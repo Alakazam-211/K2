@@ -156,6 +156,8 @@ fn build_bundle_with_manager_settings(root: &Path) -> PathBuf {
         &opts,
         "2026-06-05T00:00:00Z".to_string(),
         Some(settings),
+        None,
+        vec![],
         &bundle,
     )
     .unwrap();

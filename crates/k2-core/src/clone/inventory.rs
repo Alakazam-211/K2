@@ -1,5 +1,6 @@
-//! Inventory pass — resolve PROJECT + SLUG and enumerate the three state
-//! locations into a structured [`CloneInventory`].
+//! Inventory pass — resolve PROJECT + SLUG and enumerate workspace, Claude
+//! memory/sessions, and multi-provider sessions into a structured
+//! [`CloneInventory`].
 
 use super::scrub::classify_secret;
 use super::{CloneInventory, CloneOptions, DestinationClass, InventoryEntry};
@@ -62,6 +63,11 @@ pub fn inventory(project_path: &str, opts: CloneOptions) -> Result<CloneInventor
 
     collect_memory(&slug_dir, &mut entries);
     collect_sessions(&projects_dir, &slug, &opts, &mut entries)?;
+
+    // ── 4. Multi-provider sessions (C1–C3) ───────────────────────────
+    // Gemini / Pi / Codex / Grok / Cursor / Hermes under providers/.
+    // Never enumerates credentials / auth / whole Hermes state.db.
+    super::providers::collect_provider_sessions(&home, &project_str, &opts, &mut entries);
 
     scrubbed.sort();
     scrubbed.dedup();

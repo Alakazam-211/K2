@@ -2,12 +2,15 @@
 //! register + configure the migrated workspace.
 //!
 //! Runs on the DESTINATION machine. The source bundle stored every file
-//! under a per-class prefix (`workspace/`, `memory/`, `sessions/`) so the
-//! unpack can fan files back out WITHOUT re-deriving the class:
+//! under a per-class prefix (`workspace/`, `memory/`, `sessions/`,
+//! `providers/`) so the unpack can fan files back out WITHOUT re-deriving
+//! the class:
 //!
-//! - `workspace/<rel>` → `<dest_path>/<rel>`
-//! - `memory/<rel>`    → `<remote-home>/.claude/projects/<remote-slug>/memory/<rel>`
-//! - `sessions/<rel>`  → `<remote-home>/.claude/projects/<remote-slug-rerooted>/<rel>`
+//! - `workspace/<rel>`  → `<dest_path>/<rel>`
+//! - `memory/<rel>`     → `<remote-home>/.claude/projects/<remote-slug>/memory/<rel>`
+//! - `sessions/<rel>`   → `<remote-home>/.claude/projects/<remote-slug-rerooted>/<rel>`
+//! - `providers/<rest>` → `<remote-home>/.<rest>` (with Cursor MD5 / Grok
+//!   percent-encode re-key; Hermes export merges into state.db)
 //!
 //! `dest_path = <dest_parent>/<source-name>` (collision-safe `name (1)`).
 //! The remote slug is recomputed PURELY from the final dest path
@@ -16,8 +19,13 @@
 //! re-root the leading `<source-slug>` segment onto the recomputed remote
 //! slug, preserving any `-<branch>` worktree suffix.
 
+use super::providers::{
+    gemini_slug_from_rest, import_hermes_export, merge_gemini_projects_json, provider_is_cursor_store_db,
+    provider_needs_path_rewrite, reroot_provider, ProviderDest,
+};
 use super::CloneManifest;
 use crate::chat_history::claude_project_hash;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Result of an unpack: where the workspace landed + the recomputed slug.
@@ -38,7 +46,8 @@ pub struct UnpackResult {
 /// apply settings).
 ///
 /// `home` is the remote home dir (`dirs::home_dir()` in production, a temp
-/// dir in tests) under which `.claude/projects/<slug>/` is rooted.
+/// dir in tests) under which `.claude/projects/<slug>/` and provider trees
+/// are rooted.
 pub fn unpack_bundle(
     bundle_path: &Path,
     dest_parent: &Path,
@@ -94,6 +103,9 @@ pub fn unpack_bundle(
     let projects_dir = home.join(".claude").join("projects");
     let remote_slug_dir = projects_dir.join(&remote_slug);
 
+    // Track Gemini slugs we write so we can merge projects.json once.
+    let mut gemini_slugs: HashSet<String> = HashSet::new();
+
     // ── extract every bundle entry by class prefix ────────────────────
     let file = std::fs::File::open(bundle_path)
         .map_err(|e| format!("open bundle {}: {e}", bundle_path.display()))?;
@@ -112,8 +124,67 @@ pub fn unpack_bundle(
             continue;
         }
 
-        let out = match reroot(&archive_path, &dest_path, &remote_slug_dir, &source_slug, &remote_slug)
-        {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut buf)
+            .map_err(|e| format!("read entry {}: {e}", archive_path.display()))?;
+
+        // ── providers/ ────────────────────────────────────────────────
+        if is_providers_entry(&archive_path) {
+            let rest = strip_first_component(&archive_path);
+            match reroot_provider(
+                &rest,
+                home,
+                &source_project_path,
+                &dest_project_path,
+            ) {
+                Some(ProviderDest::HermesExport) => {
+                    // Row-level merge only — never ship/replace whole state.db.
+                    match import_hermes_export(
+                        home,
+                        &buf,
+                        &source_project_path,
+                        &dest_project_path,
+                    ) {
+                        Ok(_n) => {}
+                        Err(e) => {
+                            // Locked / missing schema / busy — log + continue
+                            // (never fail the whole unpack for Hermes).
+                            crate::log_debug!(
+                                "[clone/unpack] hermes import skipped: {e}"
+                            );
+                        }
+                    }
+                }
+                Some(ProviderDest::File(out)) => {
+                    // SOURCE→DEST rewrite for text session files; best-effort
+                    // byte rewrite inside Cursor store.db.
+                    if provider_needs_path_rewrite(&archive_path)
+                        || provider_is_cursor_store_db(&archive_path)
+                    {
+                        session_rewrite.apply_in_place(&mut buf);
+                    }
+                    if let Some(parent) = out.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
+                    }
+                    std::fs::write(&out, &buf)
+                        .map_err(|e| format!("write {}: {e}", out.display()))?;
+                    if let Some(slug) = gemini_slug_from_rest(&rest) {
+                        gemini_slugs.insert(slug);
+                    }
+                }
+                None => continue,
+            }
+            continue;
+        }
+
+        let out = match reroot(
+            &archive_path,
+            &dest_path,
+            &remote_slug_dir,
+            &source_slug,
+            &remote_slug,
+        ) {
             Some(p) => p,
             None => continue, // unknown prefix — skip defensively.
         };
@@ -122,9 +193,6 @@ pub fn unpack_bundle(
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
         }
-        let mut buf = Vec::new();
-        std::io::Read::read_to_end(&mut entry, &mut buf)
-            .map_err(|e| format!("read entry {}: {e}", archive_path.display()))?;
 
         // GH#23: rewrite embedded SOURCE→DEST workspace paths inside session
         // `.jsonl` files only (the `sessions/` class). A no-op when the
@@ -140,6 +208,13 @@ pub fn unpack_bundle(
             .map_err(|e| format!("write {}: {e}", out.display()))?;
     }
 
+    // Merge Gemini dest_path → slug into projects.json (additive).
+    for slug in &gemini_slugs {
+        if let Err(e) = merge_gemini_projects_json(home, &dest_project_path, slug) {
+            crate::log_debug!("[clone/unpack] gemini projects.json merge skipped: {e}");
+        }
+    }
+
     Ok((
         UnpackResult {
             dest_path,
@@ -151,7 +226,8 @@ pub fn unpack_bundle(
 }
 
 /// Map a bundle archive path to its on-disk destination, by class prefix.
-/// Returns `None` for an unrecognized prefix.
+/// Returns `None` for an unrecognized prefix (including `providers/`,
+/// which is handled separately).
 fn reroot(
     archive_path: &Path,
     dest_path: &Path,
@@ -181,6 +257,13 @@ fn reroot(
         }
         _ => None,
     }
+}
+
+/// Drop the first path component (`providers/…` → `…`).
+fn strip_first_component(path: &Path) -> PathBuf {
+    let mut comps = path.components();
+    let _ = comps.next();
+    comps.as_path().to_path_buf()
 }
 
 /// Re-root a session rel path (`<source-slug>[-branch]/<id>.jsonl`) onto the
@@ -219,6 +302,14 @@ fn is_session_entry(archive_path: &Path) -> bool {
         .components()
         .next()
         .map(|c| c.as_os_str() == std::ffi::OsStr::new("sessions"))
+        .unwrap_or(false)
+}
+
+fn is_providers_entry(archive_path: &Path) -> bool {
+    archive_path
+        .components()
+        .next()
+        .map(|c| c.as_os_str() == std::ffi::OsStr::new("providers"))
         .unwrap_or(false)
 }
 

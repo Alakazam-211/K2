@@ -9,7 +9,8 @@
 //! consumed by both the high-bar "Clone to" push (P2) and the
 //! save-locally README fallback (P3).
 //!
-//! ## The three locations (see PRD `k2-connect-clone-to.md`)
+//! ## State locations (see PRD `k2-connect-clone-to.md` +
+//! `clone-to-completeness.md`)
 //! For a project at `PROJECT` with
 //! `SLUG = chat_history::claude_project_hash(PROJECT)`:
 //! 1. **Workspace dir** — the `PROJECT` tree (`.k2/` — legacy `.k2so/` —
@@ -20,23 +21,28 @@
 //!    `.gitignore`) decides whether they travel.
 //! 2. **Durable memory** — the entire `<home>/.claude/projects/<SLUG>/
 //!    memory/` directory (`MEMORY.md` + every `*.md`).
-//! 3. **Live session(s)** — `<session-id>.jsonl` directly under
-//!    `<home>/.claude/projects/<SLUG>/`. Default: the newest-mtime one
-//!    (the conversation you're in). Opt-in: all of them. Worktree
-//!    variants live under `<SLUG>-<branch>/`.
+//! 3. **Claude session(s)** — `<session-id>.jsonl` under
+//!    `<home>/.claude/projects/<SLUG>/` (+ worktree `<SLUG>-<branch>/`).
+//! 4. **Multi-provider sessions (C1–C3)** — Gemini / Pi / Codex / Grok /
+//!    Cursor / Hermes under the `providers/` archive prefix. Sessions and
+//!    history only — never credentials, `auth.json`, IDE account DBs, or
+//!    a wholesale Hermes `state.db` (row-level JSON export/import).
 //!
 //! ## Pipeline
-//! `inventory()` resolves PROJECT + SLUG, walks the three locations
-//! (honoring `.gitignore`/`.k2ignore`/`.k2soignore` + the bulk skip-list via the
+//! `inventory()` resolves PROJECT + SLUG, walks workspace + Claude
+//! memory/sessions + provider locate helpers (honoring
+//! `.gitignore`/`.k2ignore`/`.k2soignore` + the bulk skip-list via the
 //! `ignore` crate), runs the secret classifier, and returns a structured
 //! [`CloneInventory`]. `CloneInventory::manifest()` produces the
 //! serializable [`CloneManifest`] (entry list + re-supply report + source
 //! slug + metadata). `build_bundle()` tar+gz's the included files under
-//! per-class subdirs (`workspace/`, `memory/`, `sessions/`) alongside
-//! `manifest.json`.
+//! per-class subdirs (`workspace/`, `memory/`, `sessions/`, `providers/`)
+//! alongside `manifest.json`.
 
 mod bundle;
+mod identity;
 mod inventory;
+mod providers;
 mod repair;
 mod scrub;
 mod settings;
@@ -46,6 +52,9 @@ mod unpack;
 mod tests;
 
 pub use bundle::{build_bundle, read_manifest_from_bundle};
+pub use identity::{
+    apply_clone_identity, capture_chat_pins, capture_pinned_chat, session_ids_from_entries,
+};
 pub use inventory::inventory;
 pub use repair::{
     migrate_legacy_slug_dirs, repair_cloned_session_paths, ProjectRepair, RepairReport,
@@ -57,10 +66,12 @@ pub use unpack::{unpack_bundle, UnpackResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Which of the three state locations a bundled file belongs to. Drives
-/// where the remote unpack route places the file: `Workspace` files land
-/// at `DEST_PATH`; `Memory` + `Session` land under the remote-recomputed
-/// `<home>/.claude/projects/<remote-slug>/`.
+/// Which state location a bundled file belongs to. Drives where the remote
+/// unpack route places the file: `Workspace` files land at `DEST_PATH`;
+/// `Memory` + `Session` land under the remote-recomputed
+/// `<home>/.claude/projects/<remote-slug>/`; `Provider` files land under
+/// the multi-provider `providers/` archive prefix (Gemini/Pi/Codex/Grok/
+/// Cursor/Hermes — see `providers.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DestinationClass {
@@ -71,6 +82,32 @@ pub enum DestinationClass {
     /// A `<session-id>.jsonl` under `~/.claude/projects/<slug>/` (or a
     /// `<slug>-<branch>/` worktree variant).
     Session,
+    /// Multi-provider session/state payload under the `providers/` tar
+    /// prefix (Gemini, Pi, Codex, Grok, Cursor, Hermes).
+    Provider,
+}
+
+/// Identity of the workspace's pinned (default-resume) chat at clone time.
+/// Captured from source `workspace_sessions` and re-applied on unpack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedChatIdentity {
+    pub session_id: String,
+    /// Harness id: `"claude"`, `"grok"`, etc.
+    pub harness: String,
+}
+
+/// One entry from the source machine's chat-pin list (named pins + flags).
+/// Captured from source `chat_session_names` and re-applied on unpack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatPinEntry {
+    pub provider: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub custom_name: String,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Options controlling what `inventory()` gathers.
@@ -116,8 +153,9 @@ pub struct InventoryEntry {
     /// Path relative to the location root, used as the destination key
     /// inside the per-class subdir. For `Workspace` this is relative to
     /// `PROJECT`; for `Memory` relative to `.../<slug>/memory/`; for
-    /// `Session` relative to `.../<slug>/` (so worktree variants keep
-    /// their `<slug>-<branch>/<id>.jsonl` shape).
+    /// `Session` relative to `.../projects/` (so worktree variants keep
+    /// their `<slug>-<branch>/<id>.jsonl` shape); for `Provider` relative
+    /// under the `providers/` prefix (e.g. `gemini/tmp/<slug>/chats/…`).
     pub rel_path: String,
     /// Destination class.
     pub class: DestinationClass,
@@ -191,6 +229,15 @@ pub struct CloneManifest {
     /// fresh id + its own path.
     #[serde(default)]
     pub settings: Option<WorkspaceSettings>,
+    /// Pinned chat identity from the source workspace. `None` when the
+    /// source had no default-resume session. Applied on unpack so the
+    /// destination resumes the same conversation.
+    #[serde(default)]
+    pub pinned_chat: Option<PinnedChatIdentity>,
+    /// Named/pinned chat list from the source workspace. Applied on
+    /// unpack into `chat_session_names`.
+    #[serde(default)]
+    pub chat_pins: Vec<ChatPinEntry>,
 }
 
 impl CloneInventory {
@@ -203,11 +250,16 @@ impl CloneInventory {
     /// `settings` is the source workspace's captured K2 settings (via
     /// [`capture_settings`]) or `None` when the source path isn't a
     /// registered project.
+    ///
+    /// `pinned_chat` / `chat_pins` come from [`capture_pinned_chat`] /
+    /// [`capture_chat_pins`] (or `None` / `vec![]` when unavailable).
     pub fn manifest(
         &self,
         opts: &CloneOptions,
         created_at: String,
         settings: Option<WorkspaceSettings>,
+        pinned_chat: Option<PinnedChatIdentity>,
+        chat_pins: Vec<ChatPinEntry>,
     ) -> CloneManifest {
         let entries = self
             .entries
@@ -231,6 +283,8 @@ impl CloneInventory {
                 items: default_reauth_items(),
             },
             settings,
+            pinned_chat,
+            chat_pins,
         }
     }
 }
@@ -248,6 +302,10 @@ fn default_reauth_items() -> Vec<String> {
             .to_string(),
         "Claude Code auth — the remote authenticates itself; \
          ~/.claude/.credentials.json is never migrated."
+            .to_string(),
+        "Provider CLI logins (Gemini / Pi / Codex / Grok / Cursor / Hermes) — \
+         the destination machine uses its own subscriptions; Clone-to ships \
+         session history only (no auth.json, credentials, or account DBs)."
             .to_string(),
     ]
 }

@@ -54,6 +54,15 @@ fn build_source_bundle(
     root: &TempDir,
     settings: Option<clone::WorkspaceSettings>,
 ) -> (PathBuf, String) {
+    build_source_bundle_with_identity(root, settings, None, vec![])
+}
+
+fn build_source_bundle_with_identity(
+    root: &TempDir,
+    settings: Option<clone::WorkspaceSettings>,
+    pinned_chat: Option<clone::PinnedChatIdentity>,
+    chat_pins: Vec<clone::ChatPinEntry>,
+) -> (PathBuf, String) {
     let project = root.path().join("source").join("My Agent");
     let src_home = root.path().join("src-home");
     fs::create_dir_all(&project).unwrap();
@@ -84,6 +93,8 @@ fn build_source_bundle(
         &opts,
         "2026-06-05T00:00:00Z".to_string(),
         settings,
+        pinned_chat,
+        chat_pins,
         &bundle,
     )
     .unwrap();
@@ -225,6 +236,86 @@ fn unpack_with_no_settings_registers_with_defaults() {
     // Default registration: agent off, default color, name = folder.
     assert_eq!(project.name, "My Agent");
     assert_eq!(project.agent_mode, "off");
+
+    let _ = pops::projects_delete(&project.id);
+}
+
+/// Pinned chat + chat pins in the manifest are applied AFTER settings,
+/// including when settings is Some (the early-return path that used to
+/// skip identity apply).
+#[test]
+fn unpack_applies_pinned_chat_and_chat_pins() {
+    let root = TempDir::new("k2so-unpack-identity");
+    let sid = "44444444-4444-4444-4444-444444444444";
+    let (bundle, _slug) = build_source_bundle_with_identity(
+        &root,
+        Some(manager_settings()),
+        Some(clone::PinnedChatIdentity {
+            session_id: sid.to_string(),
+            harness: "claude".to_string(),
+        }),
+        vec![clone::ChatPinEntry {
+            provider: "claude".to_string(),
+            session_id: sid.to_string(),
+            custom_name: "Migrated Chat".to_string(),
+            pinned: true,
+        }],
+    );
+
+    let dest_parent = root.path().join("dest");
+    let remote_home = root.path().join("remote-home");
+    fs::create_dir_all(&dest_parent).unwrap();
+    fs::create_dir_all(&remote_home).unwrap();
+
+    let (project, dest_path) =
+        super::unpack_and_register(&bundle, &dest_parent, &remote_home)
+            .expect("unpack + identity must succeed");
+
+    // Settings still applied (proves we didn't break that path).
+    assert_eq!(project.agent_mode, "manager");
+    assert_eq!(project.name, "My Agent");
+
+    // Session file landed under remote home.
+    let remote_slug = k2_core::chat_history::claude_project_hash(&dest_path);
+    assert!(
+        remote_home
+            .join(".claude")
+            .join("projects")
+            .join(&remote_slug)
+            .join(format!("{sid}.jsonl"))
+            .is_file(),
+        "session must exist on dest for pin apply"
+    );
+
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let ws = k2_core::db::schema::WorkspaceSession::get(&conn, &project.id)
+        .expect("db ok")
+        .expect("workspace_sessions row after identity apply");
+    assert_eq!(
+        ws.session_id.as_deref(),
+        Some(sid),
+        "pinned session_id stamped on dest"
+    );
+    assert_eq!(ws.harness, "claude");
+
+    let (custom_name, pinned): (String, i64) = conn
+        .query_row(
+            "SELECT custom_name, pinned FROM chat_session_names \
+             WHERE provider = 'claude' AND session_id = ?1",
+            rusqlite::params![sid],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("chat pin row applied");
+    assert_eq!(custom_name, "Migrated Chat");
+    assert_eq!(pinned, 1);
+    // Leave the shared test DB tidy.
+    conn.execute(
+        "DELETE FROM chat_session_names WHERE session_id = ?1",
+        rusqlite::params![sid],
+    )
+    .expect("cleanup chat pin");
+    drop(conn);
 
     let _ = pops::projects_delete(&project.id);
 }

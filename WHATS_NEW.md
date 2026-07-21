@@ -3,6 +3,51 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.55 — Clone To: full chat history + your pin comes with you
+
+**Clone To** is a real workspace migration again — not “files only, then
+figure out `/resume`.”
+
+### Chats show up after clone (no awkward first resume)
+
+Past conversations appear in Chat History and the agent chat dropdown as
+soon as the workspace lands on the destination. You no longer need a
+mystery `/resume` just to make the list wake up.
+
+### Pinned Chat stays pinned to the same conversation
+
+If the workspace had a **Pinned Chat** tied to a specific session, that
+session id travels with the clone (when the transcript is present). Stars
+and custom chat names for those sessions come along too.
+
+### More than Claude — the agents you actually use
+
+Clone To can now carry session history for the major harnesses K2 already
+knows how to resume:
+
+- Claude Code (as before, plus the list fix above)
+- Cursor Agent chats
+- Gemini CLI
+- Pi
+- Codex
+- Grok
+- Hermes (workspace rows only — never a whole account database)
+
+Paths and project slugs are rewritten for the destination machine so
+resume keeps working when the home path changes (Mac → Linux, etc.).
+
+### What we deliberately do *not* copy
+
+**Provider logins and subscriptions stay put.** The destination server is
+expected to use **its own** Claude / Grok / Codex / … accounts. Clone To
+moves **workspace + chat history**, not credentials, auth tokens, or
+Keychain blobs. Sign in on the other box if you haven’t already.
+
+Also unchanged: tunnel identity, connect-users, and machine-local K2
+state stay on each host.
+
+---
+
 ## 0.40.54 — Tunnel resilience + hosted web (beta)
 
 Two Connect upgrades: tunnels that actually stop, and a **beta** browser

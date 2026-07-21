@@ -311,6 +311,8 @@ fn gitignored_k2_dir_force_included() {
         &opts(&fx.home),
         "2026-07-07T00:00:00Z".to_string(),
         None,
+        None,
+        vec![],
         &out,
     )
     .unwrap();
@@ -518,7 +520,13 @@ fn credentials_json_never_enumerated() {
 fn manifest_entries_have_correct_classes() {
     let fx = build_fixture();
     let inv = inventory(&fx.project.to_string_lossy(), opts(&fx.home)).unwrap();
-    let m = inv.manifest(&opts(&fx.home), "2026-06-05T00:00:00Z".to_string(), None);
+    let m = inv.manifest(
+        &opts(&fx.home),
+        "2026-06-05T00:00:00Z".to_string(),
+        None,
+        None,
+        vec![],
+    );
 
     assert_eq!(m.source_slug, fx.slug);
     assert_eq!(m.created_at, "2026-06-05T00:00:00Z");
@@ -552,6 +560,8 @@ fn bundle_round_trips_secrets_absent_by_default() {
         &opts(&fx.home),
         "2026-06-05T00:00:00Z".to_string(),
         None,
+        None,
+        vec![],
         &out,
     )
     .unwrap();
@@ -611,6 +621,8 @@ fn default_bundle_carries_all_sessions_through_tar() {
         &opts(&fx.home),
         "2026-06-05T00:00:00Z".to_string(),
         None,
+        None,
+        vec![],
         &out,
     )
     .unwrap();
@@ -697,6 +709,8 @@ fn symlink_to_dir_skipped_symlink_to_file_copied() {
         &opts(&fx.home),
         "2026-06-05T00:00:00Z".to_string(),
         None,
+        None,
+        vec![],
         &out,
     )
     .expect("bundle must build despite a symlink-to-directory in the tree");
@@ -727,7 +741,16 @@ fn bundle_carries_secrets_when_opted_in() {
     o.carry_secrets = true;
     let inv = inventory(&fx.project.to_string_lossy(), o.clone()).unwrap();
     let out = fx._root.path().join("bundle-carry.tar.gz");
-    build_bundle(&inv, &o, "2026-06-05T00:00:00Z".to_string(), None, &out).unwrap();
+    build_bundle(
+        &inv,
+        &o,
+        "2026-06-05T00:00:00Z".to_string(),
+        None,
+        None,
+        vec![],
+        &out,
+    )
+    .unwrap();
 
     let extract = fx._root.path().join("extract-carry");
     fs::create_dir_all(&extract).unwrap();
@@ -789,6 +812,8 @@ fn manual_manifest(source_project_path: &str) -> CloneManifest {
             items: vec![],
         },
         settings: None,
+        pinned_chat: None,
+        chat_pins: vec![],
     }
 }
 
@@ -1113,6 +1138,8 @@ fn settings_round_trip_through_bundle() {
         &opts(&fx.home),
         "2026-06-05T00:00:00Z".to_string(),
         Some(settings.clone()),
+        None,
+        vec![],
         &out,
     )
     .unwrap();
@@ -1128,4 +1155,741 @@ fn settings_round_trip_through_bundle() {
     assert_eq!(got.name, "Round Trip");
     assert_eq!(got.color, "#112233");
     assert_eq!(got.worktree_mode, 1);
+}
+
+// ── pinned-chat identity capture + apply ────────────────────────────
+
+/// Seed a projects row + workspace_sessions session_id, then assert
+/// `capture_pinned_chat` returns the identity (and path normalization
+/// + empty/missing cases are graceful).
+#[test]
+fn capture_pinned_chat_from_workspace_sessions() {
+    use crate::db::schema::{Project, WorkspaceSession};
+
+    let conn = crate::db::isolated_test_connection();
+    let project_path = "/tmp/pinned-chat-agent";
+
+    Project::create(
+        &conn,
+        "proj-pin-1",
+        "Pinned Agent",
+        project_path,
+        "#00aa88",
+        0,
+        0,
+        None,
+        None,
+    )
+    .expect("create project");
+
+    // No workspace_sessions row yet → None.
+    let none = capture_pinned_chat(&conn, project_path).expect("no error");
+    assert!(none.is_none(), "no session row → None, got {none:?}");
+
+    WorkspaceSession::upsert(
+        &conn,
+        "ws-row-1",
+        "proj-pin-1",
+        None,
+        Some("sess-uuid-abc"),
+        "claude",
+        "system",
+        "stopped",
+    )
+    .expect("upsert workspace session");
+
+    let pin = capture_pinned_chat(&conn, project_path)
+        .expect("capture must not error")
+        .expect("session_id present → Some");
+    assert_eq!(pin.session_id, "sess-uuid-abc");
+    assert_eq!(pin.harness, "claude");
+
+    // Trailing-slash normalization.
+    let via_slash = capture_pinned_chat(&conn, "/tmp/pinned-chat-agent/")
+        .expect("no error")
+        .expect("trailing slash resolves");
+    assert_eq!(via_slash, pin);
+
+    // Null/cleared session_id → None.
+    WorkspaceSession::clear_session_id(&conn, "proj-pin-1").expect("clear session_id");
+    let after_clear = capture_pinned_chat(&conn, project_path).expect("no error");
+    assert!(
+        after_clear.is_none(),
+        "cleared session_id → None, got {after_clear:?}"
+    );
+
+    // Unregistered path → None.
+    let unreg = capture_pinned_chat(&conn, "/tmp/not-registered").expect("no error");
+    assert!(unreg.is_none());
+}
+
+/// `capture_chat_pins` returns only pinned or named rows for the given
+/// session ids; unmentioned / blank rows are excluded.
+#[test]
+fn capture_chat_pins_filters_by_session_and_meaning() {
+    let conn = crate::db::isolated_test_connection();
+
+    // Seed three chat_session_names rows:
+    // 1. pinned + named (keep)
+    // 2. unpinned + named (keep)
+    // 3. unpinned + empty name (drop)
+    // 4. pinned for a session_id we won't query (drop — not in list)
+    conn.execute(
+        "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+         VALUES ('claude', 'sid-a', 'Alpha', 1, unixepoch())",
+        [],
+    )
+    .expect("insert pin a");
+    conn.execute(
+        "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+         VALUES ('claude', 'sid-b', 'Bravo', 0, unixepoch())",
+        [],
+    )
+    .expect("insert name b");
+    conn.execute(
+        "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+         VALUES ('claude', 'sid-c', '', 0, unixepoch())",
+        [],
+    )
+    .expect("insert blank c");
+    conn.execute(
+        "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+         VALUES ('grok', 'sid-other', 'Other', 1, unixepoch())",
+        [],
+    )
+    .expect("insert other");
+
+    let pins = capture_chat_pins(
+        &conn,
+        &["sid-a".into(), "sid-b".into(), "sid-c".into()],
+    )
+    .expect("capture pins");
+
+    assert_eq!(
+        pins.len(),
+        2,
+        "only pinned/named among queried ids, got {pins:?}"
+    );
+    let a = pins.iter().find(|p| p.session_id == "sid-a").expect("sid-a");
+    assert_eq!(a.custom_name, "Alpha");
+    assert!(a.pinned);
+    assert_eq!(a.provider, "claude");
+    let b = pins.iter().find(|p| p.session_id == "sid-b").expect("sid-b");
+    assert_eq!(b.custom_name, "Bravo");
+    assert!(!b.pinned);
+
+    // Empty session list → empty pins (no error).
+    let empty = capture_chat_pins(&conn, &[]).expect("empty ok");
+    assert!(empty.is_empty());
+}
+
+/// Round-trip: capture → build_bundle → read_manifest → apply_clone_identity
+/// re-stamps workspace_sessions + chat_session_names on a dest project.
+#[test]
+fn identity_round_trip_through_bundle_and_apply() {
+    use crate::db::schema::{Project, WorkspaceSession};
+
+    let fx = build_fixture();
+    let conn = crate::db::isolated_test_connection();
+    let path_str = fx.project.to_string_lossy().to_string();
+
+    Project::create(
+        &conn,
+        "proj-id-rt",
+        "Identity RT",
+        &path_str,
+        "#abcdef",
+        0,
+        0,
+        None,
+        None,
+    )
+    .expect("create source project");
+
+    // Fixture has sessions: 1111…, 2222…, and a worktree session.
+    // Pin the live-ish one.
+    let pinned_sid = "11111111-1111-1111-1111-111111111111";
+    WorkspaceSession::upsert(
+        &conn,
+        "ws-rt",
+        "proj-id-rt",
+        None,
+        Some(pinned_sid),
+        "claude",
+        "system",
+        "stopped",
+    )
+    .expect("seed pinned chat");
+    conn.execute(
+        "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+         VALUES ('claude', ?1, 'Live Chat', 1, unixepoch())",
+        rusqlite::params![pinned_sid],
+    )
+    .expect("seed chat pin");
+
+    let pinned = capture_pinned_chat(&conn, &path_str)
+        .expect("capture pin")
+        .expect("Some");
+    let inv = inventory(&path_str, opts(&fx.home)).unwrap();
+    let session_ids = session_ids_from_entries(
+        inv.entries
+            .iter()
+            .map(|e| (e.class, e.rel_path.clone())),
+    );
+    assert!(
+        session_ids.iter().any(|id| id == pinned_sid),
+        "inventory must include pinned session stem, got {session_ids:?}"
+    );
+    let pins = capture_chat_pins(&conn, &session_ids).expect("capture pins");
+    assert_eq!(pins.len(), 1);
+    assert_eq!(pins[0].custom_name, "Live Chat");
+
+    let out = fx._root.path().join("bundle-identity.tar.gz");
+    build_bundle(
+        &inv,
+        &opts(&fx.home),
+        "2026-06-05T00:00:00Z".to_string(),
+        None,
+        Some(pinned.clone()),
+        pins.clone(),
+        &out,
+    )
+    .unwrap();
+
+    let m = read_manifest_from_bundle(&out).unwrap();
+    assert_eq!(m.pinned_chat.as_ref(), Some(&pinned));
+    assert_eq!(m.chat_pins, pins);
+
+    // Simulate a clean dest register on the SAME path (slug matches fixture
+    // sessions). Cannot insert a second projects row with the same path
+    // (UNIQUE) — clear identity rows then re-apply like unpack would.
+    conn.execute(
+        "DELETE FROM workspace_sessions WHERE project_id = 'proj-id-rt'",
+        [],
+    )
+    .expect("clear workspace_sessions");
+    conn.execute(
+        "DELETE FROM chat_session_names WHERE session_id = ?1",
+        rusqlite::params![pinned_sid],
+    )
+    .expect("clear chat pin for re-apply");
+
+    apply_clone_identity(
+        &conn,
+        "proj-id-rt",
+        &path_str,
+        Some(&fx.home),
+        &m,
+    )
+    .expect("apply identity");
+
+    let dest_ws = WorkspaceSession::get(&conn, "proj-id-rt")
+        .expect("db ok")
+        .expect("workspace_sessions row stamped");
+    assert_eq!(
+        dest_ws.session_id.as_deref(),
+        Some(pinned_sid),
+        "pinned session_id applied"
+    );
+    assert_eq!(dest_ws.harness, "claude");
+
+    let name: String = conn
+        .query_row(
+            "SELECT custom_name FROM chat_session_names \
+             WHERE provider = 'claude' AND session_id = ?1",
+            rusqlite::params![pinned_sid],
+            |row| row.get(0),
+        )
+        .expect("chat pin row exists");
+    assert_eq!(name, "Live Chat");
+    let pinned_flag: i64 = conn
+        .query_row(
+            "SELECT pinned FROM chat_session_names \
+             WHERE provider = 'claude' AND session_id = ?1",
+            rusqlite::params![pinned_sid],
+            |row| row.get(0),
+        )
+        .expect("pinned flag");
+    assert_eq!(pinned_flag, 1);
+}
+
+#[test]
+fn session_ids_from_entries_takes_file_stems() {
+    let ids = session_ids_from_entries([
+        (
+            DestinationClass::Session,
+            "slug/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl".into(),
+        ),
+        (
+            DestinationClass::Session,
+            "slug-branch/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl".into(),
+        ),
+        (DestinationClass::Workspace, "README.md".into()),
+        (DestinationClass::Memory, "MEMORY.md".into()),
+        // Dedup same stem.
+        (
+            DestinationClass::Session,
+            "slug/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl".into(),
+        ),
+    ]);
+    assert_eq!(
+        ids,
+        vec![
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".to_string(),
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".to_string(),
+        ]
+    );
+}
+
+// ── Multi-provider session clone (C1–C3) ─────────────────────────────
+
+/// Seed Gemini + Pi + Codex + Grok + Cursor (+ hermes) under a hermetic
+/// HOME for the fixture workspace path, then assert inventory picks them
+/// up as Provider entries, never auth/credentials, and a full bundle →
+/// unpack rewrites paths and re-keys Cursor MD5 / Grok encode.
+fn seed_provider_fixtures(home: &Path, project: &str) {
+    // Gemini: projects.json + tmp/<slug>/chats/*.jsonl
+    let gemini_slug = "ws-slug-abc";
+    write(
+        &home.join(".gemini/projects.json"),
+        &format!(
+            r#"{{"projects":{{"{project}":"{gemini_slug}","/other/proj":"other-slug"}}}}"#
+        ),
+    );
+    write(
+        &home
+            .join(".gemini/tmp")
+            .join(gemini_slug)
+            .join("chats")
+            .join("session-1.jsonl"),
+        &format!(
+            r#"{{"sessionId":"gem-uuid-1","cwd":"{project}","startTime":"2026-07-01T00:00:00Z"}}
+{{"type":"user","content":"hello from {project}"}}
+"#
+        ),
+    );
+    // Foreign gemini project — must NOT be inventoried.
+    write(
+        &home
+            .join(".gemini/tmp/other-slug/chats/foreign.jsonl"),
+        r#"{"sessionId":"gem-foreign","cwd":"/other/proj"}
+"#,
+    );
+
+    // Pi: line-1 cwd filter
+    write(
+        &home
+            .join(".pi/agent/sessions/some-slug")
+            .join("2026-07-01T00-00-00_pi-uuid-1.jsonl"),
+        &format!(
+            r#"{{"type":"session","id":"pi-uuid-1","cwd":"{project}","timestamp":"2026-07-01T00:00:00Z"}}
+{{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":"hi"}}]}}}}
+"#
+        ),
+    );
+    write(
+        &home
+            .join(".pi/agent/sessions/other-slug")
+            .join("other.jsonl"),
+        r#"{"type":"session","id":"pi-other","cwd":"/other/proj","timestamp":"2026-07-01T00:00:00Z"}
+"#,
+    );
+
+    // Codex: payload.cwd; do NOT seed history.jsonl as required inventory
+    write(
+        &home
+            .join(".codex/sessions/2026/07/01")
+            .join("rollout-2026-07-01T00-00-00-codex-uuid-1.jsonl"),
+        &format!(
+            r#"{{"type":"session_meta","payload":{{"id":"codex-uuid-1","cwd":"{project}","timestamp":"2026-07-01T00:00:00Z"}}}}
+{{"type":"event","payload":{{"text":"hi"}}}}
+"#
+        ),
+    );
+    // global history index — must never be bundled
+    write(
+        &home.join(".codex/history.jsonl"),
+        r#"{"session_id":"codex-uuid-1","ts":1,"text":"title"}
+"#,
+    );
+
+    // Grok: percent-encoded cwd dir + summary; skip subagent + auth
+    let encoded = super::providers::grok_percent_encode_cwd(project);
+    let grok_sid = "01920000-cccc-7000-8000-000000000001";
+    write(
+        &home
+            .join(".grok/sessions")
+            .join(&encoded)
+            .join(grok_sid)
+            .join("summary.json"),
+        &format!(
+            r#"{{"info":{{"id":"{grok_sid}","cwd":"{project}"}},"generated_title":"Grok chat","last_active_at":"2026-07-03T10:00:00Z"}}"#
+        ),
+    );
+    write(
+        &home
+            .join(".grok/sessions")
+            .join(&encoded)
+            .join(grok_sid)
+            .join("chat_history.jsonl"),
+        &format!(r#"{{"type":"user","content":"path was {project}"}}"#),
+    );
+    // auth.json at grok root — NEVER inventory
+    write(
+        &home.join(".grok/auth.json"),
+        r#"{"token":"must-not-travel"}"#,
+    );
+    // subagent session — skip
+    let sub_sid = "01920000-cccc-7000-8000-000000000099";
+    write(
+        &home
+            .join(".grok/sessions")
+            .join(&encoded)
+            .join(sub_sid)
+            .join("summary.json"),
+        &format!(
+            r#"{{"info":{{"id":"{sub_sid}","cwd":"{project}"}},"session_kind":"subagent","last_active_at":"2026-07-03T12:00:00Z"}}"#
+        ),
+    );
+
+    // Cursor: md5(project)/uuid/store.db
+    let md5 = crate::chat_history::md5_hex(project.as_bytes());
+    let cursor_uuid = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    write(
+        &home
+            .join(".cursor/chats")
+            .join(&md5)
+            .join(cursor_uuid)
+            .join("store.db"),
+        &format!("cursor-sqlite-placeholder containing {project}"),
+    );
+    // IDE account DB must never be inventoried (we never walk Application Support)
+    write(
+        &home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
+        "account-db-must-not-travel",
+    );
+
+    // Hermes: RO state.db with family + foreign sessions
+    let db_path = home.join(".hermes/state.db");
+    fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.pragma_update(None, "journal_mode", "wal").unwrap();
+    conn.execute_batch(
+        "CREATE TABLE sessions (
+             id TEXT PRIMARY KEY,
+             source TEXT NOT NULL,
+             parent_session_id TEXT,
+             started_at REAL NOT NULL,
+             ended_at REAL,
+             end_reason TEXT,
+             message_count INTEGER DEFAULT 0,
+             title TEXT,
+             cwd TEXT,
+             git_branch TEXT,
+             git_repo_root TEXT,
+             archived INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE TABLE messages (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             session_id TEXT NOT NULL REFERENCES sessions(id),
+             role TEXT NOT NULL,
+             content TEXT,
+             tool_calls TEXT,
+             timestamp REAL NOT NULL
+         );",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO sessions (id, source, cwd, title, started_at, archived) \
+         VALUES ('20260701_090000_aaaaaa', 'cli', ?1, 'Hermes chat', 1000.0, 0)",
+        rusqlite::params![project],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) \
+         VALUES ('20260701_090000_aaaaaa', 'user', ?1, 1001.0)",
+        rusqlite::params![format!("work in {project}")],
+    )
+    .unwrap();
+    // Foreign project row — must not export
+    conn.execute(
+        "INSERT INTO sessions (id, source, cwd, title, started_at, archived) \
+         VALUES ('20260629_070000_eeeeee', 'cli', '/other/proj', 'Foreign', 500.0, 0)",
+        [],
+    )
+    .unwrap();
+}
+
+#[test]
+fn multi_provider_inventory_finds_sessions_skips_credentials() {
+    let fx = build_fixture();
+    let project = fx.project.to_string_lossy().to_string();
+    seed_provider_fixtures(&fx.home, &project);
+
+    let inv = inventory(&project, opts(&fx.home)).unwrap();
+    let providers = rel_paths(&inv, DestinationClass::Provider);
+
+    // Gemini
+    assert!(
+        providers.iter().any(|p| p.starts_with("gemini/tmp/") && p.ends_with(".jsonl")),
+        "gemini session inventoried, got {providers:?}"
+    );
+    assert!(
+        !providers.iter().any(|p| p.contains("other-slug")),
+        "foreign gemini project must not be inventoried"
+    );
+
+    // Pi
+    assert!(
+        providers.iter().any(|p| p.contains("pi/agent/sessions/") && p.contains("pi-uuid")),
+        "pi session inventoried, got {providers:?}"
+    );
+
+    // Codex
+    assert!(
+        providers
+            .iter()
+            .any(|p| p.starts_with("codex/sessions/") && p.contains("rollout-")),
+        "codex rollout inventoried, got {providers:?}"
+    );
+    assert!(
+        !providers.iter().any(|p| {
+            // Exact filename history.jsonl only — not Grok's chat_history.jsonl.
+            std::path::Path::new(p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                == Some("history.jsonl")
+        }),
+        "codex history.jsonl must not travel, got {providers:?}"
+    );
+
+    // Grok
+    assert!(
+        providers.iter().any(|p| p.contains("grok/sessions/") && p.ends_with("summary.json")),
+        "grok summary inventoried, got {providers:?}"
+    );
+    assert!(
+        !providers.iter().any(|p| p.contains("auth")),
+        "grok auth must never be inventoried, got {providers:?}"
+    );
+    assert!(
+        !providers.iter().any(|p| p.contains("000000000099")),
+        "grok subagent must be skipped"
+    );
+
+    // Cursor
+    let md5 = crate::chat_history::md5_hex(project.as_bytes());
+    assert!(
+        providers
+            .iter()
+            .any(|p| p.contains(&format!("cursor/chats/{md5}/")) && p.ends_with("store.db")),
+        "cursor store.db inventoried, got {providers:?}"
+    );
+    assert!(
+        !providers.iter().any(|p| p.contains("globalStorage") || p.contains("state.vscdb")),
+        "Cursor IDE account DB must never be inventoried"
+    );
+
+    // Hermes export (not whole state.db)
+    assert!(
+        providers.iter().any(|p| p == "hermes/export.json"),
+        "hermes export.json inventoried, got {providers:?}"
+    );
+    assert!(
+        !providers.iter().any(|p| p.ends_with("state.db")),
+        "hermes state.db must never ship wholesale"
+    );
+
+    // Claude credentials still out
+    let all: Vec<_> = inv.entries.iter().map(|e| e.rel_path.as_str()).collect();
+    assert!(!all.iter().any(|p| p.contains("credentials") || p.contains("auth.json")));
+}
+
+#[test]
+fn multi_provider_bundle_unpack_round_trip() {
+    let fx = build_fixture();
+    let project = fx.project.to_string_lossy().to_string();
+    seed_provider_fixtures(&fx.home, &project);
+
+    let inv = inventory(&project, opts(&fx.home)).unwrap();
+    let bundle = fx._root.path().join("providers-bundle.tar.gz");
+    build_bundle(
+        &inv,
+        &opts(&fx.home),
+        "2026-07-21T00:00:00Z".to_string(),
+        None,
+        None,
+        vec![],
+        &bundle,
+    )
+    .unwrap();
+
+    // Unpack into a fresh home + dest parent
+    let dest_parent = fx._root.path().join("dest-parent");
+    fs::create_dir_all(&dest_parent).unwrap();
+    let dest_home = fx._root.path().join("dest-home");
+    fs::create_dir_all(&dest_home).unwrap();
+
+    let (res, _m) = unpack_bundle(&bundle, &dest_parent, &dest_home).unwrap();
+    let dest = res.dest_path.to_string_lossy().to_string();
+
+    // Gemini: session file under dest home with rewritten path + projects.json merge
+    let gemini_files: Vec<_> = walk_files(&dest_home.join(".gemini"))
+        .into_iter()
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
+        .collect();
+    assert!(
+        !gemini_files.is_empty(),
+        "gemini jsonl landed under dest home"
+    );
+    for f in &gemini_files {
+        let body = fs::read_to_string(f).unwrap();
+        assert!(
+            !body.contains(&project) || project == dest,
+            "gemini jsonl must rewrite SOURCE path, body={body}"
+        );
+        assert!(
+            body.contains(&dest) || project == dest,
+            "gemini jsonl must contain DEST path"
+        );
+    }
+    let projects_json = fs::read_to_string(dest_home.join(".gemini/projects.json")).unwrap();
+    assert!(
+        projects_json.contains(&dest),
+        "gemini projects.json must map dest path, got {projects_json}"
+    );
+
+    // Pi
+    let pi_files = walk_files(&dest_home.join(".pi"));
+    assert!(
+        pi_files
+            .iter()
+            .any(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl")),
+        "pi session on dest"
+    );
+    for f in pi_files
+        .iter()
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
+    {
+        let body = fs::read_to_string(f).unwrap();
+        assert!(!body.contains(&project) || project == dest, "pi cwd rewritten");
+        assert!(body.contains(&dest) || project == dest);
+    }
+
+    // Codex
+    let codex_files = walk_files(&dest_home.join(".codex"));
+    assert!(
+        codex_files
+            .iter()
+            .any(|p| p.to_string_lossy().contains("rollout-")),
+        "codex rollout on dest"
+    );
+    assert!(
+        !codex_files
+            .iter()
+            .any(|p| p.file_name().and_then(|n| n.to_str()) == Some("history.jsonl")),
+        "codex history.jsonl must not appear on dest from clone"
+    );
+
+    // Grok: re-keyed percent-encoded dest cwd
+    let dest_encoded = super::providers::grok_percent_encode_cwd(&dest);
+    let grok_summary = dest_home
+        .join(".grok/sessions")
+        .join(&dest_encoded)
+        .join("01920000-cccc-7000-8000-000000000001")
+        .join("summary.json");
+    assert!(
+        grok_summary.exists(),
+        "grok summary under dest-encoded cwd, missing at {}",
+        grok_summary.display()
+    );
+    let summary = fs::read_to_string(&grok_summary).unwrap();
+    assert!(
+        !summary.contains(&project) || project == dest,
+        "grok summary cwd rewritten"
+    );
+    assert!(summary.contains(&dest) || project == dest);
+    assert!(
+        !dest_home.join(".grok/auth.json").exists(),
+        "grok auth must not land on dest"
+    );
+
+    // Cursor: re-keyed md5(DEST)
+    let dest_md5 = crate::chat_history::md5_hex(dest.as_bytes());
+    let src_md5 = crate::chat_history::md5_hex(project.as_bytes());
+    let cursor_db = dest_home
+        .join(".cursor/chats")
+        .join(&dest_md5)
+        .join("cccccccc-cccc-cccc-cccc-cccccccccccc")
+        .join("store.db");
+    assert!(
+        cursor_db.exists(),
+        "cursor store.db under md5(DEST), missing at {}",
+        cursor_db.display()
+    );
+    if src_md5 != dest_md5 {
+        assert!(
+            !dest_home
+                .join(".cursor/chats")
+                .join(&src_md5)
+                .exists(),
+            "cursor must not keep src md5 dir on dest"
+        );
+    }
+    let cursor_body = fs::read_to_string(&cursor_db).unwrap();
+    assert!(
+        !cursor_body.contains(&project) || project == dest,
+        "cursor store.db best-effort rewrite"
+    );
+
+    // Hermes: rows merged into dest state.db with rewritten cwd
+    let dest_db = dest_home.join(".hermes/state.db");
+    assert!(dest_db.exists(), "hermes state.db created on dest");
+    let conn = rusqlite::Connection::open(&dest_db).unwrap();
+    let cwd: String = conn
+        .query_row(
+            "SELECT cwd FROM sessions WHERE id = '20260701_090000_aaaaaa'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("hermes session row present");
+    assert_eq!(cwd, dest, "hermes cwd rewritten to dest");
+    let foreign: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sessions WHERE id = '20260629_070000_eeeeee'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(foreign, 0, "foreign hermes session must not import");
+    let msg: String = conn
+        .query_row(
+            "SELECT content FROM messages WHERE session_id = '20260701_090000_aaaaaa' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        msg.contains(&dest) || !msg.contains(&project),
+        "hermes message content rewritten, got {msg}"
+    );
+}
+
+/// Collect all files under `root` as absolute paths (best-effort).
+fn walk_files(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if !root.exists() {
+        return out;
+    }
+    let walker = ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .standard_filters(false)
+        .follow_links(false)
+        .build();
+    for entry in walker.flatten() {
+        if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            out.push(entry.path().to_path_buf());
+        }
+    }
+    out
 }

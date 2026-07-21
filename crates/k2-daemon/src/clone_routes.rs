@@ -85,13 +85,23 @@ fn build_workspace_bundle(
     let inv = clone::inventory(project_path, opts.clone())
         .map_err(|e| BundleError::BadRequest(format!("inventory failed: {e}")))?;
 
-    // Capture the source workspace's K2 settings (graceful: None if the
-    // path isn't a registered project).
-    let settings = {
+    // Capture the source workspace's K2 settings + pinned-chat identity
+    // (graceful: None/empty if the path isn't a registered project).
+    let (settings, pinned_chat, chat_pins) = {
         let db = db::shared();
         let conn = db.lock();
-        clone::capture_settings(&conn, &inv.project_path)
-            .map_err(|e| BundleError::Internal(format!("settings capture: {e}")))?
+        let settings = clone::capture_settings(&conn, &inv.project_path)
+            .map_err(|e| BundleError::Internal(format!("settings capture: {e}")))?;
+        let pinned_chat = clone::capture_pinned_chat(&conn, &inv.project_path)
+            .map_err(|e| BundleError::Internal(format!("pinned-chat capture: {e}")))?;
+        let session_ids = clone::session_ids_from_entries(
+            inv.entries
+                .iter()
+                .map(|e| (e.class, e.rel_path.clone())),
+        );
+        let chat_pins = clone::capture_chat_pins(&conn, &session_ids)
+            .map_err(|e| BundleError::Internal(format!("chat-pins capture: {e}")))?;
+        (settings, pinned_chat, chat_pins)
     };
 
     // Temp bundle path: ~/.k2so/clone-tmp/<name>-<ts>.tar.gz
@@ -122,30 +132,49 @@ fn build_workspace_bundle(
     // Before the 0.39.44 encoder fix, the bundler enumerated the WRONG slug
     // dir and silently shipped 0 sessions; if it's still 0 after the fix,
     // emit a prominent warning so the operator knows BEFORE the bundle ships.
-    let session_count = inv
+    let claude_session_count = inv
         .entries
         .iter()
         .filter(|e| e.class == DestinationClass::Session)
         .count();
+    let provider_file_count = inv
+        .entries
+        .iter()
+        .filter(|e| e.class == DestinationClass::Provider)
+        .count();
+    // "chat sessions" total for the zero-session warning includes Claude
+    // sessions + multi-provider files (Gemini/Pi/Codex/Grok/Cursor/Hermes).
+    let session_count = claude_session_count + provider_file_count;
     if session_count == 0 {
         log_debug!(
             "[daemon/clone] WARN: bundling workspace {} — 0 chat sessions found to migrate \
-             (no `.jsonl` under ~/.claude/projects/{}/ or its worktree siblings)",
+             (no Claude `.jsonl` under ~/.claude/projects/{}/ and no provider sessions)",
             inv.project_path,
             inv.slug,
         );
     } else {
         log_debug!(
-            "[daemon/clone] bundling workspace {} (slug {}): {} chat session(s), {} total file(s)",
+            "[daemon/clone] bundling workspace {} (slug {}): {} chat session file(s) \
+             ({} Claude + {} provider), {} total file(s)",
             inv.project_path,
             inv.slug,
             session_count,
+            claude_session_count,
+            provider_file_count,
             entry_count,
         );
     }
 
-    clone::build_bundle(&inv, opts, created_at, settings, &bundle_path)
-        .map_err(|e| BundleError::Internal(format!("build bundle: {e}")))?;
+    clone::build_bundle(
+        &inv,
+        opts,
+        created_at,
+        settings,
+        pinned_chat,
+        chat_pins,
+        &bundle_path,
+    )
+    .map_err(|e| BundleError::Internal(format!("build bundle: {e}")))?;
 
     let size = std::fs::metadata(&bundle_path).map(|m| m.len()).unwrap_or(0);
 
@@ -258,24 +287,27 @@ pub fn unpack_and_register(
         let mut workspace_files = 0usize;
         let mut memory_files = 0usize;
         let mut session_files = 0usize;
+        let mut provider_files = 0usize;
         for e in &manifest.entries {
             match e.class {
                 DestinationClass::Workspace => workspace_files += 1,
                 DestinationClass::Memory => memory_files += 1,
                 DestinationClass::Session => session_files += 1,
+                DestinationClass::Provider => provider_files += 1,
             }
         }
         log_debug!(
             "[daemon/clone] unpacked workspace -> {} (dest slug {}): {} workspace file(s), \
-             {} memory file(s), {} chat session(s) [from source {}]",
+             {} memory file(s), {} chat session(s), {} provider file(s) [from source {}]",
             dest_path,
             result.remote_slug,
             workspace_files,
             memory_files,
             session_files,
+            provider_files,
             manifest.source_project_path,
         );
-        if session_files == 0 {
+        if session_files == 0 && provider_files == 0 {
             log_debug!(
                 "[daemon/clone] WARN: unpacked bundle carried 0 chat sessions — \
                  /resume will be empty on this destination"
@@ -306,13 +338,13 @@ pub fn unpack_and_register(
     //    NOT in `settings`, so the remote keeps its own id + path. If
     //    settings is None (source wasn't a registered project), the project
     //    keeps its registration defaults.
-    if let Some(s) = manifest.settings {
+    let project = if let Some(s) = &manifest.settings {
         let agent_mode = if s.agent_mode.is_empty() {
             None
         } else {
             Some(s.agent_mode.clone())
         };
-        let updated = pops::projects_update(
+        pops::projects_update(
             &project.id,
             Some(&s.name),
             Some(&s.color),
@@ -329,8 +361,27 @@ pub fn unpack_and_register(
             None,                          // heartbeat_schedule
             None,                          // default_agent — the pulled row keeps its stamp-on-register value
         )
-        .map_err(|e| format!("apply settings: {e}"))?;
-        return Ok((updated, dest_path));
+        .map_err(|e| format!("apply settings: {e}"))?
+    } else {
+        project
+    };
+
+    // 4. Apply pinned chat + chat pins (best-effort — never fail the
+    //    whole unpack if identity re-stamp has a DB/fs hiccup).
+    {
+        let db = db::shared();
+        let conn = db.lock();
+        if let Err(e) = clone::apply_clone_identity(
+            &conn,
+            &project.id,
+            &dest_path,
+            Some(home),
+            &manifest,
+        ) {
+            log_debug!(
+                "[daemon/clone] WARN: apply_clone_identity failed (non-fatal): {e}"
+            );
+        }
     }
 
     Ok((project, dest_path))

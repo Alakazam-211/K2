@@ -6,12 +6,16 @@
 //! workspace/<rel...>      # DestinationClass::Workspace
 //! memory/<rel...>         # DestinationClass::Memory
 //! sessions/<rel...>       # DestinationClass::Session  (rel keeps <slug>[-branch]/<id>.jsonl)
+//! providers/<rel...>      # DestinationClass::Provider (multi-provider layout)
 //! ```
 //! The per-class subdir prefix lets the remote unpack route fan files
 //! back out to PROJECT vs `~/.claude/projects/<remote-slug>/` without
 //! re-deriving the class from path heuristics.
 
-use super::{CloneInventory, CloneManifest, CloneOptions, DestinationClass, WorkspaceSettings};
+use super::{
+    ChatPinEntry, CloneInventory, CloneManifest, CloneOptions, DestinationClass,
+    PinnedChatIdentity, WorkspaceSettings,
+};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::path::{Path, PathBuf};
@@ -22,6 +26,7 @@ fn class_prefix(class: DestinationClass) -> &'static str {
         DestinationClass::Workspace => "workspace",
         DestinationClass::Memory => "memory",
         DestinationClass::Session => "sessions",
+        DestinationClass::Provider => "providers",
     }
 }
 
@@ -34,14 +39,19 @@ fn class_prefix(class: DestinationClass) -> &'static str {
 ///
 /// `settings` is the source workspace's captured K2 settings (or `None`),
 /// recorded in the manifest so the remote unpack route can re-apply them.
+///
+/// `pinned_chat` / `chat_pins` are optional identity metadata (C0 types
+/// only — pass `None` / `vec![]` until capture is wired).
 pub fn build_bundle(
     inventory: &CloneInventory,
     opts: &CloneOptions,
     created_at: String,
     settings: Option<WorkspaceSettings>,
+    pinned_chat: Option<PinnedChatIdentity>,
+    chat_pins: Vec<ChatPinEntry>,
     out_path: &Path,
 ) -> Result<PathBuf, String> {
-    let manifest = inventory.manifest(opts, created_at, settings);
+    let manifest = inventory.manifest(opts, created_at, settings, pinned_chat, chat_pins);
     let manifest_json = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| format!("serialize manifest: {e}"))?;
 

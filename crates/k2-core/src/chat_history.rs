@@ -417,48 +417,35 @@ fn newest_session_in_projects_dir(projects_dir: &Path, project_hash: &str) -> Op
 /// including worktree variants). None if Cursor has no data for this
 /// project.
 pub fn detect_cursor_session(project_path: &str) -> Option<String> {
+    // Cursor CLI stores chats under `~/.cursor/chats/<md5_hex(abs_path)>/`
+    // (same key `parse_cursor_sessions` uses). The legacy dash-hash
+    // (`cursor_project_hash`) never matched real on-disk dirs.
     let cursor_chats_dir = dirs::home_dir()?.join(".cursor").join("chats");
     let root = resolve_root_project_path(project_path);
-    let root_hash = cursor_project_hash(root);
-
-    let hash_dirs: Vec<PathBuf> = match fs::read_dir(&cursor_chats_dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                e.path().is_dir()
-                    && (name == root_hash
-                        || name.starts_with(&format!("{}-.worktrees-", root_hash)))
-            })
-            .map(|e| e.path())
-            .collect(),
-        Err(_) => return None,
-    };
+    let root_hash = md5_hex(root.as_bytes());
+    let hash_dir = cursor_chats_dir.join(&root_hash);
+    if !hash_dir.is_dir() {
+        return None;
+    }
 
     let mut best: Option<(std::time::SystemTime, String)> = None;
-
-    for hash_dir in hash_dirs {
-        let entries = match fs::read_dir(&hash_dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            if !entry.path().is_dir() {
-                continue;
-            }
-            let store_db = entry.path().join("store.db");
-            if let Ok(meta) = fs::metadata(&store_db) {
-                if let Ok(modified) = meta.modified() {
-                    let chat_id = entry.file_name().to_string_lossy().to_string();
-                    match &best {
-                        Some((best_time, _)) if modified > *best_time => {
-                            best = Some((modified, chat_id));
-                        }
-                        None => {
-                            best = Some((modified, chat_id));
-                        }
-                        _ => {}
+    let entries = fs::read_dir(&hash_dir).ok()?;
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let store_db = entry.path().join("store.db");
+        if let Ok(meta) = fs::metadata(&store_db) {
+            if let Ok(modified) = meta.modified() {
+                let chat_id = entry.file_name().to_string_lossy().to_string();
+                match &best {
+                    Some((best_time, _)) if modified > *best_time => {
+                        best = Some((modified, chat_id));
                     }
+                    None => {
+                        best = Some((modified, chat_id));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -481,22 +468,14 @@ pub fn cursor_session_file_exists(session_id: &str, project_path: &str) -> bool 
     let Some(home) = dirs::home_dir() else {
         return false;
     };
-    let cursor_chats_dir = home.join(".cursor").join("chats");
     let root = resolve_root_project_path(project_path);
-    let root_hash = cursor_project_hash(root);
-    let Ok(entries) = fs::read_dir(&cursor_chats_dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !(name == root_hash || name.starts_with(&format!("{}-.worktrees-", root_hash))) {
-            continue;
-        }
-        if entry.path().join(session_id).join("store.db").exists() {
-            return true;
-        }
-    }
-    false
+    let root_hash = md5_hex(root.as_bytes());
+    home.join(".cursor")
+        .join("chats")
+        .join(root_hash)
+        .join(session_id)
+        .join("store.db")
+        .exists()
 }
 
 /// Return the most recent Gemini session uuid for a project path.
@@ -1184,73 +1163,255 @@ fn extract_worktree_branch(project: &str) -> Option<String> {
 
 // ── Claude history parsing ──────────────────────────────────────────────
 
-pub fn parse_claude_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
-    let path = match claude_history_path() {
-        Some(p) => p,
-        None => return Ok(vec![]),
+/// Short fallback title for a disk-discovered session with no cheap display.
+fn short_claude_session_title(session_id: &str) -> String {
+    let short = if session_id.len() >= 8 {
+        &session_id[..8]
+    } else {
+        session_id
     };
-    let file = match File::open(&path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(e) => return Err(format!("Failed to open history file: {}", e)),
+    format!("Session {short}…")
+}
+
+/// Best-effort title from the first few JSONL lines (user/display text).
+/// Falls back to [`short_claude_session_title`] when nothing useful is found.
+fn cheap_claude_session_title(path: &Path, session_id: &str) -> String {
+    let Ok(file) = File::open(path) else {
+        return short_claude_session_title(session_id);
     };
     let reader = BufReader::new(file);
-    let mut sessions: HashMap<String, SessionAccumulator> = HashMap::new();
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => continue,
+    for line in reader.lines().take(12) {
+        let Ok(line) = line else {
+            continue;
         };
         if line.trim().is_empty() {
             continue;
         }
-        let parsed: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
         };
-        let session_id = match parsed.get("sessionId").and_then(|v| v.as_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let project = parsed
-            .get("project")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if let Some(filter) = project_filter {
-            let root = resolve_root_project_path(filter);
-            if !matches_project_family(&project, root) {
-                continue;
+        // history.jsonl-style display field (rare inside session files)
+        if let Some(display) = parsed.get("display").and_then(|v| v.as_str()) {
+            if !display.is_empty() {
+                return if display.len() > 80 {
+                    let truncated: String = display.chars().take(77).collect();
+                    format!("{truncated}...")
+                } else {
+                    display.to_string()
+                };
             }
         }
-        let display = parsed
-            .get("display")
+        // Claude session JSONL: user messages carry text in several shapes.
+        let is_user = parsed
+            .get("type")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let timestamp = parsed.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-        sessions
-            .entry(session_id.clone())
-            .and_modify(|acc| {
-                acc.count += 1;
-                if timestamp > acc.last_timestamp {
-                    acc.last_timestamp = timestamp;
-                }
-                if timestamp < acc.first_timestamp {
-                    acc.first_timestamp = timestamp;
-                    acc.first_display = display.clone();
-                }
+            .map(|t| t == "user" || t == "human")
+            .unwrap_or(false);
+        if !is_user {
+            continue;
+        }
+        let text = parsed
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| {
+                c.as_str().map(|s| s.to_string()).or_else(|| {
+                    c.as_array().and_then(|arr| {
+                        arr.iter().find_map(|part| {
+                            part.get("text")
+                                .and_then(|t| t.as_str())
+                                .or_else(|| part.as_str())
+                                .map(|s| s.to_string())
+                        })
+                    })
+                })
             })
-            .or_insert(SessionAccumulator {
-                session_id,
-                project,
-                first_display: display,
-                first_timestamp: timestamp,
-                last_timestamp: timestamp,
-                count: 1,
-            });
+            .or_else(|| {
+                parsed
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_default();
+        let text = text.trim();
+        if !text.is_empty() {
+            return if text.len() > 80 {
+                let truncated: String = text.chars().take(77).collect();
+                format!("{truncated}...")
+            } else {
+                text.to_string()
+            };
+        }
     }
-    Ok(sessions
+    short_claude_session_title(session_id)
+}
+
+/// Count non-empty lines in a session JSONL (message_count approx).
+fn cheap_jsonl_line_count(path: &Path) -> usize {
+    let Ok(file) = File::open(path) else {
+        return 0;
+    };
+    BufReader::new(file)
+        .lines()
+        .filter_map(|l| l.ok())
+        .filter(|l| !l.trim().is_empty())
+        .count()
+}
+
+/// Branch suffix from a Claude project dir name (`<hash>` or `<hash>-<branch>`).
+fn branch_from_claude_slug_dir(dir_name: &str, project_hash: &str) -> Option<String> {
+    if dir_name == project_hash {
+        return None;
+    }
+    dir_name
+        .strip_prefix(&format!("{project_hash}-"))
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Discover Claude session `.jsonl` files on disk for `project_filter` and
+/// insert any session ids not already present (Clone-to / history.jsonl gap).
+///
+/// Mirrors the slug family of [`newest_claude_session_on_disk`] /
+/// [`claude_session_file_exists`]: `~/.claude/projects/<hash>` and
+/// `<hash>-*`. Zero-byte files are skipped.
+fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, project_filter: &str) {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let root = resolve_root_project_path(project_filter);
+    let project_hash = claude_project_hash(root);
+    let projects_dir = home.join(".claude").join("projects");
+    let Ok(entries) = fs::read_dir(&projects_dir) else {
+        return;
+    };
+
+    // Prefer the filter path for project identity; fall back to root.
+    let project = project_filter.to_string();
+    let filter_branch = extract_worktree_branch(project_filter);
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !(name == project_hash || name.starts_with(&format!("{project_hash}-"))) {
+            continue;
+        }
+        let dir_branch = branch_from_claude_slug_dir(&name, &project_hash);
+        let origin_branch = filter_branch.clone().or(dir_branch);
+
+        let Ok(session_files) = fs::read_dir(entry.path()) else {
+            continue;
+        };
+        for sf in session_files.flatten() {
+            let path = sf.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(meta) = sf.metadata() else {
+                continue;
+            };
+            if meta.len() == 0 {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if sessions.contains_key(stem) {
+                continue;
+            }
+            let timestamp = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let title = cheap_claude_session_title(&path, stem);
+            let message_count = cheap_jsonl_line_count(&path);
+            sessions.insert(
+                stem.to_string(),
+                ChatSession {
+                    session_id: stem.to_string(),
+                    project: project.clone(),
+                    title,
+                    timestamp,
+                    provider: "claude".to_string(),
+                    message_count,
+                    origin_branch: origin_branch.clone(),
+                },
+            );
+        }
+    }
+}
+
+pub fn parse_claude_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
+    let mut sessions: HashMap<String, SessionAccumulator> = HashMap::new();
+
+    // history.jsonl is optional after Clone-to: sessions may exist only as
+    // `~/.claude/projects/<slug>/*.jsonl` with no dest-path lines in history.
+    if let Some(path) = claude_history_path() {
+        match File::open(&path) {
+            Ok(file) => {
+                let reader = BufReader::new(file);
+                for line in reader.lines() {
+                    let line = match line {
+                        Ok(l) => l,
+                        Err(_) => continue,
+                    };
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let parsed: serde_json::Value = match serde_json::from_str(&line) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let session_id = match parsed.get("sessionId").and_then(|v| v.as_str()) {
+                        Some(s) => s.to_string(),
+                        None => continue,
+                    };
+                    let project = parsed
+                        .get("project")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if let Some(filter) = project_filter {
+                        let root = resolve_root_project_path(filter);
+                        if !matches_project_family(&project, root) {
+                            continue;
+                        }
+                    }
+                    let display = parsed
+                        .get("display")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let timestamp =
+                        parsed.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                    sessions
+                        .entry(session_id.clone())
+                        .and_modify(|acc| {
+                            acc.count += 1;
+                            if timestamp > acc.last_timestamp {
+                                acc.last_timestamp = timestamp;
+                            }
+                            if timestamp < acc.first_timestamp {
+                                acc.first_timestamp = timestamp;
+                                acc.first_display = display.clone();
+                            }
+                        })
+                        .or_insert(SessionAccumulator {
+                            session_id,
+                            project,
+                            first_display: display,
+                            first_timestamp: timestamp,
+                            last_timestamp: timestamp,
+                            count: 1,
+                        });
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Failed to open history file: {}", e)),
+        }
+    }
+
+    let mut by_id: HashMap<String, ChatSession> = sessions
         .into_values()
         .map(|acc| {
             let title = if acc.first_display.len() > 80 {
@@ -1259,17 +1420,29 @@ pub fn parse_claude_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
             } else {
                 acc.first_display
             };
-            ChatSession {
-                origin_branch: extract_worktree_branch(&acc.project),
-                session_id: acc.session_id,
-                project: acc.project,
-                title,
-                timestamp: acc.last_timestamp,
-                provider: "claude".to_string(),
-                message_count: acc.count,
-            }
+            let id = acc.session_id.clone();
+            (
+                id,
+                ChatSession {
+                    origin_branch: extract_worktree_branch(&acc.project),
+                    session_id: acc.session_id,
+                    project: acc.project,
+                    title,
+                    timestamp: acc.last_timestamp,
+                    provider: "claude".to_string(),
+                    message_count: acc.count,
+                },
+            )
         })
-        .collect())
+        .collect();
+
+    // Only union when a project filter is set — a full HOME projects walk
+    // is too expensive for the unfiltered list path.
+    if let Some(filter) = project_filter {
+        union_claude_disk_sessions(&mut by_id, filter);
+    }
+
+    Ok(by_id.into_values().collect())
 }
 
 // ── Cursor chat parsing ─────────────────────────────────────────────────
@@ -3108,7 +3281,11 @@ fn percent_decode_uri(uri: &str) -> String {
 }
 
 /// MD5 hash → 32-char lowercase hex.
-fn md5_hex(data: &[u8]) -> String {
+///
+/// Used by Cursor chat-dir keys (`~/.cursor/chats/<md5>/`) and Clone-to
+/// provider inventory. Public so `clone::providers` can re-key dest paths
+/// with the same digest the list/detect paths already use.
+pub fn md5_hex(data: &[u8]) -> String {
     let digest = md5_digest(data);
     digest.iter().map(|b| format!("{:02x}", b)).collect()
 }
@@ -4310,6 +4487,97 @@ mod tests {
         // The worktree session carries an origin_branch tag.
         let b = sessions.iter().find(|s| s.session_id == "b").unwrap();
         assert_eq!(b.origin_branch.as_deref(), Some("feature"));
+    }
+
+    /// Clone-to: history.jsonl has no dest-path lines, but session
+    /// `.jsonl` files already live under `~/.claude/projects/<slug>/`.
+    /// Disk union must surface them when a project filter is set.
+    #[test]
+    fn parse_claude_sessions_unions_disk_when_history_missing() {
+        let _g = UNIT6_HOME_LOCK.lock();
+        let _h = U6HomeGuard::new("claude-disk-only");
+        let home = dirs::home_dir().unwrap();
+        let project = "/Users/z/proj-disk-only";
+        let hash = claude_project_hash(project);
+        let sess_dir = home
+            .join(".claude")
+            .join("projects")
+            .join(&hash);
+        std::fs::create_dir_all(&sess_dir).unwrap();
+        let sid = "disk-session-aaaaaaaa";
+        std::fs::write(
+            sess_dir.join(format!("{sid}.jsonl")),
+            b"{\"type\":\"user\",\"message\":{\"content\":\"hello from disk\"}}\n",
+        )
+        .unwrap();
+        // No history.jsonl at all.
+        assert!(!home.join(".claude").join("history.jsonl").exists());
+
+        let sessions = parse_claude_sessions(Some(project)).expect("parse");
+        assert_eq!(sessions.len(), 1, "got: {sessions:?}");
+        let s = &sessions[0];
+        assert_eq!(s.session_id, sid);
+        assert_eq!(s.provider, "claude");
+        assert_eq!(s.project, project);
+        assert!(
+            s.title.contains("hello from disk") || s.title.starts_with("Session "),
+            "title should be content or short fallback, got {:?}",
+            s.title
+        );
+        // Unfiltered path must NOT walk disk (history missing → empty).
+        let unfiltered = parse_claude_sessions(None).expect("unfiltered");
+        assert!(
+            unfiltered.is_empty(),
+            "disk union only when filter is Some; got: {unfiltered:?}"
+        );
+    }
+
+    /// History has one session; disk has another under the same slug → both.
+    #[test]
+    fn parse_claude_sessions_unions_history_and_disk() {
+        let _g = UNIT6_HOME_LOCK.lock();
+        let _h = U6HomeGuard::new("claude-hist-disk");
+        let home = dirs::home_dir().unwrap();
+        let project = "/Users/z/proj-hist-disk";
+        let hash = claude_project_hash(project);
+
+        let claude_dir = home.join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let history = format!(
+            "{{\"sessionId\":\"hist-sid-11111111\",\"project\":{project:?},\"display\":\"from history\",\"timestamp\":100}}\n"
+        );
+        std::fs::write(claude_dir.join("history.jsonl"), history).unwrap();
+
+        let sess_dir = claude_dir.join("projects").join(&hash);
+        std::fs::create_dir_all(&sess_dir).unwrap();
+        let disk_sid = "disk-sid-22222222";
+        std::fs::write(
+            sess_dir.join(format!("{disk_sid}.jsonl")),
+            b"{\"type\":\"user\",\"message\":{\"content\":\"only on disk\"}}\n",
+        )
+        .unwrap();
+        // Empty file must be ignored (never-run session id pre-allocation).
+        std::fs::write(sess_dir.join("empty-sid-00000000.jsonl"), b"").unwrap();
+
+        let sessions = parse_claude_sessions(Some(project)).expect("parse");
+        assert!(
+            sessions.iter().any(|s| s.session_id == "hist-sid-11111111"),
+            "history session missing: {sessions:?}"
+        );
+        assert!(
+            sessions.iter().any(|s| s.session_id == disk_sid),
+            "disk session missing: {sessions:?}"
+        );
+        assert!(
+            !sessions.iter().any(|s| s.session_id == "empty-sid-00000000"),
+            "empty jsonl must be skipped: {sessions:?}"
+        );
+        assert_eq!(sessions.len(), 2, "got: {sessions:?}");
+        let hist = sessions
+            .iter()
+            .find(|s| s.session_id == "hist-sid-11111111")
+            .unwrap();
+        assert_eq!(hist.title, "from history");
     }
 
     #[test]

@@ -1627,14 +1627,24 @@ async fn handle_one_request(
             let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
             let resp = match k2_core::tunnel::stop_tunnel() {
                 Ok(()) => {
-                    // #675.5 — connector stopped; push the cleared status.
+                    // Honest post-stop status: re-read from the connector
+                    // (reap always runs on stop; status should be stopped).
+                    // Emit TunnelStatusChanged from the real status so
+                    // clients never see a synthetic "running:false" that
+                    // disagrees with tunnel_status().
+                    let st = k2_core::tunnel::tunnel_status();
                     let _ = crate::session_events::emit(
                         crate::session_events::SessionEvent::TunnelStatusChanged {
-                            running: false,
-                            public_url: None,
+                            running: st.running,
+                            public_url: st.public_url.clone(),
                         },
                     );
-                    crate::cli::CliResponse::ok_json(r#"{"ok":true}"#.to_string())
+                    // Keep `ok` for existing clients; add `running` so
+                    // callers can confirm the stop actually took.
+                    crate::cli::CliResponse::ok_json(format!(
+                        r#"{{"ok":true,"running":{}}}"#,
+                        if st.running { "true" } else { "false" }
+                    ))
                 }
                 Err(e) => crate::cli::CliResponse::bad_request(e),
             };

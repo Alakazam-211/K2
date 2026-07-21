@@ -3,11 +3,14 @@
 //!
 //! Lifecycle:
 //!   * `start()` resolves the `frpc` binary, renders the config TOML to a
-//!     0600 file under `~/.k2/`, spawns `frpc -c <file>`, and starts a
-//!     supervisor thread that captures stdout/stderr to a log and
-//!     restarts the child on unexpected exit with exponential backoff.
-//!   * `stop()` flips the desired-state flag and signals the child to
-//!     terminate; the supervisor observes the flag and does NOT restart.
+//!     0600 file under `~/.k2/`, reaps any stray frpc bound to that config,
+//!     spawns `frpc -c <file>`, and starts a supervisor thread that
+//!     captures stdout/stderr to a log and restarts the child on unexpected
+//!     exit with exponential backoff.
+//!   * `stop()` flips the desired-state flag, kills any Child still in the
+//!     slot, always reaps stray frpc by config pattern (the supervisor
+//!     `.take()`s the handle while waiting — slot kill alone orphans), and
+//!     the supervisor poll observes the flag and does NOT restart.
 //!   * `status()` reports running/stopped + the predicted public URL.
 //!
 //! The connector is a process-wide singleton (one tunnel per daemon),
@@ -145,9 +148,9 @@ pub fn frpc_log_path() -> PathBuf {
 /// the dial worked (even if the process later died for another reason).
 const HEALTHY_UPTIME: Duration = Duration::from_secs(30);
 
-/// Poll cadence while waiting on the child in multi-relay mode (the
-/// single-relay path keeps the original blocking `wait()`). Matches the
-/// 1 s slice the lease/subdomain loops use to observe `stop()` promptly.
+/// Poll cadence while waiting on the child (solo stop-observability and
+/// multi-relay failover/watchdog). Matches the 1 s slice the lease /
+/// subdomain loops use to observe `stop()` promptly.
 const SUPERVISE_POLL: Duration = Duration::from_secs(1);
 
 /// Live connector state — the supervised child + the desired-state flag.
@@ -433,12 +436,17 @@ pub fn start(
 }
 
 /// Stop the tunnel. Flips desired-state to stopped (so the supervisor
-/// won't restart) and kills the live child. Idempotent — stopping a
+/// won't restart), kills any live child handle still in the slot, and
+/// always reaps stray frpc by config path — the supervisor `.take()`s
+/// the Child while waiting, so a bare `st.child` kill is often a no-op
+/// and orphans frpc without the pattern reap. Idempotent — stopping a
 /// stopped tunnel is `Ok`.
 pub fn stop() -> Result<(), String> {
     let mut guard = state().lock().unwrap_or_else(|p| p.into_inner());
     if let Some(st) = guard.as_ref() {
+        // 1) Tell the supervisor not to respawn.
         st.running.store(false, Ordering::SeqCst);
+        // 2) Kill the Child handle if the supervisor hasn't taken it yet.
         if let Some(child) = st.child.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
             // Best-effort graceful kill. frpc has no special signal
             // protocol; SIGKILL via `kill()` is the portable stop.
@@ -446,6 +454,17 @@ pub fn stop() -> Result<(), String> {
             let _ = child.wait();
         }
     }
+    // 3) Always reap by config pattern — independent of Child ownership.
+    //    Covers: supervisor-held child (slot empty), orphans from prior
+    //    crashes, and solo-mode waits that never observed `running=false`
+    //    before this fix. Safe when nothing matches (pkill no-match = ok).
+    let cfg_path = frpc_config_path();
+    crate::log_debug!(
+        "[tunnel] stop: reaping stray frpc matching `{}`",
+        stray_frpc_pattern(&cfg_path)
+    );
+    reap_stray_frpc(&cfg_path);
+    // 4) Clear connector state so status() reports stopped.
     *guard = None;
     Ok(())
 }
@@ -623,21 +642,20 @@ impl SessionWatch {
 
 /// Wait for the current child to end.
 ///
-/// * Single relay ([`RelaySelector::is_solo`]) — plain blocking
-///   `wait()`, byte-identical to the pre-failover supervisor: no polling,
-///   no fail-back to evaluate, no behavior change.
-/// * Multi-relay — poll `try_wait` on [`SUPERVISE_POLL`] so we can (a)
-///   feed healthy uptime into the selector while the child lives (the
-///   fail-back streak), (b) observe `stop()` and kill the child we're
-///   holding (it was TAKEN from the slot, so `stop()` can't reach it),
-///   and (c) observe the mid-session watchdog ([`SessionWatch`]) and kill
-///   a live-but-stuck child whose relay died AFTER login (frpc never
-///   exits on its own in that state — it reconnect-retries forever).
-///
-/// The solo path deliberately carries NO watchdog: with a single relay
-/// there is nowhere to rotate to, and killing a reconnect-looping frpc
-/// would only replace frp's own retry loop with ours — the blocking
-/// `wait()` stays byte-identical to the pre-failover supervisor.
+/// * Single relay ([`RelaySelector::is_solo`]) — poll `try_wait` so we can
+///   observe `stop()` and kill the child we're holding. The Child was
+///   TAKEN from the slot, so `stop()` can't reach the handle; without
+///   this poll a solo frpc is orphaned on SIGTERM/Stop until the next
+///   `start()` reaps it. **No** mid-session watchdog and **no** fail-back
+///   on solo — with a single relay there is nowhere to rotate, and a
+///   reconnect-looping frpc is left to frp's own retry (stop still kills
+///   via the poll + `reap_stray_frpc` on the stop path). The pre-failover
+///   "byte-identical solo wait" tradeoff is intentionally broken here
+///   for stop correctness: a bare `child.wait()` never saw `running=false`.
+/// * Multi-relay — same poll loop plus (a) healthy-uptime feed into the
+///   selector (fail-back streak), (b) stop observability, and (c) the
+///   mid-session watchdog ([`SessionWatch`]) for live-but-stuck children
+///   whose relay died AFTER login (frpc never exits on its own then).
 fn wait_for_exit(
     child: &mut Child,
     running: &AtomicBool,
@@ -645,8 +663,24 @@ fn wait_for_exit(
     spawned_at: Instant,
     watch: Option<&SessionWatch>,
 ) -> ChildOutcome {
+    // Solo: stop-observability only — no watchdog / fail-back.
     if selector.is_solo() {
-        return ChildOutcome::Exited(child.wait().ok().and_then(|s| s.code()));
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return ChildOutcome::Exited(status.code()),
+                Ok(None) => {}
+                Err(e) => {
+                    crate::log_debug!("[tunnel] wait on frpc child failed: {e}");
+                    return ChildOutcome::Exited(None);
+                }
+            }
+            if !running.load(Ordering::SeqCst) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return ChildOutcome::Exited(None);
+            }
+            std::thread::sleep(SUPERVISE_POLL);
+        }
     }
     loop {
         match child.try_wait() {
@@ -705,8 +739,9 @@ fn wait_for_exit(
 /// supervisor re-renders `frpc.toml` for the new relay before respawning,
 /// resets the backoff, and republishes `current_relay` so `status()`
 /// reports the relay actually being dialed. With a single relay the
-/// selector never switches and the wait path is the original blocking
-/// `wait()` — behavior is byte-identical to the pre-failover supervisor.
+/// selector never switches; the wait path still polls for stop (so solo
+/// frpc is not orphaned) but has no watchdog/fail-back (see
+/// [`wait_for_exit`]).
 ///
 /// **Mid-session relay death** (multi-relay only): exits alone can't see a
 /// relay that dies AFTER a successful login — frpc never exits then, it
@@ -716,6 +751,11 @@ fn wait_for_exit(
 /// ([`ChildOutcome::WatchdogKill`]) and the death is counted as one
 /// explicit `on_failure()` — the same threshold/rotation policy as fast
 /// dial failures, just triggered by log evidence instead of an exit.
+///
+/// **Port freeze (R1)**: `resolved_local_port` is captured once at start
+/// and reused on every respawn / relay rewrite — a mid-flight daemon port
+/// change must not rebind frpc to a different localPort while the public
+/// proxy name stays the same.
 fn spawn_supervised(
     frpc: PathBuf,
     child_slot: Arc<Mutex<Option<Child>>>,
@@ -726,9 +766,9 @@ fn spawn_supervised(
     e2e: bool,
 ) -> Result<(), String> {
     // Mid-session watchdog only in multi-relay mode: it exists to drive
-    // ROTATION, and the single-relay path stays byte-identical to the
-    // pre-failover supervisor (see `wait_for_exit`). One SessionWatch per
-    // spawned child so every run starts with a clean disconnect streak.
+    // ROTATION. Solo still polls for stop (orphan fix) but never arms a
+    // SessionWatch (nowhere to rotate). One SessionWatch per spawned
+    // child so every multi run starts with a clean disconnect streak.
     let multi = cfg.relay_list().len() > 1;
     let new_watch = move || multi.then(|| Arc::new(SessionWatch::new()));
 
@@ -1885,6 +1925,232 @@ mod tests {
             stop().expect("first stop ok");
             stop().expect("second stop ok");
             assert!(!status().running);
+        });
+    }
+
+    /// stop() always reaps by config pattern even when the Child slot is
+    /// empty (supervisor took the handle) — the orphan-kill path that
+    /// used to only run on start(). Spawns a long-lived stand-in whose
+    /// cmdline matches `stray_frpc_pattern`, never installs connector
+    /// STATE, then stop() must kill it.
+    #[cfg(unix)]
+    #[test]
+    fn stop_reaps_stray_frpc_even_when_child_slot_empty() {
+        with_temp_home(|| {
+            let cfg_path = frpc_config_path();
+            if let Some(dir) = cfg_path.parent() {
+                std::fs::create_dir_all(dir).expect("mk .k2");
+            }
+            std::fs::write(&cfg_path, "# orphan-reap test config\n").expect("write frpc.toml");
+
+            // Binary MUST be named `frpc` so the full cmdline contains the
+            // pkill pattern `frpc -c <cfg>` (same as a real frpc spawn).
+            let dir = std::env::temp_dir().join(format!(
+                "k2so-orphan-frpc-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            std::fs::create_dir_all(&dir).expect("mk orphan-frpc dir");
+            let frpc = dir.join("frpc");
+            std::fs::write(&frpc, "#!/bin/sh\nsleep 300\n").expect("write sleep-frpc");
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&frpc, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod sleep-frpc");
+            }
+
+            let mut child = Command::new(&frpc)
+                .arg("-c")
+                .arg(&cfg_path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn orphan stand-in");
+            let pid = child.id();
+            // Let the process table settle so pkill -f can see it.
+            std::thread::sleep(Duration::from_millis(150));
+            // Sanity: still running before stop (not yet exited).
+            assert!(
+                child.try_wait().expect("try_wait before").is_none(),
+                "orphan stand-in (pid {pid}) must be alive before stop"
+            );
+
+            // No connector STATE — slot is empty by construction.
+            stop().expect("stop must succeed with empty STATE");
+            assert!(!status().running);
+
+            // pkill SIGTERMs the stand-in; the Child handle reaps the
+            // zombie. Do NOT use `kill -0` — zombies still "exist" and
+            // would false-pass as alive.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut gone = false;
+            while Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        gone = true;
+                        break;
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                    Err(_) => {
+                        gone = true;
+                        break;
+                    }
+                }
+            }
+            assert!(
+                gone,
+                "stop() must reap the stray frpc (pid {pid}) matching {}",
+                stray_frpc_pattern(&cfg_path)
+            );
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// Solo-mode stop must kill a long-lived supervised child (the
+    /// wait_for_exit poll observes `running=false`). Before the fix, solo
+    /// blocked on bare `child.wait()` and stop only killed an empty slot.
+    #[cfg(unix)]
+    #[test]
+    fn solo_stop_kills_long_lived_supervised_child() {
+        with_temp_home(|| {
+            let dir = std::env::temp_dir().join(format!(
+                "k2so-solo-stop-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            std::fs::create_dir_all(&dir).expect("mk solo-stop dir");
+            // Named `frpc` so stop()'s pattern reap is a second line of defense.
+            let script = dir.join("frpc");
+            std::fs::write(&script, "#!/bin/sh\nsleep 300\n").expect("write long-lived frpc");
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod long-lived frpc");
+            }
+
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed solo config");
+
+            let st = start(None, 57839, &FrpcBinary::Explicit(script.clone()))
+                .expect("start long-lived solo frpc");
+            assert!(st.running, "solo start must report running");
+            // Give the supervisor a tick to .take() the Child so the slot
+            // is empty — the historical bug path.
+            std::thread::sleep(Duration::from_millis(200));
+
+            stop().expect("stop solo tunnel");
+            assert!(!status().running, "status must be stopped after stop()");
+
+            // Child must not still be holding the config path (reap + poll kill).
+            // pgrep -f: exit 0 = match still alive, exit 1 = no match (desired).
+            // Fail loudly if pgrep is missing or cannot run — never soft-pass.
+            let pattern = stray_frpc_pattern(&frpc_config_path());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut clean = false;
+            while Instant::now() < deadline {
+                let status = Command::new("pgrep")
+                    .arg("-f")
+                    .arg(&pattern)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .expect("pgrep -f must be available to assert solo stop killed frpc");
+                // Unix: 0 = found, 1 = not found. Anything else is a tool error.
+                let code = status.code().expect("pgrep must exit with a status code");
+                assert!(
+                    code == 0 || code == 1,
+                    "pgrep -f unexpected exit {code} for pattern `{pattern}`"
+                );
+                if code == 1 {
+                    clean = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert!(
+                clean,
+                "solo stop must leave no process matching `{pattern}`"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// R1 port freeze: `resolved_local_port` is captured once at start and
+    /// reused on every multi-relay rewrite — rotation must not change
+    /// localPort even as serverAddr flips.
+    #[test]
+    fn supervisor_rotation_keeps_frozen_local_port() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                relays: vec![
+                    RelayEndpoint {
+                        host: "10.0.0.1".to_string(),
+                        port: 7000,
+                    },
+                    RelayEndpoint {
+                        host: "10.0.0.2".to_string(),
+                        port: 7000,
+                    },
+                ],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed two-relay config");
+
+            // Pin an explicit non-default daemon port so a freeze bug would
+            // be obvious (would rebind to 0 / missing / wrong port).
+            let st = start(None, 48123, &FrpcBinary::Explicit(true_bin()))
+                .expect("start with two relays");
+            assert!(st.running);
+            assert_eq!(
+                st.local_port,
+                Some(48123),
+                "start must freeze the resolved daemon port into status"
+            );
+            let first = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+            assert!(
+                first.contains("localPort = 48123"),
+                "initial render must use the frozen port\n{first}"
+            );
+
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let rotated = loop {
+                let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+                if toml.contains("serverAddr = \"10.0.0.2\"") {
+                    break toml;
+                }
+                if Instant::now() >= deadline {
+                    panic!("supervisor never rotated; frpc.toml:\n{toml}");
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            };
+            assert!(
+                rotated.contains("localPort = 48123"),
+                "relay rotation must keep the frozen localPort from start\n{rotated}"
+            );
+            assert_eq!(
+                status().local_port,
+                Some(48123),
+                "status must still report the frozen port after rotation"
+            );
+
+            stop().expect("stop");
         });
     }
 

@@ -59,11 +59,15 @@ pub fn render_frpc_toml(cfg: &TunnelConfig, local_port: u16, e2e: bool) -> Strin
 
     // Login metas — frp v0.61: top-level `metadatas.<key>`. frps forwards
     // these as `login.metas` to the server-plugin, which validates
-    // `metas["token"]`.
+    // `metas["token"]` and (when present) `metas["device_id"]` for lease
+    // identity / multi-device accounting.
     out.push_str("# Login metadata forwarded to the K2 Connect control plane.\n");
     out.push_str("# The bearer token authorizes the tunnel and selects the user.\n");
     out.push_str("[metadatas]\n");
     out.push_str(&format!("token = {}\n", toml_str(&cfg.token)));
+    if let Some(dev) = cfg.device_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str(&format!("device_id = {}\n", toml_str(dev)));
+    }
     out.push('\n');
 
     // ── Proxy section (array of tables) ───────────────────────────────
@@ -164,6 +168,62 @@ mod tests {
         assert!(
             toml.contains("token = \"tok_secret\""),
             "token meta missing or wrong key\n{toml}"
+        );
+    }
+
+    #[test]
+    fn renders_device_id_in_login_metadatas() {
+        let mut cfg = sample();
+        cfg.device_id = Some("dev-abc-123".to_string());
+        let toml = render_frpc_toml(&cfg, 57839, false);
+        assert!(
+            toml.contains("[metadatas]"),
+            "device_id must live in the client-level [metadatas] table\n{toml}"
+        );
+        assert!(
+            toml.contains("device_id = \"dev-abc-123\""),
+            "device_id meta missing or wrong value\n{toml}"
+        );
+        // Escaping: quotes in device_id must not break the TOML string.
+        cfg.device_id = Some("dev\"evil".to_string());
+        let escaped = render_frpc_toml(&cfg, 57839, false);
+        assert!(
+            escaped.contains(r#"device_id = "dev\"evil""#),
+            "device_id must be TOML-escaped\n{escaped}"
+        );
+        // Relay path clones cfg — device_id must survive rotation renders.
+        let relay = RelayEndpoint {
+            host: "5.6.7.8".to_string(),
+            port: 7001,
+        };
+        cfg.device_id = Some("dev-abc-123".to_string());
+        let rotated = render_frpc_toml_for_relay(&cfg, &relay, 57839, false);
+        assert!(
+            rotated.contains("device_id = \"dev-abc-123\""),
+            "relay render must inherit device_id via cfg clone\n{rotated}"
+        );
+    }
+
+    #[test]
+    fn absent_or_empty_device_id_omits_key() {
+        // Default sample has no device_id.
+        let plain = render_frpc_toml(&sample(), 57839, false);
+        assert!(
+            !plain.contains("device_id"),
+            "absent device_id must omit the key entirely\n{plain}"
+        );
+        let mut cfg = sample();
+        cfg.device_id = Some(String::new());
+        let empty = render_frpc_toml(&cfg, 57839, false);
+        assert!(
+            !empty.contains("device_id"),
+            "empty device_id must omit the key\n{empty}"
+        );
+        cfg.device_id = Some("   ".to_string());
+        let blank = render_frpc_toml(&cfg, 57839, false);
+        assert!(
+            !blank.contains("device_id"),
+            "whitespace-only device_id must omit the key\n{blank}"
         );
     }
 

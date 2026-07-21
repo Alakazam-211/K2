@@ -12,7 +12,9 @@ import ModeToggle from '@/components/Presence/ModeToggle'
 import ServerSwitcher from './ServerSwitcher'
 import PageTabs from './PageTabs'
 import SettingsGearButton from './SettingsGearButton'
+import TrafficLightSpacer from './TrafficLightSpacer'
 import { Surface } from '@/components/ui'
+import { isWebClient } from '@/lib/is-web'
 
 interface TopBarProps {
   projectName?: string
@@ -86,12 +88,12 @@ export default function TopBar({
         minHeight: TOPBAR_HEIGHT
       }}
     >
-      {/* Left: traffic lights spacer + K2 branding + primary sidebar toggle.
-          Top-bar wordmark only — the OS menu bar / app name (tauri.conf.json
-          productName) stays "K2" until the 0.40.0 full rename. */}
-      <div className="flex items-center gap-2" style={{ minWidth: 130 }}>
-        {/* Traffic lights occupy ~70px on macOS */}
-        <div style={{ width: 70 }} />
+      {/* Left: traffic lights spacer (desktop only) + K2 branding + sidebar toggle. */}
+      <div
+        className="flex items-center gap-2"
+        style={{ minWidth: isWebClient() ? undefined : 130 }}
+      >
+        <TrafficLightSpacer />
         {/* App name (in-app wordmark) */}
         <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">K2</span>
         {/* K2 Connect server switcher (This Mac / saved servers / add) */}

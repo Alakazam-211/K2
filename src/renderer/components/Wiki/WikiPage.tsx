@@ -16,6 +16,7 @@ import { useToastStore } from '@/stores/toast'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
+import TrafficLightSpacer from '@/components/TopBar/TrafficLightSpacer'
 import { Surface } from '@/components/ui'
 import Markdown from '@/components/Markdown/Markdown'
 import WikiGraph from './WikiGraph'
@@ -451,7 +452,7 @@ export default function WikiPage(): React.JSX.Element | null {
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">
-          <div style={{ width: 70 }} />
+          <TrafficLightSpacer />
           <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
             K2
           </span>

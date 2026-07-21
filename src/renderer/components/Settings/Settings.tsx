@@ -7,6 +7,7 @@ import type { SettingEntry } from './searchManifest'
 import { GeneralSection, GeneralRemoteHostPanel, GENERAL_MANIFEST } from './sections/GeneralSection'
 import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
 import { useConnectHostStore } from '@/stores/connect-host'
+import TrafficLightSpacer from '@/components/TopBar/TrafficLightSpacer'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
 import { CodeEditorSettingsSection, CODE_EDITOR_MANIFEST } from './sections/CodeEditorSettingsSection'
 import { EditorsAgentsSection, EDITORS_AGENTS_MANIFEST } from './sections/EditorsAgentsSection'
@@ -174,8 +175,7 @@ export default function Settings(): React.JSX.Element {
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2">
-          {/* Traffic lights occupy ~70px on macOS */}
-          <div style={{ width: 70 }} />
+          <TrafficLightSpacer />
           {/* App name (in-app wordmark) */}
           <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
             K2

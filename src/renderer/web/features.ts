@@ -22,6 +22,14 @@ export const webFeatures = {
   permissions: desktop,
   /** Multi-host ServerSwitcher + Add server (hosted web is single same-origin). */
   multiHost: desktop,
+  /**
+   * macOS traffic-light (close/min/max) left inset. Desktop reserves ~70px;
+   * browser chrome has no window controls — reclaim that space.
+   */
+  trafficLightSpacer: desktop,
 } as const
+
+/** Width (px) reserved for traffic lights; 0 on hosted web. */
+export const TRAFFIC_LIGHT_SPACER_PX = webFeatures.trafficLightSpacer ? 70 : 0
 
 export type WebFeatures = typeof webFeatures

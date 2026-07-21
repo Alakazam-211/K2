@@ -5,6 +5,7 @@ import { usePanelsStore } from '../../stores/panels'
 import TimerButton from '@/components/Timer/TimerButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
+import TrafficLightSpacer from '@/components/TopBar/TrafficLightSpacer'
 
 interface FocusLayoutProps {
   children: ReactNode
@@ -41,8 +42,7 @@ export default function FocusLayout({
           minHeight: TOPBAR_HEIGHT
         }}
       >
-        {/* Left: traffic lights spacer */}
-        <div style={{ width: 70 }} />
+        <TrafficLightSpacer />
 
         {/* Center: workspace name + branch */}
         <div className="flex items-center gap-1.5 text-xs">

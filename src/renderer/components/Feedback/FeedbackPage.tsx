@@ -24,6 +24,7 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
+import TrafficLightSpacer from '@/components/TopBar/TrafficLightSpacer'
 import { Surface } from '@/components/ui'
 import {
   countByStatus,
@@ -188,6 +189,13 @@ function CheckGlyph(): React.JSX.Element {
 
 // ── List card ─────────────────────────────────────────────────────────────
 
+/** True when the user just finished a drag-select (non-empty selection).
+ *  Used so clickable cards don't treat "copy this title" as card select. */
+function clickWasTextSelection(): boolean {
+  const sel = window.getSelection()
+  return !!sel && !sel.isCollapsed && sel.toString().length > 0
+}
+
 export function FeedbackCard({
   row,
   workspace,
@@ -211,7 +219,12 @@ export function FeedbackCard({
     // box-shadow, and Surface's elevation slot `[box-shadow:var(--ring-surface)]`
     // sorts LATER in the Tailwind bundle — it would clobber the accent ring.
     <div
-      onClick={onSelect}
+      onClick={() => {
+        // Drag-highlighting the title leaves a selection — don't treat that
+        // mouseup as "open this ticket" (re-render would clear the copy).
+        if (clickWasTextSelection()) return
+        onSelect()
+      }}
       className={`border bg-[var(--color-bg-surface)] p-3 cursor-pointer transition-colors ${
         selected
           ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
@@ -232,21 +245,24 @@ export function FeedbackCard({
               size={18}
             />
           )}
-          <span className="text-[11px] text-[var(--color-text-secondary)] truncate">
+          <span className="text-[11px] text-[var(--color-text-secondary)] truncate selectable-copy">
             {row.projectName}
           </span>
         </div>
         <PriorityBadge priority={row.priority} />
         <CardStatusDropdown row={row} onMutated={onMutated} />
       </div>
-      {/* The ask itself is the card body. */}
-      <p className="mt-2 text-sm text-[var(--color-text-primary)] break-words" title={row.title}>
+      {/* The ask itself is the card body — selectable for quote/copy. */}
+      <p
+        className="mt-2 text-sm text-[var(--color-text-primary)] break-words selectable-copy cursor-text"
+        title={row.title}
+      >
         {row.title}
       </p>
       {/* Footer meta: kind tag + submitter · when, comment count right. */}
       <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] min-w-0">
         <KindBadge kind={row.kind} />
-        <span className="truncate">{row.agentName}</span>
+        <span className="truncate selectable-copy">{row.agentName}</span>
         <span className="opacity-60 flex-shrink-0">·</span>
         <span className="tabular-nums flex-shrink-0">
           {formatRelativeTime(row.createdAt, nowSec)}
@@ -443,7 +459,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">
-          <div style={{ width: 70 }} />
+          <TrafficLightSpacer />
           <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
             K2
           </span>

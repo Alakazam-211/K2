@@ -66,17 +66,24 @@ use k2_core::session::SessionId;
 /// `connect_users::SESSION_RECORD_VERSION`.
 const STORE_VERSION: u32 = 1;
 
-/// Token lifetime — a **multi-hour, ~session-lifetime** window, NOT a short
-/// rotation. The security boundary is EPOCH revocation at cell teardown
-/// (instant + restart-surviving — `revoke_session` is called from the
-/// child-exit observer, `v2_spawn.rs`), so the TTL is deliberately kept OFF
-/// the live critical path and is only a generous backstop that DOES apply
-/// (a token older than this stops validating even if the daemon never saw
-/// the teardown). There is no live-path rotation / sliding re-mint: a
-/// running cell's env can't be mutated after spawn, so a short TTL would
-/// strand every agent on the box mid-client-work each rotation cycle. PRD
-/// §3.1/§6 de-risks the fixed TTL as non-load-bearing.
-const TOKEN_LIFETIME_HOURS: i64 = 24;
+/// Wall-clock lifetime used only when stamping `TokenRecord::expires_at`
+/// for on-disk schema compatibility. **Not enforced on validate.**
+///
+/// Long-running agent cells (heartbeats, multi-day/month work) keep the
+/// same env passport for the life of the PTY. There is no sliding re-mint
+/// (the child env cannot be rewritten after spawn). A 24h wall TTL was
+/// stranding agents after a day with "auth token expired" / failed
+/// peer messaging while the session was still live.
+///
+/// The real security boundary is **epoch revocation** at cell teardown
+/// (`revoke_session` from the child-exit observer / `v2_spawn`) plus the
+/// global kill switch — instant and restart-surviving. Abandoned records
+/// for sessions that never tore down cleanly are cleaned when the session
+/// map / registry is pruned, not by stranding live agents.
+///
+/// `expires_at` is still written far in the future so older code that
+/// inspects the field does not treat live passports as already stale.
+const TOKEN_RECORD_HORIZON_YEARS: i64 = 100;
 
 // ─────────────────────────────────────────────────────────────────────
 // Feature flag
@@ -213,8 +220,8 @@ struct TokenRecord {
     /// constant-time-compared against this; the raw secret is never stored.
     token_digest: String,
     created_at: DateTime<Utc>,
-    /// `created_at + TOKEN_LIFETIME_HOURS` — the generous backstop TTL
-    /// (epoch-revoke at teardown is the real boundary).
+    /// Far-future stamp only (`TOKEN_RECORD_HORIZON_YEARS`). **Not** used
+    /// to cut off live agents — see [`SessionTokenRegistry::validate_hook`].
     expires_at: DateTime<Utc>,
     /// The session's epoch captured at mint. Validation rejects the record
     /// when it != the CURRENT `session_epochs[sid]` (mirror of
@@ -288,7 +295,8 @@ impl SessionTokenRegistry {
         let sid = session_id.to_string();
         let secret = new_secret();
         let now = Utc::now();
-        let expires_at = now + Duration::hours(TOKEN_LIFETIME_HOURS);
+        // Far-future stamp only — validate does not cut off live agents.
+        let expires_at = now + Duration::days(365 * TOKEN_RECORD_HORIZON_YEARS);
         let session_epoch = self.session_epochs.get(&sid).copied().unwrap_or(0);
         let record = TokenRecord {
             version: STORE_VERSION,
@@ -316,10 +324,13 @@ impl SessionTokenRegistry {
     ///   3. the record's stamped `global_epoch` == the CURRENT global epoch
     ///      (kill switch not tripped),
     ///   4. the record's stamped `session_epoch` == the CURRENT
-    ///      `session_epochs[sid]` (not revoked),
-    ///   5. the record has not expired, AND
-    ///   6. `ct_eq(SHA-256(secret), record.token_digest)` (constant-time —
+    ///      `session_epochs[sid]` (not revoked), AND
+    ///   5. `ct_eq(SHA-256(secret), record.token_digest)` (constant-time —
     ///      no byte-by-byte timing leak).
+    ///
+    /// Wall-clock `expires_at` is **not** checked — passports live for the
+    /// life of the cell (months-long agents must keep messaging). Revocation
+    /// is epoch-based at teardown / kill-switch only.
     ///
     /// Any miss → `None` (→ 403 at the call site).
     pub fn validate_hook(&self, bearer: &str) -> Option<ValidatedHook> {
@@ -343,10 +354,6 @@ impl SessionTokenRegistry {
         // Per-session revocation (stamped vs current).
         let current_epoch = self.session_epochs.get(sid).copied().unwrap_or(0);
         if rec.session_epoch != current_epoch {
-            return None;
-        }
-        // Expiry.
-        if rec.expires_at <= Utc::now() {
             return None;
         }
         // Constant-time verifier compare (mirror of connect_users): equal
@@ -1118,21 +1125,39 @@ mod tests {
         assert!(reg.validate_hook(&tb).is_none(), "global kill switch (b)");
     }
 
-    // ── expiry ──────────────────────────────────────────────────────
+    // ── wall-clock stamp is not a kill switch ───────────────────────
 
     #[test]
-    fn validate_rejects_expired_token() {
+    fn validate_ignores_past_expires_at_stamp() {
+        // Live agent passports must not die on wall clock. Epoch revoke is
+        // the kill switch; expires_at is informational only.
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
         let token = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
-        // Force the stored record's expiry into the past.
         reg.records
             .get_mut(&sid.to_string())
             .expect("record present")
-            .expires_at = Utc::now() - Duration::seconds(1);
+            .expires_at = Utc::now() - Duration::days(30);
         assert!(
-            reg.validate_hook(&token).is_none(),
-            "an expired token must 403",
+            reg.validate_hook(&token).is_some(),
+            "past expires_at must NOT 403 a still-live passport",
+        );
+    }
+
+    #[test]
+    fn validate_accepts_months_old_passport() {
+        let mut reg = SessionTokenRegistry::new();
+        let sid = SessionId::new();
+        let token = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
+        let rec = reg
+            .records
+            .get_mut(&sid.to_string())
+            .expect("record present");
+        rec.created_at = Utc::now() - Duration::days(90);
+        // leave expires_at far future (as mint would); still valid
+        assert!(
+            reg.validate_hook(&token).is_some(),
+            "90-day-old passport must still validate for long-running agents",
         );
     }
 
@@ -1325,28 +1350,23 @@ mod tests {
         }
     }
 
-    // ── TTL backstop (#58 Phase-1 close: fixed 24h, no clamp) ────────────
+    // ── mint stamps far-future expires_at (informational only) ─────────
 
     #[test]
-    fn minted_expiry_is_one_lifetime_window_from_creation() {
-        // The fixed TTL applies: expires_at ≈ created_at + 24h. Assert it
-        // lands inside [created+23h, created+25h] (loose bound tolerates the
-        // sub-ms gap between the two `Utc::now()` reads).
+    fn minted_expires_at_is_far_horizon_not_24h() {
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
         let _ = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
         let rec = reg.records.get(&sid.to_string()).expect("record present");
         let span = rec.expires_at - rec.created_at;
         assert!(
-            span >= Duration::hours(23) && span <= Duration::hours(25),
-            "expiry must be ~24h after creation, got {span}",
+            span >= Duration::days(365 * 50),
+            "expires_at stamp must be a multi-decade horizon (not 24h), got {span}",
         );
     }
 
     #[test]
     fn token_thirteen_hours_old_still_validates() {
-        // Under the OLD 12h DEFAULT_TTL this would have expired; the fixed
-        // 24h backstop keeps a 13h-old token live (≈11h remaining).
         let mut reg = SessionTokenRegistry::new();
         let sid = SessionId::new();
         let token = reg.mint(&sid, "pane-1", principal(), CredMode::ApiKey, Provider::Anthropic);
@@ -1355,10 +1375,9 @@ mod tests {
             .get_mut(&sid.to_string())
             .expect("record present");
         rec.created_at = Utc::now() - Duration::hours(13);
-        rec.expires_at = rec.created_at + Duration::hours(TOKEN_LIFETIME_HOURS);
         assert!(
             reg.validate_hook(&token).is_some(),
-            "a 13h-old token is still within the 24h backstop and must validate",
+            "a 13h-old token must still validate",
         );
     }
 

@@ -3198,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "k2"
-version = "0.40.54"
+version = "0.40.55"
 dependencies = [
  "ahash",
  "alacritty_terminal",
@@ -3261,7 +3261,7 @@ dependencies = [
 
 [[package]]
 name = "k2-core"
-version = "0.40.54"
+version = "0.40.55"
 dependencies = [
  "alacritty_terminal",
  "arc-swap",
@@ -3316,7 +3316,7 @@ dependencies = [
 
 [[package]]
 name = "k2-daemon"
-version = "0.40.54"
+version = "0.40.55"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",

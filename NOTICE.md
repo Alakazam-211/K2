@@ -19,3 +19,19 @@ official K2 Connect tunnel service.
 "K2 by Alakazam Labs" and the K2 logo are trademarks of Alakazam Labs;
 see [TRADEMARKS.md](TRADEMARKS.md). The license above does not grant
 trademark rights.
+
+## Third-party: Seti UI file icons (MIT)
+
+The Files drawer uses the **Seti** icon font for file-type glyphs
+(same family as VS Code’s default file icon theme).
+
+| | |
+|--|--|
+| **What** | `seti.woff` + generated name/extension maps under `src/renderer/assets/seti/` and `src/renderer/lib/seti-file-icons/` |
+| **Upstream** | [Seti UI](https://github.com/jesseweed/seti-ui) (Jesse Weed), packaged via VS Code `extensions/theme-seti` |
+| **License** | **MIT** (Copyright 2014 Jesse Weed) — full text in `src/renderer/assets/seti/THIRD_PARTY_NOTICES.txt` |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. MIT assets do **not** relicense the product. |
+| **Not** | Not affiliated with Microsoft or Visual Studio Code. Do not use those trademarks for K2 branding. |
+
+When redistributing K2 builds that include the Seti font, ship the MIT
+notice (this section and/or `THIRD_PARTY_NOTICES.txt`).

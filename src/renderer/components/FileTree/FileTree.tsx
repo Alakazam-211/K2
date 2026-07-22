@@ -16,6 +16,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { executeRemoteDrop } from '@/lib/handle-remote-drop'
 import { planLocalExternalDrop } from '@/lib/external-drop'
 import { compressFolder, downloadFile } from '@/lib/fs-transfer'
+import { SetiFileIcon } from '@/lib/seti-file-icons'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -137,65 +138,9 @@ function FolderIcon({ open }: { open: boolean }): React.JSX.Element {
   )
 }
 
-// ── File type icon colors ────────────────────────────────────────────
-
-const FILE_ICON_COLORS: Record<string, string> = {
-  // Web
-  ts: '#3178C6', tsx: '#3178C6', js: '#F7DF1E', jsx: '#F7DF1E',
-  html: '#E34F26', css: '#1572B6', scss: '#CC6699', less: '#1D365D',
-  vue: '#4FC08D', svelte: '#FF3E00',
-  // Data / config
-  json: '#A8B9CC', yaml: '#CB171E', yml: '#CB171E', toml: '#9C4121',
-  xml: '#F16529', csv: '#237346',
-  // Rust / systems
-  rs: '#DEA584', go: '#00ADD8', c: '#A8B9CC', cpp: '#659AD2', h: '#A8B9CC',
-  zig: '#F7A41D', swift: '#F05138',
-  // Scripting
-  py: '#3776AB', rb: '#CC342D', lua: '#000080', sh: '#4EAA25', bash: '#4EAA25',
-  zsh: '#4EAA25', fish: '#4EAA25', ps1: '#012456',
-  // JVM
-  java: '#B07219', kt: '#A97BFF', scala: '#DC322F',
-  // Docs
-  md: '#519ABA', mdx: '#519ABA', txt: '#9CA3AF', pdf: '#FF0000',
-  // Images
-  png: '#8B5CF6', jpg: '#8B5CF6', jpeg: '#8B5CF6', gif: '#8B5CF6',
-  svg: '#FFB13B', webp: '#8B5CF6', ico: '#8B5CF6',
-  // Config files
-  lock: '#6B7280', env: '#ECD53F',
-  // Docker / infra
-  dockerfile: '#2496ED',
-}
-
-// Special full-name matches
-const FILE_NAME_COLORS: Record<string, string> = {
-  'Dockerfile': '#2496ED', 'Makefile': '#6B7280', 'Cargo.toml': '#DEA584',
-  'package.json': '#CB3837', 'tsconfig.json': '#3178C6',
-  '.gitignore': '#F05032', '.env': '#ECD53F', '.env.local': '#ECD53F',
-}
-
-function getFileColor(name: string): string {
-  if (FILE_NAME_COLORS[name]) return FILE_NAME_COLORS[name]
-  const ext = name.includes('.') ? name.split('.').pop()?.toLowerCase() : ''
-  if (ext && FILE_ICON_COLORS[ext]) return FILE_ICON_COLORS[ext]
-  return '#9CA3AF'
-}
-
+// File-type icons: Seti UI (MIT) — see `@/lib/seti-file-icons` + NOTICE.md
 function FileIcon({ name }: { name?: string }): React.JSX.Element {
-  const color = name ? getFileColor(name) : '#9CA3AF'
-  return (
-    <svg
-      className="w-4 h-4 flex-shrink-0"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth={1.5}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" />
-      <path d="M14 2v6h6" />
-    </svg>
-  )
+  return <SetiFileIcon name={name} />
 }
 
 // ── Inline name editor ──────────────────────────────────────────────

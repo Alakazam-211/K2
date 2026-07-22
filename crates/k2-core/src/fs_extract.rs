@@ -40,6 +40,79 @@ pub fn is_zip_filename(name: &str) -> bool {
     ext.eq_ignore_ascii_case(b".zip")
 }
 
+// ── list (central directory only — no extract) ────────────────────────
+
+/// Hard ceiling on entries returned by [`list_zip_entries`]. Large enough
+/// for real project archives; caps wire size + UI work for zip bombs that
+/// inflate the central directory with millions of names.
+pub const MAX_LIST_ENTRIES: usize = 5_000;
+
+/// One central-directory entry as returned by [`list_zip_entries`].
+/// Zip-slip / absolute member names are still listed (raw name) so the
+/// UI can show the archive's true contents; extract still rejects them.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct ZipListEntry {
+    pub name: String,
+    /// Declared uncompressed size (0 for directories).
+    pub size: u64,
+    /// Declared compressed size on the wire.
+    pub compressed_size: u64,
+    pub is_dir: bool,
+}
+
+/// Result of a central-directory list. `truncated` is true when the
+/// archive has more members than [`MAX_LIST_ENTRIES`].
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct ZipListResult {
+    pub entries: Vec<ZipListEntry>,
+    pub truncated: bool,
+}
+
+/// List zip central-directory entries without extracting. Rejects
+/// non-`.zip` filenames and unreadable archives. Zip-slip member names
+/// are included as-is (listing is read-only; extract safety is unchanged).
+pub fn list_zip_entries(src: &str) -> Result<ZipListResult, String> {
+    let src_path = validate_path(src)?;
+    if !src_path.is_file() {
+        return Err(format!("Not a regular file: {src}"));
+    }
+    let file_name = src_path
+        .file_name()
+        .ok_or_else(|| "Source has no name".to_string())?
+        .to_string_lossy()
+        .to_string();
+    if !is_zip_filename(&file_name) {
+        return Err(format!("Not a .zip archive: {file_name}"));
+    }
+
+    let file = fs::File::open(&src_path)
+        .map_err(|e| format!("Failed to open zip {}: {e}", src_path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read zip {}: {e}", src_path.display()))?;
+
+    let total = archive.len();
+    let truncated = total > MAX_LIST_ENTRIES;
+    let limit = total.min(MAX_LIST_ENTRIES);
+    let mut entries = Vec::with_capacity(limit);
+    for i in 0..limit {
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read zip entry {i}: {e}"))?;
+        // Raw central-directory name — do NOT filter zip-slip paths here.
+        // Listing is observational; extract still enforces member safety.
+        entries.push(ZipListEntry {
+            name: entry.name().to_string(),
+            size: entry.size(),
+            compressed_size: entry.compressed_size(),
+            is_dir: entry.is_dir(),
+        });
+    }
+    Ok(ZipListResult {
+        entries,
+        truncated,
+    })
+}
+
 /// Filename stem with a trailing `.zip` (any case) stripped. Falls back
 /// to the full name when the extension is absent (caller should have
 /// already required `.zip`).
@@ -584,5 +657,113 @@ mod tests {
         assert!(!is_zip_filename("a.txt"));
         assert!(!is_zip_filename("zip"));
         assert!(!is_zip_filename("a.zip.bak"));
+    }
+
+    #[test]
+    fn list_zip_entries_returns_names_and_sizes() {
+        let tmp = TempDir::new("list");
+        let zip_path = tmp.path().join("bundle.zip");
+        write_zip(
+            &zip_path,
+            &[
+                ("readme.txt", b"hello world"),
+                ("sub/", b""),
+                ("sub/a.txt", b"aa"),
+            ],
+        );
+
+        let result = list_zip_entries(zip_path.to_str().unwrap()).expect("list succeeds");
+        assert!(!result.truncated);
+        assert_eq!(result.entries.len(), 3);
+
+        let readme = result
+            .entries
+            .iter()
+            .find(|e| e.name == "readme.txt")
+            .expect("readme.txt");
+        assert!(!readme.is_dir);
+        assert_eq!(readme.size, b"hello world".len() as u64);
+        assert!(readme.compressed_size > 0 || readme.size == 0);
+
+        let dir = result
+            .entries
+            .iter()
+            .find(|e| e.name == "sub/" || e.name == "sub")
+            .expect("sub dir");
+        assert!(dir.is_dir, "expected directory entry, got {dir:?}");
+    }
+
+    #[test]
+    fn list_zip_entries_includes_zip_slip_names() {
+        // Listing is observational — unsafe names appear so the UI can
+        // show what's in the archive. Extract still rejects them.
+        let tmp = TempDir::new("list-slip");
+        let zip_path = tmp.path().join("evil.zip");
+        {
+            let f = fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(f);
+            let opts = SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("../escape.txt", opts).unwrap();
+            zip.write_all(b"pwned").unwrap();
+            zip.start_file("safe.txt", opts).unwrap();
+            zip.write_all(b"ok").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let result = list_zip_entries(zip_path.to_str().unwrap()).expect("list succeeds");
+        assert_eq!(result.entries.len(), 2);
+        assert!(
+            result.entries.iter().any(|e| e.name.contains("..")),
+            "zip-slip name must still be listed: {:?}",
+            result.entries
+        );
+        assert!(result.entries.iter().any(|e| e.name == "safe.txt"));
+
+        // Extract safety is unchanged — still rejects the slip path.
+        let err = extract_from_zip(
+            zip_path.to_str().unwrap(),
+            &no_progress(),
+            &AtomicBool::new(false),
+        )
+        .expect_err("extract must still reject zip-slip");
+        assert!(
+            err.to_lowercase().contains("zip-slip") || err.contains("unsafe"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn list_zip_entries_rejects_non_zip() {
+        let tmp = TempDir::new("list-ext");
+        let path = tmp.path().join("notes.txt");
+        fs::write(&path, b"not a zip").unwrap();
+        let err = list_zip_entries(path.to_str().unwrap()).expect_err("non-zip must fail");
+        assert!(err.contains(".zip"), "got: {err}");
+    }
+
+    #[test]
+    fn list_zip_entries_truncated_past_cap() {
+        let tmp = TempDir::new("list-cap");
+        let zip_path = tmp.path().join("huge.zip");
+        // Build just over the list cap (avoid writing 5000 real files if
+        // cap is large — use a small override via direct ZipWriter loop).
+        {
+            let f = fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(f);
+            let opts = SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            // MAX_LIST_ENTRIES + 3 so truncated is definitely true.
+            let n = MAX_LIST_ENTRIES + 3;
+            for i in 0..n {
+                zip.start_file(format!("f{i}.txt"), opts).unwrap();
+                zip.write_all(b"x").unwrap();
+            }
+            zip.finish().unwrap();
+        }
+
+        let result = list_zip_entries(zip_path.to_str().unwrap()).expect("list succeeds");
+        assert!(result.truncated);
+        assert_eq!(result.entries.len(), MAX_LIST_ENTRIES);
     }
 }

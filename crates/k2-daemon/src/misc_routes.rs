@@ -1023,6 +1023,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/fs/read-file" => crate::fs_routes::handle_read_file(params),
         "/cli/fs/read-binary" => crate::fs_routes::handle_read_binary(params),
         "/cli/fs/clipboard-paths" => crate::fs_routes::handle_clipboard_paths(params),
+        // File-viewer zip preview — central directory list (no extract).
+        // GET-only; a stray POST hits the top-level 405 (not post_allowed).
+        "/cli/fs/zip-list" => crate::fs_routes::handle_zip_list(params),
         // 0.40.22 — poll a server-side compress job (start = POST
         // /cli/fs/compress in the dispatcher).
         "/cli/fs/compress-status" => crate::fs_routes::handle_compress_status(params),

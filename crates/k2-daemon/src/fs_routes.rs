@@ -572,6 +572,28 @@ pub fn handle_compress_cancel(body: &[u8]) -> CliResponse {
     }
 }
 
+// ── zip-list (central directory, no extract) ──────────────────────────
+//
+// GET `fs/zip-list?path=` — names + sizes for the FileViewer zip preview.
+// Read-only; zip-slip member names are still returned (extract rejects
+// them). Cap + truncated flag live in `k2_core::fs_extract::list_zip_entries`.
+
+/// GET `/cli/fs/zip-list?path=` — list central-directory entries.
+pub fn handle_zip_list(params: &HashMap<String, String>) -> CliResponse {
+    let path = match params.get("path") {
+        Some(p) if !p.is_empty() => p.clone(),
+        _ => return CliResponse::bad_request("Missing 'path' parameter"),
+    };
+    match k2_core::fs_extract::list_zip_entries(&path) {
+        Ok(result) => CliResponse::ok_json(
+            serde_json::to_string(&result).unwrap_or_else(|_| {
+                r#"{"entries":[],"truncated":false}"#.to_string()
+            }),
+        ),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 // ── extract (server-side zip → folder) ────────────────────────────────
 //
 // Same start-then-poll job shape as compress: `POST fs/extract` returns
@@ -1060,6 +1082,66 @@ mod tests {
         assert_eq!(content, "world");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn zip_list_returns_entries_for_valid_zip() {
+        use std::sync::atomic::AtomicBool;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("k2-fs-routes-zip-list-{nanos}"));
+        let src = dir.join("bundle");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("hello.txt"), b"world").unwrap();
+        let zip_path = k2_core::fs_compress::compress_to_zip(
+            src.to_str().unwrap(),
+            &|_, _| {},
+            &AtomicBool::new(false),
+        )
+        .expect("compress fixture");
+
+        let params = HashMap::from([(
+            "path".to_string(),
+            zip_path.to_string_lossy().to_string(),
+        )]);
+        let resp = handle_zip_list(&params);
+        assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["truncated"].as_bool(), Some(false));
+        let entries = v["entries"].as_array().expect("entries array");
+        assert!(!entries.is_empty(), "expected at least one entry");
+        assert!(
+            entries.iter().any(|e| {
+                e["name"]
+                    .as_str()
+                    .map(|n| n.ends_with("hello.txt"))
+                    .unwrap_or(false)
+            }),
+            "hello.txt missing from {:?}",
+            entries
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn zip_list_rejects_missing_path_and_non_zip() {
+        let resp = handle_zip_list(&HashMap::new());
+        assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("k2-fs-routes-zip-list-txt-{nanos}.txt"));
+        std::fs::write(&path, b"not a zip").unwrap();
+        let params = HashMap::from([("path".to_string(), path.to_string_lossy().to_string())]);
+        let resp = handle_zip_list(&params);
+        assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

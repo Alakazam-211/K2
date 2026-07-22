@@ -12,6 +12,7 @@ import { looksLikeBinaryText } from '@/lib/load-host-binary'
 const PDFViewer = lazy(() => import('./PDFViewer').then((m) => ({ default: m.PDFViewer })))
 const DocxViewer = lazy(() => import('./DocxViewer').then((m) => ({ default: m.DocxViewer })))
 const CodeEditor = lazy(() => import('./CodeEditor').then((m) => ({ default: m.CodeEditor })))
+const ZipViewer = lazy(() => import('./ZipViewer').then((m) => ({ default: m.ZipViewer })))
 // `getLanguageName` is a synchronous helper used in the status bar —
 // importing it eagerly is fine (it's a small string table, not the
 // CodeMirror bundle). Bundlers tree-shake the rest of the module.
@@ -814,11 +815,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         </div>
       ) : effectiveCategory === 'zip' ? (
         <div className="flex-1 overflow-hidden" ref={contentRef}>
-          <BinaryEmptyState
-            filePath={filePath}
-            message="This is a ZIP archive"
-            detail="Archive listing and Extract will land in a follow-up. Reveal to open on the host."
-          />
+          <Suspense
+            fallback={
+              <div className="p-4 text-xs text-[var(--color-text-muted)]">Loading archive…</div>
+            }
+          >
+            <ZipViewer filePath={filePath} />
+          </Suspense>
         </div>
       ) : effectiveCategory === 'audio' || effectiveCategory === 'video' ? (
         <div className="flex-1 overflow-hidden" ref={contentRef}>

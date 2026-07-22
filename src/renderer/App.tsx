@@ -31,7 +31,6 @@ import Toast from './components/Toast/Toast'
 import TransferProgress from './components/TransferProgress/TransferProgress'
 import AssistantBar from './components/WorkspaceAssistant/AssistantBar'
 import { useProjectsStore } from './stores/projects'
-import { useConnectHostStore } from './stores/connect-host'
 // Pinned-chat retention — per-window host that keeps exempt workspaces'
 // pinned chats mounted (attached + rendering) while hidden. Rendered as
 // the FIRST child of every top-level layout branch below so React's
@@ -39,7 +38,7 @@ import { useConnectHostStore } from './stores/connect-host'
 // panes) across default/focus/settings switches.
 import { PinnedChatRetainer } from './components/AgentPane/PinnedChatRetainer'
 import { k2PageTitle } from './web/page-title'
-import { executeRemoteDrop } from './lib/handle-remote-drop'
+import { mountExternalDropRouter } from './lib/external-drop-router'
 import { usePanelsStore } from './stores/panels'
 import { useSettingsStore } from './stores/settings'
 import { useCommandPaletteStore } from './stores/command-palette'
@@ -354,58 +353,13 @@ function AppRoot(): React.JSX.Element {
     }
   }, [])
 
-  // K2 Connect remote-files Phase 3 — window-level "miss" drop handler.
+  // Single owner of external OS drag-drop (`tauri://drag-drop`).
   //
-  // `tauri://drag-drop` is window-level: the terminal panes + file-tree all
-  // receive it and each acts when the drop lands inside ITS container.
-  // A drop on bare window chrome (neither a terminal nor the file-tree) is
-  // unhandled. On a REMOTE host we route that miss to the "Save to…"
-  // RemoteFolderPicker (the {kind:'miss'} case of the shared router), which
-  // uploads the bytes to a host directory the user chooses. On LOCAL this
-  // listener does nothing — a window-chrome drop has no meaning there.
-  //
-  // Self-contained hit-test: we only fire when the drop point is NOT inside
-  // a terminal ([data-terminal-id]) and NOT inside the file-tree panel
-  // ([data-file-tree-panel]) — exactly the targets the other listeners own
-  // — so we never double-handle a drop those listeners already consumed.
-  useEffect(() => {
-    const unlisteners: Array<() => void> = []
-    // Same async-registration leak guard as the menu-listener effect
-    // below: a remount before listen() resolves would leak a live
-    // duplicate handler (= double uploads on window-chrome drops).
-    let ddTorndown = false
-    const ddTrack = (fn: () => void) => {
-      if (ddTorndown) fn()
-      else unlisteners.push(fn)
-    }
-    import('@tauri-apps/api/event').then(({ listen }) => {
-      listen<{ paths: string[]; position: { x: number; y: number } }>(
-        'tauri://drag-drop',
-        (event) => {
-          if (useConnectHostStore.getState().activeHost === 'local') return
-          const { paths, position } = event.payload
-          if (!paths || paths.length === 0 || !position) return
-          const el = document.elementFromPoint(position.x, position.y)
-          // No element, or the drop landed on a target another listener
-          // owns → not a miss; let that listener handle it.
-          if (
-            el &&
-            (el as HTMLElement).closest?.(
-              '[data-terminal-id],[data-file-tree-panel],[data-path]',
-            )
-          ) {
-            return
-          }
-          // True miss on window chrome → prompt for a host destination.
-          void executeRemoteDrop(paths, { kind: 'miss' }, {})
-        },
-      ).then(ddTrack)
-    })
-    return () => {
-      ddTorndown = true
-      unlisteners.forEach((fn) => fn())
-    }
-  }, [])
+  // Hit-tests terminal → Files panel → remote miss ("Save to…") and is the
+  // ONLY window-level upload path. FileTree / TerminalPane no longer
+  // register their own listeners (leaked async listen() + unstable effect
+  // deps produced N copies of one drop). See external-drop-router.ts.
+  useEffect(() => mountExternalDropRouter(), [])
 
   // Cmd+, settings, Cmd+K command palette, Cmd+L assistant, Cmd+J running agents
   useEffect(() => {

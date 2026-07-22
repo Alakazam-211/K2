@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { beginFileDrag, wasDropConsumed } from '@/lib/file-drag'
+import { beginFileDrag } from '@/lib/file-drag'
 import { showContextMenu } from '@/lib/context-menu'
 import { useFileTreeStore } from '@/stores/filetree'
 import { useSettingsStore, getEffectiveKeybinding } from '@/stores/settings'
@@ -13,8 +13,7 @@ import { useFileClipboardStore } from '@/stores/file-clipboard'
 import { useFileUndoStore } from '@/stores/file-undo'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { executeRemoteDrop } from '@/lib/handle-remote-drop'
-import { planLocalExternalDrop } from '@/lib/external-drop'
+import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
 import { compressFolder, downloadFile } from '@/lib/fs-transfer'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
 
@@ -691,78 +690,33 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     }
   }, [rootPath, loadDir, loadEnvFiles, loadAiConfig])
 
-  // ── Drop-in from Finder (Tauri events) ─────────────────────────────
+  // ── External OS drop visual feedback + post-drop refresh ───────────
+  //
+  // Upload / copy for external drops is owned by `external-drop-router`
+  // (single App-mounted `tauri://drag-drop` listener). FileTree only:
+  //   1. paints drop-target highlights on drag-over
+  //   2. refreshes the destination folder after the router finishes
+  //
+  // R1: do NOT re-subscribe when `loadDir` / `cache` identity changes —
+  // rootPath + loadDir are read via refs. Async listen() uses a teardown
+  // guard so Strict Mode remounts never leave a live duplicate.
+  const rootPathRef = useRef(rootPath)
+  rootPathRef.current = rootPath
+  const loadDirRef = useRef(loadDir)
+  loadDirRef.current = loadDir
+
   useEffect(() => {
     const unlisteners: Array<() => void> = []
-
-    listen<{ paths: string[]; position: { x: number; y: number } }>('tauri://drag-drop', async (event) => {
-      setIsDragOver(false)
-      setDropTarget(null)
-
-      const { paths, position } = event.payload
-      if (!paths || paths.length === 0) return
-
-      // Check if the drop position is inside a terminal — if so, skip entirely
-      const dropEl = document.elementFromPoint(position.x, position.y)
-      if (dropEl && (dropEl as HTMLElement).closest?.('[data-terminal-id]')) return
-
-      // Only handle drops that land inside the file tree panel
-      if (!treeRef.current) return
-      const treeRect = treeRef.current.getBoundingClientRect()
-      const inTree = (
-        position.x >= treeRect.left && position.x <= treeRect.right &&
-        position.y >= treeRect.top && position.y <= treeRect.bottom
-      )
-      if (!inTree) return
-
-      let targetFolder = rootPath
-      const el = document.elementFromPoint(position.x, position.y)
-      if (el) {
-        const btn = (el as HTMLElement).closest('[data-path]') as HTMLElement | null
-        if (btn) {
-          const isDir = btn.dataset.isDirectory === 'true'
-          const path = btn.dataset.path
-          if (path) {
-            targetFolder = isDir ? path : parentDir(path)
-          }
-        }
-      }
-
-      // REMOTE host (K2 Connect): the dropped `paths` are LOCAL paths with
-      // no bytes on the daemon, so fs/move|copy (which expect daemon-side
-      // paths) can't work. Upload the bytes INTO the target folder instead
-      // (the "folder" case of the shared drop router). No path injection —
-      // a file-tree drop is a plain copy-into-folder, like the local case.
-      if (useConnectHostStore.getState().activeHost !== 'local') {
-        await executeRemoteDrop(paths, { kind: 'folder', path: targetFolder }, {})
-        await loadDir(targetFolder, true)
-        return
-      }
-
-      // LOCAL: an external OS drop (Finder → tree) is NEVER destructive —
-      // always COPY, regardless of modifier keys. The source file remains
-      // with its original owner (Finder), so a copy is always safe; moving
-      // here silently relocated files the user thought were headed to a
-      // remote host (data-loss bug, 2026-07-07). Only INTERNAL tree drags
-      // (handleDragOutStart's onDrop below) keep move semantics.
-      const toast = useToastStore.getState()
-      const undo = useFileUndoStore.getState()
-      const plan = planLocalExternalDrop(paths, targetFolder)
-
-      try {
-        await daemonCliPost(plan.endpoint, plan.payload)
-        undo.push(plan.undo)
-        toast.addToast(plan.toast, 'success')
-        await loadDir(targetFolder, true)
-      } catch (err) {
-        toast.addToast(`Failed: ${err}`, 'error')
-      }
-    }).then((fn) => unlisteners.push(fn))
+    let torndown = false
+    const track = (fn: () => void) => {
+      if (torndown) fn()
+      else unlisteners.push(fn)
+    }
 
     listen('tauri://drag-enter', () => {
       // Don't set isDragOver here — let drag-over handle it based on position,
       // so drops on the terminal don't get treated as file tree drops.
-    }).then((fn) => unlisteners.push(fn))
+    }).then(track)
 
     listen<{ position: { x: number; y: number } }>('tauri://drag-over', (event) => {
       const { position } = event.payload
@@ -790,18 +744,39 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
           return
         }
       }
-      setDropTarget(rootPath)
-    }).then((fn) => unlisteners.push(fn))
+      setDropTarget(rootPathRef.current)
+    }).then(track)
 
     listen('tauri://drag-leave', () => {
       setIsDragOver(false)
       setDropTarget(null)
-    }).then((fn) => unlisteners.push(fn))
+    }).then(track)
+
+    // Router clears highlight on drop itself isn't wired; clear on leave
+    // is enough, but also clear when the global drop lands (router fires
+    // the refresh event only after handling — paint reset here is cheap).
+    listen('tauri://drag-drop', () => {
+      setIsDragOver(false)
+      setDropTarget(null)
+    }).then(track)
 
     return () => {
+      torndown = true
       unlisteners.forEach((fn) => fn())
     }
-  }, [rootPath, loadDir])
+  }, [])
+
+  // Refresh the tree folder after the global router finishes a drop into it.
+  useEffect(() => {
+    const el = treeRef.current
+    if (!el) return
+    const onExternalDrop = (e: Event) => {
+      const path = (e as CustomEvent<{ path?: string }>).detail?.path
+      if (path) void loadDirRef.current(path, true)
+    }
+    el.addEventListener(FILE_TREE_EXTERNAL_DROP_EVENT, onExternalDrop)
+    return () => el.removeEventListener(FILE_TREE_EXTERNAL_DROP_EVENT, onExternalDrop)
+  }, [])
 
   // ── Internal drag state (for highlighting folders during drag) ─────
   const [internalDropTarget, setInternalDropTarget] = useState<string | null>(null)
@@ -1427,7 +1402,13 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   }
 
   return (
-    <div ref={treeRef} className="flex flex-col h-full" tabIndex={-1} data-file-tree-panel="true">
+    <div
+      ref={treeRef}
+      className="flex flex-col h-full"
+      tabIndex={-1}
+      data-file-tree-panel="true"
+      data-root-path={rootPath}
+    >
       {/* Env files section */}
       {envFiles.length > 0 && (
         <div className="px-3 pt-2 pb-1 border-b border-[var(--color-border)]">

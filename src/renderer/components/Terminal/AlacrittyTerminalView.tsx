@@ -369,7 +369,7 @@ export function AlacrittyTerminalView({
     let unlistenGrid: (() => void) | undefined
     let unlistenExit: (() => void) | undefined
     let unlistenTitle: (() => void) | undefined
-    let unlistenDrop: (() => void) | undefined
+
     let mounted = true
 
     const setup = async (): Promise<void> => {
@@ -539,48 +539,10 @@ export function AlacrittyTerminalView({
         }
       })
 
-      unlistenDrop = await listen<{ paths: string[]; position: { x: number; y: number } }>(
-        'tauri://drag-drop',
-        (event) => {
-          const { paths, position } = event.payload
-          if (!paths || paths.length === 0 || !ptyIdRef.current) return
-
-          // tauri://drag-drop is window-level: every terminal in the window
-          // receives it. Hit-test the drop position against this terminal's
-          // container so split-column layouts don't paste into every pane.
-          if (!position) return
-          const el = document.elementFromPoint(position.x, position.y)
-          if (!el) return
-          // File tree handles its own drops
-          if ((el as HTMLElement).closest?.('[data-path]')) return
-          // Only accept if the drop landed inside *this* terminal's container
-          if (!containerRef.current?.contains(el)) return
-
-          // REMOTE host (K2 Connect): the dropped `paths` are LOCAL paths
-          // with no bytes on the daemon. Upload them to the workspace's
-          // `.k2so/downloads/` then inject the returned REMOTE paths so the
-          // agent can resolve a file that actually exists on the host. The
-          // payload is built with this view's existing buildDropPayload
-          // (same shell-quote + bracketed-paste logic) over remote paths.
-          if (useConnectHostStore.getState().activeHost !== 'local') {
-            const pty = ptyIdRef.current
-            void executeRemoteDrop(
-              paths,
-              { kind: 'terminal' },
-              { workspacePath: cwd },
-              buildDropPayload,
-            ).then((payload) => {
-              if (payload && pty) terminalWrite(pty, payload)
-            })
-            return
-          }
-
-          // LOCAL host — unchanged: paste the local paths directly (images
-          // get bracketed-paste wrapping so Claude Code's image detector
-          // fires).
-          terminalWrite(ptyIdRef.current, buildDropPayload(paths))
-        }
-      )
+      // External OS drag-drop is owned by App's single
+      // `mountExternalDropRouter` listener. This pane exposes
+      // data-terminal-id + data-workspace-path for hit-test + inject;
+      // the router calls terminalWrite(id, payload) for v1 panes.
     }
 
     setup().catch((err) => console.error('[AlacrittyTerminalView] Setup failed:', err))
@@ -590,7 +552,6 @@ export function AlacrittyTerminalView({
       unlistenGrid?.()
       unlistenExit?.()
       unlistenTitle?.()
-      unlistenDrop?.()
     }
   }, [terminalId, cwd, command]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -764,9 +725,9 @@ export function AlacrittyTerminalView({
       }
       if (paths.length > 0) {
         // REMOTE host: these are local file paths — upload + inject the
-        // remote paths (same router as the tauri://drag-drop path). This
-        // DOM handler is a rare fallback under Tauri (drag-drop is normally
-        // intercepted natively), but keep it host-aware for parity.
+        // remote paths. This DOM handler is a rare fallback under Tauri
+        // (native drag-drop is owned by external-drop-router); keep it
+        // host-aware for parity when dragDropEnabled is off.
         if (useConnectHostStore.getState().activeHost !== 'local') {
           const pty = ptyIdRef.current
           void executeRemoteDrop(
@@ -1006,6 +967,7 @@ export function AlacrittyTerminalView({
       data-terminal-id={terminalId}
       data-terminal-container=""
       data-terminal-visible="true"
+      data-workspace-path={cwd}
       style={{ cursor: isDragging ? 'default' : hoveredLink ? 'pointer' : 'text', position: 'relative' }}
     >
       <div

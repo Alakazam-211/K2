@@ -4005,25 +4005,17 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   // ── Drag + drop of files (from Finder or K2 files tab) ──────
   //
-  // V2 needs TWO drop entry points because Tauri intercepts external
-  // (Finder → window) drops at the webview level — the React onDrop
-  // never fires for those:
+  // External OS drops (Finder → window) are owned by the single App-
+  // mounted `external-drop-router` (`tauri://drag-drop`). After upload
+  // (remote) or path formatting (local) the router injects into this
+  // pane via `k2so:terminal-write` on the container (see data attrs
+  // below: data-terminal-id / data-terminal-kind / data-workspace-path).
   //
-  //   1. `tauri://drag-drop` window-level event (from Finder /
-  //      external apps). Mirrors `AlacrittyTerminalView` (legacy).
-  //      Hit-tests the drop position against this terminal's
-  //      container so split layouts only inject into the pane the
-  //      drop actually landed on.
-  //
-  //   2. `k2so:terminal-write` CustomEvent dispatched by
-  //      `lib/file-drag.ts` on mouseup over a v2 container.
-  //      Internal FileTree drags never leave the webview so they
-  //      don't generate `tauri://drag-drop` — the file-drag helper
-  //      tracks the drag manually and dispatches this event when
-  //      mouseup is over `data-terminal-kind="v2"`.
-  //
-  // The React-level `onDrop` handler stays as a no-op fallback
-  // (handles the rare case where Tauri's dragDropEnabled is off).
+  // Two pane-local entry points remain:
+  //   1. React `onDrop` — rare fallback when Tauri dragDropEnabled is off
+  //      (or hosted web HTML5 drops). Does its own upload for remote.
+  //   2. `k2so:terminal-write` — internal FileTree drags (file-drag.ts)
+  //      + the external-drop-router inject path.
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -4065,68 +4057,21 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     [sendInput, cwd],
   )
 
-  // External drag-drop from Finder / other apps. Window-level event,
-  // hit-test against container so split-pane drops route correctly.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined
-    let cancelled = false
-    import('@tauri-apps/api/event').then(({ listen }) => {
-      if (cancelled) return
-      listen<{ paths: string[]; position: { x: number; y: number } }>(
-        'tauri://drag-drop',
-        (event) => {
-          const { paths, position } = event.payload
-          if (!paths || paths.length === 0) return
-          if (!position) return
-          const el = document.elementFromPoint(position.x, position.y)
-          if (!el) return
-          // File tree handles its own internal drops.
-          if ((el as HTMLElement).closest?.('[data-path]')) return
-          // Only accept if the drop landed inside *this* container.
-          const container = containerRef.current
-          if (!container || !container.contains(el)) return
-
-          // REMOTE host (K2 Connect): `paths` are LOCAL paths with no bytes
-          // on the daemon. Upload to the workspace's `.k2so/downloads/` then
-          // inject the returned REMOTE paths so the agent can resolve them.
-          // buildDropPayload is this pane's existing builder (same quoting),
-          // just fed the remote paths.
-          if (useConnectHostStore.getState().activeHost !== 'local') {
-            void executeRemoteDrop(
-              paths,
-              { kind: 'terminal' },
-              { workspacePath: cwd },
-              buildDropPayload,
-            ).then((payload) => {
-              if (payload) sendInput(payload)
-            })
-            return
-          }
-          sendInput(buildDropPayload(paths))
-        },
-      ).then((fn) => {
-        if (cancelled) fn()
-        else unlisten = fn
-      })
-    })
-    return () => {
-      cancelled = true
-      unlisten?.()
-    }
-  }, [sendInput, cwd])
-
-  // Internal drag-drop from K2's file tree. file-drag.ts dispatches
-  // this CustomEvent on the v2 container when mouseup lands here.
+  // Inject path for external-drop-router + internal file-drag.ts drops.
+  // sendInput is read via ref so this effect does not re-bind on every
+  // sendInput identity change.
+  const sendInputRef = useRef(sendInput)
+  sendInputRef.current = sendInput
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const onWrite = (e: Event) => {
       const detail = (e as CustomEvent<{ data: string }>).detail
-      if (detail?.data) sendInput(detail.data)
+      if (detail?.data) sendInputRef.current(detail.data)
     }
     el.addEventListener('k2so:terminal-write', onWrite)
     return () => el.removeEventListener('k2so:terminal-write', onWrite)
-  }, [sendInput])
+  }, [])
 
   // ── ResizeObserver → send resize ──────────────────────────────
   useEffect(() => {
@@ -4810,16 +4755,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // palette close, (c) any overlay Esc-out. Matches v1.
       data-terminal-container=""
       data-terminal-visible="true"
-      // file-drag.ts (internal FileTree drag) hit-tests for these
-      // attributes on mouseup. `data-terminal-id` matches the
+      // file-drag.ts (internal FileTree drag) + external-drop-router
+      // hit-test these on drop. `data-terminal-id` matches the
       // contract legacy AlacrittyTerminalView established;
-      // `data-terminal-kind="v2"` tells file-drag.ts to dispatch a
-      // CustomEvent (which TerminalPane's effect routes to sendInput
-      // over the WS) instead of calling the legacy `terminal_write`
-      // Tauri command — that command only knows about the legacy
-      // terminal_manager and would 404 on a v2 session id.
+      // `data-terminal-kind="v2"` tells injectors to dispatch
+      // `k2so:terminal-write` (this pane's effect → sendInput over WS)
+      // instead of legacy terminalWrite. `data-workspace-path` anchors
+      // remote terminal drops to `.k2/downloads` under this cwd.
       data-terminal-id={debugSessionId ?? undefined}
       data-terminal-kind="v2"
+      data-workspace-path={cwd}
       tabIndex={0}
       style={finalContainerStyle}
       onFocus={() => {

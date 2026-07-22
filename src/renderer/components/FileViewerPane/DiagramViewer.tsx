@@ -86,6 +86,60 @@ function SourceDiagramPreview({
   )
 }
 
+/** Mermaid global after loading the vendored UMD/min build. */
+type MermaidApi = {
+  initialize: (config: Record<string, unknown>) => void
+  render: (
+    id: string,
+    text: string,
+  ) => Promise<{ svg: string; bindFunctions?: (el: Element) => void }>
+}
+
+let mermaidLoadPromise: Promise<MermaidApi> | null = null
+
+/**
+ * Load `public/vendor/mermaid.min.js` once. Avoids bundling mermaid
+ * through Rolldown (panic on unicode in chunk hashes, Vite 8).
+ */
+function loadMermaidGlobal(): Promise<MermaidApi> {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('Mermaid requires a browser environment'))
+  }
+  const w = window as unknown as { mermaid?: MermaidApi }
+  if (w.mermaid) return Promise.resolve(w.mermaid)
+  if (mermaidLoadPromise) return mermaidLoadPromise
+
+  mermaidLoadPromise = new Promise<MermaidApi>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[data-k2-mermaid]',
+    )
+    if (existing && w.mermaid) {
+      resolve(w.mermaid)
+      return
+    }
+    const script = document.createElement('script')
+    script.dataset.k2Mermaid = '1'
+    // Vite base is relative for Tauri (`./`); public files land at root.
+    script.src = `${import.meta.env.BASE_URL}vendor/mermaid.min.js`
+    script.async = true
+    script.onload = () => {
+      const api = (window as unknown as { mermaid?: MermaidApi }).mermaid
+      if (!api) {
+        mermaidLoadPromise = null
+        reject(new Error('mermaid global missing after script load'))
+        return
+      }
+      resolve(api)
+    }
+    script.onerror = () => {
+      mermaidLoadPromise = null
+      reject(new Error('Failed to load vendored mermaid.min.js'))
+    }
+    document.head.appendChild(script)
+  })
+  return mermaidLoadPromise
+}
+
 function MermaidPreview({
   content,
   filePath,
@@ -121,9 +175,11 @@ function MermaidPreview({
       }
 
       try {
-        // Dynamic import keeps mermaid out of the cold path until a
-        // .mermaid/.mmd tab is opened.
-        const mermaid = (await import('mermaid')).default
+        // Load vendored mermaid.min.js via script tag — NOT bundler
+        // import('mermaid'). Vite 8/Rolldown panics hashing mermaid's
+        // unicode-heavy chunks (hash_placeholder mid-char slice).
+        // Public asset: src/renderer/public/vendor/mermaid.min.js
+        const mermaid = await loadMermaidGlobal()
         mermaid.initialize({
           startOnLoad: false,
           // Do not execute raw HTML from diagram text.

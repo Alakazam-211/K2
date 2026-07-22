@@ -155,3 +155,8 @@ export function mediaMimeFromPath(path: string): string {
   const ext = getFileExtension(path).replace(/^\./, '')
   return MEDIA_MIME_BY_EXT[ext] ?? 'application/octet-stream'
 }
+
+/** True when the path is tab-separated (`.tsv`). */
+export function isTsvPath(filePath: string): boolean {
+  return getFileExtension(filePath) === '.tsv'
+}

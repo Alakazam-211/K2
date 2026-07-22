@@ -7,11 +7,11 @@
 //! shrunk to a few ms so the arm → fire transition is observable
 //! without a 15s wait.
 //!
-//! Coverage (PRD §10 daemon integration):
-//!   * an aged (non-Active) chat PTY is reaped after the grace;
+//! Coverage (PRD §10 daemon integration + P0 live-PTY spare):
+//!   * an aged (non-Active) chat with a **live** PTY is NOT reaped by age-out;
 //!   * an Active (within-window) chat PTY is NOT reaped;
 //!   * a heartbeat-warm aged chat PTY is NOT reaped;
-//!   * `dismiss` arms the grace → reap (even within-window);
+//!   * `dismiss` arms the grace → reap (even within-window / live PTY);
 //!   * re-activate within the grace cancels the timer (no reap).
 
 #![cfg(unix)]
@@ -106,32 +106,37 @@ fn is_live(project_id: &str) -> bool {
 const GRACE_MS: u64 = 50;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn aged_chat_is_reaped_after_grace() {
+async fn aged_live_pty_is_not_reaped_by_window_alone() {
+    // P0 (2026-07-22 forensics): age-out must NOT [v2-kill] live agent PTYs
+    // just because last_interaction_at aged (e.g. control-plane blip stops
+    // client activate ticks). Only explicit dismiss force-reaps live work.
     let _g = lock();
     init_for_tests();
     v2_session_map::clear_for_tests();
 
-    let (pid, path) = setup_project("aged");
-    // Aged out: interacted 100h ago, default window is 24h.
+    let (pid, path) = setup_project("aged-live");
+    // Aged out: interacted 100h ago, default window is 24h — but PTY is live.
     set_last_interaction(&pid, Some(now_secs() - 100 * 3600));
-    let _session = spawn_chat_pty(&pid, &path);
+    let session = spawn_chat_pty(&pid, &path);
     assert!(is_live(&pid), "PTY should be live after spawn");
 
     let mut reaper = ReaperTestDriver::with_grace_ms(GRACE_MS);
 
-    // Pass 1: aged + not warm → arm grace. Not yet fired.
     reaper.pass().await;
-    assert!(reaper.is_armed(&pid), "aged chat should be armed");
-    assert!(is_live(&pid), "must not reap before grace elapses");
+    assert!(
+        !reaper.is_armed(&pid),
+        "live PTY must not arm age-out grace even when window-aged"
+    );
+    assert!(is_live(&pid));
 
-    // Wait past the grace, then a second pass fires the reap.
     tokio::time::sleep(Duration::from_millis(GRACE_MS + 30)).await;
     reaper.pass().await;
     assert!(
-        !is_live(&pid),
-        "aged chat must be reaped after the grace elapses"
+        is_live(&pid),
+        "live PTY must survive age-out — never silent mass reap on stale interaction"
     );
 
+    drop(session);
     v2_session_map::clear_for_tests();
 }
 

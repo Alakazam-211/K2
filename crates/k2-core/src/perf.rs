@@ -65,7 +65,14 @@ fn hists() -> &'static Mutex<HashMap<&'static str, Histogram>> {
 
 /// Record a single observation against the named histogram. Prints an
 /// automatic summary line every [`FLUSH_EVERY`] samples.
+///
+/// No-op when [`is_enabled`] is false — `perf_hist!` is left in hot paths
+/// (e.g. companion `terminal_poll_tick` every 100ms); without this gate
+/// release daemons filled multi-100MB stderr logs (2026-07-22 forensics).
 pub fn record(name: &'static str, elapsed: Duration) {
+    if !is_enabled() {
+        return;
+    }
     let mut map = hists().lock();
     let hist = map.entry(name).or_default();
     hist.push(elapsed);
@@ -156,7 +163,10 @@ impl HistGuard {
 impl Drop for HistGuard {
     #[inline(always)]
     fn drop(&mut self) {
-        record(self.name, self.start.elapsed());
+        // Cheap gate: avoid Instant accounting + map lock when perf is off.
+        if is_enabled() {
+            record(self.name, self.start.elapsed());
+        }
     }
 }
 

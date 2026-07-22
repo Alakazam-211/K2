@@ -13,14 +13,24 @@
 //! A chat PTY is reap-eligible iff:
 //!   1. `!in_active_set(projectId)` — aged out of the window AND not
 //!      `manually_active`, and
-//!   2. `!heartbeat_enabled(projectId)` — a heartbeat keeps it warm.
+//!   2. `!heartbeat_enabled(projectId)` — a heartbeat keeps it warm, and
+//!   3. **either** no live PTY remains, **or** an explicit `dismiss`
+//!      force-armed the grace (see below).
 //!
-//! There is **no subscriber/attach gate**. Attachment does NOT keep a
-//! session alive; *Active* does. This rests on the invariant (PRD
-//! §4.3.1) that opening/attaching a workspace chat IS an activation
-//! (`POST /cli/projects/activate` bumps `last_interaction_at`), so a
-//! client watching a workspace ⇒ it is Active ⇒ the reaper won't touch
-//! it. `subscriberCount` stays as data but is never a reap input.
+//! ### Live PTY spares age-out reaps (P0 — control-plane blip)
+//! Opening/attaching a workspace chat IS an activation
+//! (`POST /cli/projects/activate` bumps `last_interaction_at`). That
+//! works while a client can reach the daemon. A transient loss of
+//! `connect.k2.dev` / events-WS (client-side blip) stops those
+//! activations even though **agent PTYs are still healthy on-box**. If
+//! we aged solely on `last_interaction_at`, every live agent would look
+//! "dormant" and the reaper would `[v2-kill]` them in a batch — silent
+//! loss of real work (2026-07-22 forensics / GH#22 class).
+//!
+//! **Rule:** age-out reaping never kills a workspace that still has a
+//! live mapped PTY. Only **explicit dismiss** (forced grace) may
+//! force-close a live chat. Heartbeat-warm still always spares.
+//! `subscriberCount` stays data, not a reap input.
 //!
 //! ## Grace
 //! When a workspace first becomes reap-eligible — either the window-tick
@@ -389,8 +399,22 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
             continue;
         }
 
-        // Eligible: aged out (not Active, not warm), OR explicitly
-        // dismissed (forced), OR a still-running forced timer.
+        // (3b) P0 — live PTY present (we only iterate live chats) AND not
+        //      force-dismissed: spare age-out. Control-plane / client
+        //      blips must never look like "all agents idle → mass reap."
+        //      Explicit dismiss still arms forced grace below.
+        if !forced_already && !dismissed_this_pass {
+            if existing.is_some() {
+                log_debug!(
+                    "[active-reaper] cancel grace for project={pid} (live PTY — age-out spare)"
+                );
+            }
+            armed.remove(pid);
+            continue;
+        }
+
+        // Eligible: explicitly dismissed (forced), OR a still-running
+        // forced timer. (Age-out alone no longer arms while a PTY lives.)
         match armed.get(pid) {
             Some(state) if now >= state.deadline => {
                 // Grace elapsed → fire (after a fresh re-check below).
@@ -469,19 +493,17 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
         .unwrap_or((true, true)); // fail closed: skip the reap on join error
 
         let (active, heartbeat) = recheck;
-        // Heartbeat-warm ALWAYS spares the session (the keep-warm gate
-        // wins, even over a dismiss). For a NON-forced (aged-out) timer
-        // the window-Active gate also spares it — the workspace
-        // re-entered the window between arm and fire. A FORCED (dismiss)
-        // timer intentionally ignores the window: dismiss means "remove
-        // it now" even if the last interaction is still recent. The
-        // arming loop above already cancelled the forced timer if a
-        // fresh interaction (re-activation) advanced past the arm-time
-        // value, so reaching here forced means no re-activation happened.
-        let spare = heartbeat || (active && !forced);
+        // Heartbeat-warm ALWAYS spares (even over dismiss).
+        // Non-forced timers: spare if window-Active again OR if a live
+        // PTY is still mapped (P0 — age-out never kills live work).
+        // Forced (dismiss) ignores window + live PTY: user asked to
+        // remove it; arming already cancelled on re-activation.
+        let live_pty = v2_session_map::lookup_by_agent_name(&chat.agent_name).is_some()
+            || live_session_project_ids().contains(&chat.project_id);
+        let spare = heartbeat || (!forced && (active || live_pty));
         if spare {
             log_debug!(
-                "[active-reaper] skip fire for project={} (re-check: active={active} heartbeat={heartbeat} forced={forced})",
+                "[active-reaper] skip fire for project={} (re-check: active={active} heartbeat={heartbeat} forced={forced} live_pty={live_pty})",
                 chat.project_id,
             );
             armed.remove(&chat.project_id);

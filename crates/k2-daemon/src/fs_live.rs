@@ -12,7 +12,7 @@
 //! batched and grouped by longest-prefix project root before emit.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::OnceLock;
@@ -222,6 +222,7 @@ pub(crate) fn group_paths_by_workspace(paths: Vec<String>) -> HashMap<String, Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn noisy_filter_skips_node_modules_and_git_objects() {

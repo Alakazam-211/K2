@@ -3,6 +3,48 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.58 — Files that keep up, and previews that actually work
+
+The **Files** drawer is a real workspace browser again — not a list that
+lags behind agents or only shows plain text when you open something.
+
+### Live refresh when others change the tree
+
+When an agent, another client, or a process on the host adds, renames, or
+deletes files, the Files tree updates without a full window reload. That
+covers local workspaces and remote hosts the same way.
+
+### Dropping files no longer multiplies copies
+
+Dragging from Finder (or another app) into Files used to sometimes create
+several copies of the same drop — especially with multiple panes open.
+Drops are routed once and uploads single-flight, so one drag means one
+landing.
+
+### Open more than code
+
+Click a file and K2 picks a preview when it can:
+
+- **Images** — PNG, JPEG, GIF, WebP, SVG, ICO (and friends), including
+  files on remote hosts
+- **CSV / TSV** — table view you can scroll and edit
+- **Zip** — list contents, with a clear path to **Extract** on the host
+- **Audio / video** — play on **your** machine (the thin client), not the
+  remote server’s speakers; bytes stream from the host daemon
+- **Diagrams** — Mermaid (`.mmd` / `.mermaid`) rendered in the viewer
+- **Everything else binary** — a clear empty state instead of a broken
+  text tab
+
+Spreadsheets and slide decks (xlsx / pptx) are still out of scope for this
+release.
+
+### Polished tree
+
+Folders sort first, icons follow light/dark (Seti-style), and **Reveal in
+Finder** / the OS equivalent is labeled correctly.
+
+---
+
 ## 0.40.57 — Live agent terminals stay alive across brief disconnects
 
 The **Active** reaper no longer kills a live agent terminal just because the

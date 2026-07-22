@@ -166,3 +166,58 @@ export function bytesToObjectUrl(bytes: Uint8Array, mime: string): string {
   const blob = new Blob([copy.buffer], { type: mime })
   return URL.createObjectURL(blob)
 }
+
+/** Safe revoke for blob: URLs; no-op for data: / empty / null. */
+export function revokeObjectUrl(url: string | null | undefined): void {
+  if (url && url.startsWith('blob:')) {
+    URL.revokeObjectURL(url)
+  }
+}
+
+function extOf(path: string): string {
+  const name = path.split('/').pop()?.split('\\').pop() ?? path
+  const idx = name.lastIndexOf('.')
+  if (idx < 0 || idx === name.length - 1) return ''
+  return name.slice(idx + 1).toLowerCase()
+}
+
+/** Extension → image MIME for host-aware image previews. */
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  avif: 'image/avif',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+}
+
+/** Infer image MIME from path extension; default application/octet-stream. */
+export function imageMimeFromPath(path: string): string {
+  return IMAGE_MIME_BY_EXT[extOf(path)] ?? 'application/octet-stream'
+}
+
+/**
+ * Heuristic: text content that contains a NUL in the first sample is almost
+ * certainly binary. Used after fs/read-file when extension said "text".
+ */
+export function looksLikeBinaryText(content: string, sampleBytes = 8192): boolean {
+  const sample = content.length > sampleBytes ? content.slice(0, sampleBytes) : content
+  return sample.includes('\0')
+}
+
+/** Convenience: load host bytes and return a Blob object URL. Caller must revoke. */
+export async function loadHostObjectUrl(
+  path: string,
+  mime: string,
+  options?: LoadHostBinaryOptions,
+): Promise<string> {
+  const bytes = await loadHostBinary(path, options)
+  return bytesToObjectUrl(bytes, mime)
+}

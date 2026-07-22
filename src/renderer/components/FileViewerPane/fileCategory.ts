@@ -136,3 +136,22 @@ export function supportsViewToggle(category: FileCategory): boolean {
     category === 'diagram'
   )
 }
+
+const MEDIA_MIME_BY_EXT: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  flac: 'audio/flac',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  mkv: 'video/x-matroska',
+}
+
+/** MIME for HTML5 audio/video elements from path extension. */
+export function mediaMimeFromPath(path: string): string {
+  const ext = getFileExtension(path).replace(/^\./, '')
+  return MEDIA_MIME_BY_EXT[ext] ?? 'application/octet-stream'
+}

@@ -2,17 +2,21 @@ import React, { Suspense, lazy, useState, useEffect, useCallback, useRef, useLay
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { looksLikeBinaryText } from '@/lib/load-host-binary'
 // 0.39.0 bundle-perf: PDFViewer pulls in pdfjs-dist (~600KB gzip),
 // DocxViewer pulls in mammoth (~200KB), CodeEditor pulls in
-// @codemirror/* (~100KB). Lazy-load all three so they only enter the
-// bundle when the user actually opens a matching file. The Suspense
+// @codemirror/* (~100KB). Lazy-load heavy viewers so they only enter
+// the bundle when the user actually opens a matching file. The Suspense
 // fallback shows briefly during the dynamic import — see the JSX
 // usages below.
 const PDFViewer = lazy(() => import('./PDFViewer').then((m) => ({ default: m.PDFViewer })))
 const DocxViewer = lazy(() => import('./DocxViewer').then((m) => ({ default: m.DocxViewer })))
 const CodeEditor = lazy(() => import('./CodeEditor').then((m) => ({ default: m.CodeEditor })))
 const ZipViewer = lazy(() => import('./ZipViewer').then((m) => ({ default: m.ZipViewer })))
+const CsvViewer = lazy(() => import('./CsvViewer').then((m) => ({ default: m.CsvViewer })))
+const MediaViewer = lazy(() => import('./MediaViewer').then((m) => ({ default: m.MediaViewer })))
+const DiagramViewer = lazy(() =>
+  import('./DiagramViewer').then((m) => ({ default: m.DiagramViewer })),
+)
 // `getLanguageName` is a synchronous helper used in the status bar —
 // importing it eagerly is fine (it's a small string table, not the
 // CodeMirror bundle). Bundlers tree-shake the rest of the module.
@@ -63,11 +67,12 @@ interface FileViewerPaneProps {
 import {
   getFileCategory,
   getDefaultViewMode,
-  isBinaryOrMediaCategory,
+  isBinaryPreviewCategory,
+  supportsViewToggle,
   type FileCategory,
   type ViewMode,
 } from './fileCategory'
-export { getFileCategory, getDefaultViewMode, isBinaryOrMediaCategory } from './fileCategory'
+export { getFileCategory, getDefaultViewMode } from './fileCategory'
 export type { FileCategory, ViewMode } from './fileCategory'
 
 /** True if the current document selection overlaps `container` and
@@ -211,11 +216,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [cursorInfo, setCursorInfo] = useState({ line: 1, col: 1, selections: 1 })
-  // When extension said "text" but content has NULs, treat as binary.
-  const [detectedBinary, setDetectedBinary] = useState(false)
 
   const category = getFileCategory(filePath)
-  const effectiveCategory: FileCategory = detectedBinary ? 'binary' : category
   const [viewMode, setViewMode] = useState<ViewMode>(getDefaultViewMode(category))
   const isDirty = editedContent !== null && editedContent !== content
   const setTabDirty = useTabsStore((s) => s.setTabDirty)
@@ -272,30 +274,22 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   useEffect(() => {
     const newCategory = getFileCategory(filePath)
     setViewMode(getDefaultViewMode(newCategory))
-    setDetectedBinary(false)
   }, [filePath])
 
   const loadFile = useCallback(async () => {
-    // Binary / media / dedicated viewers don't need text content.
-    if (isBinaryOrMediaCategory(getFileCategory(filePath))) {
+    // Binary preview categories (image/pdf/docx/audio/video) load their
+    // own bytes via host-aware helpers — skip the text path.
+    if (isBinaryPreviewCategory(getFileCategory(filePath))) {
       setLoading(false)
       setError(null)
-      setDetectedBinary(false)
       return
     }
 
     setLoading(true)
     setError(null)
-    setDetectedBinary(false)
     try {
       const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
-      // Guard: extension said text but payload looks binary — don't dump into editor.
-      if (looksLikeBinaryText(result.content)) {
-        setContent('')
-        setDetectedBinary(true)
-      } else {
-        setContent(result.content)
-      }
+      setContent(result.content)
     } catch {
       // File doesn't exist yet (e.g., untitled document) — start with empty content
       setContent('')
@@ -390,8 +384,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
   // Auto-refresh: poll for file changes every 2 seconds (only when not editing)
   useEffect(() => {
-    if (isBinaryOrMediaCategory(getFileCategory(filePath))) return
-    if (detectedBinary) return
+    if (isBinaryPreviewCategory(getFileCategory(filePath))) return
     if (isDirty) return // Don't overwrite user edits
 
     const interval = setInterval(async () => {
@@ -407,11 +400,6 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       }
       try {
         const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
-        if (looksLikeBinaryText(result.content)) {
-          setDetectedBinary(true)
-          setContent('')
-          return
-        }
         // Functional update avoids stale closure over content
         setContent(prev => result.content !== prev ? result.content : prev)
       } catch {
@@ -420,7 +408,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     }, FILE_POLL_INTERVAL)
 
     return () => clearInterval(interval)
-  }, [filePath, isDirty, detectedBinary])
+  }, [filePath, isDirty])
 
   // Save file (Cmd+S) — called directly by CodeEditor with current content
   const saveFile = useCallback(async (contentToSave?: string) => {
@@ -559,16 +547,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     }
   }, [category, filePin, filePath, pinFileAsTab, unpinFileTab, pinned, tabId, paneId, pinPane, unpinPane])
 
-  // Dual-mode types get Preview | Edit. Media/zip/binary/pdf/docx are
-  // rendered-only (dedicated viewer or empty state).
-  const showViewToggle =
-    !detectedBinary &&
-    (category === 'markdown' ||
-      category === 'html' ||
-      category === 'image' ||
-      category === 'csv' ||
-      category === 'diagram' ||
-      category === 'diagramSource')
+  // Preview | Edit for markdown/html/image/csv/mermaid/diagram.
+  // Audio/video/pdf/docx are preview-only surfaces (no raw text edit).
+  const showViewToggle = supportsViewToggle(category)
 
   if (loading) {
     return (
@@ -678,13 +659,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           </div>
         )}
 
-        {/* Word wrap toggle (only for text/code files and dual-mode raw edit) */}
-        {effectiveCategory === 'text' ||
-        ((effectiveCategory === 'markdown' ||
-          effectiveCategory === 'html' ||
-          effectiveCategory === 'csv' ||
-          effectiveCategory === 'diagram' ||
-          effectiveCategory === 'diagramSource') &&
+        {/* Word wrap toggle (only for text/code / raw dual-mode files) */}
+        {category === 'text' ||
+        ((category === 'markdown' ||
+          category === 'html' ||
+          category === 'csv' ||
+          category === 'mermaid' ||
+          category === 'diagram') &&
           viewMode === 'raw') ? (
           <button
             className={`p-1 transition-colors ${
@@ -787,83 +768,67 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       )}
 
       {/* Content */}
-      {effectiveCategory === 'pdf' ? (
+      {category === 'pdf' ? (
         <div className="flex-1 overflow-hidden">
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading PDF…</div>}>
             <PDFViewer filePath={filePath} />
           </Suspense>
         </div>
-      ) : effectiveCategory === 'docx' ? (
+      ) : category === 'docx' ? (
         <div className="flex-1 overflow-hidden">
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading document…</div>}>
             <DocxViewer filePath={filePath} />
           </Suspense>
         </div>
-      ) : effectiveCategory === 'image' && viewMode === 'rendered' ? (
+      ) : category === 'audio' ? (
+        <div className="flex-1 overflow-hidden">
+          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading audio…</div>}>
+            <MediaViewer filePath={filePath} kind="audio" />
+          </Suspense>
+        </div>
+      ) : category === 'video' ? (
+        <div className="flex-1 overflow-hidden">
+          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading video…</div>}>
+            <MediaViewer filePath={filePath} kind="video" />
+          </Suspense>
+        </div>
+      ) : category === 'csv' && viewMode === 'rendered' ? (
+        <div className="flex-1 overflow-hidden" ref={contentRef}>
+          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading table…</div>}>
+            <CsvViewer content={editedContent ?? content} filePath={filePath} />
+          </Suspense>
+        </div>
+      ) : category === 'mermaid' && viewMode === 'rendered' ? (
+        <div className="flex-1 overflow-hidden" ref={contentRef}>
+          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading diagram…</div>}>
+            <DiagramViewer content={editedContent ?? content} filePath={filePath} mode="mermaid" />
+          </Suspense>
+        </div>
+      ) : category === 'diagram' && viewMode === 'rendered' ? (
+        <div className="flex-1 overflow-hidden" ref={contentRef}>
+          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading diagram…</div>}>
+            <DiagramViewer content={editedContent ?? content} filePath={filePath} mode="source" />
+          </Suspense>
+        </div>
+      ) : category === 'image' && viewMode === 'rendered' ? (
         <div className="flex-1 overflow-y-auto overflow-x-hidden" ref={contentRef}>
           <ImageViewer filePath={filePath} alt={fileName} />
         </div>
-      ) : effectiveCategory === 'image' && viewMode === 'raw' ? (
+      ) : category === 'image' && viewMode === 'raw' ? (
         <div className="flex-1 overflow-y-auto overflow-x-hidden" ref={contentRef}>
           <div className="p-4 text-xs text-[var(--color-text-muted)]">
             <p>Binary image file. Switch to Preview mode to view.</p>
           </div>
         </div>
-      ) : effectiveCategory === 'binary' ? (
+      ) : category === 'zip' ? (
         <div className="flex-1 overflow-hidden" ref={contentRef}>
-          <BinaryEmptyState filePath={filePath} />
-        </div>
-      ) : effectiveCategory === 'zip' ? (
-        <div className="flex-1 overflow-hidden" ref={contentRef}>
-          <Suspense
-            fallback={
-              <div className="p-4 text-xs text-[var(--color-text-muted)]">Loading archive…</div>
-            }
-          >
+          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading archive…</div>}>
             <ZipViewer filePath={filePath} />
           </Suspense>
         </div>
-      ) : effectiveCategory === 'audio' || effectiveCategory === 'video' ? (
+      ) : category === 'binary' ? (
         <div className="flex-1 overflow-hidden" ref={contentRef}>
-          <BinaryEmptyState
-            filePath={filePath}
-            message={
-              effectiveCategory === 'audio'
-                ? 'Audio preview loads on this device (coming soon)'
-                : 'Video preview loads on this device (coming soon)'
-            }
-            detail="Media plays in the client, never on the host. Reveal to open externally for now."
-          />
-        </div>
-      ) : effectiveCategory === 'csv' && viewMode === 'rendered' ? (
-        // Foundation: table viewer is a follow-up; Edit (raw) already works.
-        <div className="flex-1 overflow-y-auto overflow-x-hidden" ref={contentRef}>
-          <div className="p-4 text-xs text-[var(--color-text-muted)] space-y-2">
-            <p>CSV/TSV table preview is coming soon. Switch to Edit to view or change the raw text.</p>
-            <pre className="whitespace-pre-wrap font-mono text-[11px] text-[var(--color-text-secondary)] max-h-[60vh] overflow-auto border border-[var(--color-border)] p-2">
-              {(editedContent ?? content).split('\n').slice(0, 40).join('\n')}
-              {(editedContent ?? content).split('\n').length > 40 ? '\n…' : ''}
-            </pre>
-          </div>
-        </div>
-      ) : effectiveCategory === 'diagram' && viewMode === 'rendered' ? (
-        <div className="flex-1 overflow-y-auto overflow-x-hidden" ref={contentRef}>
-          <div className="p-4 text-xs text-[var(--color-text-muted)] space-y-2">
-            <p>Mermaid diagram rendering is coming soon. Switch to Edit for the source.</p>
-            <pre className="whitespace-pre-wrap font-mono text-[11px] text-[var(--color-text-secondary)] max-h-[60vh] overflow-auto border border-[var(--color-border)] p-2">
-              {editedContent ?? content}
-            </pre>
-          </div>
-        </div>
-      ) : effectiveCategory === 'diagramSource' && viewMode === 'rendered' ? (
-        <div className="flex-1 overflow-y-auto overflow-x-hidden" ref={contentRef}>
-          <div className="p-4 text-xs text-[var(--color-text-muted)] space-y-2">
-            <p>Diagram source file — visual embed not required in v1. Switch to Edit for raw source.</p>
-            <pre className="whitespace-pre-wrap font-mono text-[11px] text-[var(--color-text-secondary)] max-h-[60vh] overflow-auto border border-[var(--color-border)] p-2">
-              {(editedContent ?? content).slice(0, 4000)}
-              {(editedContent ?? content).length > 4000 ? '\n…' : ''}
-            </pre>
-          </div>
+          <BinaryEmptyState filePath={filePath} />
         </div>
       ) : category === 'markdown' && viewMode === 'rendered' ? (
         <div className="flex-1 overflow-y-auto overflow-x-hidden" ref={contentRef}>

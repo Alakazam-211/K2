@@ -17,6 +17,7 @@ import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
 import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { onFsChanged } from '@/stores/session-events'
+import { useStyleStore } from '@/stores/style'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -38,6 +39,32 @@ interface FileTreeProps {
 function parentDir(path: string): string {
   const idx = path.lastIndexOf('/')
   return idx > 0 ? path.slice(0, idx) : '/'
+}
+
+/** Dirs before files, then locale-aware name order (Finder-ish). */
+function sortEntriesFoldersFirst(entries: FileEntry[]): FileEntry[] {
+  return [...entries].sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  })
+}
+
+/**
+ * Context-menu label for revealing a path in the host file manager.
+ * Prefers client OS via UA (daemon may differ on remote; open still runs
+ * on the daemon — label is best-effort UX).
+ */
+function revealInFileManagerLabel(): string {
+  if (typeof navigator === 'undefined') return 'Reveal in file manager'
+  const ua = navigator.userAgent
+  // iOS/iPadOS report MacIntel platform but aren't Finder; Files drawer
+  // is desktop-first so Mac UA → Finder is correct for Tauri clients.
+  if (/Mac|Darwin/i.test(ua) && !/iPhone|iPad|iPod/i.test(ua)) {
+    return 'Open in Finder'
+  }
+  if (/Win/i.test(ua)) return 'Open in Explorer'
+  if (/Linux|X11|CrOS/i.test(ua)) return 'Show in Files'
+  return 'Reveal in file manager'
 }
 
 function trimTrailingSlash(path: string): string {
@@ -164,13 +191,17 @@ function ChevronIcon({ expanded }: { expanded: boolean }): React.JSX.Element {
 }
 
 function FolderIcon({ open }: { open: boolean }): React.JSX.Element {
+  // Slightly softer gold on light scheme so folders don't shout over Seti glyphs.
+  const scheme = useStyleStore((s) => s.resolvedScheme)
+  const fill = scheme === 'light' ? '#D4A017' : '#EAB308'
+  const stroke = scheme === 'light' ? '#B45309' : '#CA8A04'
   if (open) {
     return (
       <svg
         className="w-4 h-4 flex-shrink-0"
         viewBox="0 0 24 24"
-        fill="#EAB308"
-        stroke="#CA8A04"
+        fill={fill}
+        stroke={stroke}
         strokeWidth={1}
       >
         <path d="M5 4h4l2 2h8a1 1 0 011 1v1H4V5a1 1 0 011-1z" />
@@ -182,8 +213,8 @@ function FolderIcon({ open }: { open: boolean }): React.JSX.Element {
     <svg
       className="w-4 h-4 flex-shrink-0"
       viewBox="0 0 24 24"
-      fill="#EAB308"
-      stroke="#CA8A04"
+      fill={fill}
+      stroke={stroke}
       strokeWidth={1}
     >
       <path d="M5 4h4l2 2h8a1 1 0 011 1v12a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z" />
@@ -479,6 +510,13 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [newEntryState, setNewEntryState] = useState<{ parentPath: string; isDirectory: boolean } | null>(null)
 
+  // Latest cache/expanded available to loadDir + event handlers without
+  // re-creating callbacks / re-binding effects on every cache write.
+  const cacheRef = useRef(cache)
+  cacheRef.current = cache
+  const expandedDirsRef = useRef(expandedDirs)
+  expandedDirsRef.current = expandedDirs
+
   // Store subscriptions
   const selectedPaths = useFileSelectionStore((s) => s.selectedPaths)
   const clipboardMode = useFileClipboardStore((s) => s.mode)
@@ -621,33 +659,35 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   // (filteredChildren / filteredRootEntries) hides dotfiles based on
   // the store's `showHiddenFiles` toggle. This way, flipping the eye
   // icon is a pure re-render — no re-fetch needed.
-  const loadDir = useCallback(
-    async (dirPath: string, force = false) => {
-      if (!force && cache.has(dirPath)) return
+  //
+  // Identity is stable: skip-if-cached reads `cacheRef` (not `cache` in
+  // the dep array), and all writes use functional setState. Callers that
+  // list `loadDir` in effect deps no longer re-bind on every cache write.
+  const loadDir = useCallback(async (dirPath: string, force = false) => {
+    if (!force && cacheRef.current.has(dirPath)) return
 
-      setLoadingDirs((prev) => new Set(prev).add(dirPath))
-      setErrorDirs((prev) => {
-        const next = new Map(prev)
+    setLoadingDirs((prev) => new Set(prev).add(dirPath))
+    setErrorDirs((prev) => {
+      const next = new Map(prev)
+      next.delete(dirPath)
+      return next
+    })
+
+    try {
+      const raw = await daemonCliGet<FileEntry[]>('fs/read-dir', { path: dirPath, show_hidden: true })
+      const entries = sortEntriesFoldersFirst(raw)
+      setCache((prev) => new Map(prev).set(dirPath, entries))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to read directory'
+      setErrorDirs((prev) => new Map(prev).set(dirPath, message))
+    } finally {
+      setLoadingDirs((prev) => {
+        const next = new Set(prev)
         next.delete(dirPath)
         return next
       })
-
-      try {
-        const entries = await daemonCliGet<FileEntry[]>('fs/read-dir', { path: dirPath, show_hidden: true })
-        setCache((prev) => new Map(prev).set(dirPath, entries))
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to read directory'
-        setErrorDirs((prev) => new Map(prev).set(dirPath, message))
-      } finally {
-        setLoadingDirs((prev) => {
-          const next = new Set(prev)
-          next.delete(dirPath)
-          return next
-        })
-      }
-    },
-    [cache]
-  )
+    }
+  }, [])
 
   // When `showHiddenFiles` changes, any directories already in the cache
   // may have been fetched before this render rule existed (old app
@@ -686,14 +726,6 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
   // Load AI config entries on mount / root change
   useEffect(() => { loadAiConfig() }, [loadAiConfig])
-
-  // Keep latest cache/expanded sets available to event handlers without
-  // re-subscribing the local Tauri watcher / session-events socket every
-  // expand toggle.
-  const cacheRef = useRef(cache)
-  cacheRef.current = cache
-  const expandedDirsRef = useRef(expandedDirs)
-  expandedDirsRef.current = expandedDirs
 
   // Apply a batch of absolute changed paths (local fs://change OR daemon
   // fs_changed) — force-refresh parent dirs that are already visible in
@@ -1316,7 +1348,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         : []),
       { id: 'delete', label: `Move to Trash${!isSingle ? ` (${paths.length})` : ''}` },
       { id: 'separator-util', label: '', type: 'separator' },
-      { id: 'open-finder', label: 'Open in Finder' },
+      { id: 'open-finder', label: revealInFileManagerLabel() },
       { id: 'copy-path', label: 'Copy Path' }
     ]
 
@@ -1559,7 +1591,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                     e.stopPropagation()
                     const items = [
                       { id: 'open', label: 'Open' },
-                      { id: 'open-finder', label: 'Show in Finder' },
+                      { id: 'open-finder', label: revealInFileManagerLabel() },
                       { id: 'copy-path', label: 'Copy Path' },
                     ]
                     const id = await showContextMenu(items)
@@ -1627,7 +1659,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                       entry.isDirectory
                         ? { id: 'open', label: 'Reveal in Tree' }
                         : { id: 'open', label: 'Open' },
-                      { id: 'open-finder', label: 'Show in Finder' },
+                      { id: 'open-finder', label: revealInFileManagerLabel() },
                       { id: 'copy-path', label: 'Copy Path' },
                     ]
                     const id = await showContextMenu(items)

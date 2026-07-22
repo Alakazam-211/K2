@@ -94,6 +94,7 @@ pub mod fs_abstract;
 pub mod fs_atomic;
 pub mod fs_commands;
 pub mod fs_compress;
+pub mod fs_extract;
 pub mod git;
 // Phase 2.5c: workspace heartbeat schedules + launchd + cron live here
 // post-refactor. Was [`agents::heartbeat`]; the `agents/` back-compat

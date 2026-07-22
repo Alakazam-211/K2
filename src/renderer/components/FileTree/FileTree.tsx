@@ -14,7 +14,7 @@ import { useFileUndoStore } from '@/stores/file-undo'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
-import { compressFolder, downloadFile } from '@/lib/fs-transfer'
+import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -1208,6 +1208,10 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       ...(isDir && isSingle
         ? [{ id: 'compress', label: 'Compress' }]
         : []),
+      // Extract is the inverse of compress: single .zip file → sibling folder.
+      ...(!isDir && isSingle && /\.zip$/i.test(entry.name)
+        ? [{ id: 'extract', label: 'Extract' }]
+        : []),
       ...(!isDir && isSingle && isRemote
         ? [{ id: 'download', label: 'Download' }]
         : []),
@@ -1234,6 +1238,20 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       // the new archive appears without a manual reload.
       const zipPath = await compressFolder(entry.path)
       if (zipPath) await loadDir(parentDir(entry.path))
+    } else if (clickedId === 'extract') {
+      // Sibling folder lands next to the zip — refresh parent and expand
+      // the dest so contents show without a manual reload.
+      const destPath = await extractArchive(entry.path)
+      if (destPath) {
+        const parent = parentDir(entry.path)
+        await loadDir(parent)
+        setExpandedDirs((prev) => {
+          const next = new Set(prev)
+          next.add(destPath)
+          return next
+        })
+        await loadDir(destPath)
+      }
     } else if (clickedId === 'download') {
       await downloadFile(entry.path)
     } else if (clickedId === 'copy-items') {

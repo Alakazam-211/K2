@@ -1,5 +1,5 @@
 // 0.40.22 large-file transfers — renderer drivers for the daemon's
-// compress/download fs routes.
+// compress/extract/download fs routes.
 //
 // These own the WHOLE user-visible lifecycle of one operation (transfer
 // card + cancel wiring + outcome toasts), mirroring `executeRemoteDrop` —
@@ -83,6 +83,74 @@ export async function compressFolder(path: string): Promise<string | null> {
   } catch (err) {
     toast.addToast(
       `Compress failed: ${err instanceof Error ? err.message : String(err)}`,
+      'error',
+    )
+    return null
+  } finally {
+    useTransferProgressStore.getState().end(tid)
+  }
+}
+
+/** Wire shape of `GET /cli/fs/extract-status`. */
+interface ExtractStatus {
+  job_id: string
+  phase: 'running' | 'done' | 'failed'
+  done: number
+  total: number
+  dest_path?: string
+  error?: string
+}
+
+/** Poll cadence for the extract job — same as compress. */
+const EXTRACT_POLL_MS = 500
+
+/**
+ * Extract the zip at `path` into a sibling folder ON THE ACTIVE DAEMON's
+ * disk (server-side job — the archive never moves over the wire). Drives
+ * a transfer card with entry-level percent + Cancel, polls the job to a
+ * terminal phase, and toasts the outcome.
+ *
+ * @returns the final dest folder path on the daemon, or null
+ *   (failed/cancelled — already surfaced to the user).
+ */
+export async function extractArchive(path: string): Promise<string | null> {
+  const toast = useToastStore.getState()
+  const label = baseName(path)
+  const tid = useTransferProgressStore.getState().begin('extract', label)
+  let cancelSent = false
+  try {
+    const { job_id } = await daemonCliPost<{ job_id: string }>('fs/extract', { path })
+    for (;;) {
+      await sleep(EXTRACT_POLL_MS)
+      if (!cancelSent && useTransferProgressStore.getState().isCancelRequested(tid)) {
+        cancelSent = true
+        await daemonCliPost('fs/extract-cancel', { job_id })
+      }
+      const status = await daemonCliGet<ExtractStatus>('fs/extract-status', { job_id })
+      if (status.phase === 'running') {
+        useTransferProgressStore
+          .getState()
+          .update(tid, status.total > 0 ? status.done / status.total : null)
+        continue
+      }
+      if (status.phase === 'done' && status.dest_path) {
+        toast.addToast(
+          `Extracted “${label}” → ${baseName(status.dest_path)}`,
+          'success',
+          4000,
+        )
+        return status.dest_path
+      }
+      if (cancelSent) {
+        toast.addToast('Extraction cancelled', 'info', 3000)
+      } else {
+        toast.addToast(`Extract failed: ${status.error ?? 'unknown error'}`, 'error')
+      }
+      return null
+    }
+  } catch (err) {
+    toast.addToast(
+      `Extract failed: ${err instanceof Error ? err.message : String(err)}`,
       'error',
     )
     return null

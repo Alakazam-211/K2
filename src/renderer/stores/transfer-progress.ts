@@ -10,7 +10,7 @@
 
 import { create } from 'zustand'
 
-export type TransferKind = 'upload' | 'download' | 'compress'
+export type TransferKind = 'upload' | 'download' | 'compress' | 'extract'
 
 export interface Transfer {
   id: string

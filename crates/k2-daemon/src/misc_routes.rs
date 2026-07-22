@@ -1026,6 +1026,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // 0.40.22 — poll a server-side compress job (start = POST
         // /cli/fs/compress in the dispatcher).
         "/cli/fs/compress-status" => crate::fs_routes::handle_compress_status(params),
+        // Poll a server-side extract job (start = POST /cli/fs/extract).
+        "/cli/fs/extract-status" => crate::fs_routes::handle_extract_status(params),
         // 0.40.22 — ranged file read; the download-to-local stream loops it.
         "/cli/fs/read-range" => crate::fs_routes::handle_read_range(params),
         // 0.40.22 — poll a "Clone to this computer" pull-pack job (start =

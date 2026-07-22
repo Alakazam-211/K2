@@ -363,6 +363,10 @@ pub fn handle_upload_chunk(body: &[u8]) -> CliResponse {
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
+// ── extract (server-side zip → folder; inverse of compress) ───────────
+// Same async job shape as compress. Defined just below the compress
+// block so the two stay visually paired.
+
 /// A compress job's observable state; `status` snapshots it. The cancel
 /// flag rides along (skipped in serialization) so cancel needs no second
 /// registry.
@@ -522,6 +526,184 @@ pub fn handle_compress_cancel(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     match get_compress_job(&parsed.job_id) {
+        Some(job) => {
+            job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        None => CliResponse::bad_request(format!("unknown job_id: {}", parsed.job_id)),
+    }
+}
+
+// ── extract (server-side zip → folder) ────────────────────────────────
+//
+// Same start-then-poll job shape as compress: `POST fs/extract` returns
+// a job_id, a worker thread streams members into a sibling folder,
+// `GET fs/extract-status?job_id=` snapshots progress, `POST
+// fs/extract-cancel` raises the cooperative cancel flag.
+
+/// An extract job's observable state; `status` snapshots it.
+#[derive(Clone, serde::Serialize)]
+pub struct ExtractJob {
+    pub job_id: String,
+    /// `running` → `done` | `failed`. Terminal states stay in the map so a
+    /// poll that races completion still sees the outcome (jobs are removed
+    /// only when a new job starts — see `insert_extract_job`).
+    pub phase: &'static str,
+    /// Entries written / entries in the archive.
+    pub done: u64,
+    pub total: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dest_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip)]
+    cancel: Arc<AtomicBool>,
+}
+
+fn extract_jobs() -> &'static Mutex<HashMap<String, ExtractJob>> {
+    static JOBS: OnceLock<Mutex<HashMap<String, ExtractJob>>> = OnceLock::new();
+    JOBS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn insert_extract_job(job: ExtractJob) {
+    let mut map = extract_jobs().lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, j| j.phase == "running");
+    map.insert(job.job_id.clone(), job);
+}
+
+fn update_extract_job<F: FnOnce(&mut ExtractJob)>(job_id: &str, f: F) {
+    if let Some(job) = extract_jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(job_id)
+    {
+        f(job);
+    }
+}
+
+fn get_extract_job(job_id: &str) -> Option<ExtractJob> {
+    extract_jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(job_id)
+        .cloned()
+}
+
+fn new_extract_job_id() -> String {
+    let mut bytes = [0u8; 16];
+    if getrandom::getrandom(&mut bytes).is_err() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        return format!("unzip-{nanos:x}");
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[derive(Deserialize)]
+struct ExtractBody {
+    path: String,
+}
+
+/// Start an extract job for the zip at `path`. Instant-fail validation
+/// (missing path / not a .zip file) happens HERE so the caller gets a
+/// 400 instead of a job that flips to `failed`; the deep work streams
+/// on a worker thread. Returns `{ job_id }`.
+pub fn handle_extract(body: &[u8]) -> CliResponse {
+    let parsed: ExtractBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let path = match k2_core::fs_commands::validate_path(&parsed.path) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    if !path.is_file() {
+        return CliResponse::bad_request(format!("Not a regular file: {}", parsed.path));
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if !k2_core::fs_extract::is_zip_filename(&name) {
+        return CliResponse::bad_request(format!("Not a .zip archive: {name}"));
+    }
+
+    let job_id = new_extract_job_id();
+    let cancel = Arc::new(AtomicBool::new(false));
+    insert_extract_job(ExtractJob {
+        job_id: job_id.clone(),
+        phase: "running",
+        done: 0,
+        total: 0,
+        dest_path: None,
+        error: None,
+        cancel: cancel.clone(),
+    });
+
+    let src = parsed.path;
+    let worker_job_id = job_id.clone();
+    std::thread::spawn(move || {
+        let progress_id = worker_job_id.clone();
+        let result = k2_core::fs_extract::extract_from_zip(
+            &src,
+            &move |done, total| {
+                update_extract_job(&progress_id, |j| {
+                    j.done = done;
+                    j.total = total;
+                });
+            },
+            &cancel,
+        );
+        match result {
+            Ok(path) => update_extract_job(&worker_job_id, |j| {
+                j.phase = "done";
+                j.dest_path = Some(path.to_string_lossy().to_string());
+            }),
+            Err(e) => {
+                k2_core::log_debug!(
+                    "[daemon] fs/extract — job {worker_job_id} FAILED: {e}"
+                );
+                update_extract_job(&worker_job_id, |j| {
+                    j.phase = "failed";
+                    j.error = Some(e);
+                });
+            }
+        }
+    });
+
+    CliResponse::ok_json(serde_json::json!({ "job_id": job_id }).to_string())
+}
+
+/// Snapshot an extract job (GET, `?job_id=`).
+pub fn handle_extract_status(params: &HashMap<String, String>) -> CliResponse {
+    let job_id = match params.get("job_id") {
+        Some(id) if !id.is_empty() => id,
+        _ => return CliResponse::bad_request("Missing 'job_id' parameter"),
+    };
+    match get_extract_job(job_id) {
+        Some(job) => CliResponse::ok_json(
+            serde_json::to_string(&job).unwrap_or_else(|_| "{}".to_string()),
+        ),
+        None => CliResponse::bad_request(format!("unknown job_id: {job_id}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct ExtractCancelBody {
+    job_id: String,
+}
+
+/// Raise a running extract job's cooperative cancel flag. The worker
+/// notices between entries, removes its partial dest folder, and flips
+/// the job to `failed` ("Extraction cancelled").
+pub fn handle_extract_cancel(body: &[u8]) -> CliResponse {
+    let parsed: ExtractCancelBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    match get_extract_job(&parsed.job_id) {
         Some(job) => {
             job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             CliResponse::ok_json(r#"{"success":true}"#.to_string())
@@ -739,6 +921,106 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_file(zip_path);
+    }
+
+    #[test]
+    fn extract_rejects_missing_path_before_creating_a_job() {
+        let resp = handle_extract(br#"{"path":"/nonexistent/definitely-not-here-k2"}"#);
+        assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+    }
+
+    #[test]
+    fn extract_rejects_non_zip_before_creating_a_job() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("k2-fs-routes-extract-notzip-{nanos}.txt"));
+        std::fs::write(&path, b"not a zip").unwrap();
+        let body = serde_json::json!({ "path": path.to_string_lossy() }).to_string();
+        let resp = handle_extract(body.as_bytes());
+        assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+        assert!(
+            resp.body.contains(".zip") || resp.body.contains("zip"),
+            "body: {}",
+            resp.body
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn extract_status_rejects_unknown_job_id() {
+        let resp = handle_extract_status(&HashMap::from([(
+            "job_id".to_string(),
+            "no-such-job".to_string(),
+        )]));
+        assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+    }
+
+    #[test]
+    fn extract_cancel_rejects_unknown_job_id() {
+        let resp = handle_extract_cancel(br#"{"job_id":"no-such-job"}"#);
+        assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+    }
+
+    #[test]
+    fn extract_job_runs_to_done_and_status_reports_dest_path() {
+        use std::sync::atomic::AtomicBool;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("k2-fs-routes-extract-{nanos}"));
+        let src = dir.join("bundle");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("hello.txt"), b"world").unwrap();
+        // Build the fixture via compress (daemon has no direct zip dep).
+        let zip_path = k2_core::fs_compress::compress_to_zip(
+            src.to_str().unwrap(),
+            &|_, _| {},
+            &AtomicBool::new(false),
+        )
+        .expect("compress fixture");
+
+        let body = serde_json::json!({ "path": zip_path.to_string_lossy() }).to_string();
+        let resp = handle_extract(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        let job_id = v["job_id"].as_str().expect("job_id").to_string();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let params = HashMap::from([("job_id".to_string(), job_id)]);
+        let final_status = loop {
+            let s = handle_extract_status(&params);
+            assert_eq!(s.status, "200 OK", "body: {}", s.body);
+            let j: serde_json::Value = serde_json::from_str(&s.body).unwrap();
+            match j["phase"].as_str() {
+                Some("running") => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "extract job never finished"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                _ => break j,
+            }
+        };
+        assert_eq!(final_status["phase"].as_str(), Some("done"), "{final_status}");
+        let dest_path = final_status["dest_path"].as_str().expect("dest_path");
+        assert!(
+            std::path::Path::new(dest_path).is_dir(),
+            "dest missing: {dest_path}"
+        );
+        // compress stores parent-relative entries (`bundle/hello.txt`), so
+        // extract reproduces that layout under the sibling dest.
+        let content = std::fs::read_to_string(
+            std::path::Path::new(dest_path).join("bundle/hello.txt"),
+        )
+        .expect("bundle/hello.txt");
+        assert_eq!(content, "world");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

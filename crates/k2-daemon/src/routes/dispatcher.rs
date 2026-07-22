@@ -447,6 +447,10 @@ async fn handle_one_request(
             // POSTs are re-asserted with require_post in their arm below.
             | "/cli/fs/compress"
             | "/cli/fs/compress-cancel"
+            // Server-side zip → folder extract (inverse of compress). Same
+            // start-then-poll job; status is a GET via misc_routes.
+            | "/cli/fs/extract"
+            | "/cli/fs/extract-cancel"
             // K2 Connect "Clone to" P2 — workspace migration. `bundle`
             // runs on the SOURCE daemon (build the scrubbed tar.gz +
             // capture K2 settings); `unpack` runs on the DESTINATION daemon
@@ -3404,6 +3408,33 @@ async fn handle_one_request(
                 crate::fs_routes::handle_compress(&body_bytes)
             } else {
                 crate::fs_routes::handle_compress_cancel(&body_bytes)
+            };
+            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+                .await;
+        }
+        // POST /cli/fs/extract + /cli/fs/extract-cancel — server-side zip
+        // → folder (inverse of compress). Same require_post + token_ok
+        // gate; `GET /cli/fs/extract-status` polls via misc_routes.
+        p if p == "/cli/fs/extract" || p == "/cli/fs/extract-cancel" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let result = if p == "/cli/fs/extract" {
+                crate::fs_routes::handle_extract(&body_bytes)
+            } else {
+                crate::fs_routes::handle_extract_cancel(&body_bytes)
             };
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;

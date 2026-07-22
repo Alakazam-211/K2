@@ -13,6 +13,7 @@ const KIND_LABEL: Record<Transfer['kind'], string> = {
   upload: 'Uploading',
   download: 'Downloading',
   compress: 'Compressing',
+  extract: 'Extracting',
 }
 
 function TransferItem({ transfer }: { transfer: Transfer }): React.JSX.Element {

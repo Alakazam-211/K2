@@ -3,6 +3,20 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.57 — Live agent terminals stay alive across brief disconnects
+
+The **Active** reaper no longer kills a live agent terminal just because the
+app or control plane briefly disconnects. If the PTY is still running, the
+session is left alone — only truly idle/orphaned sessions are aged out.
+
+**Explicit dismiss still closes chats** the way you expect. Closing or
+dismissing a session yourself is unchanged.
+
+Daemon stderr is quieter too: terminal poll performance histogram lines no
+longer spam the log during normal use.
+
+---
+
 ## 0.40.56 — Agent passports no longer die overnight
 
 Long-running agents were losing the ability to use the **K2 CLI**

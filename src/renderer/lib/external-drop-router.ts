@@ -104,10 +104,63 @@ export function classifyExternalDrop(input: {
   return { kind: 'miss' }
 }
 
+/** Whether `position` lies inside a DOMRect (inclusive edges). */
+export function pointInRect(
+  position: { x: number; y: number },
+  rect: { left: number; right: number; top: number; bottom: number },
+): boolean {
+  return (
+    position.x >= rect.left &&
+    position.x <= rect.right &&
+    position.y >= rect.top &&
+    position.y <= rect.bottom
+  )
+}
+
+/**
+ * Pick the file-tree panel under a drop point when several may be mounted
+ * (left + right Files drawers). Prefer the panel that contains the element
+ * under the cursor; else the first panel whose bounding rect contains the
+ * point (empty padding still counts).
+ */
+export function findFileTreePanelAt(
+  position: { x: number; y: number },
+  elUnderPoint: HTMLElement | null,
+  doc: Document = document,
+): HTMLElement | null {
+  const fromPoint = elUnderPoint?.closest?.(
+    '[data-file-tree-panel]',
+  ) as HTMLElement | null
+  if (fromPoint) return fromPoint
+
+  const panels = doc.querySelectorAll('[data-file-tree-panel]')
+  for (let i = 0; i < panels.length; i++) {
+    const panel = panels[i] as HTMLElement
+    if (pointInRect(position, panel.getBoundingClientRect())) {
+      return panel
+    }
+  }
+  return null
+}
+
+/**
+ * Whether a panel with `rootPath` owns `folderPath` (equal or descendant).
+ * Used so refresh events only hit the tree that holds the dest folder.
+ */
+export function panelOwnsFolderPath(rootPath: string, folderPath: string): boolean {
+  if (!rootPath || !folderPath) return false
+  if (folderPath === rootPath) return true
+  const prefix = rootPath.endsWith('/') ? rootPath : `${rootPath}/`
+  return folderPath.startsWith(prefix)
+}
+
 /**
  * DOM hit-test at a drop position. Uses the same selectors the old
  * multi-handler paths used (`[data-terminal-id|container]`,
  * `[data-file-tree-panel]`, `[data-path]`).
+ *
+ * When multiple FileTrees are mounted, the panel under the drop point is
+ * chosen (not `querySelector`'s first match).
  */
 export function hitTestExternalDrop(
   position: { x: number; y: number },
@@ -131,28 +184,24 @@ export function hitTestExternalDrop(
     })
   }
 
-  // 2. Files panel — rect check so empty padding still counts as in-tree.
-  const panel = doc.querySelector(
-    '[data-file-tree-panel]',
-  ) as HTMLElement | null
+  // 2. Files panel — hit the panel under the point (left+right safe).
+  const panel = findFileTreePanelAt(position, el, doc)
   let fileTreeFolder: string | null = null
   if (panel) {
-    const rect = panel.getBoundingClientRect()
-    const inPanel =
-      position.x >= rect.left &&
-      position.x <= rect.right &&
-      position.y >= rect.top &&
-      position.y <= rect.bottom
-    if (inPanel) {
-      const rootPath = panel.dataset.rootPath ?? ''
-      const pathEl = el?.closest?.('[data-path]') as HTMLElement | null
-      fileTreeFolder = resolveFileTreeFolder({
-        inPanel: true,
-        rootPath,
-        rowPath: pathEl?.dataset.path ?? null,
-        rowIsDirectory: pathEl?.dataset.isDirectory === 'true',
-      })
-    }
+    const rootPath = panel.dataset.rootPath ?? ''
+    const pathEl = el?.closest?.('[data-path]') as HTMLElement | null
+    // When the element under the point is outside this panel (rect-only
+    // hit on empty chrome), ignore foreign data-path ancestors.
+    const rowInPanel =
+      pathEl && panel.contains(pathEl)
+        ? pathEl
+        : null
+    fileTreeFolder = resolveFileTreeFolder({
+      inPanel: true,
+      rootPath,
+      rowPath: rowInPanel?.dataset.path ?? null,
+      rowIsDirectory: rowInPanel?.dataset.isDirectory === 'true',
+    })
   }
 
   return classifyExternalDrop({ terminal: null, fileTreeFolder })
@@ -206,14 +255,38 @@ function injectIntoTerminal(
   )
 }
 
-function notifyFileTreeRefresh(folderPath: string, doc: Document = document): void {
-  const panel = doc.querySelector('[data-file-tree-panel]')
-  if (!panel) return
-  panel.dispatchEvent(
+/**
+ * Notify FileTree panel(s) that own `folderPath` so they reload that dir.
+ * Dispatches on every matching panel (same root on left+right is rare but
+ * harmless). Falls back to all panels when none declare a rootPath.
+ */
+export function notifyFileTreeRefresh(
+  folderPath: string,
+  doc: Document = document,
+): void {
+  const panels = doc.querySelectorAll('[data-file-tree-panel]')
+  if (panels.length === 0) return
+
+  const event = () =>
     new CustomEvent(FILE_TREE_EXTERNAL_DROP_EVENT, {
       detail: { path: folderPath },
-    }),
-  )
+    })
+
+  let matched = 0
+  for (let i = 0; i < panels.length; i++) {
+    const panel = panels[i] as HTMLElement
+    const root = panel.dataset.rootPath ?? ''
+    if (panelOwnsFolderPath(root, folderPath)) {
+      panel.dispatchEvent(event())
+      matched++
+    }
+  }
+  // No rootPath attrs (tests / older markup) → notify every panel.
+  if (matched === 0) {
+    for (let i = 0; i < panels.length; i++) {
+      panels[i].dispatchEvent(event())
+    }
+  }
 }
 
 // ── Route + execute (one upload site) ─────────────────────────────────

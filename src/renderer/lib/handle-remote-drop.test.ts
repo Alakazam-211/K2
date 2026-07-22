@@ -5,13 +5,16 @@
 // an injected picker (no zustand) to verify the destination routing and
 // the terminal payload hand-off. Failures throw loudly — no swallowed
 // catches, no skip-if-missing fallbacks.
+//
+// PR-B R3: concurrent same paths+dest join one upload flight.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 import {
   resolveDropDestination,
   executeRemoteDrop,
-  type DropTarget,
+  remoteDropFlightKey,
+  __clearRemoteDropFlightsForTests,
 } from './handle-remote-drop'
 
 // Mock the upload substrate (the IO half) + the toast store. The router
@@ -24,8 +27,13 @@ vi.mock('./upload-to-remote', () => ({
 vi.mock('@/stores/toast', () => ({
   useToastStore: { getState: () => ({ addToast: () => {} }) },
 }))
+vi.mock('@/stores/connect-host', () => ({
+  activeHostKey: () => 'local',
+  useConnectHostStore: { getState: () => ({ activeHost: 'local' }) },
+}))
 
 beforeEach(() => {
+  __clearRemoteDropFlightsForTests()
   uploadMock.mockReset()
   // Default: echo a remote path inside the destination dir.
   uploadMock.mockImplementation(async (local: string, dir: string) => {
@@ -72,6 +80,20 @@ describe('resolveDropDestination', () => {
   it('miss → destDir:null (resolved by picker), inject:false', () => {
     const dest = resolveDropDestination({ kind: 'miss' }, {})
     expect(dest).toEqual({ destDir: null, inject: false })
+  })
+})
+
+describe('remoteDropFlightKey', () => {
+  it('sorts paths so multi-file order does not split the key', () => {
+    expect(remoteDropFlightKey(['/b', '/a'], '/dest', 'local')).toBe(
+      remoteDropFlightKey(['/a', '/b'], '/dest', 'local'),
+    )
+  })
+
+  it('differs by destDir and host', () => {
+    const base = remoteDropFlightKey(['/a'], '/d1', 'local')
+    expect(remoteDropFlightKey(['/a'], '/d2', 'local')).not.toBe(base)
+    expect(remoteDropFlightKey(['/a'], '/d1', 'host-2')).not.toBe(base)
   })
 })
 
@@ -167,5 +189,120 @@ describe('executeRemoteDrop', () => {
     expect(buildPayload).not.toHaveBeenCalled()
     // Stopped after the first (failed) upload — did not attempt the second.
     expect(uploadMock).toHaveBeenCalledTimes(1)
+  })
+
+  // ── R3: in-flight dedupe ───────────────────────────────────────────
+
+  it('R3: concurrent same paths+dest join one upload (one uploadToRemote)', async () => {
+    let release!: (path: string) => void
+    uploadMock.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          release = resolve
+        }),
+    )
+
+    const p1 = executeRemoteDrop(
+      ['/local/report.pdf'],
+      { kind: 'folder', path: '/srv/inbox' },
+      {},
+    )
+    const p2 = executeRemoteDrop(
+      ['/local/report.pdf'],
+      { kind: 'folder', path: '/srv/inbox' },
+      {},
+    )
+
+    // Let both hit the inflight map before the upload settles.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(uploadMock).toHaveBeenCalledTimes(1)
+
+    release('/srv/inbox/report.pdf')
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(r1).toBeNull()
+    expect(r2).toBeNull()
+    expect(uploadMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('R3: concurrent multi-file drops with different path order still share one flight', async () => {
+    let release!: (path: string) => void
+    let calls = 0
+    uploadMock.mockImplementation(async (local: string, dir: string) => {
+      calls++
+      if (calls === 1) {
+        return new Promise<string>((resolve) => {
+          release = resolve
+        })
+      }
+      const name = local.split('/').pop() ?? local
+      return `${dir}/${name}`
+    })
+
+    const p1 = executeRemoteDrop(
+      ['/local/b.txt', '/local/a.txt'],
+      { kind: 'folder', path: '/srv' },
+      {},
+    )
+    const p2 = executeRemoteDrop(
+      ['/local/a.txt', '/local/b.txt'],
+      { kind: 'folder', path: '/srv' },
+      {},
+    )
+
+    await Promise.resolve()
+    await Promise.resolve()
+    // First flight is still stuck on the first file; second call joined —
+    // no second batch started.
+    expect(uploadMock).toHaveBeenCalledTimes(1)
+
+    release('/srv/b.txt')
+    await Promise.all([p1, p2])
+    // One sequential batch: a and b (order of the first caller).
+    expect(uploadMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('R3: different destDir does not join', async () => {
+    await Promise.all([
+      executeRemoteDrop(['/local/a.pdf'], { kind: 'folder', path: '/srv/a' }, {}),
+      executeRemoteDrop(['/local/a.pdf'], { kind: 'folder', path: '/srv/b' }, {}),
+    ])
+    expect(uploadMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('R3: key clears on settle — a later drop uploads again', async () => {
+    await executeRemoteDrop(
+      ['/local/report.pdf'],
+      { kind: 'folder', path: '/srv/inbox' },
+      {},
+    )
+    expect(uploadMock).toHaveBeenCalledTimes(1)
+    await executeRemoteDrop(
+      ['/local/report.pdf'],
+      { kind: 'folder', path: '/srv/inbox' },
+      {},
+    )
+    expect(uploadMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('R3: key clears on failure so a retry can upload', async () => {
+    uploadMock.mockRejectedValueOnce(new Error('network'))
+    const failed = await executeRemoteDrop(
+      ['/local/report.pdf'],
+      { kind: 'folder', path: '/srv/inbox' },
+      {},
+    )
+    expect(failed).toBeNull()
+
+    uploadMock.mockImplementation(async (local: string, dir: string) => {
+      const name = local.split('/').pop() ?? local
+      return `${dir}/${name}`
+    })
+    await executeRemoteDrop(
+      ['/local/report.pdf'],
+      { kind: 'folder', path: '/srv/inbox' },
+      {},
+    )
+    expect(uploadMock).toHaveBeenCalledTimes(2)
   })
 })

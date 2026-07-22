@@ -18,10 +18,22 @@
 //
 // `uploadFileChunked` is the ONE chunk loop — `clone-to.ts` delegates to
 // it too, so a transfer-layer fix lands in both features at once.
+//
+// PR-B (R4): single-flight per (host, localPath, destDir). Concurrent
+// overlapping `uploadToRemote` calls join the same promise so connection
+// flakiness / double handlers cannot mint `name` + `name (1)`. Chunked
+// transfers keep one `upload_id` for the life of that flight (true retry
+// of the same transfer reuses the id via the joined promise).
+//
+// Residual (deferred to PR-C): `daemonCliPost` still uses connection
+// retries; if the single-shot POST succeeds server-side and the client
+// only sees a network error, an internal re-POST can still create a
+// second collision-free path. Daemon `client_upload_id` would close that.
 
 import { invoke } from '@tauri-apps/api/core'
 
 import { daemonCliPost } from './daemon-cli'
+import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 
 /**
  * Files at or under this take the single-shot `fs/upload-binary` path —
@@ -67,6 +79,44 @@ function basename(localPath: string): string {
 }
 
 /**
+ * Flight key for a single local→remote file transfer (R4). Host-scoped so
+ * a leftover flight after a host switch never joins the wrong daemon.
+ */
+export function uploadToRemoteFlightKey(
+  localPath: string,
+  destDir: string,
+  hostKey: string,
+): string {
+  return `${hostKey}\n${destDir}\n${localPath}`
+}
+
+/** In-flight `uploadToRemote` promises. */
+const inflightUploads = new Map<string, Promise<string>>()
+
+/** Stable chunked `upload_id` for the life of an in-flight transfer. */
+const inflightUploadIds = new Map<string, string>()
+
+/** Test-only: clear in-flight upload maps between cases. */
+export function __clearUploadToRemoteFlightsForTests(): void {
+  inflightUploads.clear()
+  inflightUploadIds.clear()
+}
+
+/**
+ * Mint (or reuse) the chunked-transfer id for a flight key. Concurrent
+ * joiners share the same promise and thus the same id; a brand-new flight
+ * after settle gets a fresh id (correct — the prior transfer may have
+ * finalized or abandoned its `.part`).
+ */
+function chunkedUploadIdForFlight(flightKey: string, idPrefix: string): string {
+  const existing = inflightUploadIds.get(flightKey)
+  if (existing) return existing
+  const id = `${idPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  inflightUploadIds.set(flightKey, id)
+  return id
+}
+
+/**
  * Stream a large LOCAL file to the active daemon in ordered chunks via
  * `fs/upload-chunk`, returning the finalized remote path. Each chunk is
  * read from local disk and POSTed in turn, so neither the client nor the
@@ -79,6 +129,9 @@ function basename(localPath: string): string {
  *
  * The first chunk carries `total_bytes` so the daemon can refuse a doomed
  * transfer (over its ceiling / larger than free disk) before bytes move.
+ *
+ * @param opts.uploadId optional stable id for this transfer (R4). When
+ *   omitted a new id is minted (clone-to / one-off callers).
  */
 export async function uploadFileChunked(
   deps: ChunkedUploadDeps,
@@ -89,13 +142,19 @@ export async function uploadFileChunked(
     filename: string
     /** Prefixes the transfer id (diagnostics: whose `.part` is this). */
     idPrefix?: string
+    /** Stable id for the whole transfer — reused on true retries of THIS flight. */
+    uploadId?: string
     chunkBytes?: number
   } & TransferHooks,
 ): Promise<string> {
   // Unique per-transfer id so a stale/abandoned `.part` can never be
   // appended to by a different transfer (collision-free among recent
-  // uploads is enough, not cryptographic).
-  const uploadId = `${opts.idPrefix ?? 'upload'}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  // uploads is enough, not cryptographic). Prefer a caller-supplied
+  // stable id (drop single-flight) so connection retries of the same
+  // transfer keep writing the same `.part`.
+  const uploadId =
+    opts.uploadId ??
+    `${opts.idPrefix ?? 'upload'}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   const chunkBytes = opts.chunkBytes ?? UPLOAD_CHUNK_BYTES
   let offset = 0
   let finalPath: string | undefined
@@ -138,6 +197,10 @@ export async function uploadFileChunked(
  * Move a local file's bytes onto the active daemon's disk, choosing the
  * single-shot or chunked strategy by size (see module doc).
  *
+ * Concurrent calls with the same (localPath, destDir, active host) join
+ * one in-flight promise (R4). The key is cleared on settle so a later
+ * intentional drop of the same file still uploads (and may get ` (1)`).
+ *
  * @param localPath absolute path to a file on the CLIENT machine (what
  *   Tauri drag-drop hands us).
  * @param destDir   destination directory ON THE DAEMON (e.g.
@@ -149,6 +212,27 @@ export async function uploadToRemote(
   localPath: string,
   destDir: string,
   hooks: TransferHooks = {},
+): Promise<string> {
+  const hostKey = activeHostKey(useConnectHostStore.getState().activeHost)
+  const flightKey = uploadToRemoteFlightKey(localPath, destDir, hostKey)
+  const existing = inflightUploads.get(flightKey)
+  if (existing) return existing
+
+  const flight = runUploadToRemote(localPath, destDir, hooks, flightKey).finally(() => {
+    if (inflightUploads.get(flightKey) === flight) {
+      inflightUploads.delete(flightKey)
+    }
+    inflightUploadIds.delete(flightKey)
+  })
+  inflightUploads.set(flightKey, flight)
+  return flight
+}
+
+async function runUploadToRemote(
+  localPath: string,
+  destDir: string,
+  hooks: TransferHooks,
+  flightKey: string,
 ): Promise<string> {
   const filename = basename(localPath)
   const size = await invoke<number>('local_file_size', { path: localPath })
@@ -169,6 +253,7 @@ export async function uploadToRemote(
     return res.path
   }
 
+  const uploadId = chunkedUploadIdForFlight(flightKey, 'drop')
   return uploadFileChunked(
     {
       daemonCliPost,
@@ -177,6 +262,6 @@ export async function uploadToRemote(
     },
     localPath,
     size,
-    { dir: destDir, filename, idPrefix: 'drop', ...hooks },
+    { dir: destDir, filename, idPrefix: 'drop', uploadId, ...hooks },
   )
 }

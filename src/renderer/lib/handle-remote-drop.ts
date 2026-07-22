@@ -20,11 +20,16 @@
 //
 // `resolveDropDestination` is PURE (no IO) so it can be unit-tested; the
 // picker + upload + toast side-effects live in `executeRemoteDrop`.
+//
+// PR-B (R3): concurrent `executeRemoteDrop` for the same sorted paths +
+// resolved destDir (+ host) joins one in-flight promise so a leaked or
+// double-fired handler cannot mint a second remote copy.
 
 import { uploadToRemote } from './upload-to-remote'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useToastStore } from '@/stores/toast'
 import { useTransferProgressStore } from '@/stores/transfer-progress'
+import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 
 /** What the drop landed on (hit-tested at the drop position). */
 export type DropTarget =
@@ -93,11 +98,38 @@ export function resolveDropDestination(
 }
 
 /**
+ * In-flight dedupe key for a remote drop transfer (R3). Sorted paths so
+ * multi-file order doesn't mint a second key; host so left-over flights
+ * never collide across a host switch.
+ */
+export function remoteDropFlightKey(
+  localPaths: string[],
+  destDir: string,
+  hostKey: string,
+): string {
+  const paths = [...localPaths].map((p) => p.trim()).filter(Boolean).sort().join('\0')
+  return `${hostKey}\n${destDir}\n${paths}`
+}
+
+/** In-flight `executeRemoteDrop` promises, keyed by {@link remoteDropFlightKey}. */
+const inflightDrops = new Map<string, Promise<string | null>>()
+
+/** Test-only: clear in-flight drop map between cases. */
+export function __clearRemoteDropFlightsForTests(): void {
+  inflightDrops.clear()
+}
+
+/**
  * Run a remote drop end-to-end: resolve the destination, (for a miss)
  * prompt the "Save to…" picker, upload every dropped local file, and —
  * for the terminal case — feed the returned REMOTE paths through
  * `buildPayload` and return the payload for the caller to inject into its
  * PTY. Non-terminal drops return `null` (nothing to inject).
+ *
+ * Concurrent calls with the same sorted local paths + resolved destDir
+ * (+ active host) join the same promise — at most one upload batch per
+ * key while in flight (R3). The key is cleared on settle (success or
+ * failure) so a later intentional drop of the same file still uploads.
  *
  * Toasts: an "uploading…" info toast while bytes move, then success/error.
  *
@@ -129,6 +161,31 @@ export async function executeRemoteDrop(
     if (!destDir) return null // user cancelled
   }
 
+  // R3: join an in-flight transfer for the same paths+dest+host rather
+  // than starting a second upload (which would land as `name (1)`).
+  const hostKey = activeHostKey(useConnectHostStore.getState().activeHost)
+  const flightKey = remoteDropFlightKey(localPaths, destDir, hostKey)
+  const existing = inflightDrops.get(flightKey)
+  if (existing) return existing
+
+  const flight = runRemoteDropUploads(localPaths, destDir, dest.inject, buildPayload).finally(
+    () => {
+      if (inflightDrops.get(flightKey) === flight) {
+        inflightDrops.delete(flightKey)
+      }
+    },
+  )
+  inflightDrops.set(flightKey, flight)
+  return flight
+}
+
+/** Upload loop + toasts for one resolved destination (inside the flight). */
+async function runRemoteDropUploads(
+  localPaths: string[],
+  destDir: string,
+  inject: boolean,
+  buildPayload?: (remotePaths: string[]) => string,
+): Promise<string | null> {
   const toast = useToastStore.getState()
   const noun = localPaths.length === 1 ? 'file' : `${localPaths.length} files`
 
@@ -173,7 +230,7 @@ export async function executeRemoteDrop(
     3000,
   )
 
-  if (dest.inject && buildPayload) {
+  if (inject && buildPayload) {
     return buildPayload(remotePaths)
   }
   return null

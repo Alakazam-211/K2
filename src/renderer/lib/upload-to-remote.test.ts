@@ -182,10 +182,11 @@ describe('uploadFileChunked — stable uploadId option', () => {
   it('reuses the provided uploadId on every chunk', async () => {
     const posts: Array<{ upload_id: string; offset: number }> = []
     const deps = {
-      daemonCliPost: async (_route: string, body: { upload_id: string; offset: number; is_last: boolean }) => {
-        posts.push({ upload_id: body.upload_id, offset: body.offset })
-        if (body.is_last) return { path: '/d/f', done: true }
-        return { done: false }
+      daemonCliPost: async <T = unknown>(_route: string, body?: unknown): Promise<T> => {
+        const b = body as { upload_id: string; offset: number; is_last: boolean }
+        posts.push({ upload_id: b.upload_id, offset: b.offset })
+        if (b.is_last) return { path: '/d/f', done: true } as T
+        return { done: false } as T
       },
       readLocalFileRange: async () => 'YQ==',
     }

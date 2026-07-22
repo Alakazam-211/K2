@@ -20,8 +20,8 @@ describe('decodeBase64ToUint8Array', () => {
     expect(Array.from(bytes)).toEqual([65, 66, 67])
   })
 
-  it('decodes empty string to empty array', () => {
-    expect(decodeBase64ToUint8Array('').length).toBe(0)
+  it('rejects empty base64 (would paint a broken image otherwise)', () => {
+    expect(() => decodeBase64ToUint8Array('')).toThrow(/empty or missing base64/)
   })
 
   it('round-trips binary-ish bytes including NUL', () => {
@@ -101,5 +101,45 @@ describe('revokeObjectUrl', () => {
     } finally {
       URL.revokeObjectURL = orig
     }
+  })
+})
+
+import { sniffImageMime, coerceImageBytesForPreview, bytesToObjectUrl } from './load-host-binary'
+
+describe('sniffImageMime / coerceImageBytesForPreview', () => {
+  it('sniffs PNG magic', () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0])
+    expect(sniffImageMime(png)).toBe('image/png')
+    expect(coerceImageBytesForPreview(png).mime).toBe('image/png')
+  })
+
+  it('sniffs JPEG magic', () => {
+    const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0])
+    expect(sniffImageMime(jpg)).toBe('image/jpeg')
+  })
+
+  it('extracts PNG from a synthetic ICO that embeds PNG', () => {
+    // Minimal ICO: 1 entry pointing at a PNG blob
+    const png = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3,
+    ])
+    const ico = new Uint8Array(6 + 16 + png.length)
+    ico[0] = 0
+    ico[1] = 0
+    ico[2] = 1 // type icon
+    ico[3] = 0
+    ico[4] = 1 // count
+    ico[5] = 0
+    // entry at 6: width/height etc — size + offset at +8 and +12
+    const size = png.length
+    const offset = 22
+    ico[6 + 8] = size & 0xff
+    ico[6 + 9] = (size >> 8) & 0xff
+    ico[6 + 12] = offset & 0xff
+    ico[6 + 13] = (offset >> 8) & 0xff
+    ico.set(png, offset)
+    const coerced = coerceImageBytesForPreview(ico)
+    expect(coerced.mime).toBe('image/png')
+    expect(Array.from(coerced.bytes.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47])
   })
 })

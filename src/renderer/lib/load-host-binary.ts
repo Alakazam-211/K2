@@ -46,10 +46,160 @@ export class HostBinaryTooLargeError extends Error {
 }
 
 export function decodeBase64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64)
+  // Guard: daemonCliGet must return `{ base64: string }`. A missing field
+  // used to produce garbage via `atob(undefined)` → empty/corrupt images
+  // that fail with "Browser could not decode this image".
+  if (typeof base64 !== 'string' || base64.length === 0) {
+    throw new Error('fs/read-binary returned empty or missing base64 payload')
+  }
+  // Strip whitespace/newlines some proxies insert.
+  const clean = base64.replace(/\s+/g, '')
+  const binary = atob(clean)
   const data = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i)
   return data
+}
+
+/**
+ * Sniff image MIME from magic bytes. Prefer this over extension-only MIME:
+ * misnamed files and `.ico` containers (often embed PNG) decode more
+ * reliably in WKWebView when the Blob type matches the payload.
+ */
+export function sniffImageMime(bytes: Uint8Array): string | null {
+  if (bytes.length < 4) return null
+  // PNG
+  if (
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return 'image/png'
+  }
+  // JPEG
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg'
+  }
+  // GIF
+  if (
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38
+  ) {
+    return 'image/gif'
+  }
+  // WEBP: RIFF....WEBP
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp'
+  }
+  // BMP
+  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp'
+  // ICO / CUR: 00 00 01 00 or 00 00 02 00
+  if (
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x00 &&
+    (bytes[2] === 0x01 || bytes[2] === 0x02) &&
+    bytes[3] === 0x00
+  ) {
+    return 'image/x-icon'
+  }
+  // SVG (text)
+  const head = new TextDecoder('utf-8', { fatal: false })
+    .decode(bytes.subarray(0, Math.min(256, bytes.length)))
+    .trimStart()
+  if (head.startsWith('<svg') || head.startsWith('<?xml')) {
+    return 'image/svg+xml'
+  }
+  return null
+}
+
+/**
+ * Prefer a browser-friendly payload for ICO: many modern favicons embed a
+ * PNG. WKWebView often fails to paint multi-image ICO Blobs, but a bare PNG
+ * works. Returns the original bytes when no embedded PNG is found.
+ */
+export function coerceImageBytesForPreview(bytes: Uint8Array): {
+  bytes: Uint8Array
+  mime: string
+} {
+  const sniffed = sniffImageMime(bytes)
+  // Already a simple raster/svg — use sniffed MIME.
+  if (
+    sniffed === 'image/png' ||
+    sniffed === 'image/jpeg' ||
+    sniffed === 'image/gif' ||
+    sniffed === 'image/webp' ||
+    sniffed === 'image/bmp' ||
+    sniffed === 'image/svg+xml'
+  ) {
+    return { bytes, mime: sniffed }
+  }
+  // ICO container: scan for an embedded PNG (common for favicon.ico).
+  if (sniffed === 'image/x-icon' || sniffed === null) {
+    const png = extractPngFromIco(bytes)
+    if (png) return { bytes: png, mime: 'image/png' }
+  }
+  if (sniffed === 'image/x-icon') {
+    // Fall back to vnd.microsoft.icon — sometimes accepted where x-icon is not.
+    return { bytes, mime: 'image/vnd.microsoft.icon' }
+  }
+  return { bytes, mime: sniffed ?? 'application/octet-stream' }
+}
+
+/** Pull the first PNG payload out of an ICO, if any entry is PNG-encoded. */
+function extractPngFromIco(bytes: Uint8Array): Uint8Array | null {
+  if (bytes.length < 6) return null
+  if (!(bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[3] === 0x00)) return null
+  if (!(bytes[2] === 0x01 || bytes[2] === 0x02)) return null
+  const count = bytes[4] | (bytes[5] << 8)
+  if (count === 0 || count > 64) return null
+  let best: Uint8Array | null = null
+  let bestSize = 0
+  for (let i = 0; i < count; i++) {
+    const entry = 6 + i * 16
+    if (entry + 16 > bytes.length) break
+    const size =
+      bytes[entry + 8] |
+      (bytes[entry + 9] << 8) |
+      (bytes[entry + 10] << 16) |
+      (bytes[entry + 11] << 24)
+    const offset =
+      bytes[entry + 12] |
+      (bytes[entry + 13] << 8) |
+      (bytes[entry + 14] << 16) |
+      (bytes[entry + 15] << 24)
+    if (size <= 0 || offset < 0 || offset + size > bytes.length) continue
+    const slice = bytes.subarray(offset, offset + size)
+    // PNG magic inside the image blob
+    if (
+      slice.length >= 8 &&
+      slice[0] === 0x89 &&
+      slice[1] === 0x50 &&
+      slice[2] === 0x4e &&
+      slice[3] === 0x47
+    ) {
+      if (size > bestSize) {
+        bestSize = size
+        best = slice
+      }
+    }
+  }
+  if (!best) return null
+  // Copy out of the parent buffer so Blob construction is unambiguous.
+  const out = new Uint8Array(best.length)
+  out.set(best)
+  return out
 }
 
 function isAbortError(err: unknown): boolean {
@@ -90,10 +240,24 @@ export async function loadHostBinary(
   throwIfAborted(signal)
 
   try {
-    const r = await daemonCliGet<{ base64: string }>('fs/read-binary', { path })
+    const r = await daemonCliGet<{ base64?: string } | string>('fs/read-binary', {
+      path,
+    })
     throwIfAborted(signal)
     onProgress?.(1)
-    return decodeBase64ToUint8Array(r.base64)
+    // Defensive: never pass a non-string into atob.
+    const b64 =
+      typeof r === 'string'
+        ? r
+        : r && typeof r === 'object' && typeof r.base64 === 'string'
+          ? r.base64
+          : null
+    if (b64 === null) {
+      throw new Error(
+        `fs/read-binary: unexpected response shape (expected { base64 }) for ${path}`,
+      )
+    }
+    return decodeBase64ToUint8Array(b64)
   } catch (err) {
     if (isAbortError(err)) throw err
     const message = err instanceof Error ? err.message : String(err)
@@ -158,12 +322,12 @@ export async function loadHostBinaryViaRange(
 
 /** Build a Blob URL for client-side media/image playback. Caller must revoke. */
 export function bytesToObjectUrl(bytes: Uint8Array, mime: string): string {
-  // Copy into a fresh ArrayBuffer-backed view so Blob always gets a
-  // real ArrayBuffer (not SharedArrayBuffer) regardless of Uint8Array
-  // construction path.
+  // Pass a *copy of the view* as a BlobPart. Using `bytes.buffer` alone is
+  // wrong when `bytes` is a subarray (includes unrelated offset bytes) and
+  // has caused "Browser could not decode this image" for valid PNGs.
   const copy = new Uint8Array(bytes.byteLength)
   copy.set(bytes)
-  const blob = new Blob([copy.buffer], { type: mime })
+  const blob = new Blob([copy], { type: mime || 'application/octet-stream' })
   return URL.createObjectURL(blob)
 }
 
@@ -220,4 +384,27 @@ export async function loadHostObjectUrl(
 ): Promise<string> {
   const bytes = await loadHostBinary(path, options)
   return bytesToObjectUrl(bytes, mime)
+}
+
+/**
+ * Load an image for FileViewer preview: host binary → sniff/coerce → Blob URL.
+ * Prefer this over `loadHostObjectUrl` + extension MIME for images.
+ */
+export async function loadHostImageObjectUrl(
+  path: string,
+  options?: LoadHostBinaryOptions,
+): Promise<{ url: string; mime: string; byteLength: number }> {
+  const raw = await loadHostBinary(path, options)
+  if (raw.byteLength === 0) {
+    throw new Error('Image file is empty (0 bytes)')
+  }
+  const { bytes, mime } = coerceImageBytesForPreview(raw)
+  // Extension MIME as weak fallback only when sniff fails.
+  const finalMime =
+    mime !== 'application/octet-stream' ? mime : imageMimeFromPath(path)
+  return {
+    url: bytesToObjectUrl(bytes, finalMime),
+    mime: finalMime,
+    byteLength: bytes.byteLength,
+  }
 }

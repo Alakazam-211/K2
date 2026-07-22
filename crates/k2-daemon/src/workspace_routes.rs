@@ -43,6 +43,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     let _ = crate::session_events::emit(
                         crate::session_events::SessionEvent::ProjectsChanged {},
                     );
+                    crate::fs_live::resync_watches();
                     CliResponse::ok_json(body)
                 }
                 Err(e) => CliResponse::bad_request(e),

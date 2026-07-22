@@ -60,6 +60,7 @@ mod federation_drain;
 mod federation_routes;
 mod feedback_routes;
 mod fs_routes;
+mod fs_live;
 mod grid_emitter;
 mod git_routes;
 mod heartbeat_launch;
@@ -862,6 +863,13 @@ async fn async_main() {
     // persists transitions onto `mail_server.status`, and raises the
     // standard `mail:server-state-changed` event on failures.
     mail::supervisor::spawn_health_loop();
+
+    // Files-drawer multi-writer live refresh — recursive watcher over
+    // every registered project root. Agent shell writes and other
+    // clients' FS mutations land as SessionEvent::FsChanged so every
+    // thin client (local multi-window + K2 Connect) can refresh its
+    // FileTree. DB is ready above; projects_list() is live.
+    fs_live::start();
 
     // heartbeat.port watchdog — see `run_heartbeat_port_watchdog` docs.
     // The daemon takes over `~/.k2so/heartbeat.port` whenever Tauri

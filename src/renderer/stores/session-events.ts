@@ -318,6 +318,20 @@ export interface ChatHistoryChangedEvent {
   kind: 'chat_history_changed'
 }
 
+/** APP-LEVEL — files under a workspace changed (multi-writer Files-drawer
+ *  live refresh). Agent shell writes on the daemon machine, other clients'
+ *  `/cli/fs/*` mutations, and compress/upload completions all land here so
+ *  every thin client (local multi-window + K2 Connect remote) can refresh
+ *  its FileTree. `paths` are absolute; consumers refresh parent dirs
+ *  present in their tree cache. Payload is a nudge + paths, not a full
+ *  tree. Filter against the tree's own `rootPath` (APP-LEVEL so the
+ *  always-live empty-`?path=` app socket delivers it). */
+export interface FsChangedEvent {
+  kind: 'fs_changed'
+  workspacePath: string
+  paths: string[]
+}
+
 export type SessionEventMessage =
   | SessionAddedEvent
   | SessionRemovedEvent
@@ -339,6 +353,7 @@ export type SessionEventMessage =
   | ProjectGroupsChangedEvent
   | FeedbackChangedEvent
   | ChatHistoryChangedEvent
+  | FsChangedEvent
 
 export interface SessionEventHandlers {
   onAdded?: (event: SessionAddedEvent) => void
@@ -729,6 +744,7 @@ type OpenUrlHandler = (url: string, source: OpenUrlEvent['source']) => void
 type ProjectGroupsChangedHandler = (reason: string) => void
 type FeedbackChangedHandler = (reason: string) => void
 type ChatHistoryChangedHandler = () => void
+type FsChangedHandler = (e: FsChangedEvent) => void
 
 const _llmStatusHandlers = new Set<LlmStatusHandler>()
 const _projectsChangedHandlers = new Set<ProjectsChangedHandler>()
@@ -743,6 +759,7 @@ const _openUrlHandlers = new Set<OpenUrlHandler>()
 const _projectGroupsChangedHandlers = new Set<ProjectGroupsChangedHandler>()
 const _feedbackChangedHandlers = new Set<FeedbackChangedHandler>()
 const _chatHistoryChangedHandlers = new Set<ChatHistoryChangedHandler>()
+const _fsChangedHandlers = new Set<FsChangedHandler>()
 
 /** Subscribe to APP-LEVEL `projects_changed` (0.39.45, GH #18/#26).
  *  Returns an unsubscribe fn. */
@@ -858,6 +875,16 @@ export function onChatHistoryChanged(fn: ChatHistoryChangedHandler): Unsubscribe
   return () => void _chatHistoryChangedHandlers.delete(fn)
 }
 
+/** Files-drawer multi-writer live refresh — subscribe to APP-LEVEL
+ *  `fs_changed` (paths under a workspace mutated on the host by agents,
+ *  other clients, or `/cli/fs/*`). Module-level registry survives
+ *  host-switch WS teardown/reopen. FileTree filters `paths` /
+ *  `workspacePath` against its own `rootPath`. */
+export function onFsChanged(fn: FsChangedHandler): UnsubscribeFn {
+  _fsChangedHandlers.add(fn)
+  return () => void _fsChangedHandlers.delete(fn)
+}
+
 function dispatchAppEvent(msg: SessionEventMessage): void {
   switch (msg.kind) {
     case 'llm_status_changed':
@@ -898,6 +925,9 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
       break
     case 'chat_history_changed':
       for (const h of _chatHistoryChangedHandlers) h()
+      break
+    case 'fs_changed':
+      for (const h of _fsChangedHandlers) h(msg)
       break
     default:
       break
@@ -1042,7 +1072,9 @@ export function subscribeToActiveState(): UnsubscribeFn {
         msg.kind === 'projects_changed' ||
         msg.kind === 'project_groups_changed' ||
         msg.kind === 'feedback_changed' ||
-        msg.kind === 'chat_history_changed'
+        msg.kind === 'chat_history_changed' ||
+        // Files-drawer multi-writer live refresh — APP-LEVEL with paths.
+        msg.kind === 'fs_changed'
       ) {
         dispatchAppEvent(msg)
         return

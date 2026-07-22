@@ -16,6 +16,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
 import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
+import { onFsChanged } from '@/stores/session-events'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -37,6 +38,59 @@ interface FileTreeProps {
 function parentDir(path: string): string {
   const idx = path.lastIndexOf('/')
   return idx > 0 ? path.slice(0, idx) : '/'
+}
+
+function trimTrailingSlash(path: string): string {
+  if (path.length > 1 && path.endsWith('/')) return path.slice(0, -1)
+  return path
+}
+
+/** True when `path` is `root` or a descendant (safe against `/x/foo` vs `/x/foobar`). */
+function pathIsUnderRoot(path: string, root: string): boolean {
+  const p = trimTrailingSlash(path)
+  const r = trimTrailingSlash(root)
+  return p === r || p.startsWith(r + '/')
+}
+
+/**
+ * Pure helper: which directory entries should FileTree force-refresh for a
+ * batch of absolute changed paths? Exported for unit tests.
+ *
+ * A parent dir is refreshed when it is the tree root, already cached, or
+ * currently expanded. The path itself is also refreshed when it was a
+ * previously-cached/expanded directory (contents may have changed).
+ */
+export function dirsToRefreshFromFsPaths(
+  paths: string[],
+  rootPath: string,
+  cacheKeys: Iterable<string>,
+  expandedDirs: Iterable<string>,
+): string[] {
+  const cache = new Set(cacheKeys)
+  const expanded = new Set(expandedDirs)
+  const dirs = new Set<string>()
+  for (const raw of paths) {
+    if (!raw || !pathIsUnderRoot(raw, rootPath)) continue
+    const parent = parentDir(raw)
+    if (
+      pathIsUnderRoot(parent, rootPath) ||
+      parent === rootPath ||
+      trimTrailingSlash(parent) === trimTrailingSlash(rootPath)
+    ) {
+      if (
+        trimTrailingSlash(parent) === trimTrailingSlash(rootPath) ||
+        cache.has(parent) ||
+        expanded.has(parent)
+      ) {
+        dirs.add(parent)
+      }
+    }
+    // If this path itself was a known dir, refresh its listing too.
+    if (cache.has(raw) || expanded.has(raw)) {
+      dirs.add(raw)
+    }
+  }
+  return Array.from(dirs)
 }
 
 /**
@@ -633,14 +687,66 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   // Load AI config entries on mount / root change
   useEffect(() => { loadAiConfig() }, [loadAiConfig])
 
-  // ── FS Watcher ──────────────────────────────────────────────────────
+  // Keep latest cache/expanded sets available to event handlers without
+  // re-subscribing the local Tauri watcher / session-events socket every
+  // expand toggle.
+  const cacheRef = useRef(cache)
+  cacheRef.current = cache
+  const expandedDirsRef = useRef(expandedDirs)
+  expandedDirsRef.current = expandedDirs
+
+  // Apply a batch of absolute changed paths (local fs://change OR daemon
+  // fs_changed) — force-refresh parent dirs that are already visible in
+  // this tree, and refresh env/AI-config sections when root listings may
+  // have changed.
+  const applyFsPathBatch = useCallback((paths: string[]) => {
+    if (!rootPath || paths.length === 0) return
+    const dirs = dirsToRefreshFromFsPaths(
+      paths,
+      rootPath,
+      cacheRef.current.keys(),
+      expandedDirsRef.current,
+    )
+    let refreshEnv = false
+    let refreshAiConfig = false
+    for (const p of paths) {
+      if (!pathIsUnderRoot(p, rootPath)) continue
+      const dir = parentDir(p)
+      const changedName = p.split('/').pop() || ''
+      if (trimTrailingSlash(dir) === trimTrailingSlash(rootPath) && changedName.startsWith('.env')) {
+        refreshEnv = true
+      }
+      if (
+        trimTrailingSlash(dir) === trimTrailingSlash(rootPath) &&
+        AI_CONFIG_PATTERNS.some(
+          (pat) =>
+            pat.match({ name: changedName, path: p, isDirectory: false, size: 0, modifiedAt: 0 }) ||
+            pat.match({ name: changedName, path: p, isDirectory: true, size: 0, modifiedAt: 0 }),
+        )
+      ) {
+        refreshAiConfig = true
+      }
+    }
+    for (const dir of dirs) {
+      void loadDir(dir, true)
+    }
+    if (refreshEnv) void loadEnvFiles()
+    if (refreshAiConfig) void loadAiConfig()
+  }, [rootPath, loadDir, loadEnvFiles, loadAiConfig])
+
+  // ── FS Watcher (local Tauri — belt and suspenders) ─────────────────
   useEffect(() => {
     // 0.37.11 — skip the watcher entirely when rootPath isn't a real
     // filesystem path. Focus windows briefly mount with rootPath="~"
     // (placeholder) before the project loads, and `fs_watch_dir`
     // rejects with "No path was found" for non-existent paths. The
     // useEffect will re-run when rootPath becomes a real path.
-    if (!rootPath || rootPath === '~' || !rootPath.startsWith('/')) {
+    //
+    // On a remote K2 Connect host the local Mac watcher is wrong
+    // (client FS ≠ daemon FS) — skip it; the daemon `fs_changed`
+    // session event below is the source of truth.
+    const isRemote = useConnectHostStore.getState().activeHost !== 'local'
+    if (!rootPath || rootPath === '~' || !rootPath.startsWith('/') || isRemote) {
       return
     }
     // Start watching the root path
@@ -656,39 +762,32 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     let unlisten: (() => void) | null = null
     listen<Array<{ path: string; kind: string }> | { path: string; kind: string }>('fs://change', (event) => {
       const batch = Array.isArray(event.payload) ? event.payload : [event.payload]
-      // Collect unique parent dirs from the batch so we reload each once
-      // even when many paths share a directory.
-      const dirsToRefresh = new Set<string>()
-      let refreshEnv = false
-      let refreshAiConfig = false
-      for (const change of batch) {
-        const dir = parentDir(change.path)
-        dirsToRefresh.add(dir)
-        const changedName = change.path.split('/').pop() || ''
-        if (dir === rootPath && changedName.startsWith('.env')) {
-          refreshEnv = true
-        }
-        if (dir === rootPath && AI_CONFIG_PATTERNS.some((p) => p.match({ name: changedName, path: change.path, isDirectory: false, size: 0, modifiedAt: 0 }) || p.match({ name: changedName, path: change.path, isDirectory: true, size: 0, modifiedAt: 0 }))) {
-          refreshAiConfig = true
-        }
-      }
-      setCache((prev) => {
-        for (const dir of dirsToRefresh) {
-          if (prev.has(dir)) {
-            loadDir(dir, true)
-          }
-        }
-        return prev
-      })
-      if (refreshEnv) loadEnvFiles()
-      if (refreshAiConfig) loadAiConfig()
+      applyFsPathBatch(batch.map((c) => c.path))
     }).then((fn) => { unlisten = fn })
 
     return () => {
       unlisten?.()
       invoke('fs_unwatch_dir', { path: rootPath }).catch((e) => console.warn('[file-tree]', e))
     }
-  }, [rootPath, loadDir, loadEnvFiles, loadAiConfig])
+  }, [rootPath, applyFsPathBatch])
+
+  // ── Daemon multi-writer FS live refresh (APP-LEVEL fs_changed) ─────
+  // Covers agent shell writes, other thin clients, and remote hosts —
+  // anything that mutates the daemon machine's FS outside this window's
+  // local Tauri watcher. Filter against this tree's rootPath.
+  useEffect(() => {
+    if (!rootPath || rootPath === '~' || !rootPath.startsWith('/')) {
+      return
+    }
+    return onFsChanged((e) => {
+      // Only paths under THIS tree's root. workspacePath is advisory
+      // (may be a parent project when the tree is a worktree); filter
+      // strictly on absolute paths so sibling workspaces never thrash.
+      const relevant = (e.paths ?? []).filter((p) => pathIsUnderRoot(p, rootPath))
+      if (relevant.length === 0) return
+      applyFsPathBatch(relevant)
+    })
+  }, [rootPath, applyFsPathBatch, loadDir])
 
   // ── External OS drop visual feedback + post-drop refresh ───────────
   //

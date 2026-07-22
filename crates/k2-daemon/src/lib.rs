@@ -49,6 +49,7 @@ pub mod federation_drain;
 pub mod feedback_routes;
 pub mod federation_routes;
 pub mod fs_routes;
+pub mod fs_live;
 pub mod grid_emitter;
 pub mod git_routes;
 pub mod heartbeat_launch;

@@ -174,7 +174,10 @@ pub fn handle_write_file(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     match fsc::write_file(&parsed.path, &parsed.content) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+        Ok(()) => {
+            crate::session_events::emit_fs_changed_for_paths([parsed.path]);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -191,7 +194,12 @@ pub fn handle_move(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     match fsc::move_files(&parsed.sources, &parsed.destination) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+        Ok(()) => {
+            let mut paths = parsed.sources;
+            paths.push(parsed.destination);
+            crate::session_events::emit_fs_changed_for_paths(paths);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -202,7 +210,11 @@ pub fn handle_copy(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     match fsc::copy_files(&parsed.sources, &parsed.destination) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+        Ok(()) => {
+            // Destination is where new entries appear; sources are unchanged.
+            crate::session_events::emit_fs_changed_for_paths([parsed.destination]);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -220,7 +232,10 @@ pub fn handle_delete(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     match fsc::delete(&parsed.paths, parsed.permanent) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+        Ok(()) => {
+            crate::session_events::emit_fs_changed_for_paths(parsed.paths);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -237,9 +252,13 @@ pub fn handle_rename(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     match fsc::rename(&parsed.old_path, &parsed.new_name) {
-        Ok(new_path) => CliResponse::ok_json(
-            serde_json::json!({ "path": new_path }).to_string(),
-        ),
+        Ok(new_path) => {
+            crate::session_events::emit_fs_changed_for_paths([
+                parsed.old_path,
+                new_path.clone(),
+            ]);
+            CliResponse::ok_json(serde_json::json!({ "path": new_path }).to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -257,7 +276,10 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     match fsc::create_entry(&parsed.path, parsed.is_directory) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+        Ok(()) => {
+            crate::session_events::emit_fs_changed_for_paths([parsed.path]);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -289,9 +311,14 @@ pub fn handle_upload_binary(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid base64: {e}")),
     };
     match fsc::write_upload(&parsed.dir, &parsed.filename, &bytes) {
-        Ok(path) => CliResponse::ok_json(
-            serde_json::json!({ "path": path.to_string_lossy() }).to_string(),
-        ),
+        Ok(path) => {
+            crate::session_events::emit_fs_changed_for_paths([
+                path.to_string_lossy().to_string(),
+            ]);
+            CliResponse::ok_json(
+                serde_json::json!({ "path": path.to_string_lossy() }).to_string(),
+            )
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -340,9 +367,15 @@ pub fn handle_upload_chunk(body: &[u8]) -> CliResponse {
         parsed.is_last,
         parsed.total_bytes,
     ) {
-        Ok(Some(path)) => CliResponse::ok_json(
-            serde_json::json!({ "path": path.to_string_lossy(), "done": true }).to_string(),
-        ),
+        Ok(Some(path)) => {
+            // Final chunk only — intermediate appends are not user-visible.
+            crate::session_events::emit_fs_changed_for_paths([
+                path.to_string_lossy().to_string(),
+            ]);
+            CliResponse::ok_json(
+                serde_json::json!({ "path": path.to_string_lossy(), "done": true }).to_string(),
+            )
+        }
         Ok(None) => CliResponse::ok_json(
             serde_json::json!({ "received": parsed.offset + bytes.len() as u64, "done": false })
                 .to_string(),
@@ -479,10 +512,15 @@ pub fn handle_compress(body: &[u8]) -> CliResponse {
             &cancel,
         );
         match result {
-            Ok(path) => update_compress_job(&worker_job_id, |j| {
-                j.phase = "done";
-                j.zip_path = Some(path.to_string_lossy().to_string());
-            }),
+            Ok(path) => {
+                let zip = path.to_string_lossy().to_string();
+                update_compress_job(&worker_job_id, |j| {
+                    j.phase = "done";
+                    j.zip_path = Some(zip.clone());
+                });
+                // Zip lands next to the source — refresh both.
+                crate::session_events::emit_fs_changed_for_paths([src, zip]);
+            }
             Err(e) => {
                 k2_core::log_debug!(
                     "[daemon] fs/compress — job {worker_job_id} FAILED: {e}"
@@ -723,9 +761,10 @@ pub fn handle_duplicate(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     match fsc::duplicate(&parsed.path) {
-        Ok(new_path) => CliResponse::ok_json(
-            serde_json::json!({ "path": new_path }).to_string(),
-        ),
+        Ok(new_path) => {
+            crate::session_events::emit_fs_changed_for_paths([new_path.clone()]);
+            CliResponse::ok_json(serde_json::json!({ "path": new_path }).to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }

@@ -495,6 +495,28 @@ pub enum SessionEvent {
         code: String,
         ts: i64,
     },
+
+    /// Files under a workspace changed (multi-writer Files-drawer live
+    /// refresh). APP-LEVEL with a `workspacePath` + `paths` payload so
+    /// every thin client (local multi-window + K2 Connect remote) learns
+    /// about agent shell writes and other-client `/cli/fs/*` mutations —
+    /// the local Tauri `fs://change` watcher only covers the client Mac
+    /// and never reaches remote daemons or other windows.
+    ///
+    /// Wire: `{ "kind": "fs_changed", "workspacePath": string,
+    /// "paths": string[] }`. `paths` = absolute paths that changed
+    /// (files or dirs). Consumers refresh parent dirs present in their
+    /// tree cache. Payload is a nudge + paths, not a full tree.
+    /// `workspacePath` is the longest registered project root that is a
+    /// prefix of the mutated path (or the path's parent when no project
+    /// matches) — useful for filtering but not the routing class
+    /// (APP-LEVEL so every subscriber gets the nudge; FileTree filters
+    /// against its own `rootPath`).
+    FsChanged {
+        #[serde(rename = "workspacePath")]
+        workspace_path: String,
+        paths: Vec<String>,
+    },
 }
 
 /// One nested-subdomain target on the wire (0074): the internal endpoint
@@ -666,6 +688,91 @@ pub fn emit_heartbeat_roster_changed(workspace_path: &str, project_id: &str) {
         workspace_path: workspace_path.to_string(),
         project_id: project_id.to_string(),
     });
+}
+
+/// Files-drawer multi-writer live refresh — best-effort broadcast that
+/// absolute paths under a workspace changed. Skip empty workspace or an
+/// empty path set (no-op). Callers resolve `workspace_path` via
+/// [`resolve_workspace_for_path`] (longest registered project prefix, or
+/// parent-dir fallback). The broadcast `let _ =`-swallows the
+/// no-subscribers case.
+pub fn emit_fs_changed(workspace_path: &str, paths: impl IntoIterator<Item = String>) {
+    if workspace_path.is_empty() {
+        return;
+    }
+    let paths: Vec<String> = paths.into_iter().filter(|p| !p.is_empty()).collect();
+    if paths.is_empty() {
+        return;
+    }
+    let _ = emit(SessionEvent::FsChanged {
+        workspace_path: workspace_path.to_string(),
+        paths,
+    });
+}
+
+/// Resolve the workspace root for a mutated absolute path: the longest
+/// registered project path that is a prefix of `path` (exact match or
+/// `root/` prefix — never `/x/foo` for `/x/foobar`). When no project
+/// matches, fall back to the path's parent directory (still useful for
+/// prefix-style filtering if a client subscribed with that workspace
+/// root). Empty input yields empty string.
+pub fn resolve_workspace_for_path(path: &str) -> String {
+    // Bare "/" is a valid absolute path (root). Don't collapse it to empty.
+    if path == "/" {
+        return "/".to_string();
+    }
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        return String::new();
+    }
+    let projects = k2_core::projects_ops::projects_list().unwrap_or_default();
+    let mut best: Option<String> = None;
+    for p in projects {
+        let root = p.path.trim_end_matches('/');
+        if root.is_empty() {
+            continue;
+        }
+        let is_match = path == root || path.starts_with(&format!("{root}/"));
+        if !is_match {
+            continue;
+        }
+        let take = match &best {
+            None => true,
+            Some(cur) => root.len() > cur.len(),
+        };
+        if take {
+            best = Some(root.to_string());
+        }
+    }
+    if let Some(ws) = best {
+        return ws;
+    }
+    std::path::Path::new(path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// Emit one (or more) `fs_changed` events for absolute mutated paths,
+/// grouping by resolved workspace root. Convenience for `/cli/fs/*`
+/// mutation handlers that may touch several paths across workspaces.
+pub fn emit_fs_changed_for_paths(paths: impl IntoIterator<Item = String>) {
+    use std::collections::HashMap;
+    let mut by_ws: HashMap<String, Vec<String>> = HashMap::new();
+    for p in paths {
+        if p.is_empty() {
+            continue;
+        }
+        let ws = resolve_workspace_for_path(&p);
+        if ws.is_empty() {
+            continue;
+        }
+        by_ws.entry(ws).or_default().push(p);
+    }
+    for (ws, ps) in by_ws {
+        emit_fs_changed(&ws, ps);
+    }
 }
 
 /// Extract `tab-<paneGroupId>` from a `v2_session_map` agent_name.
@@ -1299,5 +1406,82 @@ mod tests {
             plain.get("sandbox_backend").is_none(),
             "a non-sandbox SessionAdded must omit sandbox_backend (byte-identical to pre-P3c): {plain:?}",
         );
+    }
+
+    /// Files-drawer multi-writer FROZEN WIRE CONTRACT:
+    /// `{ "kind": "fs_changed", "workspacePath": string, "paths": string[] }`.
+    #[test]
+    fn fs_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::FsChanged {
+            workspace_path: "/x/foo".into(),
+            paths: vec!["/x/foo/a.rs".into(), "/x/foo/src".into()],
+        });
+        assert_eq!(json["kind"], "fs_changed");
+        assert_eq!(json["workspacePath"], "/x/foo");
+        assert_eq!(
+            json["paths"],
+            serde_json::json!(["/x/foo/a.rs", "/x/foo/src"])
+        );
+        assert_keys(&json, &["kind", "workspacePath", "paths"]);
+    }
+
+    #[test]
+    fn emit_fs_changed_skips_empty_workspace_or_paths() {
+        // Unique sentinel so parallel tests sharing the process-wide bus
+        // can't false-positive our "must not emit empty" assertion.
+        let pid = std::process::id();
+        let sentinel_ws = format!("/tmp/k2-fs-emit-skip-{pid}");
+        let sentinel_path = format!("{sentinel_ws}/a");
+        let mut rx = subscribe();
+        // Drain any contamination already queued.
+        while rx.try_recv().is_ok() {}
+
+        emit_fs_changed("", vec![sentinel_path.clone()]);
+        emit_fs_changed(&sentinel_ws, Vec::<String>::new());
+        emit_fs_changed(&sentinel_ws, vec![String::new()]);
+
+        // Nothing we just emitted should appear. Other tests may still
+        // contaminate; only fail if OUR sentinel workspace shows up.
+        while let Ok(ev) = rx.try_recv() {
+            if let SessionEvent::FsChanged { workspace_path, .. } = &ev {
+                assert_ne!(
+                    workspace_path, &sentinel_ws,
+                    "empty workspace/paths must not emit (got {ev:?})"
+                );
+            }
+        }
+
+        emit_fs_changed(&sentinel_ws, vec![sentinel_path.clone()]);
+        let mut found = false;
+        // Drain until our event or the channel is empty (bounded).
+        for _ in 0..32 {
+            match rx.try_recv() {
+                Ok(SessionEvent::FsChanged {
+                    workspace_path,
+                    paths,
+                }) if workspace_path == sentinel_ws => {
+                    assert_eq!(paths, vec![sentinel_path.clone()]);
+                    found = true;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(found, "should emit for non-empty workspace+paths");
+    }
+
+    #[test]
+    fn resolve_workspace_for_path_parent_fallback_when_no_project() {
+        // No registered project will match this synthetic path in a
+        // clean test DB — parent-dir fallback is the contract.
+        let ws = resolve_workspace_for_path("/tmp/k2-fs-live-no-project/file.txt");
+        assert_eq!(ws, "/tmp/k2-fs-live-no-project");
+    }
+
+    #[test]
+    fn resolve_workspace_for_path_empty_input() {
+        assert_eq!(resolve_workspace_for_path(""), "");
+        assert_eq!(resolve_workspace_for_path("/"), "/");
     }
 }

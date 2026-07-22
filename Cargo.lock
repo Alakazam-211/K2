@@ -3333,6 +3333,7 @@ dependencies = [
  "mail-parser",
  "minisign-verify",
  "nix 0.29.0",
+ "notify",
  "parking_lot",
  "rcgen",
  "reqwest 0.12.28",

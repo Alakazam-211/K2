@@ -133,6 +133,12 @@ parking_lot = "0.12"
 # DOCX, images). A streaming WS endpoint is Phase 3 work.
 base64 = "0.22"
 
+# Files-drawer multi-writer live refresh — recursive FS watcher on the
+# daemon machine so agent shell writes + other-client mutations fan out
+# as SessionEvent::FsChanged. Same notify 7 line as src-tauri (macos_fsevent
+# is a no-op feature on Linux; inotify is the portable default there).
+notify = { version = "7", features = ["macos_fsevent"] }
+
 # P3 remote daemon self-update (binary-swap shape). `sha2` verifies the
 # downloaded artifact's SHA-256 against the manifest; `minisign-verify`
 # is the verify-ONLY pure-Rust minisign implementation used to check the

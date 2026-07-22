@@ -367,6 +367,16 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         // daemon-global owner visibility (no workspace scope).
         SessionEvent::RemoteSessionAccessDenied { .. } => return true,
 
+        // Files-drawer multi-writer live refresh — APP-LEVEL (the
+        // ChatHistory / ProjectsChanged convention): every thin client
+        // must learn about agent writes + other-client FS mutations.
+        // Carries workspacePath+paths; FileTree filters against its own
+        // rootPath. Prefer APP-LEVEL over workspace-scoped because the
+        // app-level empty-`?path=` socket is always live, while a
+        // per-workspace subscription is not guaranteed for the Files
+        // drawer.
+        SessionEvent::FsChanged { .. } => return true,
+
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter below routes them to
         // the matching subscriber exactly like SessionAdded/Removed.
@@ -514,6 +524,11 @@ mod tests {
             code: "REMOTE_SESSIONS_DISABLED".into(),
             ts: 0,
         };
+        // Files-drawer multi-writer — APP-LEVEL with payload.
+        let fs_changed = SessionEvent::FsChanged {
+            workspace_path: "/x/foo".into(),
+            paths: vec!["/x/foo/a.rs".into()],
+        };
         for ev in [
             &llm,
             &tunnel,
@@ -525,6 +540,7 @@ mod tests {
             &feedback,
             &mail,
             &remote_denied,
+            &fs_changed,
         ] {
             assert!(event_matches_workspace(ev, "/x/foo"));
             assert!(event_matches_workspace(ev, "/totally/unrelated"));

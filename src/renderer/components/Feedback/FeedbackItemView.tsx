@@ -143,6 +143,7 @@ export function FeedbackItemView({
 
       {tab === 'thread' ? (
         <ThreadTab
+          key={`thread-${id}`}
           item={item}
           error={error}
           nowSec={nowSec}
@@ -187,16 +188,35 @@ function ThreadTab({
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Selecting a ticket focuses the composer.
+  // Focus the reply box when this ticket's thread is ready.
+  // Must wait for `item` — while loading we render "Loading thread…"
+  // with no textarea, so focusing on ticketId alone always missed.
   useEffect(() => {
-    // Resize handlers can leave body { user-select: none } stuck if
-    // mouseup is lost — clear it whenever a ticket thread is open.
+    // Resize handlers can leave body { user-select: none } stuck.
     document.body.style.userSelect = ''
+    if (!item || error) return
+    let cancelled = false
+    let innerRaf = 0
+    // Double rAF: first after Loading unmounts, second after the list
+    // card click (that selected this ticket) finishes so it cannot
+    // steal focus back from the composer.
+    const outerRaf = window.requestAnimationFrame(() => {
+      innerRaf = window.requestAnimationFrame(() => {
+        if (cancelled) return
+        textareaRef.current?.focus({ preventScroll: true })
+      })
+    })
+    // Also a short timeout for slower paints / focus races.
     const t = window.setTimeout(() => {
-      textareaRef.current?.focus()
-    }, 0)
-    return () => window.clearTimeout(t)
-  }, [ticketId])
+      if (!cancelled) textareaRef.current?.focus({ preventScroll: true })
+    }, 50)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(outerRaf)
+      cancelAnimationFrame(innerRaf)
+      window.clearTimeout(t)
+    }
+  }, [ticketId, item, error])
 
   // Auto-grow the reply field with content.
   useEffect(() => {

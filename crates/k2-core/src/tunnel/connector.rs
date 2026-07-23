@@ -21,7 +21,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -153,11 +153,21 @@ const HEALTHY_UPTIME: Duration = Duration::from_secs(30);
 /// subdomain loops use to observe `stop()` promptly.
 const SUPERVISE_POLL: Duration = Duration::from_secs(1);
 
+/// How often the supervisor probes whether frpc's local target is still
+/// reachable on loopback (Bug B self-heal / port-desync). 10× SUPERVISE_POLL.
+const LOCAL_TARGET_PROBE_EVERY: u32 = 10;
+
+/// TCP connect budget when probing `127.0.0.1:<localPort>` for self-heal.
+const LOCAL_TARGET_PROBE_TIMEOUT: Duration = Duration::from_millis(400);
+
 /// Live connector state — the supervised child + the desired-state flag.
 struct ConnectorState {
-    /// The currently-running config (resolved local_port).
+    /// The currently-running config.
     cfg: TunnelConfig,
-    resolved_local_port: u16,
+    /// frpc `localPort` — frozen at start (R1) and only rewritten by the
+    /// self-heal path when the frozen target is unreachable. Shared so
+    /// `status()` and the supervisor always agree after a heal.
+    resolved_local_port: Arc<AtomicU16>,
     /// The frpc child handle. `None` between restarts.
     child: Arc<Mutex<Option<Child>>>,
     /// Desired state: `true` = should be running (supervisor restarts on
@@ -358,6 +368,10 @@ pub fn start(
     // forward cleartext to the HTTP port, which would defeat the entire
     // "relay sees only ciphertext" guarantee.
     let e2e = config::e2e_enabled(&cfg);
+    // Live E2E listener port is the single source of truth for frpc
+    // localPort (Bug B / #55). NEVER invent a free port or re-read a
+    // stale file over a live OnceLock — `ensure_https_port` prefers the
+    // daemon-registered hook (process-local bound port).
     let resolved_local_port = if e2e {
         super::tls::ensure_https_port(default_local_port)?
     } else {
@@ -374,6 +388,20 @@ pub fn start(
     // so the rendered TOML is byte-identical to the pre-failover path.
     let frpc = resolve_frpc(bin)?;
     write_relay_config(&cfg, &cfg.relay_list()[0], resolved_local_port, e2e)?;
+
+    // Invariant: after render, frpc.toml localPort must match the live
+    // resolution we just froze (debug-visible in journal on mismatch).
+    if let Err(msg) = tunnel_port_invariant_ok(
+        e2e,
+        if e2e { Some(resolved_local_port) } else { None },
+        super::tls::read_https_port(),
+        parse_local_port_from_frpc_toml(
+            &std::fs::read_to_string(frpc_config_path()).unwrap_or_default(),
+        ),
+        Some(resolved_local_port),
+    ) {
+        crate::log_debug!("[tunnel] WARN: port invariant after start render: {msg}");
+    }
 
     // Reap any STRAY frpc bound to our config before spawning a fresh one.
     // This is the load-bearing self-heal for the multi-frpc failure mode:
@@ -395,6 +423,7 @@ pub fn start(
     // failure — see `spawn_supervised`.
     let child = Arc::new(Mutex::new(None));
     let running = Arc::new(AtomicBool::new(true));
+    let resolved_port_slot = Arc::new(AtomicU16::new(resolved_local_port));
     // The live-relay slot starts at the preferred relay (index 0 — what
     // was just rendered above); the supervise loop republishes it on every
     // rotation so status() always names the relay actually being dialed.
@@ -405,7 +434,8 @@ pub fn start(
         running.clone(),
         current_relay.clone(),
         &cfg,
-        resolved_local_port,
+        resolved_port_slot.clone(),
+        default_local_port,
         e2e,
     )?;
 
@@ -425,7 +455,7 @@ pub fn start(
 
     let st = ConnectorState {
         cfg,
-        resolved_local_port,
+        resolved_local_port: resolved_port_slot,
         child,
         running,
         current_relay,
@@ -441,15 +471,18 @@ pub fn start(
 /// the Child while waiting, so a bare `st.child` kill is often a no-op
 /// and orphans frpc without the pattern reap. Idempotent — stopping a
 /// stopped tunnel is `Ok`.
+///
+/// Hardened (Bug B / Phase 4b): `running=false` FIRST, slot kill, pattern
+/// reap, short re-check, second reap (and SIGKILL if still alive) so a
+/// graceful daemon exit under `KillMode=process` cannot leave orphan frpc.
 pub fn stop() -> Result<(), String> {
     let mut guard = state().lock().unwrap_or_else(|p| p.into_inner());
     if let Some(st) = guard.as_ref() {
-        // 1) Tell the supervisor not to respawn.
+        // 1) Tell the supervisor not to respawn — MUST be first.
         st.running.store(false, Ordering::SeqCst);
         // 2) Kill the Child handle if the supervisor hasn't taken it yet.
         if let Some(child) = st.child.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
-            // Best-effort graceful kill. frpc has no special signal
-            // protocol; SIGKILL via `kill()` is the portable stop.
+            // Best-effort kill. frpc has no special signal protocol.
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -464,7 +497,29 @@ pub fn stop() -> Result<(), String> {
         stray_frpc_pattern(&cfg_path)
     );
     reap_stray_frpc(&cfg_path);
-    // 4) Clear connector state so status() reports stopped.
+    // 4) Short settle + second reap — SIGTERM from pkill may not have
+    //    reaped yet; a second pass catches late-dying children.
+    std::thread::sleep(Duration::from_millis(150));
+    reap_stray_frpc(&cfg_path);
+    // 5) Last resort on unix: if a match is still alive, SIGKILL.
+    #[cfg(unix)]
+    {
+        if stray_frpc_alive(&cfg_path) {
+            crate::log_debug!(
+                "[tunnel] stop: stray frpc still alive after SIGTERM — SIGKILL `{}`",
+                stray_frpc_pattern(&cfg_path)
+            );
+            let _ = Command::new("pkill")
+                .arg("-9")
+                .arg("-f")
+                .arg(stray_frpc_pattern(&cfg_path))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    // 6) Clear connector state so status() reports stopped.
     *guard = None;
     Ok(())
 }
@@ -499,7 +554,7 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
         running: st.running.load(Ordering::SeqCst),
         public_url,
         subdomain: (!sub.is_empty()).then(|| sub.to_string()),
-        local_port: Some(st.resolved_local_port),
+        local_port: Some(st.resolved_local_port.load(Ordering::SeqCst)),
         server_addr: Some(server_addr),
         frpc_installed: resolve_frpc(&FrpcBinary::Auto).is_ok(),
         // A live connector implies the gate passed at spawn time.
@@ -532,6 +587,150 @@ fn reap_stray_frpc(cfg_path: &Path) {
 
 #[cfg(not(unix))]
 fn reap_stray_frpc(_cfg_path: &Path) {}
+
+/// True when a process matching our frpc config pattern is still alive
+/// (`pgrep -f` exit 0). Used by the hardened stop path for a second-pass
+/// SIGKILL. Missing `pgrep` → false (don't escalate blindly).
+#[cfg(unix)]
+fn stray_frpc_alive(cfg_path: &Path) -> bool {
+    Command::new("pgrep")
+        .arg("-f")
+        .arg(stray_frpc_pattern(cfg_path))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Parse `localPort = N` from a rendered frpc.toml body. Pure — used by
+/// the port invariant helper and tests.
+pub fn parse_local_port_from_frpc_toml(toml: &str) -> Option<u16> {
+    for line in toml.lines() {
+        let line = line.trim();
+        // Accept `localPort = 12345` (renderer's exact shape).
+        let rest = match line.strip_prefix("localPort") {
+            Some(r) => r.trim_start(),
+            None => continue,
+        };
+        let rest = match rest.strip_prefix('=') {
+            Some(r) => r.trim(),
+            None => continue,
+        };
+        // Drop trailing comments if any.
+        let num = rest.split_whitespace().next().unwrap_or(rest);
+        if let Ok(p) = num.parse::<u16>() {
+            if p != 0 {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// TCP-probe whether anything is accepting on `127.0.0.1:port`. Used by
+/// the supervisor self-heal path to detect "frpc dials a dead localPort".
+pub fn local_port_reachable(port: u16) -> bool {
+    if port == 0 {
+        return false;
+    }
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, LOCAL_TARGET_PROBE_TIMEOUT).is_ok()
+}
+
+/// Ok if live/published E2E port agrees with frpc.toml `localPort` (and the
+/// connector's frozen port) when E2E is on. Pure check for tests + post-start
+/// diagnostics — never invents ports.
+///
+/// * `e2e` — effective E2E flag for this tunnel.
+/// * `live_e2e_port` — process-local bound listener (OnceLock), when known.
+/// * `published_port` — contents of `~/.k2/tunnel-https.port`, if any.
+/// * `frpc_local_port` — `localPort` from rendered frpc.toml, if any.
+/// * `frozen_port` — connector's frozen localPort (status/supervisor).
+///
+/// When E2E is off, only `frpc_local_port` and `frozen_port` are compared
+/// (if both present); live/published HTTPS ports are ignored.
+pub fn tunnel_port_invariant_ok(
+    e2e: bool,
+    live_e2e_port: Option<u16>,
+    published_port: Option<u16>,
+    frpc_local_port: Option<u16>,
+    frozen_port: Option<u16>,
+) -> Result<(), String> {
+    if !e2e {
+        if let (Some(frpc), Some(frozen)) = (frpc_local_port, frozen_port) {
+            if frpc != frozen {
+                return Err(format!(
+                    "frpc localPort {frpc} != frozen connector port {frozen} (E2E off)"
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    // Prefer the process-local live listener; fall back to the published file.
+    let sot = match (live_e2e_port, published_port) {
+        (Some(live), Some(pub_p)) if live != pub_p => {
+            return Err(format!(
+                "live E2E port {live} != published tunnel-https.port {pub_p}"
+            ));
+        }
+        (Some(live), _) => live,
+        (None, Some(pub_p)) => pub_p,
+        (None, None) => {
+            // No SoT available — still check frpc vs frozen if both present.
+            if let (Some(frpc), Some(frozen)) = (frpc_local_port, frozen_port) {
+                if frpc != frozen {
+                    return Err(format!(
+                        "frpc localPort {frpc} != frozen port {frozen} (no live/published E2E port)"
+                    ));
+                }
+            }
+            return Ok(());
+        }
+    };
+
+    if let Some(frpc) = frpc_local_port {
+        if frpc != sot {
+            return Err(format!(
+                "frpc localPort {frpc} != live/published E2E port {sot}"
+            ));
+        }
+    }
+    if let Some(frozen) = frozen_port {
+        if frozen != sot {
+            return Err(format!(
+                "frozen connector port {frozen} != live/published E2E port {sot}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Re-resolve the port frpc should dial from the **live** E2E listener
+/// (preferred) without inventing a free port. Used by self-heal only —
+/// normal respawns keep the frozen value (R1).
+fn re_resolve_live_local_port(e2e: bool, daemon_http_port: u16, current: u16) -> u16 {
+    if !e2e {
+        return current;
+    }
+    // ensure_https_port → daemon hook → HTTPS_PORT OnceLock (true live SoT).
+    // Fall back to the published file, then the current freeze.
+    match super::tls::ensure_https_port(daemon_http_port) {
+        Ok(p) if p != 0 => {
+            // Re-publish so tunnel-https.port can't drift from the live port.
+            let _ = super::tls::publish_https_port(p);
+            p
+        }
+        Ok(_) | Err(_) => {
+            if let Some(p) = super::tls::read_https_port() {
+                p
+            } else {
+                current
+            }
+        }
+    }
+}
 
 /// Write the rendered TOML to `~/.k2/frpc.toml` (0600) via tmp+rename.
 fn write_config_file(toml: &str) -> Result<(), String> {
@@ -589,6 +788,11 @@ enum ChildOutcome {
     /// the generic uptime classification would wrongly credit the long
     /// pre-death run as a success and never rotate.
     WatchdogKill,
+    /// Loopback probe found frpc's localPort unreachable while the tunnel
+    /// should still be up (Bug B desync: live E2E on port A, frpc dials B).
+    /// Supervisor re-resolves the live port, rewrites frpc.toml, and
+    /// respawns frpc only — no daemon restart, agent PTYs survive.
+    LocalPortUnreachable,
 }
 
 /// Shared per-child-run state for the MID-SESSION relay-death watchdog.
@@ -662,8 +866,12 @@ fn wait_for_exit(
     selector: &mut RelaySelector,
     spawned_at: Instant,
     watch: Option<&SessionWatch>,
+    local_port: &AtomicU16,
+    e2e: bool,
+    daemon_http_port: u16,
 ) -> ChildOutcome {
-    // Solo: stop-observability only — no watchdog / fail-back.
+    let mut ticks_since_probe = 0u32;
+    // Solo: stop-observability + localPort self-heal — no watchdog / fail-back.
     if selector.is_solo() {
         loop {
             match child.try_wait() {
@@ -678,6 +886,16 @@ fn wait_for_exit(
                 let _ = child.kill();
                 let _ = child.wait();
                 return ChildOutcome::Exited(None);
+            }
+            if probe_local_desync(
+                &mut ticks_since_probe,
+                local_port,
+                e2e,
+                daemon_http_port,
+            ) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return ChildOutcome::LocalPortUnreachable;
             }
             std::thread::sleep(SUPERVISE_POLL);
         }
@@ -714,6 +932,19 @@ fn wait_for_exit(
                 return ChildOutcome::WatchdogKill;
             }
         }
+        // Bug B self-heal: only when frozen localPort is dead AND a
+        // different live E2E port is available (true desync). Same-port
+        // unreachable (listener down / test fixture) does not thrash.
+        if probe_local_desync(
+            &mut ticks_since_probe,
+            local_port,
+            e2e,
+            daemon_http_port,
+        ) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return ChildOutcome::LocalPortUnreachable;
+        }
         // A child alive past HEALTHY_UPTIME is a working relay: reset the
         // failure counter and extend the fail-back streak. The selector
         // says when the streak has earned a return to the primary.
@@ -726,6 +957,39 @@ fn wait_for_exit(
         }
         std::thread::sleep(SUPERVISE_POLL);
     }
+}
+
+/// Periodic localPort desync probe. Returns true when the frozen port is
+/// unreachable and re-resolving the live E2E listener yields a **different**
+/// port (the luzz 44407-vs-42265 class). Never invents free ports.
+fn probe_local_desync(
+    ticks_since_probe: &mut u32,
+    local_port: &AtomicU16,
+    e2e: bool,
+    daemon_http_port: u16,
+) -> bool {
+    *ticks_since_probe = ticks_since_probe.wrapping_add(1);
+    if *ticks_since_probe < LOCAL_TARGET_PROBE_EVERY {
+        return false;
+    }
+    *ticks_since_probe = 0;
+    let port = local_port.load(Ordering::SeqCst);
+    if port == 0 || local_port_reachable(port) {
+        return false;
+    }
+    let live = re_resolve_live_local_port(e2e, daemon_http_port, port);
+    if live == port {
+        // Same port still dead — not a desync we can rewrite away.
+        return false;
+    }
+    crate::log_debug!(
+        "[tunnel] WARN: local target 127.0.0.1:{port} unreachable; live listener is \
+         {live} — self-healing frpc localPort (Bug B desync)"
+    );
+    // Stash the resolved live port so the outcome handler rewrites without
+    // a second ensure call that could race.
+    local_port.store(live, Ordering::SeqCst);
+    true
 }
 
 /// Spawn the frpc child once and start the supervisor thread that
@@ -755,14 +1019,17 @@ fn wait_for_exit(
 /// **Port freeze (R1)**: `resolved_local_port` is captured once at start
 /// and reused on every respawn / relay rewrite — a mid-flight daemon port
 /// change must not rebind frpc to a different localPort while the public
-/// proxy name stays the same.
+/// proxy name stays the same. The **only** exception is
+/// [`ChildOutcome::LocalPortUnreachable`] self-heal, which re-resolves
+/// the **live** E2E port (never a freshly-picked free port).
 fn spawn_supervised(
     frpc: PathBuf,
     child_slot: Arc<Mutex<Option<Child>>>,
     running: Arc<AtomicBool>,
     current_relay: Arc<Mutex<RelayEndpoint>>,
     cfg: &TunnelConfig,
-    resolved_local_port: u16,
+    resolved_local_port: Arc<AtomicU16>,
+    daemon_http_port: u16,
     e2e: bool,
 ) -> Result<(), String> {
     // Mid-session watchdog only in multi-relay mode: it exists to drive
@@ -780,6 +1047,7 @@ fn spawn_supervised(
 
     let frpc_thread = frpc.clone();
     let cfg_thread = cfg.clone();
+    let port_slot = resolved_local_port;
     std::thread::Builder::new()
         .name("k2so-frpc-supervisor".to_string())
         .spawn(move || {
@@ -794,6 +1062,9 @@ fn spawn_supervised(
             let publish_relay = |relay: &RelayEndpoint| {
                 *current_relay.lock().unwrap_or_else(|p| p.into_inner()) = relay.clone();
             };
+            // Frozen localPort for every normal rewrite (R1). Self-heal
+            // may update `port_slot` then re-read via this helper.
+            let frozen_port = || port_slot.load(Ordering::SeqCst);
             loop {
                 // Take the current child to wait on it.
                 let mut child = match child_slot
@@ -840,6 +1111,9 @@ fn spawn_supervised(
                     &mut selector,
                     spawned_at,
                     watch.as_deref(),
+                    &port_slot,
+                    e2e,
+                    daemon_http_port,
                 );
                 if !running.load(Ordering::SeqCst) {
                     // Stop requested — do not restart.
@@ -858,7 +1132,7 @@ fn spawn_supervised(
                         if let Err(e) = write_relay_config(
                             &cfg_thread,
                             selector.current(),
-                            resolved_local_port,
+                            frozen_port(),
                             e2e,
                         ) {
                             crate::log_debug!(
@@ -897,7 +1171,7 @@ fn spawn_supervised(
                             if let Err(e) = write_relay_config(
                                 &cfg_thread,
                                 selector.current(),
-                                resolved_local_port,
+                                frozen_port(),
                                 e2e,
                             ) {
                                 crate::log_debug!(
@@ -939,7 +1213,7 @@ fn spawn_supervised(
                             if let Err(e) = write_relay_config(
                                 &cfg_thread,
                                 selector.current(),
-                                resolved_local_port,
+                                frozen_port(),
                                 e2e,
                             ) {
                                 crate::log_debug!(
@@ -958,6 +1232,46 @@ fn spawn_supervised(
                         );
                         std::thread::sleep(backoff);
                         backoff = (backoff * 2).min(max_backoff);
+                    }
+                    ChildOutcome::LocalPortUnreachable => {
+                        // Bug B self-heal: probe already stashed the live
+                        // port into `port_slot`. Rewrite frpc.toml and
+                        // respawn frpc only — do NOT kill daemon / PTYs.
+                        let live = frozen_port();
+                        crate::log_debug!(
+                            "[tunnel] self-heal: rewriting frpc.toml localPort={live} \
+                             from live E2E listener; restarting frpc child only"
+                        );
+                        // Re-publish so tunnel-https.port cannot stay stale.
+                        if e2e {
+                            let _ = super::tls::publish_https_port(live);
+                        }
+                        if let Err(e) = write_relay_config(
+                            &cfg_thread,
+                            selector.current(),
+                            live,
+                            e2e,
+                        ) {
+                            crate::log_debug!(
+                                "[tunnel] WARN: self-heal rewrite frpc.toml failed: {e}"
+                            );
+                        }
+                        if let Err(msg) = tunnel_port_invariant_ok(
+                            e2e,
+                            if e2e { Some(live) } else { None },
+                            super::tls::read_https_port(),
+                            parse_local_port_from_frpc_toml(
+                                &std::fs::read_to_string(frpc_config_path())
+                                    .unwrap_or_default(),
+                            ),
+                            Some(live),
+                        ) {
+                            crate::log_debug!(
+                                "[tunnel] WARN: port invariant after self-heal: {msg}"
+                            );
+                        }
+                        // Prompt respawn — desync recovery should be fast.
+                        backoff = initial_backoff;
                     }
                 }
                 if !running.load(Ordering::SeqCst) {
@@ -2149,9 +2463,115 @@ mod tests {
                 Some(48123),
                 "status must still report the frozen port after rotation"
             );
+            // Invariant: frpc localPort still matches frozen after rotation.
+            tunnel_port_invariant_ok(
+                false,
+                None,
+                None,
+                parse_local_port_from_frpc_toml(&rotated),
+                Some(48123),
+            )
+            .expect("port invariant must hold after relay rotation");
 
             stop().expect("stop");
         });
+    }
+
+    #[test]
+    fn parse_local_port_from_frpc_toml_reads_renderer_shape() {
+        assert_eq!(
+            parse_local_port_from_frpc_toml("localPort = 44407\n"),
+            Some(44407)
+        );
+        assert_eq!(
+            parse_local_port_from_frpc_toml("  localPort = 42265  \n"),
+            Some(42265)
+        );
+        assert_eq!(parse_local_port_from_frpc_toml("serverAddr = \"x\"\n"), None);
+        assert_eq!(parse_local_port_from_frpc_toml("localPort = 0\n"), None);
+    }
+
+    #[test]
+    fn tunnel_port_invariant_ok_detects_e2e_desync() {
+        // Happy path: live == published == frpc == frozen.
+        tunnel_port_invariant_ok(true, Some(44407), Some(44407), Some(44407), Some(44407))
+            .expect("aligned ports must pass");
+        // luzz class: live 44407 vs frpc/file 42265.
+        let err = tunnel_port_invariant_ok(
+            true,
+            Some(44407),
+            Some(42265),
+            Some(42265),
+            Some(42265),
+        )
+        .expect_err("live vs published desync must fail");
+        assert!(
+            err.contains("44407") && err.contains("42265"),
+            "error must name both ports: {err}"
+        );
+        let err = tunnel_port_invariant_ok(
+            true,
+            Some(44407),
+            Some(44407),
+            Some(42265),
+            Some(42265),
+        )
+        .expect_err("frpc localPort desync must fail");
+        assert!(
+            err.contains("42265") && err.contains("44407"),
+            "error must name both ports: {err}"
+        );
+        // E2E off: only frpc vs frozen matter.
+        tunnel_port_invariant_ok(false, Some(1), Some(2), Some(48123), Some(48123))
+            .expect("E2E off ignores live/published HTTPS mismatch");
+        let err =
+            tunnel_port_invariant_ok(false, None, None, Some(1), Some(2)).expect_err("mismatch");
+        assert!(err.contains("E2E off"), "got: {err}");
+    }
+
+    /// Pure re-resolve path: when E2E is on and only the published port
+    /// file is available (no daemon hook), re_resolve returns the file —
+    /// never invents a free port.
+    #[test]
+    fn re_resolve_live_local_port_uses_published_not_invented() {
+        with_temp_home(|| {
+            super::super::tls::publish_https_port(44407).expect("publish");
+            let got = re_resolve_live_local_port(true, 9999, 42265);
+            assert_eq!(
+                got, 44407,
+                "must prefer published live port over stale freeze {got}"
+            );
+            // E2E off: freeze is sticky (no re-pick).
+            assert_eq!(re_resolve_live_local_port(false, 9999, 42265), 42265);
+        });
+    }
+
+    #[test]
+    fn local_port_reachable_false_for_closed_port() {
+        // Bind then drop so we know a free port that is not listening.
+        let port = {
+            let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+            l.local_addr().expect("addr").port()
+        };
+        assert!(
+            !local_port_reachable(port),
+            "closed port {port} must report unreachable"
+        );
+        assert!(!local_port_reachable(0), "port 0 is never reachable");
+    }
+
+    #[test]
+    fn local_port_reachable_true_for_open_listener() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        // Accept in background so connect completes (some platforms need it).
+        let _accept = std::thread::spawn(move || {
+            let _ = listener.accept();
+        });
+        assert!(
+            local_port_reachable(port),
+            "open listener on {port} must report reachable"
+        );
     }
 
     /// Dumps the rendered frpc TOML for the spec example so a human can

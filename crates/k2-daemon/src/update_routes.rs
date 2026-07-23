@@ -1010,6 +1010,18 @@ pub fn handle_apply(
             "[daemon] P3 update/apply — swapped {} in place (linux, pre-exit)",
             plan.running_path.display()
         );
+        // Best-effort frpc reap before shutdown_tx (Bug B defense-in-depth).
+        // stop_tunnel is idempotent and already used from HTTP tunnel routes;
+        // if the tunnel was never up this is a no-op. Main shutdown also
+        // calls stop_tunnel — double-call is safe.
+        match k2_core::tunnel::stop_tunnel() {
+            Ok(()) => k2_core::log_debug!(
+                "[daemon] P3 update/apply — stop_tunnel after swap (pre-shutdown reap)"
+            ),
+            Err(e) => k2_core::log_debug!(
+                "[daemon] P3 update/apply — stop_tunnel after swap (best-effort): {e}"
+            ),
+        }
     }
     #[cfg(not(target_os = "linux"))]
     if let Err(e) = spawn_swap_helper(&plan) {

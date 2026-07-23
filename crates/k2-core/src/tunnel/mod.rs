@@ -56,7 +56,9 @@ pub mod unpair;
 pub mod watchdog;
 
 pub use config::{e2e_enabled, RelayEndpoint, TunnelConfig};
-pub use connector::{FrpcBinary, TunnelStatus};
+pub use connector::{
+    parse_local_port_from_frpc_toml, tunnel_port_invariant_ok, FrpcBinary, TunnelStatus,
+};
 pub use failover::{RelaySelector, RelaySwitch};
 pub use watchdog::{frpc_line_signals_disconnect, frpc_line_signals_recovery, DisconnectTracker};
 

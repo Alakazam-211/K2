@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { dirsToRefreshFromFsPaths } from './FileTree'
+import { dirsToRefreshFromFsPaths, isNoisyFsPath } from './FileTree'
+
+describe('isNoisyFsPath', () => {
+  it('filters agent/VCS/build churn and keeps source', () => {
+    expect(isNoisyFsPath('/proj/.k2/AGENTS.md')).toBe(true)
+    expect(isNoisyFsPath('/proj/.git/HEAD')).toBe(true)
+    expect(isNoisyFsPath('/proj/node_modules/x/index.js')).toBe(true)
+    expect(isNoisyFsPath('/proj/src/main.rs')).toBe(false)
+    expect(isNoisyFsPath('/proj/README.md')).toBe(false)
+  })
+})
 
 describe('dirsToRefreshFromFsPaths', () => {
   const root = '/Users/me/proj'

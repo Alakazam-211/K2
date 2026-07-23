@@ -136,21 +136,69 @@ fn collect_paths(event: &Event, out: &mut HashSet<String>) {
     }
 }
 
-/// Skip high-churn paths that would flood the bus (optional filter).
+/// Skip high-churn paths that would flood the bus.
+///
+/// Agent workspaces constantly rewrite under `.k2/` / `.k2so/`, and
+/// `.git/` / build dirs thrash. Emitting those as `fs_changed` made
+/// every connected Files tree force-reload (0.40.58 bounce loop on
+/// hosts like NSI). User-visible source files still pass through.
 fn is_noisy(path: &str) -> bool {
     // Normalize separators for a simple contains check.
     let p = path.replace('\\', "/");
-    p.contains("/node_modules/")
+    let lower = p.to_ascii_lowercase();
+
+    // Workspace agent / K2 runtime state (heartbeats, mail, skills, DB).
+    if p.contains("/.k2/")
+        || p.ends_with("/.k2")
+        || p.contains("/.k2so/")
+        || p.ends_with("/.k2so")
+        || p.contains("/.claude/")
+        || p.contains("/.cursor/")
+        || p.contains("/.codex/")
+        || p.contains("/.opencode/")
+    {
+        return true;
+    }
+
+    // VCS + package/build trees.
+    if p.contains("/.git/")
+        || p.ends_with("/.git")
+        || p.contains("/node_modules/")
         || p.ends_with("/node_modules")
-        || p.contains("/.git/objects/")
-        || p.contains("/.git/objects")
-        || p.contains("/.git/index")
-        || p.contains("/.git/logs/")
         || p.contains("/target/debug/")
         || p.contains("/target/release/")
-        || p.ends_with(".swp")
+        || p.contains("/target/tmp/")
+        || p.contains("/__pycache__/")
+        || p.contains("/.venv/")
+        || p.contains("/venv/")
+        || p.contains("/.tox/")
+        || p.contains("/dist/")
+        || p.contains("/.next/")
+        || p.contains("/.nuxt/")
+        || p.contains("/.turbo/")
+        || p.contains("/.cache/")
+    {
+        return true;
+    }
+
+    // Editor / OS junk + logs / journals.
+    if p.ends_with(".swp")
         || p.ends_with(".swx")
         || p.ends_with("~")
+        || p.ends_with("/.ds_store")
+        || lower.ends_with("/.ds_store")
+        || p.ends_with(".log")
+        || p.ends_with(".log.1")
+        || p.ends_with("-journal")
+        || p.ends_with(".sqlite-wal")
+        || p.ends_with(".sqlite-shm")
+        || p.ends_with(".db-wal")
+        || p.ends_with(".db-shm")
+    {
+        return true;
+    }
+
+    false
 }
 
 /// Map each path → workspace root (longest project prefix), then emit
@@ -225,12 +273,16 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn noisy_filter_skips_node_modules_and_git_objects() {
+    fn noisy_filter_skips_churn_and_keeps_source() {
         assert!(is_noisy("/proj/node_modules/foo/index.js"));
         assert!(is_noisy("/proj/.git/objects/ab/cd"));
+        assert!(is_noisy("/proj/.git/config")); // whole .git is high-churn
         assert!(is_noisy("/proj/target/debug/deps/x.rlib"));
+        assert!(is_noisy("/proj/.k2/AGENTS.md"));
+        assert!(is_noisy("/proj/.k2so/state.db"));
+        assert!(is_noisy("/proj/agent.log"));
         assert!(!is_noisy("/proj/src/main.rs"));
-        assert!(!is_noisy("/proj/.git/config")); // config is useful; only objects/logs
+        assert!(!is_noisy("/proj/README.md"));
     }
 
     #[test]

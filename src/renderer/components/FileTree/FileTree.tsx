@@ -80,6 +80,64 @@ function pathIsUnderRoot(path: string, root: string): boolean {
 }
 
 /**
+ * Client-side mirror of daemon `fs_live::is_noisy` — skip live-refresh
+ * for high-churn agent/VCS/build paths so Files doesn't thrash when the
+ * host is busy (0.40.58 bounce on NSI-class remotes).
+ */
+export function isNoisyFsPath(path: string): boolean {
+  const p = path.replace(/\\/g, '/')
+  const lower = p.toLowerCase()
+  if (
+    p.includes('/.k2/') ||
+    p.endsWith('/.k2') ||
+    p.includes('/.k2so/') ||
+    p.endsWith('/.k2so') ||
+    p.includes('/.claude/') ||
+    p.includes('/.cursor/') ||
+    p.includes('/.codex/') ||
+    p.includes('/.opencode/')
+  ) {
+    return true
+  }
+  if (
+    p.includes('/.git/') ||
+    p.endsWith('/.git') ||
+    p.includes('/node_modules/') ||
+    p.endsWith('/node_modules') ||
+    p.includes('/target/debug/') ||
+    p.includes('/target/release/') ||
+    p.includes('/target/tmp/') ||
+    p.includes('/__pycache__/') ||
+    p.includes('/.venv/') ||
+    p.includes('/venv/') ||
+    p.includes('/.tox/') ||
+    p.includes('/dist/') ||
+    p.includes('/.next/') ||
+    p.includes('/.nuxt/') ||
+    p.includes('/.turbo/') ||
+    p.includes('/.cache/')
+  ) {
+    return true
+  }
+  if (
+    p.endsWith('.swp') ||
+    p.endsWith('.swx') ||
+    p.endsWith('~') ||
+    lower.endsWith('/.ds_store') ||
+    p.endsWith('.log') ||
+    p.endsWith('.log.1') ||
+    p.endsWith('-journal') ||
+    p.endsWith('.sqlite-wal') ||
+    p.endsWith('.sqlite-shm') ||
+    p.endsWith('.db-wal') ||
+    p.endsWith('.db-shm')
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
  * Pure helper: which directory entries should FileTree force-refresh for a
  * batch of absolute changed paths? Exported for unit tests.
  *
@@ -441,7 +499,9 @@ function TreeItem(props: TreeItemProps): React.JSX.Element | null {
 
       {entry.isDirectory && isExpanded && (
         <div>
-          {isLoading && (
+          {/* Only show Loading when we have nothing to paint yet — never
+              insert a row above existing children (that was the bounce). */}
+          {isLoading && !filteredChildren && (
             <div
               className="py-1 text-[11px] text-[var(--color-text-muted)] italic"
               style={{ paddingLeft: (depth + 1) * 16 + 8 }}
@@ -663,30 +723,58 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   // Identity is stable: skip-if-cached reads `cacheRef` (not `cache` in
   // the dep array), and all writes use functional setState. Callers that
   // list `loadDir` in effect deps no longer re-bind on every cache write.
+  //
+  // In-flight coalescing: a force refresh while the same dir is already
+  // loading joins the existing promise instead of stacking state thrash.
+  const loadDirInflightRef = useRef(new Map<string, Promise<void>>())
   const loadDir = useCallback(async (dirPath: string, force = false) => {
     if (!force && cacheRef.current.has(dirPath)) return
 
-    setLoadingDirs((prev) => new Set(prev).add(dirPath))
+    const inflight = loadDirInflightRef.current.get(dirPath)
+    if (inflight) {
+      // Join the in-flight read — avoids stacked force refreshes from
+      // rapid fs_changed batches (each used to flip Loading...).
+      await inflight
+      return
+    }
+
+    // Silent background refresh when we already paint this dir — only
+    // show "Loading..." on the first fetch (or after a root reset).
+    // Force+cached used to flip loading every fs_changed and bounce the tree.
+    const showLoading = !cacheRef.current.has(dirPath)
+    if (showLoading) {
+      setLoadingDirs((prev) => new Set(prev).add(dirPath))
+    }
     setErrorDirs((prev) => {
       const next = new Map(prev)
       next.delete(dirPath)
       return next
     })
 
-    try {
-      const raw = await daemonCliGet<FileEntry[]>('fs/read-dir', { path: dirPath, show_hidden: true })
-      const entries = sortEntriesFoldersFirst(raw)
-      setCache((prev) => new Map(prev).set(dirPath, entries))
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to read directory'
-      setErrorDirs((prev) => new Map(prev).set(dirPath, message))
-    } finally {
-      setLoadingDirs((prev) => {
-        const next = new Set(prev)
-        next.delete(dirPath)
-        return next
-      })
-    }
+    const work = (async () => {
+      try {
+        const raw = await daemonCliGet<FileEntry[]>('fs/read-dir', {
+          path: dirPath,
+          show_hidden: true,
+        })
+        const entries = sortEntriesFoldersFirst(raw)
+        setCache((prev) => new Map(prev).set(dirPath, entries))
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to read directory'
+        setErrorDirs((prev) => new Map(prev).set(dirPath, message))
+      } finally {
+        if (showLoading) {
+          setLoadingDirs((prev) => {
+            const next = new Set(prev)
+            next.delete(dirPath)
+            return next
+          })
+        }
+        loadDirInflightRef.current.delete(dirPath)
+      }
+    })()
+    loadDirInflightRef.current.set(dirPath, work)
+    await work
   }, [])
 
   // When `showHiddenFiles` changes, any directories already in the cache
@@ -731,17 +819,29 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   // fs_changed) — force-refresh parent dirs that are already visible in
   // this tree, and refresh env/AI-config sections when root listings may
   // have changed.
-  const applyFsPathBatch = useCallback((paths: string[]) => {
+  //
+  // Debounced (~250ms) + noisy-path filtered so agent/.k2 churn on a
+  // remote host cannot force-reload the tree every few hundred ms.
+  const fsBatchPendingRef = useRef<Set<string>>(new Set())
+  const fsBatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flushFsPathBatch = useCallback(() => {
+    fsBatchTimerRef.current = null
+    const paths = Array.from(fsBatchPendingRef.current)
+    fsBatchPendingRef.current.clear()
     if (!rootPath || paths.length === 0) return
+
+    const useful = paths.filter((p) => !isNoisyFsPath(p))
+    if (useful.length === 0) return
+
     const dirs = dirsToRefreshFromFsPaths(
-      paths,
+      useful,
       rootPath,
       cacheRef.current.keys(),
       expandedDirsRef.current,
     )
     let refreshEnv = false
     let refreshAiConfig = false
-    for (const p of paths) {
+    for (const p of useful) {
       if (!pathIsUnderRoot(p, rootPath)) continue
       const dir = parentDir(p)
       const changedName = p.split('/').pop() || ''
@@ -765,6 +865,26 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     if (refreshEnv) void loadEnvFiles()
     if (refreshAiConfig) void loadAiConfig()
   }, [rootPath, loadDir, loadEnvFiles, loadAiConfig])
+
+  const applyFsPathBatch = useCallback((paths: string[]) => {
+    if (!rootPath || paths.length === 0) return
+    for (const p of paths) {
+      if (p) fsBatchPendingRef.current.add(p)
+    }
+    if (fsBatchTimerRef.current != null) return
+    fsBatchTimerRef.current = setTimeout(flushFsPathBatch, 250)
+  }, [rootPath, flushFsPathBatch])
+
+  // Clear pending FS batch when leaving this tree / unmount.
+  useEffect(() => {
+    return () => {
+      if (fsBatchTimerRef.current != null) {
+        clearTimeout(fsBatchTimerRef.current)
+        fsBatchTimerRef.current = null
+      }
+      fsBatchPendingRef.current.clear()
+    }
+  }, [rootPath])
 
   // ── FS Watcher (local Tauri — belt and suspenders) ─────────────────
   useEffect(() => {
@@ -1782,7 +1902,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
           }
         }}
       >
-        {loadingDirs.has(rootPath) && (
+        {loadingDirs.has(rootPath) && !filteredRootEntries && (
           <div className="py-1 pl-4 text-[11px] text-[var(--color-text-muted)] italic">
             Loading...
           </div>

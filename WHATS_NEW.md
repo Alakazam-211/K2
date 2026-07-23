@@ -3,6 +3,52 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.61 — Linux servers actually update (and stay reachable)
+
+### Update from the app installs the new daemon
+
+On a **remote Linux** host (Settings → **Connections** → **Update to …**),
+K2 now finishes the full install path: download → verify → **install &
+restart**. Before this release, that button could download and stage a
+build without ever swapping the binary, so the box looked like it
+“updated,” came back on the **same** version, and left you thinking
+nothing changed.
+
+After install, the app only treats the update as successful when the
+host’s `/boot-status` reports the **expected new version** — not merely
+“online again.”
+
+(Settings → General → remote host **Download** / **Install & restart**
+was already the complete flow; Connections is now aligned.)
+
+### Tunnel stays in sync after restart
+
+Restarting a Linux daemon (including for an update) could leave the
+public `*.k2.dev` tunnel pointing at a **dead local port** while the
+daemon listened elsewhere — external **HTTP 000** until an operator
+SSHed in and ran `systemctl restart`.
+
+0.40.61 keeps the live HTTPS listener port as the source of truth for
+frpc, hardens tunnel stop/reap so orphan frpc is less likely, and
+self-heals when frpc’s local port is unreachable but a live listener
+exists (rewrite frpc only — agent sessions are not killed for that
+heal).
+
+**Ops note for already-provisioned boxes:** new install scripts use
+`KillMode=control-group` so orphan tunnel helpers die with the unit.
+Existing units may still say `KillMode=process` until you redeploy the
+unit or:
+
+```bash
+sudo sed -i 's/KillMode=process/KillMode=control-group/' /etc/systemd/system/k2-daemon.service
+sudo systemctl daemon-reload && sudo systemctl restart k2-daemon
+```
+
+Update both the **thin client** and the **daemon** on the host so the
+new Connections flow and the tunnel self-heal land together.
+
+---
+
 ## 0.40.60 — Tickets, and chat text you can actually select
 
 ### Feedback is now Tickets

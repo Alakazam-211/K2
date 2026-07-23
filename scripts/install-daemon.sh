@@ -283,10 +283,10 @@ Type=simple
 ExecStart=$BIN_PATH
 Restart=always
 RestartSec=2
-# Shape B self-update spawns a detached swap helper that must OUTLIVE
-# the daemon across the restart; control-group KillMode would kill it
-# before it swaps the staged binary.
-KillMode=process
+# Linux update swaps the binary in-process before exit (0.40.43+).
+# KillMode=control-group ensures orphan frpc dies with the unit so a
+# restarted daemon cannot leave stale localPort dialers registered at frps.
+KillMode=control-group
 
 [Install]
 WantedBy=default.target

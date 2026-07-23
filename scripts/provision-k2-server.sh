@@ -198,11 +198,10 @@ Environment=K2_HOOK_SCOPED=1
 ExecStart=${K2_HOME}/.local/bin/k2-daemon
 Restart=always
 RestartSec=2
-# Shape B self-update spawns a detached swap helper that must OUTLIVE the
-# daemon across the restart; the default control-group KillMode would
-# kill it before it can swap the staged binary. The daemon reaps its own
-# PTY children on graceful shutdown, so process-scoped kill is safe.
-KillMode=process
+# Linux update swaps the binary in-process before exit (0.40.43+).
+# KillMode=control-group ensures orphan frpc dies with the unit so a
+# restarted daemon cannot leave stale localPort dialers registered at frps.
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target

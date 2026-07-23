@@ -1,7 +1,7 @@
 // Render plain text with clickable http(s) URLs. Used by Tickets + Project
 // chat so threads stay selectable/copyable while links open externally.
 
-import React from 'react'
+import React, { type CSSProperties } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
 const URL_RE = /(https?:\/\/[^\s<>"'`]+)/gi
@@ -17,6 +17,13 @@ function trimTrailingPunct(url: string): { href: string; trail: string } {
   return { href, trail }
 }
 
+/** Inline select styles — beats body.userSelect=none left by resize drags. */
+export const SELECTABLE_TEXT_STYLE: CSSProperties = {
+  userSelect: 'text',
+  WebkitUserSelect: 'text',
+  cursor: 'text',
+}
+
 export function LinkifiedText({
   text,
   className,
@@ -26,7 +33,10 @@ export function LinkifiedText({
 }): React.JSX.Element {
   const parts = text.split(URL_RE)
   return (
-    <span className={className ?? 'selectable-copy whitespace-pre-wrap break-words'}>
+    <span
+      className={className ?? 'selectable-copy whitespace-pre-wrap break-words'}
+      style={SELECTABLE_TEXT_STYLE}
+    >
       {parts.map((part, i) => {
         if (i % 2 === 1 || /^https?:\/\//i.test(part)) {
           const { href, trail } = trimTrailingPunct(part)
@@ -34,7 +44,8 @@ export function LinkifiedText({
             <React.Fragment key={i}>
               <a
                 href={href}
-                className="text-[var(--color-accent)] underline underline-offset-2 hover:opacity-90 cursor-pointer break-all"
+                className="text-[var(--color-accent)] underline underline-offset-2 hover:opacity-90 cursor-pointer break-all selectable-copy"
+                style={SELECTABLE_TEXT_STYLE}
                 onClick={(e) => {
                   e.preventDefault()
                   e.stopPropagation()

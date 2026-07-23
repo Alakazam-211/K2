@@ -557,6 +557,7 @@ async fn handle_one_request(
             | "/cli/feedback/comment"
             | "/cli/feedback/answer"
             | "/cli/feedback/resolve"
+            | "/cli/feedback/assign"
             // K2 Mail (prd-email-server-v1 §11) — every mutating
             // `/cli/mail/*` path, listed NOW (foundation slice) so
             // later slices never fight this allowlist. JSON-bodied

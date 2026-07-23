@@ -38,7 +38,7 @@ import {
   type FeedbackShow,
 } from './feedback-api'
 import { KindBadge, PriorityBadge, StatusBadge } from './badges'
-import { LinkifiedText } from '@/lib/linkified-text'
+import { LinkifiedText, SELECTABLE_TEXT_STYLE } from '@/lib/linkified-text'
 import {
   clearTicketDraft,
   getTicketDraft,
@@ -189,6 +189,9 @@ function ThreadTab({
 
   // Selecting a ticket focuses the composer.
   useEffect(() => {
+    // Resize handlers can leave body { user-select: none } stuck if
+    // mouseup is lost — clear it whenever a ticket thread is open.
+    document.body.style.userSelect = ''
     const t = window.setTimeout(() => {
       textareaRef.current?.focus()
     }, 0)
@@ -266,9 +269,16 @@ function ThreadTab({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-4 py-3">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto min-h-0 px-4 py-3 chat-thread-selectable"
+        style={SELECTABLE_TEXT_STYLE}
+      >
         {item.body && (
-          <div className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)]">
+          <div
+            className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] selectable-copy"
+            style={SELECTABLE_TEXT_STYLE}
+          >
             <LinkifiedText text={item.body} className="selectable-copy whitespace-pre-wrap break-words" />
           </div>
         )}
@@ -318,7 +328,10 @@ function ThreadTab({
                     {formatRelativeTime(c.at, nowSec)}
                   </span>
                 </div>
-                <div className="text-xs text-[var(--color-text-primary)] mt-0.5">
+                <div
+                  className="text-xs text-[var(--color-text-primary)] mt-0.5 selectable-copy"
+                  style={SELECTABLE_TEXT_STYLE}
+                >
                   <LinkifiedText text={c.body} className="selectable-copy whitespace-pre-wrap break-words" />
                 </div>
               </div>

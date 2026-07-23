@@ -76,12 +76,22 @@ a,
 }
 
 /* Opt-in text selection for Tickets / Project chat (and similar).
-   Some shells inherit user-select:none from drag regions or UI chrome;
-   this class forces copy/highlight on message bodies and titles. */
-.selectable-copy {
-  -webkit-user-select: text;
-  user-select: text;
+   Resize handlers often set document.body { user-select: none }; CSS
+   inheritance then blocks selection unless descendants re-enable it.
+   !important beats utility classes + stuck body styles. Pair with
+   inline WebkitUserSelect on message bodies (FileViewerPane idiom). */
+.selectable-copy,
+.selectable-copy * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
   cursor: text;
+  -webkit-app-region: no-drag;
+}
+
+/* Whole chat thread panes (scroll area) — not chrome/toolbars. */
+.chat-thread-selectable {
+  -webkit-user-select: text !important;
+  user-select: text !important;
   -webkit-app-region: no-drag;
 }
 

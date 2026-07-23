@@ -3,6 +3,22 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.59 — Files tree no longer bounces on busy hosts
+
+On remote (and busy local) machines, the Files drawer could flash
+**Loading...** over and over, making the tree jump while agents or other
+tools wrote under the workspace.
+
+Live refresh still updates when real project files change. High-churn
+paths (agent/runtime state, `.git`, build caches, logs) no longer thrash
+the list, and a directory you already have open refreshes quietly in the
+background instead of re-showing the loading row.
+
+Update both the **thin client** and the **daemon** on the host (e.g. NSI)
+so the quieter watcher and the calmer UI land together.
+
+---
+
 ## 0.40.58 — Files that keep up, and previews that actually work
 
 The **Files** drawer is a real workspace browser again — not a list that

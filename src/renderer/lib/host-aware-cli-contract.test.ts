@@ -307,6 +307,25 @@ describe('host-aware CLI — remote self-update wire contract (P4)', () => {
     // camelCase must not leak — the route reads snake_case `job_id`.
     expect(body).not.toHaveProperty('jobId')
   })
+
+  // Connections tile Shape B orchestration (Bug A / #55): standalone hosts
+  // must complete start → poll until staged → apply { job_id }. Without apply
+  // the binary never swaps. This mirrors HostTile.doUpdate + pollStatus wire
+  // shape against the ACTIVE-host daemonCli helpers (hostOp* is the per-tile
+  // equivalent with the same body contract).
+  it('Shape B Connections sequence: start (empty) then apply { job_id } after stage', async () => {
+    // 1. start
+    await updateStart()
+    expect(daemonCliPost).toHaveBeenLastCalledWith('daemon/update/start', {})
+    // 2. status poll reads job_id from query
+    await updateStatus('job-1')
+    expect(daemonCliGet).toHaveBeenLastCalledWith('daemon/update/status', { job_id: 'job-1' })
+    // 3. apply REQUIRED for standalone — body { job_id }, never jobId
+    await updateApply('job-1')
+    expect(daemonCliPost).toHaveBeenLastCalledWith('daemon/update/apply', { job_id: 'job-1' })
+    const posts = daemonCliPost.mock.calls.map((c) => c[0] as string)
+    expect(posts).toEqual(['daemon/update/start', 'daemon/update/apply'])
+  })
 })
 
 describe('host-aware CLI POST swaps — set-surfaced (cont.)', () => {

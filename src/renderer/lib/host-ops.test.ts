@@ -140,6 +140,34 @@ describe('hostOpPost / hostOpGet — survive a remote restart (retry-on-network-
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('hostOpPost: defaults body to {} so check/start stay empty-body', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      fakeRes({ body: JSON.stringify({ ok: true }) }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await hostOpPost(CREDS, 'daemon/update/start', 30000)
+    const init = fetchMock.mock.calls[0][1] as RequestInit | undefined
+    expect(init?.body).toBe(JSON.stringify({}))
+  })
+
+  it('hostOpPost: apply carries { job_id } in the JSON body (Shape B)', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      fakeRes({ body: JSON.stringify({ ok: true }) }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await hostOpPost(CREDS, 'daemon/update/apply', 30000, { job_id: 'job-1' })
+    const call = fetchMock.mock.calls[0] as [string, RequestInit | undefined]
+    const init = call[1]
+    expect(init?.method).toBe('POST')
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    expect(body).toEqual({ job_id: 'job-1' })
+    expect(body).not.toHaveProperty('jobId')
+    expect(call[0]).toContain('/cli/daemon/update/apply')
+    expect(call[0]).toContain('token=tok')
+  })
+
   it('hostOpGet: a 500 app error is NOT retried (single fetch)', async () => {
     const fetchMock = vi.fn(async () =>
       fakeRes({ status: 500, body: JSON.stringify({ error: 'boom' }) }),

@@ -70,11 +70,14 @@ async function parse<T>(res: Response): Promise<T> {
 
 /** POST `<base>/cli/<route>?token=<token>` to a SPECIFIC host. Owner token
  *  rides the query string (the daemon's require_owner_or_admin reads it
- *  there); no body. Throws on non-2xx with a `{"error":"…"}`-aware message. */
+ *  there). Body defaults to `{}` so check/start/restart stay empty-body;
+ *  apply MUST pass `{ job_id }` (Shape B Linux swap). Throws on non-2xx
+ *  with a `{"error":"…"}`-aware message. */
 export async function hostOpPost<T = unknown>(
   creds: HostCreds,
   route: string,
   timeoutMs = 30000,
+  body: unknown = {},
 ): Promise<T> {
   // Wrap in withRemoteRetry so a remote restart/update (which leaves a DEAD
   // pooled WKWebView socket) self-heals: the network throw evicts the dead
@@ -85,6 +88,7 @@ export async function hostOpPost<T = unknown>(
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
       signal: AbortSignal.timeout(timeoutMs),
     })
     return parse<T>(res)

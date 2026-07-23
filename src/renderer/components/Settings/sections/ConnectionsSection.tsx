@@ -42,12 +42,19 @@ import { autoPairWithHost, isTrustedPeerHost } from '@/lib/federation'
 import { isConnectionLevelError } from '@/lib/remote-retry'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import { recoveryStatusText } from '@/lib/remote-recovery'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import {
   updatePhaseCopy,
+  updateCompleteCopy,
+  updateHostConfirmCopy,
   isTerminalPhase,
+  isFailurePhase,
+  isStaged,
   isForbiddenError,
   isAuthError,
   updateForbiddenCopy,
+  shouldAutoApplyAfterStage,
+  shouldResolveComeback,
   type UpdateCheckResult,
   type UpdateStatusResult,
 } from './update-host'
@@ -435,12 +442,18 @@ function HostTile({
   const [checkError, setCheckError] = useState<string | null>(null)
   const [summary, setSummary] = useState<CheckSummary | null>(null)
   const [hostCurrent, setHostCurrent] = useState<string | undefined>(undefined)
+  // From the last successful check — drives Shape A vs B (auto-apply) and the
+  // version-gated comeback after apply. Absent on older hosts → treat as Shape B.
+  const [installKind, setInstallKind] = useState<UpdateCheckResult['installKind'] | undefined>(
+    undefined,
+  )
   const [updateBusy, setUpdateBusy] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
   const [phaseText, setPhaseText] = useState<string | null>(null)
   // True while polling /boot-status back to 'ready' after a restart/update we
   // triggered — drives the "reconnecting…" UX and disables re-triggering.
   const [reconnecting, setReconnecting] = useState(false)
+  const confirm = useConfirmDialogStore((s) => s.confirm)
   // Federation peer pin status relative to the ACTIVE daemon (not this tile's
   // host settings). 'checking' while listFederationPeers is in flight.
   const [peerPaired, setPeerPaired] = useState<'checking' | 'yes' | 'no'>('checking')
@@ -569,7 +582,12 @@ function HostTile({
   // guards every setState so a navigated-away tile is safe. The total wait is
   // capped (~4 min) so a host that never returns surfaces a recovery hint
   // instead of looping forever.
-  const waitForHostReady = async (): Promise<void> => {
+  //
+  // When `expectedVersion` is set (post-update path), success is VERSION-GATED
+  // via shouldResolveComeback (Baden rule): ready+old without sawDown keeps
+  // watching; ready+expected → success; ready+wrong after sawDown → hard fail
+  // ("update did not take"). Plain restart (no expected) still accepts any ready.
+  const waitForHostReady = async (opts?: { expectedVersion?: string }): Promise<void> => {
     if (reconnecting) return // already polling this host back to life
     setReconnecting(true)
     // Clear the transient errors the dropping server produced — "reconnecting"
@@ -580,18 +598,54 @@ function HostTile({
     setFederation('unknown') // the server is dropping; re-read once it's back
     setPhaseText(`${label} is restarting — reconnecting…`)
 
+    const expected = opts?.expectedVersion
     const deadline = Date.now() + 4 * 60_000 // cap the total wait at ~4 minutes
     const intervalMs = 2500
+    // Baden: old daemon keeps answering ready until swap — track an outage.
+    let sawDown = false
     try {
       while (aliveRef.current && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, intervalMs))
         if (!aliveRef.current) return
         const status = await hostBootStatus(creds)
         if (!aliveRef.current) return
+        if (status === null) sawDown = true
+
+        if (expected) {
+          const verdict = shouldResolveComeback({
+            phase: status?.phase,
+            version: status?.version,
+            expected,
+            sawDown,
+          })
+          if (verdict === 'keep-watching') continue
+          if (verdict === 'wrong-version') {
+            setPhaseText(null)
+            const observed = status?.version
+            setHostCurrent(observed)
+            setUpdateError(
+              `${label} is back on v${observed ?? 'an unexpected version'} — update did not take` +
+                ` (expected v${expected}). Try again or SSH install-daemon.sh --version ${expected}.`,
+            )
+            void reviveRemoteSession(host.id, { force: true })
+            void refreshFederation()
+            return
+          }
+          // success
+          setPhaseText(null)
+          if (status?.version) setHostCurrent(status.version)
+          setRestartMsg({
+            ok: true,
+            text: updateCompleteCopy(label, expected, status?.version),
+          })
+          setSummary(null) // hide stale "Update to X" until next check
+          void reviveRemoteSession(host.id, { force: true })
+          void refreshFederation()
+          return
+        }
+
         if (status?.phase === 'ready') {
-          // The server is genuinely back — clear the reconnecting/phase state,
-          // refresh the federation badge + current-version read so the tile
-          // reflects the new state, and stop polling.
+          // Plain restart path — any ready is enough (no version gate).
           setPhaseText(null)
           if (status.version) setHostCurrent(status.version)
           setRestartMsg({
@@ -614,7 +668,9 @@ function HostTile({
       // Timed out — don't loop forever; give a concrete recovery path.
       setPhaseText(null)
       setUpdateError(
-        `${label} is still unreachable — try “Check for updates”, or relaunch K2 if it persists.`,
+        expected
+          ? `${label} did not come back on v${expected} within the wait window — try “Check for updates”, or SSH install-daemon.sh.`
+          : `${label} is still unreachable — try “Check for updates”, or relaunch K2 if it persists.`,
       )
     } finally {
       if (aliveRef.current) setReconnecting(false)
@@ -654,6 +710,9 @@ function HostTile({
       const r = await hostOpPost<UpdateCheckResult>(creds, 'daemon/update/check', 15000)
       setSummary(summarizeCheck(label, r))
       setHostCurrent(r.current)
+      // Shape A vs B: Connections auto-applies only for standalone (and
+      // older hosts that omit installKind). bundled-app never gets apply.
+      setInstallKind(r.installKind)
     } catch (e) {
       const m = errMsg(e)
       clearIfAuthError(m)
@@ -663,43 +722,129 @@ function HostTile({
     }
   }
 
-  const pollStatus = async (jobId: string): Promise<void> => {
+  /**
+   * Poll update status after start. Shape B (standalone / unknown): when
+   * phase hits `staged`, POST apply once with `{ job_id }` — without this the
+   * binary never swaps (#55 Bug A). Shape A (bundled-app): never apply; keep
+   * polling until terminal (co-located Tauri app installs itself).
+   *
+   * Connection errors BEFORE apply are hard failures (not "reconnecting").
+   * Connection errors AFTER apply (or after Shape A stage, when the app is
+   * installing) hand off to version-gated waitForHostReady.
+   */
+  const pollStatus = async (
+    jobId: string,
+    kind: UpdateCheckResult['installKind'] | undefined,
+  ): Promise<'applied' | 'failed' | 'unreachable'> => {
+    let appliedSent = false
+    let sawStaged = false
     for (let i = 0; i < 90; i++) {
-      if (!aliveRef.current) return
+      if (!aliveRef.current) return 'failed'
       await new Promise((r) => setTimeout(r, 2000))
-      if (!aliveRef.current) return
+      if (!aliveRef.current) return 'failed'
       let status: UpdateStatusResult
       try {
-        status = await hostOpGet<UpdateStatusResult>(creds, 'daemon/update/status', { job_id: jobId })
-      } catch {
-        // The host goes unreachable while it installs & restarts — that's the
-        // EXPECTED terminal state, not an error. Hand off to the state-aware
-        // reconnect poll: watch /boot-status until the host is back on 'ready'.
-        if (aliveRef.current) void waitForHostReady()
-        return
+        status = await hostOpGet<UpdateStatusResult>(creds, 'daemon/update/status', {
+          job_id: jobId,
+        })
+      } catch (e) {
+        // Only treat as "host going down for install" AFTER apply (Shape B)
+        // or after staged on Shape A (app self-installs). Pre-apply blips are
+        // real failures — never claim reconnecting success.
+        if (appliedSent || (sawStaged && !shouldAutoApplyAfterStage(kind))) {
+          return 'unreachable'
+        }
+        const m = errMsg(e)
+        clearIfAuthError(m)
+        if (aliveRef.current) {
+          setPhaseText(null)
+          setUpdateError(
+            isForbiddenError(m)
+              ? updateForbiddenCopy(label)
+              : `Lost connection to ${label} before the update could install: ${m}`,
+          )
+        }
+        return 'failed'
       }
-      if (!aliveRef.current) return
+      if (!aliveRef.current) return 'failed'
       const pct = typeof status.progress === 'number' ? status.progress * 100 : undefined
       setPhaseText(updatePhaseCopy(status.phase, label, { progress: pct, current: hostCurrent }))
-      if (isTerminalPhase(status.phase)) {
-        if (status.error) {
-          setUpdateError(`Update error on ${label}: ${status.error}`)
-        } else if (status.phase === 'restarting' || status.phase === 'done') {
-          // The host is going down to apply the update — start the state-aware
-          // reconnect poll instead of leaving a stale "restarting…" line that
-          // never clears (failed/rolled-back stay put: nothing to wait for).
-          if (aliveRef.current) void waitForHostReady()
+
+      if (isFailurePhase(status.phase)) {
+        setPhaseText(null)
+        setUpdateError(
+          status.error
+            ? `Update error on ${label}: ${status.error}`
+            : updatePhaseCopy(status.phase, label, { current: hostCurrent }),
+        )
+        return 'failed'
+      }
+
+      if (isStaged(status.phase)) {
+        sawStaged = true
+        if (shouldAutoApplyAfterStage(kind) && !appliedSent) {
+          appliedSent = true
+          setPhaseText(`Installing update on ${label}…`)
+          try {
+            // Shape B: start only stages; apply swaps the binary + restarts.
+            await hostOpPost(creds, 'daemon/update/apply', 30000, { job_id: jobId })
+          } catch (e) {
+            const m = errMsg(e)
+            // Apply often races the host drop: connection error AFTER apply
+            // was attempted is the install/restart path, not a hard failure.
+            if (isConnectionLevelError(e) && !isForbiddenError(m) && !isAuthError(m)) {
+              return 'unreachable'
+            }
+            clearIfAuthError(m)
+            if (aliveRef.current) {
+              setPhaseText(null)
+              setUpdateError(
+                isForbiddenError(m)
+                  ? updateForbiddenCopy(label)
+                  : `Couldn't install the update on ${label}: ${m}`,
+              )
+            }
+            return 'failed'
+          }
+          continue
         }
-        return
+        // Shape A: stay in the poll loop until terminal / host goes away.
+      }
+
+      if (status.phase === 'restarting' || status.phase === 'done') {
+        return 'applied'
+      }
+
+      // Other terminal (shouldn't reach here after isFailurePhase) — stop.
+      if (isTerminalPhase(status.phase)) {
+        return 'failed'
       }
     }
+    if (aliveRef.current) {
+      setPhaseText(null)
+      setUpdateError(`Timed out waiting for the update on ${label}.`)
+    }
+    return 'failed'
   }
 
   const doUpdate = async (): Promise<void> => {
+    const latest = summary?.kind === 'available' ? summary.latest : undefined
+    // Confirm before bouncing a live box (same copy as General Install & restart).
+    const copy = updateHostConfirmCopy(label, host.hostname, latest ?? 'the new version')
+    const ok = await confirm({
+      title: copy.title,
+      message: copy.message,
+      confirmLabel: copy.confirmLabel,
+      destructive: true,
+    })
+    if (!ok) return
+
     setUpdateBusy(true)
     setUpdateError(null)
     setRestartMsg(null)
     setPhaseText(`Starting update for ${label}…`)
+    const expectedVersion = latest
+    const kind = installKind
     try {
       const res = await hostOpPost<{ job_id?: string }>(creds, 'daemon/update/start', 30000)
       const jobId = res?.job_id
@@ -708,24 +853,28 @@ function HostTile({
         setUpdateError(`${label} did not return an update job id.`)
         return
       }
-      await pollStatus(jobId)
+      const outcome = await pollStatus(jobId, kind)
+      if (!aliveRef.current) return
+      if (outcome === 'failed') {
+        // pollStatus already set updateError / phaseText
+        return
+      }
+      // applied | unreachable after apply → version-gated reconnect
+      setPhaseText(`Installing & restarting ${label}… it'll reconnect automatically.`)
+      void waitForHostReady({ expectedVersion })
     } catch (e) {
       const m = errMsg(e)
       clearIfAuthError(m)
-      // The user explicitly triggered this update. A CONNECTION-level failure
-      // here (e.g. "Load failed" because the host already started dropping and
-      // the update/start response socket died) is NOT a hard failure — the
-      // correct UX is "reconnecting", so poll /boot-status back to ready
-      // instead of surfacing the transient network error. Auth/403 are
-      // authoritative and still surface immediately.
-      if (!isForbiddenError(m) && !isAuthError(m) && isConnectionLevelError(e)) {
-        void waitForHostReady()
-        return
-      }
+      // start() connection failure is a hard error BEFORE apply — do NOT treat
+      // pre-apply blips as "update restarting". Auth/403 still surface as-is.
       setPhaseText(null)
-      setUpdateError(isForbiddenError(m) ? updateForbiddenCopy(label) : `Couldn't start the update on ${label}: ${m}`)
+      setUpdateError(
+        isForbiddenError(m)
+          ? updateForbiddenCopy(label)
+          : `Couldn't start the update on ${label}: ${m}`,
+      )
     } finally {
-      setUpdateBusy(false)
+      if (aliveRef.current) setUpdateBusy(false)
     }
   }
 

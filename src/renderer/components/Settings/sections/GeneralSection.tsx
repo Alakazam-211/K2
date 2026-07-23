@@ -1212,7 +1212,7 @@ function UpdateHostRow(): React.JSX.Element | null {
             version: s?.version,
             expected,
             sawDown,
-          })
+          }) !== 'keep-watching'
         ) {
           setComeback({ kind: 'back', version: s?.version, expected })
           // Resolve the job UI back to idle: the phase line goes away, the

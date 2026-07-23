@@ -92,7 +92,9 @@ export function isStaged(phase: UpdatePhase | null): boolean {
 /** True for terminal phases that should stop the status poll loop. The host
  *  goes away on `restarting`/`done` (the ConnectionGate's soft-reconnect
  *  takes over), and `failed`/`rolled-back` are dead ends — none warrant
- *  further polling. */
+ *  further polling. `staged` is intentionally NOT terminal: Shape B hosts
+ *  still need a client `apply` after stage, and Shape A keeps polling until
+ *  the co-located app drives restart. */
 export function isTerminalPhase(phase: UpdatePhase | null): boolean {
   return (
     phase === 'done' ||
@@ -100,6 +102,12 @@ export function isTerminalPhase(phase: UpdatePhase | null): boolean {
     phase === 'failed' ||
     phase === 'rolled-back'
   )
+}
+
+/** Shape B (standalone): after start, when status hits `staged`, client MUST apply.
+ *  Shape A (bundled-app): start alone is enough — never call apply. */
+export function shouldAutoApplyAfterStage(installKind: string | undefined): boolean {
+  return installKind !== 'bundled-app'
 }
 
 /** True for the two failure phases that must be surfaced as a host-named
@@ -176,6 +184,17 @@ export function updateSlowComebackCopy(hostLabel: string): string {
 }
 
 /**
+ * Comeback watcher verdict for post-apply /boot-status polling.
+ *   - keep-watching: not ready yet, or ready on the OLD version without ever
+ *     seeing the host go down (pre-update daemon still answering — Baden bug)
+ *   - success: ready on the expected version (or ready after sawDown with no
+ *     usable version pair to contradict)
+ *   - wrong-version: ready after sawDown, but version ≠ expected — update
+ *     did not take / rolled back. Callers must NOT claim update success.
+ */
+export type ComebackVerdict = 'keep-watching' | 'success' | 'wrong-version'
+
+/**
  * The comeback watcher's RESOLUTION RULE (pure, unit-tested — the Baden
  * false-rollback bug): during an update the OLD daemon keeps answering
  * /boot-status `ready` right up until the process actually swaps
@@ -188,19 +207,30 @@ export function updateSlowComebackCopy(hostLabel: string): string {
  *   - the reported version EQUALS the expected one (the update took), OR
  *   - the watcher saw the host go DOWN at least once (`sawDown`) and it's
  *     now back `ready` — whatever version it reports is then the honest
- *     post-restart truth (a real rollback surfaces here).
+ *     post-restart truth (a real rollback surfaces as wrong-version).
  * A `ready` probe with neither is the old daemon still running: keep
  * watching.
+ *
+ * Returns a 3-way verdict so Connections can hard-fail wrong-version while
+ * General (and anyone using truthiness) can still treat both success and
+ * wrong-version as "resolved" via `!== 'keep-watching'`.
  */
 export function shouldResolveComeback(args: {
   phase: string | undefined
   version: string | undefined
   expected: string | undefined
   sawDown: boolean
-}): boolean {
-  if (args.phase !== 'ready') return false
-  if (args.version && args.expected && args.version === args.expected) return true
-  return args.sawDown
+}): ComebackVerdict {
+  if (args.phase !== 'ready') return 'keep-watching'
+  if (args.version && args.expected && args.version === args.expected) return 'success'
+  if (!args.sawDown) return 'keep-watching'
+  // Host went down and is back. Version mismatch ⇒ the update did not take.
+  if (args.version && args.expected && args.version !== args.expected) {
+    return 'wrong-version'
+  }
+  // sawDown + ready with no comparable version pair (older daemon omits
+  // version, or expected was lost) — honest post-restart truth, numberless.
+  return 'success'
 }
 
 /** Copy for the "Update available — <current> → <latest>" banner once a

@@ -25,6 +25,7 @@ import {
   updateCompleteCopy,
   updateSlowComebackCopy,
   shouldResolveComeback,
+  shouldAutoApplyAfterStage,
   updateForbiddenCopy,
   isForbiddenError,
   isStaged,
@@ -89,6 +90,7 @@ describe('phase state machine', () => {
     // Mid-flight phases keep the poll loop running.
     expect(isTerminalPhase('downloading')).toBe(false)
     expect(isTerminalPhase('verifying')).toBe(false)
+    // staged is NOT terminal — Shape B still needs apply after stage.
     expect(isTerminalPhase('staged')).toBe(false)
     expect(isTerminalPhase('applying')).toBe(false)
     expect(isTerminalPhase(null)).toBe(false)
@@ -100,6 +102,24 @@ describe('phase state machine', () => {
     expect(isFailurePhase('done')).toBe(false)
     expect(isFailurePhase('staged')).toBe(false)
     expect(isFailurePhase(null)).toBe(false)
+  })
+})
+
+describe('shouldAutoApplyAfterStage — Shape A vs Shape B (Bug A / #55)', () => {
+  it('standalone must auto-apply after staged', () => {
+    expect(shouldAutoApplyAfterStage('standalone')).toBe(true)
+  })
+
+  it('undefined installKind (older hosts) is treated as Shape B — must apply', () => {
+    expect(shouldAutoApplyAfterStage(undefined)).toBe(true)
+  })
+
+  it('unknown installKind is treated as Shape B — must apply', () => {
+    expect(shouldAutoApplyAfterStage('unknown')).toBe(true)
+  })
+
+  it('bundled-app must NOT auto-apply after staged (Shape A — app installs itself)', () => {
+    expect(shouldAutoApplyAfterStage('bundled-app')).toBe(false)
   })
 })
 
@@ -177,10 +197,10 @@ describe('shouldResolveComeback — the Baden false-rollback rule', () => {
         expected: '0.40.47',
         sawDown: false,
       }),
-    ).toBe(false)
+    ).toBe('keep-watching')
   })
 
-  it('ready on the EXPECTED version resolves even without a seen outage (sub-poll restart)', () => {
+  it('ready on the EXPECTED version is success even without a seen outage (sub-poll restart)', () => {
     expect(
       shouldResolveComeback({
         phase: 'ready',
@@ -188,10 +208,10 @@ describe('shouldResolveComeback — the Baden false-rollback rule', () => {
         expected: '0.40.47',
         sawDown: false,
       }),
-    ).toBe(true)
+    ).toBe('success')
   })
 
-  it('seen down + back ready on the OLD version resolves — a REAL rollback must surface', () => {
+  it('seen down + back ready on the OLD version is wrong-version — update did not take', () => {
     expect(
       shouldResolveComeback({
         phase: 'ready',
@@ -199,10 +219,10 @@ describe('shouldResolveComeback — the Baden false-rollback rule', () => {
         expected: '0.40.47',
         sawDown: true,
       }),
-    ).toBe(true)
+    ).toBe('wrong-version')
   })
 
-  it('seen down + back ready with NO version (old daemon) resolves numberlessly', () => {
+  it('seen down + back ready with NO version (old daemon) is success numberlessly', () => {
     expect(
       shouldResolveComeback({
         phase: 'ready',
@@ -210,7 +230,7 @@ describe('shouldResolveComeback — the Baden false-rollback rule', () => {
         expected: '0.40.47',
         sawDown: true,
       }),
-    ).toBe(true)
+    ).toBe('success')
   })
 
   it('never resolves on a non-ready phase, regardless of anything else', () => {
@@ -221,7 +241,7 @@ describe('shouldResolveComeback — the Baden false-rollback rule', () => {
         expected: '0.40.47',
         sawDown: true,
       }),
-    ).toBe(false)
+    ).toBe('keep-watching')
     expect(
       shouldResolveComeback({
         phase: undefined,
@@ -229,7 +249,7 @@ describe('shouldResolveComeback — the Baden false-rollback rule', () => {
         expected: undefined,
         sawDown: true,
       }),
-    ).toBe(false)
+    ).toBe('keep-watching')
   })
 
   it('no expected version (check state lost) + never seen down: ready alone still does not resolve', () => {
@@ -240,7 +260,18 @@ describe('shouldResolveComeback — the Baden false-rollback rule', () => {
         expected: undefined,
         sawDown: false,
       }),
-    ).toBe(false)
+    ).toBe('keep-watching')
+  })
+
+  it('seen down + ready + no expected: success (honest post-restart, numberless expected)', () => {
+    expect(
+      shouldResolveComeback({
+        phase: 'ready',
+        version: '0.40.44',
+        expected: undefined,
+        sawDown: true,
+      }),
+    ).toBe('success')
   })
 })
 

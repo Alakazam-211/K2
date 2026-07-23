@@ -457,7 +457,9 @@ export default function FeedbackPage(): React.JSX.Element | null {
       const base = detailWidth
       let last = base
       document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
+      // Full-screen overlay already blocks interaction during drag. Avoid
+      // body.userSelect=none — it sticks in WKWebView and blocks selection
+      // of ticket message bodies after the drag.
       setResizingDetail(true)
       const onMove = (ev: MouseEvent): void => {
         // Dragging left widens the right panel.
@@ -468,7 +470,8 @@ export default function FeedbackPage(): React.JSX.Element | null {
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
         document.body.style.cursor = ''
-        document.body.style.userSelect = ''
+        document.body.style.removeProperty('user-select')
+        document.body.style.removeProperty('-webkit-user-select')
         setResizingDetail(false)
         setDetailWidth(last)
         setLiveDetailWidth(null)

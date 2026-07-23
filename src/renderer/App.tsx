@@ -47,6 +47,7 @@ import RunningAgentsPanel from './components/RunningAgentsPanel/RunningAgentsPan
 import FeedbackPage from './components/Feedback/FeedbackPage'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
+import { usePageViewStore } from './stores/page-view'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
 import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs } from './stores/tabs'
@@ -422,7 +423,19 @@ function AppRoot(): React.JSX.Element {
 
   // Refocus last active terminal when clicking dead space (navbar, sidebar padding, etc.)
   // Interactive elements (inputs, textareas, buttons, contenteditable, select) keep their own focus.
+  //
+  // CRITICAL: also leave focus alone when the user has a live DOM text
+  // selection. Message bodies in Tickets / Project chat / FileViewer are
+  // plain divs (activeElement stays body). Without this, the capture-phase
+  // click handler focuses a terminal on the next rAF and the 200ms poll
+  // does the same — both collapse the highlight within a split second.
+  // TerminalPane already guards the same way on its own focus path (0.37.11).
   useEffect(() => {
+    const hasLiveTextSelection = (): boolean => {
+      const sel = window.getSelection()
+      return !!sel && !sel.isCollapsed && (sel.toString().length > 0)
+    }
+
     const handleGlobalClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement
       if (!target) return
@@ -434,9 +447,16 @@ function AppRoot(): React.JSX.Element {
       if (target.closest('input, textarea, select, button, [contenteditable="true"], [role="textbox"]')) return
       // Don't steal from elements with tabindex (custom interactive components)
       if (target.tabIndex >= 0 && target.dataset.terminalContainer === undefined) return
+      // Opt-in selectable surfaces (Tickets / Project chat / list cards).
+      if (target.closest('.selectable-copy, .chat-thread-selectable')) return
+      // Drag-select just finished: selection exists on mouseup/click.
+      if (hasLiveTextSelection()) return
 
       // Find the last focused terminal container and refocus it
       requestAnimationFrame(() => {
+        // Re-check after the browser finalizes the selection range.
+        if (hasLiveTextSelection()) return
+
         const activeEl = document.activeElement as HTMLElement | null
         // If something interactive already grabbed focus, leave it
         if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) return
@@ -465,16 +485,22 @@ function AppRoot(): React.JSX.Element {
     // split-pane safety net (if a specific pane is focused it's
     // not body/null, so we leave it) — but be explicit about it:
     // never refocus if ANY terminal container currently has
-    // focus.
+    // focus. Also never refocus over a live text selection.
     const refocusInterval = setInterval(() => {
       const active = document.activeElement as HTMLElement | null
       // Only refocus if nothing meaningful has focus
       if (active && active !== document.body) return
+      // Keep ticket/project/file-viewer highlights (activeElement is body
+      // while selecting non-focusable DOM text).
+      if (hasLiveTextSelection()) return
       // Don't refocus if settings is open
       if (useSettingsStore.getState().settingsOpen) return
       // Don't refocus if any overlay is open (command palette, running agents, assistant)
       if (useCommandPaletteStore.getState().isOpen) return
       if (useRunningAgentsStore.getState().isOpen) return
+      // Full-page overlays (Tickets / Projects / Wiki) sit above terminals;
+      // stealing focus under them collapses in-overlay text selection.
+      if (usePageViewStore.getState().page !== 'agents') return
       // Find and focus the visible terminal
       const terminalContainer = document.querySelector('[data-terminal-container][data-terminal-visible="true"]') as HTMLElement
       if (terminalContainer) {

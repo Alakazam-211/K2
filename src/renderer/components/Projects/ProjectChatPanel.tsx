@@ -50,7 +50,12 @@ import {
   pocLabel,
   type ConnectRole,
 } from './project-chat'
-import { LinkifiedText, SELECTABLE_TEXT_STYLE } from '@/lib/linkified-text'
+import {
+  SelectableText,
+  SelectableRegion,
+  clearStuckBodyUserSelect,
+} from '@/components/common/SelectableText'
+import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import {
   clearProjectChatDraft,
   getProjectChatDraft,
@@ -103,8 +108,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
 
   useEffect(() => {
     setDraft(getProjectChatDraft(show.id))
-    // Resize handlers can leave body { user-select: none } stuck.
-    document.body.style.userSelect = ''
+    clearStuckBodyUserSelect()
   }, [show.id])
 
   // Auto-grow the composer with content.
@@ -154,12 +158,14 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   // event bumps the store revision; the open panel refetches on a
   // trailing 300ms window — each bump resets the timer via the cleanup,
   // so a burst fires ONE fetch. Only `messages` is replaced; the draft
-  // lives in its own state and survives.
+  // lives in its own state and survives. Skip while the user is
+  // drag-selecting message text (DOM replace collapses the range).
   const seenRevision = useRef(revision)
   useEffect(() => {
     if (revision === seenRevision.current) return
     seenRevision.current = revision
     const timer = setTimeout(() => {
+      if (hasSelectionWithin(scrollRef.current)) return
       void load(limitRef.current)
     }, 300)
     return () => clearTimeout(timer)
@@ -167,14 +173,15 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
 
   // Keep the newest message in view when the TAIL grows (initial load or
   // a new message) — but not when history is prepended (loadEarlier
-  // preserves its own scroll anchor). Runs after paint (rAF) so
-  // scrollHeight reflects the freshly-rendered list.
+  // preserves its own scroll anchor) and not mid text-selection.
   const lastId = messages && messages.length > 0 ? messages[messages.length - 1].id : null
   const prevLastId = useRef<string | null>(null)
   useEffect(() => {
     if (lastId === null || lastId === prevLastId.current) return
     prevLastId.current = lastId
+    if (hasSelectionWithin(scrollRef.current)) return
     requestAnimationFrame(() => {
+      if (hasSelectionWithin(scrollRef.current)) return
       const el = scrollRef.current
       if (el) el.scrollTop = el.scrollHeight
     })
@@ -248,7 +255,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     const base = useProjectGroupsStore.getState().chatWidth
     let last = base
     document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
+    // Overlay already captures the drag; avoid body.userSelect=none which
+    // can stick in WKWebView and block message-body selection afterwards.
     setResizing(true)
 
     const handleMove = (ev: MouseEvent): void => {
@@ -260,7 +268,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       document.removeEventListener('mousemove', handleMove)
       document.removeEventListener('mouseup', handleUp)
       document.body.style.cursor = ''
-      document.body.style.userSelect = ''
+      clearStuckBodyUserSelect()
       setResizing(false)
       // Persist on release (setChatWidth is sync — no flicker when the
       // live value clears).
@@ -308,11 +316,14 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       </div>
 
       <div className="flex-1 flex flex-col min-h-0">
-        {/* The stream, oldest-first — explicitly selectable (not chrome). */}
+        {/* The stream, oldest-first — SelectableRegion re-enables text
+            selection (form textareas work without this; div text does not
+            under body user-select:none / parent gesture handlers). */}
+        <SelectableRegion className="flex-1 min-h-0 flex flex-col">
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto min-h-0 px-3 py-2 chat-thread-selectable"
-          style={SELECTABLE_TEXT_STYLE}
+          className="flex-1 overflow-y-auto min-h-0 px-3 py-2"
+          data-project-chat={show.id}
         >
           {loadError ? (
             <div className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load chat: {loadError}</div>
@@ -368,15 +379,10 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                           {formatRelativeTime(m.createdAt, nowSec)}
                         </span>
                       </div>
-                      <div
-                        className="text-xs text-[var(--color-text-primary)] mt-0.5 selectable-copy"
-                        style={SELECTABLE_TEXT_STYLE}
-                      >
-                        <LinkifiedText
-                          text={m.body}
-                          className="selectable-copy whitespace-pre-wrap break-words"
-                        />
-                      </div>
+                      <SelectableText
+                        text={m.body}
+                        className="text-xs text-[var(--color-text-primary)] mt-0.5"
+                      />
                       {delivery && (
                         <div className="mt-0.5 text-[9px] text-[var(--color-text-muted)] opacity-80 italic">
                           {delivery}
@@ -389,6 +395,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             </>
           )}
         </div>
+        </SelectableRegion>
 
         {/* Composer — gated on Connect role (≥ Member); hidden for Viewers. */}
         <div className="border-t border-[var(--color-border)] px-3 py-2 flex-shrink-0">

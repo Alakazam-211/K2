@@ -3,6 +3,35 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.60 — Tickets, and chat text you can actually select
+
+### Feedback is now Tickets
+
+The Feedback surface is **Tickets** end to end — page label, agent CLI
+(`k2 tickets …`), and wording. Existing ticket data and routes keep
+working; this is a product rename, not a wipe.
+
+### Ticket polish
+
+- **Planned** status alongside waiting / answered / closed
+- **Assignees** so a ticket can target the right people
+- **Drafts** that survive leaving a ticket and coming back
+- Reply box **auto-grows**, autofocuses when a thread is ready, and
+  resizes with the detail panel
+- **Clickable links** in ticket and project chat bodies
+
+### Highlight and copy chat text
+
+You can **drag-select and copy** message bodies in **Tickets** threads
+and **Project chat** — not only the composer.
+
+A global “return focus to the terminal” path was treating those
+message divs as dead space and clearing the highlight almost instantly.
+That reclaim now leaves a live selection alone (and skips full-page
+Tickets / Projects / Wiki overlays).
+
+---
+
 ## 0.40.59 — Files tree no longer bounces on busy hosts
 
 On remote (and busy local) machines, the Files drawer could flash

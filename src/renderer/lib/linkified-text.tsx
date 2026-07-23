@@ -54,6 +54,9 @@ export function LinkifiedText({
                     window.open(href, '_blank', 'noopener,noreferrer')
                   })
                 }}
+                // Keep link clicks from starting a selection drag that
+                // parent panels would swallow; plain text still selects.
+                onMouseDown={(e) => e.stopPropagation()}
               >
                 {href}
               </a>

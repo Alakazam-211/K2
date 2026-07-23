@@ -79,20 +79,30 @@ a,
    Resize handlers often set document.body { user-select: none }; CSS
    inheritance then blocks selection unless descendants re-enable it.
    !important beats utility classes + stuck body styles. Pair with
-   inline WebkitUserSelect on message bodies (FileViewerPane idiom). */
+   inline WebkitUserSelect on message bodies (FileViewerPane idiom) and
+   SelectableText's setProperty(..., 'important') on mount/pointerdown. */
 .selectable-copy,
-.selectable-copy * {
+.selectable-copy *,
+.chat-thread-selectable,
+.chat-thread-selectable * {
   -webkit-user-select: text !important;
   user-select: text !important;
-  cursor: text;
   -webkit-app-region: no-drag;
 }
 
-/* Whole chat thread panes (scroll area) — not chrome/toolbars. */
+.selectable-copy,
 .chat-thread-selectable {
-  -webkit-user-select: text !important;
-  user-select: text !important;
-  -webkit-app-region: no-drag;
+  cursor: text;
+}
+
+/* Visible highlight on dark UI (default OS selection can be near-invisible
+   against our canvas in some palettes). */
+.selectable-copy::selection,
+.selectable-copy *::selection,
+.chat-thread-selectable::selection,
+.chat-thread-selectable *::selection {
+  background: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  color: var(--color-text-primary);
 }
 
 /* ── CodeMirror overrides ─────────────────────────────────────────── */

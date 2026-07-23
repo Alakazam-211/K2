@@ -38,7 +38,12 @@ import {
   type FeedbackShow,
 } from './feedback-api'
 import { KindBadge, PriorityBadge, StatusBadge } from './badges'
-import { LinkifiedText, SELECTABLE_TEXT_STYLE } from '@/lib/linkified-text'
+import {
+  SelectableText,
+  SelectableRegion,
+  clearStuckBodyUserSelect,
+} from '@/components/common/SelectableText'
+import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import {
   clearTicketDraft,
   getTicketDraft,
@@ -93,15 +98,21 @@ export function FeedbackItemView({
   // comments fire ONE fetch (each bump resets the timer via the
   // cleanup). Only `item` is replaced by the refetch; the composer's
   // draft lives in ThreadTab state, so mid-typed text survives.
+  // Defer while the user is drag-selecting thread text (FileViewer
+  // hasSelectionWithin idiom — DOM rebuild collapses the range).
   const seenRevision = useRef(revision)
   useEffect(() => {
     if (revision === seenRevision.current) return
     seenRevision.current = revision
     const timer = setTimeout(() => {
+      const thread = document.querySelector(
+        `[data-ticket-thread="${id}"]`,
+      ) as HTMLElement | null
+      if (hasSelectionWithin(thread)) return
       void load()
     }, 300)
     return () => clearTimeout(timer)
-  }, [revision, load])
+  }, [revision, load, id])
 
   const projectPath = item?.projectPath ?? listRow.projectPath
   const workspaceName = item?.workspace ?? listRow.projectName
@@ -188,27 +199,29 @@ function ThreadTab({
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Focus the reply box when this ticket's thread is ready.
-  // Must wait for `item` — while loading we render "Loading thread…"
-  // with no textarea, so focusing on ticketId alone always missed.
+  // Focus the reply box ONCE per ticket id when the thread first becomes
+  // ready — not on every live `item` refetch. Re-focus steals the caret
+  // and kills drag-selection on message bodies.
+  const focusedForTicketRef = useRef<string | null>(null)
   useEffect(() => {
-    // Resize handlers can leave body { user-select: none } stuck.
-    document.body.style.userSelect = ''
+    clearStuckBodyUserSelect()
     if (!item || error) return
+    if (focusedForTicketRef.current === ticketId) return
+    focusedForTicketRef.current = ticketId
     let cancelled = false
     let innerRaf = 0
-    // Double rAF: first after Loading unmounts, second after the list
-    // card click (that selected this ticket) finishes so it cannot
-    // steal focus back from the composer.
     const outerRaf = window.requestAnimationFrame(() => {
       innerRaf = window.requestAnimationFrame(() => {
         if (cancelled) return
+        // Don't yank focus if the user is already selecting thread text.
+        if (hasSelectionWithin(scrollRef.current)) return
         textareaRef.current?.focus({ preventScroll: true })
       })
     })
-    // Also a short timeout for slower paints / focus races.
     const t = window.setTimeout(() => {
-      if (!cancelled) textareaRef.current?.focus({ preventScroll: true })
+      if (cancelled) return
+      if (hasSelectionWithin(scrollRef.current)) return
+      textareaRef.current?.focus({ preventScroll: true })
     }, 50)
     return () => {
       cancelled = true
@@ -217,6 +230,15 @@ function ThreadTab({
       window.clearTimeout(t)
     }
   }, [ticketId, item, error])
+
+  // Ticket switch → allow one-shot focus for the new id. Combined into the
+  // same commit as a ticketId change so we don't null the flag after the
+  // focus effect already stamped it.
+  const prevTicketIdRef = useRef(ticketId)
+  if (prevTicketIdRef.current !== ticketId) {
+    prevTicketIdRef.current = ticketId
+    focusedForTicketRef.current = null
+  }
 
   // Auto-grow the reply field with content.
   useEffect(() => {
@@ -231,13 +253,18 @@ function ThreadTab({
     setTicketDraft(ticketId, text)
   }
 
-  // Keep the newest message in view whenever the rendered thread changes
-  // (initial load, item switch, or a fresh comment). Runs after paint so
-  // scrollHeight reflects the freshly-rendered list.
+  // Keep the newest message in view when the thread grows — but not while
+  // the user is drag-selecting (scroll jump + DOM churn kill the range).
   const commentCount = item?.comments.length ?? 0
+  const prevCommentCountRef = useRef(commentCount)
   useEffect(() => {
     if (!item) return
+    const grew = commentCount > prevCommentCountRef.current
+    prevCommentCountRef.current = commentCount
+    if (!grew && prevCommentCountRef.current !== 0) return
+    if (hasSelectionWithin(scrollRef.current)) return
     requestAnimationFrame(() => {
+      if (hasSelectionWithin(scrollRef.current)) return
       const el = scrollRef.current
       if (el) el.scrollTop = el.scrollHeight
     })
@@ -289,76 +316,69 @@ function ThreadTab({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto min-h-0 px-4 py-3 chat-thread-selectable"
-        style={SELECTABLE_TEXT_STYLE}
-      >
-        {item.body && (
-          <div
-            className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] selectable-copy"
-            style={SELECTABLE_TEXT_STYLE}
-          >
-            <LinkifiedText text={item.body} className="selectable-copy whitespace-pre-wrap break-words" />
-          </div>
-        )}
+      <SelectableRegion className="flex-1 overflow-y-auto min-h-0 px-4 py-3">
+        <div ref={scrollRef} className="min-h-full" data-ticket-thread={ticketId}>
+          {item.body && (
+            <div className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)]">
+              <SelectableText text={item.body} />
+            </div>
+          )}
 
-        <AssigneePicker
-          ticketId={item.id}
-          assignees={item.assignees ?? []}
-          busy={busy}
-          onChanged={onChanged}
-        />
+          <AssigneePicker
+            ticketId={item.id}
+            assignees={item.assignees ?? []}
+            busy={busy}
+            onChanged={onChanged}
+          />
 
-        {item.options && item.options.length > 0 && (
-          <div className="mb-3 flex flex-wrap gap-2">
-            {item.options.map((opt) => {
-              const accepted = item.answer === opt
+          {item.options && item.options.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {item.options.map((opt) => {
+                const accepted = item.answer === opt
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    disabled={!canTapOptions || busy}
+                    onClick={() => void submit(() => commentFeedback(item.id, opt))}
+                    className={`px-3 py-1.5 text-[11px] font-medium border transition-colors ${
+                      accepted
+                        ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                        : canTapOptions
+                          ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] cursor-pointer'
+                          : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
+                    } disabled:cursor-not-allowed`}
+                  >
+                    {opt}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2">
+            {item.comments.map((c, i) => {
+              const isOwner = c.author === 'owner'
               return (
-                <button
-                  key={opt}
-                  type="button"
-                  disabled={!canTapOptions || busy}
-                  onClick={() => void submit(() => commentFeedback(item.id, opt))}
-                  className={`px-3 py-1.5 text-[11px] font-medium border transition-colors ${
-                    accepted
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                      : canTapOptions
-                        ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] cursor-pointer'
-                        : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
-                  } disabled:cursor-not-allowed`}
-                >
-                  {opt}
-                </button>
+                <div key={`${c.at}-${i}`} className="flex flex-col">
+                  <div className="flex items-baseline gap-2">
+                    <span className={`text-[10px] font-semibold ${isOwner ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-secondary)]'}`}>
+                      {isOwner ? 'You' : c.author}
+                    </span>
+                    <span className="text-[9px] text-[var(--color-text-muted)] tabular-nums">
+                      {formatRelativeTime(c.at, nowSec)}
+                    </span>
+                  </div>
+                  <SelectableText
+                    text={c.body}
+                    className="text-xs text-[var(--color-text-primary)] mt-0.5"
+                  />
+                </div>
               )
             })}
           </div>
-        )}
-
-        <div className="flex flex-col gap-2">
-          {item.comments.map((c, i) => {
-            const isOwner = c.author === 'owner'
-            return (
-              <div key={`${c.at}-${i}`} className="flex flex-col">
-                <div className="flex items-baseline gap-2">
-                  <span className={`text-[10px] font-semibold ${isOwner ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-secondary)]'}`}>
-                    {isOwner ? 'You' : c.author}
-                  </span>
-                  <span className="text-[9px] text-[var(--color-text-muted)] tabular-nums">
-                    {formatRelativeTime(c.at, nowSec)}
-                  </span>
-                </div>
-                <div
-                  className="text-xs text-[var(--color-text-primary)] mt-0.5 selectable-copy"
-                  style={SELECTABLE_TEXT_STYLE}
-                >
-                  <LinkifiedText text={c.body} className="selectable-copy whitespace-pre-wrap break-words" />
-                </div>
-              </div>
-            )
-          })}
         </div>
-      </div>
+      </SelectableRegion>
 
       <div className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
         {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}

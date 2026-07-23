@@ -705,6 +705,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0089_remote_sessions",
             include_str!("../../drizzle_sql/0089_remote_sessions.sql"),
         ),
+        // 0090 (Tickets UX): status `planned` + multi-assignee usernames
+        // snapshotted for push targeting (survives connect-user removal).
+        // Wire table stays `feedback*` for CLI/API compat; UI says Tickets.
+        (
+            "0090_feedback_tickets",
+            include_str!("../../drizzle_sql/0090_feedback_tickets.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

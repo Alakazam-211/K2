@@ -75,6 +75,16 @@ a,
   -webkit-app-region: no-drag;
 }
 
+/* Opt-in text selection for Tickets / Project chat (and similar).
+   Some shells inherit user-select:none from drag regions or UI chrome;
+   this class forces copy/highlight on message bodies and titles. */
+.selectable-copy {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+  -webkit-app-region: no-drag;
+}
+
 /* ── CodeMirror overrides ─────────────────────────────────────────── */
 /* All CM styles in @layer cm-overrides so they beat Tailwind (@layer   */
 /* tw) but lose to CodeMirror's unlayered runtime style-mod styles.    */

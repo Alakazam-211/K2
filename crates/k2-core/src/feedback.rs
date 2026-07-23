@@ -1,18 +1,24 @@
-//! Feedback F1 (prd-agent-feedback-notifications §4.1) — the durable
-//! agent→human ask primitive.
+//! Tickets (wire/table name still `feedback*`) — durable agent→human
+//! asks. Product UI/CLI label is **Tickets**; `k2 feedback` remains a
+//! compatibility alias. Future product "feedback" (K2 itself) is a
+//! separate channel.
 //!
 //! An agent that needs a person (a question, an approval, a heads-up)
 //! files a `feedback` row instead of dying in an unwatched terminal
-//! prompt. The item sits on the server's Feedback page until a human
+//! prompt. The item sits on the server's Tickets page until a human
 //! answers or resolves it; a per-item comment thread
 //! (`feedback_comments`) carries the discussion. The daemon's
-//! `/cli/feedback/*` routes and the `k2 feedback` CLI verb are thin
-//! wrappers over this module (daemon-first: all logic lives here).
+//! `/cli/feedback/*` routes and the `k2 tickets` / `k2 feedback` CLI
+//! verbs are thin wrappers over this module (daemon-first).
 //!
-//! Status pipeline (v1, deliberately smaller than the AFSROW reference
-//! board): `waiting → answered → resolved`, plus `dismissed`. `answer`
-//! is denormalized onto the item so `k2 feedback ask --wait` reads one
+//! Status pipeline: `waiting → answered → resolved`, plus `dismissed`
+//! and `planned` (sorted out; fix scheduled for a release). `answer`
+//! is denormalized onto the item so `k2 tickets ask --wait` reads one
 //! row; the accepted answer ALSO lands in the thread as a comment.
+//!
+//! Assignees (`feedback_assignees`) are username **snapshots** (text,
+//! not FK) so removed connect-users still show and still match
+//! `push_devices.username` for targeted mobile push.
 //!
 //! Addressing: items are UUIDs, resolvable by a SHORT UNIQUE PREFIX
 //! (see [`resolve_id_prefix`]) — ambiguity is an error carrying the
@@ -24,7 +30,7 @@ use rusqlite::params;
 pub const KINDS: [&str; 3] = ["question", "approval", "fyi"];
 
 /// The valid `feedback.status` values.
-pub const STATUSES: [&str; 4] = ["waiting", "answered", "resolved", "dismissed"];
+pub const STATUSES: [&str; 5] = ["waiting", "answered", "resolved", "dismissed", "planned"];
 
 /// One `feedback` row + its thread size. Serializes camelCase — the
 /// wire shape the routes return (matches the CLI mockup's `--json`
@@ -52,6 +58,9 @@ pub struct FeedbackItem {
     pub answered_at: Option<i64>,
     /// Thread size (message-count badge on the board card).
     pub comment_count: i64,
+    /// Assigned server users (username snapshots). Empty = unassigned
+    /// (push fans out to all devices). Sorted for stable wire order.
+    pub assignees: Vec<String>,
 }
 
 /// One `feedback_comments` row. camelCase for the same wire reason;
@@ -194,8 +203,9 @@ const ITEM_SELECT: &str = "SELECT f.id, f.project_id, f.session_id, f.session_ki
 
 fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<FeedbackItem> {
     let options_json: Option<String> = row.get(8)?;
+    let id: String = row.get(0)?;
     Ok(FeedbackItem {
-        id: row.get(0)?,
+        id: id.clone(),
         project_id: row.get(1)?,
         session_id: row.get(2)?,
         session_kind: row.get(3)?,
@@ -211,7 +221,87 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<FeedbackItem> {
         updated_at: row.get(13)?,
         answered_at: row.get(14)?,
         comment_count: row.get(15)?,
+        // Assignees loaded in a second query — row_to_item has no conn.
+        // Callers that need them use [`attach_assignees`] / get_item.
+        assignees: Vec::new(),
     })
+}
+
+/// Load assignee username snapshots for one ticket (sorted).
+pub fn list_assignees(feedback_id: &str) -> Result<Vec<String>, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT username FROM feedback_assignees \
+             WHERE feedback_id = ?1 ORDER BY username ASC",
+        )
+        .map_err(|e| format!("assignees list failed: {e}"))?;
+    let rows = stmt
+        .query_map(params![feedback_id], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("assignees list failed: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("assignees list failed: {e}"))
+}
+
+fn attach_assignees(item: &mut FeedbackItem) {
+    item.assignees = list_assignees(&item.id).unwrap_or_default();
+}
+
+fn attach_assignees_all(items: &mut [FeedbackItem]) {
+    for item in items {
+        attach_assignees(item);
+    }
+}
+
+/// Replace the assignee set for a ticket. Usernames are trimmed, empty
+/// dropped, de-duplicated; stored as plain text snapshots (no FK) so a
+/// later connect-user removal does not erase the assignment or break
+/// push targeting against `push_devices.username`.
+pub fn set_assignees(feedback_id: &str, usernames: &[String]) -> Result<FeedbackItem, String> {
+    let id = feedback_id.trim();
+    if id.is_empty() {
+        return Err("feedback id must not be empty".to_string());
+    }
+    // Ensure the ticket exists first.
+    if get_item(id).is_none() {
+        return Err(format!("no feedback item with id {id}"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut clean: Vec<String> = Vec::new();
+    for u in usernames {
+        let t = u.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if seen.insert(t.to_string()) {
+            clean.push(t.to_string());
+        }
+    }
+    let now = now_secs();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "DELETE FROM feedback_assignees WHERE feedback_id = ?1",
+        params![id],
+    )
+    .map_err(|e| format!("assignees clear failed: {e}"))?;
+    for u in &clean {
+        conn.execute(
+            "INSERT INTO feedback_assignees (feedback_id, username, assigned_at) \
+             VALUES (?1, ?2, ?3)",
+            params![id, u, now],
+        )
+        .map_err(|e| format!("assignee insert failed: {e}"))?;
+    }
+    // Touch updated_at so list order / live refresh notice the change.
+    conn.execute(
+        "UPDATE feedback SET updated_at = ?2 WHERE id = ?1",
+        params![id, now],
+    )
+    .map_err(|e| format!("feedback touch failed: {e}"))?;
+    drop(conn);
+    get_item(id).ok_or_else(|| "feedback row vanished after assign".to_string())
 }
 
 /// List a workspace's feedback items, newest first.
@@ -219,13 +309,16 @@ pub fn list_for_project(project_id: &str, filter: &ListFilter) -> Result<Vec<Fee
     if let ListFilter::Status(s) = filter {
         if !STATUSES.contains(&s.as_str()) {
             return Err(format!(
-                "invalid status '{s}' — valid: waiting, answered, resolved, dismissed"
+                "invalid status '{s}' — valid: waiting, answered, resolved, dismissed, planned"
             ));
         }
     }
     let db = crate::db::shared();
     let conn = db.lock();
     let (where_clause, status_param): (&str, Option<&str>) = match filter {
+        // Open: still waiting on a human, or answered and not closed.
+        // `planned` is closed-ish (scheduled) so it only shows with --all
+        // or an explicit status filter.
         ListFilter::Open => (
             " WHERE f.project_id = ?1 AND f.status IN ('waiting','answered')",
             None,
@@ -245,8 +338,13 @@ pub fn list_for_project(project_id: &str, filter: &ListFilter) -> Result<Vec<Fee
         None => stmt.query_map(params![project_id], row_to_item),
     }
     .map_err(|e| format!("query: {e}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("row: {e}"))
+    let mut items = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("row: {e}"))?;
+    drop(stmt);
+    drop(conn);
+    attach_assignees_all(&mut items);
+    Ok(items)
 }
 
 /// Fetch one item by FULL id. `None` when it doesn't exist.
@@ -254,7 +352,10 @@ pub fn get_item(id: &str) -> Option<FeedbackItem> {
     let db = crate::db::shared();
     let conn = db.lock();
     let sql = format!("{ITEM_SELECT} WHERE f.id = ?1");
-    conn.query_row(&sql, params![id], row_to_item).ok()
+    let mut item = conn.query_row(&sql, params![id], row_to_item).ok()?;
+    drop(conn);
+    attach_assignees(&mut item);
+    Some(item)
 }
 
 /// Fetch one item + its full thread (chronological) by FULL id.
@@ -416,7 +517,7 @@ pub fn set_answer(
 pub fn set_status(id: &str, status: &str) -> Result<FeedbackItem, String> {
     if !STATUSES.contains(&status) {
         return Err(format!(
-            "invalid status '{status}' — valid: waiting, answered, resolved, dismissed"
+            "invalid status '{status}' — valid: waiting, answered, resolved, dismissed, planned"
         ));
     }
     let now = now_secs();

@@ -12,7 +12,12 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 
 export type FeedbackKind = 'question' | 'approval' | 'fyi'
-export type FeedbackStatus = 'waiting' | 'answered' | 'resolved' | 'dismissed'
+export type FeedbackStatus =
+  | 'waiting'
+  | 'answered'
+  | 'resolved'
+  | 'dismissed'
+  | 'planned'
 
 export interface FeedbackItem {
   id: string
@@ -31,6 +36,8 @@ export interface FeedbackItem {
   updatedAt: number
   answeredAt: number | null
   commentCount: number
+  /** Username snapshots for push targeting. */
+  assignees: string[]
 }
 
 /** A list row tagged with the workspace it was fetched for (the list
@@ -80,6 +87,7 @@ export async function fetchAllFeedback(
         )
         return (res.items ?? []).map((item) => ({
           ...item,
+          assignees: item.assignees ?? [],
           projectPath: p.path,
           projectName: p.name,
         }))
@@ -133,14 +141,24 @@ export async function commentFeedback(id: string, body: string): Promise<void> {
   await daemonCliPost('feedback/comment', { id, body })
 }
 
-/** POST /cli/feedback/resolve — `resolved`, `dismissed`, or `waiting`
- *  (reopen, the per-card status dropdown). `answered` is NOT manually
- *  settable — it's only reachable through an actual reply. */
+/** POST /cli/feedback/resolve — `resolved`, `dismissed`, `planned`, or
+ *  `waiting` (reopen). `answered` is NOT manually settable. */
 export async function resolveFeedback(
   id: string,
-  status: 'resolved' | 'dismissed' | 'waiting',
+  status: 'resolved' | 'dismissed' | 'waiting' | 'planned',
 ): Promise<void> {
   await daemonCliPost('feedback/resolve', { id, status })
+}
+
+/** POST /cli/feedback/assign — replace assignee set (username snapshots). */
+export async function assignFeedback(
+  id: string,
+  usernames: string[],
+): Promise<{ assignees: string[] }> {
+  return daemonCliPost<{ assignees: string[] }>('feedback/assign', {
+    id,
+    usernames,
+  })
 }
 
 // ── Pure helpers (unit-tested in feedback-api.test.ts) ────────────────────
@@ -154,16 +172,23 @@ export function sortNewestFirst<T extends { createdAt: number }>(rows: T[]): T[]
 export interface GroupedFeedback<T> {
   waiting: T[]
   answered: T[]
+  planned: T[]
   closed: T[]
 }
 
 export function groupByStatus<T extends { status: FeedbackStatus }>(
   rows: T[],
 ): GroupedFeedback<T> {
-  const grouped: GroupedFeedback<T> = { waiting: [], answered: [], closed: [] }
+  const grouped: GroupedFeedback<T> = {
+    waiting: [],
+    answered: [],
+    planned: [],
+    closed: [],
+  }
   for (const row of rows) {
     if (row.status === 'waiting') grouped.waiting.push(row)
     else if (row.status === 'answered') grouped.answered.push(row)
+    else if (row.status === 'planned') grouped.planned.push(row)
     else grouped.closed.push(row)
   }
   return grouped
@@ -179,10 +204,18 @@ export interface StatusCounts {
   answered: number
   resolved: number
   dismissed: number
+  planned: number
 }
 
 export function countByStatus<T extends { status: FeedbackStatus }>(rows: T[]): StatusCounts {
-  const counts: StatusCounts = { all: rows.length, waiting: 0, answered: 0, resolved: 0, dismissed: 0 }
+  const counts: StatusCounts = {
+    all: rows.length,
+    waiting: 0,
+    answered: 0,
+    resolved: 0,
+    dismissed: 0,
+    planned: 0,
+  }
   for (const row of rows) counts[row.status]++
   return counts
 }

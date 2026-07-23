@@ -50,12 +50,8 @@ const TOPBAR_HEIGHT = 38
 
 // ── Per-card status dropdown ──────────────────────────────────────────────
 
-/** The manually selectable statuses (canonical four, NOT customizable):
- *  Waiting reopens a closed item; Resolved/Dismissed close it. Answered
- *  is DISPLAYED when it's the current state but never selectable — it's
- *  only reachable through an actual reply (a manual answered with a
- *  null answer would break the `ask --wait` contract). */
-const SELECTABLE_STATUSES = ['waiting', 'resolved', 'dismissed'] as const
+/** Manually selectable statuses. Answered is display-only (via a reply). */
+const SELECTABLE_STATUSES = ['waiting', 'planned', 'resolved', 'dismissed'] as const
 
 /** StatusBadge's palette, shared by the trigger so the dropdown reads
  *  as the card's status badge with a chevron. */
@@ -64,7 +60,9 @@ function statusChipClass(status: FeedbackStatus): string {
     ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
     : status === 'answered'
       ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
-      : 'bg-white/[0.06] text-[var(--color-text-muted)]'
+      : status === 'planned'
+        ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)]'
+        : 'bg-white/[0.06] text-[var(--color-text-muted)]'
 }
 
 function CardStatusDropdown({
@@ -213,7 +211,8 @@ export function FeedbackCard({
   onSelect: () => void
   onMutated: () => void
 }): React.JSX.Element {
-  const dimmed = row.status === 'resolved' || row.status === 'dismissed'
+  const dimmed =
+    row.status === 'resolved' || row.status === 'dismissed' || row.status === 'planned'
   return (
     // NOT Surface (P2 final wave): the selected state's `ring-1` sets
     // box-shadow, and Surface's elevation slot `[box-shadow:var(--ring-surface)]`
@@ -252,26 +251,27 @@ export function FeedbackCard({
         <PriorityBadge priority={row.priority} />
         <CardStatusDropdown row={row} onMutated={onMutated} />
       </div>
-      {/* The ask itself is the card body — selectable for quote/copy. */}
-      <p
-        className="mt-2 text-sm text-[var(--color-text-primary)] break-words selectable-copy cursor-text"
-        title={row.title}
-      >
+      {/* No title= tooltip — selectable body text is the source of truth. */}
+      <p className="mt-2 text-sm text-[var(--color-text-primary)] break-words selectable-copy cursor-text">
         {row.title}
       </p>
-      {/* Footer meta: kind tag + submitter · when, comment count right. */}
       <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] min-w-0">
         <KindBadge kind={row.kind} />
         <span className="truncate selectable-copy">{row.agentName}</span>
+        {(row.assignees?.length ?? 0) > 0 && (
+          <>
+            <span className="opacity-60 flex-shrink-0">·</span>
+            <span className="truncate selectable-copy opacity-80">
+              → {row.assignees.join(', ')}
+            </span>
+          </>
+        )}
         <span className="opacity-60 flex-shrink-0">·</span>
         <span className="tabular-nums flex-shrink-0">
           {formatRelativeTime(row.createdAt, nowSec)}
         </span>
         {row.commentCount > 1 && (
-          <span
-            className="ml-auto inline-flex items-center gap-1 text-[var(--color-accent)] tabular-nums flex-shrink-0"
-            title={`${row.commentCount} messages in thread`}
-          >
+          <span className="ml-auto inline-flex items-center gap-1 text-[var(--color-accent)] tabular-nums flex-shrink-0">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
@@ -431,12 +431,66 @@ export default function FeedbackPage(): React.JSX.Element | null {
     void useFeedbackStore.getState().refreshWaitingCount()
   }, [loadList])
 
+  // Resizable detail (right) column — persisted per client.
+  // Hooks must sit above the early return.
+  const DETAIL_MIN = 360
+  const DETAIL_MAX = 960
+  const DETAIL_DEFAULT = 560
+  const [detailWidth, setDetailWidth] = useState(() => {
+    try {
+      const n = Number(localStorage.getItem('k2.tickets.detailWidth'))
+      if (Number.isFinite(n) && n >= DETAIL_MIN && n <= DETAIL_MAX) return n
+    } catch {
+      /* ignore */
+    }
+    return DETAIL_DEFAULT
+  })
+  const [liveDetailWidth, setLiveDetailWidth] = useState<number | null>(null)
+  const [resizingDetail, setResizingDetail] = useState(false)
+  const width = liveDetailWidth ?? detailWidth
+
+  const startDetailResize = useCallback(
+    (e: React.MouseEvent): void => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      const startX = e.clientX
+      const base = detailWidth
+      let last = base
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      setResizingDetail(true)
+      const onMove = (ev: MouseEvent): void => {
+        // Dragging left widens the right panel.
+        last = Math.min(DETAIL_MAX, Math.max(DETAIL_MIN, base + (startX - ev.clientX)))
+        setLiveDetailWidth(last)
+      }
+      const onUp = (): void => {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setResizingDetail(false)
+        setDetailWidth(last)
+        setLiveDetailWidth(null)
+        try {
+          localStorage.setItem('k2.tickets.detailWidth', String(last))
+        } catch {
+          /* ignore */
+        }
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    },
+    [detailWidth],
+  )
+
   if (!isOpen) return null
 
   const sections = grouped
     ? ([
         { label: 'Waiting on you', rows: grouped.waiting },
         { label: 'Answered', rows: grouped.answered },
+        { label: 'Planned', rows: grouped.planned },
         { label: 'Closed', rows: grouped.closed },
       ] as const)
     : []
@@ -490,13 +544,11 @@ export default function FeedbackPage(): React.JSX.Element | null {
         </div>
       </Surface>
 
-      {/* Master-detail: fluid list column left, response panel right.
-          Below lg the columns stack 50/50 (the app window can go down to
-          800px wide); each half keeps its own internal scroll. */}
-      <div className="flex-1 min-h-0 grid grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_720px] lg:grid-rows-[minmax(0,1fr)]">
+      {/* Master-detail: list left, resizable ticket panel right. */}
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
         {/* LEFT COLUMN — fixed filter rows (search + workspace filter,
             then the status chips) above the scrollable card list. */}
-        <div className="flex flex-col min-h-0 min-w-0">
+        <div className="flex flex-col min-h-0 min-w-0 flex-1">
           <div className="flex flex-col gap-2 px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
             <div className="flex items-center gap-2">
             <div className="relative flex-1 min-w-0">
@@ -535,7 +587,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
             {/* Status filter — per-status counts always visible (the
                 AFSROW board idiom); one status, or All. */}
             <div className="flex items-center gap-1 flex-wrap">
-              {(['all', 'waiting', 'answered', 'resolved', 'dismissed'] as const).map((s) => {
+              {(['all', 'waiting', 'answered', 'planned', 'resolved', 'dismissed'] as const).map((s) => {
                 const active = statusFilter === s
                 return (
                   <button
@@ -547,7 +599,6 @@ export default function FeedbackPage(): React.JSX.Element | null {
                         ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
                         : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)]'
                     }`}
-                    title={s === 'all' ? 'Show every status' : `Show only ${s} items`}
                   >
                     <span className="capitalize">{s === 'all' ? 'All' : s}</span>
                     <span
@@ -565,20 +616,20 @@ export default function FeedbackPage(): React.JSX.Element | null {
 
           <div className="flex-1 overflow-y-auto min-h-0 px-3 pb-3">
             {error && (
-              <div className="px-1 py-3 text-[11px] text-[var(--color-status-error-soft)]">Failed to load feedback: {error}</div>
+              <div className="px-1 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">Failed to load tickets: {error}</div>
             )}
             {rows === null && !error && (
-              <div className="px-1 py-8 text-center text-[var(--color-text-muted)] text-sm">Loading feedback…</div>
+              <div className="px-1 py-8 text-center text-[var(--color-text-muted)] text-sm">Loading tickets…</div>
             )}
             {grouped && filtered !== null && filtered.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full text-center px-8">
                 {rows !== null && rows.length > 0 ? (
-                  <p className="text-sm text-[var(--color-text-secondary)]">No feedback matches your filters</p>
+                  <p className="text-sm text-[var(--color-text-secondary)]">No tickets match your filters</p>
                 ) : (
                   <>
-                    <p className="text-sm text-[var(--color-text-secondary)]">No feedback yet</p>
+                    <p className="text-sm text-[var(--color-text-secondary)]">No tickets yet</p>
                     <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-70">
-                      Agents file asks here with `k2 feedback ask` — new items appear live.
+                      Agents file asks with `k2 tickets ask` — new items appear live.
                     </p>
                   </>
                 )}
@@ -608,10 +659,17 @@ export default function FeedbackPage(): React.JSX.Element | null {
           </div>
         </div>
 
-        {/* RIGHT COLUMN — the response panel. Swaps to whichever item is
-            selected (Thread | Agent tabs at its top); scrolls
-            internally, like the list on the left. */}
-        <div className="flex flex-col min-h-0 min-w-0 border-t lg:border-t-0 lg:border-l border-[var(--color-border)]">
+        {/* RIGHT COLUMN — resizable ticket panel. */}
+        <div
+          className="relative flex flex-col min-h-0 min-w-0 border-t lg:border-t-0 lg:border-l border-[var(--color-border)] flex-shrink-0 flex-1 lg:flex-none"
+          style={{ width }}
+        >
+          <div
+            className="hidden lg:block absolute top-0 bottom-0 z-10 cursor-col-resize hover:bg-[var(--color-accent)]/40 transition-colors"
+            style={{ left: -4, width: 7 }}
+            onMouseDown={startDetailResize}
+          />
+          {resizingDetail && <div className="fixed inset-0 z-50" style={{ cursor: 'col-resize' }} />}
           {selectedRow ? (
             <FeedbackItemView
               key={selectedRow.id}
@@ -623,7 +681,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
             />
           ) : (
             <div className="flex-1 flex items-center justify-center m-4 border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-muted)] text-center px-6">
-              Select a feedback item to open its thread.
+              Select a ticket to open its thread.
             </div>
           )}
         </div>

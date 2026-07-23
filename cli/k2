@@ -9016,7 +9016,7 @@ cmd_help() {
         inbox)                    cmd_help_inbox ;;
         agent)                    cmd_help_agent ;;
         preset)                   cmd_help_preset ;;
-        feedback)                 cmd_help_feedback ;;
+        feedback|tickets)         cmd_help_feedback ;;
         mail)                     cmd_help_mail ;;
         dns)                      cmd_help_dns ;;
         project)                  cmd_help_project ;;
@@ -9578,7 +9578,7 @@ cmd_schema() {
     },
     {
       "name": "feedback ask",
-      "usage": "k2 feedback ask <title> [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--wait [--timeout <s>]] [--json]",
+      "usage": "k2 tickets ask <title> [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--wait [--timeout <s>]] [--json]",
       "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
       "args": [{"name": "title", "required": true}],
       "flags": [
@@ -9594,7 +9594,7 @@ cmd_schema() {
     },
     {
       "name": "feedback list",
-      "usage": "k2 feedback list [--all] [--status <s>] [--json]",
+      "usage": "k2 tickets list [--all] [--status <s>] [--json]",
       "description": "List this workspace's feedback items, newest first. Default shows open items (waiting + answered).",
       "args": [],
       "flags": [
@@ -9605,21 +9605,21 @@ cmd_schema() {
     },
     {
       "name": "feedback show",
-      "usage": "k2 feedback show <id> [--json]",
+      "usage": "k2 tickets show <id> [--json]",
       "description": "Show one feedback item: the ask, its status/answer, and the full discussion thread. <id> accepts a short unique prefix (ambiguous prefix = exit 4 with candidates in the hint).",
       "args": [{"name": "id", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (includes the comments array)."}]
     },
     {
       "name": "feedback comment",
-      "usage": "k2 feedback comment <id> \"<text>\" [--json]",
+      "usage": "k2 tickets comment <id> \"<text>\" [--json]",
       "description": "Add a message to a feedback item's discussion thread. Bumps the message count only; does not change status (only NEW items fire notifications).",
       "args": [{"name": "id", "required": true}, {"name": "text", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "feedback resolve",
-      "usage": "k2 feedback resolve <id> [--json]",
+      "usage": "k2 tickets resolve <id> [--json]",
       "description": "Mark a feedback item resolved (you got what you needed). Drops out of the default list view; still visible with --all.",
       "args": [{"name": "id", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
@@ -11853,7 +11853,7 @@ manager agent's name).
 - `k2 msg <agent> "message"` — direct delivery to a live peer.
 - `k2 msg <agent> --inbox --title "..." --body "..."` — queued inbox
   item for a peer that may be asleep.
-- `k2 feedback ask "<title>"` — ask your HUMAN for a decision or an
+- `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
 - `k2 project read` / `k2 project msg <name> "..."` — your project's
@@ -11908,7 +11908,7 @@ to: __ESCALATION_CONTACT__ (your operator/owner — replace this).
   live screen, then deliver. Use for delegation and follow-ups.
 - `k2 msg <agent> --inbox --title "..." --body "..."` — queued task
   for an agent that may be asleep.
-- `k2 feedback ask "<title>"` — ask your HUMAN for a decision or an
+- `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
 - `k2 project read` / `k2 project msg <name> "..."` — your project's
@@ -11963,7 +11963,7 @@ your manager agent's name).
   discuss interactively.
 - `k2 msg <agent> --inbox --title "..." --body "..."` — queued
   findings report for an agent that may be asleep.
-- `k2 feedback ask "<title>"` — ask your HUMAN for a decision or an
+- `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
 - `k2 project read` / `k2 project msg <name> "..."` — your project's
@@ -12018,7 +12018,7 @@ __MANAGER__ (replace with your manager agent's name).
   interactively.
 - `k2 msg <agent> --inbox --title "..." --body "..."` — queued
   write-up for an agent that may be asleep.
-- `k2 feedback ask "<title>"` — ask your HUMAN for a decision or an
+- `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
 - `k2 project read` / `k2 project msg <name> "..."` — your project's
@@ -13924,8 +13924,8 @@ print(f\"total queued: {d.get('total_queued',0)}\")"
 
 # ── Feedback (F1) — ask a human for input, durably ───────────────────
 #
-# `k2 feedback` files agent→human asks as durable items on this
-# server's Feedback page (prd-agent-feedback-notifications, mockup:
+# `k2 tickets` (alias: `k2 tickets`) files agent→human asks as durable
+# items on this server's Tickets page (prd-agent-feedback-notifications, mockup:
 # .k2/notes/feedback-cli-mockup.md — the help text below is that
 # mockup VERBATIM; it passed the 36/36 comprehension gate).
 #
@@ -13940,6 +13940,10 @@ print(f\"total queued: {d.get('total_queued',0)}\")"
 #   {"error":{"code":"closed_unanswered"}} on stderr + exit 1;
 #   --timeout → {"error":{"code":"timeout"}} + exit 1, item STAYS
 #   waiting.
+
+# Note: `k2 tickets` remains a compatibility alias for `k2 tickets`.
+# Product "Feedback" (K2 itself) is a future separate channel — use
+# tickets for human contact on this server.
 
 _feedback_err() {
     local code="$1" hint="$2"
@@ -13996,7 +14000,7 @@ cmd_feedback_ask() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback ask <title> [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--wait [--timeout s]] [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--wait [--timeout s]] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$title" ]; then title="$1"; else
@@ -14133,7 +14137,7 @@ if not wait:
         print('Filed feedback %s — "%s" (%s, priority %s, %s)'
               % (short, d.get("title", ""), d.get("kind", "?"),
                  d.get("priority", "?"), d.get("status", "?")))
-        print("A human will be notified. Check back with: k2 feedback show %s" % short)
+        print("A human will be notified. Check back with: k2 tickets show %s" % short)
     sys.exit(0)
 
 # ── --wait: poll `show` (~2s) until answered / closed / timeout ──────
@@ -14179,10 +14183,10 @@ cmd_feedback_list() {
                 status="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback list [--all] [--status <s>] [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets list [--all] [--status <s>] [--json]"
                 exit 2 ;;
             *)
-                _feedback_err "usage" "unexpected argument '$1' — usage: k2 feedback list [--all] [--status <s>] [--json]"
+                _feedback_err "usage" "unexpected argument '$1' — usage: k2 tickets list [--all] [--status <s>] [--json]"
                 exit 2 ;;
         esac
     done
@@ -14242,11 +14246,11 @@ cmd_feedback_show() {
         case "$1" in
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback show <id> [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets show <id> [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
-                    _feedback_err "usage" "unexpected extra argument '$1' — usage: k2 feedback show <id>"
+                    _feedback_err "usage" "unexpected extra argument '$1' — usage: k2 tickets show <id>"
                     exit 2
                 fi
                 shift ;;
@@ -14318,7 +14322,7 @@ cmd_feedback_comment() {
         case "$1" in
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback comment <id> <text> [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets comment <id> <text> [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"
@@ -14331,7 +14335,7 @@ cmd_feedback_comment() {
         esac
     done
     if [ -z "$id" ] || [ -z "$text" ]; then
-        _feedback_err "usage" "usage: k2 feedback comment <id> \"<text>\""
+        _feedback_err "usage" "usage: k2 tickets comment <id> \"<text>\""
         exit 2
     fi
     # Author attribution: the CLI is the AGENT interface, so default to
@@ -14372,11 +14376,11 @@ cmd_feedback_resolve() {
         case "$1" in
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 feedback resolve <id> [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets resolve <id> [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
-                    _feedback_err "usage" "unexpected extra argument '$1' — usage: k2 feedback resolve <id>"
+                    _feedback_err "usage" "unexpected extra argument '$1' — usage: k2 tickets resolve <id>"
                     exit 2
                 fi
                 shift ;;
@@ -14460,7 +14464,7 @@ The workspace and your session are auto-detected from the environment, so the
 human can jump straight into your session to talk to you if they prefer.
 
 USAGE
-  k2 feedback ask <title> [flags]
+  k2 tickets ask <title> [flags]
 
 ARGUMENTS
   <title>                One-line summary of what you need (the notification text)
@@ -14490,9 +14494,9 @@ FLAGS
   --json                 JSON output
 
 EXAMPLES
-  k2 feedback ask "Deploy to prod now?" --kind approval --options "Yes,No,Wait for me" --priority 1
-  k2 feedback ask "Which color for the CTA?" --body-file ./context.md
-  ANSWER=$(k2 feedback ask "Proceed with the migration?" --options "Go,Stop" --wait)
+  k2 tickets ask "Deploy to prod now?" --kind approval --options "Yes,No,Wait for me" --priority 1
+  k2 tickets ask "Which color for the CTA?" --body-file ./context.md
+  ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go,Stop" --wait)
 EOF
 }
 
@@ -14502,7 +14506,7 @@ List this workspace's feedback items, newest first. Default shows open items
 (waiting + answered); pass --all to include resolved/dismissed.
 
 USAGE
-  k2 feedback list [flags]
+  k2 tickets list [flags]
 
 FLAGS
   --all                  Include resolved and dismissed items
@@ -14518,7 +14522,7 @@ thread. Use it to read the answer after `ask` returned (or after a --wait
 timed out).
 
 USAGE
-  k2 feedback show <id> [flags]
+  k2 tickets show <id> [flags]
 
 ARGUMENTS
   <id>                   A feedback id from `ask`/`list`. A short unique prefix
@@ -14537,7 +14541,7 @@ message count only — commenting does NOT change the item's status and does
 not fire a notification (only NEW items notify).
 
 USAGE
-  k2 feedback comment <id> "<text>" [flags]
+  k2 tickets comment <id> "<text>" [flags]
 
 ARGUMENTS
   <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
@@ -14555,7 +14559,7 @@ applies). Resolved items drop out of the default `list` view (still visible
 with --all). The recorded answer, if any, is kept.
 
 USAGE
-  k2 feedback resolve <id> [flags]
+  k2 tickets resolve <id> [flags]
 
 ARGUMENTS
   <id>                   A feedback id from `ask`/`list` (short unique prefix ok)
@@ -14603,7 +14607,7 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
 # (visible here via bash dynamic scope from the calling cmd_project_*),
 # re-exported onto the python3 invocation. Sender identity is the
 # workspace auto-detected at the top of this script (K2_PROJECT_PATH →
-# cwd walk-up — the same detection `k2 feedback` uses).
+# cwd walk-up — the same detection `k2 tickets` uses).
 _project_py() {
     ABASE="$BASE_URL" ATOKEN="$TOKEN" P_WS_PATH="$PROJECT" \
     P_AGENT_NAME="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
@@ -15241,7 +15245,7 @@ ADDRESSING
 
 WHO YOU ARE
   msg and read act AS your workspace, auto-detected from K2_PROJECT_PATH
-  (falling back to the current directory) — the same detection `k2 feedback`
+  (falling back to the current directory) — the same detection `k2 tickets`
   uses. Only members (and the server owner via the app) can post.
 
 GLOBAL FLAGS
@@ -18020,7 +18024,7 @@ QUEUED IS SUCCESS
   In approval mode this prints `queued for approval (out_…)` and exits 0 —
   the queueing succeeded; track it with `k2 mail outbox <id>`. If sending is
   off or a send was denied, that is your human's decision — raise it with
-  `k2 feedback ask`, don't retry-loop.
+  `k2 tickets ask`, don't retry-loop.
 
 EXAMPLES
   k2 mail send hello@example.com --subject "hi" --body "hello from the bot"
@@ -19636,7 +19640,7 @@ case "${1:-help}" in
                 exit 2 ;;
         esac
         ;;
-    feedback)
+    feedback|tickets)
         # Feedback F1 — durable agent→human asks (ask/list/show/
         # comment/resolve). See `k2 feedback --help`.
         case "${2:-}" in

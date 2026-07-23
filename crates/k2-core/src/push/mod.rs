@@ -60,14 +60,22 @@ pub enum PushEvent {
         heartbeat: String,
         reason: String,
     },
-    /// Companion C4: an agent filed a feedback item
-    /// (`feedback:created`). CONTENT-FREE by construction (§4.5
-    /// invariant): carries the asking agent's name + the feedback id
-    /// ONLY — never the ask's title/body. The phone deep-links on the
-    /// id and pulls content over the E2E channel.
+    /// Companion C4: an agent filed a ticket (`feedback:created`).
+    /// CONTENT-FREE by construction (§4.5 invariant): asking agent name
+    /// + ticket id ONLY — never the ask's title/body. Optional
+    /// `assignees` narrows push to those usernames' devices (empty =
+    /// fan out to everyone registered on this server).
     FeedbackCreated {
         agent_name: String,
         feedback_id: String,
+        /// Username snapshots from `feedback_assignees` (may be empty).
+        assignees: Vec<String>,
+    },
+    /// New comment on a ticket (thread activity). CONTENT-FREE; same
+    /// assignee targeting as [`Self::FeedbackCreated`].
+    FeedbackCommented {
+        feedback_id: String,
+        assignees: Vec<String>,
     },
     /// Companion C4: a non-owner author posted into a project-group
     /// chat (`project-group:message-created`, author != "owner").
@@ -91,9 +99,9 @@ impl PushEvent {
             }
             // C4 mobile pushes use the generic app title; the body
             // carries the (still content-free) attribution line.
-            Self::FeedbackCreated { .. } | Self::ProjectMessageCreated { .. } => {
-                "K2".to_string()
-            }
+            Self::FeedbackCreated { .. }
+            | Self::FeedbackCommented { .. }
+            | Self::ProjectMessageCreated { .. } => "K2".to_string(),
         }
     }
 
@@ -103,8 +111,9 @@ impl PushEvent {
             Self::AgentNeedsAttention { summary, .. } => summary.clone(),
             Self::HeartbeatFailed { reason, .. } => reason.clone(),
             Self::FeedbackCreated { agent_name, .. } => {
-                format!("{agent_name} needs your feedback")
+                format!("{agent_name} needs you on a ticket")
             }
+            Self::FeedbackCommented { .. } => "New reply on a ticket".to_string(),
             Self::ProjectMessageCreated { project_name, .. } => {
                 format!("New message in {project_name}")
             }
@@ -117,7 +126,21 @@ impl PushEvent {
             Self::AgentNeedsAttention { action_url, .. } => action_url,
             Self::HeartbeatFailed { .. }
             | Self::FeedbackCreated { .. }
+            | Self::FeedbackCommented { .. }
             | Self::ProjectMessageCreated { .. } => "",
+        }
+    }
+
+    /// When `Some(non-empty)`, only devices for these usernames receive
+    /// the push. `None` / empty → all registered devices on this host.
+    pub fn target_usernames(&self) -> Option<&[String]> {
+        match self {
+            Self::FeedbackCreated { assignees, .. } | Self::FeedbackCommented { assignees, .. }
+                if !assignees.is_empty() =>
+            {
+                Some(assignees.as_slice())
+            }
+            _ => None,
         }
     }
 
@@ -126,8 +149,9 @@ impl PushEvent {
     /// content is pulled in-app (feedback PRD §8.6).
     pub fn data(&self) -> serde_json::Value {
         match self {
-            Self::FeedbackCreated { feedback_id, .. } => serde_json::json!({
-                "kind": "feedback",
+            Self::FeedbackCreated { feedback_id, .. }
+            | Self::FeedbackCommented { feedback_id, .. } => serde_json::json!({
+                "kind": "ticket",
                 "feedbackId": feedback_id,
             }),
             Self::ProjectMessageCreated { group_id, .. } => serde_json::json!({
@@ -444,10 +468,13 @@ impl K2Cloud {
 
 impl PushTarget for K2Cloud {
     fn send(&self, event: &PushEvent) -> Result<(), PushError> {
-        let devices = crate::push_devices::list_devices()
-            .map_err(PushError::BadConfig)?;
+        let devices = match event.target_usernames() {
+            Some(users) => crate::push_devices::list_devices_for_usernames(users)
+                .map_err(PushError::BadConfig)?,
+            None => crate::push_devices::list_devices().map_err(PushError::BadConfig)?,
+        };
         if devices.is_empty() {
-            // Nobody registered — nothing to deliver, no network call.
+            // Nobody registered (or no assignee has a device) — no network call.
             return Ok(());
         }
         let url = format!("{}/push/dispatch", self.gateway_url);
@@ -549,13 +576,14 @@ mod tests {
         let e = PushEvent::FeedbackCreated {
             agent_name: "cortana".to_string(),
             feedback_id: "fb-123".to_string(),
+            assignees: vec![],
         };
         assert_eq!(e.title(), "K2");
-        assert_eq!(e.body(), "cortana needs your feedback");
+        assert_eq!(e.body(), "cortana needs you on a ticket");
         assert_eq!(e.action_url(), "");
         assert_eq!(
             e.data(),
-            serde_json::json!({ "kind": "feedback", "feedbackId": "fb-123" })
+            serde_json::json!({ "kind": "ticket", "feedbackId": "fb-123" })
         );
 
         let e = PushEvent::ProjectMessageCreated {
@@ -662,6 +690,7 @@ mod tests {
             .send(&PushEvent::FeedbackCreated {
                 agent_name: "cortana".to_string(),
                 feedback_id: "fb-77".to_string(),
+                assignees: vec![],
             })
             .expect("send");
 
@@ -683,7 +712,7 @@ mod tests {
             "payload carries exactly title/body/data"
         );
         assert_eq!(body["payload"]["title"], "K2");
-        assert_eq!(body["payload"]["body"], "cortana needs your feedback");
+        assert_eq!(body["payload"]["body"], "cortana needs you on a ticket");
         assert_eq!(
             body["payload"]["data"],
             serde_json::json!({ "kind": "feedback", "feedbackId": "fb-77" })

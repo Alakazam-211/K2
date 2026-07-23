@@ -66,7 +66,7 @@ Every K2-spawned PTY gets, for free:
 | `K2_HOOK_TOKEN` | Auth token for the `k2` CLI. By default (`K2_HOOK_SCOPED` on, opt out with `0`/`false`/`off`) every agent session gets a **per-session scoped token** here — it identifies *your session*, and is what `k2 respond` authenticates with. Never the daemon owner token. |
 | `K2_PROJECT_PATH` | The workspace root |
 
-So any process inside the PTY can already run `k2 respond`, `k2 feedback ask`,
+So any process inside the PTY can already run `k2 respond`, `k2 tickets ask`,
 `k2 msg`, `k2 project msg`, … — the `k2` CLI resolves its connection from these.
 
 On top of that, the preset's **`env` metadata** (a JSON object) is merged into
@@ -171,7 +171,7 @@ K2 maintains a canonical `.k2/AGENTS.md` in every managed workspace, mirrored
 to the harness entrypoints (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
 `.cursor/rules`, `.goosehints`, aider conf). It contains the workspace context
 **and** the K2 CLI teachings (the loadable `k2-cli` skill:
-`.k2/skills/k2-cli/SKILL.md` — `msg`, `inbox`, `feedback`, `respond`,
+`.k2/skills/k2-cli/SKILL.md` — `msg`, `inbox`, `tickets`, `respond`,
 `project`, heartbeats).
 
 Contract item: **your agent should read `AGENTS.md` at cwd on startup** (the
@@ -215,7 +215,7 @@ Notes:
   you don't put it in the command — that's what keeps the API door fail-closed
   (§6).
 - Aider consumes K2's docs fan-out via its conf `read:` entry (§7), so it
-  learns `k2 respond` / `k2 feedback` without extra setup.
+  learns `k2 respond` / `k2 tickets` without extra setup.
 
 ## 9. Conformance tiers (quick self-check)
 

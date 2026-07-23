@@ -29,6 +29,7 @@ import {
   wakeCanonicalMemberSession,
 } from '@/components/Projects/wake-member-session'
 import {
+  assignFeedback,
   commentFeedback,
   fetchFeedbackShow,
   optionsActionable,
@@ -37,6 +38,12 @@ import {
   type FeedbackShow,
 } from './feedback-api'
 import { KindBadge, PriorityBadge, StatusBadge } from './badges'
+import { LinkifiedText } from '@/lib/linkified-text'
+import {
+  clearTicketDraft,
+  getTicketDraft,
+  setTicketDraft,
+} from '@/lib/composer-drafts'
 
 interface FeedbackItemViewProps {
   id: string
@@ -105,7 +112,7 @@ export function FeedbackItemView({
       {/* Item header: title + badges + the two tabs along the top. */}
       <div className="px-4 pt-3 border-b border-[var(--color-border)] flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <span className="text-sm font-medium text-[var(--color-text-primary)] truncate flex-1" title={view.title}>
+          <span className="text-sm font-medium text-[var(--color-text-primary)] truncate flex-1 selectable-copy">
             {view.title}
           </span>
           <PriorityBadge priority={view.priority} />
@@ -139,6 +146,7 @@ export function FeedbackItemView({
           item={item}
           error={error}
           nowSec={nowSec}
+          ticketId={id}
           onChanged={() => {
             void load()
             onMutated()
@@ -163,17 +171,42 @@ function ThreadTab({
   item,
   error,
   nowSec,
+  ticketId,
   onChanged,
 }: {
   item: FeedbackShow | null
   error: string | null
   nowSec: number
+  ticketId: string
   onChanged: () => void
 }): React.JSX.Element {
-  const [reply, setReply] = useState('')
+  // Drafts survive unmount (leave ticket / switch pages).
+  const [reply, setReply] = useState(() => getTicketDraft(ticketId))
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Selecting a ticket focuses the composer.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      textareaRef.current?.focus()
+    }, 0)
+    return () => window.clearTimeout(t)
+  }, [ticketId])
+
+  // Auto-grow the reply field with content.
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
+  }, [reply])
+
+  const setReplyAndDraft = (text: string): void => {
+    setReply(text)
+    setTicketDraft(ticketId, text)
+  }
 
   // Keep the newest message in view whenever the rendered thread changes
   // (initial load, item switch, or a fresh comment). Runs after paint so
@@ -205,7 +238,7 @@ function ThreadTab({
   )
 
   if (error) {
-    return <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)]">Failed to load item: {error}</div>
+    return <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">Failed to load ticket: {error}</div>
   }
   if (!item) {
     return (
@@ -216,7 +249,8 @@ function ThreadTab({
   }
 
   const canTapOptions = optionsActionable(item)
-  const openItem = item.status === 'waiting' || item.status === 'answered'
+  const openItem =
+    item.status === 'waiting' || item.status === 'answered' || item.status === 'planned'
 
   // Always a plain comment — the daemon lands human comments in the
   // asking session, and the first one on a waiting ask answers it.
@@ -225,23 +259,27 @@ function ThreadTab({
     if (!text) return
     void submit(async () => {
       await commentFeedback(item.id, text)
-      setReply('')
+      setReplyAndDraft('')
+      clearTicketDraft(ticketId)
     })
   }
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-4 py-3">
-        {/* The ask body (title is in the header; body adds the context). */}
         {item.body && (
-          <div className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] whitespace-pre-wrap break-words">
-            {item.body}
+          <div className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)]">
+            <LinkifiedText text={item.body} className="selectable-copy whitespace-pre-wrap break-words" />
           </div>
         )}
 
-        {/* Structured options — one-tap buttons while waiting: tapping
-            posts the label as a comment (which answers a waiting ask
-            daemon-side); the accepted choice stays highlighted after. */}
+        <AssigneePicker
+          ticketId={item.id}
+          assignees={item.assignees ?? []}
+          busy={busy}
+          onChanged={onChanged}
+        />
+
         {item.options && item.options.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
             {item.options.map((opt) => {
@@ -267,8 +305,6 @@ function ThreadTab({
           </div>
         )}
 
-        {/* Thread. The first comment is the ask itself (seeded by the
-            daemon in the agent's voice) — rendered like any message. */}
         <div className="flex flex-col gap-2">
           {item.comments.map((c, i) => {
             const isOwner = c.author === 'owner'
@@ -282,8 +318,8 @@ function ThreadTab({
                     {formatRelativeTime(c.at, nowSec)}
                   </span>
                 </div>
-                <div className="text-xs text-[var(--color-text-primary)] whitespace-pre-wrap break-words mt-0.5">
-                  {c.body}
+                <div className="text-xs text-[var(--color-text-primary)] mt-0.5">
+                  <LinkifiedText text={c.body} className="selectable-copy whitespace-pre-wrap break-words" />
                 </div>
               </div>
             )
@@ -291,12 +327,12 @@ function ThreadTab({
         </div>
       </div>
 
-      {/* Reply box + status actions. */}
       <div className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
-        {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)]">{actionError}</div>}
+        {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
         <textarea
+          ref={textareaRef}
           value={reply}
-          onChange={(e) => setReply(e.target.value)}
+          onChange={(e) => setReplyAndDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault()
@@ -305,7 +341,7 @@ function ThreadTab({
           }}
           placeholder="Add a comment — it lands in the agent's session"
           rows={2}
-          className="w-full px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none placeholder:text-[var(--color-text-muted)]"
+          className="w-full px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-y-auto placeholder:text-[var(--color-text-muted)] selectable-copy"
         />
         <div className="flex items-center gap-2 mt-2">
           <button
@@ -325,9 +361,16 @@ function ThreadTab({
               <button
                 type="button"
                 disabled={busy}
+                onClick={() => void submit(() => resolveFeedback(item.id, 'planned'))}
+                className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                Planned
+              </button>
+              <button
+                type="button"
+                disabled={busy}
                 onClick={() => void submit(() => resolveFeedback(item.id, 'resolved'))}
                 className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
-                title="Mark resolved — you got what you needed"
               >
                 Resolve
               </button>
@@ -336,7 +379,6 @@ function ThreadTab({
                 disabled={busy}
                 onClick={() => void submit(() => resolveFeedback(item.id, 'dismissed'))}
                 className="px-3 py-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
-                title="Dismiss without an answer"
               >
                 Dismiss
               </button>
@@ -344,6 +386,139 @@ function ThreadTab({
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Multi-select assignees from server users + synthetic `owner`. */
+function AssigneePicker({
+  ticketId,
+  assignees,
+  busy,
+  onChanged,
+}: {
+  ticketId: string
+  assignees: string[]
+  busy: boolean
+  onChanged: () => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [candidates, setCandidates] = useState<string[]>(['owner'])
+  const [local, setLocal] = useState<string[]>(assignees)
+  const [saving, setSaving] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setLocal(assignees)
+  }, [assignees, ticketId])
+
+  useEffect(() => {
+    let cancelled = false
+    void daemonCliGet<{ users?: Array<{ username: string }> }>('users', {})
+      .then((res) => {
+        if (cancelled) return
+        const names = (res.users ?? []).map((u) => u.username).filter(Boolean)
+        setCandidates(['owner', ...names.filter((n) => n !== 'owner')])
+      })
+      .catch(() => {
+        // Viewer may not list users — still allow assigning owner.
+        if (!cancelled) setCandidates(['owner'])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  const toggle = (name: string): void => {
+    setLocal((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
+    )
+  }
+
+  const save = async (): Promise<void> => {
+    setSaving(true)
+    try {
+      await assignFeedback(ticketId, local)
+      onChanged()
+      setOpen(false)
+    } catch (e) {
+      console.warn('[tickets] assign failed', e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div ref={rootRef} className="mb-3 relative">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+          Assignees
+        </span>
+        {(local.length === 0 ? ['Unassigned'] : local).map((a) => (
+          <span
+            key={a}
+            className="px-1.5 py-0.5 text-[10px] bg-white/[0.06] text-[var(--color-text-secondary)] selectable-copy"
+          >
+            {a}
+          </span>
+        ))}
+        <button
+          type="button"
+          disabled={busy || saving}
+          onClick={() => setOpen((o) => !o)}
+          className="px-2 py-0.5 text-[10px] text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 cursor-pointer disabled:opacity-50"
+        >
+          Edit
+        </button>
+      </div>
+      {open && (
+        <div className="absolute left-0 top-full mt-1 z-20 min-w-[180px] max-h-48 overflow-y-auto bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-lg py-1">
+          {candidates.map((name) => {
+            const on = local.includes(name)
+            return (
+              <button
+                key={name}
+                type="button"
+                onClick={() => toggle(name)}
+                className={`flex w-full items-center gap-2 px-2 py-1.5 text-[11px] text-left cursor-pointer ${
+                  on
+                    ? 'bg-white/[0.04] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06]'
+                }`}
+              >
+                <span className="w-3 text-[var(--color-accent)]">{on ? '✓' : ''}</span>
+                {name}
+              </button>
+            )
+          })}
+          <div className="border-t border-[var(--color-border)] mt-1 pt-1 px-2 pb-1 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-[10px] text-[var(--color-text-muted)] cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void save()}
+              className="text-[10px] text-[var(--color-accent)] cursor-pointer disabled:opacity-50"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

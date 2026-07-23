@@ -23,16 +23,18 @@ describe('sortNewestFirst', () => {
 })
 
 describe('groupByStatus', () => {
-  it('splits waiting / answered / closed (resolved + dismissed together)', () => {
+  it('splits waiting / answered / planned / closed', () => {
     const rows = [
       { status: 'waiting' as FeedbackStatus, id: 'w' },
       { status: 'answered' as FeedbackStatus, id: 'a' },
+      { status: 'planned' as FeedbackStatus, id: 'p' },
       { status: 'resolved' as FeedbackStatus, id: 'r' },
       { status: 'dismissed' as FeedbackStatus, id: 'd' },
     ]
     const g = groupByStatus(rows)
     expect(g.waiting.map((r) => r.id)).toEqual(['w'])
     expect(g.answered.map((r) => r.id)).toEqual(['a'])
+    expect(g.planned.map((r) => r.id)).toEqual(['p'])
     expect(g.closed.map((r) => r.id)).toEqual(['r', 'd'])
   })
 })
@@ -44,13 +46,15 @@ describe('countByStatus', () => {
       { status: 'waiting' as FeedbackStatus },
       { status: 'answered' as FeedbackStatus },
       { status: 'dismissed' as FeedbackStatus },
+      { status: 'planned' as FeedbackStatus },
     ]
     expect(countByStatus(rows)).toEqual({
-      all: 4,
+      all: 5,
       waiting: 2,
       answered: 1,
       resolved: 0,
       dismissed: 1,
+      planned: 1,
     })
   })
   it('an empty list is all zeroes', () => {
@@ -60,6 +64,7 @@ describe('countByStatus', () => {
       answered: 0,
       resolved: 0,
       dismissed: 0,
+      planned: 0,
     })
   })
 })

@@ -68,10 +68,10 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// `send` level just like an app-password inbox — only Microsoft-OAuth
 /// stays draft-only (until Graph send lands). The assistant-inbox note
 /// corrects the "OAuth inboxes are draft-only" claim accordingly.
-pub const SKILL_VERSION_MANAGER: u32 = 7;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 7;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 7;
-pub const SKILL_VERSION_TEMPLATE: u32 = 2;
+pub const SKILL_VERSION_MANAGER: u32 = 8;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 8;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 8;
+pub const SKILL_VERSION_TEMPLATE: u32 = 3;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
@@ -93,7 +93,7 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// (K2 Mail S8): the loadable k2-cli skill gains the "Email"
 /// (`k2 mail`) section — minting, untrusted-content markers, the
 /// `wait` loop, send governance.
-pub const SKILL_VERSION_WORKSPACE: u32 = 11;
+pub const SKILL_VERSION_WORKSPACE: u32 = 12;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

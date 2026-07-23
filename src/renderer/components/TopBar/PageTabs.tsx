@@ -104,12 +104,12 @@ export default function PageTabs(): React.JSX.Element {
         title="Projects — grouped agents, shared dashboards"
       />
       <PageTab
-        label="Feedback"
+        label="Tickets"
         selected={page === 'feedback'}
         onSelect={() => select('feedback')}
         badge={waitingCount}
         badgeClass="bg-[var(--color-status-working)]"
-        title="Feedback — agents waiting on you"
+        title="Tickets — agents waiting on a human"
       />
     </div>
   )

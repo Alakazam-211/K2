@@ -129,13 +129,23 @@ fn handle_unregister(body: &[u8]) -> CliResponse {
 // ── Dispatch triggers (V1) ────────────────────────────────────────────
 
 /// `feedback:created` → mobile push. Called next to the
-/// `HookEvent::FeedbackCreated` emit in `feedback_routes::handle_create`
-/// — every new ask pushes (asks are always agent-authored, so there is
-/// no "the device's own user caused this" case to suppress).
-pub fn notify_feedback_created(agent_name: &str, feedback_id: &str) {
+/// `HookEvent::FeedbackCreated` emit in `feedback_routes::handle_create`.
+/// When `assignees` is non-empty, only those usernames' devices receive
+/// the push; empty = fan out to everyone on the server (legacy).
+pub fn notify_feedback_created(agent_name: &str, feedback_id: &str, assignees: &[String]) {
     dispatch_push(PushEvent::FeedbackCreated {
         agent_name: agent_name.to_string(),
         feedback_id: feedback_id.to_string(),
+        assignees: assignees.to_vec(),
+    });
+}
+
+/// Ticket thread reply → mobile push to assignees (or everyone if
+/// unassigned). Content-free: ticket id only.
+pub fn notify_feedback_commented(feedback_id: &str, assignees: &[String]) {
+    dispatch_push(PushEvent::FeedbackCommented {
+        feedback_id: feedback_id.to_string(),
+        assignees: assignees.to_vec(),
     });
 }
 
@@ -391,6 +401,7 @@ mod tests {
                 PushEvent::FeedbackCreated {
                     agent_name: "a".into(),
                     feedback_id: "f".into(),
+                    assignees: vec![],
                 },
             )
             .is_none(),
@@ -426,7 +437,7 @@ mod tests {
         let fid = format!("fb-notify-{}", uuid::Uuid::new_v4());
         let gid = format!("pg-notify-{}", uuid::Uuid::new_v4());
         let mark = test_push_capture::mark();
-        notify_feedback_created("cortana", &fid);
+        notify_feedback_created("cortana", &fid, &[]);
         notify_project_message_created("Apollo", &gid);
         let events = test_push_capture::since(mark);
         let mine: Vec<_> = events
@@ -439,10 +450,10 @@ mod tests {
             .collect();
         assert_eq!(mine.len(), 2, "both notifies captured: {events:?}");
         assert_eq!(mine[0].title(), "K2");
-        assert_eq!(mine[0].body(), "cortana needs your feedback");
+        assert_eq!(mine[0].body(), "cortana needs you on a ticket");
         assert_eq!(
             mine[0].data(),
-            serde_json::json!({ "kind": "feedback", "feedbackId": fid })
+            serde_json::json!({ "kind": "ticket", "feedbackId": fid })
         );
         assert_eq!(mine[1].body(), "New message in Apollo");
         assert_eq!(

@@ -133,8 +133,7 @@ pub fn remove_device(device_id: &str) -> Result<bool, String> {
 }
 
 /// Every registered device, oldest-registered first (rowid tiebreak
-/// for same-second registrations). V1 dispatch fans out to ALL of
-/// them — per-user subscriptions come later on the `username` column.
+/// for same-second registrations).
 pub fn list_devices() -> Result<Vec<PushDevice>, String> {
     let db = crate::db::shared();
     let conn = db.lock();
@@ -146,6 +145,21 @@ pub fn list_devices() -> Result<Vec<PushDevice>, String> {
         .map_err(|e| format!("push device list failed: {e}"))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("push device list failed: {e}"))
+}
+
+/// Devices whose `username` is in `usernames` (exact match). Used for
+/// ticket-assignee push targeting. Empty input → empty result (caller
+/// decides whether to fall back to [`list_devices`]).
+pub fn list_devices_for_usernames(usernames: &[String]) -> Result<Vec<PushDevice>, String> {
+    if usernames.is_empty() {
+        return Ok(Vec::new());
+    }
+    let all = list_devices()?;
+    let set: std::collections::HashSet<&str> = usernames.iter().map(|s| s.as_str()).collect();
+    Ok(all
+        .into_iter()
+        .filter(|d| set.contains(d.username.as_str()))
+        .collect())
 }
 
 /// Drop every device holding a vendor token the gateway reported dead

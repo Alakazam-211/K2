@@ -50,6 +50,12 @@ import {
   pocLabel,
   type ConnectRole,
 } from './project-chat'
+import { LinkifiedText } from '@/lib/linkified-text'
+import {
+  clearProjectChatDraft,
+  getProjectChatDraft,
+  setProjectChatDraft,
+} from '@/lib/composer-drafts'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
 // border (the dashboard's DIVIDER_HIT_PX idiom).
@@ -85,10 +91,27 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
 
-  // Composer state — deliberately drawer-local so live refetches can
-  // never eat a mid-typed draft (§6.4 draft protection).
-  const [draft, setDraft] = useState('')
+  // Composer drafts survive panel unmount (leave project / switch pages).
+  const [draft, setDraft] = useState(() => getProjectChatDraft(show.id))
   const [busy, setBusy] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const setDraftAndPersist = (text: string): void => {
+    setDraft(text)
+    setProjectChatDraft(show.id, text)
+  }
+
+  useEffect(() => {
+    setDraft(getProjectChatDraft(show.id))
+  }, [show.id])
+
+  // Auto-grow the composer with content.
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
+  }, [draft])
   const [sendError, setSendError] = useState<string | null>(null)
   const [lastPost, setLastPost] = useState<LastPost | null>(null)
 
@@ -182,7 +205,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     setSendError(null)
     postProjectGroupMessage(show.id, text)
       .then((posted) => {
-        setDraft('')
+        setDraftAndPersist('')
+        clearProjectChatDraft(show.id)
         setLastPost({
           messageId: posted.id,
           delivered: posted.delivered,
@@ -338,8 +362,11 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                           {formatRelativeTime(m.createdAt, nowSec)}
                         </span>
                       </div>
-                      <div className="text-xs text-[var(--color-text-primary)] whitespace-pre-wrap break-words mt-0.5">
-                        {m.body}
+                      <div className="text-xs text-[var(--color-text-primary)] mt-0.5">
+                        <LinkifiedText
+                          text={m.body}
+                          className="selectable-copy whitespace-pre-wrap break-words"
+                        />
                       </div>
                       {delivery && (
                         <div className="mt-0.5 text-[9px] text-[var(--color-text-muted)] opacity-80 italic">
@@ -364,8 +391,9 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             <>
               {sendError && <div className="mb-1.5 text-[11px] text-[var(--color-status-error-soft)]">{sendError}</div>}
               <textarea
+                ref={textareaRef}
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                onChange={(e) => setDraftAndPersist(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                     e.preventDefault()
@@ -377,7 +405,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                 }}
                 placeholder={composerPlaceholder(show.members, show.pocWorkspaceId)}
                 rows={2}
-                className="w-full px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none placeholder:text-[var(--color-text-muted)]"
+                className="w-full px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-y-auto placeholder:text-[var(--color-text-muted)] selectable-copy"
               />
               <div className="flex justify-end mt-1.5">
                 <button

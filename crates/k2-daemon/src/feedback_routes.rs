@@ -96,7 +96,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
         "/cli/feedback/create" | "/cli/feedback/comment" | "/cli/feedback/answer"
-        | "/cli/feedback/resolve" => CliResponse::method_not_allowed(),
+        | "/cli/feedback/resolve" | "/cli/feedback/assign" => CliResponse::method_not_allowed(),
 
         _ => return None,
     };
@@ -111,6 +111,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/feedback/comment" => handle_comment(body),
         "/cli/feedback/answer" => handle_answer(body),
         "/cli/feedback/resolve" => handle_resolve(body),
+        "/cli/feedback/assign" => handle_assign(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -419,7 +420,11 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
     // push (the frozen only-created-notifies contract); the event is
     // content-free (agent name + id, NEVER the ask's title/body —
     // §4.5) and dormant/fire-and-forget inside push_routes.
-    crate::push_routes::notify_feedback_created(&item.agent_name, &item.id);
+    crate::push_routes::notify_feedback_created(
+        &item.agent_name,
+        &item.id,
+        &item.assignees,
+    );
 
     let (name, _) = project_name_path(&item.project_id);
     let mut v = serde_json::to_value(&item).unwrap_or_else(|_| serde_json::json!({}));
@@ -485,6 +490,11 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
         return match feedback::add_comment(&full_id, author, &b.body) {
             Ok(c) => {
                 emit_commented(&full_id, &c.author);
+                // Push assignees (or all devices if unassigned) on thread
+                // activity — not just create.
+                if let Some(item) = feedback::get_item(&full_id) {
+                    crate::push_routes::notify_feedback_commented(&full_id, &item.assignees);
+                }
                 CliResponse::ok_json(
                     serde_json::json!({
                         "ok": true,
@@ -539,6 +549,7 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
     // [`emit_commented`]) — also before the injection, so an open
     // thread panel refreshes without waiting on a slow wake.
     emit_commented(&item.id, &comment.author);
+    crate::push_routes::notify_feedback_commented(&item.id, &item.assignees);
 
     // Shared F3 delivery — the comment lands in the asking session,
     // framed with the owner's display name (same server-side
@@ -667,9 +678,12 @@ pub fn handle_resolve(body: &[u8]) -> CliResponse {
         return usage_error("missing 'id' (a feedback id or unique prefix)");
     }
     let status = b.status.unwrap_or_else(|| "resolved".to_string());
-    if !matches!(status.as_str(), "resolved" | "dismissed" | "waiting") {
+    if !matches!(
+        status.as_str(),
+        "resolved" | "dismissed" | "waiting" | "planned"
+    ) {
         return usage_error(format!(
-            "invalid status '{status}' — resolve accepts: resolved, dismissed, waiting (reopen)"
+            "invalid status '{status}' — resolve accepts: resolved, dismissed, planned, waiting (reopen)"
         ));
     }
     let full_id = match feedback::resolve_id_prefix(&b.id) {
@@ -695,6 +709,56 @@ pub fn handle_resolve(body: &[u8]) -> CliResponse {
                     "ok": true,
                     "id": item.id,
                     "status": item.status,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => usage_error(e),
+    }
+}
+
+/// `POST /cli/feedback/assign` — replace the assignee set with
+/// username snapshots. Empty list clears assignees (push fans out to
+/// all devices again).
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct AssignBody {
+    id: String,
+    /// Usernames to assign (`owner` or connect-user names). Snapshots.
+    usernames: Vec<String>,
+}
+
+/// Handler for `POST /cli/feedback/assign`.
+pub fn handle_assign(body: &[u8]) -> CliResponse {
+    let b: AssignBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.id.is_empty() {
+        return usage_error("missing 'id' (a ticket id or unique prefix)");
+    }
+    let full_id = match feedback::resolve_id_prefix(&b.id) {
+        Ok(f) => f,
+        Err(e) => return prefix_error_response(&b.id, e),
+    };
+    match feedback::set_assignees(&full_id, &b.usernames) {
+        Ok(item) => {
+            let (_, path) = project_name_path(&item.project_id);
+            // Reuse status-changed bus so open boards refresh assignees.
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::FeedbackStatusChanged,
+                serde_json::json!({
+                    "id": item.id,
+                    "projectPath": path,
+                    "status": item.status,
+                    "assignees": item.assignees,
+                }),
+            );
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "id": item.id,
+                    "assignees": item.assignees,
                 })
                 .to_string(),
             )
@@ -1402,9 +1466,8 @@ mod tests {
         assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
     }
 
-    /// Companion C4 trigger selection: CREATE pushes to mobile
-    /// (content-free — §4.5: agent name + id only, never the ask
-    /// text); comment / answer / resolve never push.
+    /// Companion C4: CREATE pushes (content-free); comments also push
+    /// thread activity; resolve does not.
     #[test]
     fn feedback_create_pushes_mobile_and_other_mutations_do_not() {
         use k2_core::push::PushEvent;
@@ -1428,7 +1491,7 @@ mod tests {
         assert_eq!(pushes.len(), 1, "create pushes exactly once: {pushes:?}");
         let e = &pushes[0];
         assert_eq!(e.title(), "K2");
-        assert_eq!(e.body(), "scout needs your feedback");
+        assert_eq!(e.body(), "scout needs you on a ticket");
         assert!(
             !e.body().contains("tunnel") && !e.body().contains("port"),
             "the ask's text must never ride the push (§4.5): {}",
@@ -1436,11 +1499,10 @@ mod tests {
         );
         assert_eq!(
             e.data(),
-            serde_json::json!({ "kind": "feedback", "feedbackId": id })
+            serde_json::json!({ "kind": "ticket", "feedbackId": id })
         );
 
-        // Comment (agent), comment (human — doubles as the answer),
-        // and resolve: none of them may push for this item.
+        // Comments push FeedbackCommented; resolve must not push create.
         let mark = crate::push_routes::test_push_capture::mark();
         let resp = handle_comment(
             serde_json::json!({ "id": id, "body": "leaning 8080", "author": "scout" })
@@ -1456,15 +1518,27 @@ mod tests {
             serde_json::json!({ "id": id }).to_string().as_bytes(),
         );
         assert_eq!(resp.status, "200 OK", "resolve failed: {}", resp.body);
-        let stray: Vec<_> = crate::push_routes::test_push_capture::since(mark)
-            .into_iter()
+        let since = crate::push_routes::test_push_capture::since(mark);
+        let creates: Vec<_> = since
+            .iter()
             .filter(|e| {
                 matches!(e, PushEvent::FeedbackCreated { feedback_id, .. } if feedback_id == &id)
             })
             .collect();
         assert!(
-            stray.is_empty(),
-            "only feedback:created pushes — comment/answer/resolve must not: {stray:?}"
+            creates.is_empty(),
+            "resolve must not re-push FeedbackCreated: {creates:?}"
+        );
+        let comments: Vec<_> = since
+            .iter()
+            .filter(|e| {
+                matches!(e, PushEvent::FeedbackCommented { feedback_id, .. } if feedback_id == &id)
+            })
+            .collect();
+        assert_eq!(
+            comments.len(),
+            2,
+            "each comment should push once: {comments:?}"
         );
     }
 }

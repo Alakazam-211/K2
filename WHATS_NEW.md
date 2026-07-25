@@ -3,6 +3,63 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.62 — Settings that scale: Connect, LLMs, General
+
+### K2 Connect is easier to navigate
+
+Settings → **K2 Connect** is no longer a permanent side-by-side Host /
+Servers wall. You get clear tabs:
+
+- **Tunnel** — expose this machine + host policies  
+- **Access** — users and invite (half-width again, so forms aren’t stretched)  
+- **Servers** — your address book, updates, and federation pairing  
+
+### Pair two cloud servers while you’re signed into one
+
+The **saved-servers** list (this Mac’s address book) stays visible when
+you’re connected to a remote. That unlocks **Pair as federated peer**
+between two K2 Cloud boxes without bouncing back to Local first. The
+top-bar server switcher still always shows *your* list — not the remote
+machine’s.
+
+### Agentic systems are just on
+
+No more **Agentic Systems** beta toggle. Canonical Agent Flow, Heartbeats,
+workspace Skills, and agent polling are always available. Older
+“turn agentic off” flags no longer hide the product.
+
+### Editors and LLMs are separate
+
+- **Editors** — default editor/terminal and detected apps  
+- **LLMs** — default agent, presets, CLI install guide, and a **Credentials**
+  column for the big seven (Claude live auto-refresh; Codex, Grok, Gemini,
+  Cursor Agent, Hermes, Pi coming soon)  
+
+Nav: **LLMs** sits under Styles. Workspace settings are labeled
+**Workspaces / Agents**.
+
+### General has real tabs
+
+Settings → **General**:
+
+| Tab | What’s there |
+|---|---|
+| **General** | Version, CLI, What’s new, your name, reset |
+| **Workspaces** | Active-bar hours, completion sound, **Canonical Agent Flow** help |
+| **Server** | K2 Server + keep running when the window closes |
+| **Local LLM** `beta` | Workspace assistant / model |
+
+Canonical Agent Flow is no longer its own top-level page — it lives under
+General → Workspaces, with room for the diagram and a shorter intro.
+
+### Agent presets & CLI guide
+
+Built-in order puts **Grok before Gemini**. CLI Tools Setup matches that
+list and includes **Hermes**. Existing installs get the Grok/Gemini swap
+on the next daemon start (or use **Reset Built-ins**).
+
+---
+
 ## 0.40.61 — Linux servers actually update (and stay reachable)
 
 ### Update from the app installs the new daemon

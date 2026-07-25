@@ -201,7 +201,9 @@ pub struct AppSettings {
     pub ai_assistant_enabled: bool,
     #[serde(default)]
     pub timer: TimerSettings,
-    #[serde(default)]
+    /// Always treated as on by product code; default true for new installs.
+    /// Wire field retained so old settings.json still deserializes.
+    #[serde(default = "default_true")]
     pub agentic_systems_enabled: bool,
     #[serde(default = "default_true")]
     pub keep_daemon_on_quit: bool,

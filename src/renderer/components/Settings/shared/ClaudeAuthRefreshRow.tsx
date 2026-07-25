@@ -6,7 +6,15 @@ import { Toggle } from '@/components/ui'
 import { useClaudeAuthStore } from '@/stores/claude-auth'
 import type { ClaudeAuthState } from '@/stores/claude-auth'
 
-export function ClaudeAuthRefreshRow(): React.JSX.Element {
+/**
+ * Claude credential auto-refresh control.
+ * `embedded` = list-row mode (status + toggle only; parent supplies icon/title).
+ */
+export function ClaudeAuthRefreshRow({
+  embedded = false,
+}: {
+  embedded?: boolean
+} = {}): React.JSX.Element {
   const claudeAuthAutoRefresh = useSettingsStore((s) => s.claudeAuthAutoRefresh)
   const setClaudeAuthAutoRefresh = useSettingsStore((s) => s.setClaudeAuthAutoRefresh)
   const confirm = useConfirmDialogStore((s) => s.confirm)
@@ -20,7 +28,6 @@ export function ClaudeAuthRefreshRow(): React.JSX.Element {
     uninstallScheduler,
   } = useClaudeAuthStore()
 
-  // Poll status every 60s while mounted
   useEffect(() => {
     fetchStatus()
     const interval = setInterval(fetchStatus, 60_000)
@@ -29,7 +36,6 @@ export function ClaudeAuthRefreshRow(): React.JSX.Element {
 
   const handleToggle = useCallback(async () => {
     if (!claudeAuthAutoRefresh) {
-      // Enabling — show consent dialog
       const confirmed = await confirm({
         title: 'Install Background Token Refresh?',
         message:
@@ -45,7 +51,6 @@ export function ClaudeAuthRefreshRow(): React.JSX.Element {
         console.error('[settings] Failed to install Claude auth scheduler:', e)
       }
     } else {
-      // Disabling
       try {
         await uninstallScheduler()
         setClaudeAuthAutoRefresh(false)
@@ -54,7 +59,14 @@ export function ClaudeAuthRefreshRow(): React.JSX.Element {
         console.error('[settings] Failed to uninstall Claude auth scheduler:', e)
       }
     }
-  }, [claudeAuthAutoRefresh, confirm, installScheduler, uninstallScheduler, setClaudeAuthAutoRefresh, fetchStatus])
+  }, [
+    claudeAuthAutoRefresh,
+    confirm,
+    installScheduler,
+    uninstallScheduler,
+    setClaudeAuthAutoRefresh,
+    fetchStatus,
+  ])
 
   const handleRefreshNow = useCallback(async () => {
     await refresh()
@@ -85,7 +97,8 @@ export function ClaudeAuthRefreshRow(): React.JSX.Element {
         <span className="text-[10px] text-[var(--color-text-muted)] whitespace-nowrap">{text}</span>
         {(authState === 'expiring' || authState === 'expired') && (
           <button
-            onClick={handleRefreshNow}
+            type="button"
+            onClick={() => void handleRefreshNow()}
             disabled={refreshing}
             className="text-[10px] text-[var(--color-accent)] hover:underline cursor-pointer no-drag disabled:opacity-50"
           >
@@ -96,21 +109,36 @@ export function ClaudeAuthRefreshRow(): React.JSX.Element {
     )
   }
 
+  const toggle = (
+    <Toggle
+      checked={claudeAuthAutoRefresh}
+      onChange={() => void handleToggle()}
+      aria-label="Auto-refresh Claude credentials"
+    />
+  )
+
+  if (embedded) {
+    return (
+      <div className="flex items-center flex-shrink-0">
+        {statusIndicator}
+        {toggle}
+      </div>
+    )
+  }
+
   return (
     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">Auto-refresh Claude credentials</span>
+        <span className="text-xs text-[var(--color-text-secondary)]">
+          Auto-refresh Claude credentials
+        </span>
         <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
           Background scheduler keeps your Claude session alive
         </p>
       </div>
       <div className="flex items-center flex-shrink-0">
         {statusIndicator}
-        <Toggle
-          checked={claudeAuthAutoRefresh}
-          onChange={() => void handleToggle()}
-          aria-label="Auto-refresh Claude credentials"
-        />
+        {toggle}
       </div>
     </div>
   )

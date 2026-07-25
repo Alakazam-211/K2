@@ -674,8 +674,6 @@ export default function Sidebar(): React.JSX.Element {
   const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
   const activeFocusGroupId = useFocusGroupsStore((s) => s.activeFocusGroupId)
 
-  const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
-
   // 0.37.13 — Agents & Pinned section collapse + scroll.
   // Persists across launches via localStorage so users with many
   // workspaces don't have to re-collapse on every reopen.

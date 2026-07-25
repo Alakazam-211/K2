@@ -832,8 +832,8 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
     let presets: &[(&str, &str, &str, &str, i64)] = &[
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456001", "Claude", "claude --dangerously-skip-permissions", "", 0),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex -c model_reasoning_effort=\"high\" --dangerously-bypass-approvals-and-sandbox", "", 1),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 2),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", "", 3),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", "", 2),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 3),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 4),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 5),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 6),
@@ -891,10 +891,8 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
     // Grok at sort_order 3, but existing installs still had Cursor Agent at 3 —
     // a tie that renders Grok adjacent-but-unordered against Cursor Agent. If
     // Grok and Cursor Agent still share a slot, open a gap by bumping Cursor
-    // Agent (and everything at/after Grok's slot, except Grok) down by one, so
-    // Grok lands between Gemini (2) and Cursor Agent. Idempotent: once resolved
-    // this is a no-op, and it never fires on fresh installs (the seed already
-    // spaces them 2/3/4).
+    // Agent (and everything at/after Grok's slot, except Grok) down by one.
+    // Idempotent: once resolved this is a no-op.
     let grok_cursor_collision: i64 = conn.query_row(
         "SELECT COUNT(*) FROM agent_presets g, agent_presets c \
          WHERE g.label = 'Grok' AND c.label = 'Cursor Agent' \
@@ -911,6 +909,40 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
                                   WHERE label = 'Grok' AND is_built_in = 1)",
             [],
         )?;
+    }
+
+    // One-time ordering repair: product order is Grok before Gemini. Older
+    // seeds had Gemini at 2 and Grok at 3. Swap their sort_order when Gemini
+    // still sorts earlier. Idempotent once Grok ≤ Gemini.
+    let gemini_order: Option<i64> = conn
+        .query_row(
+            "SELECT sort_order FROM agent_presets \
+             WHERE label = 'Gemini' AND is_built_in = 1",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    let grok_order: Option<i64> = conn
+        .query_row(
+            "SELECT sort_order FROM agent_presets \
+             WHERE label = 'Grok' AND is_built_in = 1",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    if let (Some(g_ord), Some(x_ord)) = (gemini_order, grok_order) {
+        if g_ord < x_ord {
+            conn.execute(
+                "UPDATE agent_presets SET sort_order = ?1 \
+                 WHERE label = 'Grok' AND is_built_in = 1",
+                params![g_ord],
+            )?;
+            conn.execute(
+                "UPDATE agent_presets SET sort_order = ?1 \
+                 WHERE label = 'Gemini' AND is_built_in = 1",
+                params![x_ord],
+            )?;
+        }
     }
 
     Ok(())

@@ -1004,7 +1004,6 @@ function ProjectDetail({
   const [canonicalProbes, setCanonicalProbes] = useState<HarnessProbe[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [settingsTab, setSettingsTab] = useState<WorkspaceSettingsTab>('agent')
-  const agenticSystemsEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
 
   // Close editor / reset tab state when project changes (user navigated
   // away without using back button).
@@ -1016,14 +1015,6 @@ function ProjectDetail({
     setSettingsTab('agent')
     setHistoryEmpty(false)
   }, [project.id])
-
-  // If agentic systems are off, don't leave the user stranded on Skills/Schedule
-  // (Context stays available — it holds PROJECT.md knowledge).
-  useEffect(() => {
-    if (!agenticSystemsEnabled && (settingsTab === 'skills' || settingsTab === 'schedule')) {
-      setSettingsTab('agent')
-    }
-  }, [agenticSystemsEnabled, settingsTab])
 
   // Detect per-harness canonical state (PRD §5.2) so the canonical button
   // reads "Set up …" vs "Manage / Undo". Re-runs when the modal closes so a
@@ -1218,16 +1209,16 @@ function ProjectDetail({
   const agentMode = project.agentMode || 'off'
   const isManagerMode = agentMode === 'manager' || agentMode === 'coordinator' || agentMode === 'pod'
 
-  const workspaceTabs: Array<{ id: WorkspaceSettingsTab; label: string; hidden?: boolean }> = [
+  const workspaceTabs: Array<{ id: WorkspaceSettingsTab; label: string }> = [
     { id: 'agent', label: 'Agent' },
-    // Context always visible — holds PROJECT.md; Agent Settings beta is nested inside.
+    // Context always visible — holds PROJECT.md; Agent Settings nested inside.
     { id: 'context', label: 'Context' },
-    { id: 'skills', label: 'Skills', hidden: !agenticSystemsEnabled },
-    { id: 'schedule', label: 'Heartbeats', hidden: !agenticSystemsEnabled },
+    { id: 'skills', label: 'Skills' },
+    { id: 'schedule', label: 'Heartbeats' },
     { id: 'worktrees', label: 'Worktrees' },
     { id: 'import', label: 'Import' },
   ]
-  const visibleTabs = workspaceTabs.filter((t) => !t.hidden)
+  const visibleTabs = workspaceTabs
 
   return (
     <>
@@ -1442,18 +1433,7 @@ function ProjectDetail({
               </div>
             </SettingsGroup>
 
-            {agenticSystemsEnabled && (
-          <SettingsGroup
-            title="Agent Settings"
-            badge={
-              <span
-                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
-                title="Agentic systems are in beta — interface and behavior may change"
-              >
-                beta
-              </span>
-            }
-          >
+          <SettingsGroup title="Agent Settings">
             <div className="space-y-2">
               <div className="flex gap-1">
                 {(['off', 'agent', 'manager', 'custom'] as const).map((mode) => {
@@ -1624,28 +1604,27 @@ function ProjectDetail({
               )}
             </div>
           </SettingsGroup>
-            )}
 
             {/* Context layers — what ships in each wake (moved from Heartbeats tab) */}
-            {agenticSystemsEnabled && agentMode !== 'off' && (
+            {agentMode !== 'off' && (
               <ContextLayersPreview
                 projectPath={project.path}
                 agentMode={project.agentMode || null}
                 onOpenSettings={() => {
-                  useSettingsStore.getState().setSection('agent-skills')
+                  useSettingsStore.getState().setSection('agent-skills') // → General → Workspaces
                 }}
               />
             )}
           </>
         )}
 
-        {settingsTab === 'skills' && agenticSystemsEnabled && (
+        {settingsTab === 'skills' && (
           <SettingsGroup title="Skills">
             <ProjectSkillsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
           </SettingsGroup>
         )}
 
-        {settingsTab === 'schedule' && agenticSystemsEnabled && (
+        {settingsTab === 'schedule' && (
           <div className="space-y-4">
             {agentMode !== 'off' ? (
               <>
@@ -3233,9 +3212,8 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
 // ── Project Skills Panel ────────────────────────────────────────────
 //
 // Promoted out of ProjectAgentsPanel in 0.39.0h. Renders the Skills
-// list as its own top-level Settings group. Always visible (regardless
-// of agent mode / `agenticSystemsEnabled`) — per the Phase 2.5b
-// followup, every workspace has skill profiles. Fetches its own skills
+// list as its own top-level Settings group. Always visible — every
+// workspace has skill profiles (Phase 2.5b). Fetches its own skills
 // + agents (the latter only to filter the workspace manager out of the
 // per-row list so it isn't duplicated next to the Workspace Manager
 // block in Agent Settings).

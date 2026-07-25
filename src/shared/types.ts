@@ -82,6 +82,7 @@ export interface AppSettingsResponse {
   defaultAgent: string
   aiAssistantEnabled: boolean
   timer: TimerSettingsBackend
+  /** Always true — agentic systems are GA; kept for settings.json wire compat. */
   agenticSystemsEnabled: boolean
   claudeAuthAutoRefresh: boolean
   lastActiveProjectId: string | null

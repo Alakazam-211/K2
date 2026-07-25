@@ -14,11 +14,14 @@ import { AgentContextDiagram } from './AgentContextDiagram'
 // standard (Pi/Hermes/Codex/+28 read it natively); CLAUDE.md is the bridge
 // for Claude Code, which doesn't read AGENTS.md natively.
 
+// Lives under Settings → General → Workspaces (help guide, not a top-level nav item).
+// section stays `general` so search jumps to General; deep-link id `agent-skills` still
+// redirects via the settings store.
 export const AGENT_SKILLS_MANIFEST: SettingEntry[] = [
-  { id: 'agent-skills.canonical-flow', section: 'agent-skills', label: 'Canonical Agent Flow', description: 'How .k2/AGENT.md + PROJECT.md generate .k2/AGENTS.md and mirror out to the AI-harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'AGENT.md'] },
-  { id: 'agent-skills.workspace-manager', section: 'agent-skills', label: 'Workspace Manager skill', description: 'Opt-in role skill — weaves Workspace Manager guidance into AGENT.md', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
-  { id: 'agent-skills.k2-agent', section: 'agent-skills', label: 'K2 Agent skill', description: 'Opt-in role skill — weaves K2 Agent (planner) guidance into AGENT.md', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
-  { id: 'agent-skills.k2-canonical-agent', section: 'agent-skills', label: 'K2 Canonical Agent skill', description: 'Opt-in skill — unify the workspace harness files safely (merge + mirror)', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
+  { id: 'agent-skills.canonical-flow', section: 'general', group: 'Workspaces', label: 'Canonical Agent Flow', description: 'How .k2/AGENT.md + PROJECT.md generate .k2/AGENTS.md and mirror out to the AI-harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'AGENT.md', 'help'] },
+  { id: 'agent-skills.workspace-manager', section: 'general', group: 'Workspaces', label: 'Workspace Manager skill', description: 'Opt-in role skill — weaves Workspace Manager guidance into AGENT.md', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
+  { id: 'agent-skills.k2-agent', section: 'general', group: 'Workspaces', label: 'K2 Agent skill', description: 'Opt-in role skill — weaves K2 Agent (planner) guidance into AGENT.md', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
+  { id: 'agent-skills.k2-canonical-agent', section: 'general', group: 'Workspaces', label: 'K2 Canonical Agent skill', description: 'Opt-in skill — unify the workspace harness files safely (merge + mirror)', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
 ]
 
 // The three opt-in skills of this PRD (canonical-agents §2), surfaced as
@@ -52,21 +55,33 @@ export function AgentSkillsSection(): React.JSX.Element {
   // workspaces, so showing one workspace's harness state here just confused
   // users. Removed per that feedback.
   return (
-    <div className="max-w-3xl">
+    <div className="w-full" data-settings-id="agent-skills.canonical-flow">
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Canonical Agent Flow</h2>
-      <p className="text-xs text-[var(--color-text-muted)] mb-4">
-        Each AI coding tool reads its project notes from a different file. You author{' '}
-        <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENT.md</span> (persona) and{' '}
-        <span className="font-mono text-[var(--color-text-secondary)]">.k2/PROJECT.md</span> (project);
-        K2 generates the canonical{' '}
-        <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> entrypoint from
-        them — the cross-tool standard read natively by Pi, Hermes, Codex and 28+ others. The per-harness
-        files (<span className="font-mono">CLAUDE.md</span>, <span className="font-mono">GEMINI.md</span>,{' '}
-        <span className="font-mono">.cursor/rules</span>) are read-only{' '}
-        <span className="text-[var(--color-text-secondary)]">symlink mirrors</span> of it.{' '}
-        <span className="font-mono">CLAUDE.md</span> is the bridge for Claude Code, which doesn’t read
-        AGENTS.md natively. Write your context once; every tool sees the same picture.
-      </p>
+      <div className="text-xs text-[var(--color-text-muted)] mb-4 space-y-2 leading-relaxed max-w-3xl">
+        <p>
+          Different AI tools look for project notes in different files. You write two sources of
+          truth:{' '}
+          <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENT.md</span> (persona)
+          and{' '}
+          <span className="font-mono text-[var(--color-text-secondary)]">.k2/PROJECT.md</span>{' '}
+          (project).
+        </p>
+        <p>
+          K2 builds{' '}
+          <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> from
+          those — the shared entrypoint that Pi, Hermes, Codex, and most other tools already read.
+        </p>
+        <p>
+          Tool-specific files (
+          <span className="font-mono">CLAUDE.md</span>, <span className="font-mono">GEMINI.md</span>,{' '}
+          <span className="font-mono">.cursor/rules</span>
+          ) are read-only symlink mirrors of that file. Claude Code only reads{' '}
+          <span className="font-mono">CLAUDE.md</span>, so that mirror is its bridge.
+        </p>
+        <p className="text-[var(--color-text-secondary)]">
+          Write once. Every harness sees the same picture.
+        </p>
+      </div>
 
       {/* Canonical-source diagram: AGENT.md → harness mirrors. */}
       <AgentContextDiagram />

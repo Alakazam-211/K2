@@ -244,26 +244,26 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             Err(r) => r,
         },
         "/cli/agentic" => {
-            // Global toggle, not project-specific.
+            // Agentic systems are always on (GA). SET still accepted for
+            // wire compat but cannot turn the feature off.
             if let Some(enable) = opt_param(params, "enable") {
-                let on = enable == "1" || enable == "true" || enable == "on";
-                match k2_core::workspace::settings::set_agentic_enabled(on) {
+                let _on = enable == "1" || enable == "true" || enable == "on";
+                match k2_core::workspace::settings::set_agentic_enabled(true) {
                     Ok(()) => {
                         k2_core::agent_hooks::emit(
                             k2_core::agent_hooks::HookEvent::SyncSettings,
                             serde_json::Value::Null,
                         );
                         CliResponse::ok_json(
-                            serde_json::json!({"success": true, "agenticEnabled": on})
+                            serde_json::json!({"success": true, "agenticEnabled": true})
                                 .to_string(),
                         )
                     }
                     Err(e) => CliResponse::bad_request(e),
                 }
             } else {
-                let enabled = k2_core::workspace::settings::get_agentic_enabled();
                 CliResponse::ok_json(
-                    serde_json::json!({"agenticEnabled": enabled}).to_string(),
+                    serde_json::json!({"agenticEnabled": true}).to_string(),
                 )
             }
         }

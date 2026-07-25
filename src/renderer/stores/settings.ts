@@ -30,7 +30,30 @@ import { onActiveHostChange } from '@/stores/connect-host'
 // NOTE the naming collision: 'projects' is the LEGACY workspaces section
 // (label "Workspaces" — ProjectsSection.tsx); 'project-groups' is the
 // Projects-V1 groups section (label "Projects" — Projects/ProjectSettings).
-export type SettingsSection = 'general' | 'styles' | 'terminal' | 'code-editor' | 'editors-agents' | 'keybindings' | 'projects' | 'project-groups' | 'timer' | 'agent-skills' | 'heartbeats' | 'companion' | 'wake-scheduler' | 'permissions' | 'dictation-lab' | 'connections' | 'k2-connect' | 'email-hosting' | 'email-link'
+export type SettingsSection =
+  | 'general'
+  | 'styles'
+  | 'terminal'
+  | 'code-editor'
+  | 'editors'
+  | 'agents'
+  /** @deprecated Split into `editors` + `agents`; kept so old deep-links still resolve. */
+  | 'editors-agents'
+  | 'keybindings'
+  | 'projects'
+  | 'project-groups'
+  | 'timer'
+  /** @deprecated Help guide lives under General → Workspaces. Deep-links redirect. */
+  | 'agent-skills'
+  | 'heartbeats'
+  | 'companion'
+  | 'wake-scheduler'
+  | 'permissions'
+  | 'dictation-lab'
+  | 'connections'
+  | 'k2-connect'
+  | 'email-hosting'
+  | 'email-link'
 
 export interface TerminalSettings {
   fontFamily: string
@@ -40,9 +63,17 @@ export interface TerminalSettings {
   naturalTextEditing: boolean
 }
 
+/** Sub-tabs inside Settings → General (Canonical Agent Flow deep-links to workspaces). */
+export type GeneralSubTab = 'general' | 'workspaces' | 'server' | 'local-llm'
+
 interface SettingsState {
   settingsOpen: boolean
   activeSection: SettingsSection
+  /**
+   * One-shot: when set, GeneralSection opens this sub-tab then clears it.
+   * Used by deep-links (e.g. agent-skills → General → Workspaces).
+   */
+  generalSubTab: GeneralSubTab | null
 
   // Terminal settings
   terminal: TerminalSettings
@@ -56,7 +87,8 @@ interface SettingsState {
   // AI Assistant
   aiAssistantEnabled: boolean
 
-  // Master switch for the entire agent system (agents, coordinator, heartbeat, reviews)
+  // Legacy wire field — agentic systems are always on (out of beta).
+  // Kept for settings.json / daemon API compat; never used to hide UI.
   agenticSystemsEnabled: boolean
 
   // Claude Auth auto-refresh (background scheduler)
@@ -270,7 +302,8 @@ async function persistAndApply(
       keybindings: result.keybindings,
       projectSettings: result.projectSettings ?? {},
       defaultAgent: result.defaultAgent ?? 'claude',
-      agenticSystemsEnabled: result.agenticSystemsEnabled ?? true,
+      // Always on — ignore any stale false from disk / remote hosts.
+      agenticSystemsEnabled: true,
       claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',
@@ -293,9 +326,20 @@ async function persistAndApply(
   }
 }
 
+function resolveSettingsSection(
+  section: SettingsSection | undefined,
+  fallback: SettingsSection,
+): { section: SettingsSection; generalSubTab?: GeneralSubTab } {
+  if (!section) return { section: fallback }
+  if (section === 'editors-agents') return { section: 'agents' }
+  if (section === 'agent-skills') return { section: 'general', generalSubTab: 'workspaces' }
+  return { section }
+}
+
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settingsOpen: false,
   activeSection: 'general',
+  generalSubTab: null,
   terminal: { ...DEFAULT_TERMINAL },
   keybindings: {},
   projectSettings: {},
@@ -323,11 +367,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   openSettings: (section?: SettingsSection, projectId?: string) => {
     // The optional preselect payload routes by section: the legacy
-    // 'projects' (Workspaces) section consumes initialProjectId; the
+    // 'projects' (Workspaces / Agents) section consumes initialProjectId; the
     // 'project-groups' (Projects) section consumes initialProjectGroupId.
+    // 'editors-agents' → Agents; 'agent-skills' → General → Workspaces.
+    const { section: resolved, generalSubTab } = resolveSettingsSection(
+      section,
+      get().activeSection,
+    )
     set({
       settingsOpen: true,
-      activeSection: section ?? get().activeSection,
+      activeSection: resolved,
+      ...(generalSubTab ? { generalSubTab } : {}),
       initialProjectId: section === 'project-groups' ? null : (projectId ?? null),
       initialProjectGroupId: section === 'project-groups' ? (projectId ?? null) : null
     })
@@ -338,7 +388,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setSection: (section: SettingsSection) => {
-    set({ activeSection: section })
+    const { section: resolved, generalSubTab } = resolveSettingsSection(section, section)
+    set({
+      activeSection: resolved,
+      ...(generalSubTab ? { generalSubTab } : {}),
+    })
   },
 
   updateTerminalSettings: async (partial: Partial<TerminalSettings>) => {
@@ -639,7 +693,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       keybindings: result.keybindings,
       projectSettings: result.projectSettings ?? {},
       defaultAgent: result.defaultAgent ?? 'claude',
-      agenticSystemsEnabled: result.agenticSystemsEnabled ?? true,
+      // Always on — ignore any stale false from disk / remote hosts.
+      agenticSystemsEnabled: true,
       claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
       activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
       ownerDisplayName: result.ownerDisplayName ?? '',

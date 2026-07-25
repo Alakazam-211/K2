@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
-import { useSettingsStore } from '@/stores/settings'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
 interface K2soAgentInfo {
@@ -144,21 +143,6 @@ export default function AgentsPanel(): React.JSX.Element {
     if (agent.doneCount > 0) return 'var(--color-status-ok)'   // green — has completed work
     if (agent.inboxCount > 0) return 'var(--color-accent)'  // blue — has pending work
     return 'var(--color-neutral)'                              // gray — idle
-  }
-
-  const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
-
-  if (!agenticEnabled) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center p-4 gap-2">
-        <p className="text-[10px] text-[var(--color-text-muted)] text-center">
-          Agentic Systems is off
-        </p>
-        <p className="text-[9px] text-[var(--color-text-muted)] text-center">
-          Enable it in Settings &gt; General
-        </p>
-      </div>
-    )
   }
 
   if (!activeProject) {

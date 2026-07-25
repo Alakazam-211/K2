@@ -12922,7 +12922,7 @@ WORKSPACE MODE
                             manager: workspace coordinates other workspaces
 
 GLOBAL TOGGLES
-  --agentic <on|off>        Enable/disable all background agent systems
+  --agentic <on|off>        (always on — agentic systems are GA; flag is a no-op)
 
 COMPANION (mobile + remote-desktop access)
   --companion <on|off>      Enable/disable companion server (ngrok tunnel)
@@ -12931,7 +12931,6 @@ COMPANION (mobile + remote-desktop access)
 EXAMPLES
   k2 settings                              # show current
   k2 settings --mode manager
-  k2 settings --agentic off
   k2 settings --companion on
 EOF
 }
@@ -13471,7 +13470,7 @@ WIKI (per-workspace brain map under .k2/wiki/)
 SETTINGS
   settings                                      Show current settings
   settings --mode <off|agent|manager>           Workspace mode
-  settings --agentic <on|off>                   Global agentic systems toggle
+  settings --agentic <on|off>                   (always on — no-op; agentic is GA)
   settings --companion <on|off>                 Enable/disable companion tunnel
   settings --companion-password "<pw>"          Rotate companion password
 

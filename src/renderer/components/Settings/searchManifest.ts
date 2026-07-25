@@ -96,12 +96,16 @@ export function searchManifest(entries: SettingEntry[], query: string): SettingE
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
   styles: 'Styles',
-  projects: 'Workspaces',
+  projects: 'Workspaces / Agents',
   'project-groups': 'Projects',
-  'agent-skills': 'Canonical Agent Flow',
+  /** @deprecated — content under General → Workspaces */
+  'agent-skills': 'General',
   terminal: 'Terminal',
   'code-editor': 'Code Editor',
-  'editors-agents': 'Editors & Agents',
+  editors: 'Editors',
+  agents: 'LLMs',
+  /** @deprecated — use Editors / LLMs */
+  'editors-agents': 'LLMs',
   keybindings: 'Keybindings',
   timer: 'Timer',
   heartbeats: 'Heartbeats',

@@ -215,12 +215,11 @@ export function useTerminalShortcuts(cwd: string): void {
 
 function switchToPinnedByIndex(targetIdx: number): void {
   const projectsState = useProjectsStore.getState()
-  const agenticEnabled = useSettingsStore.getState().agenticSystemsEnabled
 
   // Agent workspaces (top of sidebar) + pinned workspaces
-  const agentProjects = agenticEnabled
-    ? projectsState.projects.filter((p) => p.agentMode === 'agent' || p.agentMode === 'custom')
-    : []
+  const agentProjects = projectsState.projects.filter(
+    (p) => p.agentMode === 'agent' || p.agentMode === 'custom',
+  )
   const pinnedProjects = projectsState.projects.filter(
     (p) => p.pinned && p.agentMode !== 'agent' && p.agentMode !== 'custom'
   )

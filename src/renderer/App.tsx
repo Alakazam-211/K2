@@ -673,14 +673,11 @@ function AppRoot(): React.JSX.Element {
   const [showQuitDialog, setShowQuitDialog] = useState(false)
   const [quitAgents, setQuitAgents] = useState<ActiveAgent[]>([])
 
-  // Start agent polling (only when agentic systems enabled)
-  const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
+  // Agent polling is always on — agentic systems are no longer optional.
   useEffect(() => {
-    if (agenticEnabled) {
-      startAgentPolling()
-    }
+    startAgentPolling()
     return () => { stopAgentPolling() }
-  }, [agenticEnabled])
+  }, [])
 
   // Check for updates on launch and every 3 hours
   useUpdateChecker()

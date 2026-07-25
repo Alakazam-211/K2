@@ -43,41 +43,55 @@ import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 import { useSettingsStore, sanitizeOwnerDisplayName, OWNER_DISPLAY_NAME_MAX } from '@/stores/settings'
 import { useUpdateStore } from '@/stores/update'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
-import { AgenticSystemsToggle } from '../shared/AgenticSystemsToggle'
-import { ClaudeAuthRefreshRow } from '../shared/ClaudeAuthRefreshRow'
 import { LocalLLMSettings } from '../shared/LocalLLMSettings'
+import { AgentSkillsSection } from './AgentSkillsSection'
 import type { SettingEntry } from '../searchManifest'
 import { webFeatures } from '@/web/features'
+import type { GeneralSubTab } from '@/stores/settings'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
-  { id: 'general.app-version', section: 'general', label: 'App Version', description: 'K2 version and auto-updater', keywords: ['update', 'version', 'check', 'release'] },
-  { id: 'general.cli-version', section: 'general', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
-  { id: 'general.agentic-systems', section: 'general', label: 'Agentic Systems', description: 'Enable AI agent orchestration, workspace manager, heartbeat, review queue', keywords: ['ai', 'agent', 'agentic', 'heartbeat', 'manager', 'review', 'beta'] },
-  { id: 'general.claude-auth-refresh', section: 'general', label: 'Auto-refresh Claude credentials', description: 'Background scheduler that keeps your Claude session alive', keywords: ['claude', 'auth', 'token', 'login', 'credentials', 'scheduler'] },
-  { id: 'general.daemon', section: 'general', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
-  { id: 'general.keep-daemon-on-quit', section: 'general', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
-  { id: 'general.restart-host', section: 'general', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
-  { id: 'general.update-host', section: 'general', label: 'Update connected host', description: 'Update the REMOTE machine you are connected to over K2 Connect', keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
-  { id: 'general.active-window-hours', section: 'general', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
-  { id: 'general.completion-sound', section: 'general', label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
-  { id: 'general.owner-display-name', section: 'general', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
-  { id: 'general.ai-assistant', section: 'general', label: 'AI Workspace Assistant', description: 'Local LLM for natural-language workspace operations (⌘L)', keywords: ['ai', 'assistant', 'llm', 'cmd+l', 'qwen', 'model', 'local', 'gguf'] },
-  { id: 'general.model-status', section: 'general', label: 'Model Status', description: 'Current local LLM load state', keywords: ['model', 'llm', 'loaded', 'download'] },
-  { id: 'general.download-model', section: 'general', label: 'Download Default Model', description: 'Fetch Qwen2.5-1.5B locally (~1.1GB)', keywords: ['download', 'model', 'qwen', 'local llm'] },
-  { id: 'general.custom-model', section: 'general', label: 'Custom Model', description: 'Point at any GGUF model file', keywords: ['model', 'gguf', 'custom', 'load'] },
-  { id: 'general.config-location', section: 'general', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
-  { id: 'general.reset-all', section: 'general', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
+  { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater', keywords: ['update', 'version', 'check', 'release'] },
+  { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
+  { id: 'general.owner-display-name', section: 'general', group: 'General', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
+  { id: 'general.config-location', section: 'general', group: 'General', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
+  { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
+  { id: 'general.active-window-hours', section: 'general', group: 'Workspaces', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
+  { id: 'general.completion-sound', section: 'general', group: 'Workspaces', label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
+  { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
+  { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
+  { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
+  { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected host', description: 'Update the REMOTE machine you are connected to over K2 Connect', keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
+  { id: 'general.ai-assistant', section: 'general', group: 'Local LLM', label: 'AI Workspace Assistant', description: 'Local LLM for natural-language workspace operations (⌘L)', keywords: ['ai', 'assistant', 'llm', 'cmd+l', 'qwen', 'model', 'local', 'gguf', 'beta'] },
+  { id: 'general.model-status', section: 'general', group: 'Local LLM', label: 'Model Status', description: 'Current local LLM load state', keywords: ['model', 'llm', 'loaded', 'download'] },
+  { id: 'general.download-model', section: 'general', group: 'Local LLM', label: 'Download Default Model', description: 'Fetch Qwen2.5-1.5B locally (~1.1GB)', keywords: ['download', 'model', 'qwen', 'local llm'] },
+  { id: 'general.custom-model', section: 'general', group: 'Local LLM', label: 'Custom Model', description: 'Point at any GGUF model file', keywords: ['model', 'gguf', 'custom', 'load'] },
+]
+
+const GENERAL_TABS: Array<{ id: GeneralSubTab; label: string; beta?: boolean }> = [
+  { id: 'general', label: 'General' },
+  { id: 'workspaces', label: 'Workspaces' },
+  { id: 'server', label: 'Server' },
+  { id: 'local-llm', label: 'Local LLM', beta: true },
 ]
 
 export function GeneralSection(): React.JSX.Element {
   const resetAllSettings = useSettingsStore((s) => s.resetAllSettings)
+  const generalSubTab = useSettingsStore((s) => s.generalSubTab)
   // B2: when connected to a REMOTE host, the left "App Version" row is THIS
   // Mac's local Tauri app version — NOT the host's. Label it "This Mac" so
   // it can't be mistaken for the host version (the host version lives in the
   // right-pane UpdateHostRow). `activeHost === 'local'` ⇒ no badge.
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const isRemote = activeHost !== 'local'
+  const [tab, setTab] = useState<GeneralSubTab>('general')
   const [confirming, setConfirming] = useState(false)
+
+  // Deep-link: openSettings('agent-skills') sets generalSubTab to workspaces.
+  useEffect(() => {
+    if (!generalSubTab) return
+    setTab(generalSubTab)
+    useSettingsStore.setState({ generalSubTab: null })
+  }, [generalSubTab])
   const [currentVersion, setCurrentVersion] = useState<string>('')
   const updateStatus = useUpdateStore((s) => s.status)
   const updateVersion = useUpdateStore((s) => s.version)
@@ -108,12 +122,44 @@ export function GeneralSection(): React.JSX.Element {
   // right pane is empty and the divider is hidden — General just stays at
   // half-width. (See Settings.tsx.)
   return (
-    <div className="w-full">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-4">General</h2>
+    <div className="w-full flex flex-col min-h-0">
+      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">General</h2>
 
+      <div
+        role="tablist"
+        aria-label="General settings"
+        className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] mb-4 flex-shrink-0"
+      >
+        {GENERAL_TABS.map((t) => {
+          const active = tab === t.id
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(t.id)}
+              className={`px-3 py-2 text-[11px] font-medium transition-colors no-drag cursor-pointer border-b-2 -mb-px inline-flex items-center gap-1.5 ${
+                active
+                  ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                  : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+              }`}
+            >
+              {t.label}
+              {t.beta && (
+                <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+                  beta
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {tab === 'general' && (
       <div className="space-y-4">
         {/* Version & Update */}
-        <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
+        <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.app-version">
           <span className="flex items-center gap-2 min-w-0">
             <span className="text-xs text-[var(--color-text-secondary)]">K2 by Alakazam Labs</span>
             {isRemote && (
@@ -231,39 +277,16 @@ export function GeneralSection(): React.JSX.Element {
             with the auto-show on first launch after an update (0.38.7). */}
         <WhatsNewRow />
 
-        {/* Agentic Systems master switch */}
-        <AgenticSystemsToggle />
-
-        {/* Claude Auth Auto-Refresh */}
-        <ClaudeAuthRefreshRow />
-
-        {/* P1.C — configurable Active-Bar tenure window */}
-        <ActiveWindowHoursRow />
-
-        {/* F4 — completion chime for unseen agent completions */}
-        <CompletionSoundRow />
-
         {/* "Your display name" — the `from` attribution agents see when
             you message them via the composer (resolved server-side). */}
         <OwnerDisplayNameRow />
 
-        {/* K2 Daemon — persistent-agents service */}
-        <DaemonRow />
-
-        {/* Keep-daemon-on-quit preference: honored by Cmd+Q and by the
-            menubar's Quit K2 item. Default ON pairs with the menubar
-            icon so users always have visibility into what's running. */}
-        <KeepDaemonOnQuitRow />
-
-        {/* AI Workspace Assistant (Cmd+L) — core feature, belongs in General */}
-        <LocalLLMSettings />
-
-        <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
+        <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.config-location">
           <span className="text-xs text-[var(--color-text-secondary)]">Config Location</span>
           <span className="text-xs text-[var(--color-text-muted)]">~/.k2/settings.json</span>
         </div>
 
-        <div className="pt-4">
+        <div className="pt-4" data-settings-id="general.reset-all">
           {confirming ? (
             <div className="flex items-center gap-2">
               <span className="text-xs text-[var(--color-status-error-soft)]">Reset all settings to defaults?</span>
@@ -293,6 +316,40 @@ export function GeneralSection(): React.JSX.Element {
           )}
         </div>
       </div>
+      )}
+
+      {tab === 'workspaces' && (
+        <div className="space-y-6">
+          {/* Prefs stay ~half-pane width; guide below uses the full column. */}
+          <div className="max-w-xl space-y-4">
+            <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed -mt-1">
+              How workspaces behave in the sidebar Active bar and when agents finish out of view.
+            </p>
+            <ActiveWindowHoursRow />
+            <CompletionSoundRow />
+          </div>
+          {/* Help guide: was a top-level “Canonical Agent Flow” settings page. */}
+          <div className="border-t border-[var(--color-border)] pt-5 w-full max-w-5xl">
+            <AgentSkillsSection />
+          </div>
+        </div>
+      )}
+
+      {tab === 'server' && (
+        <div className="space-y-4">
+          <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed -mt-1">
+            Local K2 daemon — keeps agents and Companion running when the window is closed.
+          </p>
+          <DaemonRow />
+          <KeepDaemonOnQuitRow />
+        </div>
+      )}
+
+      {tab === 'local-llm' && (
+        <div>
+          <LocalLLMSettings />
+        </div>
+      )}
     </div>
   )
 }
@@ -390,7 +447,7 @@ function CompletionSoundRow(): React.JSX.Element {
 
   return (
     <div
-      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
+      className="flex items-center justify-between py-2"
       data-settings-id="general.completion-sound"
     >
       <div className="flex-1 min-w-0 mr-3">

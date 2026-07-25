@@ -314,29 +314,25 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
     .map_err(|e| format!("Project not found: {}", e))
 }
 
-/// Read the global agentic-systems toggle from
-/// `~/.k2so/settings.json` via [`crate::app_settings`]. Defaults to
-/// `false` when the field is missing — the AppSettings serde default
-/// for `agentic_systems_enabled`.
+/// Agentic systems are always on (GA). The stored field remains for
+/// settings.json / `/cli/agentic` wire compatibility, but readers never
+/// branch on it to hide features.
 ///
 /// **0.39.0 migration:** these accessors used to read the SQLite
 /// `app_settings (key, value)` table created by migration 0050. That
 /// table is now dead-but-inert (kept in the migration ladder for
-/// rollback safety only); the canonical store is the JSON file, which
-/// shares the same writer lock (`SETTINGS_LOCK`) as every other
-/// daemon-side setting and so closes the F3 two-writers race for this
-/// toggle too.
+/// rollback safety only); the canonical store is the JSON file.
 pub fn get_agentic_enabled() -> bool {
-    crate::app_settings::load().agentic_systems_enabled
+    true
 }
 
-/// Set the global agentic-systems toggle in `~/.k2so/settings.json`
-/// via [`crate::app_settings::update`]. The update is atomic across
-/// concurrent callers (the `SETTINGS_LOCK` mutex serializes the
-/// load+merge+save critical section).
-pub fn set_agentic_enabled(enabled: bool) -> Result<(), String> {
+/// Persist `agenticSystemsEnabled: true` only. Off is rejected — the
+/// product no longer supports disabling agentic systems. Callers that
+/// pass `false` still succeed (no error) but the stored value stays on
+/// so older clients cannot turn the feature off.
+pub fn set_agentic_enabled(_enabled: bool) -> Result<(), String> {
     crate::app_settings::update(serde_json::json!({
-        "agenticSystemsEnabled": enabled,
+        "agenticSystemsEnabled": true,
     }))
     .map(|_| ())
 }
@@ -1417,32 +1413,30 @@ mod tests {
     }
 
     #[test]
-    fn agentic_enabled_round_trips_through_app_settings() {
+    fn agentic_enabled_is_always_on() {
         let _g = HOME_TEST_LOCK.lock();
         let _home = HomeGuard::new();
 
-        // Default when the JSON file is absent is `true` — the
-        // `AppSettings::default()` value for `agentic_systems_enabled`.
+        // GA: accessor always returns true regardless of disk state.
         assert!(
             get_agentic_enabled(),
-            "fresh ~/.k2/settings.json → agentic_systems_enabled defaults to true",
+            "fresh install → agentic systems are always on",
         );
 
-        // Set true → read true.
         set_agentic_enabled(true).expect("set true");
-        assert!(get_agentic_enabled(), "after set(true), read must be true");
+        assert!(get_agentic_enabled(), "after set(true), still on");
 
-        // Set false → read false (update() rewrites the JSON in place).
-        set_agentic_enabled(false).expect("set false");
+        // Off is a no-op for the public API — still reports on, and
+        // force-writes true so stale false cannot stick.
+        set_agentic_enabled(false).expect("set false must not error");
         assert!(
-            !get_agentic_enabled(),
-            "after set(false), read must be false",
+            get_agentic_enabled(),
+            "after set(false), public API still reports on",
         );
-
-        // And confirm a fresh `app_settings::load()` (the canonical
-        // round-trip path) sees the same value — guards against the
-        // accessor accidentally caching in-process.
-        assert!(!crate::app_settings::load().agentic_systems_enabled);
+        assert!(
+            crate::app_settings::load().agentic_systems_enabled,
+            "disk must store true after any set_agentic_enabled call",
+        );
     }
 
     #[test]

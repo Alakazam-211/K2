@@ -10,7 +10,8 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import TrafficLightSpacer from '@/components/TopBar/TrafficLightSpacer'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
 import { CodeEditorSettingsSection, CODE_EDITOR_MANIFEST } from './sections/CodeEditorSettingsSection'
-import { EditorsAgentsSection, EDITORS_AGENTS_MANIFEST } from './sections/EditorsAgentsSection'
+import { EditorsSection, EDITORS_MANIFEST } from './sections/EditorsSection'
+import { AgentsSection, AGENTS_MANIFEST } from './sections/AgentsSection'
 import { KeybindingsSection, KEYBINDINGS_MANIFEST } from './sections/KeybindingsSection'
 import { TimerSection, TIMER_MANIFEST } from './sections/TimerSection'
 import { CompanionSection, COMPANION_MANIFEST } from './sections/CompanionSection'
@@ -24,7 +25,7 @@ import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSecti
 // confused with ProjectsSection above, the LEGACY workspaces section
 // (id 'projects', label "Workspaces").
 import ProjectGroupSettings from '../Projects/ProjectSettings'
-import { AgentSkillsSection, AGENT_SKILLS_MANIFEST } from './sections/AgentSkillsSection'
+import { AGENT_SKILLS_MANIFEST } from './sections/AgentSkillsSection'
 // HeartbeatsPanel is rendered inline inside ProjectsSection now; manifest
 // stays exported from HeartbeatsSection so searches still find it.
 import { HEARTBEATS_MANIFEST } from './sections/HeartbeatsSection'
@@ -36,11 +37,13 @@ import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { webFeatures } from '@/web/features'
 
 // ── Section nav items ────────────────────────────────────────────────
-const SECTIONS: { id: SettingsSection; label: string; agenticOnly?: boolean }[] = [
+// Agentic systems are always on. Canonical Agent Flow lives under
+// General → Workspaces (not a top-level nav item).
+const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'styles', label: 'Styles' },
-  { id: 'projects', label: 'Workspaces' },
-  { id: 'agent-skills', label: 'Canonical Agent Flow', agenticOnly: true },
+  { id: 'agents', label: 'LLMs' },
+  { id: 'projects', label: 'Workspaces / Agents' },
   { id: 'project-groups', label: 'Projects' },
   { id: 'k2-connect', label: 'K2 Connect' },
   { id: 'companion', label: 'K2 Companion' },
@@ -48,8 +51,8 @@ const SECTIONS: { id: SettingsSection; label: string; agenticOnly?: boolean }[] 
   { id: 'email-link', label: 'Email Link' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'code-editor', label: 'Code Editor' },
-  { id: 'editors-agents', label: 'Editors & Agents' },
-  { id: 'wake-scheduler', label: 'Heartbeats', agenticOnly: true },
+  { id: 'editors', label: 'Editors' },
+  { id: 'wake-scheduler', label: 'Heartbeats' },
   { id: 'keybindings', label: 'Keybindings' },
   { id: 'timer', label: 'Timer' },
   // Hosted web: macOS FDA / Accessibility etc. do not apply — omit nav entry.
@@ -81,11 +84,9 @@ export default function Settings(): React.JSX.Element {
   const isRemote = useConnectHostStore((s) => s.activeHost) !== 'local'
   const [searchOpen, setSearchOpen] = useState(false)
 
-  // Flat manifest across every section — filtered by agenticSystemsEnabled
-  // so users can't jump to a gated section they don't have enabled.
-  const agenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
-  const allEntries = useMemo<SettingEntry[]>(() => {
-    const combined: SettingEntry[] = [
+  // Flat manifest across every section (agentic sections always included).
+  const allEntries = useMemo<SettingEntry[]>(
+    () => [
       ...GENERAL_MANIFEST,
       ...STYLES_MANIFEST,
       ...PROJECTS_MANIFEST,
@@ -93,7 +94,8 @@ export default function Settings(): React.JSX.Element {
       ...HEARTBEATS_MANIFEST,
       ...TERMINAL_MANIFEST,
       ...CODE_EDITOR_MANIFEST,
-      ...EDITORS_AGENTS_MANIFEST,
+      ...EDITORS_MANIFEST,
+      ...AGENTS_MANIFEST,
       ...KEYBINDINGS_MANIFEST,
       ...TIMER_MANIFEST,
       ...COMPANION_MANIFEST,
@@ -104,15 +106,9 @@ export default function Settings(): React.JSX.Element {
       ...WAKE_SCHEDULER_MANIFEST,
       ...(webFeatures.permissions ? PERMISSIONS_MANIFEST : []),
       ...DICTATION_LAB_MANIFEST,
-    ]
-    if (agenticEnabled) return combined
-    return combined.filter(
-      (e) =>
-        e.section !== 'agent-skills' &&
-        e.section !== 'heartbeats' &&
-        e.section !== 'wake-scheduler'
-    )
-  }, [agenticEnabled])
+    ],
+    [],
+  )
 
   // Hosted web: if a prior session left activeSection on amputated
   // Permissions, bounce to General so the content pane isn't blank.
@@ -145,6 +141,18 @@ export default function Settings(): React.JSX.Element {
   // so the user's eye lands on the right control.
   const handlePick = useCallback((entry: SettingEntry) => {
     setSearchOpen(false)
+    // General sub-tabs: search entries carry a group so we open the right tab
+    // (e.g. Canonical Agent Flow → Workspaces) before scrolling to the row.
+    if (entry.section === 'general' && entry.group) {
+      const subByGroup: Record<string, 'general' | 'workspaces' | 'server' | 'local-llm'> = {
+        General: 'general',
+        Workspaces: 'workspaces',
+        Server: 'server',
+        'Local LLM': 'local-llm',
+      }
+      const sub = subByGroup[entry.group]
+      if (sub) useSettingsStore.setState({ generalSubTab: sub })
+    }
     setSection(entry.section)
     // Defer so the section mounts, renders, and gets a chance to lay out
     // before we query for the row. Two rAFs is usually enough even for
@@ -205,7 +213,7 @@ export default function Settings(): React.JSX.Element {
           </button>
         </div>
         <nav className="flex-1 py-1 overflow-y-auto">
-          {SECTIONS.filter((s) => !s.agenticOnly || useSettingsStore.getState().agenticSystemsEnabled).map((s) => (
+          {SECTIONS.map((s) => (
             <button
               key={s.id}
               onClick={() => setSection(s.id)}
@@ -239,6 +247,7 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'project-groups' ||
           activeSection === 'k2-connect' ||
           activeSection === 'connections' ||
+          activeSection === 'agents' ||
           activeSection === 'email-hosting' ||
           activeSection === 'email-link'
             ? 'overflow-hidden p-0'
@@ -248,26 +257,19 @@ export default function Settings(): React.JSX.Element {
         }`}
       >
         {activeSection === 'general' && (
-          /* General always sits in the LEFT half (half-width). The RIGHT half
-             carries the host-only controls + a full-height divider ONLY when
-             connected to a remote host; when local it's an empty pane with no
-             divider (General just stays half-width). Mirrors the k2-connect /
-             connections half/half shell layout below. */
+          /* When local: full width (Canonical Agent Flow needs room). When
+             remote: half/half with Connected host controls on the right. */
           <div className="flex h-full min-h-0">
             <div className="flex-1 min-w-0 overflow-y-auto p-6">
               <GeneralSection />
             </div>
-            <div
-              className={`flex-1 min-w-0 overflow-y-auto p-6 ${
-                isRemote ? 'border-l border-[var(--color-border)]' : ''
-              }`}
-            >
-              {isRemote && (
+            {isRemote && (
+              <div className="flex-1 min-w-0 overflow-y-auto p-6 border-l border-[var(--color-border)]">
                 <SectionErrorBoundary>
                   <GeneralRemoteHostPanel />
                 </SectionErrorBoundary>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
         {activeSection === 'styles' && (
@@ -277,7 +279,16 @@ export default function Settings(): React.JSX.Element {
         )}
         {activeSection === 'terminal' && <TerminalSection />}
         {activeSection === 'code-editor' && <CodeEditorSettingsSection />}
-        {activeSection === 'editors-agents' && <EditorsAgentsSection />}
+        {activeSection === 'editors' && (
+          <SectionErrorBoundary>
+            <EditorsSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'agents' && (
+          <SectionErrorBoundary>
+            <AgentsSection />
+          </SectionErrorBoundary>
+        )}
         {activeSection === 'keybindings' && <KeybindingsSection />}
         {activeSection === 'timer' && (
           <SectionErrorBoundary>
@@ -314,11 +325,6 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'email-link' && (
           <SectionErrorBoundary>
             <EmailLinkSection />
-          </SectionErrorBoundary>
-        )}
-        {activeSection === 'agent-skills' && (
-          <SectionErrorBoundary>
-            <AgentSkillsSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'wake-scheduler' && (

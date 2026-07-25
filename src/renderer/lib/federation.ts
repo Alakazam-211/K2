@@ -102,8 +102,10 @@ export function peerMatchesHostname(peer: FederationPeer, hostname: string): boo
 /**
  * True when the ACTIVE daemon already has a **Trusted** pin that routes to
  * `hostname`. Used by the Connections tile "Peer: trusted" badge / to hide
- * the Pair button after a successful pair. Fail-soft: federation off or
- * unreachable → false (tile still offers Pair so the operator can try).
+ * the Pair button after a successful pair. Relative to whatever host is
+ * active (Local or a signed-in remote) — not always "this Mac". Fail-soft:
+ * federation off or unreachable → false (tile still offers Pair so the
+ * operator can try).
  */
 export async function isTrustedPeerHost(hostname: string): Promise<boolean> {
   if (!hostname.trim()) return false
@@ -333,10 +335,11 @@ function looksLikeHost(host: string): boolean {
 }
 
 /**
- * Establish MUTUAL trust between the active (local) daemon and `host`, using
- * owner authority on both. Idempotent: if both directions are already Trusted
- * it returns immediately. Fails LOUD (and leaves no half-pair beyond what each
- * confirm already committed) if any step errors.
+ * Establish MUTUAL trust between the ACTIVE daemon (Local or the remote the
+ * client is signed into) and `host`, using owner authority on both. Idempotent:
+ * if both directions are already Trusted it returns immediately. Fails LOUD
+ * (and leaves no half-pair beyond what each confirm already committed) if any
+ * step errors. Cloud↔cloud: sign into server A, pair tile for server B.
  */
 export async function autoPairWithHost(host: string): Promise<void> {
   // Distinguish an AUTH failure (403 — not an owner/admin, or not signed in)

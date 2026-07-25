@@ -9,6 +9,11 @@
 // token goes to the OS keychain ONLY when "Remember password" is on, else
 // it's kept in memory for the session.
 //
+// The list is ALWAYS this Mac's address book (same source as the top-bar
+// ServerSwitcher) — including while signed into a remote. That keeps
+// cloud↔cloud "Pair as federated peer" reachable: Pair pins the ACTIVE
+// daemon to the tile host. External agents on the right stay host-aware.
+//
 // Selecting/connecting a host reuses the top-bar switcher path
 // (`pickHost`) so a host without a remembered token drops into the same
 // full-screen sign-in.
@@ -85,8 +90,9 @@ export const CONNECTIONS_MANIFEST: SettingEntry[] = [
     id: 'connections.pair-federated-peer',
     section: 'connections',
     label: 'Pair as federated peer',
-    description: 'Establish mutual federation trust between this Mac and a saved server so cross-server agents can connect',
-    keywords: ['federation', 'peer', 'pair', 'federated', 'cross-server', 'trust', 'agents'],
+    description:
+      'Establish mutual federation trust between the active host (This Mac or a signed-in server) and another saved server so cross-server agents can connect — including cloud-to-cloud',
+    keywords: ['federation', 'peer', 'pair', 'federated', 'cross-server', 'trust', 'agents', 'cloud'],
   },
 ]
 
@@ -131,9 +137,12 @@ export function ConnectionsSection(): React.JSX.Element {
   const removeHost = useConnectHostStore((s) => s.removeHost)
   const pickHost = useConnectHostStore((s) => s.pickHost)
 
-  // The device address book (saved-server tiles + add form) is a per-DEVICE
-  // concept — only meaningful when the active daemon is local. On a remote host
-  // it's replaced by the host-aware FederationOverview.
+  // The address book is always the LOCAL CLIENT's saved servers
+  // (~/.k2so/connect-hosts.json on this Mac) — never the remote machine's book.
+  // We keep it visible while signed into a remote so operators can Pair cloud
+  // servers to each other (autoPairWithHost uses the ACTIVE daemon + the tile).
+  // Top-bar ServerSwitcher also reads this same local store (no "Inception").
+  // The right pane (FederationOverview) stays host-aware for external agents.
   const isLocalActive = activeHost === 'local'
   const activeHostLabel = isLocalActive ? 'This Mac' : activeHost.label || activeHost.hostname
 
@@ -203,6 +212,31 @@ export function ConnectionsSection(): React.JSX.Element {
       return
     }
     const passwordEntered = draft.password // do NOT trim — passwords may have edge whitespace
+    const isNew = !draft.id
+
+    // New hosts must prove credentials before they enter the address book —
+    // otherwise a wrong password still creates a tile, and a second "add"
+    // attempt leaves two lookalike servers.
+    if (isNew && !passwordEntered) {
+      setError('Password is required when adding a server.')
+      return
+    }
+
+    // Block duplicate URL (same host:port:scheme) on ADD. Edits keep their id.
+    if (isNew) {
+      const dup = hosts.find(
+        (h) =>
+          h.hostname === parsed.hostname &&
+          h.port === parsed.port &&
+          h.secure === parsed.secure,
+      )
+      if (dup) {
+        setError(
+          `A server for ${parsed.hostname}${parsed.port === 443 && parsed.secure ? '' : `:${parsed.port}`} is already saved as “${dup.label}”. Edit that tile (or remove it) instead of adding a duplicate.`,
+        )
+        return
+      }
+    }
 
     const id = draft.id ?? `host-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const existing = draft.id ? hosts.find((h) => h.id === draft.id) : undefined
@@ -225,13 +259,20 @@ export function ConnectionsSection(): React.JSX.Element {
     // now (connect-users #617). A blank password on an EDIT keeps the
     // remembered one untouched (no re-login). loginToHost commits the
     // session token + lastConnectedAt into the store on success.
+    //
+    // addHost is required before loginToHost (it keys the host by id). On a
+    // FAILED login for a NEW host we remove the provisional tile so a wrong
+    // password never sticks in the list.
     if (passwordEntered) {
       setBusy(true)
       setError(null)
-      addHost(host) // make the host known so loginToHost can update it by id
+      addHost(host)
       const result = await loginToHost(host, passwordEntered)
       setBusy(false)
       if (!result.ok) {
+        if (isNew) {
+          removeHost(id)
+        }
         setError(result.reason)
         return
       }
@@ -259,20 +300,22 @@ export function ConnectionsSection(): React.JSX.Element {
     'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 
   return (
-    <div className="w-full">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Connections</h2>
+    <div className="w-full h-full min-h-0 flex flex-col">
+      {/* Middle split: address book (left) | external agents (right).
+          Trusted peer pins live on each server tile — no separate peer list. */}
+      <div className="flex flex-1 min-h-0">
+      <div className="flex-1 min-w-0 overflow-y-auto pr-3 [scrollbar-gutter:stable]">
+      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Servers</h2>
       <p className="text-[10px] text-[var(--color-text-muted)] mb-4">
+        K2 servers saved on this Mac. Passwords stay in the OS keychain only when
+        “Remember password” is on. Peer trust on each tile is relative to{' '}
+        <span className="text-[var(--color-text-secondary)]">{activeHostLabel}</span>
         {isLocalActive
-          ? 'K2 servers this device connects to. Each server’s password is stored in your OS keychain only when “Remember password” is on — never in plain text. Below: who the local daemon is federated with.'
-          : `Viewing ${activeHostLabel}. The saved-servers address book is per-device and hidden while you’re on a remote host — instead, here is who ${activeHostLabel} is federated with.`}
+          ? ' (this device).'
+          : ' — pair another server while signed in here to federate the two clouds.'}
       </p>
 
-      {/* Device address book (Local tile + saved hosts + add/edit form) is a
-          per-DEVICE client concept — show it only when the active daemon is
-          local. On a remote host it'd be confusing (it's THIS Mac's list, not
-          the remote's), so it's replaced by the federation overview below. */}
-      {isLocalActive && (
-      <>
+      {/* Local client address book — always shown (even while remote is active). */}
       {/* Local — always present, never editable. */}
       <div className="flex items-center gap-2 mb-2 px-3 py-2 border border-[var(--color-border)]">
         <span
@@ -300,18 +343,14 @@ export function ConnectionsSection(): React.JSX.Element {
             (a.label || a.hostname).localeCompare(b.label || b.hostname, undefined, { sensitivity: 'base' })
           )
           .map((h) => {
-          // This address book only renders when the LOCAL daemon is active
-          // (isLocalActive gate above), so no saved host can be the active
-          // one — TS correctly narrows `activeHost` to 'local' here and the
-          // old `activeHost !== 'local' && activeHost.id === h.id` check
-          // was provably always false.
-          const isActive = false
+          const isActive = activeHost !== 'local' && activeHost.id === h.id
           return (
             <HostTile
               key={h.id}
               host={h}
               isActive={isActive}
               connectionStatus={connectionStatus}
+              activePeerSideLabel={activeHostLabel}
               onEdit={() => beginEdit(h)}
               onRemove={() => removeHost(h.id)}
               onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
@@ -389,12 +428,12 @@ export function ConnectionsSection(): React.JSX.Element {
           + Add a server
         </button>
       )}
-      </>
-      )}
+      </div>
 
-      {/* Host-aware federation overview — the ACTIVE daemon's peers + cross-agent
-          connections (local or remote). Always shown. */}
-      <FederationOverview refreshKey={fedRefreshKey} />
+      <div className="flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] pl-6 pr-3 [scrollbar-gutter:stable]">
+        <FederationOverview refreshKey={fedRefreshKey} />
+      </div>
+      </div>
     </div>
   )
 }
@@ -407,13 +446,14 @@ export function ConnectionsSection(): React.JSX.Element {
  *  token) disables the owner-gated controls and shows a "sign in" hint.
  *
  *  "Pair as federated peer" establishes mutual trust between the ACTIVE
- *  daemon (this Mac, when the address book is shown) and this saved host —
+ *  daemon (Local or whichever remote you're signed into) and this saved host —
  *  the missing step between "Federation: on" and the Federated Connections
- *  server picker. */
+ *  server picker. Hidden when this tile is the active host (can't pair self). */
 function HostTile({
   host,
   isActive,
   connectionStatus,
+  activePeerSideLabel,
   onEdit,
   onRemove,
   onFederationPeersChanged,
@@ -421,6 +461,8 @@ function HostTile({
   host: ConnectHost
   isActive: boolean
   connectionStatus: ConnectionStatus
+  /** Display name of the ACTIVE daemon for Peer/Pair copy ("This Mac" / server label). */
+  activePeerSideLabel: string
   onEdit: () => void
   onRemove: () => void
   onFederationPeersChanged?: () => void
@@ -538,7 +580,7 @@ function HostTile({
       setPeerPaired('yes')
       setPairMsg({
         ok: true,
-        text: `Paired with ${label} — it will show under Federated servers and in workspace Federated Connections.`,
+        text: `Paired ${activePeerSideLabel} ↔ ${label} — available in workspace Federated Connections.`,
       })
       onFederationPeersChanged?.()
     } catch (e) {
@@ -905,17 +947,17 @@ function HostTile({
           >
             {federationBadgeText(federation)}
           </span>
-          {!signedOut && peerPaired === 'yes' && (
+          {!signedOut && !isActive && peerPaired === 'yes' && (
             <span
               className="text-[9px] px-1.5 py-0.5 border whitespace-nowrap no-drag border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
-              title="This Mac already has a Trusted federation pin for this server"
+              title={`${activePeerSideLabel} already has a Trusted federation pin for this server`}
             >
               Peer: trusted
             </span>
           )}
           {/* "Active" badge only — switching to a host happens from the
-              server switcher / K2 Connect view, not here. The tile is for
-              managing the host in place (Sign in / Restart / updates). */}
+              server switcher, not here. The tile is for managing the host in
+              place (Sign in / Restart / updates / Pair). */}
           {isActive && (
             <span className="text-[10px] text-[var(--color-text-muted)]">Active</span>
           )}
@@ -952,34 +994,36 @@ function HostTile({
             </button>
           )}
           {/* Chicken-and-egg fix: enable federation on both sides still leaves
-              the peer store empty until mutual trust is pinned. This button
-              runs autoPairWithHost (owner tokens on both daemons). */}
-          {peerPaired === 'yes' ? (
-            <button
-              type="button"
-              onClick={() => void doPairPeer()}
-              disabled={pairBusy || reconnecting}
-              className={BTN_SECONDARY}
-              title="Already paired — click to re-check mutual trust"
-            >
-              {pairBusy ? 'Pairing…' : 'Re-pair peer'}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => void doPairPeer()}
-              disabled={pairBusy || reconnecting || federation === 'off'}
-              className={BTN_ACCENT}
-              data-settings-id="connections.pair-federated-peer"
-              title={
-                federation === 'off'
-                  ? 'Enable federation on this server (and on this Mac under K2 Connect) first'
-                  : 'Establish mutual federation trust between this Mac and this server'
-              }
-            >
-              {pairBusy ? 'Pairing…' : peerPaired === 'checking' ? 'Checking peer…' : 'Pair as federated peer'}
-            </button>
-          )}
+              the peer store empty until mutual trust is pinned. Pair is relative
+              to the ACTIVE daemon (Local or the remote you're signed into) —
+              never offered on the active host's own tile (can't pair self). */}
+          {!isActive &&
+            (peerPaired === 'yes' ? (
+              <button
+                type="button"
+                onClick={() => void doPairPeer()}
+                disabled={pairBusy || reconnecting}
+                className={BTN_SECONDARY}
+                title={`Already paired with ${activePeerSideLabel} — click to re-check mutual trust`}
+              >
+                {pairBusy ? 'Pairing…' : 'Re-pair peer'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void doPairPeer()}
+                disabled={pairBusy || reconnecting || federation === 'off'}
+                className={BTN_ACCENT}
+                data-settings-id="connections.pair-federated-peer"
+                title={
+                  federation === 'off'
+                    ? `Enable federation on this server (and on ${activePeerSideLabel} under K2 Connect) first`
+                    : `Establish mutual federation trust between ${activePeerSideLabel} and this server`
+                }
+              >
+                {pairBusy ? 'Pairing…' : peerPaired === 'checking' ? 'Checking peer…' : 'Pair as federated peer'}
+              </button>
+            ))}
           <button onClick={() => void doRestart()} disabled={restartBusy || reconnecting} className={BTN_ORANGE}>
             {restartBusy ? 'Restarting…' : reconnecting ? 'Reconnecting…' : 'Restart'}
           </button>

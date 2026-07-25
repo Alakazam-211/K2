@@ -14,8 +14,9 @@ import { EditorsAgentsSection, EDITORS_AGENTS_MANIFEST } from './sections/Editor
 import { KeybindingsSection, KEYBINDINGS_MANIFEST } from './sections/KeybindingsSection'
 import { TimerSection, TIMER_MANIFEST } from './sections/TimerSection'
 import { CompanionSection, COMPANION_MANIFEST } from './sections/CompanionSection'
-import { ConnectionsSection, CONNECTIONS_MANIFEST } from './sections/ConnectionsSection'
-import { K2ConnectSection, K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
+import { CONNECTIONS_MANIFEST } from './sections/ConnectionsSection'
+import { K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
+import { K2ConnectSettingsShell } from './sections/K2ConnectSettingsShell'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
@@ -289,23 +290,11 @@ export default function Settings(): React.JSX.Element {
           </SectionErrorBoundary>
         )}
         {(activeSection === 'k2-connect' || activeSection === 'connections') && (
-          <div className="flex h-full min-h-0">
-            {/* Left pane: K2 Connect (host/expose). Scrolls independently. */}
-            <div className="flex-1 min-w-0 overflow-y-auto p-6">
-              <SectionErrorBoundary>
-                <K2ConnectSection />
-              </SectionErrorBoundary>
-            </div>
-            {/* Right pane: Connections (servers you connect to). The
-                border-l is a full-height divider because both flex panes
-                stretch to the container's h-full (mirrors the Workspaces
-                settings layout). */}
-            <div className="flex-1 min-w-0 overflow-y-auto p-6 border-l border-[var(--color-border)]">
-              <SectionErrorBoundary>
-                <ConnectionsSection />
-              </SectionErrorBoundary>
-            </div>
-          </div>
+          <SectionErrorBoundary>
+            {/* Host | Servers primary tabs (full width). Deep-link
+                `connections` opens Servers; `k2-connect` opens Host. */}
+            <K2ConnectSettingsShell />
+          </SectionErrorBoundary>
         )}
         {activeSection === 'projects' && (
           <SectionErrorBoundary>

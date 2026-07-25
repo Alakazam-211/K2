@@ -383,7 +383,15 @@ async function clearAccountSession(): Promise<void> {
   }
 }
 
-export function K2ConnectSection(): React.JSX.Element {
+/** Host-side panels rendered under the flat K2 Connect tab strip (no nested tabs). */
+export type K2ConnectHostPanel = 'tunnel' | 'people' | 'policies'
+
+export function K2ConnectSection({
+  panel = 'tunnel',
+}: {
+  /** Which host panel to show. Shell owns the peer tabs. */
+  panel?: K2ConnectHostPanel
+}): React.JSX.Element {
   const [serverAddr, setServerAddr] = useState(DEFAULT_SERVER_ADDR)
   const [serverPort, setServerPort] = useState(String(DEFAULT_SERVER_PORT))
   const [subdomain, setSubdomain] = useState('')
@@ -1159,95 +1167,61 @@ export function K2ConnectSection(): React.JSX.Element {
   }
 
   return (
-    <div className="w-full">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
-        K2 Connect
-        <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
-          beta
-        </span>
-      </h2>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-4">
-        Expose THIS device&apos;s K2 daemon at a public URL so you can reach it from another
-        computer (the server switcher) or your phone (K2 Companion). One tunnel, both clients.
-      </p>
-
-      <div className="space-y-5">
-        {/* ── Remote access (PER-SERVER) — renders for owner/admin on BOTH
-            this Mac AND a remote host. All three switches are per-server
-            settings, so they must be settable wherever you're looking; the
-            rest of K2 Connect (tunnel config) is local-only below. Host-aware
-            persist writes to the ACTIVE server's daemon. Hidden for confirmed
-            members — defense-in-depth only: the daemon enforces owner-or-admin
-            on these keys itself (/cli/settings/update 403s a Member touching
-            federationEnabled, allowRemoteInstruct, or apiEnabled, and the
-            /cli/federation/* surface is role-gated server-side too). The
-            group pairs the federation MASTER
-            (does the cross-server surface exist at all) with the delivery
-            CONSENT (may remote principals actually message agents) and the
-            public /v1 API switch, so every remote-access surface is enabled
-            from one place. ── */}
-        {viewerRole !== 'member' && (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
-              {/* Switch, not checkbox — visually paired with the
-                  AllowRemoteInstructRow switch below so the whole Remote
-                  access group reads as one control style. */}
-              <div className="min-w-0">
-                <span className="text-xs text-[var(--color-text-secondary)]">
-                  Enable federation (cross-server agents)
-                </span>
-                <span className="text-[10px] text-[var(--color-text-muted)] ml-2">{isRemote ? 'this server' : 'this device'}</span>
+    <div className="w-full h-full min-h-0 flex flex-col">
+      {/* Scroll owned by parent shell panes; avoid nested overflow here. */}
+      <div className="space-y-5 pb-4">
+        {/* ── Policies: host-scoped remote access (active daemon) ──
+            Same SettingsGroup chrome as Account / URLs (title + left rule). */}
+        {panel === 'policies' && (
+          <SettingsGroup title="Policies">
+            {viewerRole !== 'member' ? (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
+                  <div className="min-w-0">
+                    <span className="text-xs text-[var(--color-text-secondary)]">
+                      Enable federation (cross-server agents)
+                    </span>
+                    <span className="text-[10px] text-[var(--color-text-muted)] ml-2">{isRemote ? 'this server' : 'this device'}</span>
+                  </div>
+                  <Toggle
+                    checked={federationEnabled}
+                    onChange={(next) => void setFederationEnabled(next)}
+                    aria-label="Enable federation"
+                  />
+                </div>
+                <AllowRemoteInstructRow />
+                <div
+                  className="flex items-center justify-between gap-3"
+                  data-settings-id="k2-connect.public-api"
+                >
+                  <div className="min-w-0">
+                    <span className="text-xs text-[var(--color-text-secondary)]">
+                      Enable public API (/v1)
+                    </span>
+                    <span className="text-[10px] text-[var(--color-text-muted)] ml-2">
+                      {isRemote ? 'this server' : 'this device'} · takes effect immediately, no restart
+                    </span>
+                  </div>
+                  <Toggle
+                    checked={apiEnabled}
+                    onChange={(next) => void setApiEnabled(next)}
+                    aria-label="Enable public API"
+                  />
+                </div>
+                <DnsManageEnabledRow />
+                <AgentsCanCreateConnectionsRow />
               </div>
-              <Toggle
-                checked={federationEnabled}
-                onChange={(next) => void setFederationEnabled(next)}
-                aria-label="Enable federation"
-              />
-            </div>
-            {/* Delivery consent — moved here from Settings → General so it
-                sits with the federation master it also gates (it is the
-                consent for BOTH connect-user composer messages AND paired
-                servers' inbound federation messages). NOT nested under the
-                checkbox: it works with federation off (composer path). */}
-            <AllowRemoteInstructRow />
-            {/* 0.40.43 (1c) — public /v1 API switch. ORed server-side with
-                the K2_API env flag (env stays a valid headless force-on)
-                and evaluated PER REQUEST by the daemon, so the flip is live
-                instantly: deliberately NO restart-confirmation dialog here,
-                unlike env-var changes. Owner/Admin only — the daemon 403s a
-                Member POSTing apiEnabled (this group is already hidden for
-                confirmed members; server enforcement is the real gate). */}
-            <div
-              className="flex items-center justify-between gap-3"
-              data-settings-id="k2-connect.public-api"
-            >
-              <div className="min-w-0">
-                <span className="text-xs text-[var(--color-text-secondary)]">
-                  Enable public API (/v1)
-                </span>
-                <span className="text-[10px] text-[var(--color-text-muted)] ml-2">
-                  {isRemote ? 'this server' : 'this device'} · takes effect immediately, no restart
-                </span>
-              </div>
-              <Toggle
-                checked={apiEnabled}
-                onChange={(next) => void setApiEnabled(next)}
-                aria-label="Enable public API"
-              />
-            </div>
-            {/* DNS K1 — agent DNS-mutation master (deny-by-default). Same
-                owner/admin gate as the remote-access keys above. */}
-            <DnsManageEnabledRow />
-            {/* C1 — agents-may-create-connections master (deny-by-default).
-                Owner always may add/remove; agents need this or the
-                per-workspace override. */}
-            <AgentsCanCreateConnectionsRow />
-          </div>
+            ) : (
+              <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+                Host policies are managed by an administrator.
+              </p>
+            )}
+          </SettingsGroup>
         )}
 
-        {/* K2 #628: the EXPOSE controls (account login, tunnel config,
-            start/stop) only apply to THIS Mac's own daemon. On a remote
-            host show a short note instead and let the user switch back. */}
+        {/* ── Tunnel: account + expose + URLs nested map ── */}
+        {panel === 'tunnel' && (
+        <>
         {isRemote ? (
           <div className="px-3 py-2 border border-[var(--color-border)] text-[10px] text-[var(--color-text-muted)] leading-relaxed">
             K2 Connect tunneling is managed on the machine that owns the daemon. You&apos;re
@@ -1548,7 +1522,17 @@ export function K2ConnectSection(): React.JSX.Element {
           </>
         )}
 
-        {/* ── Users / Access — role-gated multi-user list (#617 / #629) ─── */}
+        {/* URLs on Tunnel for both This Mac and remote active host */}
+        <SettingsGroup title="URLs">
+          <div data-settings-id="k2-connect.urls">
+            <TunnelUrlsPanel />
+          </div>
+        </SettingsGroup>
+        </>
+        )}
+
+        {/* ── People: Users / Access — role-gated multi-user list (#617 / #629) ─── */}
+        {panel === 'people' && (
         <SettingsGroup title="Users / Access">
           <div data-settings-id="k2-connect.users" className="space-y-3">
             {/* K2 #629: only viewers who can manage users (Owner|Admin)
@@ -1835,18 +1819,7 @@ export function K2ConnectSection(): React.JSX.Element {
             )}
           </div>
         </SettingsGroup>
-
-        {/* ── URLs — server-wide tunnel view (0074), directly beneath the
-            Users/Access list per the workspace-attribution design: tunnel
-            status + the FULL nested-subdomain table with its workspace
-            attribution column. The per-workspace drawer section shows
-            only the active workspace's URLs; THIS is where the whole
-            server's map (and unattributed labels) lives. ── */}
-        <SettingsGroup title="URLs">
-          <div data-settings-id="k2-connect.urls">
-            <TunnelUrlsPanel />
-          </div>
-        </SettingsGroup>
+        )}
       </div>
     </div>
   )

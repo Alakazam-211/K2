@@ -785,8 +785,10 @@ export function ProjectsSection(): React.JSX.Element {
         </div>
       </div>
 
-      {/* ── Right panel: selected workspace settings ── */}
-      <div className="flex-1 overflow-y-auto p-6 min-h-0 relative">
+      {/* ── Right panel: selected workspace settings ──
+          overflow-hidden (not y-auto) so only ProjectDetail's tab panel
+          scrolls — avoids a nested scrollbar that overpaints content. */}
+      <div className="flex-1 overflow-hidden p-6 min-h-0 relative flex flex-col">
         {selectedProject ? (
           <ProjectDetail
             project={selectedProject}
@@ -1236,9 +1238,9 @@ function ProjectDetail({
         onCancel={() => setCropImage(null)}
       />
     )}
-    <div className="flex flex-col h-full min-h-0 max-w-3xl">
+    <div className="flex flex-col h-full min-h-0 max-w-3xl w-full">
       {/* ── Sticky header + tabs ── */}
-      <div className="flex-shrink-0 space-y-4 pb-3">
+      <div className="flex-shrink-0 space-y-4 pb-3 pr-1">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-base font-medium text-[var(--color-text-primary)]">{project.name}</h2>
@@ -1285,8 +1287,10 @@ function ProjectDetail({
         </div>
       </div>
 
-      {/* ── Tab panels ── */}
-      <div className="flex-1 overflow-y-auto min-h-0 pt-4 space-y-6 pb-8">
+      {/* ── Tab panels ──
+          pr-3 + scrollbar-gutter so overlay scrollbars (macOS) don't sit
+          on top of toggles / swatches / list rows. */}
+      <div className="flex-1 overflow-y-auto min-h-0 pt-4 space-y-6 pb-8 pr-3 [scrollbar-gutter:stable]">
         {settingsTab === 'agent' && (
           <>
             <SettingsGroup title="Identity">

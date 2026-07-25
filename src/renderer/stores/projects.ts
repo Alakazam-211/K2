@@ -55,6 +55,62 @@ registerProjectDefaultAgentGetter(
 const TOUCH_DEBOUNCE_MS = 5 * 60 * 1000
 const _lastTouchMap = new Map<string, number>()
 
+// Remote mutate latency (color/reorder): after an optimistic mutation succeeds,
+// the daemon may broadcast ProjectsChanged (and local windows may receive
+// sync:projects). Coalesce those event-driven refetches so the actor does not
+// immediately re-pay the full N+1 projects graph over the tunnel.
+const PROJECTS_CHANGED_DEBOUNCE_MS = 150
+/** How long after an optimistic success to ignore event-driven refetches. */
+const OPTIMISTIC_SELF_ECHO_SUPPRESS_MS = 500
+let _projectsChangedTimer: ReturnType<typeof setTimeout> | null = null
+let _suppressProjectsChangedUntil = 0
+let _pendingProjectsChanged = false
+
+/** Mark that this client just completed an optimistic projects mutation so
+ *  a trailing ProjectsChanged / sync:projects echo does not force an
+ *  immediate full graph refetch. */
+function noteOptimisticProjectsMutationSuccess(): void {
+  _suppressProjectsChangedUntil = Date.now() + OPTIMISTIC_SELF_ECHO_SUPPRESS_MS
+}
+
+/**
+ * Debounced (+ self-echo suppressed) path for event-driven project list
+ * refresh. Used by `onProjectsChanged` (daemon session-events) and by
+ * Tauri `sync:projects` (other local windows) so the acting client does
+ * not stack a full N+1 refetch on top of its optimistic paint.
+ */
+export function scheduleProjectsRefreshFromSync(): void {
+  _pendingProjectsChanged = true
+  if (_projectsChangedTimer != null) {
+    clearTimeout(_projectsChangedTimer)
+  }
+  const fire = (): void => {
+    _projectsChangedTimer = null
+    const now = Date.now()
+    if (now < _suppressProjectsChangedUntil) {
+      // Still in the self-echo suppress window — reschedule once it ends
+      // so a peer mutation that arrived during the window is not dropped.
+      const wait = _suppressProjectsChangedUntil - now
+      _projectsChangedTimer = setTimeout(fire, wait)
+      return
+    }
+    if (!_pendingProjectsChanged) return
+    _pendingProjectsChanged = false
+    void useProjectsStore.getState().fetchProjects()
+  }
+  _projectsChangedTimer = setTimeout(fire, PROJECTS_CHANGED_DEBOUNCE_MS)
+}
+
+/** Test-only: clear debounce / suppress state between cases. */
+export function _resetProjectsChangedSyncForTests(): void {
+  if (_projectsChangedTimer != null) {
+    clearTimeout(_projectsChangedTimer)
+    _projectsChangedTimer = null
+  }
+  _suppressProjectsChangedUntil = 0
+  _pendingProjectsChanged = false
+}
+
 // #672 — canonical-Active gesture: opening/focusing a workspace is an
 // ACTIVATION (PRD §4.3.1 — the load-bearing invariant that makes daemon-
 // side Active-only reaping safe). We POST projects/activate to the daemon,
@@ -202,6 +258,9 @@ interface ProjectsState {
   /** Internal: the unguarded workspace-switch body. See `_doSetActiveProject`. */
   _doSetActiveWorkspace: (projectId: string, workspaceId: string) => void
   reorderProjects: (ids: string[]) => Promise<void>
+  /** Optimistic color change: patches the store immediately, POSTs
+   *  `projects/update`, rolls back on failure. Does NOT full-refetch on success. */
+  setProjectColor: (id: string, color: string) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
   createSection: (projectId: string, name: string, color?: string) => Promise<void>
   deleteSection: (id: string) => Promise<void>
@@ -702,12 +761,55 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   reorderProjects: async (ids: string[]) => {
+    // Snapshot for rollback — UI drag already knows the target order; paint
+    // it immediately so remote clients don't snap back while the POST is in
+    // flight (and never wait on a full N+1 fetchProjects for success).
+    const previous = get().projects
+    const byId = new Map(previous.map((p) => [p.id, p]))
+    const reordered: ProjectWithWorkspaces[] = []
+    ids.forEach((id, index) => {
+      const p = byId.get(id)
+      if (!p) return
+      byId.delete(id)
+      reordered.push(p.tabOrder === index ? p : { ...p, tabOrder: index })
+    })
+    // Preserve any projects not present in `ids` (defensive — reorder
+    // should be a full permutation of the current list).
+    for (const p of byId.values()) reordered.push(p)
+    set({ projects: reordered })
+
     try {
       await daemonCliPost('projects/reorder', { ids })
+      // Local multi-window: other Tauri windows re-fetch via useWindowSync.
+      // Actor paint is already optimistic — do NOT fetchProjects here.
+      noteOptimisticProjectsMutationSuccess()
       emitProjectsChanged()
-      await get().fetchProjects()
     } catch (err) {
+      set({ projects: previous })
       console.error('[projects] reorderProjects failed:', err)
+    }
+  },
+
+  setProjectColor: async (id: string, color: string) => {
+    const existing = get().projects.find((p) => p.id === id)
+    if (!existing) return
+    const previousColor = existing.color
+    // Optimistic paint — sidebar + settings swatches read projects[].color.
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? { ...p, color } : p)),
+    }))
+    try {
+      await daemonCliPost('projects/update', { id, color })
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+      // Success: trust the local patch. Do not full-refetch the project graph.
+    } catch (err) {
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === id ? { ...p, color: previousColor } : p,
+        ),
+      }))
+      console.error('[projects] setProjectColor failed:', err)
     }
   },
 
@@ -851,8 +953,12 @@ onDaemonConnected(() => {
 // Settings update WITHOUT a manual window reload. This replaces reliance
 // on the local-only Tauri `sync:projects` event, which never fires for
 // CLI/remote mutations and doesn't exist for K2 Connect clients.
+//
+// Debounced + self-echo suppressed: optimistic color/reorder already
+// painted the actor; a trailing ProjectsChanged broadcast must not
+// immediately re-trigger the full N+1 list fan-out over the tunnel.
 onProjectsChanged(() => {
-  void useProjectsStore.getState().fetchProjects()
+  scheduleProjectsRefreshFromSync()
 })
 
 onActiveHostChange(() => {

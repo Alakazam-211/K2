@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import { useProjectsStore } from '@/stores/projects'
+import { scheduleProjectsRefreshFromSync } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { usePresetsStore } from '@/stores/presets'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
@@ -32,7 +32,10 @@ export function useWindowSync(): void {
     const setup = async (): Promise<void> => {
       unlisteners.push(
         await listen('sync:projects', () => {
-          useProjectsStore.getState().fetchProjects()
+          // Same debounce + optimistic self-echo suppress as the daemon
+          // ProjectsChanged path — the acting window must not re-pay the
+          // full N+1 graph refetch after it already painted optimistically.
+          scheduleProjectsRefreshFromSync()
         })
       )
 

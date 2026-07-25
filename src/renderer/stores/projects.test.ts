@@ -6,7 +6,10 @@
 //   - fetchProjects   → GET `projects/list` + per-project `workspaces/list`
 //                       and `sections/list` with snake_case `project_id`
 //   - renameProject   → POST `projects/update`  + emits sync:projects
-//   - reorderProjects → POST `projects/reorder` + emits sync:projects
+//   - reorderProjects → optimistic local reorder + POST `projects/reorder`
+//                       + emits sync:projects; success path does NOT refetch
+//   - setProjectColor → optimistic color patch + POST `projects/update`;
+//                       success path does NOT refetch; failure rolls back
 //   - removeProject   → POST `workspace-layouts/delete` + `projects/delete`
 //                       + emits sync:projects
 //   - createSection   → POST `sections/create`  (NO sync — old shim emitted none)
@@ -17,7 +20,7 @@
 // The store has an import-time side effect (`fetchProjects()`), so every
 // dependency is mocked via hoisted `vi.mock` BEFORE the store import.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ── Mock the host-aware daemon-cli layer (the thing we migrated TO) ──────
 const daemonCliGet = vi.fn()
@@ -101,7 +104,12 @@ vi.mock('./settings', () => ({
   },
 }))
 
-import { useProjectsStore, type ProjectWithWorkspaces } from './projects'
+import {
+  useProjectsStore,
+  scheduleProjectsRefreshFromSync,
+  _resetProjectsChangedSyncForTests,
+  type ProjectWithWorkspaces,
+} from './projects'
 
 function mkProject(id: string): Record<string, unknown> {
   return {
@@ -142,6 +150,12 @@ describe('projects store — Plan B host-aware migration', () => {
     ensurePinnedMock.mockClear()
     callOrder.length = 0
     resetStore()
+    _resetProjectsChangedSyncForTests()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    _resetProjectsChangedSyncForTests()
   })
 
   it('fetchProjects GETs projects/list then workspaces/list + sections/list per project (snake_case)', async () => {
@@ -182,13 +196,177 @@ describe('projects store — Plan B host-aware migration', () => {
   })
 
   it('reorderProjects POSTs projects/reorder and emits sync:projects', async () => {
+    const a = mkProject('a') as unknown as ProjectWithWorkspaces
+    const b = mkProject('b') as unknown as ProjectWithWorkspaces
+    a.tabOrder = 0
+    b.tabOrder = 1
+    a.workspaces = []
+    b.workspaces = []
+    a.sections = []
+    b.sections = []
+    useProjectsStore.setState({ projects: [a, b] })
+
     daemonCliPost.mockResolvedValueOnce({ success: true })
+
+    await useProjectsStore.getState().reorderProjects(['b', 'a'])
+
+    expect(daemonCliPost).toHaveBeenCalledWith('projects/reorder', { ids: ['b', 'a'] })
+    expect(emitMock).toHaveBeenCalledWith('sync:projects')
+  })
+
+  it('reorderProjects optimistically reorders local projects and does NOT fetchProjects on success', async () => {
+    const a = mkProject('a') as unknown as ProjectWithWorkspaces
+    const b = mkProject('b') as unknown as ProjectWithWorkspaces
+    const c = mkProject('c') as unknown as ProjectWithWorkspaces
+    a.tabOrder = 0
+    b.tabOrder = 1
+    c.tabOrder = 2
+    for (const p of [a, b, c]) {
+      p.workspaces = []
+      p.sections = []
+    }
+    useProjectsStore.setState({ projects: [a, b, c] })
+
+    let resolvePost!: (v: unknown) => void
+    daemonCliPost.mockImplementationOnce(
+      () => new Promise((resolve) => { resolvePost = resolve }),
+    )
+    const fetchSpy = vi.spyOn(useProjectsStore.getState(), 'fetchProjects')
+
+    const pending = useProjectsStore.getState().reorderProjects(['c', 'a', 'b'])
+
+    // Paint before network resolves
+    const mid = useProjectsStore.getState().projects as ProjectWithWorkspaces[]
+    expect(mid.map((p) => p.id)).toEqual(['c', 'a', 'b'])
+    expect(mid.map((p) => p.tabOrder)).toEqual([0, 1, 2])
+
+    resolvePost({ success: true })
+    await pending
+
+    expect(daemonCliPost).toHaveBeenCalledWith('projects/reorder', { ids: ['c', 'a', 'b'] })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(daemonCliGet).not.toHaveBeenCalledWith('projects/list')
+    expect(emitMock).toHaveBeenCalledWith('sync:projects')
+    fetchSpy.mockRestore()
+  })
+
+  it('reorderProjects rolls back local order when POST fails', async () => {
+    const a = mkProject('a') as unknown as ProjectWithWorkspaces
+    const b = mkProject('b') as unknown as ProjectWithWorkspaces
+    a.tabOrder = 0
+    b.tabOrder = 1
+    a.workspaces = []
+    b.workspaces = []
+    a.sections = []
+    b.sections = []
+    useProjectsStore.setState({ projects: [a, b] })
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    daemonCliPost.mockRejectedValueOnce(new Error('reorder boom'))
+
+    await useProjectsStore.getState().reorderProjects(['b', 'a'])
+
+    const after = useProjectsStore.getState().projects as ProjectWithWorkspaces[]
+    expect(after.map((p) => p.id)).toEqual(['a', 'b'])
+    expect(emitMock).not.toHaveBeenCalledWith('sync:projects')
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('setProjectColor optimistically patches color and does NOT fetchProjects on success', async () => {
+    const p = mkProject('p-color') as unknown as ProjectWithWorkspaces
+    p.color = '#ffffff'
+    p.workspaces = []
+    p.sections = []
+    useProjectsStore.setState({ projects: [p] })
+
+    let resolvePost!: (v: unknown) => void
+    daemonCliPost.mockImplementationOnce(
+      () => new Promise((resolve) => { resolvePost = resolve }),
+    )
+    const fetchSpy = vi.spyOn(useProjectsStore.getState(), 'fetchProjects')
+
+    const pending = useProjectsStore.getState().setProjectColor('p-color', '#ef4444')
+
+    // Immediate paint
+    expect((useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0].color).toBe('#ef4444')
+
+    resolvePost({ success: true })
+    await pending
+
+    expect(daemonCliPost).toHaveBeenCalledWith('projects/update', {
+      id: 'p-color',
+      color: '#ef4444',
+    })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(daemonCliGet).not.toHaveBeenCalledWith('projects/list')
+    expect(emitMock).toHaveBeenCalledWith('sync:projects')
+    expect((useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0].color).toBe('#ef4444')
+    fetchSpy.mockRestore()
+  })
+
+  it('setProjectColor rolls back previous color when POST fails', async () => {
+    const p = mkProject('p-color-fail') as unknown as ProjectWithWorkspaces
+    p.color = '#3b82f6'
+    p.workspaces = []
+    p.sections = []
+    useProjectsStore.setState({ projects: [p] })
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    daemonCliPost.mockRejectedValueOnce(new Error('color boom'))
+
+    await useProjectsStore.getState().setProjectColor('p-color-fail', '#22c55e')
+
+    expect((useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0].color).toBe('#3b82f6')
+    expect(emitMock).not.toHaveBeenCalledWith('sync:projects')
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('scheduleProjectsRefreshFromSync debounces fetchProjects (~150ms trailing)', async () => {
+    vi.useFakeTimers()
+    daemonCliGet.mockResolvedValue([])
+    const fetchSpy = vi.spyOn(useProjectsStore.getState(), 'fetchProjects')
+
+    scheduleProjectsRefreshFromSync()
+    scheduleProjectsRefreshFromSync()
+    scheduleProjectsRefreshFromSync()
+    expect(fetchSpy).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(149)
+    expect(fetchSpy).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(2)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    fetchSpy.mockRestore()
+  })
+
+  it('scheduleProjectsRefreshFromSync suppresses self-echo after optimistic mutation success', async () => {
+    vi.useFakeTimers()
     daemonCliGet.mockResolvedValue([])
 
-    await useProjectsStore.getState().reorderProjects(['a', 'b'])
+    const p = mkProject('p-echo') as unknown as ProjectWithWorkspaces
+    p.color = '#fff'
+    p.workspaces = []
+    p.sections = []
+    useProjectsStore.setState({ projects: [p] })
+    daemonCliPost.mockResolvedValueOnce({ success: true })
 
-    expect(daemonCliPost).toHaveBeenCalledWith('projects/reorder', { ids: ['a', 'b'] })
-    expect(emitMock).toHaveBeenCalledWith('sync:projects')
+    await useProjectsStore.getState().setProjectColor('p-echo', '#a855f7')
+
+    const fetchSpy = vi.spyOn(useProjectsStore.getState(), 'fetchProjects')
+    // Daemon / Tauri self-echo immediately after optimistic success
+    scheduleProjectsRefreshFromSync()
+
+    await vi.advanceTimersByTimeAsync(150)
+    // Still inside the 500ms suppress window — no refetch
+    expect(fetchSpy).not.toHaveBeenCalled()
+
+    // After suppress window (+ debounce residue), the pending event may fire once
+    await vi.advanceTimersByTimeAsync(500)
+    // Peer reconcile: at most one fetch after the suppress window ends
+    expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(1)
+    fetchSpy.mockRestore()
   })
 
   it('removeProject POSTs workspace-layouts/delete + projects/delete and emits sync:projects', async () => {

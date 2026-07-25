@@ -74,8 +74,6 @@ export function ProjectsSection(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const removeProject = useProjectsStore((s) => s.removeProject)
   const fetchProjects = useProjectsStore((s) => s.fetchProjects)
-  const projectSettings = useSettingsStore((s) => s.projectSettings)
-  const updateProjectSetting = useSettingsStore((s) => s.updateProjectSetting)
 
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
   const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
@@ -206,7 +204,6 @@ export function ProjectsSection(): React.JSX.Element {
   }, [reorderFocusGroups])
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null
-  const editors = ['Cursor', 'VS Code', 'Zed', 'Other']
 
   const toggleGroupCollapse = useCallback((groupId: string) => {
     setCollapsedGroups((prev) => {
@@ -243,8 +240,6 @@ export function ProjectsSection(): React.JSX.Element {
   useEffect(() => {
     requestAnimationFrame(() => searchInputRef.current?.focus())
   }, [])
-
-  const settingsAgenticEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
 
   // Filter helper for search
   const matchesSearch = useCallback((p: typeof projects[0]) => {
@@ -795,11 +790,8 @@ export function ProjectsSection(): React.JSX.Element {
         {selectedProject ? (
           <ProjectDetail
             project={selectedProject}
-            editors={editors}
             focusGroups={focusGroups}
             focusGroupsEnabled={focusGroupsEnabled}
-            projectSettings={projectSettings}
-            updateProjectSetting={updateProjectSetting}
             removeProject={removeProject}
             assignProjectToGroup={assignProjectToGroup}
             fetchProjects={fetchProjects}
@@ -955,24 +947,21 @@ function WorktreeFoldersOnDisk({
   )
 }
 
+// Per-workspace detail tabs (replaces the long two-column stack).
+type WorkspaceSettingsTab = 'agent' | 'context' | 'skills' | 'schedule' | 'worktrees' | 'import'
+
 // ── Workspace Detail (right panel content) ─────────────────────────────
 function ProjectDetail({
   project,
-  editors,
   focusGroups,
   focusGroupsEnabled,
-  projectSettings,
-  updateProjectSetting,
   removeProject,
   assignProjectToGroup,
   fetchProjects
 }: {
   project: ReturnType<typeof useProjectsStore.getState>['projects'][number]
-  editors: string[]
   focusGroups: ReturnType<typeof useFocusGroupsStore.getState>['focusGroups']
   focusGroupsEnabled: boolean
-  projectSettings: Record<string, Record<string, any>>
-  updateProjectSetting: (projectId: string, key: string, value: string) => void
   removeProject: (id: string) => Promise<void>
   assignProjectToGroup: (projectId: string, groupId: string | null) => Promise<void>
   fetchProjects: () => Promise<void>
@@ -992,8 +981,8 @@ function ProjectDetail({
   // picks up any edits the agent made to the row.
   const [hbRefreshNonce, setHbRefreshNonce] = useState(0)
   // When agentMode is 'off' and there are no historical fires for this
-  // workspace, there's no audit to show — collapse the right column so
-  // we don't leave an empty frame next to every Off workspace.
+  // workspace, there's no audit to show — hide History so we don't leave
+  // an empty frame. A hidden mount still tracks onEmptyChange.
   const [historyEmpty, setHistoryEmpty] = useState(false)
   // 0.39.0f Phase 2.1: the workspace's primary agent identity, resolved
   // via the daemon-first `k2so_workspace_agent_display_name` helper
@@ -1012,14 +1001,27 @@ function ProjectDetail({
   const [canonicalModalMode, setCanonicalModalMode] = useState<'setup' | 'manage' | null>(null)
   const [canonicalProbes, setCanonicalProbes] = useState<HarnessProbe[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [settingsTab, setSettingsTab] = useState<WorkspaceSettingsTab>('agent')
+  const agenticSystemsEnabled = useSettingsStore((s) => s.agenticSystemsEnabled)
 
-  // Close editor when project changes (user navigated away without using back button)
+  // Close editor / reset tab state when project changes (user navigated
+  // away without using back button).
   useEffect(() => {
     setAgentEditorOpen(false)
     setAgentEditorName('')
     setWakeupEditingHb(null)
     setCanonicalModalMode(null)
+    setSettingsTab('agent')
+    setHistoryEmpty(false)
   }, [project.id])
+
+  // If agentic systems are off, don't leave the user stranded on Skills/Schedule
+  // (Context stays available — it holds PROJECT.md knowledge).
+  useEffect(() => {
+    if (!agenticSystemsEnabled && (settingsTab === 'skills' || settingsTab === 'schedule')) {
+      setSettingsTab('agent')
+    }
+  }, [agenticSystemsEnabled, settingsTab])
 
   // Detect per-harness canonical state (PRD §5.2) so the canonical button
   // reads "Set up …" vs "Manage / Undo". Re-runs when the modal closes so a
@@ -1211,6 +1213,20 @@ function ProjectDetail({
     )
   }
 
+  const agentMode = project.agentMode || 'off'
+  const isManagerMode = agentMode === 'manager' || agentMode === 'coordinator' || agentMode === 'pod'
+
+  const workspaceTabs: Array<{ id: WorkspaceSettingsTab; label: string; hidden?: boolean }> = [
+    { id: 'agent', label: 'Agent' },
+    // Context always visible — holds PROJECT.md; Agent Settings beta is nested inside.
+    { id: 'context', label: 'Context' },
+    { id: 'skills', label: 'Skills', hidden: !agenticSystemsEnabled },
+    { id: 'schedule', label: 'Heartbeats', hidden: !agenticSystemsEnabled },
+    { id: 'worktrees', label: 'Worktrees' },
+    { id: 'import', label: 'Import' },
+  ]
+  const visibleTabs = workspaceTabs.filter((t) => !t.hidden)
+
   return (
     <>
     {cropImage && (
@@ -1220,486 +1236,474 @@ function ProjectDetail({
         onCancel={() => setCropImage(null)}
       />
     )}
-    <div className={`grid gap-8 ${
-      (project.agentMode || 'off') === 'off' && historyEmpty
-        ? 'grid-cols-[minmax(0,42rem)]'
-        : 'grid-cols-[minmax(0,42rem)_minmax(0,1fr)]'
-    }`}>
-    <div className="space-y-6 min-w-0">
-      {/* ── Header ── */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-base font-medium text-[var(--color-text-primary)]">{project.name}</h2>
-          <p className="text-[11px] text-[var(--color-text-muted)] mt-1 break-all">{project.path}</p>
-        </div>
-        <button
-          onClick={() => {
-            const defaultWs = project.workspaces?.[0]
-            if (defaultWs) {
-              useProjectsStore.getState().setActiveWorkspace(project.id, defaultWs.id)
-            }
-            useSettingsStore.getState().closeSettings()
-          }}
-          className="flex-shrink-0 px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
-        >
-          Open Workspace
-        </button>
-      </div>
-
-      {/* ── Group 1: Workspace — Icon, Color, Focus Group ── */}
-      <SettingsGroup title="Workspace">
-        {/* Icon */}
-        <div className="flex items-center gap-4 py-2">
-          <div
-            className="flex-shrink-0 flex items-center justify-center overflow-hidden"
-            style={{
-              width: 48,
-              height: 48,
-              backgroundColor: project.iconUrl ? 'transparent' : project.color,
-              border: project.iconUrl ? `2px solid ${project.color}` : 'none'
+    <div className="flex flex-col h-full min-h-0 max-w-3xl">
+      {/* ── Sticky header + tabs ── */}
+      <div className="flex-shrink-0 space-y-4 pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-medium text-[var(--color-text-primary)]">{project.name}</h2>
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1 break-all">{project.path}</p>
+          </div>
+          <button
+            onClick={() => {
+              const defaultWs = project.workspaces?.[0]
+              if (defaultWs) {
+                useProjectsStore.getState().setActiveWorkspace(project.id, defaultWs.id)
+              }
+              useSettingsStore.getState().closeSettings()
             }}
+            className="flex-shrink-0 px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
           >
-            {project.iconUrl ? (
-              <img
-                src={project.iconUrl}
-                alt={project.name}
-                style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
-              />
-            ) : (
-              <span
-                className="text-[var(--color-on-accent)] font-bold"
-                style={{ fontSize: 22, lineHeight: 1 }}
-              >
-                {firstLetter}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleDetectIcon}
-              disabled={iconLoading}
-              className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {iconLoading ? 'Working...' : 'Detect'}
-            </button>
-            <button
-              onClick={handleUploadClick}
-              disabled={iconLoading}
-              className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              Upload
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/svg+xml,image/x-icon"
-              className="hidden"
-              onChange={handleFileSelected}
-            />
-            {project.iconUrl && (
-              <button
-                onClick={handleClearIcon}
-                disabled={iconLoading}
-                className="px-2.5 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                Remove
-              </button>
-            )}
-          </div>
+            Open Workspace
+          </button>
         </div>
 
-        {/* Color */}
-        <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">
-          <span className="text-xs text-[var(--color-text-secondary)]">Color</span>
-          <div className="flex items-center gap-1.5">
-            {['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#a855f7', '#ec4899', '#06b6d4', '#64748b'].map((color) => (
-              <button
-                key={color}
-                onClick={async () => {
-                  await daemonCliPost('projects/update', { id: project.id, color })
-                  emitProjectsChanged()
-                  await fetchProjects()
-                }}
-                className={`w-4 h-4 flex-shrink-0 no-drag cursor-pointer transition-transform ${
-                  project.color === color ? 'scale-125 ring-1 ring-white/50' : 'hover:scale-110'
-                }`}
-                style={{ backgroundColor: color }}
-              />
-            ))}
-          </div>
-        </div>
-
-        {/* Focus Group */}
-        {focusGroupsEnabled && (
-          <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">
-            <span className="text-xs text-[var(--color-text-secondary)]">Focus Group</span>
-            <SettingDropdown
-              value={project.focusGroupId ?? ''}
-              options={[
-                { value: '', label: 'No Group' },
-                ...focusGroups.map((g) => ({ value: g.id, label: g.name })),
-              ]}
-              onChange={async (v) => {
-                await assignProjectToGroup(project.id, v || null)
-                await fetchProjects()
-              }}
-            />
-          </div>
-        )}
-
-        {/* Default Agent — per-workspace override of the global default
-            agent (agent de-generalization Slice 1, migration 0063). Always
-            visible — it applies to plain Cmd+Shift+T launches regardless of
-            agentMode. */}
-        <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
-
-        {/* Workspace Knowledge — edits the canonical .k2so/PROJECT.md
-            (shared project knowledge injected into every agent at launch).
-            Regenerates the workspace SKILL.md on close. This is the single
-            PROJECT.md editor (the redundant "Project Context" block was
-            removed). */}
-        <div className="pt-3 border-t border-[var(--color-border)]">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs text-[var(--color-text-secondary)]">Workspace Knowledge</span>
-              <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
-                Edits <span className="font-mono">.k2so/PROJECT.md</span> — shared project knowledge (tech stack, conventions, key directories) injected into every agent at launch.
-              </p>
-            </div>
-            <button
-              onClick={() => { setAgentEditorName('__claude_md__'); setAgentEditorOpen(true) }}
-              className="px-5 py-1.5 text-[11px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer flex-shrink-0 whitespace-nowrap"
-            >
-              Manage Knowledge
-            </button>
-          </div>
-        </div>
-      </SettingsGroup>
-
-      {/* ── Group 2: Agent Settings — Mode tabs, Heartbeat, Agents list ── */}
-      {useSettingsStore.getState().agenticSystemsEnabled && <SettingsGroup
-        title="Agent Settings"
-        badge={
-          <span
-            className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
-            title="Agentic systems are in beta — interface and behavior may change"
-          >
-            beta
-          </span>
-        }
-      >
-        <div className="space-y-2">
-          {/* Mode selector */}
-          <div className="flex gap-1">
-            {(['off', 'agent', 'manager', 'custom'] as const).map((mode) => {
-              const isActive = (project.agentMode || 'off') === mode || (mode === 'manager' && (project.agentMode === 'coordinator' || project.agentMode === 'pod'))
-              const labels = { off: 'Off', custom: 'Custom Agent', agent: 'K2 Agent', manager: 'Workspace Manager' }
-              return (
-                <button
-                  key={mode}
-                  onClick={async () => {
-                    const currentMode = project.agentMode || 'off'
-                    if (currentMode === mode) return
-
-                    // Confirm before modifying CLAUDE.md — explain what will happen
-                    const fromLabel = currentMode === 'off' ? null : labels[currentMode as keyof typeof labels]
-                    const toLabel = labels[mode]
-
-                    if (mode === 'off') {
-                      const confirmed = await useConfirmDialogStore.getState().confirm({
-                        title: `Disable ${fromLabel} Mode`,
-                        message: [
-                          'This will:',
-                          '',
-                          '• Move CLAUDE.md to .k2so/CLAUDE.md.disabled',
-                          '• Your content is preserved and restored if you re-enable',
-                          '• The heartbeat will be turned off if active',
-                        ].join('\n'),
-                        confirmLabel: 'Disable',
-                      })
-                      if (!confirmed) return
-                    } else if (mode === 'custom') {
-                      const lines = [
-                        'Train a single agent to operate any software via the heartbeat.',
-                        '',
-                        'What happens:',
-                        '• No CLAUDE.md is generated — the agent runs from its persona only',
-                        '• Use "Manage Persona" to define its behavior with the AI editor',
-                        '• Worktrees are disabled in this mode',
-                      ]
-                      if (currentMode !== 'off') {
-                        lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
-                      }
-                      const confirmed = await useConfirmDialogStore.getState().confirm({
-                        title: `Enable ${toLabel} Mode`,
-                        message: lines.join('\n'),
-                        confirmLabel: `Enable ${toLabel} Mode`,
-                      })
-                      if (!confirmed) return
-                    } else if (mode === 'agent') {
-                      const lines = [
-                        'A K2 planner agent that helps you build PRDs, milestones, and technical plans.',
-                        '',
-                        'What happens:',
-                        '• Generates a CLAUDE.md with K2 planner instructions',
-                        '• If a user-written CLAUDE.md exists, it won\'t be overwritten',
-                        '  (the generated version is saved to .k2so/CLAUDE.md.generated)',
-                      ]
-                      if (currentMode !== 'off') {
-                        lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
-                      }
-                      const confirmed = await useConfirmDialogStore.getState().confirm({
-                        title: `Enable ${toLabel} Mode`,
-                        message: lines.join('\n'),
-                        confirmLabel: `Enable ${toLabel} Mode`,
-                      })
-                      if (!confirmed) return
-                    } else if (mode === 'manager') {
-                      const lines = [
-                        'A workspace manager delegates work to agent templates that execute in parallel worktrees.',
-                        '',
-                        'What happens:',
-                        '• Generates a CLAUDE.md with manager instructions',
-                        '• A manager agent is created automatically',
-                        '• If a user-written CLAUDE.md exists, it won\'t be overwritten',
-                        '  (the generated version is saved to .k2so/CLAUDE.md.generated)',
-                      ]
-                      if (currentMode !== 'off') {
-                        lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
-                      }
-                      const confirmed = await useConfirmDialogStore.getState().confirm({
-                        title: `Enable ${toLabel} Mode`,
-                        message: lines.join('\n'),
-                        confirmLabel: `Enable ${toLabel} Mode`,
-                      })
-                      if (!confirmed) return
-                    }
-
-                    if (currentMode !== 'off') {
-                      await daemonCliPost('agents/disable-workspace-claude-md', {
-                        project_path: project.path,
-                      }).catch(console.error)
-                    }
-
-                    await daemonCliPost('projects/update', { id: project.id, agentMode: mode })
-                    emitProjectsChanged()
-
-                    if (mode === 'agent' || mode === 'manager') {
-                      await daemonCliPost('agents/regenerate-workspace-skill', {
-                        project_path: project.path,
-                      }).catch(console.error)
-                    }
-
-                    if (mode === 'off' && project.heartbeatEnabled) {
-                      await daemonCliPost('projects/update', { id: project.id, heartbeatEnabled: 0 })
-                      emitProjectsChanged()
-                    }
-
-                    await fetchProjects()
-                  }}
-                  className={`flex-1 px-2 py-1.5 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
-                    isActive
-                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
-                      : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'
-                  }`}
-                >
-                  {labels[mode]}
-                </button>
-              )
-            })}
-          </div>
-
-          <p className="text-[10px] text-[var(--color-text-muted)]">
-            {(project.agentMode || 'off') === 'off' && 'No agent features enabled for this workspace.'}
-            {(project.agentMode || 'off') === 'custom' && 'Custom Agent — train agents to operate any software via the heartbeat. Customize each agent\'s behavior with the AI persona editor.'}
-            {(project.agentMode || 'off') === 'agent' && 'K2 Agent — a planner that helps you build PRDs, milestones, and technical plans for this workspace.'}
-            {((project.agentMode || 'off') === 'manager' || project.agentMode === 'coordinator' || project.agentMode === 'pod') && 'Workspace Manager — delegates work to agent templates that execute in parallel worktrees.'}
-          </p>
-
-          {/* Agent identity — Persona + name FIRST (above State) so the
-              reading order is identity → lifecycle-state → schedule. */}
-          {(project.agentMode || 'off') === 'custom' && (
-            <div className="pt-2 border-t border-[var(--color-border)]">
-              <CustomAgentPersonaButton projectPath={project.path} projectName={project.name} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
-            </div>
-          )}
-          {(project.agentMode || 'off') === 'agent' && (
-            <div className="pt-2 border-t border-[var(--color-border)]">
-              <K2SOAgentPersonaButton projectPath={project.path} projectName={project.name} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
-            </div>
-          )}
-
-          {/* ── Three opt-in agent-setup skills (canonical-agents PRD §9.3) ──
-              Role buttons gate on agent role; the canonical button is
-              ALWAYS shown — every mode incl. custom AND off — so it must
-              render OUTSIDE the ProjectAgentsPanel `!== 'off'` gate below. */}
-          {/* Workspace Manager — role = manager (manager|coordinator|pod). */}
-          {((project.agentMode || 'off') === 'manager' || project.agentMode === 'coordinator' || project.agentMode === 'pod') && (
-            <div className="pt-2 border-t border-[var(--color-border)]">
-              <RoleSkillButton
-                role="workspace-manager"
-                projectPath={project.path}
-                onOpen={() => { setAgentEditorName('__workspace_manager__'); setAgentEditorOpen(true) }}
-              />
-            </div>
-          )}
-          {/* K2 Agent — role = agent. */}
-          {(project.agentMode || 'off') === 'agent' && (
-            <div className="pt-2 border-t border-[var(--color-border)]">
-              <RoleSkillButton
-                role="k2-agent"
-                projectPath={project.path}
-                onOpen={() => { setAgentEditorName('__k2_agent__'); setAgentEditorOpen(true) }}
-              />
-            </div>
-          )}
-          {/* K2 Canonical Agent — ALWAYS, including custom and off. */}
-          <div className="pt-2 border-t border-[var(--color-border)]">
-            <CanonicalAgentButton
-              probes={canonicalProbes}
-              projectPath={project.path}
-              onOpen={(mode) => setCanonicalModalMode(mode)}
-            />
-          </div>
-
-          {/* Heartbeats moved to the right column (next to History +
-              Context Layers) so the wake-related surfaces live together
-              and the main settings column stays focused on workspace
-              identity/mode/worktree setup. See the aside below. */}
-
-          {/* Workspace Manager block — gated to manager modes only.
-              ProjectAgentsPanel's only remaining content is the Manager
-              section (Skills was promoted out in 0.39.0h; the Project
-              Context block was removed — it duplicated the always-on
-              "Workspace Knowledge" editor above). So render the panel AND
-              its top divider only for manager workspaces; other modes
-              would otherwise show an empty panel under an orphaned line. */}
-          {((project.agentMode || 'off') === 'manager' || project.agentMode === 'coordinator' || project.agentMode === 'pod') && (
-            <div className="pt-2">
-              <ProjectAgentsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
-            </div>
-          )}
-
-          {/* Connected Workspaces — for manager, coordinator, and custom modes */}
-          {((project.agentMode || 'off') === 'manager' || project.agentMode === 'coordinator' || (project.agentMode || 'off') === 'custom') && (
-            <div className="pt-2 border-t border-[var(--color-border)]">
-              <ConnectedWorkspacesPanel projectId={project.id} />
-            </div>
-          )}
-        </div>
-      </SettingsGroup>}
-
-      {/* ── Group 2.5: Skills — promoted out of Agent Settings in 0.39.0h.
-          Phase 2.1 invariant: workspace has ONE primary agent + N skill
-          profiles. Primary-agent and skills are sibling concepts, so
-          the visual hierarchy renders them as sibling SettingsGroups
-          rather than parent (Agent Settings) → child (Skills). Always
-          visible regardless of `agenticSystemsEnabled` / `agentMode`
-          per the Phase 2.5b followup — every workspace can manage its
-          skill profiles. */}
-      <SettingsGroup title="Skills">
-        <ProjectSkillsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
-      </SettingsGroup>
-
-      {/* ── Group 3: Worktree Management ── */}
-      <SettingsGroup title="Worktrees">
-        {/* Worktrees table */}
-        <div className={project.workspaces.length > 0 ? '' : 'hidden'}>
-          <div className="border border-[var(--color-border)]">
-            {project.workspaces.map((ws, i) => (
-              <div
-                key={ws.id}
-                className={`flex items-center gap-2 px-3 py-1.5 ${
-                  i < project.workspaces.length - 1 ? 'border-b border-[var(--color-border)]' : ''
-                }`}
-              >
-                <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">{ws.name}</span>
-                {ws.branch && (
-                  <span className="text-[10px] text-[var(--color-text-muted)] truncate max-w-[120px]">{ws.branch}</span>
-                )}
-                <span className="text-[10px] text-[var(--color-text-muted)]">{ws.type}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Worktree Folders on Disk */}
-        <WorktreeFoldersOnDisk project={project} fetchProjects={fetchProjects} />
-      </SettingsGroup>
-
-      {/* ── #67 Remote access (per-workspace remote-instruct opt-in) ── */}
-      <SettingsGroup title="Remote Access">
-        <RemoteInstructToggle project={project} fetchProjects={fetchProjects} />
-      </SettingsGroup>
-
-      {/* ── DNS K1 (per-workspace DNS-manage opt-in) ── */}
-      <SettingsGroup title="DNS">
-        <DnsManageToggle project={project} fetchProjects={fetchProjects} />
-      </SettingsGroup>
-
-      {/* ── C1 (per-workspace agents-may-create-connections) ── */}
-      <SettingsGroup title="Connections">
-        <AgentsCreateConnectionsToggle project={project} fetchProjects={fetchProjects} />
-      </SettingsGroup>
-
-      {/* ── Group 4: Chat Migrations ── */}
-      <SettingsGroup title="Chat Migrations">
-        <CursorMigrationPanel projectPath={project.path} />
-      </SettingsGroup>
-
-      {/* ── Danger zone ── */}
-      <div className="pt-4 border-t border-[var(--color-border)]">
-        <button
-          onClick={() => removeProject(project.id)}
-          className="px-3 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer"
+        <div
+          role="tablist"
+          aria-label="Workspace settings"
+          className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)]"
         >
-          Remove Workspace
-        </button>
+          {visibleTabs.map((tab) => {
+            const active = settingsTab === tab.id
+            return (
+              <button
+                key={tab.id}
+                role="tab"
+                type="button"
+                aria-selected={active}
+                onClick={() => setSettingsTab(tab.id)}
+                className={`px-3 py-2 text-[11px] font-medium transition-colors no-drag cursor-pointer border-b-2 -mb-px ${
+                  active
+                    ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                    : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                }`}
+              >
+                {tab.label}
+              </button>
+            )
+          })}
+        </div>
       </div>
-    </div>
 
-    {/* Right column — wake-related surfaces grouped together: Heartbeats
-        (the schedule), Context Layers (what ships in each wake), and the
-        fire History (what actually happened). Sticks to the top while
-        the left column scrolls so the wake picture stays visible next to
-        whatever setting you're editing. Hidden entirely when the
-        workspace is Off AND has no historical fire rows, so an Off
-        workspace that was never an agent doesn't get a dead frame. */}
-    {!((project.agentMode || 'off') === 'off' && historyEmpty) && (
-      <aside className="min-w-0 sticky top-0 self-start space-y-4">
-        {(project.agentMode || 'off') !== 'off' && (
+      {/* ── Tab panels ── */}
+      <div className="flex-1 overflow-y-auto min-h-0 pt-4 space-y-6 pb-8">
+        {settingsTab === 'agent' && (
           <>
-            <HeartbeatsPanel
-              key={`hb-${hbRefreshNonce}`}
-              projectPath={project.path}
-              agentMode={project.agentMode || null}
-              // 0.39.0f Phase 2.1: single daemon-resolved primary
-              // agent identity, no mode→literal mapping. See
-              // primaryAgentName useEffect above for the resolver.
-              agentName={primaryAgentName
-                || project.name.toLowerCase().replace(/\s+/g, '-')}
-              onConfigureWakeup={(row) => setWakeupEditingHb(row)}
-            />
-            <ShowHeartbeatSessionsToggle projectPath={project.path} />
+            <SettingsGroup title="Identity">
+              {/* Icon */}
+              <div className="flex items-center gap-4 py-2">
+                <div
+                  className="flex-shrink-0 flex items-center justify-center overflow-hidden"
+                  style={{
+                    width: 48,
+                    height: 48,
+                    backgroundColor: project.iconUrl ? 'transparent' : project.color,
+                    border: project.iconUrl ? `2px solid ${project.color}` : 'none'
+                  }}
+                >
+                  {project.iconUrl ? (
+                    <img
+                      src={project.iconUrl}
+                      alt={project.name}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
+                    />
+                  ) : (
+                    <span
+                      className="text-[var(--color-on-accent)] font-bold"
+                      style={{ fontSize: 22, lineHeight: 1 }}
+                    >
+                      {firstLetter}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleDetectIcon}
+                    disabled={iconLoading}
+                    className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {iconLoading ? 'Working...' : 'Detect'}
+                  </button>
+                  <button
+                    onClick={handleUploadClick}
+                    disabled={iconLoading}
+                    className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Upload
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/svg+xml,image/x-icon"
+                    className="hidden"
+                    onChange={handleFileSelected}
+                  />
+                  {project.iconUrl && (
+                    <button
+                      onClick={handleClearIcon}
+                      disabled={iconLoading}
+                      className="px-2.5 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Color */}
+              <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">
+                <span className="text-xs text-[var(--color-text-secondary)]">Color</span>
+                <div className="flex items-center gap-1.5">
+                  {['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#a855f7', '#ec4899', '#06b6d4', '#64748b'].map((color) => (
+                    <button
+                      key={color}
+                      onClick={() => {
+                        // Optimistic store path: paints immediately, POSTs color,
+                        // rolls back on failure — no success-path N+1 refetch.
+                        void useProjectsStore.getState().setProjectColor(project.id, color)
+                      }}
+                      className={`w-4 h-4 flex-shrink-0 no-drag cursor-pointer transition-transform ${
+                        project.color === color ? 'scale-125 ring-1 ring-white/50' : 'hover:scale-110'
+                      }`}
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Focus Group */}
+              {focusGroupsEnabled && (
+                <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">
+                  <span className="text-xs text-[var(--color-text-secondary)]">Focus Group</span>
+                  <SettingDropdown
+                    value={project.focusGroupId ?? ''}
+                    options={[
+                      { value: '', label: 'No Group' },
+                      ...focusGroups.map((g) => ({ value: g.id, label: g.name })),
+                    ]}
+                    onChange={async (v) => {
+                      await assignProjectToGroup(project.id, v || null)
+                      await fetchProjects()
+                    }}
+                  />
+                </div>
+              )}
+
+              <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
+            </SettingsGroup>
+
+            <SettingsGroup title="Remote Access">
+              <RemoteInstructToggle project={project} fetchProjects={fetchProjects} />
+            </SettingsGroup>
+            <SettingsGroup title="DNS">
+              <DnsManageToggle project={project} fetchProjects={fetchProjects} />
+            </SettingsGroup>
+            <SettingsGroup title="Connections">
+              <AgentsCreateConnectionsToggle project={project} fetchProjects={fetchProjects} />
+            </SettingsGroup>
+            {(isManagerMode || agentMode === 'custom') && (
+              <SettingsGroup title="Connected Workspaces">
+                <ConnectedWorkspacesPanel projectId={project.id} />
+              </SettingsGroup>
+            )}
+
+            <div className="pt-2 border-t border-[var(--color-border)]">
+              <button
+                onClick={() => removeProject(project.id)}
+                className="px-3 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer"
+              >
+                Remove Workspace
+              </button>
+            </div>
           </>
         )}
-        {(project.agentMode || 'off') !== 'off' && (
-          <ContextLayersPreview
-            projectPath={project.path}
-            agentMode={project.agentMode || null}
-            onOpenSettings={() => {
-              // Deep-link to Settings → Agent Skills. The layer stack is
-              // read-only; edits go through the Agent Skills section.
-              useSettingsStore.getState().setSection('agent-skills')
-            }}
-          />
+
+        {settingsTab === 'context' && (
+          <>
+            {/* PROJECT.md — shared workspace knowledge (always on Context) */}
+            <SettingsGroup title="Workspace Knowledge">
+              <div className="flex items-center justify-between py-1">
+                <div>
+                  <span className="text-xs text-[var(--color-text-secondary)]">PROJECT.md</span>
+                  <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
+                    Edits <span className="font-mono">.k2so/PROJECT.md</span> — shared project knowledge (tech stack, conventions, key directories) injected into every agent at launch.
+                  </p>
+                </div>
+                <button
+                  onClick={() => { setAgentEditorName('__claude_md__'); setAgentEditorOpen(true) }}
+                  className="px-5 py-1.5 text-[11px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer flex-shrink-0 whitespace-nowrap"
+                >
+                  Manage Knowledge
+                </button>
+              </div>
+            </SettingsGroup>
+
+            {agenticSystemsEnabled && (
+          <SettingsGroup
+            title="Agent Settings"
+            badge={
+              <span
+                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
+                title="Agentic systems are in beta — interface and behavior may change"
+              >
+                beta
+              </span>
+            }
+          >
+            <div className="space-y-2">
+              <div className="flex gap-1">
+                {(['off', 'agent', 'manager', 'custom'] as const).map((mode) => {
+                  const isActive = agentMode === mode || (mode === 'manager' && isManagerMode)
+                  const labels = { off: 'Off', custom: 'Custom Agent', agent: 'K2 Agent', manager: 'Workspace Manager' }
+                  return (
+                    <button
+                      key={mode}
+                      onClick={async () => {
+                        const currentMode = project.agentMode || 'off'
+                        if (currentMode === mode) return
+
+                        const fromLabel = currentMode === 'off' ? null : labels[currentMode as keyof typeof labels]
+                        const toLabel = labels[mode]
+
+                        if (mode === 'off') {
+                          const confirmed = await useConfirmDialogStore.getState().confirm({
+                            title: `Disable ${fromLabel} Mode`,
+                            message: [
+                              'This will:',
+                              '',
+                              '• Move CLAUDE.md to .k2so/CLAUDE.md.disabled',
+                              '• Your content is preserved and restored if you re-enable',
+                              '• The heartbeat will be turned off if active',
+                            ].join('\n'),
+                            confirmLabel: 'Disable',
+                          })
+                          if (!confirmed) return
+                        } else if (mode === 'custom') {
+                          const lines = [
+                            'Train a single agent to operate any software via the heartbeat.',
+                            '',
+                            'What happens:',
+                            '• No CLAUDE.md is generated — the agent runs from its persona only',
+                            '• Use "Manage Persona" to define its behavior with the AI editor',
+                            '• Worktrees are disabled in this mode',
+                          ]
+                          if (currentMode !== 'off') {
+                            lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
+                          }
+                          const confirmed = await useConfirmDialogStore.getState().confirm({
+                            title: `Enable ${toLabel} Mode`,
+                            message: lines.join('\n'),
+                            confirmLabel: `Enable ${toLabel} Mode`,
+                          })
+                          if (!confirmed) return
+                        } else if (mode === 'agent') {
+                          const lines = [
+                            'A K2 planner agent that helps you build PRDs, milestones, and technical plans.',
+                            '',
+                            'What happens:',
+                            '• Generates a CLAUDE.md with K2 planner instructions',
+                            '• If a user-written CLAUDE.md exists, it won\'t be overwritten',
+                            '  (the generated version is saved to .k2so/CLAUDE.md.generated)',
+                          ]
+                          if (currentMode !== 'off') {
+                            lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
+                          }
+                          const confirmed = await useConfirmDialogStore.getState().confirm({
+                            title: `Enable ${toLabel} Mode`,
+                            message: lines.join('\n'),
+                            confirmLabel: `Enable ${toLabel} Mode`,
+                          })
+                          if (!confirmed) return
+                        } else if (mode === 'manager') {
+                          const lines = [
+                            'A workspace manager delegates work to agent templates that execute in parallel worktrees.',
+                            '',
+                            'What happens:',
+                            '• Generates a CLAUDE.md with manager instructions',
+                            '• A manager agent is created automatically',
+                            '• If a user-written CLAUDE.md exists, it won\'t be overwritten',
+                            '  (the generated version is saved to .k2so/CLAUDE.md.generated)',
+                          ]
+                          if (currentMode !== 'off') {
+                            lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
+                          }
+                          const confirmed = await useConfirmDialogStore.getState().confirm({
+                            title: `Enable ${toLabel} Mode`,
+                            message: lines.join('\n'),
+                            confirmLabel: `Enable ${toLabel} Mode`,
+                          })
+                          if (!confirmed) return
+                        }
+
+                        if (currentMode !== 'off') {
+                          await daemonCliPost('agents/disable-workspace-claude-md', {
+                            project_path: project.path,
+                          }).catch(console.error)
+                        }
+
+                        await daemonCliPost('projects/update', { id: project.id, agentMode: mode })
+                        emitProjectsChanged()
+
+                        if (mode === 'agent' || mode === 'manager') {
+                          await daemonCliPost('agents/regenerate-workspace-skill', {
+                            project_path: project.path,
+                          }).catch(console.error)
+                        }
+
+                        if (mode === 'off' && project.heartbeatEnabled) {
+                          await daemonCliPost('projects/update', { id: project.id, heartbeatEnabled: 0 })
+                          emitProjectsChanged()
+                        }
+
+                        await fetchProjects()
+                      }}
+                      className={`flex-1 px-2 py-1.5 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
+                        isActive
+                          ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
+                          : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'
+                      }`}
+                    >
+                      {labels[mode]}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <p className="text-[10px] text-[var(--color-text-muted)]">
+                {agentMode === 'off' && 'No agent features enabled for this workspace.'}
+                {agentMode === 'custom' && 'Custom Agent — train agents to operate any software via the heartbeat. Customize each agent\'s behavior with the AI persona editor.'}
+                {agentMode === 'agent' && 'K2 Agent — a planner that helps you build PRDs, milestones, and technical plans for this workspace.'}
+                {isManagerMode && 'Workspace Manager — delegates work to agent templates that execute in parallel worktrees.'}
+              </p>
+
+              {agentMode === 'custom' && (
+                <div className="pt-2 border-t border-[var(--color-border)]">
+                  <CustomAgentPersonaButton projectPath={project.path} projectName={project.name} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
+                </div>
+              )}
+              {agentMode === 'agent' && (
+                <div className="pt-2 border-t border-[var(--color-border)]">
+                  <K2SOAgentPersonaButton projectPath={project.path} projectName={project.name} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
+                </div>
+              )}
+
+              {isManagerMode && (
+                <div className="pt-2 border-t border-[var(--color-border)]">
+                  <RoleSkillButton
+                    role="workspace-manager"
+                    projectPath={project.path}
+                    onOpen={() => { setAgentEditorName('__workspace_manager__'); setAgentEditorOpen(true) }}
+                  />
+                </div>
+              )}
+              {agentMode === 'agent' && (
+                <div className="pt-2 border-t border-[var(--color-border)]">
+                  <RoleSkillButton
+                    role="k2-agent"
+                    projectPath={project.path}
+                    onOpen={() => { setAgentEditorName('__k2_agent__'); setAgentEditorOpen(true) }}
+                  />
+                </div>
+              )}
+              <div className="pt-2 border-t border-[var(--color-border)]">
+                <CanonicalAgentButton
+                  probes={canonicalProbes}
+                  projectPath={project.path}
+                  onOpen={(mode) => setCanonicalModalMode(mode)}
+                />
+              </div>
+
+              {isManagerMode && (
+                <div className="pt-2">
+                  <ProjectAgentsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
+                </div>
+              )}
+            </div>
+          </SettingsGroup>
+            )}
+
+            {/* Context layers — what ships in each wake (moved from Heartbeats tab) */}
+            {agenticSystemsEnabled && agentMode !== 'off' && (
+              <ContextLayersPreview
+                projectPath={project.path}
+                agentMode={project.agentMode || null}
+                onOpenSettings={() => {
+                  useSettingsStore.getState().setSection('agent-skills')
+                }}
+              />
+            )}
+          </>
         )}
-        <HistoryPanel projectPath={project.path} onEmptyChange={setHistoryEmpty} />
-      </aside>
-    )}
+
+        {settingsTab === 'skills' && agenticSystemsEnabled && (
+          <SettingsGroup title="Skills">
+            <ProjectSkillsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
+          </SettingsGroup>
+        )}
+
+        {settingsTab === 'schedule' && agenticSystemsEnabled && (
+          <div className="space-y-4">
+            {agentMode !== 'off' ? (
+              <>
+                <HeartbeatsPanel
+                  key={`hb-${hbRefreshNonce}`}
+                  projectPath={project.path}
+                  agentMode={project.agentMode || null}
+                  agentName={primaryAgentName
+                    || project.name.toLowerCase().replace(/\s+/g, '-')}
+                  onConfigureWakeup={(row) => setWakeupEditingHb(row)}
+                />
+                <ShowHeartbeatSessionsToggle projectPath={project.path} />
+              </>
+            ) : (
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Turn on an agent mode under <button type="button" className="text-[var(--color-accent)] underline no-drag cursor-pointer" onClick={() => setSettingsTab('context')}>Context</button> to configure heartbeats.
+              </p>
+            )}
+            {/* Single HistoryPanel mount: hide when Off+empty, keep mounted so onEmptyChange
+                can re-show history if fires appear later. */}
+            <div className={agentMode === 'off' && historyEmpty ? 'hidden' : undefined}>
+              <HistoryPanel projectPath={project.path} onEmptyChange={setHistoryEmpty} />
+            </div>
+          </div>
+        )}
+
+        {settingsTab === 'worktrees' && (
+          <SettingsGroup title="Worktrees">
+            <div className={project.workspaces.length > 0 ? '' : 'hidden'}>
+              <div className="border border-[var(--color-border)]">
+                {project.workspaces.map((ws, i) => (
+                  <div
+                    key={ws.id}
+                    className={`flex items-center gap-2 px-3 py-1.5 ${
+                      i < project.workspaces.length - 1 ? 'border-b border-[var(--color-border)]' : ''
+                    }`}
+                  >
+                    <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">{ws.name}</span>
+                    {ws.branch && (
+                      <span className="text-[10px] text-[var(--color-text-muted)] truncate max-w-[120px]">{ws.branch}</span>
+                    )}
+                    <span className="text-[10px] text-[var(--color-text-muted)]">{ws.type}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {project.workspaces.length === 0 && (
+              <p className="text-[10px] text-[var(--color-text-muted)] py-1">No registered worktrees for this workspace.</p>
+            )}
+            <WorktreeFoldersOnDisk project={project} fetchProjects={fetchProjects} />
+          </SettingsGroup>
+        )}
+
+        {settingsTab === 'import' && (
+          <SettingsGroup title="Chat Migrations">
+            <CursorMigrationPanel projectPath={project.path} />
+          </SettingsGroup>
+        )}
+      </div>
     </div>
     </>
   )

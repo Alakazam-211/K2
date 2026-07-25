@@ -766,10 +766,15 @@ struct ProjectsCreateBody {
     color: Option<String>,
 }
 
-/// 0.39.45 (GH #18/#26): broadcast that the registered project set
-/// changed so every client — other windows, the CLI's next caller, K2
-/// Connect remotes — re-fetches the project list without a manual
-/// window reload. APP-LEVEL on the session-events bus.
+/// 0.39.45 (GH #18/#26): broadcast that the projects list changed so
+/// every client — other windows, the CLI's next caller, K2 Connect
+/// remotes — re-fetches without a manual window reload. APP-LEVEL on
+/// the session-events bus.
+///
+/// Originally framed as "registered project set changed" (membership).
+/// Presentation changes (color, order, name, pin, icon, agent mode, …)
+/// intentionally use this same event too — clients already treat
+/// `ProjectsChanged` as a full-list refetch signal.
 fn emit_projects_changed() {
     let _ = crate::session_events::emit(
         crate::session_events::SessionEvent::ProjectsChanged {},
@@ -846,7 +851,7 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
         }
     });
     // Workspace States retired: never write projects.tier_id.
-    serialized(pops::projects_update(
+    let result = pops::projects_update(
         &b.id,
         b.name.as_deref(),
         b.color.as_deref(),
@@ -862,7 +867,11 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
         b.heartbeat_mode,
         hb_schedule_param,
         default_agent_param,
-    ))
+    );
+    if result.is_ok() {
+        emit_projects_changed();
+    }
+    serialized(result)
 }
 
 pub fn handle_projects_delete(body: &[u8]) -> CliResponse {
@@ -903,7 +912,11 @@ pub fn handle_projects_reorder(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    unit_ok(pops::projects_reorder(&b.ids))
+    let result = pops::projects_reorder(&b.ids);
+    if result.is_ok() {
+        emit_projects_changed();
+    }
+    unit_ok(result)
 }
 
 // ── Canonical Active set routes (task #672) ────────────────────────────
@@ -1438,5 +1451,104 @@ mod set_tab_title_tests {
         let resp = handle_set_tab_title(body.as_bytes());
         assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
         assert!(resp.body.contains("tabId"));
+    }
+}
+
+#[cfg(test)]
+mod projects_mutate_broadcast_tests {
+    //! Remote projects mutate latency Phase 2 — `POST /cli/projects/update`
+    //! and `POST /cli/projects/reorder` must emit `ProjectsChanged` so every
+    //! client (other windows + K2 Connect remotes) re-fetches the list.
+    //! Same subscribe-before-write pattern as `set_tab_title_tests`.
+
+    use super::*;
+    use crate::session_events::{self, SessionEvent};
+    use parking_lot::Mutex as PLMutex;
+
+    static TEST_LOCK: PLMutex<()> = PLMutex::new(());
+
+    fn unique(suffix: &str) -> String {
+        format!(
+            "pcb-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            suffix
+        )
+    }
+
+    fn seed_project(project_id: &str, path: &str, tab_order: i64) {
+        let dbh = k2_core::db::shared();
+        let conn = dbh.lock();
+        k2_core::db::schema::Project::create(
+            &conn, project_id, "Test", path, "#fff", tab_order, 0, None, None,
+        )
+        .expect("seed project");
+    }
+
+    /// Drain until a `ProjectsChanged` lands, or fail loudly at the deadline.
+    /// The bus is process-global, so skip unrelated events from parallel tests.
+    fn expect_projects_changed(rx: &mut tokio::sync::broadcast::Receiver<SessionEvent>) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no ProjectsChanged seen within 500ms"
+            );
+            match rx.try_recv() {
+                Ok(SessionEvent::ProjectsChanged {}) => break,
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(e) => panic!("recv error: {e:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn projects_update_emits_projects_changed() {
+        let _g = TEST_LOCK.lock();
+        let project_id = unique("p");
+        seed_project(&project_id, &format!("/tmp/{project_id}"), 0);
+
+        // Subscribe BEFORE the write so we capture the emit.
+        let mut rx = session_events::subscribe();
+
+        let body =
+            serde_json::json!({ "id": project_id, "color": "#ff00aa" }).to_string();
+        let resp = handle_projects_update(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert!(
+            resp.body.contains("\"color\":\"#ff00aa\""),
+            "response must echo updated color: {}",
+            resp.body
+        );
+
+        expect_projects_changed(&mut rx);
+    }
+
+    #[test]
+    fn projects_reorder_emits_projects_changed() {
+        let _g = TEST_LOCK.lock();
+        let id_a = unique("a");
+        let id_b = unique("b");
+        seed_project(&id_a, &format!("/tmp/{id_a}"), 0);
+        seed_project(&id_b, &format!("/tmp/{id_b}"), 1);
+
+        let mut rx = session_events::subscribe();
+
+        let body = serde_json::json!({ "ids": [&id_b, &id_a] }).to_string();
+        let resp = handle_projects_reorder(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert!(
+            resp.body.contains("\"success\":true"),
+            "reorder must report success: {}",
+            resp.body
+        );
+
+        expect_projects_changed(&mut rx);
     }
 }

@@ -9112,18 +9112,19 @@ LENGTH LIMIT — IMPORTANT
       k2 msg <workspace> --inbox-silent ./report.pdf
 
 TRAY DELIVERY (work packages)
-  k2 msg <workspace> --inbox-wake <path> [--title "..."] [--from <name>]
+  k2 msg <workspace> --inbox-wake <path> [path…] [--title "..."] [--from <name>]
       Package + short live knock (recommended). Wake line is a pointer
       (`[inbox:<id>] <title>` + `Open: k2 inbox read <id>`), never the
-      full file body.
+      full file body. Multiple paths → one package (cover + all sidecars).
 
-  k2 msg <workspace> --inbox-silent <path> [--title "..."] [--from <name>]
+  k2 msg <workspace> --inbox-silent <path> [path…] [--title "..."] [--from <name>]
       Package only — does NOT notify the peer. Use wake, or a separate
       live `k2 msg` after silent, if you want a knock.
 
   Bare `--inbox` is a hard error (must pick silent or wake).
   Non-markdown files land as a cover `.md` + sidecar under
-  `.k2/inbox/<id>.files/<filename>`.
+  `.k2/inbox/<id>.files/<filename>`. Multi-file: all files are sidecars
+  under one `<id>.files/` with a single cover note listing them.
 
 RELATED VERBS
   k2 inbox list | read <id> | move | archive
@@ -9146,6 +9147,7 @@ EXAMPLES
   k2 msg scout_v3 "wake up and check in" --wake
   k2 msg scout_v3 --inbox-wake ./brief.md
   k2 msg scout_v3 --inbox-silent ./data.csv --title "CSV drop"
+  k2 msg scout_v3 --inbox-wake a.md b.pdf notes.txt --title "Batch"
   k2 msg /Users/me/work/MyApp "deploy completed"
   k2 msg peer::other.k2.dev "ping from federation"
 EOF
@@ -9360,14 +9362,14 @@ cmd_schema() {
   "commands": [
     {
       "name": "msg",
-      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace> --inbox-silent|--inbox-wake <path>",
+      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace> --inbox-silent|--inbox-wake <path> [path…]",
       "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; for long content or files use --inbox-wake / --inbox-silent. Federated peers: agent::host (prefer) or legacy agent@host — never mail. Wire form fp::ws::agent is k2 fed send only.",
-      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or federated agent::host"}, {"name": "text_or_path", "required": false, "description": "Live message text, or file path with --inbox-silent|--inbox-wake"}],
+      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or federated agent::host"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
       "flags": [
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
         {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
-        {"name": "--inbox-silent", "arg": null, "description": "Land a durable tray package under peer .k2/inbox/ (file path or --title/--body). Does NOT notify."},
-        {"name": "--inbox-wake", "arg": null, "description": "Land tray package + short live knock ([inbox:id] title + open line). Preferred tray mode."},
+        {"name": "--inbox-silent", "arg": null, "description": "Land a durable tray package under peer .k2/inbox/ (one or more file paths, or --title/--body). Multi-file → one package. Does NOT notify."},
+        {"name": "--inbox-wake", "arg": null, "description": "Land tray package + short live knock ([inbox:id] title + open line). Accepts multiple paths as one package. Preferred tray mode."},
         {"name": "--inbox", "arg": null, "description": "Hard error — use --inbox-silent or --inbox-wake."},
         {"name": "--title", "arg": "text", "description": "Title override for tray package (with --inbox-silent|--inbox-wake)."},
         {"name": "--body", "arg": "text", "description": "String body when no file path (legacy compose form with tray flags)."}
@@ -13300,8 +13302,8 @@ with one shared chat + one PoC agent (see PROJECTS below).
 TALK TO OTHERS
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
   msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)
-  msg <workspace> --inbox-wake <path>   Package + short live notify (tray)
-  msg <workspace> --inbox-silent <path> Package only (no notify)
+  msg <workspace> --inbox-wake <path> [path…]   Package + short live notify (tray; multi-file → one package)
+  msg <workspace> --inbox-silent <path> [path…] Package only (no notify; multi-file → one package)
   msg <workspace> --signal <kind> ...   Emit a typed signal (advanced)
   read <workspace> [--lines N]          Read their live terminal (peek before you inject)
   connections list [--json]             Connected workspaces (bidirectional)
@@ -13530,8 +13532,11 @@ Error: bare --inbox is no longer accepted.
 
 Tray delivery requires an explicit mode:
 
-  k2 msg <workspace> --inbox-wake   <path>   # package + short live notify (recommended)
-  k2 msg <workspace> --inbox-silent <path>   # package only (does NOT notify)
+  k2 msg <workspace> --inbox-wake   <path> [path…]   # package + short live notify (recommended)
+  k2 msg <workspace> --inbox-silent <path> [path…]   # package only (does NOT notify)
+
+Multiple paths land as ONE tray package (cover note + sidecars under
+.k2/inbox/<id>.files/). Single path keeps the classic single-file shape.
 
 --inbox-silent lands a durable package under the peer's .k2/inbox/ but
 does not wake or ping them. Use --inbox-wake for package + knock, or send
@@ -13891,8 +13896,70 @@ sys.exit(0)
 ' || return $?
 }
 
+# Resolve a client path to absolute. Echoes path or empty.
+_msg_inbox_abspath() {
+    local path="$1"
+    local abs_path=""
+    if command -v python3 >/dev/null 2>&1; then
+        abs_path=$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$path" 2>/dev/null) || abs_path=""
+    fi
+    if [[ -z "$abs_path" ]]; then
+        case "$path" in
+            /*) abs_path="$path" ;;
+            ~/*) abs_path="${HOME}/${path#~/}" ;;
+            *) abs_path="$(pwd)/$path" ;;
+        esac
+    fi
+    printf '%s' "$abs_path"
+}
+
+# Build a flat .tar.gz of absolute files (basenames only; collisions get -N
+# suffix). Echoes the temp archive path. Caller must rm it.
+_msg_inbox_pack_tar_gz() {
+    local out=""
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "Error: python3 required to pack multi-file inbox bundle" >&2
+        return 1
+    fi
+    out=$(mktemp "${TMPDIR:-/tmp}/k2-msg-inbox-bundle.XXXXXX.tar.gz") || {
+        echo "Error: cannot create temp archive for multi-file inbox" >&2
+        return 1
+    }
+    if ! python3 -c '
+import os, sys, tarfile
+out = sys.argv[1]
+paths = sys.argv[2:]
+used = set()
+with tarfile.open(out, "w:gz") as tf:
+    for p in paths:
+        base = os.path.basename(p) or "attachment"
+        name = base
+        n = 2
+        while name in used:
+            stem, dot, ext = base.rpartition(".")
+            if dot and stem:
+                name = f"{stem}-{n}.{ext}"
+            else:
+                name = f"{base}-{n}"
+            n += 1
+        used.add(name)
+        tf.add(p, arcname=name)
+' "$out" "$@"; then
+        rm -f "$out"
+        echo "Error: failed to pack multi-file inbox bundle" >&2
+        return 1
+    fi
+    printf '%s' "$out"
+    return 0
+}
+
 cmd_msg_inbox_form() {
-    # `msg <ws> --inbox-silent|wake [path] [--title ...] [--body ...] [--from ...]`
+    # `msg <ws> --inbox-silent|wake [path …] [--title ...] [--body ...] [--from ...]`
+    #
+    # P2 multi-file: multiple positionals that are files become ONE tray
+    # package (cover + sidecars under <id>.files/). Local loopback posts
+    # paths[] to /cli/inbox/deliver; remote multi packs a flat tar.gz,
+    # stages via upload-binary/chunk, then /cli/inbox/deliver-bundle.
     #
     # #36: recipient is workspace=<token> (same as live msg) — stamp_principal
     # never overwrites workspace=/target=.
@@ -13918,63 +13985,52 @@ cmd_msg_inbox_form() {
         esac
     done
 
-    # Path: explicit --path, or first/last non-flag positional that is a file.
-    if [[ -z "$path" ]]; then
+    # Collect ALL positional paths that are readable files (P2 multi-file).
+    # Explicit --path is treated as a single-file override when set.
+    local file_paths=()
+    if [[ -n "$path" ]]; then
+        file_paths+=("$path")
+    else
         local cand
         for cand in "${positional[@]+"${positional[@]}"}"; do
             if [[ -f "$cand" ]]; then
-                path="$cand"
-                break
+                file_paths+=("$cand")
             fi
         done
     fi
-    # If no file path found but one positional looks path-like, keep it for
+    # If no file found but one positional looks path-like, keep it for
     # a clearer error (daemon will reject missing file).
-    if [[ -z "$path" && ${#positional[@]} -gt 0 ]]; then
+    if [[ ${#file_paths[@]} -eq 0 && ${#positional[@]} -gt 0 ]]; then
         local p0="${positional[0]}"
         case "$p0" in
             ./*|/*|~/*|*.md|*.txt|*.pdf|*.png|*.jpg|*.zip|*.json|*.csv)
-                path="$p0" ;;
+                file_paths+=("$p0") ;;
         esac
     fi
 
     local wake_flag="false"
     [[ "$mode" == "wake" ]] && wake_flag="true"
 
-    # ── File package path (primary) ──────────────────────────────────
-    if [[ -n "$path" ]]; then
-        # Resolve to absolute path so the daemon (possibly different CWD) can open it.
-        local abs_path
-        if command -v python3 >/dev/null 2>&1; then
-            abs_path=$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$path" 2>/dev/null) || abs_path=""
-        fi
-        if [[ -z "$abs_path" ]]; then
-            # Fallback: bash-only absolute-ize for relative paths.
-            case "$path" in
-                /*) abs_path="$path" ;;
-                ~/*) abs_path="${HOME}/${path#~/}" ;;
-                *) abs_path="$(pwd)/$path" ;;
-            esac
-        fi
-        if [[ ! -f "$abs_path" ]]; then
-            echo "Error: file not found: $path" >&2
-            echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [--title \"...\"] [--from <name>]" >&2
-            exit 2
-        fi
+    # ── File package path (primary; single or multi) ─────────────────
+    if [[ ${#file_paths[@]} -gt 0 ]]; then
+        local abs_paths=()
+        local fp abs_path
+        for fp in "${file_paths[@]}"; do
+            abs_path=$(_msg_inbox_abspath "$fp")
+            if [[ ! -f "$abs_path" ]]; then
+                echo "Error: file not found: $fp" >&2
+                echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [path…] [--title \"...\"] [--from <name>]" >&2
+                exit 2
+            fi
+            abs_paths+=("$abs_path")
+        done
 
-        # P1 remote file staging: when the active daemon is not loopback
-        # (K2 Connect / --host repointed BASE_URL), the daemon cannot open
-        # a client-local path — upload first. Local loopback keeps the
-        # direct-path fast path; if deliver reports "not a readable file"
-        # we fall back to upload (daemon/CLI FS skew).
-        local deliver_path="$abs_path"
-        local staged_path=""
         local need_upload="false"
         if ! _msg_daemon_is_local; then
             need_upload="true"
         fi
 
-        _msg_inbox_post_deliver() {
+        _msg_inbox_post_deliver_single() {
             local pth="$1"
             local params="workspace=$(urlencode "$target")&path=$(urlencode "$pth")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
             [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
@@ -13982,9 +14038,59 @@ cmd_msg_inbox_form() {
             cli_send cli_post_form "/cli/inbox/deliver" "$params"
         }
 
-        local response
+        _msg_inbox_post_deliver_multi() {
+            # paths= is a JSON array of absolute paths the daemon can open.
+            local paths_json
+            paths_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${abs_paths[@]}") || {
+                echo "Error: failed to encode paths JSON for multi-file deliver" >&2
+                return 1
+            }
+            local params="workspace=$(urlencode "$target")&paths=$(urlencode "$paths_json")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
+            [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
+            [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
+            cli_send cli_post_form "/cli/inbox/deliver" "$params"
+        }
+
+        _msg_inbox_post_deliver_bundle() {
+            local pth="$1"
+            local params="workspace=$(urlencode "$target")&path=$(urlencode "$pth")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
+            [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
+            [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
+            cli_send cli_post_form "/cli/inbox/deliver-bundle" "$params"
+        }
+
+        local response staged_path=""
+
+        # ── Multi-file ──────────────────────────────────────────────
+        if [[ ${#abs_paths[@]} -gt 1 ]]; then
+            if [[ "$need_upload" != "true" ]]; then
+                response=$(_msg_inbox_post_deliver_multi) || true
+                if _msg_inbox_is_not_readable_error "$response"; then
+                    need_upload="true"
+                else
+                    _msg_inbox_map_response "$response" "$wake_flag"
+                    return $?
+                fi
+            fi
+            # Remote (or local FS skew): pack flat tar.gz → stage → deliver-bundle.
+            local bundle_local
+            bundle_local=$(_msg_inbox_pack_tar_gz "${abs_paths[@]}") || exit 1
+            staged_path=$(_msg_inbox_stage_file "$target" "$bundle_local") || {
+                rm -f "$bundle_local"
+                echo "Error: failed to stage multi-file bundle on daemon for inbox deliver" >&2
+                exit 1
+            }
+            rm -f "$bundle_local"
+            response=$(_msg_inbox_post_deliver_bundle "$staged_path")
+            _msg_inbox_delete_staged "$staged_path"
+            _msg_inbox_map_response "$response" "$wake_flag"
+            return $?
+        fi
+
+        # ── Single-file (P0/P1 path unchanged) ───────────────────────
+        local deliver_path="${abs_paths[0]}"
         if [[ "$need_upload" != "true" ]]; then
-            response=$(_msg_inbox_post_deliver "$deliver_path")
+            response=$(_msg_inbox_post_deliver_single "$deliver_path")
             if _msg_inbox_is_not_readable_error "$response"; then
                 need_upload="true"
             else
@@ -13994,12 +14100,12 @@ cmd_msg_inbox_form() {
         fi
 
         if [[ "$need_upload" == "true" ]]; then
-            staged_path=$(_msg_inbox_stage_file "$target" "$abs_path") || {
+            staged_path=$(_msg_inbox_stage_file "$target" "${abs_paths[0]}") || {
                 echo "Error: failed to stage local file on daemon for inbox deliver" >&2
                 exit 1
             }
             deliver_path="$staged_path"
-            response=$(_msg_inbox_post_deliver "$deliver_path")
+            response=$(_msg_inbox_post_deliver_single "$deliver_path")
             # Best-effort cleanup of staging copy (package already owns bytes).
             _msg_inbox_delete_staged "$staged_path"
             _msg_inbox_map_response "$response" "$wake_flag"
@@ -14009,7 +14115,7 @@ cmd_msg_inbox_form() {
 
     # ── Legacy string compose (--title/--body, no path) ──────────────
     if [[ -z "$title" ]]; then
-        echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [--title \"...\"] [--from <name>]" >&2
+        echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [path…] [--title \"...\"] [--from <name>]" >&2
         echo "   or: k2 msg <workspace> --inbox-${mode} --title \"...\" [--body \"...\"]" >&2
         exit 2
     fi

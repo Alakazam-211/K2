@@ -680,6 +680,7 @@ async fn handle_one_request(
             | "/cli/push/unregister-device"
             | "/cli/inbox/compose"
             | "/cli/inbox/deliver"
+            | "/cli/inbox/deliver-bundle"
             | "/cli/inbox/move"
             | "/cli/inbox/archive"
             | "/cli/inbox/delete"

@@ -333,7 +333,321 @@ pub fn deliver_file(
 /// Build the short live-wake pointer payload (without `[from …]` framing —
 /// `deliver_live` / `format_message` adds that).
 pub fn wake_pointer_text(id: &str, title: &str) -> String {
-    format!("[inbox:{id}] {title}\nOpen: k2 inbox read {id}")
+    wake_pointer_text_n(id, title, None)
+}
+
+/// Wake pointer with optional multi-file note (`N files` when `file_count > 1`).
+pub fn wake_pointer_text_n(id: &str, title: &str, file_count: Option<usize>) -> String {
+    match file_count {
+        Some(n) if n > 1 => {
+            format!("[inbox:{id}] {title}\nOpen: k2 inbox read {id}\n({n} files)")
+        }
+        _ => format!("[inbox:{id}] {title}\nOpen: k2 inbox read {id}"),
+    }
+}
+
+/// Deliver one or more local files into the target workspace's inbox as a
+/// single tray package (one id, one cover `.md`, all files as sidecars under
+/// `<id>.files/`).
+///
+/// Rules:
+/// - 0 paths → error
+/// - 1 path → delegates to [`deliver_file`] (preserves single-file shape)
+/// - N paths → one multi-file package
+///
+/// Title (multi): override, else if exactly one source is `.md` use that
+/// file's title resolution, else `"N files: name1, name2, …"` (truncated).
+pub fn deliver_files(
+    workspace: &Path,
+    source_paths: &[PathBuf],
+    title_override: Option<&str>,
+    from: Option<&str>,
+    source: Option<&str>,
+) -> Result<DeliveredPackage, String> {
+    if source_paths.is_empty() {
+        return Err("no source paths — pass at least one file".to_string());
+    }
+    if source_paths.len() == 1 {
+        return deliver_file(
+            workspace,
+            &source_paths[0],
+            title_override,
+            from,
+            source,
+        );
+    }
+
+    // Validate every path is a readable file before allocating a package id.
+    for p in source_paths {
+        if !p.is_file() {
+            return Err(format!(
+                "source path is not a readable file: {}",
+                p.display()
+            ));
+        }
+    }
+
+    let source_tag = source.unwrap_or("msg-inbox").to_string();
+    let from_tag = from.unwrap_or("self").to_string();
+    let root = inbox_root(workspace);
+    fs::create_dir_all(&root).map_err(|e| format!("create inbox dir: {e}"))?;
+
+    let title = resolve_multi_title(title_override, source_paths);
+    let filename = allocate_md_filename(&root, &title);
+    let id = filename.strip_suffix(".md").unwrap_or(&filename).to_string();
+    let files_dir = root.join(format!("{id}.files"));
+    fs::create_dir_all(&files_dir).map_err(|e| format!("create sidecar dir: {e}"))?;
+
+    let mut sidecar_paths: Vec<String> = Vec::with_capacity(source_paths.len());
+    let mut body_lines: Vec<String> = Vec::with_capacity(source_paths.len() + 4);
+    body_lines.push(format!(
+        "Multi-file package delivered via `k2 msg --inbox-*` ({n} files).\n",
+        n = source_paths.len()
+    ));
+    body_lines.push(String::new());
+
+    // Track used sidecar names so collisions get a numeric suffix.
+    let mut used_names: Vec<String> = Vec::new();
+
+    for source_path in source_paths {
+        let original_name = source_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment");
+        let safe_name = unique_sidecar_name(original_name, &used_names);
+        used_names.push(safe_name.clone());
+
+        let sidecar = files_dir.join(&safe_name);
+        fs::copy(source_path, &sidecar)
+            .map_err(|e| format!("copy sidecar {}: {e}", source_path.display()))?;
+        let file_size = fs::metadata(&sidecar).map(|m| m.len()).unwrap_or(0);
+        let size_human = human_bytes(file_size);
+        let rel_sidecar = format!("{id}.files/{safe_name}");
+        body_lines.push(format!(
+            "- **`{safe_name}`** ({size_human}) — `.k2/inbox/{rel_sidecar}`"
+        ));
+        sidecar_paths.push(sidecar.display().to_string());
+    }
+
+    body_lines.push(String::new());
+    body_lines.push(format!(
+        "Open this cover note with `k2 inbox read {id}`. Sidecars live under `.k2/inbox/{id}.files/`.\n"
+    ));
+
+    let created = simple_date_now();
+    let body = body_lines.join("\n");
+    let written = format!(
+        "---\ntitle: {title}\npriority: normal\ncreated: {created}\nsource: {source_tag}\nfrom: {from_tag}\n---\n\n{body}"
+    );
+    let cover_path = root.join(&filename);
+    atomic_write(&cover_path, &written)?;
+
+    Ok(DeliveredPackage {
+        id,
+        title,
+        filename,
+        folder: String::new(),
+        cover_path: cover_path.display().to_string(),
+        sidecar_paths,
+        body_preview: body_preview_for(&written),
+        source: source_tag,
+        from: from_tag,
+    })
+}
+
+/// Unpack a flat (or `files/`-prefixed) `.tar.gz` into a multi-file tray
+/// package. Used for remote multi-upload efficiency: CLI packs basenames,
+/// stages the archive, daemon unpacks into one package.
+///
+/// Entries with directory components other than a single leading `files/`
+/// are rejected (path-traversal defense). Empty archives error.
+pub fn unpack_tray_bundle(
+    workspace: &Path,
+    bundle_tar_gz_path: &Path,
+    title_override: Option<&str>,
+    from: Option<&str>,
+    source: Option<&str>,
+) -> Result<DeliveredPackage, String> {
+    if !bundle_tar_gz_path.is_file() {
+        return Err(format!(
+            "bundle path is not a readable file: {}",
+            bundle_tar_gz_path.display()
+        ));
+    }
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "k2-inbox-bundle-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&tmp_root).map_err(|e| format!("create unpack dir: {e}"))?;
+
+    let extract_result = (|| -> Result<Vec<PathBuf>, String> {
+        let file = fs::File::open(bundle_tar_gz_path)
+            .map_err(|e| format!("open bundle {}: {e}", bundle_tar_gz_path.display()))?;
+        let dec = flate2::read::GzDecoder::new(file);
+        let mut ar = tar::Archive::new(dec);
+        let mut extracted: Vec<PathBuf> = Vec::new();
+
+        for entry in ar.entries().map_err(|e| format!("read bundle: {e}"))? {
+            let mut entry = entry.map_err(|e| format!("read bundle entry: {e}"))?;
+            let header = entry.header().clone();
+            // Skip directories / non-files.
+            if !header.entry_type().is_file() {
+                continue;
+            }
+            let entry_path = entry
+                .path()
+                .map_err(|e| format!("entry path: {e}"))?
+                .to_path_buf();
+            let basename = safe_tar_entry_basename(&entry_path)?;
+            let dest = tmp_root.join(&basename);
+            // If two entries sanitize to the same name, suffix.
+            let dest = if dest.exists() {
+                let mut n = 2;
+                loop {
+                    let candidate = tmp_root.join(format!("{basename}.{n}"));
+                    if !candidate.exists() {
+                        break candidate;
+                    }
+                    n += 1;
+                }
+            } else {
+                dest
+            };
+            {
+                let mut out = fs::File::create(&dest)
+                    .map_err(|e| format!("create extracted file {}: {e}", dest.display()))?;
+                std::io::copy(&mut entry, &mut out)
+                    .map_err(|e| format!("extract {}: {e}", dest.display()))?;
+            }
+            extracted.push(dest);
+        }
+        if extracted.is_empty() {
+            return Err("bundle contains no files".to_string());
+        }
+        Ok(extracted)
+    })();
+
+    let extracted = match extract_result {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&tmp_root);
+            return Err(e);
+        }
+    };
+
+    let result = deliver_files(workspace, &extracted, title_override, from, source);
+    let _ = fs::remove_dir_all(&tmp_root);
+    result
+}
+
+/// Accept flat basenames or a single `files/<name>` prefix; reject `..` /
+/// multi-component paths.
+fn safe_tar_entry_basename(entry_path: &Path) -> Result<String, String> {
+    let mut components: Vec<&str> = entry_path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    // Drop a single leading "files" directory if present.
+    if components.len() == 2 && components[0].eq_ignore_ascii_case("files") {
+        components.remove(0);
+    }
+    if components.len() != 1 {
+        return Err(format!(
+            "bundle entry has nested path (only flat or files/ prefix allowed): {}",
+            entry_path.display()
+        ));
+    }
+    let name = components[0];
+    if name == ".." || name == "." || name.is_empty() {
+        return Err(format!(
+            "bundle entry has unsafe name: {}",
+            entry_path.display()
+        ));
+    }
+    Ok(sanitize_sidecar_filename(name))
+}
+
+/// Multi-file title: override → sole-md title → `"N files: a, b, …"` truncated.
+fn resolve_multi_title(title_override: Option<&str>, source_paths: &[PathBuf]) -> String {
+    if let Some(t) = title_override {
+        let t = t.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+
+    let md_paths: Vec<&PathBuf> = source_paths
+        .iter()
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+        })
+        .collect();
+    if md_paths.len() == 1 {
+        let content = safe_read_to_string(md_paths[0]).ok();
+        return resolve_title(None, content.as_deref(), md_paths[0]);
+    }
+
+    let names: Vec<String> = source_paths
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string()
+        })
+        .collect();
+    let n = names.len();
+    let joined = names.join(", ");
+    let raw = format!("{n} files: {joined}");
+    // Keep titles readable in lists / wake lines (~80 chars).
+    const MAX: usize = 80;
+    if raw.chars().count() <= MAX {
+        raw
+    } else {
+        let mut out = String::new();
+        for c in raw.chars().take(MAX.saturating_sub(1)) {
+            out.push(c);
+        }
+        out.push('…');
+        out
+    }
+}
+
+/// Sanitize + ensure uniqueness among already-used sidecar names.
+fn unique_sidecar_name(original: &str, used: &[String]) -> String {
+    let base = sanitize_sidecar_filename(original);
+    if !used.iter().any(|u| u == &base) {
+        return base;
+    }
+    // Split stem/ext for nicer suffixes: report.pdf → report-2.pdf
+    let (stem, ext) = match base.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() && !e.is_empty() && !e.contains('/') => {
+            (s.to_string(), Some(e.to_string()))
+        }
+        _ => (base.clone(), None),
+    };
+    let mut n = 2;
+    loop {
+        let candidate = match &ext {
+            Some(e) => format!("{stem}-{n}.{e}"),
+            None => format!("{stem}-{n}"),
+        };
+        if !used.iter().any(|u| u == &candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 fn deliver_markdown_file(
@@ -1047,5 +1361,161 @@ mod tests {
         let err = deliver_file(ws.path(), &ws.path().join("nope.md"), None, None, None)
             .unwrap_err();
         assert!(err.contains("not a readable file"));
+    }
+
+    #[test]
+    fn deliver_files_empty_errors() {
+        let ws = make_ws();
+        let err = deliver_files(ws.path(), &[], None, None, None).unwrap_err();
+        assert!(err.contains("no source paths"));
+    }
+
+    #[test]
+    fn deliver_files_one_path_matches_deliver_file() {
+        let ws = make_ws();
+        let src = ws.path().join("solo.pdf");
+        fs::write(&src, b"%PDF solo").unwrap();
+
+        let single = deliver_file(ws.path(), &src, Some("Solo"), Some("cli"), None).unwrap();
+        // Second call would allocate a different slug suffix if same title —
+        // compare structural shape rather than id.
+        let multi = deliver_files(
+            ws.path(),
+            &[src.clone()],
+            Some("Solo2"),
+            Some("cli"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(multi.sidecar_paths.len(), single.sidecar_paths.len());
+        assert_eq!(multi.from, "cli");
+        assert_eq!(multi.source, "msg-inbox");
+        assert!(multi.sidecar_paths[0].ends_with("solo.pdf"));
+        assert!(Path::new(&multi.cover_path).exists());
+    }
+
+    #[test]
+    fn deliver_files_two_files_cover_and_sidecars() {
+        let ws = make_ws();
+        let a = ws.path().join("a.md");
+        let b = ws.path().join("b.pdf");
+        fs::write(&a, "---\ntitle: Alpha Note\n---\n\nHello.\n").unwrap();
+        fs::write(&b, b"%PDF-bytes").unwrap();
+
+        let pkg = deliver_files(
+            ws.path(),
+            &[a, b],
+            None,
+            Some("alice"),
+            None,
+        )
+        .unwrap();
+        // Exactly one .md among two → use that md's title.
+        assert_eq!(pkg.title, "Alpha Note");
+        assert_eq!(pkg.sidecar_paths.len(), 2);
+        assert_eq!(pkg.from, "alice");
+        assert_eq!(pkg.source, "msg-inbox");
+
+        let files_dir = inbox_root(ws.path()).join(format!("{}.files", pkg.id));
+        assert!(files_dir.join("a.md").exists());
+        assert!(files_dir.join("b.pdf").exists());
+        assert!(Path::new(&pkg.cover_path).exists());
+
+        let cover = fs::read_to_string(&pkg.cover_path).unwrap();
+        assert!(cover.contains("title: Alpha Note"));
+        assert!(cover.contains("source: msg-inbox"));
+        assert!(cover.contains("from: alice"));
+        assert!(cover.contains("priority: normal"));
+        assert!(cover.contains("a.md"));
+        assert!(cover.contains("b.pdf"));
+        assert!(cover.contains(&format!("k2 inbox read {}", pkg.id)));
+        assert!(cover.contains("2 files"));
+    }
+
+    #[test]
+    fn deliver_files_title_override_and_n_files_default() {
+        let ws = make_ws();
+        let a = ws.path().join("x.txt");
+        let b = ws.path().join("y.csv");
+        fs::write(&a, "x").unwrap();
+        fs::write(&b, "y").unwrap();
+
+        let pkg = deliver_files(ws.path(), &[a.clone(), b.clone()], None, None, None).unwrap();
+        assert!(pkg.title.starts_with("2 files:"));
+        assert!(pkg.title.contains("x.txt"));
+        assert!(pkg.title.contains("y.csv"));
+
+        let pkg2 = deliver_files(
+            ws.path(),
+            &[a, b],
+            Some("Batch Drop"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(pkg2.title, "Batch Drop");
+    }
+
+    #[test]
+    fn deliver_files_missing_source_errors() {
+        let ws = make_ws();
+        let good = ws.path().join("ok.txt");
+        fs::write(&good, "ok").unwrap();
+        let bad = ws.path().join("missing.bin");
+        let err = deliver_files(ws.path(), &[good, bad], None, None, None).unwrap_err();
+        assert!(err.contains("not a readable file"));
+    }
+
+    #[test]
+    fn unpack_tray_bundle_flat_tar_gz() {
+        let ws = make_ws();
+        // Build a minimal flat tar.gz of two files.
+        let stage = ws.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(stage.join("one.txt"), b"one").unwrap();
+        fs::write(stage.join("two.bin"), b"two").unwrap();
+        let bundle = ws.path().join("pack.tar.gz");
+        {
+            let f = fs::File::create(&bundle).unwrap();
+            let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+            let mut tar = tar::Builder::new(enc);
+            for name in ["one.txt", "two.bin"] {
+                let path = stage.join(name);
+                let mut file = fs::File::open(&path).unwrap();
+                let meta = file.metadata().unwrap();
+                let mut header = tar::Header::new_gnu();
+                header.set_metadata(&meta);
+                header.set_size(meta.len());
+                header.set_cksum();
+                tar.append_data(&mut header, Path::new(name), &mut file)
+                    .unwrap();
+            }
+            let enc = tar.into_inner().unwrap();
+            enc.finish().unwrap();
+        }
+
+        let pkg = unpack_tray_bundle(
+            ws.path(),
+            &bundle,
+            Some("From Bundle"),
+            Some("remote"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(pkg.title, "From Bundle");
+        assert_eq!(pkg.sidecar_paths.len(), 2);
+        assert_eq!(pkg.from, "remote");
+        let files_dir = inbox_root(ws.path()).join(format!("{}.files", pkg.id));
+        assert!(files_dir.join("one.txt").exists());
+        assert!(files_dir.join("two.bin").exists());
+    }
+
+    #[test]
+    fn wake_pointer_text_n_mentions_file_count() {
+        let t = wake_pointer_text_n("pack", "Stuff", Some(3));
+        assert!(t.contains("(3 files)"));
+        assert!(t.contains("[inbox:pack] Stuff"));
+        let single = wake_pointer_text_n("pack", "Stuff", Some(1));
+        assert!(!single.contains("files)"));
     }
 }

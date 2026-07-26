@@ -262,15 +262,20 @@ pub fn handle_migrate_post(params: &HashMap<String, String>) -> CliResponse {
 
 /// POST /cli/inbox/deliver
 ///
-/// File-first tray package for `k2 msg --inbox-silent|wake <path>`.
+/// File-first tray package for `k2 msg --inbox-silent|wake <path> [paths…]`.
 ///
 /// Params (form or query):
 /// - `workspace` / `target` / `project` / `project_path` — recipient token
-/// - `path` — absolute path the **daemon** can open (local same-host)
+/// - `path` — absolute path the **daemon** can open (single file, as today)
+/// - `paths` — JSON array of absolute paths the daemon can open (multi-file
+///   → one tray package via [`k2_core::inbox::deliver_files`])
 /// - `title` (optional override)
 /// - `from` (optional sender identity for frontmatter + wake framing)
 /// - `source` (optional; default `msg-inbox`)
 /// - `wake` / `mode` — `wake=true|1|yes` or `mode=wake` enables live knock
+///
+/// Prefer `paths` when multiple files share one package; `path` alone keeps
+/// the P0 single-file shape. If both are set, `paths` wins when non-empty.
 ///
 /// Package success is primary. On wake mode, if package lands but wake
 /// fails, response still has package fields + `wake: {success:false,...}`
@@ -298,22 +303,19 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
         }
     }
 
-    let path_str = str_param(params, "path");
-    if path_str.is_empty() {
-        return CliResponse::bad_request(
-            "Missing path — absolute path to the file the daemon should package into the inbox",
-        );
-    }
-    let source_path = PathBuf::from(&path_str);
+    let source_paths = match deliver_source_paths(params) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
     let title = opt_param(params, "title");
     let from = opt_param(params, "from");
     let source = opt_param(params, "source");
     let wake = deliver_wants_wake(params);
 
     let workspace = PathBuf::from(&resolved_path);
-    let package = match k2_core::inbox::deliver_file(
+    let package = match k2_core::inbox::deliver_files(
         &workspace,
-        &source_path,
+        &source_paths,
         title.as_deref(),
         from.as_deref(),
         source.as_deref(),
@@ -322,22 +324,138 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return CliResponse::bad_request(e),
     };
 
+    finish_deliver_response(params, &target_token, package, from, wake)
+}
+
+/// POST /cli/inbox/deliver-bundle
+///
+/// Unpack a staged flat `.tar.gz` (or `files/`-prefixed) into one multi-file
+/// tray package. Used by remote multi-file `k2 msg --inbox-*` so the CLI
+/// uploads one archive instead of N files.
+///
+/// Params:
+/// - `workspace` / `target` / `project` / `project_path` — recipient token
+/// - `path` — absolute path to the staged `.tar.gz` the daemon can open
+/// - `title` / `from` / `source` / `wake` / `mode` — same as deliver
+pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliResponse {
+    let target_token = opt_param(params, "workspace")
+        .or_else(|| opt_param(params, "target"))
+        .or_else(|| opt_param(params, "project"))
+        .or_else(|| opt_param(params, "project_path"))
+        .unwrap_or_default();
+    if target_token.is_empty() {
+        return CliResponse::bad_request(
+            "Missing workspace (or target/project) — the inbox to deliver into",
+        );
+    }
+    let Some(resolved_path) = crate::workspace_msg::resolve_workspace(&target_token) else {
+        return crate::workspace_routes::workspace_not_found_response(&target_token);
+    };
+    let principal = crate::caller_workspace::principal_from_params(params);
+    match crate::comms::gate_cross_workspace(principal.as_ref(), &resolved_path) {
+        Ok(()) => {}
+        Err(Some(resp)) => return resp,
+        Err(None) => {
+            return crate::workspace_routes::workspace_not_found_response(&target_token);
+        }
+    }
+
+    let path_str = str_param(params, "path");
+    if path_str.is_empty() {
+        return CliResponse::bad_request(
+            "Missing path — absolute path to the staged .tar.gz the daemon should unpack",
+        );
+    }
+    let bundle_path = PathBuf::from(&path_str);
+    let title = opt_param(params, "title");
+    let from = opt_param(params, "from");
+    let source = opt_param(params, "source");
+    let wake = deliver_wants_wake(params);
+
+    let workspace = PathBuf::from(&resolved_path);
+    let package = match k2_core::inbox::unpack_tray_bundle(
+        &workspace,
+        &bundle_path,
+        title.as_deref(),
+        from.as_deref(),
+        source.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+
+    finish_deliver_response(params, &target_token, package, from, wake)
+}
+
+/// Resolve `paths` (JSON array) and/or `path` (single) into source file list.
+fn deliver_source_paths(params: &HashMap<String, String>) -> Result<Vec<PathBuf>, CliResponse> {
+    // Prefer multi-path JSON when present and non-empty.
+    if let Some(raw) = opt_param(params, "paths") {
+        match serde_json::from_str::<Vec<String>>(&raw) {
+            Ok(list) if !list.is_empty() => {
+                return Ok(list.into_iter().map(PathBuf::from).collect());
+            }
+            Ok(_) => {
+                return Err(CliResponse::bad_request(
+                    "paths is an empty array — pass at least one absolute path",
+                ));
+            }
+            Err(e) => {
+                return Err(CliResponse::bad_request(format!(
+                    "paths must be a JSON array of absolute path strings: {e}"
+                )));
+            }
+        }
+    }
+    let path_str = str_param(params, "path");
+    if path_str.is_empty() {
+        return Err(CliResponse::bad_request(
+            "Missing path or paths — absolute path(s) the daemon should package into the inbox",
+        ));
+    }
+    Ok(vec![PathBuf::from(path_str)])
+}
+
+fn finish_deliver_response(
+    _params: &HashMap<String, String>,
+    target_token: &str,
+    package: k2_core::inbox::DeliveredPackage,
+    from: Option<String>,
+    wake: bool,
+) -> CliResponse {
     let package_id = package.id.clone();
     let package_title = package.title.clone();
+    // Total files in the package: multi always has sidecars; single-md has 0.
+    let file_count = if package.sidecar_paths.is_empty() {
+        1
+    } else {
+        package.sidecar_paths.len()
+    };
     let mut out = serde_json::to_value(&package).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(obj) = out.as_object_mut() {
         obj.insert("ok".into(), serde_json::json!(true));
         // Convenience flat aliases (camelCase already on DeliveredPackage).
         obj.insert("coverPath".into(), serde_json::json!(package.cover_path));
-        obj.insert("sidecarPaths".into(), serde_json::json!(package.sidecar_paths));
-        obj.insert("bodyPreview".into(), serde_json::json!(package.body_preview));
+        obj.insert(
+            "sidecarPaths".into(),
+            serde_json::json!(package.sidecar_paths),
+        );
+        obj.insert(
+            "bodyPreview".into(),
+            serde_json::json!(package.body_preview),
+        );
+        obj.insert("fileCount".into(), serde_json::json!(file_count));
     }
 
     if wake {
-        let pointer = k2_core::inbox::wake_pointer_text(&package_id, &package_title);
+        let pointer = k2_core::inbox::wake_pointer_text_n(
+            &package_id,
+            &package_title,
+            Some(file_count),
+        );
         let from_tag = from.unwrap_or_else(|| "external".to_string());
         let wake_resp = crate::workspace_msg::deliver_live(
-            &target_token,
+            target_token,
             &pointer,
             &from_tag,
             "",
@@ -554,6 +672,7 @@ pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliRespons
     match path {
         "/cli/inbox/compose" => handle_compose_post(params),
         "/cli/inbox/deliver" => handle_deliver_post(params),
+        "/cli/inbox/deliver-bundle" => handle_deliver_bundle_post(params),
         "/cli/inbox/move" => handle_move_post(params),
         "/cli/inbox/archive" => handle_archive_post(params),
         "/cli/inbox/delete" => handle_delete_post(params),

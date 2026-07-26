@@ -3,6 +3,44 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.65 — Context hamburger: always-on AGENTS.md stack
+
+Always-on workspace context is a **stack of markdown layers** that K2
+composes into `.k2/AGENTS.md` — the “context hamburger.”
+
+### Stack model
+
+- **System layers** (toggleable): Agent persona, PROJECT.md, Tooling
+  (k2-cli pointer).
+- **Optional layers**: ordered path references (wiki index, your docs,
+  guidance packs). Enable / disable / reorder without editing the
+  generated file.
+- **SSOT**: daemon SQLite; CLI and Settings stay in sync.
+
+### CLI
+
+```text
+k2 agent context list|add|remove|on|off|move|show|regen|presets
+k2 agent context on|off pinned:agent|pinned:project|pinned:tooling
+k2 agent hire <dir> --context wiki:index --context docs/notes.md
+```
+
+Presets include `wiki:index`, `wiki:home`, `manager:pack`, and
+`k2:pack` (lean standing-order packs under `.k2/context/presets/`).
+
+### Settings
+
+Workspace Settings has a **Context stack** editor (View/Edit, system
+toggles, wiki seed chips). Day-2 management is `k2 agent context …`;
+hire only **seeds** layers with `--context`.
+
+### Soft size warn
+
+Stacks over ~64 KiB show a soft warning so always-on context stays lean.
+Load skills for depth; keep hamburger layers short.
+
+---
+
 ## 0.40.63 — `k2 msg` tray packages: silent, wake, and files
 
 ### Send durable packages, not only live pings

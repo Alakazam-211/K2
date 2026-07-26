@@ -328,6 +328,14 @@ Custom/local-LLM agents (e.g. aider against an Ollama server) are added with
 must honor (PTY spawn, prompt intake, `k2 respond`, declared danger flags) is
 `docs/agent-contract.md` in the K2 repository; `k2 preset --help` has the
 command surface.
+
+## Always-on context (AGENTS.md hamburger)
+```
+k2 agent context list|add|on|off|move|regen   # manage stack layers
+k2 agent hire <dir> --context wiki:index --context <path>   # seed at hire
+```
+Optional path layers compose into `.k2/AGENTS.md` with Agent / Project /
+Tooling. Prefer short standing orders; load skills for depth.
 "#
     .to_string()
 }
@@ -1515,6 +1523,15 @@ mod tests {
         assert!(
             body.contains("docs/agent-contract.md"),
             "k2-cli skill must point custom agents at the agent contract",
+        );
+        // Context hamburger (0.40.65): lean always-on stack management.
+        assert!(
+            body.contains("k2 agent context"),
+            "k2-cli skill must teach `k2 agent context`",
+        );
+        assert!(
+            body.contains("--context"),
+            "k2-cli skill must mention hire --context seed",
         );
         // K2 Mail S8: the `k2 mail` surface + its guardrails
         // (SKILL_VERSION_WORKSPACE bumped 9→11 for this section; 10 taken on main).

@@ -93,7 +93,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// (K2 Mail S8): the loadable k2-cli skill gains the "Email"
 /// (`k2 mail`) section — minting, untrusted-content markers, the
 /// `wait` loop, send governance.
-pub const SKILL_VERSION_WORKSPACE: u32 = 12;
+/// Bumped to 13 in 0.40.65: k2-cli skill gains a lean "Always-on context"
+/// section (`k2 agent context …`, hire `--context`).
+pub const SKILL_VERSION_WORKSPACE: u32 = 13;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

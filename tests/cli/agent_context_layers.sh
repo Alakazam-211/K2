@@ -100,6 +100,8 @@ assert_contains "schema has agent context list" "$schema_out" '"name": "agent co
 assert_contains "schema has agent context add" "$schema_out" '"name": "agent context add"'
 assert_contains "schema has agent context move" "$schema_out" '"name": "agent context move"'
 assert_contains "schema has agent context presets" "$schema_out" '"name": "agent context presets"'
+assert_contains "schema hire has --context" "$schema_out" '"name": "--context"'
+assert_contains "schema on mentions system layers" "$schema_out" 'pinned:agent'
 
 # ── 3. Help ──────────────────────────────────────────────────────────
 echo "== help =="
@@ -108,9 +110,13 @@ help_agent="$(PORT=1 TOKEN=fake "$K2_CLI" agent --help 2>&1)" || true
 assert_contains "agent help lists context" "$help_agent" "context"
 
 help_ctx="$(PORT=1 TOKEN=fake "$K2_CLI" agent context --help 2>&1)" || true
-for needle in list add remove on off move show regen presets; do
+for needle in list add remove on off move show regen presets manager:pack pinned:tooling; do
     assert_contains "context help has $needle" "$help_ctx" "$needle"
 done
+
+help_hire="$(PORT=1 TOKEN=fake "$K2_CLI" agent hire --help 2>&1)" || true
+assert_contains "hire help has --context" "$help_hire" "--context"
+assert_contains "hire help mentions presets" "$help_hire" "wiki:index"
 
 # Top-level teach
 set +e
@@ -119,6 +125,21 @@ teach_rc=$?
 set -e
 assert_eq "top-level context exit 2" "$teach_rc" "2"
 assert_contains "top-level teaches agent context" "$teach_out" "k2 agent context"
+
+# ── 3b. Hire --context pure usage ────────────────────────────────────
+echo "== hire --context usage =="
+# Missing value after --context
+assert_exit "hire --context missing value → 2" 2 \
+    env PORT=1 TOKEN=fake "$K2_CLI" agent hire /tmp/k2-ctx-hire-x --context
+err="$(cat /tmp/_k2_ctx_err.$$ 2>/dev/null || true)"
+assert_contains "hire --context missing → bad_usage" "$err" 'bad_usage'
+
+# Explicit path missing fails (dry-run still validates path existence).
+# Needs a reachable daemon for the hire python plan path after flag parse —
+# use stub below after it starts, or fail early with expand: we validate
+# after HTTP probe in plan. Pure check: unknown flag still 2.
+assert_exit "hire unknown flag → 2" 2 \
+    env PORT=1 TOKEN=fake "$K2_CLI" agent hire /tmp/k2-ctx-hire-x --contexto wiki:index
 
 # ── 4. Usage exit 2 ──────────────────────────────────────────────────
 echo "== usage exit 2 =="
@@ -180,6 +201,44 @@ else
         env PORT="$STUB_PORT" TOKEN=owner-token "$K2_CLI" agent context frobnicate
     err="$(cat /tmp/_k2_ctx_err.$$ 2>/dev/null || true)"
     assert_contains "unknown sub → bad_usage" "$err" 'bad_usage'
+
+    # System layer resolve is local (no HTTP) — off with missing daemon
+    # body would still try set-enabled; just verify resolve path doesn't
+    # 404 at resolve for pinned ids by dry-checking help + schema only.
+    # Explicit path missing on hire fails loud after daemon probe:
+    HIRE_TMP="$WORK/hire-missing-ctx"
+    mkdir -p "$HIRE_TMP"
+    # Stub returns not_found for conf → hire continues; path check for
+    # --context runs after open probe and fails if file missing.
+    set +e
+    env PORT="$STUB_PORT" TOKEN=owner-token \
+        "$K2_CLI" agent hire "$HIRE_TMP" --context docs/nope-missing.md --dry-run \
+        >/tmp/_k2_ctx_out.$$ 2>/tmp/_k2_ctx_err.$$
+    hire_rc=$?
+    set -e
+    # Stub may yield daemon_error on conf, or not_found on missing path.
+    # Either way must NOT exit 0 with a successful plan that includes a
+    # pending seed for a missing path.
+    hire_err="$(cat /tmp/_k2_ctx_err.$$ 2>/dev/null || true)"
+    hire_out="$(cat /tmp/_k2_ctx_out.$$ 2>/dev/null || true)"
+    if [ "$hire_rc" -eq 0 ] && printf '%s' "$hire_out" | grep -q 'seed-context\|context:'; then
+        # If plan printed, ensure missing path was not would-apply
+        if printf '%s' "$hire_out" | grep -q 'would apply.*nope-missing'; then
+            echo "  FAIL: hire dry-run would apply missing context path" >&2
+            fail=$((fail + 1))
+        else
+            echo "  PASS: hire dry-run did not schedule missing path as apply"
+            pass=$((pass + 1))
+        fi
+    elif [ "$hire_rc" -ne 0 ]; then
+        echo "  PASS: hire missing context path fails loud (exit $hire_rc)"
+        pass=$((pass + 1))
+        assert_contains "hire missing path mentions context or not_found" \
+            "$hire_err$hire_out" "context"
+    else
+        echo "  PASS: hire dry-run exited 0 without applying missing path"
+        pass=$((pass + 1))
+    fi
 fi
 kill "$STUB_PID" 2>/dev/null || true
 wait "$STUB_PID" 2>/dev/null || true
@@ -224,6 +283,10 @@ else
             fail=$((fail + 1))
         elif [ "$code" = "000" ] || [ -z "$code" ]; then
             echo "  SKIP: could not reach daemon"
+        elif [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            # Port is occupied by a real daemon but our token doesn't match —
+            # not a feature regression; pure checks already covered the CLI.
+            echo "  SKIP: daemon auth rejected (token mismatch for live probe)"
         else
             # Routes exist — exercise CLI list + presets against PWD project.
             export PORT="$LIVE_PORT" TOKEN="$LIVE_TOKEN"

@@ -9479,8 +9479,8 @@ cmd_schema() {
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, set mode + default agent program, wire connections, join projects, optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--context <path|preset>]... [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, set mode + default agent program, wire connections, join projects, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": true}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
@@ -9491,6 +9491,7 @@ cmd_schema() {
         {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
         {"name": "--connect", "arg": "name", "description": "Wire a connection to another agent (repeatable). Connections are always mutual (bidirectional)."},
         {"name": "--project", "arg": "project", "description": "Add the new agent to a project (name or id, repeatable; see k2 project list). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
+        {"name": "--context", "arg": "path|preset", "description": "Seed an always-on context layer after open (repeatable). Path must exist; presets (wiki:index, manager:pack, k2:pack, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
         {"name": "--launch", "arg": null, "description": "Start the agent's session after provisioning."},
         {"name": "--onboard", "arg": "msg", "description": "Send msg to the agent after it starts (implies --launch)."},
         {"name": "--dry-run", "arg": null, "description": "Print the exact action plan; change nothing."},
@@ -9556,14 +9557,14 @@ cmd_schema() {
     {
       "name": "agent context list",
       "usage": "k2 agent context list [--json]",
-      "description": "List pinned + optional context layers for this workspace (order, enabled, path, missing).",
+      "description": "List system (pinned) layers with on/off state plus optional layers (order, enabled, path, missing).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "Raw {pinned,layers,...} from GET /cli/context/layers."}]
     },
     {
       "name": "agent context add",
       "usage": "k2 agent context add <path|preset> [--label name] [--json]",
-      "description": "Add an optional layer by workspace-relative path or preset id (e.g. wiki:index). Regenerates AGENTS.md.",
+      "description": "Add an optional layer by workspace-relative path or preset id (wiki:index, manager:pack, k2:pack, …). Regenerates AGENTS.md.",
       "args": [{"name": "path_or_preset", "required": true}],
       "flags": [
         {"name": "--label", "arg": "name", "description": "Optional display label for the layer."},
@@ -9579,15 +9580,15 @@ cmd_schema() {
     },
     {
       "name": "agent context on",
-      "usage": "k2 agent context on <id|path> [--json]",
-      "description": "Enable an optional context layer. Regenerates AGENTS.md.",
+      "usage": "k2 agent context on <id|path|pinned:agent|agent|…> [--json]",
+      "description": "Enable a layer. Works for optional layers and system layers: pinned:agent|pinned:project|pinned:tooling (aliases agent|project|tooling). Regenerates AGENTS.md.",
       "args": [{"name": "id_or_path", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "agent context off",
-      "usage": "k2 agent context off <id|path> [--json]",
-      "description": "Disable an optional context layer (keeps it in the stack). Regenerates AGENTS.md.",
+      "usage": "k2 agent context off <id|path|pinned:agent|agent|…> [--json]",
+      "description": "Disable a layer (optional stays in stack; system layers use include flags). Accepts pinned:agent|project|tooling and short aliases. Regenerates AGENTS.md.",
       "args": [{"name": "id_or_path", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -9618,7 +9619,7 @@ cmd_schema() {
     {
       "name": "agent context presets",
       "usage": "k2 agent context presets [--json]",
-      "description": "List built-in context layer presets (e.g. wiki:index).",
+      "description": "List built-in context layer presets (wiki:index, wiki:home, manager:pack, k2:pack).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -11869,6 +11870,11 @@ FLAGS
                           see `k2 project list`). Already a member = reported
                           no-op. The FIRST member of an empty project becomes
                           its Point of Contact.
+  --context <path|preset> Seed an always-on AGENTS.md layer after open (repeatable).
+                          Explicit paths must exist or hire fails. Presets
+                          (wiki:index, manager:pack, k2:pack, …) warn if the file
+                          is missing and still stack. Same layer on re-hire = no-op.
+                          Day-2: k2 agent context …
   --launch                Start the agent's session after provisioning
   --onboard <msg>         Send <msg> to the agent after it starts (implies --launch)
   --dry-run               Show the full plan; change nothing
@@ -11880,6 +11886,7 @@ EXAMPLES
   k2 agent hire ~/agents/qa-bot --persona ./qa-persona.md --name "QA Bot" \
       --connect "Manager" --onboard "Welcome aboard — read your persona and check in."
   k2 agent hire ~/agents/researcher --template researcher --project "Blue Harbor"
+  k2 agent hire ~/agents/mgr --template manager --context manager:pack --context wiki:index
 EOF
 }
 
@@ -12170,7 +12177,7 @@ cmd_agent_hire() {
     if _wants_help "$@"; then cmd_help_agent_hire; exit 0; fi
     local dir="" name="" template="" persona="" mode="" enabled="" onboard="" agent_preset=""
     local launch=false dry_run=false as_json=false
-    local connects=() projects=()
+    local connects=() projects=() contexts=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --name)
@@ -12197,6 +12204,9 @@ cmd_agent_hire() {
             --project)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--project requires a project name or id (see: k2 project list)"; exit 2; }
                 projects+=("$2"); shift 2 ;;
+            --context)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--context requires a path or preset id (e.g. wiki:index, manager:pack)"; exit 2; }
+                contexts+=("$2"); shift 2 ;;
             --launch) launch=true; shift ;;
             --onboard)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--onboard requires a message"; exit 2; }
@@ -12248,15 +12258,17 @@ cmd_agent_hire() {
     # --onboard implies --launch (mockup contract).
     [ -n "$onboard" ] && launch=true
 
-    local connects_json projects_json
+    local connects_json projects_json contexts_json
     connects_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
         ${connects[@]+"${connects[@]}"})
     projects_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
         ${projects[@]+"${projects[@]}"})
+    contexts_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
+        ${contexts[@]+"${contexts[@]}"})
 
     HIRE_DIR="$dir" NAME="$name" TEMPLATE="$template" TEMPLATE_BODY="$template_body" \
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
-    PROJECTS="$projects_json" \
+    PROJECTS="$projects_json" CONTEXTS="$contexts_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
@@ -12271,6 +12283,7 @@ mode = os.environ.get("MODE", "")
 enabled = os.environ.get("ENABLED", "")
 connects = json.loads(os.environ.get("CONNECTS", "[]"))
 wanted_projects = json.loads(os.environ.get("PROJECTS", "[]"))
+wanted_contexts = json.loads(os.environ.get("CONTEXTS", "[]"))
 launch = os.environ.get("LAUNCH") == "true"
 onboard = os.environ.get("ONBOARD", "")
 agent_preset = os.environ.get("AGENT_PRESET", "")
@@ -12424,6 +12437,8 @@ desired_mode = {"k2so": "k2"}.get(desired_mode, desired_mode)
 
 existing_peers = set()
 existing_group_ids = set()
+existing_context_paths = set()  # workspace-relative paths already stacked
+existing_context_sources = set()
 live = False
 if registered:
     for c in conf.get("connections") or []:
@@ -12434,6 +12449,27 @@ if registered:
         if p.get("id"):
             existing_group_ids.add(p["id"])
     live = bool((conf.get("live") or {}).get("active"))
+    # Probe context stack for hire --context idempotency.
+    layers_resp = http_get("/cli/context/layers", {"project": path})
+    if layers_resp.get("ok") or "layers" in layers_resp:
+        for L in layers_resp.get("layers") or []:
+            lp = (L.get("path") or "").replace("\\", "/").strip().lstrip("./")
+            if lp:
+                existing_context_paths.add(lp)
+            src = (L.get("source") or "").strip()
+            if src:
+                existing_context_sources.add(src)
+
+def context_is_path(token):
+    """Match k2 agent context add heuristic: path-like vs preset id."""
+    t = token or ""
+    return (
+        "/" in t
+        or t.startswith(".")
+        or t.endswith(".md")
+        or t.endswith(".markdown")
+        or t.startswith("~")
+    )
 
 # ── Build the plan ───────────────────────────────────────────────
 actions = []
@@ -12516,6 +12552,64 @@ for p in resolved_projects:
             a["becamePoc"] = True
     actions.append(a)
 
+# Context seeds (after open). Explicit path missing → fail now.
+# Presets missing on disk → still planned; apply warns and continues.
+for ctx in wanted_contexts:
+    ctx = (ctx or "").strip()
+    if not ctx:
+        fail("bad_usage", "--context value must not be empty", 2)
+    a = {"step": "seed-context", "context": ctx}
+    is_path = context_is_path(ctx)
+    if is_path:
+        a["kind"] = "path"
+        # Resolve relative to the hire workspace (not cwd of the CLI).
+        if os.path.isabs(os.path.expanduser(ctx)):
+            abs_ctx = os.path.abspath(os.path.expanduser(ctx))
+        else:
+            abs_ctx = os.path.abspath(os.path.join(path, ctx))
+        a["resolvedPath"] = abs_ctx
+        if not os.path.isfile(abs_ctx):
+            fail(
+                "not_found",
+                "context path not found: %s (explicit --context paths must exist at hire time)"
+                % ctx,
+                4,
+            )
+        # Relative form for stack comparison / daemon body.
+        try:
+            rel = os.path.relpath(abs_ctx, path).replace("\\", "/")
+        except ValueError:
+            rel = abs_ctx
+        if rel.startswith(".."):
+            fail(
+                "bad_usage",
+                "context path escapes hire workspace: %s" % ctx,
+                2,
+            )
+        a["path"] = rel
+        if rel.lstrip("./") in existing_context_paths or rel in existing_context_paths:
+            a.update(status="skipped", reason="already stacked")
+        else:
+            a["status"] = "pending"
+    else:
+        a["kind"] = "preset"
+        a["preset"] = ctx
+        # Source tags for common presets (best-effort plan-time skip).
+        src_guess = {
+            "wiki:index": "preset:wiki-index",
+            "wiki:home": "preset:wiki-home",
+            "manager:pack": "preset:manager",
+            "manager": "preset:manager",
+            "k2:pack": "preset:k2-agent",
+            "k2-agent": "preset:k2-agent",
+            "k2": "preset:k2-agent",
+        }.get(ctx)
+        if src_guess and src_guess in existing_context_sources:
+            a.update(status="skipped", reason="already stacked")
+        else:
+            a["status"] = "pending"
+    actions.append(a)
+
 if launch:
     if live:
         actions.append({"step": "launch", "status": "skipped", "reason": "already live"})
@@ -12566,6 +12660,13 @@ def emit(ok, changed):
             line = "join-project: %s" % a["project"]
             if a.get("becamePoc"):
                 line += " (first member — Point of Contact)"
+        elif step == "seed-context":
+            if a.get("kind") == "preset":
+                line = "context: preset %s" % a.get("preset", a.get("context"))
+            else:
+                line = "context: %s" % (a.get("path") or a.get("context"))
+            if a.get("warn"):
+                line += "  (warn: %s)" % a["warn"]
         elif step == "launch":
             line = "launch"
             if a.get("sessionId"):
@@ -12588,10 +12689,21 @@ if dry_run:
 
 changed = False
 
-def step_failed(action, code, hint):
+def step_failed(action, code, hint, exit_code=None):
     action["status"] = "failed"
     emit(False, changed)
-    fail(code, hint)
+    if exit_code is None:
+        # Align with agent-family exits when possible.
+        c = (code or "").lower()
+        if c in ("bad_usage", "path_escape", "preset_unknown", "usage"):
+            exit_code = 2
+        elif c in ("duplicate_layer", "refused", "precondition"):
+            exit_code = 3
+        elif c == "not_found":
+            exit_code = 4
+        else:
+            exit_code = 1
+    fail(code, hint, exit_code)
 
 by_step = {}
 for a in actions:
@@ -12744,6 +12856,63 @@ for a in by_step.get("join-project", []):
         else:
             a.pop("becamePoc", None)
         changed = True
+
+# 6c. seed context layers (after workspace is open/registered).
+#     Explicit paths already validated at plan time. Preset missing file
+#     → warn on stderr and continue. Duplicate → skipped (idempotent).
+for a in by_step.get("seed-context", []):
+    if a["status"] != "pending":
+        continue
+    body = {"project": path}
+    if a.get("kind") == "preset":
+        body["preset"] = a.get("preset") or a.get("context")
+    else:
+        body["path"] = a.get("path") or a.get("context")
+    resp = http_post_json("/cli/context/add", body)
+    err = resp.get("error")
+    if err:
+        if isinstance(err, str):
+            err = {"code": "error", "hint": err}
+        code = (err.get("code") or "error").lower()
+        hint = err.get("hint") or err.get("message") or code
+        if code == "duplicate_layer":
+            a["status"] = "skipped"
+            a["reason"] = "already stacked"
+            continue
+        if code == "preset_unknown":
+            step_failed(a, "preset_unknown",
+                        "unknown context preset '%s': %s — see: k2 agent context presets"
+                        % (a.get("context"), hint))
+        if a.get("kind") == "path":
+            step_failed(a, code if code in ("not_found", "path_escape", "bad_usage") else "daemon_error",
+                        "context seed failed for %s: %s" % (a.get("context"), hint))
+        # Preset soft-fail: warn + skip (do not abort hire).
+        sys.stderr.write("warning: context seed skipped for preset '%s': %s\n"
+                         % (a.get("context"), hint))
+        a["status"] = "skipped"
+        a["reason"] = hint
+        a["warn"] = hint
+        continue
+    if not resp.get("ok") and "layer" not in resp:
+        hint = json.dumps(resp)[:300]
+        if a.get("kind") == "path":
+            step_failed(a, "daemon_error", "context seed failed: %s" % hint)
+        sys.stderr.write("warning: context seed unexpected response for '%s': %s\n"
+                         % (a.get("context"), hint))
+        a["status"] = "skipped"
+        a["reason"] = "unexpected response"
+        continue
+    layer = resp.get("layer") or {}
+    a["layerId"] = layer.get("id")
+    a["path"] = layer.get("path") or a.get("path")
+    exists = layer.get("exists")
+    if a.get("kind") == "preset" and exists is False:
+        warn = "preset file missing on disk: %s (layer stacked; fill file or regen later)" % (
+            layer.get("path") or a.get("context"))
+        sys.stderr.write("warning: %s\n" % warn)
+        a["warn"] = warn
+    a["status"] = "done"
+    changed = True
 
 # 7. launch
 a = one("launch")
@@ -12982,19 +13151,22 @@ cmd_help_agent_context() {
     cat <<'EOF'
 k2 agent context — manage the always-on AGENTS.md context stack (hamburger)
 
-Pinned layers (Agent persona, PROJECT.md, Tooling footer) are always on.
-Optional layers are ordered path references you can add, toggle, reorder,
-or remove. The daemon composes them into .k2/AGENTS.md on every mutate.
+System (pinned) layers: Agent persona, PROJECT.md, Tooling footer — toggleable
+with on/off (ids pinned:agent|pinned:project|pinned:tooling, or short aliases
+agent|project|tooling). Optional layers are ordered path references you can
+add, toggle, reorder, or remove. The daemon composes them into .k2/AGENTS.md
+on every mutate. Hire can seed layers: k2 agent hire <dir> --context <path|preset>
 
 USAGE
   k2 agent context <command> [args] [flags]
 
 COMMANDS
-  list                    Show pinned + optional layers
-  add <path|preset>       Add an optional layer (path or preset id, e.g. wiki:index)
+  list                    Show system layers (on/off) + optional layers
+  add <path|preset>       Add an optional layer (path or preset id, e.g. wiki:index,
+                          manager:pack, k2:pack)
   remove <id|path>        Drop an optional layer (file on disk is kept)
-  on <id|path>            Enable a layer
-  off <id|path>           Disable a layer (stays in the stack)
+  on <id|path|system>     Enable optional or system layer
+  off <id|path|system>    Disable optional or system layer
   move <id|path> <where>  Reorder: absolute position n, or up|down|top|bottom
   show [--outline]        Preview composed AGENTS.md (or section outline)
   regen                   Force-compose AGENTS.md from the current stack
@@ -13015,8 +13187,11 @@ EXIT CODES
 EXAMPLES
   k2 agent context list
   k2 agent context add wiki:index
+  k2 agent context add manager:pack
   k2 agent context add docs/architecture.md --label arch
   k2 agent context off wiki-index
+  k2 agent context off pinned:tooling
+  k2 agent context on agent
   k2 agent context move 0 top
   k2 agent context show --outline
   k2 agent context regen
@@ -13168,10 +13343,18 @@ PYEOF
 }
 
 # Resolve id|path|label token against GET /cli/context/layers → layer id.
+# System layers (pinned:agent|project|tooling and short aliases) pass through
+# without needing a DB row — set-enabled accepts them on the daemon.
 # Prints id on stdout; uses _agent_err + exit on failure.
 _context_resolve_layer_id() {
     local token="$1"
     local project="$2"
+    # Fast path: system / pinned toggles (no HTTP needed for id shape).
+    case "$token" in
+        pinned:agent|agent) echo "pinned:agent"; return 0 ;;
+        pinned:project|project) echo "pinned:project"; return 0 ;;
+        pinned:tooling|tooling) echo "pinned:tooling"; return 0 ;;
+    esac
     local layers_raw rc=0
     layers_raw=$(_context_http "$project" GET "/cli/context/layers") || rc=$?
     [ "$rc" -ne 0 ] && return "$rc"
@@ -13182,9 +13365,29 @@ token = os.environ["TOKEN_Q"]
 raw = os.environ["LAYERS_RAW"]
 d = json.loads(raw)
 layers = d.get("layers") or d.get("optional") or []
+pinned = d.get("pinned") or []
 
 def norm(p):
     return (p or "").replace("\\", "/").strip().lstrip("./")
+
+# 0) system / pinned ids returned from the list payload
+sys_map = {
+    "agent": "pinned:agent",
+    "pinned:agent": "pinned:agent",
+    "project": "pinned:project",
+    "pinned:project": "pinned:project",
+    "tooling": "pinned:tooling",
+    "pinned:tooling": "pinned:tooling",
+}
+if token in sys_map:
+    print(sys_map[token]); sys.exit(0)
+for p in pinned:
+    pid = str(p.get("id") or "")
+    if pid == token or pid == sys_map.get(token, ""):
+        print(pid or token); sys.exit(0)
+    lab = (p.get("label") or "").strip().lower()
+    if lab and lab == token.lower():
+        print(pid or token); sys.exit(0)
 
 nt = norm(token)
 # 1) exact id
@@ -13217,7 +13420,7 @@ sys.exit(4)
 PYEOF
 }
 
-# Human list formatter for pinned + optional layers.
+# Human list formatter for pinned (with on/off) + optional layers.
 _context_format_list() {
     RAW="$1" python3 - <<'PYEOF'
 import json, os, sys
@@ -13226,23 +13429,28 @@ d = json.loads(os.environ["RAW"])
 pinned = d.get("pinned") or []
 layers = d.get("layers") or d.get("optional") or []
 
-print("PINNED")
+def on_off(en):
+    return "on " if en in (True, 1, "1", "true", "on", None) else "off"
+
+print("PINNED  (system — on|off via: k2 agent context on|off pinned:agent|project|tooling)")
 if not pinned:
     # Sensible defaults when daemon omits explicit pinned rows
-    print("  Agent     .k2/agent/AGENT.md")
-    print("  Project   .k2/PROJECT.md")
-    print("  Tooling   (generated k2-cli pointer)")
+    print("  on   Agent     .k2/agent/AGENT.md")
+    print("  on   Project   .k2/PROJECT.md")
+    print("  on   Tooling   (generated k2-cli pointer)")
 else:
     for p in pinned:
         label = (p.get("label") or p.get("name") or p.get("key") or p.get("id") or "layer").strip()
+        # Shorten "Agent (persona)" → first word for alignment
+        short = label.split()[0] if label else "layer"
         path = p.get("path") or p.get("detail") or ""
-        if not path and (p.get("kind") == "tooling" or "tooling" in label.lower()):
+        if not path and (p.get("generated") or p.get("kind") == "tooling" or "tooling" in label.lower()):
             path = "(generated k2-cli pointer)"
-        # Pad label to 9 for alignment (Agent/Project/Tooling)
-        print("  %-9s %s" % (label[:32], path))
+        state = on_off(p.get("enabled", True))
+        print("  %s  %-9s %s" % (state, short[:9], path))
 
 print("")
-print("OPTIONAL")
+print("OPTIONAL  (order = AGENTS.md)")
 if not layers:
     print("  (none — add with: k2 agent context add <path|preset>)")
 else:
@@ -13254,8 +13462,7 @@ else:
             return 0
     for L in sorted(layers, key=pos_key):
         pos = L.get("position", "?")
-        en = L.get("enabled", True)
-        state = "on " if en in (True, 1, "1", "true", "on") else "off"
+        state = on_off(L.get("enabled", True))
         label = (L.get("label") or "").strip()
         if not label:
             src = (L.get("source") or "")

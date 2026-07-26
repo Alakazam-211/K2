@@ -40,6 +40,7 @@ import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import type { SettingEntry } from '../searchManifest'
 import { HeartbeatsPanel, HistoryPanel, WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
 import { ContextLayersPreview } from './ContextLayersPreview'
+import { ContextStackEditor } from './ContextStackEditor'
 import { RoleSkillEditor } from './RoleSkillEditor'
 import { CanonicalAgentModal } from './CanonicalAgentModal'
 import { type HarnessProbe } from './canonicalState'
@@ -63,6 +64,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.add', section: 'projects', label: 'Add Workspace', description: 'Register a new project directory', keywords: ['add', 'new', 'workspace', 'project', 'folder'] },
   { id: 'projects.focus-groups', section: 'projects', label: 'Focus Groups', description: 'Organize workspaces into tabbed folders', keywords: ['focus', 'groups', 'tabs'] },
   { id: 'projects.workspace-knowledge', section: 'projects', label: 'Workspace Knowledge', description: 'Shared .k2so/PROJECT.md injected into every agent', keywords: ['workspace knowledge', 'project context', 'project.md', 'shared'] },
+  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context (AGENTS.md stack)', description: 'Pinned + optional markdown layers composed into .k2/AGENTS.md', keywords: ['context', 'stack', 'hamburger', 'agents.md', 'layers', 'wiki', 'always-on'] },
   { id: 'projects.heartbeat', section: 'projects', label: 'Heartbeat Schedule', description: 'Scheduled / hourly / off per-project heartbeat mode', keywords: ['heartbeat', 'schedule', 'cron', 'hourly', 'scheduled'] },
   { id: 'projects.agents', section: 'projects', label: 'Project Agents', description: 'Custom agent personas + wake-up files per workspace', keywords: ['agent', 'persona', 'wakeup', 'create'] },
   { id: 'projects.worktrees', section: 'projects', label: 'Worktree Folders', description: 'Enable/disable per-agent git worktrees', keywords: ['worktree', 'git', 'branch'] },
@@ -1433,8 +1435,20 @@ function ProjectDetail({
               </div>
             </SettingsGroup>
 
+            {/* Always-on context stack (context hamburger) — primary way to
+                inject docs into .k2/AGENTS.md. Mode radio below is no longer
+                the model for always-on context. */}
+            <SettingsGroup title="Always-on context (AGENTS.md stack)">
+              <ContextStackEditor projectPath={project.path} />
+            </SettingsGroup>
+
           <SettingsGroup title="Agent Settings">
             <div className="space-y-2">
+              <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+                Mode controls agent features (heartbeats, role skills, worktrees) — not the
+                always-on context pack. Put wiki notes and guidance in the stack above;
+                Manager / K2 / Custom no longer rewrite AGENTS.md by type alone.
+              </p>
               <div className="flex gap-1">
                 {(['off', 'agent', 'manager', 'custom'] as const).map((mode) => {
                   const isActive = agentMode === mode || (mode === 'manager' && isManagerMode)
@@ -1464,11 +1478,11 @@ function ProjectDetail({
                           if (!confirmed) return
                         } else if (mode === 'custom') {
                           const lines = [
-                            'Train a single agent to operate any software via the heartbeat.',
+                            'Enable a custom agent for this workspace (heartbeat + persona).',
                             '',
                             'What happens:',
-                            '• No CLAUDE.md is generated — the agent runs from its persona only',
-                            '• Use "Manage Persona" to define its behavior with the AI editor',
+                            '• Agent features turn on; use Manage Persona for behavior',
+                            '• Always-on context is the stack above — not rewritten by this mode',
                             '• Worktrees are disabled in this mode',
                           ]
                           if (currentMode !== 'off') {
@@ -1482,12 +1496,12 @@ function ProjectDetail({
                           if (!confirmed) return
                         } else if (mode === 'agent') {
                           const lines = [
-                            'A K2 planner agent that helps you build PRDs, milestones, and technical plans.',
+                            'Enable K2 Agent features for planning workflows.',
                             '',
                             'What happens:',
-                            '• Generates a CLAUDE.md with K2 planner instructions',
+                            '• Planner role skill becomes available (loadable, not auto-stacked)',
+                            '• Always-on context stays the AGENTS.md stack above',
                             '• If a user-written CLAUDE.md exists, it won\'t be overwritten',
-                            '  (the generated version is saved to .k2so/CLAUDE.md.generated)',
                           ]
                           if (currentMode !== 'off') {
                             lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
@@ -1500,13 +1514,12 @@ function ProjectDetail({
                           if (!confirmed) return
                         } else if (mode === 'manager') {
                           const lines = [
-                            'A workspace manager delegates work to agent templates that execute in parallel worktrees.',
+                            'Enable Workspace Manager features (delegation, templates, worktrees).',
                             '',
                             'What happens:',
-                            '• Generates a CLAUDE.md with manager instructions',
+                            '• Manager role skill becomes available (loadable, not auto-stacked)',
+                            '• Always-on context stays the AGENTS.md stack above',
                             '• A manager agent is created automatically',
-                            '• If a user-written CLAUDE.md exists, it won\'t be overwritten',
-                            '  (the generated version is saved to .k2so/CLAUDE.md.generated)',
                           ]
                           if (currentMode !== 'off') {
                             lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
@@ -1554,10 +1567,10 @@ function ProjectDetail({
               </div>
 
               <p className="text-[10px] text-[var(--color-text-muted)]">
-                {agentMode === 'off' && 'No agent features enabled for this workspace.'}
-                {agentMode === 'custom' && 'Custom Agent — train agents to operate any software via the heartbeat. Customize each agent\'s behavior with the AI persona editor.'}
-                {agentMode === 'agent' && 'K2 Agent — a planner that helps you build PRDs, milestones, and technical plans for this workspace.'}
-                {isManagerMode && 'Workspace Manager — delegates work to agent templates that execute in parallel worktrees.'}
+                {agentMode === 'off' && 'No agent features enabled for this workspace. Always-on context stack still applies when agents run.'}
+                {agentMode === 'custom' && 'Custom Agent — heartbeat + persona. Always-on docs live in the context stack, not in this mode choice.'}
+                {agentMode === 'agent' && 'K2 Agent — planner workflows + loadable role skill. Add planner notes to the context stack if you want them always-on.'}
+                {isManagerMode && 'Workspace Manager — delegation + templates. Manager guidance is a loadable skill; stack optional layers for always-on docs.'}
               </p>
 
               {agentMode === 'custom' && (

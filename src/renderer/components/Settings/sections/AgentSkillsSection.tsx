@@ -18,9 +18,9 @@ import { AgentContextDiagram } from './AgentContextDiagram'
 // section stays `general` so search jumps to General; deep-link id `agent-skills` still
 // redirects via the settings store.
 export const AGENT_SKILLS_MANIFEST: SettingEntry[] = [
-  { id: 'agent-skills.canonical-flow', section: 'general', group: 'Workspaces', label: 'Canonical Agent Flow', description: 'How .k2/AGENT.md + PROJECT.md generate .k2/AGENTS.md and mirror out to the AI-harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'AGENT.md', 'help'] },
-  { id: 'agent-skills.workspace-manager', section: 'general', group: 'Workspaces', label: 'Workspace Manager skill', description: 'Opt-in role skill — weaves Workspace Manager guidance into AGENT.md', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
-  { id: 'agent-skills.k2-agent', section: 'general', group: 'Workspaces', label: 'K2 Agent skill', description: 'Opt-in role skill — weaves K2 Agent (planner) guidance into AGENT.md', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
+  { id: 'agent-skills.canonical-flow', section: 'general', group: 'Workspaces', label: 'Canonical Agent Flow', description: 'How the context stack (AGENT + PROJECT + optional layers) generates .k2/AGENTS.md and mirrors out to harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'AGENT.md', 'context stack', 'help'] },
+  { id: 'agent-skills.workspace-manager', section: 'general', group: 'Workspaces', label: 'Workspace Manager skill', description: 'Opt-in loadable role skill — manager guidance (not auto-stacked into AGENTS.md)', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
+  { id: 'agent-skills.k2-agent', section: 'general', group: 'Workspaces', label: 'K2 Agent skill', description: 'Opt-in loadable role skill — planner guidance (not auto-stacked into AGENTS.md)', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
   { id: 'agent-skills.k2-canonical-agent', section: 'general', group: 'Workspaces', label: 'K2 Canonical Agent skill', description: 'Opt-in skill — unify the workspace harness files safely (merge + mirror)', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
 ]
 
@@ -51,25 +51,25 @@ const OPT_IN_SKILLS: { dir: string; label: string; blurb: string }[] = [
 export function AgentSkillsSection(): React.JSX.Element {
   // Pure explainer for the AGENTS.md-canonical flow. The per-workspace
   // canonical state lives WITH each workspace (the Canonical Agent button +
-  // checkbox), not here — this is a global Settings section and can't switch
-  // workspaces, so showing one workspace's harness state here just confused
-  // users. Removed per that feedback.
+  // checkbox + context stack editor), not here — this is a global Settings
+  // section and can't switch workspaces, so showing one workspace's harness
+  // state here just confused users. Removed per that feedback.
   return (
     <div className="w-full" data-settings-id="agent-skills.canonical-flow">
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Canonical Agent Flow</h2>
       <div className="text-xs text-[var(--color-text-muted)] mb-4 space-y-2 leading-relaxed max-w-3xl">
         <p>
-          Different AI tools look for project notes in different files. You write two sources of
-          truth:{' '}
-          <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENT.md</span> (persona)
-          and{' '}
-          <span className="font-mono text-[var(--color-text-secondary)]">.k2/PROJECT.md</span>{' '}
-          (project).
+          Different AI tools look for project notes in different files. Always-on context is a{' '}
+          <span className="text-[var(--color-text-secondary)]">context stack</span> (the hamburger):
+          pinned{' '}
+          <span className="font-mono text-[var(--color-text-secondary)]">AGENT.md</span> (persona) +{' '}
+          <span className="font-mono text-[var(--color-text-secondary)]">PROJECT.md</span> (project) +
+          optional ordered layers (wiki index, docs, packs), composed into one entrypoint.
         </p>
         <p>
           K2 builds{' '}
           <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> from
-          those — the shared entrypoint that Pi, Hermes, Codex, and most other tools already read.
+          that stack — the shared entrypoint that Pi, Hermes, Codex, and most other tools already read.
         </p>
         <p>
           Tool-specific files (
@@ -79,11 +79,13 @@ export function AgentSkillsSection(): React.JSX.Element {
           <span className="font-mono">CLAUDE.md</span>, so that mirror is its bridge.
         </p>
         <p className="text-[var(--color-text-secondary)]">
-          Write once. Every harness sees the same picture.
+          Manage always-on context via the per-workspace stack editor (Settings → Workspaces → a
+          workspace → Context) or{' '}
+          <span className="font-mono">k2 agent context</span>. Write once. Every harness sees the same picture.
         </p>
       </div>
 
-      {/* Canonical-source diagram: AGENT.md → harness mirrors. */}
+      {/* Canonical-source diagram: stack → AGENTS.md → harness mirrors. */}
       <AgentContextDiagram />
 
       {/* The two opt-in routes (PRD §11). */}

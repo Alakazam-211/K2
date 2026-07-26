@@ -13545,6 +13545,305 @@ EOF
     exit 2
 }
 
+# ── P1: stage local files onto the daemon before /cli/inbox/deliver ───
+# When the active daemon is remote (K2 Connect / --host) OR the daemon
+# cannot open the client path, the CLI uploads bytes first:
+#   < 50 MB  → POST /cli/fs/upload-binary  (single-shot base64)
+#   ≥ 50 MB  → POST /cli/fs/upload-chunk   (8 MB ordered chunks)
+# Staging dir on the daemon: <target-ws>/.k2/tmp/msg-inbox/
+# Then deliver with the staged absolute path; best-effort fs/delete after.
+# Local loopback + readable path keeps the direct-path fast path.
+
+# BEGIN_MSG_INBOX_UPLOAD_POLICY
+# Single-shot ceiling for msg-inbox staging (PRD P1). Renderer clone/drop
+# uses 64 MB; tray file delivery uses 50 MB so mid-size files stream early.
+_MSG_INBOX_SINGLE_SHOT_MAX=50000000
+_MSG_INBOX_CHUNK_BYTES=8388608
+
+# Pure: exit 0 when size should use chunked upload-chunk.
+_msg_inbox_use_chunked() {
+    local size="${1:-0}"
+    # Guard non-numeric.
+    case "$size" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$size" -ge "${_MSG_INBOX_SINGLE_SHOT_MAX}" ]
+}
+# END_MSG_INBOX_UPLOAD_POLICY
+
+# True when BASE_URL points at loopback (daemon and CLI share a host FS view).
+_msg_daemon_is_local() {
+    case "${BASE_URL:-}" in
+        http://127.0.0.1:*|http://localhost:*|http://[::1]:*|\
+        https://127.0.0.1:*|https://localhost:*|https://[::1]:*)
+            return 0 ;;
+        *)
+            return 1 ;;
+    esac
+}
+
+# True when a /cli/inbox/deliver JSON body means the daemon could not open path.
+_msg_inbox_is_not_readable_error() {
+    local response="$1"
+    if ! command -v python3 >/dev/null 2>&1; then
+        case "$response" in
+            *"not a readable file"*|*"source path is not"*) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    echo "$response" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    s = raw.lower()
+    sys.exit(0 if ("not a readable file" in s or "source path is not" in s) else 1)
+err = d.get("error")
+if isinstance(err, dict):
+    s = " ".join(str(err.get(k) or "") for k in ("hint", "message", "code", "error"))
+else:
+    s = str(err or "")
+s = s.lower()
+sys.exit(0 if ("not a readable file" in s or "source path is not" in s) else 1)
+' 2>/dev/null
+}
+
+# Resolve target workspace token → absolute path ON THE ACTIVE DAEMON.
+# Echoes path or empty.
+_msg_inbox_resolve_ws_path() {
+    local target="$1"
+    local out
+    out=$(cli_send cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null) || out=""
+    if command -v python3 >/dev/null 2>&1; then
+        echo "$out" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("path") or "")
+except Exception:
+    pass
+' 2>/dev/null
+    else
+        # Crude fallback: "path":"..."
+        echo "$out" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+    fi
+}
+
+# POST JSON body from a file (avoids ARG_MAX on multi-MB base64 payloads).
+# Uses $TOKEN like cli_post_json (owner or connect-user; not UDS-scoped fs).
+_msg_inbox_cli_post_json_file() {
+    local endpoint="$1"
+    local body_file="$2"
+    local max_time="${3:-300}"
+    curl -s -X POST "${BASE_URL}${endpoint}?token=${TOKEN}" \
+        --connect-timeout 10 --max-time "$max_time" \
+        -H "Content-Type: application/json" \
+        --data-binary @"$body_file" 2>/dev/null
+}
+
+# Small JSON body (delete etc.) — still fine on argv.
+_msg_inbox_cli_post_json() {
+    local endpoint="$1"
+    local body="$2"
+    local max_time="${3:-30}"
+    curl -s -X POST "${BASE_URL}${endpoint}?token=${TOKEN}" \
+        --connect-timeout 10 --max-time "$max_time" \
+        -H "Content-Type: application/json" \
+        --data-raw "$body" 2>/dev/null
+}
+
+# Upload local file to daemon staging dir. Echoes remote absolute path.
+# Args: <local_abs_path> <remote_dir> <filename>
+_msg_inbox_upload_file() {
+    local local_path="$1"
+    local remote_dir="$2"
+    local filename="$3"
+    local size
+    size=$(wc -c < "$local_path" | tr -d '[:space:]') || size=0
+    case "$size" in
+        ''|*[!0-9]*) size=0 ;;
+    esac
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "Error: python3 required to stage file for remote inbox deliver" >&2
+        return 1
+    fi
+
+    local body_file use_chunked="false"
+    if _msg_inbox_use_chunked "$size"; then
+        use_chunked="true"
+    fi
+    body_file=$(mktemp "${TMPDIR:-/tmp}/k2-msg-inbox-upload.XXXXXX") || {
+        echo "Error: cannot create temp file for upload body" >&2
+        return 1
+    }
+
+    if [[ "$use_chunked" != "true" ]]; then
+        # Single-shot upload-binary (body via temp file — ARG_MAX safe).
+        if ! python3 -c '
+import base64, json, sys
+path, directory, filename, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+with open(path, "rb") as f:
+    b64 = base64.b64encode(f.read()).decode("ascii")
+with open(out, "w", encoding="utf-8") as o:
+    json.dump({"dir": directory, "filename": filename, "base64": b64},
+              o, ensure_ascii=False, separators=(",", ":"))
+' "$local_path" "$remote_dir" "$filename" "$body_file"; then
+            rm -f "$body_file"
+            echo "Error: failed to encode file for upload: $local_path" >&2
+            return 1
+        fi
+        # Scale timeout with size (min 60s, ~2s/MB headroom, cap 600s).
+        local mt=60
+        if [ "$size" -gt 0 ]; then
+            mt=$(( 60 + size / 500000 ))
+            [ "$mt" -gt 600 ] && mt=600
+        fi
+        local resp remote_path
+        resp=$(_msg_inbox_cli_post_json_file "/cli/fs/upload-binary" "$body_file" "$mt")
+        rm -f "$body_file"
+        remote_path=$(echo "$resp" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if d.get("error"):
+    sys.stderr.write(str(d.get("error")) + "\n")
+    sys.exit(1)
+p = d.get("path") or ""
+if not p:
+    sys.exit(1)
+print(p)
+' 2>/dev/null) || {
+            echo "Error: upload-binary failed for $(basename "$local_path"): ${resp:-no response}" >&2
+            return 1
+        }
+        printf '%s' "$remote_path"
+        return 0
+    fi
+
+    # Chunked upload-chunk loop (same wire format as renderer upload-to-remote).
+    local upload_id offset=0 chunk_bytes="${_MSG_INBOX_CHUNK_BYTES}"
+    upload_id="msg-inbox-$$-$(date +%s)-$RANDOM"
+    local remote_path=""
+    while [ "$offset" -lt "$size" ]; do
+        local len=$(( size - offset ))
+        [ "$len" -gt "$chunk_bytes" ] && len=$chunk_bytes
+        local is_last="false"
+        [ $(( offset + len )) -ge "$size" ] && is_last="true"
+        if ! python3 -c '
+import base64, json, sys
+path, offset, length = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+upload_id, directory, filename = sys.argv[4], sys.argv[5], sys.argv[6]
+is_last = sys.argv[7] == "true"
+total = int(sys.argv[8])
+out = sys.argv[9]
+with open(path, "rb") as f:
+    f.seek(offset)
+    data = f.read(length)
+body = {
+    "upload_id": upload_id,
+    "dir": directory,
+    "filename": filename,
+    "offset": offset,
+    "base64": base64.b64encode(data).decode("ascii"),
+    "is_last": is_last,
+}
+if offset == 0:
+    body["total_bytes"] = total
+with open(out, "w", encoding="utf-8") as o:
+    json.dump(body, o, ensure_ascii=False, separators=(",", ":"))
+' "$local_path" "$offset" "$len" "$upload_id" "$remote_dir" "$filename" \
+            "$is_last" "$size" "$body_file"; then
+            rm -f "$body_file"
+            echo "Error: failed to build upload-chunk body at offset $offset" >&2
+            return 1
+        fi
+        local resp
+        resp=$(_msg_inbox_cli_post_json_file "/cli/fs/upload-chunk" "$body_file" 120)
+        if [ "$is_last" = "true" ]; then
+            remote_path=$(echo "$resp" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if d.get("error"):
+    sys.stderr.write(str(d.get("error")) + "\n")
+    sys.exit(1)
+p = d.get("path") or ""
+if not p:
+    sys.exit(1)
+print(p)
+' 2>/dev/null) || {
+                rm -f "$body_file"
+                echo "Error: upload-chunk finalize failed: ${resp:-no response}" >&2
+                return 1
+            }
+        else
+            if ! echo "$resp" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if d.get("error"):
+    sys.stderr.write(str(d.get("error")) + "\n")
+    sys.exit(1)
+' 2>/dev/null; then
+                rm -f "$body_file"
+                echo "Error: upload-chunk failed at offset $offset: ${resp:-no response}" >&2
+                return 1
+            fi
+        fi
+        offset=$(( offset + len ))
+    done
+    rm -f "$body_file"
+    if [ -z "$remote_path" ]; then
+        echo "Error: chunked upload sent no data (empty file?)" >&2
+        return 1
+    fi
+    printf '%s' "$remote_path"
+    return 0
+}
+
+# Stage local file under <ws>/.k2/tmp/msg-inbox/ on the daemon. Echoes remote path.
+_msg_inbox_stage_file() {
+    local target="$1"
+    local local_path="$2"
+    local ws_path filename remote_dir remote_path
+    ws_path=$(_msg_inbox_resolve_ws_path "$target")
+    if [ -z "$ws_path" ]; then
+        # Fall back: if target looks absolute, use it; else fail loudly.
+        case "$target" in
+            /*) ws_path="$target" ;;
+            *)
+                echo "Error: cannot resolve workspace '$target' on daemon for file staging" >&2
+                return 1
+                ;;
+        esac
+    fi
+    filename=$(basename "$local_path")
+    # Prefer .k2/ layout (0.40+); write_upload creates the tree.
+    remote_dir="${ws_path}/.k2/tmp/msg-inbox"
+    remote_path=$(_msg_inbox_upload_file "$local_path" "$remote_dir" "$filename") || return 1
+    printf '%s' "$remote_path"
+    return 0
+}
+
+# Best-effort permanent delete of a staged path on the daemon.
+_msg_inbox_delete_staged() {
+    local staged_path="$1"
+    [ -z "$staged_path" ] && return 0
+    if ! command -v python3 >/dev/null 2>&1; then
+        return 0
+    fi
+    local body
+    body=$(python3 -c 'import json,sys; print(json.dumps({"paths":[sys.argv[1]],"permanent":True}))' "$staged_path") || return 0
+    _msg_inbox_cli_post_json "/cli/fs/delete" "$body" 30 >/dev/null 2>&1 || true
+}
+
 # Shared JSON error mapper for inbox compose / deliver responses.
 # Exit 3 for not_connected/gated/forbidden; exit 1 for other structured
 # errors; exit 0 on success. For wake-after-package: package ok + wake
@@ -13663,17 +13962,49 @@ cmd_msg_inbox_form() {
             exit 2
         fi
 
-        # TODO(remote): when target workspace lives on another host, upload
-        # via /cli/fs/upload-binary|upload-chunk into project .k2/tmp/ then
-        # deliver_file from that staged path. v1 requires path readable by
-        # the local daemon (same-machine / same FS as target tray).
-        local params="workspace=$(urlencode "$target")&path=$(urlencode "$abs_path")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
-        [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
-        [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
+        # P1 remote file staging: when the active daemon is not loopback
+        # (K2 Connect / --host repointed BASE_URL), the daemon cannot open
+        # a client-local path — upload first. Local loopback keeps the
+        # direct-path fast path; if deliver reports "not a readable file"
+        # we fall back to upload (daemon/CLI FS skew).
+        local deliver_path="$abs_path"
+        local staged_path=""
+        local need_upload="false"
+        if ! _msg_daemon_is_local; then
+            need_upload="true"
+        fi
+
+        _msg_inbox_post_deliver() {
+            local pth="$1"
+            local params="workspace=$(urlencode "$target")&path=$(urlencode "$pth")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
+            [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
+            [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
+            cli_send cli_post_form "/cli/inbox/deliver" "$params"
+        }
+
         local response
-        response=$(cli_send cli_post_form "/cli/inbox/deliver" "$params")
-        _msg_inbox_map_response "$response" "$wake_flag"
-        return $?
+        if [[ "$need_upload" != "true" ]]; then
+            response=$(_msg_inbox_post_deliver "$deliver_path")
+            if _msg_inbox_is_not_readable_error "$response"; then
+                need_upload="true"
+            else
+                _msg_inbox_map_response "$response" "$wake_flag"
+                return $?
+            fi
+        fi
+
+        if [[ "$need_upload" == "true" ]]; then
+            staged_path=$(_msg_inbox_stage_file "$target" "$abs_path") || {
+                echo "Error: failed to stage local file on daemon for inbox deliver" >&2
+                exit 1
+            }
+            deliver_path="$staged_path"
+            response=$(_msg_inbox_post_deliver "$deliver_path")
+            # Best-effort cleanup of staging copy (package already owns bytes).
+            _msg_inbox_delete_staged "$staged_path"
+            _msg_inbox_map_response "$response" "$wake_flag"
+            return $?
+        fi
     fi
 
     # ── Legacy string compose (--title/--body, no path) ──────────────

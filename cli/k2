@@ -9547,6 +9547,82 @@ cmd_schema() {
       ]
     },
     {
+      "name": "agent context",
+      "usage": "k2 agent context <list|add|remove|on|off|move|show|regen|presets> [args] [--json]",
+      "description": "Day-2 management of the always-on AGENTS.md context stack (context hamburger): pinned layers (Agent/Project/Tooling) plus optional ordered path layers. Workspace from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD. Exit codes: 0 ok, 1 error, 2 bad usage, 3 precondition (e.g. duplicate_layer), 4 not found.",
+      "args": [{"name": "subcommand", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "Machine-readable JSON (daemon body; mutations include ok/layer/regen)."}]
+    },
+    {
+      "name": "agent context list",
+      "usage": "k2 agent context list [--json]",
+      "description": "List pinned + optional context layers for this workspace (order, enabled, path, missing).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw {pinned,layers,...} from GET /cli/context/layers."}]
+    },
+    {
+      "name": "agent context add",
+      "usage": "k2 agent context add <path|preset> [--label name] [--json]",
+      "description": "Add an optional layer by workspace-relative path or preset id (e.g. wiki:index). Regenerates AGENTS.md.",
+      "args": [{"name": "path_or_preset", "required": true}],
+      "flags": [
+        {"name": "--label", "arg": "name", "description": "Optional display label for the layer."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "agent context remove",
+      "usage": "k2 agent context remove <id|path> [--json]",
+      "description": "Remove an optional layer by id or path (does not delete the file on disk). Regenerates AGENTS.md.",
+      "args": [{"name": "id_or_path", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context on",
+      "usage": "k2 agent context on <id|path> [--json]",
+      "description": "Enable an optional context layer. Regenerates AGENTS.md.",
+      "args": [{"name": "id_or_path", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context off",
+      "usage": "k2 agent context off <id|path> [--json]",
+      "description": "Disable an optional context layer (keeps it in the stack). Regenerates AGENTS.md.",
+      "args": [{"name": "id_or_path", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context move",
+      "usage": "k2 agent context move <id|path> <n|up|down|top|bottom> [--json]",
+      "description": "Reorder an optional layer: absolute 0-based position n, or direction up|down|top|bottom.",
+      "args": [{"name": "id_or_path", "required": true}, {"name": "position_or_direction", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context show",
+      "usage": "k2 agent context show [--outline] [--json]",
+      "description": "Preview the composed AGENTS.md (or section outline with --outline).",
+      "args": [],
+      "flags": [
+        {"name": "--outline", "arg": null, "description": "Section headings only (outline=1)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "agent context regen",
+      "usage": "k2 agent context regen [--json]",
+      "description": "Force-compose .k2/AGENTS.md from the current layer stack.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "agent context presets",
+      "usage": "k2 agent context presets [--json]",
+      "description": "List built-in context layer presets (e.g. wiki:index).",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
       "name": "preset list",
       "usage": "k2 preset list [--json]",
       "description": "The agent-preset roster: every launchable agent program this server knows (built-ins + custom), with enabled/source and declared metadata (danger flags, env, readiness).",
@@ -11064,6 +11140,7 @@ COMMANDS
   set <name> [flags]      Change one or more settings (hire's settings flags)
   list                    List every agent on this server with mode + live status
   retire <name>           Safely decommission an agent (guards + archive; never deletes)
+  context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
 
 ADDRESSING
   <name> accepts an agent name or a path. Anything containing "/" is treated as a path.
@@ -12894,6 +12971,728 @@ if not d.get("dryRun"):
 PYEOF
 }
 
+# ── Context hamburger — `k2 agent context …` (prd-context-hamburger-v1) ──
+#
+# Day-2 stack management for always-on AGENTS.md layers. Daemon SSOT via
+# /cli/context/* (owner token + project= like other agent verbs).
+# Exit codes match the agent family: 0 ok · 1 runtime · 2 usage ·
+# 3 precondition (duplicate_layer etc.) · 4 not found.
+
+cmd_help_agent_context() {
+    cat <<'EOF'
+k2 agent context — manage the always-on AGENTS.md context stack (hamburger)
+
+Pinned layers (Agent persona, PROJECT.md, Tooling footer) are always on.
+Optional layers are ordered path references you can add, toggle, reorder,
+or remove. The daemon composes them into .k2/AGENTS.md on every mutate.
+
+USAGE
+  k2 agent context <command> [args] [flags]
+
+COMMANDS
+  list                    Show pinned + optional layers
+  add <path|preset>       Add an optional layer (path or preset id, e.g. wiki:index)
+  remove <id|path>        Drop an optional layer (file on disk is kept)
+  on <id|path>            Enable a layer
+  off <id|path>           Disable a layer (stays in the stack)
+  move <id|path> <where>  Reorder: absolute position n, or up|down|top|bottom
+  show [--outline]        Preview composed AGENTS.md (or section outline)
+  regen                   Force-compose AGENTS.md from the current stack
+  presets                 List built-in layer presets
+
+WORKSPACE
+  Resolved from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD (same as other
+  agent verbs). Passed to the daemon as `project`.
+
+FLAGS
+  --label <name>          With add: optional display label
+  --outline               With show: section headings only
+  --json                  Machine-readable output
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 3 precondition (e.g. duplicate layer) · 4 not found
+
+EXAMPLES
+  k2 agent context list
+  k2 agent context add wiki:index
+  k2 agent context add docs/architecture.md --label arch
+  k2 agent context off wiki-index
+  k2 agent context move 0 top
+  k2 agent context show --outline
+  k2 agent context regen
+EOF
+}
+
+# Map daemon error.code → agent-family exit status.
+_context_exit_for_code() {
+    case "${1:-}" in
+        bad_usage|path_escape|preset_unknown|usage|invalid_move|invalid_position)
+            return 2 ;;
+        duplicate_layer|refused|precondition|agents_create_connections_disabled)
+            return 3 ;;
+        not_found)
+            return 4 ;;
+        *)
+            return 1 ;;
+    esac
+}
+
+# Absolute workspace path for context routes (matches $PROJECT resolution).
+_context_project_path() {
+    python3 -c 'import os; print(os.path.abspath(os.path.expanduser(os.environ.get("K2_PROJECT_PATH") or os.environ.get("K2SO_PROJECT_PATH") or os.getcwd())))' 2>/dev/null \
+        || echo "${PROJECT:-$PWD}"
+}
+
+# Soft size / other soft warnings from daemon JSON → stderr (non-fatal).
+_context_print_soft_warn() {
+    local raw="$1"
+    RAW="$raw" python3 - <<'PYEOF'
+import json, os, sys
+raw = os.environ.get("RAW", "")
+try:
+    d = json.loads(raw) if raw else {}
+except Exception:
+    sys.exit(0)
+warn = d.get("softWarn") or d.get("soft_warn") or d.get("warn")
+if not warn:
+    sys.exit(0)
+if isinstance(warn, list):
+    for w in warn:
+        sys.stderr.write("warning: %s\n" % w)
+elif isinstance(warn, dict):
+    sys.stderr.write("warning: %s\n" % (warn.get("hint") or warn.get("message") or json.dumps(warn)))
+else:
+    sys.stderr.write("warning: %s\n" % warn)
+PYEOF
+}
+
+# Shared HTTP + error handling for context routes.
+# Env: ABASE ATOKEN APROJECT METHOD ROUTE (path only) QS (extra query, optional)
+#      BODY (JSON string for POST; empty for GET)
+# Prints response body on stdout; maps errors to exit codes.
+_context_http() {
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" APROJECT="$1" METHOD="$2" ROUTE="$3" \
+    QS="${4:-}" BODY="${5:-}" python3 - <<'PYEOF'
+import json, os, sys
+import urllib.error, urllib.parse, urllib.request
+
+base = os.environ["ABASE"]
+token = os.environ["ATOKEN"]
+project = os.environ["APROJECT"]
+method = os.environ["METHOD"].upper()
+route = os.environ["ROUTE"]
+qs_extra = os.environ.get("QS", "")
+body = os.environ.get("BODY", "")
+
+def fail(code, hint, exit_code=1):
+    sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}}) + "\n")
+    sys.exit(exit_code)
+
+def exit_for(code):
+    c = (code or "").lower()
+    if c in ("bad_usage", "path_escape", "preset_unknown", "usage",
+             "invalid_move", "invalid_position"):
+        return 2
+    if c in ("duplicate_layer", "refused", "precondition"):
+        return 3
+    if c == "not_found":
+        return 4
+    return 1
+
+params = {"token": token, "project": project}
+if qs_extra:
+    for part in qs_extra.split("&"):
+        if not part:
+            continue
+        if "=" in part:
+            k, v = part.split("=", 1)
+            params[k] = urllib.parse.unquote(v)
+        else:
+            params[part] = ""
+
+url = base + route + "?" + urllib.parse.urlencode(params)
+try:
+    if method == "GET":
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read().decode("utf-8", "replace")
+            status = r.status
+    else:
+        data = (body or "{}").encode("utf-8")
+        req = urllib.request.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw = r.read().decode("utf-8", "replace")
+            status = r.status
+except urllib.error.HTTPError as e:
+    status = e.code
+    try:
+        raw = e.read().decode("utf-8", "replace")
+    except Exception:
+        raw = ""
+    if not raw:
+        fail("daemon_error", "HTTP %s on %s" % (status, route), 1)
+except Exception as e:
+    fail("daemon_unreachable", "no response from the K2 daemon (is it running?): %s" % e, 1)
+
+if not raw.strip():
+    fail("daemon_error", "empty response from %s (HTTP %s)" % (route, status), 1)
+
+try:
+    d = json.loads(raw)
+except Exception:
+    fail("bad_response", "daemon returned unparseable response from %s: %r" % (route, raw[:200]), 1)
+
+err = d.get("error")
+if err is not None:
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    code = err.get("code") or "error"
+    hint = err.get("hint") or err.get("message") or code
+    sys.stderr.write(json.dumps({"error": err}) + "\n")
+    sys.exit(exit_for(code))
+
+# Some routes use ok:false without error object
+if d.get("ok") is False and not d.get("layers") and "pinned" not in d and "presets" not in d and "content" not in d and "outline" not in d and "text" not in d:
+    fail("daemon_error", "unexpected response: %s" % json.dumps(d)[:300], 1)
+
+# 404 with HTML / empty structured body
+if status == 404 and "ok" not in d and "layers" not in d and "presets" not in d:
+    fail("not_found", "route %s not found (is the context-hamburger daemon build running?)" % route, 4)
+
+print(raw)
+PYEOF
+}
+
+# Resolve id|path|label token against GET /cli/context/layers → layer id.
+# Prints id on stdout; uses _agent_err + exit on failure.
+_context_resolve_layer_id() {
+    local token="$1"
+    local project="$2"
+    local layers_raw rc=0
+    layers_raw=$(_context_http "$project" GET "/cli/context/layers") || rc=$?
+    [ "$rc" -ne 0 ] && return "$rc"
+    TOKEN_Q="$token" LAYERS_RAW="$layers_raw" python3 - <<'PYEOF'
+import json, os, sys
+
+token = os.environ["TOKEN_Q"]
+raw = os.environ["LAYERS_RAW"]
+d = json.loads(raw)
+layers = d.get("layers") or d.get("optional") or []
+
+def norm(p):
+    return (p or "").replace("\\", "/").strip().lstrip("./")
+
+nt = norm(token)
+# 1) exact id
+for L in layers:
+    if str(L.get("id") or "") == token:
+        print(L["id"]); sys.exit(0)
+# 2) exact / suffix path
+for L in layers:
+    p = norm(L.get("path"))
+    if p == nt or p.endswith("/" + nt) or (L.get("path") or "") == token:
+        print(L["id"]); sys.exit(0)
+# 3) label (case-insensitive)
+for L in layers:
+    lab = (L.get("label") or "").strip()
+    if lab and lab.lower() == token.lower():
+        print(L["id"]); sys.exit(0)
+# 4) source suffix e.g. wiki-index from preset:wiki-index
+for L in layers:
+    src = (L.get("source") or "")
+    if src == token or src.endswith(":" + token) or src.replace("preset:", "") == token:
+        print(L["id"]); sys.exit(0)
+
+sys.stderr.write(json.dumps({
+    "error": {
+        "code": "not_found",
+        "hint": "no context layer matches '%s' — see: k2 agent context list" % token,
+    }
+}) + "\n")
+sys.exit(4)
+PYEOF
+}
+
+# Human list formatter for pinned + optional layers.
+_context_format_list() {
+    RAW="$1" python3 - <<'PYEOF'
+import json, os, sys
+
+d = json.loads(os.environ["RAW"])
+pinned = d.get("pinned") or []
+layers = d.get("layers") or d.get("optional") or []
+
+print("PINNED")
+if not pinned:
+    # Sensible defaults when daemon omits explicit pinned rows
+    print("  Agent     .k2/agent/AGENT.md")
+    print("  Project   .k2/PROJECT.md")
+    print("  Tooling   (generated k2-cli pointer)")
+else:
+    for p in pinned:
+        label = (p.get("label") or p.get("name") or p.get("key") or p.get("id") or "layer").strip()
+        path = p.get("path") or p.get("detail") or ""
+        if not path and (p.get("kind") == "tooling" or "tooling" in label.lower()):
+            path = "(generated k2-cli pointer)"
+        # Pad label to 9 for alignment (Agent/Project/Tooling)
+        print("  %-9s %s" % (label[:32], path))
+
+print("")
+print("OPTIONAL")
+if not layers:
+    print("  (none — add with: k2 agent context add <path|preset>)")
+else:
+    # Sort by position if present
+    def pos_key(L):
+        try:
+            return int(L.get("position", 0))
+        except (TypeError, ValueError):
+            return 0
+    for L in sorted(layers, key=pos_key):
+        pos = L.get("position", "?")
+        en = L.get("enabled", True)
+        state = "on " if en in (True, 1, "1", "true", "on") else "off"
+        label = (L.get("label") or "").strip()
+        if not label:
+            src = (L.get("source") or "")
+            if src.startswith("preset:"):
+                label = src.split(":", 1)[1]
+            else:
+                path = (L.get("path") or "")
+                label = path.rsplit("/", 1)[-1].rsplit(".", 1)[0] if path else (L.get("id") or "?")[:12]
+        path = L.get("path") or ""
+        missing = ""
+        exists = L.get("exists")
+        if exists is False or exists == 0 or exists == "false":
+            missing = "  MISSING"
+        print("  %s  %s  %-12s %s%s" % (pos, state, label[:12], path, missing))
+PYEOF
+}
+
+_context_format_presets() {
+    RAW="$1" python3 - <<'PYEOF'
+import json, os, sys
+d = json.loads(os.environ["RAW"])
+presets = d.get("presets") or d.get("items") or []
+if isinstance(d, list):
+    presets = d
+if not presets:
+    print("(no context presets registered)")
+    sys.exit(0)
+print("%-16s  %-28s  %s" % ("ID", "PATH", "LABEL"))
+for p in presets:
+    if not isinstance(p, dict):
+        print(p)
+        continue
+    pid = p.get("id") or p.get("preset") or "?"
+    path = p.get("path") or p.get("defaultPath") or ""
+    label = p.get("label") or p.get("name") or ""
+    print("%-16s  %-28s  %s" % (pid, path, label))
+PYEOF
+}
+
+_context_format_show() {
+    local outline_flag="${2:-0}"
+    RAW="$1" OUTLINE="$outline_flag" python3 - <<'PYEOF'
+import json, os, sys
+d = json.loads(os.environ["RAW"])
+outline = os.environ.get("OUTLINE") == "1"
+# Prefer explicit fields from daemon
+if outline:
+    items = d.get("outline") or d.get("sections") or d.get("headings")
+    if items:
+        for it in items:
+            if isinstance(it, dict):
+                level = it.get("level") or it.get("depth") or 1
+                title = it.get("title") or it.get("heading") or it.get("text") or ""
+                print("%s%s" % ("  " * max(0, int(level) - 1), title))
+            else:
+                print(it)
+        sys.exit(0)
+text = d.get("content") or d.get("text") or d.get("body") or d.get("preview") or ""
+if text:
+    print(text, end="" if text.endswith("\n") else "\n")
+    sys.exit(0)
+# Fallback: pretty-print remaining JSON (minus ok)
+out = {k: v for k, v in d.items() if k != "ok"}
+print(json.dumps(out, indent=2))
+PYEOF
+}
+
+cmd_agent_context() {
+    if _wants_help "$@" || [ $# -eq 0 ]; then
+        cmd_help_agent_context
+        exit 0
+    fi
+    local sub="$1"
+    shift
+    case "$sub" in
+        list)     cmd_agent_context_list "$@" ;;
+        add)      cmd_agent_context_add "$@" ;;
+        remove|rm|delete)
+                  cmd_agent_context_remove "$@" ;;
+        on)       cmd_agent_context_set_enabled true "$@" ;;
+        off)      cmd_agent_context_set_enabled false "$@" ;;
+        move)     cmd_agent_context_move "$@" ;;
+        show)     cmd_agent_context_show "$@" ;;
+        regen)    cmd_agent_context_regen "$@" ;;
+        presets)  cmd_agent_context_presets "$@" ;;
+        --help|-h)
+            cmd_help_agent_context
+            exit 0
+            ;;
+        *)
+            _agent_err "bad_usage" "unknown context subcommand '$sub' — see: k2 agent context --help"
+            exit 2
+            ;;
+    esac
+}
+
+cmd_agent_context_list() {
+    if _wants_help "$@"; then cmd_help_agent_context; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context list [--json]"
+                exit 2 ;;
+            *)
+                _agent_err "bad_usage" "unexpected argument '$1' — usage: k2 agent context list [--json]"
+                exit 2 ;;
+        esac
+    done
+    local project raw rc=0
+    project=$(_context_project_path)
+    raw=$(_context_http "$project" GET "/cli/context/layers") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    _context_print_soft_warn "$raw"
+    if $as_json; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+    _context_format_list "$raw"
+}
+
+cmd_agent_context_add() {
+    if _wants_help "$@"; then cmd_help_agent_context; exit 0; fi
+    local target="" label="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --label)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--label requires a value"; exit 2; }
+                label="$2"; shift 2 ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context add <path|preset> [--label name] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$target" ]; then target="$1"; else
+                    _agent_err "bad_usage" "unexpected extra argument '$1' — usage: k2 agent context add <path|preset> [--label name] [--json]"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$target" ]; then
+        _agent_err "bad_usage" "missing <path|preset> — usage: k2 agent context add <path|preset> [--label name] [--json]"
+        exit 2
+    fi
+    local project body raw rc=0
+    project=$(_context_project_path)
+    # Preset heuristic: contains ":" and is not an absolute/relative path
+    # with a drive or leading slash-only weirdness. Paths with "/" or
+    # ending in .md are always paths.
+    body=$(TARGET="$target" LABEL="$label" PROJECT="$project" python3 - <<'PYEOF'
+import json, os
+target = os.environ["TARGET"]
+label = os.environ.get("LABEL") or ""
+project = os.environ["PROJECT"]
+body = {"project": project}
+# path if looks like a filesystem path
+is_path = (
+    "/" in target
+    or target.startswith(".")
+    or target.endswith(".md")
+    or target.endswith(".markdown")
+    or target.startswith("~")
+)
+if is_path:
+    body["path"] = target
+else:
+    # preset id (wiki:index, manager, etc.)
+    body["preset"] = target
+if label:
+    body["label"] = label
+print(json.dumps(body))
+PYEOF
+)
+    raw=$(_context_http "$project" POST "/cli/context/add" "" "$body") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    _context_print_soft_warn "$raw"
+    if $as_json; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+    RAW="$raw" python3 - <<'PYEOF'
+import json, os
+d = json.loads(os.environ["RAW"])
+layer = d.get("layer") or d.get("added") or {}
+path = layer.get("path") or d.get("path") or ""
+lab = layer.get("label") or ""
+lid = layer.get("id") or d.get("id") or ""
+bits = ["added"]
+if lab:
+    bits.append(lab)
+if path:
+    bits.append(path)
+if lid and lid not in bits:
+    bits.append("(id %s)" % lid)
+print(" ".join(bits))
+if d.get("regenerated") is False:
+    print("(AGENTS.md not regenerated — run: k2 agent context regen)")
+elif d.get("regen") or d.get("regenerated") or d.get("agentsMd"):
+    print("AGENTS.md regenerated.")
+PYEOF
+}
+
+cmd_agent_context_remove() {
+    if _wants_help "$@"; then cmd_help_agent_context; exit 0; fi
+    local token="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context remove <id|path> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$token" ]; then token="$1"; else
+                    _agent_err "bad_usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$token" ]; then
+        _agent_err "bad_usage" "missing <id|path> — usage: k2 agent context remove <id|path> [--json]"
+        exit 2
+    fi
+    local project lid body raw rc=0
+    project=$(_context_project_path)
+    lid=$(_context_resolve_layer_id "$token" "$project") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    body=$(python3 -c 'import json,sys; print(json.dumps({"project":sys.argv[1],"id":sys.argv[2]}))' "$project" "$lid")
+    raw=$(_context_http "$project" POST "/cli/context/remove" "" "$body") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    _context_print_soft_warn "$raw"
+    if $as_json; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+    echo "removed layer $lid"
+}
+
+cmd_agent_context_set_enabled() {
+    local enabled="$1"
+    shift
+    if _wants_help "$@"; then cmd_help_agent_context; exit 0; fi
+    local token="" as_json=false
+    local verb="on"
+    [ "$enabled" = "false" ] && verb="off"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context $verb <id|path> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$token" ]; then token="$1"; else
+                    _agent_err "bad_usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$token" ]; then
+        _agent_err "bad_usage" "missing <id|path> — usage: k2 agent context $verb <id|path> [--json]"
+        exit 2
+    fi
+    local project lid body raw rc=0
+    project=$(_context_project_path)
+    lid=$(_context_resolve_layer_id "$token" "$project") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    body=$(ENABLED="$enabled" PROJECT="$project" LID="$lid" python3 - <<'PYEOF'
+import json, os
+print(json.dumps({
+    "project": os.environ["PROJECT"],
+    "id": os.environ["LID"],
+    "enabled": os.environ["ENABLED"] == "true",
+}))
+PYEOF
+)
+    raw=$(_context_http "$project" POST "/cli/context/set-enabled" "" "$body") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    _context_print_soft_warn "$raw"
+    if $as_json; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+    if [ "$enabled" = "true" ]; then
+        echo "enabled layer $lid"
+    else
+        echo "disabled layer $lid"
+    fi
+}
+
+cmd_agent_context_move() {
+    if _wants_help "$@"; then cmd_help_agent_context; exit 0; fi
+    local token="" where="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context move <id|path> <n|up|down|top|bottom> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$token" ]; then token="$1"
+                elif [ -z "$where" ]; then where="$1"
+                else
+                    _agent_err "bad_usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$token" ] || [ -z "$where" ]; then
+        _agent_err "bad_usage" "usage: k2 agent context move <id|path> <n|up|down|top|bottom> [--json]"
+        exit 2
+    fi
+    if ! printf '%s' "$where" | grep -Eq '^(up|down|top|bottom|[0-9]+)$'; then
+        _agent_err "bad_usage" "invalid move target '$where' — use n (0-based), up, down, top, or bottom"
+        exit 2
+    fi
+    local project lid body raw rc=0
+    project=$(_context_project_path)
+    lid=$(_context_resolve_layer_id "$token" "$project") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    body=$(WHERE="$where" PROJECT="$project" LID="$lid" python3 - <<'PYEOF'
+import json, os
+where = os.environ["WHERE"]
+body = {"project": os.environ["PROJECT"], "id": os.environ["LID"]}
+if where.isdigit():
+    body["position"] = int(where)
+else:
+    body["direction"] = where
+print(json.dumps(body))
+PYEOF
+)
+    raw=$(_context_http "$project" POST "/cli/context/move" "" "$body") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    _context_print_soft_warn "$raw"
+    if $as_json; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+    echo "moved layer $lid → $where"
+}
+
+cmd_agent_context_show() {
+    if _wants_help "$@"; then cmd_help_agent_context; exit 0; fi
+    local as_json=false outline=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --outline) outline=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context show [--outline] [--json]"
+                exit 2 ;;
+            *)
+                _agent_err "bad_usage" "unexpected argument '$1' — usage: k2 agent context show [--outline] [--json]"
+                exit 2 ;;
+        esac
+    done
+    local project qs="" raw rc=0
+    project=$(_context_project_path)
+    if $outline; then qs="outline=1"; fi
+    raw=$(_context_http "$project" GET "/cli/context/show" "$qs") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    _context_print_soft_warn "$raw"
+    if $as_json; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+    if $outline; then
+        _context_format_show "$raw" 1
+    else
+        _context_format_show "$raw" 0
+    fi
+}
+
+cmd_agent_context_regen() {
+    if _wants_help "$@"; then cmd_help_agent_context; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context regen [--json]"
+                exit 2 ;;
+            *)
+                _agent_err "bad_usage" "unexpected argument '$1' — usage: k2 agent context regen [--json]"
+                exit 2 ;;
+        esac
+    done
+    local project body raw rc=0
+    project=$(_context_project_path)
+    body=$(python3 -c 'import json,sys; print(json.dumps({"project":sys.argv[1]}))' "$project")
+    raw=$(_context_http "$project" POST "/cli/context/regen" "" "$body") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    _context_print_soft_warn "$raw"
+    if $as_json; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+    RAW="$raw" python3 - <<'PYEOF'
+import json, os
+d = json.loads(os.environ["RAW"])
+path = d.get("path") or d.get("agentsMd") or d.get("agents_md") or ".k2/AGENTS.md"
+bytes_ = d.get("bytes") or d.get("size")
+if bytes_ is not None:
+    print("regenerated %s (%s bytes)" % (path, bytes_))
+else:
+    print("regenerated %s" % path)
+PYEOF
+}
+
+cmd_agent_context_presets() {
+    if _wants_help "$@"; then cmd_help_agent_context; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context presets [--json]"
+                exit 2 ;;
+            *)
+                _agent_err "bad_usage" "unexpected argument '$1' — usage: k2 agent context presets [--json]"
+                exit 2 ;;
+        esac
+    done
+    local project raw rc=0
+    project=$(_context_project_path)
+    raw=$(_context_http "$project" GET "/cli/context/presets") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    if $as_json; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+    _context_format_presets "$raw"
+}
+
 cmd_help_skills() {
     cat <<'EOF'
 k2 skills <subcommand> [options]
@@ -13335,8 +14134,9 @@ CHECKIN
   done                                  Shortcut for `checkin --done`
 
 AGENTS
-  agent                                 Hire, configure, list, retire this server's agents
-                                        (hire/conf/get/set/list/retire — see `k2 agent --help`)
+  agent                                 Hire, configure, list, retire this server's agents;
+                                        manage AGENTS.md context layers (hire/conf/get/set/
+                                        list/retire/context — see `k2 agent --help`)
   preset                                Agent PRESETS: the launchable agent roster + custom
                                         agents (list/show/add/set/remove — `k2 preset --help`)
 
@@ -20446,6 +21246,9 @@ case "${1:-help}" in
             # arm with the real fleet-view semantics (PRD §3).
             list)   shift 2; cmd_agent_list "$@" ;;
             retire) shift 2; cmd_agent_retire "$@" ;;
+            # Context hamburger — day-2 AGENTS.md layer stack
+            # (prd-context-hamburger-v1).
+            context) shift 2; cmd_agent_context "$@" ;;
             --help|-h|'') cmd_help_agent; exit 0 ;;
             update) shift 2; cmd_agent_update "$@" ;;
             complete) shift 2; cmd_agent_complete "$@" ;;
@@ -20459,6 +21262,13 @@ case "${1:-help}" in
                 cmd_help_agent >&2
                 exit 2 ;;
         esac
+        ;;
+    context)
+        # Top-level teach string — stack lives under `k2 agent context`.
+        echo "Use: k2 agent context <list|add|remove|on|off|move|show|regen|presets>" >&2
+        echo "Day-2 management of the always-on AGENTS.md context stack (context hamburger)." >&2
+        echo "See: k2 agent context --help" >&2
+        exit 2
         ;;
     preset)
         # W6 (0.40.30): `k2 preset` — agent-preset management

@@ -3,6 +3,51 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
+## 0.40.63 — `k2 msg` tray packages: silent, wake, and files
+
+### Send durable packages, not only live pings
+
+Live `k2 msg <workspace> "text"` is still for **short** lines injected into
+a running session. For briefs, PDFs, CSVs, and multi-file drops, use the
+**work tray** modes:
+
+```text
+k2 msg <workspace> --inbox-wake   ./brief.md
+k2 msg <workspace> --inbox-silent ./report.pdf
+k2 msg <workspace> --inbox-wake   a.md b.pdf notes.txt --title "Batch"
+```
+
+- **`--inbox-wake`** (preferred) — lands a package under the peer’s
+  `.k2/inbox/` **and** knocks with a short live line:
+  `[inbox:<id>] <title>` plus `Open: k2 inbox read <id>` (never the full
+  file body).
+- **`--inbox-silent`** — package only; **does not** notify. Use wake, or a
+  separate live `msg`, if you want a knock.
+- **Bare `--inbox`** is a hard error — you must pick silent or wake.
+
+Markdown is normalized into a tray item; other files become a **cover note**
+plus sidecars under `.k2/inbox/<id>.files/`. Multiple paths → **one** package.
+
+Recipients still manage their tray with **`k2 inbox list|read|move|…`**.
+This is **not** `k2 mail` (real email).
+
+### Cross-host files (Connect)
+
+Large or remote drops stage with the same upload path Clone To uses
+(single-shot under 50 MB, chunked at/above). Tray send to `agent::host`
+needs a **signed-in K2 Connect host** for that server — federation live
+text is not enough to upload files. In-cell agent passports can deliver
+when the daemon can read the path on the same machine; remote **staging**
+needs an owner or Connect-user token (clear error if not).
+
+### Agent docs
+
+Built-in k2-cli skill strings and wake templates teach
+`--inbox-wake` / `--inbox-silent` with file paths, not the old bare
+`--inbox --title/--body` form.
+
+---
+
 ## 0.40.62 — Settings that scale: Connect, LLMs, General
 
 ### K2 Connect is easier to navigate

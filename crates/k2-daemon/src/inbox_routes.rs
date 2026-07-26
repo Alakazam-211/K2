@@ -258,6 +258,121 @@ pub fn handle_migrate_post(params: &HashMap<String, String>) -> CliResponse {
     )
 }
 
+// ── File package delivery (POST) ───────────────────────────────────────
+
+/// POST /cli/inbox/deliver
+///
+/// File-first tray package for `k2 msg --inbox-silent|wake <path>`.
+///
+/// Params (form or query):
+/// - `workspace` / `target` / `project` / `project_path` — recipient token
+/// - `path` — absolute path the **daemon** can open (local same-host)
+/// - `title` (optional override)
+/// - `from` (optional sender identity for frontmatter + wake framing)
+/// - `source` (optional; default `msg-inbox`)
+/// - `wake` / `mode` — `wake=true|1|yes` or `mode=wake` enables live knock
+///
+/// Package success is primary. On wake mode, if package lands but wake
+/// fails, response still has package fields + `wake: {success:false,...}`
+/// (caller should treat package as delivered — exit 0).
+pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
+    let target_token = opt_param(params, "workspace")
+        .or_else(|| opt_param(params, "target"))
+        .or_else(|| opt_param(params, "project"))
+        .or_else(|| opt_param(params, "project_path"))
+        .unwrap_or_default();
+    if target_token.is_empty() {
+        return CliResponse::bad_request(
+            "Missing workspace (or target/project) — the inbox to deliver into",
+        );
+    }
+    let Some(resolved_path) = crate::workspace_msg::resolve_workspace(&target_token) else {
+        return crate::workspace_routes::workspace_not_found_response(&target_token);
+    };
+    let principal = crate::caller_workspace::principal_from_params(params);
+    match crate::comms::gate_cross_workspace(principal.as_ref(), &resolved_path) {
+        Ok(()) => {}
+        Err(Some(resp)) => return resp,
+        Err(None) => {
+            return crate::workspace_routes::workspace_not_found_response(&target_token);
+        }
+    }
+
+    let path_str = str_param(params, "path");
+    if path_str.is_empty() {
+        return CliResponse::bad_request(
+            "Missing path — absolute path to the file the daemon should package into the inbox",
+        );
+    }
+    let source_path = PathBuf::from(&path_str);
+    let title = opt_param(params, "title");
+    let from = opt_param(params, "from");
+    let source = opt_param(params, "source");
+    let wake = deliver_wants_wake(params);
+
+    let workspace = PathBuf::from(&resolved_path);
+    let package = match k2_core::inbox::deliver_file(
+        &workspace,
+        &source_path,
+        title.as_deref(),
+        from.as_deref(),
+        source.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+
+    let package_id = package.id.clone();
+    let package_title = package.title.clone();
+    let mut out = serde_json::to_value(&package).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("ok".into(), serde_json::json!(true));
+        // Convenience flat aliases (camelCase already on DeliveredPackage).
+        obj.insert("coverPath".into(), serde_json::json!(package.cover_path));
+        obj.insert("sidecarPaths".into(), serde_json::json!(package.sidecar_paths));
+        obj.insert("bodyPreview".into(), serde_json::json!(package.body_preview));
+    }
+
+    if wake {
+        let pointer = k2_core::inbox::wake_pointer_text(&package_id, &package_title);
+        let from_tag = from.unwrap_or_else(|| "external".to_string());
+        let wake_resp = crate::workspace_msg::deliver_live(
+            &target_token,
+            &pointer,
+            &from_tag,
+            "",
+            true, // always wake on --inbox-wake
+            crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+        );
+        out["wake"] = serde_json::json!({
+            "success": wake_resp.success,
+            "reason": wake_resp.reason,
+            "hint": wake_resp.hint,
+            "targetSessionId": wake_resp.target_session_id,
+            "woke": wake_resp.woke,
+            "wakeMs": wake_resp.wake_ms,
+            "attempts": wake_resp.attempts,
+        });
+    }
+
+    CliResponse::ok_json(out.to_string())
+}
+
+fn deliver_wants_wake(params: &HashMap<String, String>) -> bool {
+    if let Some(mode) = opt_param(params, "mode") {
+        let m = mode.to_ascii_lowercase();
+        if m == "wake" || m == "inbox-wake" {
+            return true;
+        }
+        if m == "silent" || m == "inbox-silent" {
+            return false;
+        }
+    }
+    opt_param(params, "wake")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "wake"))
+        .unwrap_or(false)
+}
+
 // ── Glossary (read-only, no project) ───────────────────────────────────
 
 /// Glossary entry: term + one-line summary + full definition body.
@@ -297,7 +412,7 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "connections",
         summary: "Cross-workspace links: local peers for msg/read/inbox + roster",
-        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `k2 connections list`, and agent-initiated `k2 msg` / `k2 msg --inbox` / `k2 read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `k2 connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner enables Settings → K2 Connect → Allow agents to create connections (or the per-workspace toggle). `list` is always allowed.\n\nNOT the same as: skill profiles (`k2 skills`), live sessions (`k2 workspace list --running`), or ngrok tunnel state (`k2 tunnel` / `k2 daemon companion`).",
+        definition: "Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `k2 connections list`, and agent-initiated `k2 msg` / `k2 msg --inbox-wake|--inbox-silent` / `k2 read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `k2 connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner enables Settings → K2 Connect → Allow agents to create connections (or the per-workspace toggle). `list` is always allowed.\n\nNOT the same as: skill profiles (`k2 skills`), live sessions (`k2 workspace list --running`), or ngrok tunnel state (`k2 tunnel` / `k2 daemon companion`).",
     },
     GlossaryEntry {
         term: "feedback",
@@ -322,7 +437,7 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "inbox",
         summary: "Workspace's email-like communication channel",
-        definition: "The workspace's email-like communication channel. Items arrive here from other workspaces (via `k2so msg --inbox`) or are composed by the workspace's own agent (via `k2so inbox compose`).\n\nInbox items are non-urgent, non-aggro — the agent reads and triages on its own schedule. Triage = move items into folders the agent creates. There's no system-imposed folder taxonomy; the agent organizes its inbox the way a person organizes email (Projects, Reference, Issues, FYI, etc.).\n\nStorage: `.k2/inbox/<id>.md` (top-level) and `.k2/inbox/<folder>/<id>.md` (after `inbox move`).\n\nMigration from pre-Phase-2.1 K2SO: the daemon runs a one-shot migration on its first boot after upgrade. Old `.k2so/work/{inbox,active,done}/*.md` files are atomic-renamed into `.k2/inbox/{,active,done}/`, then the empty `.k2so/work/` folder is sent to the macOS Recycle Bin (recoverable if anything was missed). After migration there's no `.k2so/work/`; everything lives under `.k2/inbox/`.\n\nSee also: `k2so inbox --help` for the full verb surface, `k2so msg --help` for sending into someone else's inbox.",
+        definition: "The workspace's email-like communication channel. Items arrive here from other workspaces (via `k2 msg --inbox-wake|--inbox-silent`) or are composed by the workspace's own agent (via `k2so inbox compose`).\n\nInbox items are non-urgent, non-aggro — the agent reads and triages on its own schedule. Triage = move items into folders the agent creates. There's no system-imposed folder taxonomy; the agent organizes its inbox the way a person organizes email (Projects, Reference, Issues, FYI, etc.).\n\nStorage: `.k2/inbox/<id>.md` (top-level) and `.k2/inbox/<folder>/<id>.md` (after `inbox move`).\n\nMigration from pre-Phase-2.1 K2SO: the daemon runs a one-shot migration on its first boot after upgrade. Old `.k2so/work/{inbox,active,done}/*.md` files are atomic-renamed into `.k2/inbox/{,active,done}/`, then the empty `.k2so/work/` folder is sent to the macOS Recycle Bin (recoverable if anything was missed). After migration there's no `.k2so/work/`; everything lives under `.k2/inbox/`.\n\nSee also: `k2so inbox --help` for the full verb surface, `k2so msg --help` for sending into someone else's inbox.",
     },
     GlossaryEntry {
         term: "mail",
@@ -438,6 +553,7 @@ pub fn handle_glossary_get(params: &HashMap<String, String>) -> CliResponse {
 pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliResponse {
     match path {
         "/cli/inbox/compose" => handle_compose_post(params),
+        "/cli/inbox/deliver" => handle_deliver_post(params),
         "/cli/inbox/move" => handle_move_post(params),
         "/cli/inbox/archive" => handle_archive_post(params),
         "/cli/inbox/delete" => handle_delete_post(params),

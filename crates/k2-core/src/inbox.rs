@@ -230,13 +230,7 @@ pub fn compose(
     let root = inbox_root(workspace);
     fs::create_dir_all(&root).map_err(|e| format!("create inbox dir: {e}"))?;
 
-    let stem = slug_for_title(title);
-    let mut filename = format!("{}.md", stem);
-    let mut suffix = 2;
-    while root.join(&filename).exists() {
-        filename = format!("{}-{}.md", stem, suffix);
-        suffix += 1;
-    }
+    let filename = allocate_md_filename(&root, title);
     let priority = priority.unwrap_or("normal").to_string();
     let source = source.unwrap_or("manual").to_string();
     let from = from.unwrap_or("self").to_string();
@@ -260,6 +254,290 @@ pub fn compose(
         from,
         body_preview: body_preview_for(&content),
     })
+}
+
+// ── File package delivery (`k2 msg --inbox-silent|wake <path>`) ────────
+
+/// Outcome of [`deliver_file`] — durable package under `.k2/inbox/`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveredPackage {
+    pub id: String,
+    pub title: String,
+    pub filename: String,
+    pub folder: String,
+    /// Absolute path of the listable cover / body `.md`.
+    pub cover_path: String,
+    /// Absolute paths of any sidecar binaries under `<id>.files/`.
+    pub sidecar_paths: Vec<String>,
+    pub body_preview: String,
+    pub source: String,
+    pub from: String,
+}
+
+/// Deliver a local file into the target workspace's inbox as a durable
+/// package. Markdown sources become normalized `.md` items; other files
+/// become a cover note + sidecar under `<id>.files/<safe_name>`.
+///
+/// Title resolution (first hit wins):
+/// 1. `title_override`
+/// 2. YAML frontmatter `title:` (when source is `.md`)
+/// 3. First `# heading` in the `.md` body
+/// 4. Filename stem
+///
+/// `source` defaults to `"msg-inbox"`. `from` defaults to `"self"`.
+pub fn deliver_file(
+    workspace: &Path,
+    source_path: &Path,
+    title_override: Option<&str>,
+    from: Option<&str>,
+    source: Option<&str>,
+) -> Result<DeliveredPackage, String> {
+    if !source_path.is_file() {
+        return Err(format!(
+            "source path is not a readable file: {}",
+            source_path.display()
+        ));
+    }
+
+    let source_tag = source.unwrap_or("msg-inbox").to_string();
+    let from_tag = from.unwrap_or("self").to_string();
+    let is_md = source_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("md"))
+        .unwrap_or(false);
+
+    let root = inbox_root(workspace);
+    fs::create_dir_all(&root).map_err(|e| format!("create inbox dir: {e}"))?;
+
+    if is_md {
+        deliver_markdown_file(
+            &root,
+            source_path,
+            title_override,
+            &from_tag,
+            &source_tag,
+        )
+    } else {
+        deliver_binary_file(
+            &root,
+            source_path,
+            title_override,
+            &from_tag,
+            &source_tag,
+        )
+    }
+}
+
+/// Build the short live-wake pointer payload (without `[from …]` framing —
+/// `deliver_live` / `format_message` adds that).
+pub fn wake_pointer_text(id: &str, title: &str) -> String {
+    format!("[inbox:{id}] {title}\nOpen: k2 inbox read {id}")
+}
+
+fn deliver_markdown_file(
+    root: &Path,
+    source_path: &Path,
+    title_override: Option<&str>,
+    from: &str,
+    source: &str,
+) -> Result<DeliveredPackage, String> {
+    let content = safe_read_to_string(source_path)?;
+    let title = resolve_title(title_override, Some(&content), source_path);
+    let body = extract_md_body(&content);
+    let filename = allocate_md_filename(root, &title);
+    let created = simple_date_now();
+    let priority = parse_frontmatter(&content)
+        .get("priority")
+        .cloned()
+        .unwrap_or_else(|| "normal".to_string());
+
+    let written = format!(
+        "---\ntitle: {title}\npriority: {priority}\ncreated: {created}\nsource: {source}\nfrom: {from}\n---\n\n{body}\n"
+    );
+    let path = root.join(&filename);
+    atomic_write(&path, &written)?;
+
+    let id = filename.strip_suffix(".md").unwrap_or(&filename).to_string();
+    Ok(DeliveredPackage {
+        id,
+        title,
+        filename,
+        folder: String::new(),
+        cover_path: path.display().to_string(),
+        sidecar_paths: Vec::new(),
+        body_preview: body_preview_for(&written),
+        source: source.to_string(),
+        from: from.to_string(),
+    })
+}
+
+fn deliver_binary_file(
+    root: &Path,
+    source_path: &Path,
+    title_override: Option<&str>,
+    from: &str,
+    source: &str,
+) -> Result<DeliveredPackage, String> {
+    let title = resolve_title(title_override, None, source_path);
+    let original_name = source_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment");
+    let safe_name = sanitize_sidecar_filename(original_name);
+    let file_size = fs::metadata(source_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let size_human = human_bytes(file_size);
+
+    let filename = allocate_md_filename(root, &title);
+    let id = filename.strip_suffix(".md").unwrap_or(&filename).to_string();
+    let files_dir = root.join(format!("{id}.files"));
+    fs::create_dir_all(&files_dir).map_err(|e| format!("create sidecar dir: {e}"))?;
+    let sidecar = files_dir.join(&safe_name);
+
+    // Copy bytes (not rename — source stays with the caller).
+    fs::copy(source_path, &sidecar)
+        .map_err(|e| format!("copy sidecar {}: {e}", source_path.display()))?;
+
+    let rel_sidecar = format!("{id}.files/{safe_name}");
+    let created = simple_date_now();
+    let body = format!(
+        "Attachment package delivered via `k2 msg --inbox-*`.\n\n\
+         - **File:** `{safe_name}` ({size_human})\n\
+         - **Sidecar:** `.k2/inbox/{rel_sidecar}` (or `.k2so/inbox/` on legacy workspaces)\n\n\
+         Open this cover note with `k2 inbox read {id}`. Open the sidecar path on disk for the file bytes.\n"
+    );
+    let written = format!(
+        "---\ntitle: {title}\npriority: normal\ncreated: {created}\nsource: {source}\nfrom: {from}\n---\n\n{body}"
+    );
+    let cover_path = root.join(&filename);
+    atomic_write(&cover_path, &written)?;
+
+    Ok(DeliveredPackage {
+        id,
+        title,
+        filename,
+        folder: String::new(),
+        cover_path: cover_path.display().to_string(),
+        sidecar_paths: vec![sidecar.display().to_string()],
+        body_preview: body_preview_for(&written),
+        source: source.to_string(),
+        from: from.to_string(),
+    })
+}
+
+/// Allocate a free `<slug>.md` (or `<slug>-N.md`) under `root`.
+fn allocate_md_filename(root: &Path, title: &str) -> String {
+    let stem = slug_for_title(title);
+    let mut filename = format!("{stem}.md");
+    let mut suffix = 2;
+    while root.join(&filename).exists() {
+        filename = format!("{stem}-{suffix}.md");
+        suffix += 1;
+    }
+    filename
+}
+
+/// Title resolution order for file packages (see PRD §4.3).
+fn resolve_title(
+    title_override: Option<&str>,
+    md_content: Option<&str>,
+    source_path: &Path,
+) -> String {
+    if let Some(t) = title_override {
+        let t = t.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    if let Some(content) = md_content {
+        let fm = parse_frontmatter(content);
+        if let Some(t) = fm.get("title") {
+            let t = t.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+        if let Some(h) = first_md_heading(content) {
+            return h;
+        }
+    }
+    source_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "untitled".to_string())
+}
+
+/// Body after the closing `---` of YAML frontmatter, or the full file.
+fn extract_md_body(content: &str) -> String {
+    if content.starts_with("---") {
+        if let Some(end) = content[3..].find("---") {
+            return content[3 + end + 3..].trim().to_string();
+        }
+    }
+    content.trim().to_string()
+}
+
+/// First ATX heading (`# Title`) in the markdown body, if any.
+fn first_md_heading(content: &str) -> Option<String> {
+    let body = extract_md_body(content);
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix('#') {
+            // Require at least one # followed by space-ish heading text.
+            let rest = rest.trim_start_matches('#').trim();
+            if !rest.is_empty() {
+                return Some(rest.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Sanitize a sidecar filename: strip path components, reject `..`, keep
+/// alphanum / dash / underscore / dot; collapse everything else to `_`.
+pub fn sanitize_sidecar_filename(name: &str) -> String {
+    // Drop any directory components (defense in depth).
+    let base = Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment");
+    if base == ".." || base == "." || base.is_empty() {
+        return "attachment".to_string();
+    }
+    let mut out = String::with_capacity(base.len());
+    for c in base.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('.').trim_matches('_');
+    if trimmed.is_empty() || trimmed == ".." {
+        "attachment".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn human_bytes(n: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if n >= GB {
+        format!("{:.1} GB", n as f64 / GB as f64)
+    } else if n >= MB {
+        format!("{:.1} MB", n as f64 / MB as f64)
+    } else if n >= KB {
+        format!("{:.1} KB", n as f64 / KB as f64)
+    } else {
+        format!("{n} B")
+    }
 }
 
 /// Move an item by id into the target folder. Creates the folder if
@@ -679,5 +957,95 @@ mod tests {
         let report2 = migrate_work_to_inbox(ws.path());
         assert!(report2.already_migrated);
         assert_eq!(report2.moved_top_level, 0);
+    }
+
+    #[test]
+    fn deliver_file_md_normalizes_frontmatter() {
+        let ws = make_ws();
+        let src = ws.path().join("brief.md");
+        fs::write(
+            &src,
+            "---\ntitle: Ship It\npriority: high\nfrom: someone\n---\n\nDo the thing.\n",
+        )
+        .unwrap();
+
+        let pkg = deliver_file(ws.path(), &src, None, Some("alice"), None).unwrap();
+        assert_eq!(pkg.title, "Ship It");
+        assert_eq!(pkg.source, "msg-inbox");
+        assert_eq!(pkg.from, "alice");
+        assert!(pkg.sidecar_paths.is_empty());
+        assert_eq!(pkg.filename, "ship-it.md");
+
+        let content = fs::read_to_string(inbox_root(ws.path()).join(&pkg.filename)).unwrap();
+        assert!(content.contains("title: Ship It"));
+        assert!(content.contains("source: msg-inbox"));
+        assert!(content.contains("from: alice"));
+        assert!(content.contains("priority: high"));
+        assert!(content.contains("Do the thing."));
+        // Original from: is overwritten by deliver's from arg.
+        assert!(!content.contains("from: someone"));
+    }
+
+    #[test]
+    fn deliver_file_md_title_override_and_heading_fallback() {
+        let ws = make_ws();
+        let src = ws.path().join("notes.md");
+        fs::write(&src, "# Heading Title\n\nBody only.\n").unwrap();
+
+        let pkg = deliver_file(ws.path(), &src, None, None, None).unwrap();
+        assert_eq!(pkg.title, "Heading Title");
+
+        let pkg2 = deliver_file(
+            ws.path(),
+            &src,
+            Some("Explicit"),
+            Some("bob"),
+            Some("msg-inbox"),
+        )
+        .unwrap();
+        assert_eq!(pkg2.title, "Explicit");
+        assert_eq!(pkg2.from, "bob");
+    }
+
+    #[test]
+    fn deliver_file_binary_writes_cover_and_sidecar() {
+        let ws = make_ws();
+        let src = ws.path().join("report.pdf");
+        fs::write(&src, b"%PDF-1.4 fake").unwrap();
+
+        let pkg = deliver_file(ws.path(), &src, Some("Q2 Report"), Some("cli"), None).unwrap();
+        assert_eq!(pkg.title, "Q2 Report");
+        assert_eq!(pkg.sidecar_paths.len(), 1);
+        assert!(pkg.sidecar_paths[0].ends_with("report.pdf"));
+        assert!(Path::new(&pkg.sidecar_paths[0]).exists());
+        assert!(Path::new(&pkg.cover_path).exists());
+
+        let files_dir = inbox_root(ws.path()).join(format!("{}.files", pkg.id));
+        assert!(files_dir.join("report.pdf").exists());
+        let cover = fs::read_to_string(&pkg.cover_path).unwrap();
+        assert!(cover.contains("source: msg-inbox"));
+        assert!(cover.contains("report.pdf"));
+        assert!(cover.contains(&format!("k2 inbox read {}", pkg.id)));
+    }
+
+    #[test]
+    fn sanitize_sidecar_rejects_traversal() {
+        assert_eq!(sanitize_sidecar_filename("../etc/passwd"), "passwd");
+        assert_eq!(sanitize_sidecar_filename(".."), "attachment");
+        assert_eq!(sanitize_sidecar_filename("my file (1).pdf"), "my_file__1_.pdf");
+    }
+
+    #[test]
+    fn wake_pointer_text_format() {
+        let t = wake_pointer_text("ship-it", "Ship It");
+        assert_eq!(t, "[inbox:ship-it] Ship It\nOpen: k2 inbox read ship-it");
+    }
+
+    #[test]
+    fn deliver_file_missing_source_errors() {
+        let ws = make_ws();
+        let err = deliver_file(ws.path(), &ws.path().join("nope.md"), None, None, None)
+            .unwrap_err();
+        assert!(err.contains("not a readable file"));
     }
 }

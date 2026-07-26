@@ -9104,16 +9104,30 @@ LENGTH LIMIT — IMPORTANT
   multi-line text gets TRUNCATED or mangled by the recipient's terminal
   input widget (Claude Code / Codex / Gemini all treat fast-arriving
   bytes as a paste with input-buffer limits). For anything longer than a
-  sentence or two — task briefs, file contents, structured/multi-line
-  content — use the inbox instead, which has no length limit and the
-  recipient reads on their own schedule:
+  sentence or two — task briefs, file contents, structured packages —
+  use tray delivery (`--inbox-silent` / `--inbox-wake`), which lands a
+  durable package under the peer's `.k2/inbox/` with no length limit:
 
-      k2 msg <workspace> --inbox --title "..." --body "..."
+      k2 msg <workspace> --inbox-wake ./brief.md
+      k2 msg <workspace> --inbox-silent ./report.pdf
+
+TRAY DELIVERY (work packages)
+  k2 msg <workspace> --inbox-wake <path> [--title "..."] [--from <name>]
+      Package + short live knock (recommended). Wake line is a pointer
+      (`[inbox:<id>] <title>` + `Open: k2 inbox read <id>`), never the
+      full file body.
+
+  k2 msg <workspace> --inbox-silent <path> [--title "..."] [--from <name>]
+      Package only — does NOT notify the peer. Use wake, or a separate
+      live `k2 msg` after silent, if you want a knock.
+
+  Bare `--inbox` is a hard error (must pick silent or wake).
+  Non-markdown files land as a cover `.md` + sidecar under
+  `.k2/inbox/<id>.files/<filename>`.
 
 RELATED VERBS
-  k2 msg <workspace> --inbox --title "..." --body "..."
-      Queue a task (email-style) — recipient reads on their own
-      schedule, no length limit. Use for anything long or non-urgent.
+  k2 inbox list | read <id> | move | archive
+      Manage YOUR workspace's tray (receive/triage). Unchanged.
 
   k2 read <workspace> [--lines N] [--agent <name>]
       Read the recipient's live terminal (peek before you inject, or
@@ -9130,6 +9144,8 @@ EXAMPLES
   k2 msg scout_v3 "ping" --from sms-bridge
   k2 msg scout_v3 "keep going" --command "/loop"
   k2 msg scout_v3 "wake up and check in" --wake
+  k2 msg scout_v3 --inbox-wake ./brief.md
+  k2 msg scout_v3 --inbox-silent ./data.csv --title "CSV drop"
   k2 msg /Users/me/work/MyApp "deploy completed"
   k2 msg peer::other.k2.dev "ping from federation"
 EOF
@@ -9168,7 +9184,8 @@ OUTPUT
 
 RELATED VERBS
   k2 msg <workspace> "text"          Talk to the agent live.
-  k2 msg <ws> --inbox --title ...    Queue a task (email-style).
+  k2 msg <ws> --inbox-wake <path>    Package + short live notify.
+  k2 msg <ws> --inbox-silent <path>  Package only (no notify).
   k2 sessions live <workspace>       List a workspace's live sessions.
 
 EXAMPLES
@@ -9343,15 +9360,17 @@ cmd_schema() {
   "commands": [
     {
       "name": "msg",
-      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"]",
-      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; use --inbox for long content. Federated peers: agent::host (prefer) or legacy agent@host — never mail. Wire form fp::ws::agent is k2 fed send only.",
-      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or federated agent::host"}, {"name": "text", "required": true}],
+      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace> --inbox-silent|--inbox-wake <path>",
+      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; for long content or files use --inbox-wake / --inbox-silent. Federated peers: agent::host (prefer) or legacy agent@host — never mail. Wire form fp::ws::agent is k2 fed send only.",
+      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or federated agent::host"}, {"name": "text_or_path", "required": false, "description": "Live message text, or file path with --inbox-silent|--inbox-wake"}],
       "flags": [
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
         {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
-        {"name": "--inbox", "arg": null, "description": "Queue an email-style task instead of a live send (no length limit). Pair with --title/--body."},
-        {"name": "--title", "arg": "text", "description": "Inbox item title (with --inbox)."},
-        {"name": "--body", "arg": "text", "description": "Inbox item body (with --inbox)."}
+        {"name": "--inbox-silent", "arg": null, "description": "Land a durable tray package under peer .k2/inbox/ (file path or --title/--body). Does NOT notify."},
+        {"name": "--inbox-wake", "arg": null, "description": "Land tray package + short live knock ([inbox:id] title + open line). Preferred tray mode."},
+        {"name": "--inbox", "arg": null, "description": "Hard error — use --inbox-silent or --inbox-wake."},
+        {"name": "--title", "arg": "text", "description": "Title override for tray package (with --inbox-silent|--inbox-wake)."},
+        {"name": "--body", "arg": "text", "description": "String body when no file path (legacy compose form with tray flags)."}
       ]
     },
     {
@@ -10889,8 +10908,8 @@ cmd_help_inbox() {
 k2 inbox [<subcommand>] [options]
 
 The workspace's email-like communication channel. Items arrive from
-other workspaces (via `k2 msg --inbox`) or are composed by your own
-agent (via `k2 inbox compose`). Read, triage, file into folders.
+other workspaces (via `k2 msg --inbox-wake|--inbox-silent`) or are
+composed by your own agent (via `k2 inbox compose`). Read, triage, file into folders.
 
 SUBCOMMANDS
   (none)                    Show inbox items (= `inbox list`)
@@ -10928,7 +10947,8 @@ EXAMPLES
 
 RECEIVING FROM OTHER WORKSPACES
   Other workspaces send to your inbox with:
-    k2 msg <your-workspace> --inbox --title "..." --body "..."
+    k2 msg <your-workspace> --inbox-wake ./brief.md
+    k2 msg <your-workspace> --inbox-silent ./data.pdf
   Their items appear in your inbox alongside your own composes.
 
 LEGACY ITEMS
@@ -10997,7 +11017,7 @@ AGENT GATE (create / remove)
   connections). `list` is always allowed.
 
 MSG / READ PEER GATE
-  Live `k2 msg`, `k2 msg --inbox`, and `k2 read` require a local
+  Live `k2 msg`, tray `k2 msg --inbox-wake|--inbox-silent`, and `k2 read` require a local
   connection to the target (or same-workspace). Unconnected peers
   return exit 3 with code `not_connected` — add them here first.
 
@@ -11851,8 +11871,8 @@ manager agent's name).
 - `k2 talk <agent> "message"` — interactive send: shows the peer's
   live screen first, then delivers. Use when you need a reply.
 - `k2 msg <agent> "message"` — direct delivery to a live peer.
-- `k2 msg <agent> --inbox --title "..." --body "..."` — queued inbox
-  item for a peer that may be asleep.
+- `k2 msg <agent> --inbox-wake <path>` — durable tray package + knock
+  (prefer over silent). `--inbox-silent` packages without notifying.
 - `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
@@ -11906,8 +11926,8 @@ to: __ESCALATION_CONTACT__ (your operator/owner — replace this).
 - `k2 agent list` — the full roster on this server.
 - `k2 talk <agent> "message"` — interactive send: read the peer's
   live screen, then deliver. Use for delegation and follow-ups.
-- `k2 msg <agent> --inbox --title "..." --body "..."` — queued task
-  for an agent that may be asleep.
+- `k2 msg <agent> --inbox-wake <path>` — durable tray package + knock
+  (prefer over silent). `--inbox-silent` packages without notifying.
 - `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
@@ -11961,8 +11981,8 @@ your manager agent's name).
 - `k2 inbox` — incoming review requests land here; check every session.
 - `k2 talk <agent> "message"` — send findings to the owning agent and
   discuss interactively.
-- `k2 msg <agent> --inbox --title "..." --body "..."` — queued
-  findings report for an agent that may be asleep.
+- `k2 msg <agent> --inbox-wake <path>` — durable tray package + knock
+  (prefer over silent). `--inbox-silent` packages without notifying.
 - `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
@@ -12016,8 +12036,8 @@ __MANAGER__ (replace with your manager agent's name).
 - `k2 inbox` — research requests land here; check every session.
 - `k2 talk <agent> "message"` — deliver findings and discuss
   interactively.
-- `k2 msg <agent> --inbox --title "..." --body "..."` — queued
-  write-up for an agent that may be asleep.
+- `k2 msg <agent> --inbox-wake <path>` — durable tray package + knock
+  (prefer over silent). `--inbox-silent` packages without notifying.
 - `k2 tickets ask "<title>"` — ask your HUMAN for a decision or an
   approval; the ask sits durably on their Feedback page (it does not
   die like a terminal prompt) and the answer comes back to you.
@@ -13050,7 +13070,7 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
   work inbox                      → inbox (default verb shows new arrivals)
   work move --from <a> --to <b>   → inbox move <id> <folder>
   work done                       → inbox archive <id>
-  work send <ws> --title --body   → msg <ws> --inbox --title "..." --body "..."
+  work send <ws> --title --body   → msg <ws> --inbox-wake|--inbox-silent --title "..." --body "..."
 
   # 0.40.31 — legacy per-agent adaptive heartbeat control removed
   # (heartbeat.json; nothing consumed it since 0.39.0d). Named
@@ -13077,7 +13097,7 @@ EXAMPLES OF MIGRATION
 
   # Queueing work to another workspace
   Old: k2 work send my_other_ws --title "task" --body "do this"
-  New: k2 msg my_other_ws --inbox --title "task" --body "do this"
+  New: k2 msg my_other_ws --inbox-wake ./task.md
 
   # Creating your own task / note
   Old: k2 work create --title "audit auth" --body "..."
@@ -13280,7 +13300,8 @@ with one shared chat + one PoC agent (see PROJECTS below).
 TALK TO OTHERS
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
   msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)
-  msg <workspace> "text" --inbox        Drop in their inbox (email — async, no length limit)
+  msg <workspace> --inbox-wake <path>   Package + short live notify (tray)
+  msg <workspace> --inbox-silent <path> Package only (no notify)
   msg <workspace> --signal <kind> ...   Emit a typed signal (advanced)
   read <workspace> [--lines N]          Read their live terminal (peek before you inject)
   connections list [--json]             Connected workspaces (bidirectional)
@@ -13495,59 +13516,48 @@ ONBOARDING (first-launch flow)
 EOF
 }
 
-# ── Phase 2.1: msg --inbox / --signal flag handlers ───────────────────
+# ── Phase 2.1 / file-delivery: msg --inbox-silent / --inbox-wake ───────
+#
+# Bare `--inbox` is a hard error (teaching copy). Tray send modes:
+#   k2 msg <ws> --inbox-silent <path>   package only
+#   k2 msg <ws> --inbox-wake   <path>   package + short live knock
+# Legacy string form (one-release): --title/--body without a path still
+# composes via /cli/inbox/compose; --inbox-wake then also deliver_live.
 
-cmd_msg_inbox_form() {
-    # 0.39.0f Phase 2.1c: migrated from /cli/work/inbox/create (now 410)
-    # to POST /cli/inbox/compose?project=<target>. The new inbox surface
-    # uses `project=<token>` to target a different workspace's inbox —
-    # same token contract as live `k2 msg <workspace>` (name | path | UUID).
-    #
-    # #36 (0.40.45): do NOT pre-resolve via TCP `/cli/workspace/resolve`
-    # (not UDS-eligible; agents often got plain "workspace not found"
-    # exit 1 for a peer that live msg correctly reports as
-    # `not_connected` exit 3). Pass the target token straight through;
-    # the daemon resolves, peer-gates, and returns the shared JSON contract.
-    # `msg <ws> --inbox --title "..." --body "..."`
-    local target="$1"
-    shift
-    local title="" body="" priority="" from=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --title)    title="$2"; shift 2 ;;
-            --body)     body="$2"; shift 2 ;;
-            --priority) priority="$2"; shift 2 ;;
-            --from)     from="$2"; shift 2 ;;
-            *) shift ;;
-        esac
-    done
-    if [[ -z "$title" ]]; then
-        echo "Usage: k2 msg <workspace> --inbox --title \"...\" [--body \"...\"]" >&2
-        exit 1
-    fi
+cmd_msg_inbox_bare_error() {
+    cat >&2 <<'EOF'
+Error: bare --inbox is no longer accepted.
 
-    # 0.39.45 (#35/#37): title/body/priority/from ride a REAL form body.
-    #
-    # #36: recipient is `workspace=<token>` (same as live msg) — stamp_principal
-    # NEVER overwrites workspace=/target=, only project=/from=/project_id=.
-    # Putting the peer in project= fought stamp restore and silently wrote
-    # to the sender's own inbox while the peer gate saw same-workspace.
-    local params="workspace=$(urlencode "$target")&title=$(urlencode "$title")"
-    [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
-    [[ -n "$priority" ]] && params="${params}&priority=$(urlencode "$priority")"
-    # `--from` was historically `assigned_by` on the old work-route;
-    # the inbox-compose route names it `from` (writes to the YAML
-    # frontmatter `from:` field — identical persisted shape).
-    [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
-    # C2: prefer UDS+scoped (peer-gated) when available; fall back to TCP.
-    local response
-    response=$(cli_send cli_post_form "/cli/inbox/compose" "$params")
+Tray delivery requires an explicit mode:
+
+  k2 msg <workspace> --inbox-wake   <path>   # package + short live notify (recommended)
+  k2 msg <workspace> --inbox-silent <path>   # package only (does NOT notify)
+
+--inbox-silent lands a durable package under the peer's .k2/inbox/ but
+does not wake or ping them. Use --inbox-wake for package + knock, or send
+a separate live `k2 msg <workspace> "..."` after silent if you want your
+own notify.
+
+Legacy string form (no file): 
+  k2 msg <workspace> --inbox-silent --title "..." [--body "..."]
+  k2 msg <workspace> --inbox-wake   --title "..." [--body "..."]
+EOF
+    exit 2
+}
+
+# Shared JSON error mapper for inbox compose / deliver responses.
+# Exit 3 for not_connected/gated/forbidden; exit 1 for other structured
+# errors; exit 0 on success. For wake-after-package: package ok + wake
+# fail still exits 0 (wake field present for callers).
+_msg_inbox_map_response() {
+    local response="$1"
+    local wake_mode="${2:-false}"
     echo "$response"
-    # Map 403 not_connected / gated → exit 3 (same as live msg / read).
-    # workspace not_found / other structured errors → exit 1 JSON on stderr.
-    if command -v python3 >/dev/null 2>&1; then
-        echo "$response" | python3 -c '
-import json, sys
+    if ! command -v python3 >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "$response" | WAKE_MODE="$wake_mode" python3 -c '
+import json, sys, os
 try:
     d = json.load(sys.stdin)
 except Exception:
@@ -13565,10 +13575,220 @@ if isinstance(err, str) and err:
     sys.stderr.write(json.dumps({"error": {"code": "error", "hint": err}},
                                 ensure_ascii=False, separators=(",", ":")) + "\n")
     sys.exit(1)
-if d.get("ok") is False:
+if d.get("ok") is False and "id" not in d and "filename" not in d:
     sys.exit(1)
+# Package primary: if wake failed after package landed, note it but exit 0.
+if os.environ.get("WAKE_MODE") == "true":
+    wake = d.get("wake")
+    if isinstance(wake, dict) and wake.get("success") is False:
+        reason = wake.get("reason") or "wake_failed"
+        hint = wake.get("hint") or ""
+        sys.stderr.write(
+            f"note: package landed; wake notify failed ({reason})"
+            + (f": {hint}" if hint else "")
+            + "\n"
+        )
+sys.exit(0)
 ' || return $?
+}
+
+cmd_msg_inbox_form() {
+    # `msg <ws> --inbox-silent|wake [path] [--title ...] [--body ...] [--from ...]`
+    #
+    # #36: recipient is workspace=<token> (same as live msg) — stamp_principal
+    # never overwrites workspace=/target=.
+    local target="$1"
+    shift
+    local mode="$1"   # silent | wake
+    shift
+
+    local title="" body="" priority="" from="" path=""
+    local positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --title)    title="$2"; shift 2 ;;
+            --body)     body="$2"; shift 2 ;;
+            --priority) priority="$2"; shift 2 ;;
+            --from)     from="$2"; shift 2 ;;
+            --path)     path="$2"; shift 2 ;;
+            -*)
+                echo "Error: unknown flag '$1' (try 'k2 msg --help')" >&2
+                exit 2 ;;
+            *)
+                positional+=("$1"); shift ;;
+        esac
+    done
+
+    # Path: explicit --path, or first/last non-flag positional that is a file.
+    if [[ -z "$path" ]]; then
+        local cand
+        for cand in "${positional[@]+"${positional[@]}"}"; do
+            if [[ -f "$cand" ]]; then
+                path="$cand"
+                break
+            fi
+        done
     fi
+    # If no file path found but one positional looks path-like, keep it for
+    # a clearer error (daemon will reject missing file).
+    if [[ -z "$path" && ${#positional[@]} -gt 0 ]]; then
+        local p0="${positional[0]}"
+        case "$p0" in
+            ./*|/*|~/*|*.md|*.txt|*.pdf|*.png|*.jpg|*.zip|*.json|*.csv)
+                path="$p0" ;;
+        esac
+    fi
+
+    local wake_flag="false"
+    [[ "$mode" == "wake" ]] && wake_flag="true"
+
+    # ── File package path (primary) ──────────────────────────────────
+    if [[ -n "$path" ]]; then
+        # Resolve to absolute path so the daemon (possibly different CWD) can open it.
+        local abs_path
+        if command -v python3 >/dev/null 2>&1; then
+            abs_path=$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$path" 2>/dev/null) || abs_path=""
+        fi
+        if [[ -z "$abs_path" ]]; then
+            # Fallback: bash-only absolute-ize for relative paths.
+            case "$path" in
+                /*) abs_path="$path" ;;
+                ~/*) abs_path="${HOME}/${path#~/}" ;;
+                *) abs_path="$(pwd)/$path" ;;
+            esac
+        fi
+        if [[ ! -f "$abs_path" ]]; then
+            echo "Error: file not found: $path" >&2
+            echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [--title \"...\"] [--from <name>]" >&2
+            exit 2
+        fi
+
+        # TODO(remote): when target workspace lives on another host, upload
+        # via /cli/fs/upload-binary|upload-chunk into project .k2/tmp/ then
+        # deliver_file from that staged path. v1 requires path readable by
+        # the local daemon (same-machine / same FS as target tray).
+        local params="workspace=$(urlencode "$target")&path=$(urlencode "$abs_path")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
+        [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
+        [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
+        local response
+        response=$(cli_send cli_post_form "/cli/inbox/deliver" "$params")
+        _msg_inbox_map_response "$response" "$wake_flag"
+        return $?
+    fi
+
+    # ── Legacy string compose (--title/--body, no path) ──────────────
+    if [[ -z "$title" ]]; then
+        echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [--title \"...\"] [--from <name>]" >&2
+        echo "   or: k2 msg <workspace> --inbox-${mode} --title \"...\" [--body \"...\"]" >&2
+        exit 2
+    fi
+
+    local params="workspace=$(urlencode "$target")&title=$(urlencode "$title")&source=msg-inbox"
+    [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
+    [[ -n "$priority" ]] && params="${params}&priority=$(urlencode "$priority")"
+    [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
+    local response
+    response=$(cli_send cli_post_form "/cli/inbox/compose" "$params")
+
+    # Compose-only for silent. For wake: after compose success, deliver_live
+    # with the inbox pointer (package ok is primary).
+    if [[ "$wake_flag" != "true" ]]; then
+        _msg_inbox_map_response "$response" "false"
+        return $?
+    fi
+
+    # Parse compose result; on error, map and exit. On success, wake.
+    local compose_id="" compose_title="$title"
+    if command -v python3 >/dev/null 2>&1; then
+        local mapped
+        mapped=$(echo "$response" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("PARSE_FAIL"); sys.exit(0)
+err = d.get("error")
+if isinstance(err, dict):
+    code = err.get("code") or ""
+    hint = err.get("hint") or code
+    print("ERR\t" + code + "\t" + hint)
+    sys.exit(0)
+if isinstance(err, str) and err:
+    print("ERR\terror\t" + err)
+    sys.exit(0)
+if d.get("ok") is False and "id" not in d:
+    print("ERR\terror\tcompose failed")
+    sys.exit(0)
+print("OK\t" + (d.get("id") or "") + "\t" + (d.get("title") or ""))
+') || true
+        case "$mapped" in
+            ERR$'\t'*)
+                local ecode hint
+                ecode=$(printf '%s' "$mapped" | cut -f2)
+                hint=$(printf '%s' "$mapped" | cut -f3-)
+                echo "$response"
+                printf '%s\n' "$(python3 -c 'import json,sys; print(json.dumps({"error":{"code":sys.argv[1],"hint":sys.argv[2]}},separators=(",",":")))' "$ecode" "$hint")" >&2
+                if [[ "$ecode" == "not_connected" || "$ecode" == "gated" || "$ecode" == "forbidden" ]]; then
+                    return 3
+                fi
+                return 1
+                ;;
+            OK$'\t'*)
+                compose_id=$(printf '%s' "$mapped" | cut -f2)
+                compose_title=$(printf '%s' "$mapped" | cut -f3-)
+                [[ -z "$compose_title" ]] && compose_title="$title"
+                ;;
+            *)
+                echo "$response"
+                return 0
+                ;;
+        esac
+    else
+        echo "$response"
+        return 0
+    fi
+
+    # Wake knock with pointer payload.
+    local from_tag="${from:-external}"
+    local pointer="[inbox:${compose_id}] ${compose_title}"$'\n'"Open: k2 inbox read ${compose_id}"
+    local wake_params="workspace=$(urlencode "$target")&text=$(urlencode "$pointer")&from=$(urlencode "$from_tag")&wake=true"
+    local wake_resp
+    wake_resp=$(cli_send cli_post_form "/cli/workspace/msg" "$wake_params")
+    # Merge package + wake into one JSON line for the agent.
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c '
+import json, sys
+pkg = json.loads(sys.argv[1])
+try:
+    wake = json.loads(sys.argv[2])
+except Exception:
+    wake = {"success": False, "reason": "wake_parse_error", "hint": sys.argv[2][:200]}
+pkg["wake"] = {
+    "success": bool(wake.get("success")),
+    "reason": wake.get("reason"),
+    "hint": wake.get("hint"),
+    "targetSessionId": wake.get("target_session_id") or wake.get("targetSessionId"),
+    "woke": wake.get("woke"),
+    "wakeMs": wake.get("wake_ms") or wake.get("wakeMs"),
+    "attempts": wake.get("attempts"),
+}
+print(json.dumps(pkg, ensure_ascii=False, separators=(",", ":")))
+if not wake.get("success"):
+    reason = wake.get("reason") or "wake_failed"
+    hint = wake.get("hint") or ""
+    sys.stderr.write(
+        f"note: package landed; wake notify failed ({reason})"
+        + (f": {hint}" if hint else "")
+        + "\n"
+    )
+' "$response" "$wake_resp" || {
+            echo "$response"
+            echo "note: package landed; wake notify failed (merge error)" >&2
+        }
+    else
+        echo "$response"
+    fi
+    return 0
 }
 
 cmd_msg_signal_form() {
@@ -13582,7 +13802,7 @@ cmd_msg_signal_form() {
             --signal)  kind="$2"; shift 2 ;;
             --payload) payload="$2"; shift 2 ;;
             --from)    from="$2"; shift 2 ;;
-            --inbox)   delivery="inbox"; shift ;;
+            --inbox|--inbox-silent|--inbox-wake) delivery="inbox"; shift ;;
             *) shift ;;
         esac
     done
@@ -13593,33 +13813,50 @@ cmd_msg_signal_form() {
     cmd_signal "${args[@]}"
 }
 
-# Wrapper that splits `k2 msg <ws> ...` into live / --inbox / --signal forms.
+# Wrapper that splits `k2 msg <ws> ...` into live / tray / --signal forms.
 cmd_msg_v2() {
-    # Detect --inbox or --signal anywhere in the args. If present, dispatch
-    # to the alternate form; otherwise fall through to legacy cmd_msg
-    # (live delivery).
-    local has_inbox="false" has_signal="false"
+    # Detect tray flags or --signal anywhere in the args.
+    local has_inbox_bare="false"
+    local has_inbox_silent="false"
+    local has_inbox_wake="false"
+    local has_signal="false"
     for arg in "$@"; do
         case "$arg" in
-            --inbox) has_inbox="true" ;;
+            --inbox) has_inbox_bare="true" ;;
+            --inbox-silent) has_inbox_silent="true" ;;
+            --inbox-wake) has_inbox_wake="true" ;;
             --signal) has_signal="true" ;;
         esac
     done
     if [[ "$has_signal" == "true" ]]; then
         local target="$1"; shift
         cmd_msg_signal_form "$target" "$@"
-    elif [[ "$has_inbox" == "true" ]]; then
+        return $?
+    fi
+    # Bare --inbox without silent/wake → hard teaching error (exit 2).
+    if [[ "$has_inbox_bare" == "true" && "$has_inbox_silent" != "true" && "$has_inbox_wake" != "true" ]]; then
+        cmd_msg_inbox_bare_error
+    fi
+    if [[ "$has_inbox_silent" == "true" && "$has_inbox_wake" == "true" ]]; then
+        echo "Error: pass exactly one of --inbox-silent or --inbox-wake" >&2
+        exit 2
+    fi
+    if [[ "$has_inbox_silent" == "true" || "$has_inbox_wake" == "true" ]]; then
         local target="$1"; shift
-        # Drop the --inbox flag itself from forwarded args
+        local mode="silent"
+        [[ "$has_inbox_wake" == "true" ]] && mode="wake"
         local rest=()
         for arg in "$@"; do
-            [[ "$arg" == "--inbox" ]] && continue
-            rest+=("$arg")
+            case "$arg" in
+                --inbox|--inbox-silent|--inbox-wake) continue ;;
+                *) rest+=("$arg") ;;
+            esac
         done
-        cmd_msg_inbox_form "$target" "${rest[@]}"
-    else
-        cmd_msg "$@"
+        cmd_msg_inbox_form "$target" "$mode" "${rest[@]+"${rest[@]}"}"
+        return $?
     fi
+    # Bare --inbox alone already exited; any leftover bare with mode was stripped.
+    cmd_msg "$@"
 }
 
 # ── Phase 2.1: checkin --status / --done flag handlers ───────────────
@@ -19791,7 +20028,7 @@ case "${1:-help}" in
             inbox)
                 fail_deprecated "work inbox" "k2 inbox (default verb shows new arrivals)" ;;
             send)
-                fail_deprecated "work send" "k2 msg <workspace> --inbox --title \"...\" --body \"...\"" ;;
+                fail_deprecated "work send" "k2 msg <workspace> --inbox-wake <path>  (or --inbox-silent)" ;;
             move)
                 fail_deprecated "work move" "k2 inbox move <id> <folder>" ;;
             done)

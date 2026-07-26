@@ -679,6 +679,7 @@ async fn handle_one_request(
             | "/cli/push/register-device"
             | "/cli/push/unregister-device"
             | "/cli/inbox/compose"
+            | "/cli/inbox/deliver"
             | "/cli/inbox/move"
             | "/cli/inbox/archive"
             | "/cli/inbox/delete"

@@ -131,6 +131,8 @@ mod remote_session_sessions;
 mod signal_format;
 mod skill_layers_routes;
 mod skills_routes;
+// Context hamburger — optional AGENTS.md layer stack (prd-context-hamburger-v1).
+mod context_routes;
 mod spawn;
 mod terminal_event_sink;
 mod terminal_lifecycle_routes;

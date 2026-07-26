@@ -426,7 +426,64 @@ mod tests {
         let resp = dispatch("/cli/context/presets", &HashMap::new()).unwrap();
         assert_eq!(resp.status, "200 OK");
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
-        assert!(v["presets"].as_array().unwrap().len() >= 2);
+        let presets = v["presets"].as_array().unwrap();
+        assert!(presets.len() >= 4, "wiki + manager + k2 packs");
+        assert!(
+            presets.iter().any(|p| p["id"] == "manager:pack"),
+            "manager:pack preset listed"
+        );
+        assert!(
+            presets.iter().any(|p| p["id"] == "k2:pack"),
+            "k2:pack preset listed"
+        );
+
+        cleanup(&path, &pid);
+    }
+
+    #[test]
+    fn pack_preset_materializes_and_system_toggle() {
+        let root = unique_root("pack");
+        let path = root.to_str().unwrap().to_string();
+        let pid = register(&path);
+
+        let body = serde_json::json!({
+            "project": path,
+            "preset": "manager:pack"
+        })
+        .to_string();
+        let resp = dispatch_post("/cli/context/add", body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["layer"]["source"], "preset:manager");
+        assert_eq!(v["layer"]["exists"], true);
+        assert!(
+            root.join(".k2/context/presets/manager.md").is_file(),
+            "manager pack file must materialize"
+        );
+
+        // System layer off via set-enabled
+        let body = serde_json::json!({
+            "project": path,
+            "id": "pinned:tooling",
+            "enabled": false
+        })
+        .to_string();
+        let resp = dispatch_post("/cli/context/set-enabled", body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["layer"]["id"], "pinned:tooling");
+        assert_eq!(v["layer"]["enabled"], false);
+
+        let mut params = HashMap::new();
+        params.insert("project".into(), path.clone());
+        let resp = dispatch("/cli/context/layers", &params).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        let pinned = v["pinned"].as_array().unwrap();
+        let tooling = pinned
+            .iter()
+            .find(|p| p["id"] == "pinned:tooling")
+            .expect("tooling row");
+        assert_eq!(tooling["enabled"], false);
 
         cleanup(&path, &pid);
     }

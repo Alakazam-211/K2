@@ -77,6 +77,9 @@ pub mod agent_editor;
 pub mod relations;
 pub mod session;
 pub mod settings;
+// Context hamburger (prd-context-hamburger-v1): optional AGENTS.md layer
+// stack — SQLite SSOT of path references composed into `.k2/AGENTS.md`.
+pub mod context_layers;
 pub mod terminal_id;
 pub mod triage;
 pub mod wake_prompts;

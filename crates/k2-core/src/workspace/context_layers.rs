@@ -37,7 +37,8 @@ pub struct ContextLayer {
     pub bytes: u64,
 }
 
-/// Pinned layer info for UI/CLI display (not stored in the table).
+/// System layer info for UI/CLI display (AGENT / PROJECT / Tooling).
+/// Enabled flags live on `projects.context_include_*` (default ON).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedLayer {
@@ -49,6 +50,16 @@ pub struct PinnedLayer {
     /// When true, content is generated (Tooling footer) rather than a file.
     #[serde(default)]
     pub generated: bool,
+    /// Whether this system layer is included in AGENTS.md compose.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Whether the AI File Editor can open this path (false for tooling / wiki packs).
+    #[serde(default = "default_true")]
+    pub editable: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Built-in preset that resolves to a fixed workspace-relative path.
@@ -276,10 +287,32 @@ fn now_iso() -> String {
 
 // ── Pinned info ───────────────────────────────────────────────────────
 
-/// Build pinned-layer display info for a workspace.
+/// Read system-layer include flags (default ON if columns missing / project unknown).
+pub fn system_include_flags(project_path: &str) -> (bool, bool, bool) {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT COALESCE(context_include_agent, 1), \
+                COALESCE(context_include_project, 1), \
+                COALESCE(context_include_tooling, 1) \
+         FROM projects WHERE path = ?1",
+        params![project_path],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0).unwrap_or(1) != 0,
+                row.get::<_, i64>(1).unwrap_or(1) != 0,
+                row.get::<_, i64>(2).unwrap_or(1) != 0,
+            ))
+        },
+    )
+    .unwrap_or((true, true, true))
+}
+
+/// Build system-layer display info for a workspace (toggleable defaults).
 pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
     use crate::workspace::agent_identity::{agent_dir, find_primary_agent};
 
+    let (inc_agent, inc_project, inc_tooling) = system_include_flags(project_path);
     let mut out = Vec::with_capacity(3);
 
     // Agent persona
@@ -316,10 +349,12 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
     out.push(PinnedLayer {
         id: "pinned:agent".into(),
         path: agent_rel,
-        label: "Agent".into(),
+        label: "Agent (persona)".into(),
         exists,
         bytes,
         generated: false,
+        enabled: inc_agent,
+        editable: true,
     });
 
     // Project
@@ -340,23 +375,36 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
     out.push(PinnedLayer {
         id: "pinned:project".into(),
         path: project_rel,
-        label: "Project".into(),
+        label: "Project (knowledge)".into(),
         exists,
         bytes,
         generated: false,
+        enabled: inc_project,
+        editable: true,
     });
 
-    // Tooling footer (generated)
+    // Tooling footer (generated k2-cli pointer)
     out.push(PinnedLayer {
         id: "pinned:tooling".into(),
         path: String::new(),
-        label: "Tooling".into(),
+        label: "Tooling (k2-cli pointer)".into(),
         exists: true,
         bytes: 0,
         generated: true,
+        enabled: inc_tooling,
+        editable: false,
     });
 
     out
+}
+
+/// True when a layer id is a system (pinned) toggle: `pinned:agent|project|tooling`.
+pub fn is_system_layer_id(id: &str) -> bool {
+    matches!(
+        id,
+        "pinned:agent" | "pinned:project" | "pinned:tooling"
+            | "agent" | "project" | "tooling"
+    )
 }
 
 // ── List / stack ──────────────────────────────────────────────────────
@@ -454,7 +502,7 @@ pub fn estimate_composed_bytes(
     layers: &[ContextLayer],
 ) -> u64 {
     let mut total: u64 = 256; // header overhead
-    for p in pinned {
+    for p in pinned.iter().filter(|p| p.enabled) {
         if p.generated {
             total += 512; // Tooling footer ballpark
         } else {
@@ -620,12 +668,48 @@ pub fn remove_layer(project_path: &str, id_or_path: &str) -> Result<(), ContextE
     Ok(())
 }
 
-/// Enable or disable a layer. Regenerates AGENTS.md.
+/// Enable or disable a layer (optional DB row **or** system pinned id).
+/// Regenerates AGENTS.md.
 pub fn set_enabled(
     project_path: &str,
     id_or_path: &str,
     enabled: bool,
 ) -> Result<ContextLayer, ContextError> {
+    // System layers: projects.context_include_* columns.
+    if let Some(col) = system_flag_column(id_or_path) {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let n = conn
+            .execute(
+                &format!("UPDATE projects SET {col} = ?1 WHERE path = ?2"),
+                params![if enabled { 1 } else { 0 }, project_path],
+            )
+            .map_err(|e| ContextError::Db(e.to_string()))?;
+        if n == 0 {
+            return Err(ContextError::NotFound(format!(
+                "workspace not registered: {project_path}"
+            )));
+        }
+        drop(conn);
+        crate::workspace::skill_regen::write_workspace_skill_file(project_path);
+        // Return a synthetic layer row for the API shape.
+        let pinned = pinned_info(project_path);
+        let p = pinned
+            .into_iter()
+            .find(|p| p.id == normalize_system_id(id_or_path))
+            .ok_or_else(|| ContextError::NotFound(id_or_path.to_string()))?;
+        return Ok(ContextLayer {
+            id: p.id,
+            path: p.path,
+            enabled: p.enabled,
+            position: -1,
+            source: "system".into(),
+            label: Some(p.label),
+            exists: p.exists,
+            bytes: p.bytes,
+        });
+    }
+
     let project_id = resolve_project_id(project_path)?;
     let id = resolve_layer_id(project_path, &project_id, id_or_path)?;
 
@@ -648,6 +732,24 @@ pub fn set_enabled(
 
     crate::workspace::skill_regen::write_workspace_skill_file(project_path);
     get_layer(project_path, &id)
+}
+
+fn normalize_system_id(id: &str) -> String {
+    match id {
+        "agent" | "pinned:agent" => "pinned:agent".into(),
+        "project" | "pinned:project" => "pinned:project".into(),
+        "tooling" | "pinned:tooling" => "pinned:tooling".into(),
+        other => other.to_string(),
+    }
+}
+
+fn system_flag_column(id: &str) -> Option<&'static str> {
+    match id {
+        "pinned:agent" | "agent" => Some("context_include_agent"),
+        "pinned:project" | "project" => Some("context_include_project"),
+        "pinned:tooling" | "tooling" => Some("context_include_tooling"),
+        _ => None,
+    }
 }
 
 /// Move a layer to an absolute position or by direction.
@@ -954,10 +1056,13 @@ mod tests {
         let stack = list_stack(path).expect("list_stack");
         assert!(stack.layers.is_empty(), "no optional layers yet");
         assert_eq!(stack.pinned.len(), 3);
-        assert_eq!(stack.pinned[0].label, "Agent");
-        assert_eq!(stack.pinned[1].label, "Project");
-        assert_eq!(stack.pinned[2].label, "Tooling");
+        assert!(stack.pinned[0].label.contains("Agent"));
+        assert!(stack.pinned[1].label.contains("Project"));
+        assert!(stack.pinned[2].label.contains("Tooling"));
         assert!(stack.pinned[2].generated);
+        assert!(stack.pinned[0].enabled);
+        assert!(stack.pinned[1].enabled);
+        assert!(stack.pinned[2].enabled);
         assert!(!stack.soft_warn);
 
         cleanup_project(path, &pid);

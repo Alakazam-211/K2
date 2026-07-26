@@ -719,6 +719,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0091_project_context_layers",
             include_str!("../../drizzle_sql/0091_project_context_layers.sql"),
         ),
+        // 0092 (Context hamburger): system layers (AGENT / PROJECT / Tooling)
+        // are toggleable, default ON.
+        (
+            "0092_project_context_system_flags",
+            include_str!("../../drizzle_sql/0092_project_context_system_flags.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

@@ -39,8 +39,7 @@ import { showContextMenu } from '@/lib/context-menu'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import type { SettingEntry } from '../searchManifest'
 import { HeartbeatsPanel, HistoryPanel, WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
-import { ContextLayersPreview } from './ContextLayersPreview'
-import { ContextStackEditor } from './ContextStackEditor'
+import { ContextStackEditor, type ContextEditTarget } from './ContextStackEditor'
 import { RoleSkillEditor } from './RoleSkillEditor'
 import { CanonicalAgentModal } from './CanonicalAgentModal'
 import { type HarnessProbe } from './canonicalState'
@@ -63,7 +62,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.list', section: 'projects', label: 'Workspaces', description: 'All registered projects + focus groups', keywords: ['workspaces', 'projects', 'focus groups'] },
   { id: 'projects.add', section: 'projects', label: 'Add Workspace', description: 'Register a new project directory', keywords: ['add', 'new', 'workspace', 'project', 'folder'] },
   { id: 'projects.focus-groups', section: 'projects', label: 'Focus Groups', description: 'Organize workspaces into tabbed folders', keywords: ['focus', 'groups', 'tabs'] },
-  { id: 'projects.workspace-knowledge', section: 'projects', label: 'Workspace Knowledge', description: 'Shared .k2so/PROJECT.md injected into every agent', keywords: ['workspace knowledge', 'project context', 'project.md', 'shared'] },
+  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context stack', description: 'Toggle AGENT.md / PROJECT.md / layers that compose into AGENTS.md', keywords: ['context', 'hamburger', 'agents.md', 'project.md', 'persona', 'wiki'] },
   { id: 'projects.context-stack', section: 'projects', label: 'Always-on context (AGENTS.md stack)', description: 'Pinned + optional markdown layers composed into .k2/AGENTS.md', keywords: ['context', 'stack', 'hamburger', 'agents.md', 'layers', 'wiki', 'always-on'] },
   { id: 'projects.heartbeat', section: 'projects', label: 'Heartbeat Schedule', description: 'Scheduled / hourly / off per-project heartbeat mode', keywords: ['heartbeat', 'schedule', 'cron', 'hourly', 'scheduled'] },
   { id: 'projects.agents', section: 'projects', label: 'Project Agents', description: 'Custom agent personas + wake-up files per workspace', keywords: ['agent', 'persona', 'wakeup', 'create'] },
@@ -974,6 +973,8 @@ function ProjectDetail({
   const [cropImage, setCropImage] = useState<string | null>(null)
   const [agentEditorOpen, setAgentEditorOpen] = useState(false)
   const [agentEditorName, setAgentEditorName] = useState('')
+  /** Generic stack-layer edit (arbitrary .md path via AIFileEditor). */
+  const [contextFileEdit, setContextFileEdit] = useState<{ path: string; label: string } | null>(null)
   // The WakeupEditor lives alongside the other "agent editor"
   // takeovers (ClaudeMdEditor, AgentPersonaEditor, ProjectContextEditor)
   // so it fills the Settings content area without colliding with the
@@ -1012,11 +1013,27 @@ function ProjectDetail({
   useEffect(() => {
     setAgentEditorOpen(false)
     setAgentEditorName('')
+    setContextFileEdit(null)
     setWakeupEditingHb(null)
     setCanonicalModalMode(null)
     setSettingsTab('agent')
     setHistoryEmpty(false)
   }, [project.id])
+
+  const openContextEdit = useCallback((target: ContextEditTarget) => {
+    if (target.kind === 'agent') {
+      const name = primaryAgentName || project.name.toLowerCase().replace(/\s+/g, '-')
+      setAgentEditorName(name)
+      setAgentEditorOpen(true)
+      return
+    }
+    if (target.kind === 'project') {
+      setAgentEditorName('__claude_md__')
+      setAgentEditorOpen(true)
+      return
+    }
+    setContextFileEdit({ path: target.absPath, label: target.label })
+  }, [primaryAgentName, project.name])
 
   // Detect per-harness canonical state (PRD §5.2) so the canonical button
   // reads "Set up …" vs "Manage / Undo". Re-runs when the modal closes so a
@@ -1118,7 +1135,23 @@ function ProjectDetail({
 
   const firstLetter = project.name.charAt(0).toUpperCase()
 
-  // Full-screen agent editor takeover (same pattern as CustomThemeCreator)
+  // Full-screen agent / context-file editor takeover (same pattern as CustomThemeCreator)
+  if (contextFileEdit) {
+    return (
+      <SectionErrorBoundary>
+        <div className="absolute inset-0 overflow-hidden bg-[var(--color-bg)]">
+          <ContextLayerFileEditor
+            filePath={contextFileEdit.path}
+            label={contextFileEdit.label}
+            projectPath={project.path}
+            projectName={project.name}
+            onClose={() => setContextFileEdit(null)}
+          />
+        </div>
+      </SectionErrorBoundary>
+    )
+  }
+
   if (agentEditorOpen && agentEditorName) {
     return (
       <SectionErrorBoundary>
@@ -1417,37 +1450,22 @@ function ProjectDetail({
 
         {settingsTab === 'context' && (
           <>
-            {/* PROJECT.md — shared workspace knowledge (always on Context) */}
-            <SettingsGroup title="Workspace Knowledge">
-              <div className="flex items-center justify-between py-1">
-                <div>
-                  <span className="text-xs text-[var(--color-text-secondary)]">PROJECT.md</span>
-                  <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
-                    Edits <span className="font-mono">.k2so/PROJECT.md</span> — shared project knowledge (tech stack, conventions, key directories) injected into every agent at launch.
-                  </p>
-                </div>
-                <button
-                  onClick={() => { setAgentEditorName('__claude_md__'); setAgentEditorOpen(true) }}
-                  className="px-5 py-1.5 text-[11px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer flex-shrink-0 whitespace-nowrap"
-                >
-                  Manage Knowledge
-                </button>
-              </div>
-            </SettingsGroup>
-
-            {/* Always-on context stack (context hamburger) — primary way to
-                inject docs into .k2/AGENTS.md. Mode radio below is no longer
-                the model for always-on context. */}
+            {/* Always-on context stack — View/Edit persona, project knowledge,
+                optional layers (wiki index, user files). Replaces Manage
+                Knowledge / Manage Persona / the old Context Layers preview. */}
             <SettingsGroup title="Always-on context (AGENTS.md stack)">
-              <ContextStackEditor projectPath={project.path} />
+              <ContextStackEditor
+                projectPath={project.path}
+                onEdit={openContextEdit}
+              />
             </SettingsGroup>
 
           <SettingsGroup title="Agent Settings">
             <div className="space-y-2">
               <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
                 Mode controls agent features (heartbeats, role skills, worktrees) — not the
-                always-on context pack. Put wiki notes and guidance in the stack above;
-                Manager / K2 / Custom no longer rewrite AGENTS.md by type alone.
+                always-on context pack. Edit persona and project knowledge from the stack
+                above (View + Edit). Manager / K2 / Custom no longer rewrite AGENTS.md by type alone.
               </p>
               <div className="flex gap-1">
                 {(['off', 'agent', 'manager', 'custom'] as const).map((mode) => {
@@ -1481,7 +1499,7 @@ function ProjectDetail({
                             'Enable a custom agent for this workspace (heartbeat + persona).',
                             '',
                             'What happens:',
-                            '• Agent features turn on; use Manage Persona for behavior',
+                            '• Agent features turn on; edit persona from the context stack (Agent layer → Edit)',
                             '• Always-on context is the stack above — not rewritten by this mode',
                             '• Worktrees are disabled in this mode',
                           ]
@@ -1573,17 +1591,6 @@ function ProjectDetail({
                 {isManagerMode && 'Workspace Manager — delegation + templates. Manager guidance is a loadable skill; stack optional layers for always-on docs.'}
               </p>
 
-              {agentMode === 'custom' && (
-                <div className="pt-2 border-t border-[var(--color-border)]">
-                  <CustomAgentPersonaButton projectPath={project.path} projectName={project.name} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
-                </div>
-              )}
-              {agentMode === 'agent' && (
-                <div className="pt-2 border-t border-[var(--color-border)]">
-                  <K2SOAgentPersonaButton projectPath={project.path} projectName={project.name} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
-                </div>
-              )}
-
               {isManagerMode && (
                 <div className="pt-2 border-t border-[var(--color-border)]">
                   <RoleSkillButton
@@ -1618,16 +1625,6 @@ function ProjectDetail({
             </div>
           </SettingsGroup>
 
-            {/* Context layers — what ships in each wake (moved from Heartbeats tab) */}
-            {agentMode !== 'off' && (
-              <ContextLayersPreview
-                projectPath={project.path}
-                agentMode={project.agentMode || null}
-                onOpenSettings={() => {
-                  useSettingsStore.getState().setSection('agent-skills') // → General → Workspaces
-                }}
-              />
-            )}
           </>
         )}
 
@@ -2180,6 +2177,152 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
 // SKILL.md (the prior shape of this editor) led to silent overwrites
 // because the regen pipeline owns the output.
 
+/** AI File Editor for an arbitrary context-stack markdown path. */
+function ContextLayerFileEditor({
+  filePath,
+  label,
+  projectPath,
+  projectName,
+  onClose,
+}: {
+  filePath: string
+  label: string
+  projectPath: string
+  projectName: string
+  onClose: () => void
+}): React.JSX.Element {
+  const [content, setContent] = useState('')
+  const [previewMode, setPreviewMode] = useState<'preview' | 'edit'>('preview')
+  const [previewScale, setPreviewScale] = useState(100)
+  const cssScale = Math.round(previewScale * 0.7)
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
+  const watchDir = filePath.includes('/')
+    ? filePath.slice(0, filePath.lastIndexOf('/'))
+    : projectPath
+
+  useEffect(() => {
+    daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
+      .then((r) => setContent(r.content))
+      .catch(() => setContent(''))
+  }, [filePath])
+
+  const handleClose = useCallback(async () => {
+    try {
+      await daemonCliPost('agents/regenerate-workspace-skill', { project_path: projectPath })
+    } catch (err) {
+      console.warn('[context-layer] regen on close failed:', err)
+    }
+    onClose()
+  }, [projectPath, onClose])
+
+  const systemPrompt = useMemo(() => [
+    `You're helping the user edit a context-stack file for workspace "${projectName}".`,
+    ``,
+    `File label: ${label}`,
+    `Path: ${filePath}`,
+    ``,
+    `This file is included in the always-on AGENTS.md stack when enabled.`,
+    `Keep it high-signal. Prefer links/pointers over dumping whole docs.`,
+    ``,
+    `Current contents:`,
+    content,
+  ].join('\n'), [projectName, label, filePath, content])
+
+  const terminalArgs = useMemo(() => {
+    if (!agentCommand) return undefined
+    const baseArgs = [...agentCommand.args]
+    if (agentCommand.command === 'claude') {
+      return [
+        ...baseArgs,
+        '--append-system-prompt', systemPrompt,
+        `Read ${filePath}. Help the user refine this context-stack file (${label}).`,
+      ]
+    }
+    return baseArgs
+  }, [agentCommand, systemPrompt, filePath, label])
+
+  return (
+    <AIFileEditor
+      filePath={filePath}
+      watchDir={watchDir}
+      cwd={projectPath}
+      command={agentCommand?.command}
+      args={terminalArgs}
+      title={`${label}`}
+      instructions={`Editing ${filePath} — part of the always-on AGENTS.md context stack. Regen runs when you close this editor.`}
+      warningText="This file is included in always-on context when its stack layer is enabled."
+      onFileChange={setContent}
+      onClose={() => void handleClose()}
+      preview={
+        <div className="h-full flex flex-col">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] flex-shrink-0">
+            <div className="text-xs text-[var(--color-text-muted)] truncate">
+              <span className="font-medium text-[var(--color-text-primary)]">{label}</span>
+              <span className="mx-2">&middot;</span>
+              <span className="font-mono text-[10px]">{filePath}</span>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {previewMode === 'preview' && (
+                <div className="flex items-center gap-0.5">
+                  <button
+                    onClick={() => setPreviewScale((s) => Math.max(50, s - 10))}
+                    className="w-5 h-5 flex items-center justify-center text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
+                  >
+                    −
+                  </button>
+                  <span className="text-[9px] tabular-nums text-[var(--color-text-muted)] w-7 text-center">{previewScale}%</span>
+                  <button
+                    onClick={() => setPreviewScale((s) => Math.min(200, s + 10))}
+                    className="w-5 h-5 flex items-center justify-center text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
+                  >
+                    +
+                  </button>
+                </div>
+              )}
+              <div className="flex border border-[var(--color-border)]">
+                <button
+                  onClick={() => setPreviewMode('preview')}
+                  className={`px-2 py-0.5 text-[10px] no-drag cursor-pointer ${
+                    previewMode === 'preview'
+                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+                  }`}
+                >
+                  Preview
+                </button>
+                <button
+                  onClick={() => setPreviewMode('edit')}
+                  className={`px-2 py-0.5 text-[10px] no-drag cursor-pointer ${
+                    previewMode === 'edit'
+                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+                  }`}
+                >
+                  Source
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto p-4">
+            {previewMode === 'preview' ? (
+              <div style={{ zoom: cssScale / 100 }} className="prose prose-invert prose-sm max-w-none">
+                <Markdown remarkPlugins={[remarkGfm]}>{content || '*Empty file.*'}</Markdown>
+              </div>
+            ) : (
+              <CodeEditor
+                value={content}
+                onChange={setContent}
+                language="markdown"
+                path={filePath}
+              />
+            )}
+          </div>
+        </div>
+      }
+    />
+  )
+}
+
 function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: string; projectName: string; onClose: () => void }): React.JSX.Element {
   const [content, setContent] = useState('')
   const [previewMode, setPreviewMode] = useState<'preview' | 'edit'>('preview')
@@ -2233,8 +2376,8 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
     `• Important notes — gotchas, known issues, things to watch out for`,
     ``,
     `Do NOT include agent-specific role/persona content — that lives in the`,
-    `agent's AGENT.md (.k2so/agent/AGENT.md) and the user can edit it via`,
-    `Settings → Workspaces → "Manage Persona".`,
+    `agent's AGENT.md (.k2/agent/AGENT.md); edit it from Settings → Workspaces`,
+    `→ Context → Agent layer → Edit.`,
     ``,
     `Current contents:`,
     content,

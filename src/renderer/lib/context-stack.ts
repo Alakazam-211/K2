@@ -20,7 +20,7 @@ export interface ContextLayer {
   bytes: number
 }
 
-/** Pinned layer for display only (not stored in project_context_layers). */
+/** System layer (AGENT / PROJECT / Tooling) — toggleable, default ON. */
 export interface PinnedLayer {
   id: string
   path: string
@@ -29,6 +29,10 @@ export interface PinnedLayer {
   bytes: number
   /** When true, content is generated (Tooling footer) rather than a file. */
   generated?: boolean
+  /** Included in AGENTS.md compose (default true). */
+  enabled?: boolean
+  /** Openable in AI File Editor (false for tooling / wiki packs). */
+  editable?: boolean
 }
 
 /** Built-in preset that resolves to a fixed workspace-relative path. */
@@ -72,6 +76,8 @@ function normalizePinned(p: PinnedLayer): PinnedLayer {
     exists: Boolean(p.exists),
     bytes: Number(p.bytes ?? 0) || 0,
     generated: Boolean(p.generated),
+    enabled: p.enabled === undefined ? true : Boolean(p.enabled),
+    editable: p.editable === undefined ? !Boolean(p.generated) : Boolean(p.editable),
   }
 }
 
@@ -211,15 +217,33 @@ export function contextErrorMessage(err: unknown, fallback = 'Request failed'): 
 
 /** Static pinned rows when the daemon is unreachable (UI scaffold). */
 export const FALLBACK_PINNED: PinnedLayer[] = [
-  { id: 'pinned:agent', path: '.k2/agent/AGENT.md', label: 'Agent', exists: true, bytes: 0 },
-  { id: 'pinned:project', path: '.k2/PROJECT.md', label: 'Project', exists: true, bytes: 0 },
+  {
+    id: 'pinned:agent',
+    path: '.k2/agent/AGENT.md',
+    label: 'Agent (persona)',
+    exists: true,
+    bytes: 0,
+    enabled: true,
+    editable: true,
+  },
+  {
+    id: 'pinned:project',
+    path: '.k2/PROJECT.md',
+    label: 'Project (knowledge)',
+    exists: true,
+    bytes: 0,
+    enabled: true,
+    editable: true,
+  },
   {
     id: 'pinned:tooling',
     path: '',
-    label: 'Tooling',
+    label: 'Tooling (k2-cli pointer)',
     exists: true,
     bytes: 0,
     generated: true,
+    enabled: true,
+    editable: false,
   },
 ]
 

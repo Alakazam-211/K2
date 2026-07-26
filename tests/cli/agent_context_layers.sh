@@ -8,7 +8,7 @@
 #   4. Live daemon (optional):
 #        - daemon down → skip live section (exit 0 overall if pure checks pass)
 #        - daemon up + /cli/context/* missing (404) → FAIL loud
-#        - daemon up + routes present → list/presets happy path
+#        - daemon up + routes present → list/catalog happy path
 #
 # Never touches the real ~/.k2 for pure checks (HOME sandboxed).
 # Live section uses heartbeat.port/token from the sandbox HOME if a
@@ -99,7 +99,7 @@ assert_contains "schema has agent context" "$schema_out" '"name": "agent context
 assert_contains "schema has agent context list" "$schema_out" '"name": "agent context list"'
 assert_contains "schema has agent context add" "$schema_out" '"name": "agent context add"'
 assert_contains "schema has agent context move" "$schema_out" '"name": "agent context move"'
-assert_contains "schema has agent context presets" "$schema_out" '"name": "agent context presets"'
+assert_contains "schema has agent context catalog" "$schema_out" '"name": "agent context catalog"'
 assert_contains "schema hire has --context" "$schema_out" '"name": "--context"'
 assert_contains "schema on mentions system layers" "$schema_out" 'pinned:agent'
 
@@ -110,13 +110,13 @@ help_agent="$(PORT=1 TOKEN=fake "$K2_CLI" agent --help 2>&1)" || true
 assert_contains "agent help lists context" "$help_agent" "context"
 
 help_ctx="$(PORT=1 TOKEN=fake "$K2_CLI" agent context --help 2>&1)" || true
-for needle in list add remove on off move show regen presets manager:pack pinned:tooling; do
+for needle in list add remove on off move show regen catalog manager:pack pinned:tooling; do
     assert_contains "context help has $needle" "$help_ctx" "$needle"
 done
 
 help_hire="$(PORT=1 TOKEN=fake "$K2_CLI" agent hire --help 2>&1)" || true
 assert_contains "hire help has --context" "$help_hire" "--context"
-assert_contains "hire help mentions presets" "$help_hire" "wiki:index"
+assert_contains "hire help mentions catalog seeds" "$help_hire" "wiki:index"
 
 # Top-level teach
 set +e
@@ -274,12 +274,12 @@ else
     else
         # Probe context route — fail loud on 404 (daemon up, feature not wired).
         code="$(curl -s -o /tmp/_k2_ctx_probe.$$ -w "%{http_code}" --connect-timeout 2 --max-time 10 \
-            "${base}/cli/context/presets?token=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$LIVE_TOKEN")")"
+            "${base}/cli/context/catalog?token=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$LIVE_TOKEN")")"
         body="$(cat /tmp/_k2_ctx_probe.$$ 2>/dev/null || true)"
         rm -f /tmp/_k2_ctx_probe.$$
-        echo "  probe GET /cli/context/presets → HTTP $code"
+        echo "  probe GET /cli/context/catalog → HTTP $code"
         if [ "$code" = "404" ]; then
-            echo "  FAIL: daemon is up but /cli/context/presets returned 404 — wire context routes (backend worktree)" >&2
+            echo "  FAIL: daemon is up but /cli/context/catalog returned 404 — wire context routes (backend worktree)" >&2
             fail=$((fail + 1))
         elif [ "$code" = "000" ] || [ -z "$code" ]; then
             echo "  SKIP: could not reach daemon"
@@ -288,27 +288,27 @@ else
             # not a feature regression; pure checks already covered the CLI.
             echo "  SKIP: daemon auth rejected (token mismatch for live probe)"
         else
-            # Routes exist — exercise CLI list + presets against PWD project.
+            # Routes exist — exercise CLI list + catalog against PWD project.
             export PORT="$LIVE_PORT" TOKEN="$LIVE_TOKEN"
             # Restore a project path (use PROJECT_ROOT as a registered-or-not workspace)
             set +e
-            presets_out="$(PORT="$LIVE_PORT" TOKEN="$LIVE_TOKEN" K2_PROJECT_PATH="$PROJECT_ROOT" \
-                "$K2_CLI" agent context presets --json 2>/tmp/_k2_ctx_err.$$)"
+            catalog_out="$(PORT="$LIVE_PORT" TOKEN="$LIVE_TOKEN" K2_PROJECT_PATH="$PROJECT_ROOT" \
+                "$K2_CLI" agent context catalog --json 2>/tmp/_k2_ctx_err.$$)"
             prc=$?
             set -e
             if [ "$prc" -eq 0 ]; then
-                echo "  PASS: agent context presets --json (exit 0)"
+                echo "  PASS: agent context catalog --json (exit 0)"
                 pass=$((pass + 1))
-                assert_contains "presets JSON parseable" "$presets_out" "{"
+                assert_contains "catalog JSON parseable" "$catalog_out" "{"
             else
                 # not_found project is acceptable if workspace not registered;
                 # other failures are real.
                 err="$(cat /tmp/_k2_ctx_err.$$ 2>/dev/null || true)"
-                if printf '%s' "$err$presets_out" | grep -Eq 'not_found|No project|unregistered'; then
-                    echo "  PASS: presets reached daemon (project not registered — ok for smoke)"
+                if printf '%s' "$err$catalog_out" | grep -Eq 'not_found|No project|unregistered'; then
+                    echo "  PASS: catalog reached daemon (project not registered — ok for smoke)"
                     pass=$((pass + 1))
                 else
-                    echo "  FAIL: presets exit $prc — $err" >&2
+                    echo "  FAIL: catalog exit $prc — $err" >&2
                     fail=$((fail + 1))
                 fi
             fi

@@ -115,47 +115,56 @@ export function GeneralSection(): React.JSX.Element {
     }
   }, [handleCheckUpdate])
 
-  // The Settings shell ALWAYS renders General in the LEFT pane of a half/half
-  // split, so it fills its half-width pane (w-full). The RIGHT pane shows the
-  // host-only Restart + Update controls (<GeneralRemoteHostPanel/>) with a
-  // full-height divider ONLY when connected to a remote host; when local the
-  // right pane is empty and the divider is hidden — General just stays at
-  // half-width. (See Settings.tsx.)
-  return (
-    <div className="w-full flex flex-col min-h-0">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">General</h2>
+  // Chrome (title + tabs) spans the full General pane; body is half-width for
+  // form tabs, full-width for Workspaces (Canonical Agent Flow / diagrams).
+  // Remote hosts: this pane is the left half; Restart/Update live on the right
+  // (see Settings.tsx + GeneralRemoteHostPanel).
+  const fullWidthBody = tab === 'workspaces'
 
-      <div
-        role="tablist"
-        aria-label="General settings"
-        className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] mb-4 flex-shrink-0"
-      >
-        {GENERAL_TABS.map((t) => {
-          const active = tab === t.id
-          return (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setTab(t.id)}
-              className={`px-3 py-2 text-[11px] font-medium transition-colors no-drag cursor-pointer border-b-2 -mb-px inline-flex items-center gap-1.5 ${
-                active
-                  ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                  : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-              }`}
-            >
-              {t.label}
-              {t.beta && (
-                <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
-                  beta
-                </span>
-              )}
-            </button>
-          )
-        })}
+  return (
+    <div className="w-full h-full flex flex-col min-h-0">
+      {/* Full-width chrome */}
+      <div className="flex-shrink-0 px-6 pt-6">
+        <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">General</h2>
+
+        <div
+          role="tablist"
+          aria-label="General settings"
+          className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full"
+        >
+          {GENERAL_TABS.map((t) => {
+            const active = tab === t.id
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(t.id)}
+                className={`px-3 py-2 text-[11px] font-medium transition-colors no-drag cursor-pointer border-b-2 -mb-px inline-flex items-center gap-1.5 ${
+                  active
+                    ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                    : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                }`}
+              >
+                {t.label}
+                {t.beta && (
+                  <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+                    beta
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
+      {/* Tab body: half-width forms vs full-width Workspaces */}
+      <div
+        className={`flex-1 min-h-0 overflow-y-auto px-6 pt-4 pb-8 [scrollbar-gutter:stable] ${
+          fullWidthBody ? 'w-full max-w-none' : 'w-full max-w-xl'
+        }`}
+      >
       {tab === 'general' && (
       <div className="space-y-4">
         {/* Version & Update */}
@@ -319,17 +328,16 @@ export function GeneralSection(): React.JSX.Element {
       )}
 
       {tab === 'workspaces' && (
-        <div className="space-y-6">
-          {/* Prefs stay ~half-pane width; guide below uses the full column. */}
-          <div className="max-w-xl space-y-4">
+        <div className="space-y-6 w-full">
+          <div className="space-y-4 max-w-xl">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed -mt-1">
               How workspaces behave in the sidebar Active bar and when agents finish out of view.
             </p>
             <ActiveWindowHoursRow />
             <CompletionSoundRow />
           </div>
-          {/* Help guide: was a top-level “Canonical Agent Flow” settings page. */}
-          <div className="border-t border-[var(--color-border)] pt-5 w-full max-w-5xl">
+          {/* Full column for Canonical Agent Flow diagram + guide */}
+          <div className="border-t border-[var(--color-border)] pt-5 w-full">
             <AgentSkillsSection />
           </div>
         </div>
@@ -350,6 +358,7 @@ export function GeneralSection(): React.JSX.Element {
           <LocalLLMSettings />
         </div>
       )}
+      </div>
     </div>
   )
 }

@@ -20,19 +20,21 @@ composes into `.k2/AGENTS.md` — the “context hamburger.”
 ### CLI
 
 ```text
-k2 agent context list|add|remove|on|off|move|show|regen|presets
+k2 agent context list|add|remove|on|off|move|show|regen|catalog
 k2 agent context on|off pinned:agent|pinned:project|pinned:tooling
 k2 agent hire <dir> --context wiki:index --context docs/notes.md
 ```
 
-Presets include `wiki:index`, `wiki:home`, `manager:pack`, and
-`k2:pack` (lean standing-order packs under `.k2/context/presets/`).
+Catalog ids include `wiki:index`, `wiki:home`, **`wiki:hygiene`**,
+`subagents:pack`, `manager:pack`, `k2:pack` (lean packs under
+`.k2/context/catalog/`), plus live rosters that rewrite with AGENTS.md:
+**`connections:roster`**, **`heartbeats:roster`**, **`skills:roster`**.
 
 ### Settings
 
 Workspace Settings has a **Context stack** editor (View/Edit, system
-toggles, wiki seed chips). Day-2 management is `k2 agent context …`;
-hire only **seeds** layers with `--context`.
+toggles, **Browse catalog**). Day-2 management is
+`k2 agent context …`; hire only **seeds** layers with `--context`.
 
 ### Soft size warn
 

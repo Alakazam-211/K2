@@ -66,10 +66,10 @@ export function RoleSkillButton({
 }
 
 /**
- * K2 Canonical Agent button — shown ALWAYS, every mode incl. custom + off
- * (PRD §9.3). Opens the canonical ceremony modal. Label gates on
- * detect_canonical_state: "Manage / Undo" when any harness is already
- * canonicalized, "Set up …" otherwise.
+ * K2 Canonical Agent control — setup ceremony + harness fan-out toggle.
+ * Compact card layout for the Context tab left column (and other embeds).
+ * Label gates on detect_canonical_state: "Manage / Undo" when unified,
+ * "Set up" otherwise (PRD §9.3).
  */
 export function CanonicalAgentButton({
   probes,
@@ -83,8 +83,7 @@ export function CanonicalAgentButton({
   const unified = anyHarnessUnified(probes)
   const [fanoutEnabled, setFanoutEnabled] = useState(false)
   const [fanoutBusy, setFanoutBusy] = useState(false)
-  // CHECKING the box opens the confirmation modal (replaces the bare
-  // window.confirm); the modal owns the two apply routes.
+  // Enabling opens the confirmation modal; disabling applies immediately.
   const [showFanoutModal, setShowFanoutModal] = useState(false)
   const [skillHint, setSkillHint] = useState(false)
 
@@ -121,54 +120,85 @@ export function CanonicalAgentButton({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="min-w-0">
-          <span className="text-xs text-[var(--color-text-secondary)]">K2 Canonical Agent</span>
-          <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">{CANONICAL_PITCH_SUBTITLE}</p>
+      {/* Primary action row */}
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] font-medium text-[var(--color-text-primary)]">
+              K2 Canonical Agent
+            </span>
+            {unified ? (
+              <span className="text-[8px] uppercase tracking-wider font-semibold px-1 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+                unified
+              </span>
+            ) : (
+              <span className="text-[8px] uppercase tracking-wider font-semibold px-1 py-0.5 bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] border border-[var(--color-border)]">
+                not set up
+              </span>
+            )}
+          </div>
+          <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5 leading-snug">
+            Write context once — every LLM reads the same generated{' '}
+            <span className="font-mono">AGENTS.md</span>.
+          </p>
         </div>
         <button
+          type="button"
           onClick={() => onOpen(unified ? 'manage' : 'setup')}
-          className="px-2.5 py-1 text-[11px] font-medium text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors whitespace-nowrap no-drag cursor-pointer"
+          className="flex-shrink-0 px-2.5 py-1 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors whitespace-nowrap no-drag cursor-pointer"
         >
-          {unified ? 'Manage / Undo' : 'Set up canonical'}
+          {unified ? 'Manage / Undo' : 'Set up'}
         </button>
       </div>
-      {/* Permission checkbox lives WITH the button (PRD §4). Reads/writes the
-          same `.k2/.harness-fanout-enabled` marker the Canonical Agent Flow
-          settings page does, so the two stay in sync. */}
-      <label className="flex items-start gap-2 cursor-pointer no-drag select-none">
-        <input
-          type="checkbox"
-          checked={fanoutEnabled}
+
+      {/* Fan-out toggle row — label left, switch right (stack-row alignment) */}
+      <div className="flex items-start gap-2 pt-1.5 border-t border-[var(--color-border)]">
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] font-medium text-[var(--color-text-secondary)] leading-tight">
+            Auto harness fan-out
+          </div>
+          <p className="text-[9px] text-[var(--color-text-muted)] leading-snug mt-0.5">
+            Symlink <span className="font-mono">CLAUDE.md</span>,{' '}
+            <span className="font-mono">GEMINI.md</span>, … →{' '}
+            <span className="font-mono">.k2/AGENTS.md</span>. Off by default.
+            {' '}
+            <span className="text-[var(--color-status-warn-amber-soft)]">
+              Can replace existing files
+            </span>
+            {' '}
+            — prefer <span className="font-medium text-[var(--color-text-secondary)]">Set up</span> above
+            for projects that already have harness notes.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={fanoutEnabled}
+          aria-label="Programmatic harness fan-out"
           disabled={fanoutBusy}
-          onChange={toggleFanout}
-          className="peer sr-only"
-        />
-        <span
-          aria-hidden="true"
-          className="mt-0.5 w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
+          onClick={() => void toggleFanout()}
+          title={
+            fanoutEnabled
+              ? 'Fan-out on — harness files symlink to .k2/AGENTS.md'
+              : 'Fan-out off — enable to auto-symlink CLAUDE.md / GEMINI.md / …'
+          }
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            fanoutEnabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
         >
-          {fanoutEnabled && (
-            <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-            </svg>
-          )}
-        </span>
-        <span className="text-[9px] text-[var(--color-text-muted)] leading-snug">
-          Allow programmatic harness fan-out (symlinks). When on, K2 keeps the harness files
-          (<span className="font-mono">CLAUDE.md</span>, <span className="font-mono">GEMINI.md</span>, …)
-          symlinked to the generated <span className="font-mono">.k2/AGENTS.md</span> automatically. Off by
-          default. <span className="text-[var(--color-status-warn-amber-soft)]">Can overwrite existing harness content</span> — for an
-          existing project, run the K2 Canonical Agent (button above) instead; it merges safely. Best for new
-          projects.
-        </span>
-      </label>
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              fanoutEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+      </div>
 
       {skillHint ? (
         <div className="border-l-2 border-[var(--color-accent)]/60 bg-[var(--color-accent)]/5 pl-2 py-1.5 text-[9px] leading-snug text-[var(--color-text-secondary)]">
-          <span className="font-medium text-[var(--color-accent)]">K2 Canonical Agent enabled.</span>{' '}
-          Run it from this workspace&rsquo;s Agent chat to merge your harness files. Programmatic fan-out
-          was <span className="font-medium">not</span> turned on.
+          <span className="font-medium text-[var(--color-accent)]">Canonical Agent skill ready.</span>{' '}
+          Run it in this workspace&rsquo;s agent chat to merge harness files safely. Fan-out was
+          <span className="font-medium"> not</span> turned on.
         </div>
       ) : null}
 

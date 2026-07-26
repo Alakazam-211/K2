@@ -29,7 +29,7 @@ pub struct ContextLayer {
     pub path: String,
     pub enabled: bool,
     pub position: i64,
-    /// `'user'` | `'preset:wiki-index'` | …
+    /// `'user'` | `'catalog:wiki-index'` | …
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -62,14 +62,34 @@ fn default_true() -> bool {
     true
 }
 
-/// Built-in preset that resolves to a fixed workspace-relative path.
+/// Built-in (or installed) catalog entry offered in Browse catalog / `k2 agent context catalog`.
+///
+/// Wire shape matches pack-metadata foundation: required id/path/label/source/kind;
+/// optional description/version/author/tags for catalog UX (marketplace-ready).
+///
+/// **`recommended` is first-party only** — never trust a marketplace pack's
+/// self-declared recommendation. Only K2 built-ins (or a future signed
+/// allowlist) may set this true when constructing the list.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct ContextPreset {
+pub struct ContextCatalogEntry {
     pub id: String,
     pub path: String,
     pub label: String,
     pub source: String,
+    /// `"live"` | `"static"` | `"path"`
+    pub kind: String,
+    /// K2-controlled “nice experience” recommendation. Not a free-form tag.
+    #[serde(default)]
+    pub recommended: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// Full list response: pinned + optional layers + soft-size estimate.
@@ -89,7 +109,7 @@ pub enum ContextError {
     NotFound(String),
     PathEscape(String),
     DuplicateLayer(String),
-    PresetUnknown(String),
+    CatalogUnknown(String),
     Db(String),
 }
 
@@ -100,7 +120,7 @@ impl ContextError {
             ContextError::NotFound(_) => "not_found",
             ContextError::PathEscape(_) => "path_escape",
             ContextError::DuplicateLayer(_) => "duplicate_layer",
-            ContextError::PresetUnknown(_) => "preset_unknown",
+            ContextError::CatalogUnknown(_) => "catalog_unknown",
             ContextError::Db(_) => "db_error",
         }
     }
@@ -111,7 +131,7 @@ impl ContextError {
             | ContextError::NotFound(h)
             | ContextError::PathEscape(h)
             | ContextError::DuplicateLayer(h)
-            | ContextError::PresetUnknown(h)
+            | ContextError::CatalogUnknown(h)
             | ContextError::Db(h) => h,
         }
     }
@@ -125,117 +145,711 @@ impl std::fmt::Display for ContextError {
 
 impl std::error::Error for ContextError {}
 
-// ── Presets ───────────────────────────────────────────────────────────
+// ── Catalog ───────────────────────────────────────────────────────────
 
-/// Built-in presets: wiki seeds + role guidance packs (Workspace Manager / K2 Agent).
-/// Manager & K2 packs materialize the same generated role markdown that used to
-/// be woven into AGENT.md when those agent types were selected.
-pub fn list_presets() -> Vec<ContextPreset> {
+/// Path for the live-regenerated connected-agents roster pack.
+pub const CONNECTIONS_ROSTER_PATH: &str = ".k2/context/catalog/connections-roster.md";
+pub const CONNECTIONS_ROSTER_SOURCE: &str = "catalog:connections-roster";
+pub const CONNECTIONS_ROSTER_ID: &str = "connections:roster";
+
+pub const HEARTBEATS_ROSTER_PATH: &str = ".k2/context/catalog/heartbeats-roster.md";
+pub const HEARTBEATS_ROSTER_SOURCE: &str = "catalog:heartbeats-roster";
+pub const HEARTBEATS_ROSTER_ID: &str = "heartbeats:roster";
+
+pub const SKILLS_ROSTER_PATH: &str = ".k2/context/catalog/skills-roster.md";
+pub const SKILLS_ROSTER_SOURCE: &str = "catalog:skills-roster";
+pub const SKILLS_ROSTER_ID: &str = "skills:roster";
+
+pub const WIKI_HYGIENE_PATH: &str = ".k2/context/catalog/wiki-hygiene.md";
+pub const WIKI_HYGIENE_SOURCE: &str = "catalog:wiki-hygiene";
+pub const WIKI_HYGIENE_ID: &str = "wiki:hygiene";
+
+pub const SUBAGENTS_PACK_PATH: &str = ".k2/context/catalog/always-use-subagents.md";
+pub const SUBAGENTS_PACK_SOURCE: &str = "catalog:subagents";
+pub const SUBAGENTS_PACK_ID: &str = "subagents:pack";
+
+/// Which live-generated pack a layer is (if any).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveKind {
+    Connections,
+    Heartbeats,
+    Skills,
+}
+
+fn builtin_catalog_entry(
+    id: &str,
+    path: &str,
+    label: &str,
+    source: &str,
+    kind: &str,
+    description: &str,
+    version: Option<&str>,
+    recommended: bool,
+    tags: &[&str],
+) -> ContextCatalogEntry {
+    ContextCatalogEntry {
+        id: id.into(),
+        path: path.into(),
+        label: label.into(),
+        source: source.into(),
+        kind: kind.into(),
+        recommended,
+        description: Some(description.into()),
+        version: version.map(|v| v.into()),
+        author: Some("K2".into()),
+        // Free-form discovery tags only — never put "recommended" here.
+        tags: tags.iter().map(|t| (*t).into()).collect(),
+    }
+}
+
+/// Built-in catalog entries: wiki seeds + lean packs + live rosters.
+///
+/// Live rosters (connections / heartbeats / skills) rebuild on every AGENTS.md
+/// compose so always-on context tracks a changing workspace.
+pub fn list_catalog() -> Vec<ContextCatalogEntry> {
     vec![
-        ContextPreset {
-            id: "wiki:index".into(),
-            path: ".k2/wiki/_Index.md".into(),
-            label: "Wiki index".into(),
-            source: "preset:wiki-index".into(),
-        },
-        ContextPreset {
-            id: "wiki:home".into(),
-            path: ".k2/wiki/Home.md".into(),
-            label: "Wiki home".into(),
-            source: "preset:wiki-home".into(),
-        },
-        ContextPreset {
-            id: "manager:pack".into(),
-            path: ".k2/context/presets/manager.md".into(),
-            label: "Workspace Manager".into(),
-            source: "preset:manager".into(),
-        },
-        ContextPreset {
-            id: "k2:pack".into(),
-            path: ".k2/context/presets/k2-agent.md".into(),
-            label: "K2 Agent".into(),
-            source: "preset:k2-agent".into(),
-        },
+        builtin_catalog_entry(
+            "wiki:index",
+            ".k2/wiki/_Index.md",
+            "Wiki index",
+            "catalog:wiki-index",
+            "path",
+            "Workspace wiki map — links and structure for .k2/wiki/.",
+            Some("1.0.0"),
+            true, // recommended
+            &["wiki", "knowledge"],
+        ),
+        builtin_catalog_entry(
+            "wiki:home",
+            ".k2/wiki/Home.md",
+            "Wiki home",
+            "catalog:wiki-home",
+            "path",
+            "Wiki landing page for this workspace.",
+            Some("1.0.0"),
+            false,
+            &["wiki", "knowledge"],
+        ),
+        builtin_catalog_entry(
+            WIKI_HYGIENE_ID,
+            WIKI_HYGIENE_PATH,
+            "Wiki hygiene",
+            WIKI_HYGIENE_SOURCE,
+            "static",
+            "Standing orders for keeping .k2/wiki/ healthy — link, index, no orphans; don’t dump the vault into AGENTS.md.",
+            Some("1.0.0"),
+            true, // recommended
+            &["wiki", "knowledge", "hygiene"],
+        ),
+        builtin_catalog_entry(
+            SUBAGENTS_PACK_ID,
+            SUBAGENTS_PACK_PATH,
+            "Always use subagents",
+            SUBAGENTS_PACK_SOURCE,
+            "static",
+            "Standing order: do heavy work in subagent worktrees; review and cherry-pick onto main.",
+            Some("1.0.0"),
+            true, // recommended
+            &["workflow", "subagents", "context"],
+        ),
+        builtin_catalog_entry(
+            "manager:pack",
+            ".k2/context/catalog/manager.md",
+            "Workspace Manager",
+            "catalog:manager",
+            "static",
+            "Lean always-on standing orders for coordinating connected workspaces. Full playbook stays a loadable skill.",
+            Some("1.0.0"),
+            false,
+            &["role", "manager"],
+        ),
+        builtin_catalog_entry(
+            "k2:pack",
+            ".k2/context/catalog/k2-agent.md",
+            "K2 Agent",
+            "catalog:k2-agent",
+            "static",
+            "Lean always-on planner orientation. Full K2 Agent playbook stays a loadable skill.",
+            Some("1.0.0"),
+            false,
+            &["role", "planner"],
+        ),
+        builtin_catalog_entry(
+            CONNECTIONS_ROSTER_ID,
+            CONNECTIONS_ROSTER_PATH,
+            "Connected agents roster",
+            CONNECTIONS_ROSTER_SOURCE,
+            "live",
+            "Live list of connected workspace-agents (local + remote). Regenerates whenever AGENTS.md is rewritten.",
+            None,
+            true, // recommended
+            &["live", "roster", "connections"],
+        ),
+        builtin_catalog_entry(
+            HEARTBEATS_ROSTER_ID,
+            HEARTBEATS_ROSTER_PATH,
+            "Heartbeats roster",
+            HEARTBEATS_ROSTER_SOURCE,
+            "live",
+            "Live catalog of scheduled heartbeats (name, frequency, WAKEUP path) — not full WAKEUP bodies.",
+            None,
+            true, // recommended
+            &["live", "roster", "heartbeats"],
+        ),
+        builtin_catalog_entry(
+            SKILLS_ROSTER_ID,
+            SKILLS_ROSTER_PATH,
+            "Skills roster",
+            SKILLS_ROSTER_SOURCE,
+            "live",
+            "Live catalog of .k2/skills/ profiles to load on demand — not full skill dumps.",
+            None,
+            false,
+            &["live", "roster", "skills"],
+        ),
     ]
 }
 
-fn known_preset_ids() -> String {
-    list_presets()
+fn live_kind_for_source(source: &str) -> Option<LiveKind> {
+    match source {
+        CONNECTIONS_ROSTER_SOURCE => Some(LiveKind::Connections),
+        HEARTBEATS_ROSTER_SOURCE => Some(LiveKind::Heartbeats),
+        SKILLS_ROSTER_SOURCE => Some(LiveKind::Skills),
+        _ => None,
+    }
+}
+
+fn live_kind_for_path(path: &str) -> Option<LiveKind> {
+    if path == CONNECTIONS_ROSTER_PATH
+        || path.ends_with("/context/catalog/connections-roster.md")
+    {
+        Some(LiveKind::Connections)
+    } else if path == HEARTBEATS_ROSTER_PATH
+        || path.ends_with("/context/catalog/heartbeats-roster.md")
+    {
+        Some(LiveKind::Heartbeats)
+    } else if path == SKILLS_ROSTER_PATH
+        || path.ends_with("/context/catalog/skills-roster.md")
+    {
+        Some(LiveKind::Skills)
+    } else {
+        None
+    }
+}
+
+fn live_kind_for_layer(layer: &ContextLayer) -> Option<LiveKind> {
+    live_kind_for_source(&layer.source).or_else(|| live_kind_for_path(&layer.path))
+}
+
+/// True when this layer is live-generated (not a static user/wiki file).
+pub fn is_live_generated_layer(layer: &ContextLayer) -> bool {
+    live_kind_for_layer(layer).is_some()
+}
+
+/// Markdown body for a live layer (no leading H1 — compose adds `## label`).
+pub fn render_live_layer_body(project_path: &str, layer: &ContextLayer) -> Option<String> {
+    match live_kind_for_layer(layer)? {
+        LiveKind::Connections => Some(render_connections_roster_body(project_path)),
+        LiveKind::Heartbeats => Some(render_heartbeats_roster_body(project_path)),
+        LiveKind::Skills => Some(render_skills_roster_body(project_path)),
+    }
+}
+
+/// Markdown body for the connections roster (no leading H1 — compose adds `## label`).
+pub fn render_connections_roster_body(project_path: &str) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "Live roster of **connected workspace-agents** (peers, not sub-agents). \
+         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+    );
+    out.push_str("Message / peek:\n\n");
+    out.push_str("    k2 msg <workspace-name> \"short live knock\"\n");
+    out.push_str("    k2 msg <workspace-name> --inbox-wake <path> [path…]\n");
+    out.push_str("    k2 read <workspace-name>\n");
+    out.push_str("    k2 connections list\n\n");
+
+    let local = crate::connections::list_peers(project_path).unwrap_or_default();
+    let remotes = list_remote_connection_summaries(project_path);
+
+    if local.is_empty() && remotes.is_empty() {
+        out.push_str("### No connected agents yet\n\n");
+        out.push_str("Wire a peer with:\n\n");
+        out.push_str("    k2 connections add <other-workspace-path>\n");
+        out.push_str("    k2 connections add agent::host.k2.dev   # remote form\n");
+        return out;
+    }
+
+    if !local.is_empty() {
+        out.push_str("### Local connections\n\n");
+        for peer in &local {
+            let status = if peer.reachable {
+                "reachable"
+            } else {
+                "unreachable"
+            };
+            let rel = if peer.relation_types.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", peer.relation_types.join(", "))
+            };
+            out.push_str(&format!(
+                "- **{}** — `{status}`{rel}\n",
+                peer.project_name
+            ));
+            if !peer.path.is_empty() {
+                out.push_str(&format!("  - path: `{}`\n", peer.path));
+            }
+        }
+        out.push('\n');
+    }
+
+    if !remotes.is_empty() {
+        out.push_str("### Remote connections\n\n");
+        for r in &remotes {
+            let pair = if r.paired { "paired" } else { "unbound" };
+            out.push_str(&format!(
+                "- **{}** @ `{}` — remote · {pair}\n",
+                r.agent, r.host
+            ));
+            out.push_str(&format!("  - address: `{}`\n", r.remote_addr));
+        }
+        out.push('\n');
+    }
+
+    out.push_str(
+        "To update: `k2 connections add|remove …` — this layer rewrites on the next AGENTS.md regen \
+         and when connections change.\n",
+    );
+    out
+}
+
+/// Live heartbeats catalog (names, schedules, WAKEUP paths) — not WAKEUP bodies.
+pub fn render_heartbeats_roster_body(project_path: &str) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "Live catalog of this workspace’s **heartbeats** (scheduled wakes). \
+         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+    );
+    out.push_str("Manage:\n\n");
+    out.push_str("    k2 heartbeat list\n");
+    out.push_str("    k2 heartbeat signal wakeup <name>\n");
+    out.push_str("    k2 heartbeat enable|disable <name>\n\n");
+    out.push_str(
+        "WAKEUP.md is the **user message** for that schedule — do not paste full wake \
+         bodies into AGENTS.md; edit the path listed below.\n\n",
+    );
+
+    let rows = crate::heartbeats::k2so_heartbeat_list(project_path.to_string()).unwrap_or_default();
+    if rows.is_empty() {
+        out.push_str("### No heartbeats yet\n\n");
+        out.push_str("Create one in Settings → Heartbeats, or:\n\n");
+        out.push_str("    k2 heartbeat create <name> --every 1h\n");
+        return out;
+    }
+
+    out.push_str("### Schedules\n\n");
+    for hb in &rows {
+        let state = if hb.enabled { "on" } else { "off" };
+        let last = hb
+            .last_fired
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("never");
+        out.push_str(&format!(
+            "- **{}** — `{state}` · `{}`\n",
+            hb.name, hb.frequency
+        ));
+        out.push_str(&format!("  - wakeup: `{}`\n", hb.wakeup_path));
+        out.push_str(&format!("  - last fired: {last}\n"));
+        if let Some(ref err) = hb.schedule_error {
+            if !err.is_empty() {
+                out.push_str(&format!("  - schedule error: {err}\n"));
+            }
+        }
+        if let Some(ref reason) = hb.disabled_reason {
+            if !reason.is_empty() {
+                out.push_str(&format!("  - disabled reason: {reason}\n"));
+            }
+        }
+    }
+    out.push('\n');
+    out.push_str(
+        "Archived heartbeats are omitted. This list updates on the next AGENTS.md regen \
+         after create/edit/archive.\n",
+    );
+    out
+}
+
+/// Live skills catalog under `.k2/skills/` — load on demand, don’t dump bodies.
+pub fn render_skills_roster_body(project_path: &str) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "Live catalog of **loadable skills** (documentation profiles under `.k2/skills/`). \
+         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+    );
+    out.push_str(
+        "Skills are **on-demand** — load the matching `SKILL.md` when you need depth. \
+         Do not stack full skill bodies into always-on context.\n\n",
+    );
+
+    let skills = crate::skills::crud::list(project_path).unwrap_or_default();
+    if skills.is_empty() {
+        out.push_str("### No skills yet\n\n");
+        out.push_str("Common built-ins appear after first use (e.g. `k2-cli`, role packs).\n");
+        out.push_str("Create or install skills under `.k2/skills/<name>/SKILL.md`.\n");
+        return out;
+    }
+
+    out.push_str("### Available skills\n\n");
+    for s in &skills {
+        let title = s
+            .title
+            .as_deref()
+            .filter(|t| !t.is_empty())
+            .unwrap_or(s.name.as_str());
+        out.push_str(&format!("- **{}**", s.name));
+        if title != s.name {
+            out.push_str(&format!(" — {title}"));
+        }
+        out.push('\n');
+        out.push_str(&format!("  - path: `.k2/skills/{}/SKILL.md`\n", s.name));
+    }
+    out.push('\n');
+    out.push_str(
+        "This list updates on the next AGENTS.md regen after skills are added/removed.\n",
+    );
+    out
+}
+
+struct RemoteConnSummary {
+    agent: String,
+    host: String,
+    remote_addr: String,
+    paired: bool,
+}
+
+fn list_remote_connection_summaries(project_path: &str) -> Vec<RemoteConnSummary> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let Some(project_id) =
+        crate::workspace::agent_identity::resolve_project_id(&conn, project_path)
+    else {
+        return Vec::new();
+    };
+    let Ok(rows) =
+        crate::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, &project_id)
+    else {
+        return Vec::new();
+    };
+    let mut out: Vec<RemoteConnSummary> = rows
+        .into_iter()
+        .map(|r| {
+            let paired = r
+                .peer_fingerprint
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_some();
+            RemoteConnSummary {
+                agent: r.agent,
+                host: r.host,
+                remote_addr: r.remote_addr,
+                paired,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.agent
+            .cmp(&b.agent)
+            .then_with(|| a.host.cmp(&b.host))
+    });
+    out
+}
+
+fn live_kind_meta(kind: LiveKind) -> (&'static str, &'static str, &'static str) {
+    match kind {
+        LiveKind::Connections => (
+            CONNECTIONS_ROSTER_PATH,
+            "Connected agents roster",
+            CONNECTIONS_ROSTER_SOURCE,
+        ),
+        LiveKind::Heartbeats => (
+            HEARTBEATS_ROSTER_PATH,
+            "Heartbeats roster",
+            HEARTBEATS_ROSTER_SOURCE,
+        ),
+        LiveKind::Skills => (SKILLS_ROSTER_PATH, "Skills roster", SKILLS_ROSTER_SOURCE),
+    }
+}
+
+fn render_live_file(project_path: &str, kind: LiveKind) -> String {
+    let (_, title, _) = live_kind_meta(kind);
+    let body = match kind {
+        LiveKind::Connections => render_connections_roster_body(project_path),
+        LiveKind::Heartbeats => render_heartbeats_roster_body(project_path),
+        LiveKind::Skills => render_skills_roster_body(project_path),
+    };
+    format!("# {title}\n\n{body}")
+}
+
+/// Write/overwrite one live roster file from current workspace state.
+fn sync_live_kind_file(project_path: &str, kind: LiveKind) -> Result<(), ContextError> {
+    let (path, _, _) = live_kind_meta(kind);
+    let rel = normalize_catalog_path(project_path, path)?;
+    let abs = Path::new(project_path).join(&rel);
+    if let Some(parent) = abs.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            ContextError::Db(format!(
+                "cannot create context catalog directory {}: {e}",
+                parent.display()
+            ))
+        })?;
+    }
+    let body = render_live_file(project_path, kind);
+    fs::write(&abs, body).map_err(|e| {
+        ContextError::Db(format!(
+            "cannot write live context pack {}: {e}",
+            abs.display()
+        ))
+    })?;
+    Ok(())
+}
+
+/// Write/overwrite the connections roster file (compat helper).
+pub fn sync_connections_roster_file(project_path: &str) -> Result<(), ContextError> {
+    sync_live_kind_file(project_path, LiveKind::Connections)
+}
+
+/// If this project has any live roster layers stacked, rewrite their files.
+/// Called from AGENTS.md publish so FileViewer matches compose.
+pub fn sync_live_generated_layers(project_path: &str) {
+    let Ok(layers) = list_layers(project_path) else {
+        return;
+    };
+    let mut seen = [false; 3];
+    for layer in &layers {
+        if let Some(kind) = live_kind_for_layer(layer) {
+            let idx = match kind {
+                LiveKind::Connections => 0,
+                LiveKind::Heartbeats => 1,
+                LiveKind::Skills => 2,
+            };
+            if !seen[idx] {
+                seen[idx] = true;
+                let _ = sync_live_kind_file(project_path, kind);
+            }
+        }
+    }
+}
+
+/// After connection graph changes: if either side stacks the connections roster,
+/// rewrite AGENTS.md so the always-on roster reflects the new peers.
+pub fn refresh_roster_after_connection_change(project_paths: &[&str]) {
+    for path in project_paths {
+        if path.trim().is_empty() {
+            continue;
+        }
+        let Ok(layers) = list_layers(path) else {
+            continue;
+        };
+        if layers
+            .iter()
+            .any(|l| live_kind_for_layer(l) == Some(LiveKind::Connections))
+        {
+            crate::workspace::skill_regen::write_workspace_skill_file(path);
+        }
+    }
+}
+
+/// Lean always-on Manager layer — triage/delegate orientation, not the full skill.
+const MANAGER_PACK_MD: &str = r#"# Workspace Manager (always-on)
+
+Short standing orders for coordinating peers. Full playbook:
+`.k2/skills/workspace-manager/SKILL.md` (load on demand).
+
+## Role
+
+You coordinate work across **connected workspaces** (peers, not sub-agents).
+Your harness owns sub-agent/worktree spawn; K2 wires messaging and the tray.
+
+## Every wake
+
+1. `k2 checkin` — messages, inbox, reviews, activity.
+2. Triage live msgs + `k2 inbox` (act / file / reply / archive).
+3. Prefer `k2 msg <ws> --inbox-wake <path>` for real work packages; live `msg` for short knocks.
+4. Peek with `k2 read <ws>` before injecting into a peer.
+5. `k2 checkin --status "…"` then `k2 done` (or `--blocked "…"`).
+
+## Do not
+
+- Dump full skill bodies into always-on context (toggle this layer off if unused).
+- Treat peers as subordinates; connections are bidirectional.
+- Use `k2 mail` for agent-to-agent work (that's email).
+"#;
+
+/// Lean always-on K2 Agent (planner) layer — planning orientation, not the full skill.
+const K2_AGENT_PACK_MD: &str = r#"# K2 Agent / planner (always-on)
+
+Short standing orders for planning. Full playbook:
+`.k2/skills/k2-agent/SKILL.md` (load on demand).
+
+## Role
+
+You turn requests into **PRDs, milestones, and specs** — not implementation.
+Write durable plans under `.k2/prds/` / `.k2/milestones/`; keep PROJECT.md current.
+
+## Every wake
+
+1. `k2 checkin` — inbox, peers, reviews.
+2. Capture work with `k2 inbox compose` / read tray packages.
+3. Plan in docs; register ship-ready items via inbox when useful.
+4. Coordinate with `k2 msg` / `--inbox-wake`; keep live msgs short.
+5. `k2 checkin --status "…"` then `k2 done`.
+
+## Do not
+
+- Implement large changes yourself when the plan belongs elsewhere.
+- Bloat always-on context with full skill or PRD dumps — link paths instead.
+- Skip writing decisions back to PROJECT.md / PRDs.
+"#;
+
+/// Lean standing order: prefer subagent worktrees for heavy work.
+const SUBAGENTS_PACK_MD: &str = r#"# Always use subagents
+
+Always use subagents in worktrees to do your heavy work to protect your context window. Review their work and cherry pick their changes onto main when they are done.
+"#;
+
+/// Lean wiki hygiene — how to keep `.k2/wiki/` healthy without bloating AGENTS.md.
+const WIKI_HYGIENE_PACK_MD: &str = r#"# Wiki hygiene (always-on)
+
+Standing orders for this workspace’s **knowledge vault** at `.k2/wiki/`.
+This is user-owned brain matter — not host control docs, not a dump into AGENTS.md.
+
+## Principles
+
+1. **Durable facts → wiki notes.** Chat and AGENT.md are for persona / standing orders; lasting knowledge goes under `.k2/wiki/`.
+2. **Link, don’t paste.** Prefer `[[wikilinks]]` and short pointers. Do not paste long vault bodies into AGENTS.md, PROJECT.md, or persona.
+3. **Index is the map.** Keep `.k2/wiki/_Index.md` (and `Home.md` if you use it) current when you add or rename notes.
+4. **No orphans.** New notes should be reachable from Index/Home or a parent note. Fix broken `[[links]]` when you notice them.
+5. **Titles + aliases.** Use clear H1 titles; frontmatter `aliases` / `tags` when useful for discovery.
+6. **Seed if empty.** If the vault is missing, seed Index/Home (Settings → Context → Seed wiki, or create the files), then grow from there.
+
+## Every meaningful wiki edit
+
+1. Write/update the note under `.k2/wiki/`.
+2. Link it from `_Index.md` (and any parent topic note).
+3. Fix renames: update inbound links; leave a stub only if something external still points at the old path.
+4. Prefer many small linked notes over one giant page.
+
+## Do not
+
+- Treat AGENTS.md as a second wiki (it regenerates; the vault is the SSOT for notes).
+- Stack entire skill bodies or full PRD dumps as “wiki” substitutes.
+- Invent a parallel notes tree outside `.k2/wiki/` for agent-shared knowledge.
+"#;
+
+fn known_catalog_ids() -> String {
+    list_catalog()
         .into_iter()
         .map(|p| p.id)
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-fn resolve_preset(preset_id: &str) -> Result<ContextPreset, ContextError> {
-    let id = preset_id.trim();
+fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextError> {
+    let id = catalog_id.trim();
     // Accept short aliases (product language + skill dir names).
     let canonical = match id {
-        "manager" | "workspace-manager" | "preset:manager" => "manager:pack",
-        "k2-agent" | "k2" | "k2so-agent" | "preset:k2-agent" => "k2:pack",
+        "manager" | "workspace-manager" | "catalog:manager" => "manager:pack",
+        "k2-agent" | "k2" | "k2so-agent" | "catalog:k2-agent" => "k2:pack",
+        "connections" | "roster" | "connections-roster" | "connected-agents"
+        | "catalog:connections-roster" => CONNECTIONS_ROSTER_ID,
+        "heartbeats" | "heartbeats-roster" | "catalog:heartbeats-roster" => {
+            HEARTBEATS_ROSTER_ID
+        }
+        "skills" | "skills-roster" | "skills-index" | "catalog:skills-roster" => {
+            SKILLS_ROSTER_ID
+        }
+        "wiki-hygiene" | "hygiene" | "catalog:wiki-hygiene" => WIKI_HYGIENE_ID,
+        "subagents" | "subagents:pack" | "always-use-subagents" | "use-subagents"
+        | "catalog:subagents" => SUBAGENTS_PACK_ID,
         other => other,
     };
-    list_presets()
+    list_catalog()
         .into_iter()
         .find(|p| p.id == canonical)
         .ok_or_else(|| {
-            ContextError::PresetUnknown(format!(
-                "unknown preset '{preset_id}'; known: {}",
-                known_preset_ids()
+            ContextError::CatalogUnknown(format!(
+                "unknown catalog id '{catalog_id}'; known: {}",
+                known_catalog_ids()
             ))
         })
 }
 
-fn is_materializing_pack(preset: &ContextPreset) -> bool {
+fn is_materializing_pack(entry: &ContextCatalogEntry) -> bool {
     matches!(
-        preset.source.as_str(),
-        "preset:manager" | "preset:k2-agent"
+        entry.source.as_str(),
+        "catalog:manager"
+            | "catalog:k2-agent"
+            | WIKI_HYGIENE_SOURCE
+            | SUBAGENTS_PACK_SOURCE
+            | CONNECTIONS_ROSTER_SOURCE
+            | HEARTBEATS_ROSTER_SOURCE
+            | SKILLS_ROSTER_SOURCE
     )
 }
 
-/// Write Manager / K2 role markdown under the workspace on first add (idempotent).
-/// Uses the same generators that previously fed AGENT.md for those agent types.
+/// Write lean always-on pack + ensure the matching loadable skill exists.
+/// Manager/K2/wiki-hygiene: idempotent (does not overwrite existing user-edited packs).
+/// Live rosters: always rewritten from current registry / disk state.
 fn materialize_pack_if_needed(
     project_path: &str,
-    preset: &ContextPreset,
+    entry: &ContextCatalogEntry,
     rel_path: &str,
 ) -> Result<(), ContextError> {
-    if !is_materializing_pack(preset) {
+    if !is_materializing_pack(entry) {
         return Ok(());
     }
+
+    if let Some(kind) = live_kind_for_source(&entry.source) {
+        let _ = rel_path;
+        return sync_live_kind_file(project_path, kind);
+    }
+
     let abs = Path::new(project_path).join(rel_path);
-    if abs.is_file() {
-        return Ok(());
-    }
-    if let Some(parent) = abs.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
+    if !abs.is_file() {
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                ContextError::Db(format!(
+                    "cannot create context catalog directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+        let body = match entry.source.as_str() {
+            "catalog:manager" => MANAGER_PACK_MD,
+            "catalog:k2-agent" => K2_AGENT_PACK_MD,
+            WIKI_HYGIENE_SOURCE => WIKI_HYGIENE_PACK_MD,
+            SUBAGENTS_PACK_SOURCE => SUBAGENTS_PACK_MD,
+            _ => return Ok(()),
+        };
+        fs::write(&abs, body).map_err(|e| {
             ContextError::Db(format!(
-                "cannot create context preset directory {}: {e}",
-                parent.display()
+                "cannot write context pack {}: {e}",
+                abs.display()
             ))
         })?;
     }
-    let project_name = Path::new(project_path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "workspace".to_string());
-    let body = match preset.source.as_str() {
-        "preset:manager" => {
-            crate::skills::content::generate_manager_skill_content(project_path, &project_name)
-        }
-        "preset:k2-agent" => {
-            let agent_name = crate::workspace::agent_identity::resolve_agent_name(project_path)
-                .unwrap_or_else(|| "k2-agent".to_string());
-            crate::skills::content::generate_k2so_agent_skill_content(&project_name, &agent_name)
-        }
-        _ => return Ok(()),
+
+    // Full generators remain the loadable skills (depth on demand), not always-on.
+    let opt_in = match entry.source.as_str() {
+        "catalog:manager" => Some(crate::skills::content::OptInSkill::WorkspaceManager),
+        "catalog:k2-agent" => Some(crate::skills::content::OptInSkill::K2Agent),
+        _ => None,
     };
-    fs::write(&abs, body).map_err(|e| {
-        ContextError::Db(format!(
-            "cannot write context pack {}: {e}",
-            abs.display()
-        ))
-    })?;
+    if let Some(skill) = opt_in {
+        let _ = crate::skills::content::write_opt_in_skill(project_path, skill);
+    }
     Ok(())
 }
 
@@ -567,6 +1181,8 @@ pub fn list_enabled_layers(project_path: &str) -> Vec<ContextLayer> {
 
 /// Full stack view for list/show: pinned + optionals + soft-size estimate.
 pub fn list_stack(project_path: &str) -> Result<LayerStack, ContextError> {
+    // Keep on-disk roster fresh when the Settings UI polls the stack.
+    sync_live_generated_layers(project_path);
     let layers = list_layers(project_path)?;
     let pinned = pinned_info(project_path);
     let composed_bytes = estimate_composed_bytes(project_path, &pinned, &layers);
@@ -593,7 +1209,9 @@ pub fn estimate_composed_bytes(
         }
     }
     for l in layers.iter().filter(|l| l.enabled) {
-        if l.exists {
+        if is_live_generated_layer(l) {
+            total += 800; // live roster ballpark
+        } else if l.exists {
             total += l.bytes;
         }
     }
@@ -609,27 +1227,27 @@ pub fn estimate_composed_bytes(
 
 // ── Mutations ─────────────────────────────────────────────────────────
 
-/// Add a layer by path or preset. Regenerates AGENTS.md on success.
+/// Add a layer by path or catalog id. Regenerates AGENTS.md on success.
 pub fn add_layer(
     project_path: &str,
     path: Option<&str>,
-    preset: Option<&str>,
+    catalog: Option<&str>,
     label: Option<&str>,
 ) -> Result<ContextLayer, ContextError> {
     let has_path = path.map(|p| !p.trim().is_empty()).unwrap_or(false);
-    let has_preset = preset.map(|p| !p.trim().is_empty()).unwrap_or(false);
+    let has_catalog = catalog.map(|p| !p.trim().is_empty()).unwrap_or(false);
 
-    if has_path == has_preset {
+    if has_path == has_catalog {
         return Err(ContextError::BadUsage(
-            "provide exactly one of path or preset".into(),
+            "provide exactly one of path or catalog".into(),
         ));
     }
 
-    let (rel_path, source, default_label) = if has_preset {
-        let p = resolve_preset(preset.unwrap().trim())?;
-        // Preset paths are fixed relative strings; still normalize to confirm
+    let (rel_path, source, default_label) = if has_catalog {
+        let p = resolve_catalog_id(catalog.unwrap().trim())?;
+        // Catalog paths are fixed relative strings; still normalize to confirm
         // they land under the workspace (and rewrite `.k2/` vs `.k2so/` if needed).
-        let rel = normalize_preset_path(project_path, &p.path)?;
+        let rel = normalize_catalog_path(project_path, &p.path)?;
         // Manager / K2 packs: materialize generated role markdown on first add.
         materialize_pack_if_needed(project_path, &p, &rel)?;
         (rel, p.source, Some(p.label))
@@ -701,8 +1319,8 @@ pub fn add_layer(
 
 /// Preset paths are authored as `.k2/...`. On legacy `.k2so/` workspaces,
 /// rewrite the first segment so the file lands in the real dot-dir.
-fn normalize_preset_path(project_path: &str, preset_path: &str) -> Result<String, ContextError> {
-    let rel = preset_path.trim_start_matches("./");
+fn normalize_catalog_path(project_path: &str, catalog_path: &str) -> Result<String, ContextError> {
+    let rel = catalog_path.trim_start_matches("./");
     // Try the path as written first.
     if let Ok(n) = normalize_layer_path(project_path, rel) {
         return Ok(n);
@@ -1050,15 +1668,27 @@ pub fn layer_section_title(project_path: &str, layer: &ContextLayer) -> String {
 }
 
 /// Read a layer body for compose (frontmatter stripped). Missing → None.
+/// Live-generated layers rebuild from registry/disk state — they never depend
+/// on a stale on-disk body for AGENTS.md correctness.
 pub fn read_layer_body(project_path: &str, layer: &ContextLayer) -> Option<String> {
-    let abs = abs_layer_path(project_path, &layer.path);
-    let raw = fs::read_to_string(&abs).ok()?;
-    let body = crate::workspace::wake_prompts::strip_frontmatter(&raw);
-    let body = body.trim();
-    if body.is_empty() {
-        None
+    if is_live_generated_layer(layer) {
+        let body = render_live_layer_body(project_path, layer)?;
+        let body = body.trim();
+        if body.is_empty() {
+            None
+        } else {
+            Some(body.to_string())
+        }
     } else {
-        Some(body.to_string())
+        let abs = abs_layer_path(project_path, &layer.path);
+        let raw = fs::read_to_string(&abs).ok()?;
+        let body = crate::workspace::wake_prompts::strip_frontmatter(&raw);
+        let body = body.trim();
+        if body.is_empty() {
+            None
+        } else {
+            Some(body.to_string())
+        }
     }
 }
 
@@ -1200,8 +1830,8 @@ mod tests {
     }
 
     #[test]
-    fn preset_wiki_index_adds_and_rewrites_source() {
-        let root = unique_root("preset");
+    fn catalog_wiki_index_adds_and_rewrites_source() {
+        let root = unique_root("catalog");
         let path = root.to_str().unwrap();
         let pid = register_project(path);
 
@@ -1211,14 +1841,14 @@ mod tests {
         )
         .unwrap();
 
-        let layer = add_layer(path, None, Some("wiki:index"), None).expect("preset add");
-        assert_eq!(layer.source, "preset:wiki-index");
+        let layer = add_layer(path, None, Some("wiki:index"), None).expect("catalog add");
+        assert_eq!(layer.source, "catalog:wiki-index");
         assert_eq!(layer.path, ".k2/wiki/_Index.md");
         assert_eq!(layer.label.as_deref(), Some("Wiki index"));
         assert!(layer.exists);
 
         let err = add_layer(path, None, Some("wiki:nope"), None).expect_err("unknown");
-        assert_eq!(err.code(), "preset_unknown");
+        assert_eq!(err.code(), "catalog_unknown");
 
         cleanup_project(path, &pid);
     }
@@ -1265,35 +1895,166 @@ mod tests {
     }
 
     #[test]
-    fn list_presets_has_wiki_entries() {
-        let presets = list_presets();
-        assert!(presets.iter().any(|p| p.id == "wiki:index"));
-        assert!(presets.iter().any(|p| p.id == "wiki:home"));
-        assert!(presets.iter().any(|p| p.id == "manager:pack"));
-        assert!(presets.iter().any(|p| p.id == "k2:pack"));
+    fn list_catalog_has_wiki_entries() {
+        let catalog = list_catalog();
+        assert!(catalog.iter().any(|p| p.id == "wiki:index"));
+        assert!(catalog.iter().any(|p| p.id == "wiki:home"));
+        assert!(catalog.iter().any(|p| p.id == WIKI_HYGIENE_ID));
+        assert!(catalog.iter().any(|p| p.id == SUBAGENTS_PACK_ID));
+        assert!(catalog.iter().any(|p| p.id == "manager:pack"));
+        assert!(catalog.iter().any(|p| p.id == "k2:pack"));
+        assert!(catalog.iter().any(|p| p.id == CONNECTIONS_ROSTER_ID));
+        assert!(catalog.iter().any(|p| p.id == HEARTBEATS_ROSTER_ID));
+        assert!(catalog.iter().any(|p| p.id == SKILLS_ROSTER_ID));
+        for p in &catalog {
+            assert!(
+                matches!(p.kind.as_str(), "live" | "static" | "path"),
+                "catalog entry {} bad kind {}",
+                p.id,
+                p.kind
+            );
+            assert!(
+                p.description.as_ref().map(|d| !d.is_empty()).unwrap_or(false),
+                "catalog entry {} missing description",
+                p.id
+            );
+            assert_eq!(p.author.as_deref(), Some("K2"));
+            if p.kind == "static" || p.kind == "path" {
+                assert_eq!(p.version.as_deref(), Some("1.0.0"), "static/path need version");
+            }
+            if p.kind == "live" {
+                assert!(p.version.is_none(), "live packs have no version pin");
+            }
+            assert!(!p.tags.is_empty(), "catalog entry {} should have tags", p.id);
+            assert!(
+                !p.tags.iter().any(|t| t.eq_ignore_ascii_case("recommended")),
+                "recommended must be a boolean field, not a free-form tag ({})",
+                p.id
+            );
+        }
+        let recommended: Vec<_> = catalog
+            .iter()
+            .filter(|p| p.recommended)
+            .map(|p| p.id.as_str())
+            .collect();
+        assert!(recommended.contains(&"wiki:index"));
+        assert!(recommended.contains(&"wiki:hygiene"));
+        assert!(recommended.contains(&SUBAGENTS_PACK_ID));
+        assert!(recommended.contains(&CONNECTIONS_ROSTER_ID));
+        assert!(recommended.contains(&HEARTBEATS_ROSTER_ID));
+        assert!(!recommended.contains(&"skills:roster"));
+        assert!(!recommended.contains(&"manager:pack"));
     }
 
     #[test]
-    fn pack_presets_materialize_on_first_add() {
+    fn connections_roster_catalog_materializes_and_composes_live() {
+        let root = unique_root("roster");
+        let path = root.to_str().unwrap();
+        let _pid = register_project(path);
+
+        let layer = add_layer(path, None, Some("connections:roster"), None).expect("roster");
+        assert_eq!(layer.source, CONNECTIONS_ROSTER_SOURCE);
+        assert_eq!(layer.path, CONNECTIONS_ROSTER_PATH);
+        assert!(layer.exists);
+        let abs = root.join(".k2/context/catalog/connections-roster.md");
+        assert!(abs.is_file(), "roster file must materialize");
+        let body = fs::read_to_string(&abs).unwrap();
+        assert!(
+            body.contains("No connected agents yet") || body.contains("Local connections"),
+            "roster should describe connections; first 300:\n{}",
+            &body[..body.len().min(300)]
+        );
+
+        // Compose must include the roster section even if the file is deleted
+        // (live generation path).
+        fs::remove_file(&abs).ok();
+        let composed = show_composed(path).expect("compose");
+        assert!(
+            composed.contains("Connected agents roster")
+                || composed.contains("No connected agents yet"),
+            "composed AGENTS.md must inline live roster; first 500:\n{}",
+            &composed[..composed.len().min(500)]
+        );
+
+        cleanup_project(path, &_pid);
+    }
+
+    #[test]
+    fn wiki_hygiene_and_live_rosters_materialize() {
+        let root = unique_root("hygiene-rosters");
+        let path = root.to_str().unwrap();
+        let _pid = register_project(path);
+
+        let hygiene = add_layer(path, None, Some("wiki:hygiene"), None).expect("hygiene");
+        assert_eq!(hygiene.source, WIKI_HYGIENE_SOURCE);
+        let hygiene_body =
+            fs::read_to_string(root.join(".k2/context/catalog/wiki-hygiene.md")).unwrap();
+        assert!(
+            hygiene_body.contains("Wiki hygiene") && hygiene_body.contains(".k2/wiki/"),
+            "hygiene pack body unexpected: {}",
+            &hygiene_body[..hygiene_body.len().min(200)]
+        );
+
+        let hb = add_layer(path, None, Some("heartbeats:roster"), None).expect("hb roster");
+        assert_eq!(hb.source, HEARTBEATS_ROSTER_SOURCE);
+        assert!(root.join(".k2/context/catalog/heartbeats-roster.md").is_file());
+
+        let sk = add_layer(path, None, Some("skills:roster"), None).expect("skills roster");
+        assert_eq!(sk.source, SKILLS_ROSTER_SOURCE);
+        assert!(root.join(".k2/context/catalog/skills-roster.md").is_file());
+
+        let composed = show_composed(path).expect("compose");
+        assert!(
+            composed.contains("Wiki hygiene")
+                && composed.contains("Heartbeats roster")
+                && composed.contains("Skills roster"),
+            "compose missing new packs; first 800:\n{}",
+            &composed[..composed.len().min(800)]
+        );
+
+        cleanup_project(path, &_pid);
+    }
+
+    #[test]
+    fn pack_catalog_materialize_on_first_add() {
         let root = unique_root("pack");
         let path = root.to_str().unwrap();
         let _pid = register_project(path);
 
-        let manager_abs = root.join(".k2/context/presets/manager.md");
+        let manager_abs = root.join(".k2/context/catalog/manager.md");
         assert!(!manager_abs.exists());
 
         let layer = add_layer(path, None, Some("manager:pack"), None).expect("manager pack");
-        assert_eq!(layer.source, "preset:manager");
-        assert_eq!(layer.path, ".k2/context/presets/manager.md");
+        assert_eq!(layer.source, "catalog:manager");
+        assert_eq!(layer.path, ".k2/context/catalog/manager.md");
         assert!(manager_abs.is_file(), "manager pack must materialize");
         assert!(layer.exists);
+        let body = fs::read_to_string(&manager_abs).unwrap();
+        assert!(
+            body.contains("always-on") || body.contains("standing"),
+            "pack should be lean always-on orientation, got len={}",
+            body.len()
+        );
+        assert!(
+            body.len() < 4_000,
+            "always-on pack must stay small (not full skill dump), len={}",
+            body.len()
+        );
+        // Full skill remains loadable for depth.
+        assert!(
+            root.join(".k2/skills/workspace-manager/SKILL.md").is_file()
+                || root.join(".k2so/skills/workspace-manager/SKILL.md").is_file(),
+            "loadable workspace-manager skill should be ensured on pack add"
+        );
 
         let err = add_layer(path, None, Some("manager:pack"), None).expect_err("dup");
         assert_eq!(err.code(), "duplicate_layer");
 
         let k2_layer = add_layer(path, None, Some("k2-agent"), None).expect("k2 alias");
-        assert_eq!(k2_layer.source, "preset:k2-agent");
-        assert!(root.join(".k2/context/presets/k2-agent.md").is_file());
+        assert_eq!(k2_layer.source, "catalog:k2-agent");
+        assert!(root.join(".k2/context/catalog/k2-agent.md").is_file());
+        let k2_body = fs::read_to_string(root.join(".k2/context/catalog/k2-agent.md")).unwrap();
+        assert!(k2_body.len() < 4_000, "k2 pack must stay lean, len={}", k2_body.len());
 
         cleanup_project(path, &_pid);
     }
@@ -1314,7 +2075,7 @@ mod tests {
     }
 
     #[test]
-    fn bad_usage_both_path_and_preset() {
+    fn bad_usage_both_path_and_catalog() {
         let root = unique_root("both");
         let path = root.to_str().unwrap();
         let pid = register_project(path);

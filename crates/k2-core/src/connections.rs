@@ -875,6 +875,10 @@ pub fn connections_for_actor(
                     eprintln!("[connections] WARNING: {warning}");
                     resp["warning"] = serde_json::Value::String(warning);
                 }
+                drop(conn);
+                crate::workspace::context_layers::refresh_roster_after_connection_change(&[
+                    project_path,
+                ]);
                 return Ok(resp.to_string());
             }
 
@@ -943,6 +947,19 @@ pub fn connections_for_actor(
                 Some(&format!("Connected to {}", target_display)),
             );
 
+            let target_path: String = conn
+                .query_row(
+                    "SELECT path FROM projects WHERE id = ?1",
+                    rusqlite::params![target_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or_default();
+            drop(conn);
+            crate::workspace::context_layers::refresh_roster_after_connection_change(&[
+                project_path,
+                target_path.as_str(),
+            ]);
+
             Ok(serde_json::json!({
                 "success": true,
                 "id": id,
@@ -981,12 +998,24 @@ pub fn connections_for_actor(
                     None,
                     Some(&format!("Disconnected from {} (remote)", remote_addr)),
                 );
+                drop(conn);
+                crate::workspace::context_layers::refresh_roster_after_connection_change(&[
+                    project_path,
+                ]);
                 return Ok(serde_json::json!({"success": true, "remote": true}).to_string());
             }
 
             // 0.39.45 (#33): same case-insensitive + did-you-mean
             // resolution as `add`.
             let target_id = resolve_target_project_id(&conn, target_name)?;
+
+            let target_path: String = conn
+                .query_row(
+                    "SELECT path FROM projects WHERE id = ?1",
+                    rusqlite::params![target_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or_default();
 
             let rel_id: Result<String, _> = conn.query_row(
                 "SELECT id FROM workspace_relations WHERE source_project_id = ?1 AND target_project_id = ?2",
@@ -1006,6 +1035,11 @@ pub fn connections_for_actor(
                         Some(&target_id),
                         Some(&format!("Disconnected from {}", target_name)),
                     );
+                    drop(conn);
+                    crate::workspace::context_layers::refresh_roster_after_connection_change(&[
+                        project_path,
+                        target_path.as_str(),
+                    ]);
                     Ok(serde_json::json!({"success": true}).to_string())
                 }
                 Err(_) => Err(format!("No connection to '{}' found", target_name)),

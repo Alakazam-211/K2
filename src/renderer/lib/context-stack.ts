@@ -13,7 +13,7 @@ export interface ContextLayer {
   path: string
   enabled: boolean
   position: number
-  /** `'user'` | `'preset:wiki-index'` | … */
+  /** `'user'` | `'catalog:wiki-index'` | … */
   source: string
   label?: string | null
   exists: boolean
@@ -35,12 +35,26 @@ export interface PinnedLayer {
   editable?: boolean
 }
 
-/** Built-in preset that resolves to a fixed workspace-relative path. */
-export interface ContextPreset {
+/** Built-in / installed catalog entry for Browse catalog + `k2 agent context catalog`. */
+export interface ContextCatalogEntry {
   id: string
   path: string
   label: string
   source: string
+  /** `"live" | "static" | "path"` — pack kind for catalog UX. */
+  kind?: string
+  /**
+   * K2-controlled recommendation for a nice default experience.
+   * First-party only — never trust a marketplace pack's self-declared tag.
+   */
+  recommended?: boolean
+  /** Short blurb for the catalog modal (optional; client may fill). */
+  description?: string
+  /** Semver for static/path packs; omit for live. */
+  version?: string
+  author?: string
+  /** Free-form discovery tags only (not used for recommendation). */
+  tags?: string[]
 }
 
 /** Full list response: pinned + optional layers + soft-size estimate. */
@@ -98,19 +112,56 @@ function normalizeLayerResult(raw: unknown): ContextLayer {
   return normalizeLayer((raw ?? {}) as ContextLayer)
 }
 
-function normalizePresets(raw: unknown): ContextPreset[] {
+function normalizeCatalog(raw: unknown): ContextCatalogEntry[] {
   const list = Array.isArray(raw)
     ? raw
-    : Array.isArray((raw as { presets?: unknown })?.presets)
-      ? ((raw as { presets: unknown[] }).presets)
+    : Array.isArray((raw as { catalog?: unknown })?.catalog)
+      ? ((raw as { catalog: unknown[] }).catalog)
+      : Array.isArray((raw as { items?: unknown })?.items)
+        ? ((raw as { items: unknown[] }).items)
       : []
   return list.map((p) => {
-    const r = p as ContextPreset
+    const r = p as ContextCatalogEntry & {
+      description?: string
+      version?: string
+      author?: string
+      tags?: string[]
+      kind?: string
+      recommended?: boolean
+    }
+    const description =
+      r.description != null && String(r.description).trim().length > 0
+        ? String(r.description)
+        : undefined
+    const version =
+      r.version != null && String(r.version).trim().length > 0
+        ? String(r.version)
+        : undefined
+    const author =
+      r.author != null && String(r.author).trim().length > 0
+        ? String(r.author)
+        : undefined
+    const kind =
+      r.kind != null && String(r.kind).trim().length > 0
+        ? String(r.kind)
+        : undefined
+    // Strip spoofable "recommended" from free-form tags; use boolean only.
+    const tags = Array.isArray(r.tags)
+      ? r.tags
+          .map((t) => String(t))
+          .filter((t) => t.length > 0 && t.toLowerCase() !== 'recommended')
+      : undefined
     return {
       id: String(r.id ?? ''),
       path: String(r.path ?? ''),
       label: String(r.label ?? r.id ?? ''),
-      source: String(r.source ?? `preset:${r.id ?? 'user'}`),
+      source: String(r.source ?? `catalog:${r.id ?? 'user'}`),
+      recommended: Boolean(r.recommended),
+      ...(kind ? { kind } : {}),
+      ...(description ? { description } : {}),
+      ...(version ? { version } : {}),
+      ...(author ? { author } : {}),
+      ...(tags && tags.length > 0 ? { tags } : {}),
     }
   })
 }
@@ -121,23 +172,23 @@ export async function fetchContextStack(projectPath: string): Promise<LayerStack
   return normalizeStack(raw)
 }
 
-/** GET /cli/context/presets */
-export async function fetchContextPresets(): Promise<ContextPreset[]> {
-  const raw = await daemonCliGet<unknown>('context/presets')
-  return normalizePresets(raw)
+/** GET /cli/context/catalog */
+export async function fetchContextCatalog(): Promise<ContextCatalogEntry[]> {
+  const raw = await daemonCliGet<unknown>('context/catalog')
+  return normalizeCatalog(raw)
 }
 
-/** POST /cli/context/add — exactly one of path or preset. */
+/** POST /cli/context/add — exactly one of path or catalog. */
 export async function addContextLayer(args: {
   project: string
   path?: string
-  preset?: string
+  catalog?: string
   label?: string
 }): Promise<ContextLayer> {
   const raw = await daemonCliPost<unknown>('context/add', {
     project: args.project,
     path: args.path,
-    preset: args.preset,
+    catalog: args.catalog,
     label: args.label,
   })
   // Some handlers return the layer; others wrap as { layer }.
@@ -247,30 +298,164 @@ export const FALLBACK_PINNED: PinnedLayer[] = [
   },
 ]
 
-/** Default suggestion chips when presets endpoint is empty/unavailable. */
-export const DEFAULT_PRESET_CHIPS: ContextPreset[] = [
+/**
+ * Built-in catalog entries when the catalog endpoint is empty/unavailable,
+ * or to fill metadata for known ids on older daemons.
+ * New shippable packs should be added here (and in daemon `list_catalog`).
+ */
+export const DEFAULT_CATALOG_ENTRIES: ContextCatalogEntry[] = [
   {
     id: 'wiki:index',
     path: '.k2/wiki/_Index.md',
     label: 'Wiki index',
-    source: 'preset:wiki-index',
+    source: 'catalog:wiki-index',
+    kind: 'path',
+    recommended: true,
+    description: 'Workspace wiki map — links and structure for .k2/wiki/.',
+    version: '1.0.0',
+    author: 'K2',
+    tags: ['wiki', 'knowledge'],
   },
   {
     id: 'wiki:home',
     path: '.k2/wiki/Home.md',
     label: 'Wiki home',
-    source: 'preset:wiki-home',
+    source: 'catalog:wiki-home',
+    kind: 'path',
+    recommended: false,
+    description: 'Wiki landing page for this workspace.',
+    version: '1.0.0',
+    author: 'K2',
+    tags: ['wiki', 'knowledge'],
+  },
+  {
+    id: 'wiki:hygiene',
+    path: '.k2/context/catalog/wiki-hygiene.md',
+    label: 'Wiki hygiene',
+    source: 'catalog:wiki-hygiene',
+    kind: 'static',
+    recommended: true,
+    description:
+      'Standing orders for keeping .k2/wiki/ healthy — link, index, no orphans; don’t dump the vault into AGENTS.md.',
+    version: '1.0.0',
+    author: 'K2',
+    tags: ['wiki', 'knowledge', 'hygiene'],
+  },
+  {
+    id: 'subagents:pack',
+    path: '.k2/context/catalog/always-use-subagents.md',
+    label: 'Always use subagents',
+    source: 'catalog:subagents',
+    kind: 'static',
+    recommended: true,
+    description:
+      'Standing order: do heavy work in subagent worktrees; review and cherry-pick onto main.',
+    version: '1.0.0',
+    author: 'K2',
+    tags: ['workflow', 'subagents', 'context'],
   },
   {
     id: 'manager:pack',
-    path: '.k2/context/presets/manager.md',
+    path: '.k2/context/catalog/manager.md',
     label: 'Workspace Manager',
-    source: 'preset:manager',
+    source: 'catalog:manager',
+    kind: 'static',
+    recommended: false,
+    description:
+      'Lean always-on standing orders for coordinating connected workspaces. Full playbook stays a loadable skill.',
+    version: '1.0.0',
+    author: 'K2',
+    tags: ['role', 'manager'],
   },
   {
     id: 'k2:pack',
-    path: '.k2/context/presets/k2-agent.md',
+    path: '.k2/context/catalog/k2-agent.md',
     label: 'K2 Agent',
-    source: 'preset:k2-agent',
+    source: 'catalog:k2-agent',
+    kind: 'static',
+    recommended: false,
+    description:
+      'Lean always-on planner orientation. Full K2 Agent playbook stays a loadable skill.',
+    version: '1.0.0',
+    author: 'K2',
+    tags: ['role', 'planner'],
+  },
+  {
+    id: 'connections:roster',
+    path: '.k2/context/catalog/connections-roster.md',
+    label: 'Connected agents roster',
+    source: 'catalog:connections-roster',
+    kind: 'live',
+    recommended: true,
+    description:
+      'Live list of connected workspace-agents (local + remote). Regenerates whenever AGENTS.md is rewritten and when connections change.',
+    author: 'K2',
+    tags: ['live', 'roster', 'connections'],
+  },
+  {
+    id: 'heartbeats:roster',
+    path: '.k2/context/catalog/heartbeats-roster.md',
+    label: 'Heartbeats roster',
+    source: 'catalog:heartbeats-roster',
+    kind: 'live',
+    recommended: true,
+    description:
+      'Live catalog of scheduled heartbeats (name, frequency, WAKEUP path). Regenerates on AGENTS.md rewrite — not full WAKEUP bodies.',
+    author: 'K2',
+    tags: ['live', 'roster', 'heartbeats'],
+  },
+  {
+    id: 'skills:roster',
+    path: '.k2/context/catalog/skills-roster.md',
+    label: 'Skills roster',
+    source: 'catalog:skills-roster',
+    kind: 'live',
+    recommended: false,
+    description:
+      'Live catalog of .k2/skills/ profiles to load on demand. Regenerates on AGENTS.md rewrite — not full skill dumps.',
+    author: 'K2',
+    tags: ['live', 'roster', 'skills'],
   },
 ]
+
+/** Merge API catalog with known defaults (order + client metadata fill). */
+export function mergeContextCatalog(apiList: ContextCatalogEntry[]): ContextCatalogEntry[] {
+  const byId = new Map<string, ContextCatalogEntry>()
+  for (const p of DEFAULT_CATALOG_ENTRIES) byId.set(p.id, p)
+  for (const p of apiList) {
+    const prior = byId.get(p.id)
+    // First-party builtins: prefer API recommended; fall back to client default.
+    // Unknown (marketplace) packs: only trust recommended if API set it — and
+    // the daemon must refuse to set recommended for non-builtin sources.
+    const recommended =
+      typeof p.recommended === 'boolean'
+        ? p.recommended
+        : Boolean(prior?.recommended)
+    const tags = (p.tags && p.tags.length > 0 ? p.tags : prior?.tags)?.filter(
+      (t) => t.toLowerCase() !== 'recommended',
+    )
+    byId.set(p.id, {
+      ...prior,
+      ...p,
+      recommended,
+      description: p.description ?? prior?.description,
+      kind: p.kind ?? prior?.kind,
+      version: p.version ?? prior?.version,
+      author: p.author ?? prior?.author,
+      ...(tags && tags.length > 0 ? { tags } : { tags: prior?.tags }),
+    })
+  }
+  const ordered: ContextCatalogEntry[] = []
+  const seen = new Set<string>()
+  for (const p of DEFAULT_CATALOG_ENTRIES) {
+    const hit = byId.get(p.id)
+    if (hit) {
+      ordered.push(hit)
+      seen.add(p.id)
+    }
+  }
+  for (const p of apiList) {
+    if (!seen.has(p.id)) ordered.push(byId.get(p.id) ?? p)
+  }
+  return ordered
+}

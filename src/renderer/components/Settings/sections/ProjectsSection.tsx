@@ -1008,15 +1008,14 @@ function ProjectDetail({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [settingsTab, setSettingsTab] = useState<WorkspaceSettingsTab>('agent')
 
-  // Close editor / reset tab state when project changes (user navigated
-  // away without using back button).
+  // Close takeovers when the selected workspace changes — keep settingsTab
+  // so the user stays on Context / Heartbeats / etc. while flipping agents.
   useEffect(() => {
     setAgentEditorOpen(false)
     setAgentEditorName('')
     setContextFileEdit(null)
     setWakeupEditingHb(null)
     setCanonicalModalMode(null)
-    setSettingsTab('agent')
     setHistoryEmpty(false)
   }, [project.id])
 
@@ -1254,6 +1253,12 @@ function ProjectDetail({
     { id: 'import', label: 'Import' },
   ]
   const visibleTabs = workspaceTabs
+  // Header + tab strip always span the full settings column.
+  // Tab body width is per-tab: wide for stack/lists, constrained for forms.
+  const fullWidthTabContent =
+    settingsTab === 'context' ||
+    settingsTab === 'schedule' ||
+    settingsTab === 'worktrees'
 
   return (
     <>
@@ -1264,10 +1269,10 @@ function ProjectDetail({
         onCancel={() => setCropImage(null)}
       />
     )}
-    <div className="flex flex-col h-full min-h-0 max-w-3xl w-full">
-      {/* ── Sticky header + tabs ── */}
-      <div className="flex-shrink-0 space-y-4 pb-3 pr-1">
-        <div className="flex items-start justify-between gap-3">
+    <div className="flex flex-col h-full min-h-0 w-full">
+      {/* ── Sticky header + tabs (full width of the settings content column) ── */}
+      <div className="flex-shrink-0 space-y-4 pb-3 pr-1 w-full">
+        <div className="flex items-start justify-between gap-3 w-full">
           <div className="min-w-0">
             <h2 className="text-base font-medium text-[var(--color-text-primary)]">{project.name}</h2>
             <p className="text-[11px] text-[var(--color-text-muted)] mt-1 break-all">{project.path}</p>
@@ -1289,7 +1294,7 @@ function ProjectDetail({
         <div
           role="tablist"
           aria-label="Workspace settings"
-          className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)]"
+          className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full"
         >
           {visibleTabs.map((tab) => {
             const active = settingsTab === tab.id
@@ -1314,9 +1319,17 @@ function ProjectDetail({
       </div>
 
       {/* ── Tab panels ──
-          pr-3 + scrollbar-gutter so overlay scrollbars (macOS) don't sit
-          on top of toggles / swatches / list rows. */}
-      <div className="flex-1 overflow-y-auto min-h-0 pt-4 space-y-6 pb-8 pr-3 [scrollbar-gutter:stable]">
+          Context + Heartbeats use height-filling left/right splits.
+          Other tabs scroll normally; narrow tabs keep max-w-3xl. */}
+      <div
+        className={
+          settingsTab === 'context' || settingsTab === 'schedule'
+            ? 'flex-1 min-h-0 overflow-hidden flex flex-col w-full pt-3 pr-3 pb-3'
+            : `flex-1 overflow-y-auto min-h-0 pt-4 space-y-6 pb-8 pr-3 [scrollbar-gutter:stable] ${
+                fullWidthTabContent ? 'w-full max-w-none' : 'w-full max-w-3xl'
+              }`
+        }
+      >
         {settingsTab === 'agent' && (
           <>
             <SettingsGroup title="Identity">
@@ -1447,36 +1460,20 @@ function ProjectDetail({
         )}
 
         {settingsTab === 'context' && (
-          <>
-            {/* Always-on context stack — View/Edit persona, project knowledge,
-                optional layers (wiki index, user files). Replaces Manage
-                Knowledge / Manage Persona / the old Context Layers preview. */}
-            <SettingsGroup title="Always-on context (AGENTS.md stack)">
-              <ContextStackEditor
-                projectPath={project.path}
-                onEdit={openContextEdit}
-              />
-            </SettingsGroup>
-
-          {/* Agent types (Off / Custom / K2 / Manager) retired — every workspace
-              is effectively a custom agent. Role guidance lives in the stack chips
-              (Workspace Manager / K2 Agent). This section is only Canonical Agent. */}
-          <SettingsGroup title="Canonical Agent">
-            <div className="space-y-2">
-              <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-                Unify harness files (CLAUDE.md, AGENTS.md, …) safely into the context stack.
-                Persona and project knowledge are edited above; optional Manager / K2 guidance
-                are stack chips, not agent types.
-              </p>
-              <CanonicalAgentButton
-                probes={canonicalProbes}
-                projectPath={project.path}
-                onOpen={(mode) => setCanonicalModalMode(mode)}
-              />
-            </div>
-          </SettingsGroup>
-
-          </>
+          /* Full tab body: left stack + Canonical Agent | right FileViewer */
+          <div className="h-full min-h-0 w-full">
+            <ContextStackEditor
+              projectPath={project.path}
+              onEdit={openContextEdit}
+              canonicalSlot={
+                <CanonicalAgentButton
+                  probes={canonicalProbes}
+                  projectPath={project.path}
+                  onOpen={(mode) => setCanonicalModalMode(mode)}
+                />
+              }
+            />
+          </div>
         )}
 
         {settingsTab === 'skills' && (
@@ -1486,18 +1483,32 @@ function ProjectDetail({
         )}
 
         {settingsTab === 'schedule' && (
-          <div className="space-y-4">
-            {/* Agent types retired — always show heartbeats (custom agent default). */}
-            <HeartbeatsPanel
-              key={`hb-${hbRefreshNonce}`}
-              projectPath={project.path}
-              agentMode={project.agentMode || 'custom'}
-              agentName={primaryAgentName
-                || project.name.toLowerCase().replace(/\s+/g, '-')}
-              onConfigureWakeup={(row) => setWakeupEditingHb(row)}
-            />
-            <ShowHeartbeatSessionsToggle projectPath={project.path} />
-            <HistoryPanel projectPath={project.path} onEmptyChange={setHistoryEmpty} />
+          <div className="flex flex-col h-full min-h-0">
+            {/* Left: heartbeats roster · Right: run history — independent scroll */}
+            <div className="flex-1 min-h-0 flex flex-row border border-[var(--color-border)]">
+              <div className="flex-1 min-w-0 min-h-0 flex flex-col border-r border-[var(--color-border)]">
+                <div className="flex-1 min-h-0 overflow-y-auto p-3 [scrollbar-gutter:stable]">
+                  <HeartbeatsPanel
+                    key={`hb-${hbRefreshNonce}`}
+                    projectPath={project.path}
+                    agentMode={project.agentMode || 'custom'}
+                    agentName={primaryAgentName
+                      || project.name.toLowerCase().replace(/\s+/g, '-')}
+                    onConfigureWakeup={(row) => setWakeupEditingHb(row)}
+                  />
+                </div>
+                <div className="flex-shrink-0 border-t border-[var(--color-border)] px-3 py-2">
+                  <ShowHeartbeatSessionsToggle projectPath={project.path} />
+                </div>
+              </div>
+              <div className="w-[min(44%,26rem)] min-w-[16rem] max-w-md flex-shrink-0 min-h-0 flex flex-col p-3">
+                <HistoryPanel
+                  projectPath={project.path}
+                  onEmptyChange={setHistoryEmpty}
+                  fillHeight
+                />
+              </div>
+            </div>
           </div>
         )}
 

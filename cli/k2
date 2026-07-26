@@ -245,8 +245,8 @@ _skip_conn_gate=0
 [ "${1:-}" = "schema" ] && _skip_conn_gate=1
 
 if [ "$_skip_conn_gate" != "1" ] && { [ -z "$PORT" ] || [ -z "$TOKEN" ]; }; then
-    echo "Error: Cannot connect to K2SO." >&2
-    echo "Either run this from a K2SO terminal, or ensure K2SO is running." >&2
+    echo "Error: Cannot connect to K2." >&2
+    echo "Either run this from a K2 terminal, or ensure K2 is running." >&2
     echo "(Connection details: ~/.k2/heartbeat.port and ~/.k2/heartbeat.token)" >&2
     exit 1
 fi
@@ -2225,7 +2225,7 @@ cmd_daemon_install() {
                 echo "Usage: k2 daemon install [--version <x.y.z>] [--bin-dir <dir>]"
                 echo "                           [--manifest-url <url>] [--no-service] [--dry-run]"
                 echo ""
-                echo "  Install the STANDALONE (headless, no-GUI) K2SO daemon binary"
+                echo "  Install the STANDALONE (headless, no-GUI) K2 daemon binary"
                 echo "  from a signed GitHub release. Minisign-verifies the binary"
                 echo "  against the embedded updater pubkey before installing."
                 echo ""
@@ -2425,7 +2425,7 @@ cmd_daemon_install() {
             mkdir -p "$(dirname "$svc_path")"
             cat > "$svc_path" <<EOF
 [Unit]
-Description=K2SO standalone daemon
+Description=K2 standalone daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -2472,7 +2472,7 @@ EOF
     fi
 
     echo ""
-    echo "Standalone K2SO daemon installed: $bin_path"
+    echo "Standalone K2 daemon installed: $bin_path"
     echo "NOTE: pairing this headless box to a K2 Connect account from the"
     echo "      CLI is a follow-up — token bootstrap is still an open PRD"
     echo "      question, so this installer does NOT pair the daemon. Once"
@@ -5112,13 +5112,13 @@ cmd_whatsnew() {
                 cat <<'EOF'
 k2 whatsnew [--reset] [--all] [--mark-seen]
 
-Show the user-facing changelog for K2SO versions you haven't seen yet
+Show the user-facing changelog for K2 versions you haven't seen yet
 (the same content the Tauri app shows in its popup on first launch
 after an update).
 
 OPTIONS
   --reset      Clear the "last seen" marker so the popup shows again
-               next K2SO launch.
+               next K2 launch.
   --all        Print the full changelog regardless of last-seen state.
   --mark-seen  Manually mark the current version as seen (rarely needed;
                the popup does this on dismiss).
@@ -5133,7 +5133,7 @@ EOF
             local resp
             resp=$(cli_request "/cli/whats_new/reset" "")
             echo "$resp"
-            echo "(K2SO will show the popup again on next app launch.)" >&2
+            echo "(K2 will show the popup again on next app launch.)" >&2
             ;;
         mark-seen)
             cli_request "/cli/whats_new/mark_seen" ""
@@ -5164,11 +5164,11 @@ try:
     if d.get("has_new"):
         print(d.get("content", "").strip())
         cv = d.get("current_version", "?")
-        sys.stderr.write("\n— up through K2SO " + cv + "\n")
+        sys.stderr.write("\n— up through K2 " + cv + "\n")
     else:
         cv = d.get("current_version", "?")
         ls = d.get("last_seen_version") or "(never)"
-        sys.stderr.write("You are up to date on K2SO " + cv + ". (Last seen: " + ls + ")\n")
+        sys.stderr.write("You are up to date on K2 " + cv + ". (Last seen: " + ls + ")\n")
 except Exception as e:
     sys.stderr.write("could not parse response: " + str(e) + "\n")
     sys.exit(1)'
@@ -8768,15 +8768,15 @@ cmd_workspace_preview() {
     if [ -d "$target_path" ]; then
         target_path="$(cd "$target_path" && pwd)"
     fi
-    echo "Preview: what K2SO will do if you add $target_path"
+    echo "Preview: what K2 will do if you add $target_path"
     echo ""
-    echo "Collision-prone files K2SO takes over (archive → import body into SKILL.md → symlink):"
+    echo "Collision-prone files K2 takes over (archive → import body into SKILL.md → symlink):"
     local any_found=false
     for rel in "CLAUDE.md" "GEMINI.md" "AGENT.md" ".goosehints" ".cursor/rules/k2so.mdc"; do
         if [ -f "$target_path/$rel" ] && [ ! -L "$target_path/$rel" ]; then
-            # If this is K2SO's own generated file, don't report it as user content.
+            # If this is K2's own generated file, don't report it as user content.
             if grep -q "k2so_generated: true" "$target_path/$rel" 2>/dev/null; then
-                printf "  %-30s  K2SO-generated (will refresh in place)\n" "$rel"
+                printf "  %-30s  K2-generated (will refresh in place)\n" "$rel"
             else
                 local size
                 size=$(wc -c < "$target_path/$rel" 2>/dev/null | tr -d ' ')
@@ -8797,17 +8797,17 @@ cmd_workspace_preview() {
         echo "  (none — workspace is clean for first-time setup)"
     fi
     echo ""
-    echo "Files K2SO will create fresh (no pre-existing file):"
+    echo "Files K2 will create fresh (no pre-existing file):"
     for rel in "SKILL.md" "CLAUDE.md" "GEMINI.md" "AGENT.md" ".goosehints" ".cursor/rules/k2so.mdc" ".aider.conf.yml" ".opencode/agent/k2so.md" ".pi/skills/k2so/SKILL.md"; do
         if [ ! -e "$target_path/$rel" ]; then
             printf "  %s\n" "$rel"
         fi
     done
     echo ""
-    echo "Marker-injected (preserves your existing content, K2SO adds its own block):"
+    echo "Marker-injected (preserves your existing content, K2 adds its own block):"
     for rel in "AGENTS.md" ".github/copilot-instructions.md"; do
         if [ -f "$target_path/$rel" ]; then
-            echo "  $rel  (exists — K2SO block inserted between markers)"
+            echo "  $rel  (exists — K2 block inserted between markers)"
         else
             echo "  $rel  (will create)"
         fi
@@ -8832,8 +8832,8 @@ cmd_workspace_remove() {
         echo "Usage: k2 workspace remove <path> [--mode keep-current|restore-original]" >&2
         echo "" >&2
         echo "  --mode keep-current      Freeze the current SKILL.md body into each harness file so" >&2
-        echo "                           every CLI LLM keeps working after K2SO disconnects." >&2
-        echo "  --mode restore-original  Restore pre-K2SO files from .k2/migration/; files K2SO" >&2
+        echo "                           every CLI LLM keeps working after K2 disconnects." >&2
+        echo "  --mode restore-original  Restore pre-K2 files from .k2/migration/; files K2" >&2
         echo "                           created fresh are removed. .k2/ stays intact for reconnect." >&2
         echo "  (no mode)                DB-only deregister; filesystem untouched (symlinks remain)." >&2
         exit 1
@@ -9479,7 +9479,7 @@ cmd_schema() {
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--context <path|preset>]... [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--context <path|catalog-id>]... [--launch] [--onboard <msg>] [--dry-run] [--json]",
       "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, set mode + default agent program, wire connections, join projects, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": true}],
       "flags": [
@@ -9491,7 +9491,7 @@ cmd_schema() {
         {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
         {"name": "--connect", "arg": "name", "description": "Wire a connection to another agent (repeatable). Connections are always mutual (bidirectional)."},
         {"name": "--project", "arg": "project", "description": "Add the new agent to a project (name or id, repeatable; see k2 project list). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
-        {"name": "--context", "arg": "path|preset", "description": "Seed an always-on context layer after open (repeatable). Path must exist; presets (wiki:index, manager:pack, k2:pack, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
+        {"name": "--context", "arg": "path|catalog-id", "description": "Seed an always-on context layer after open (repeatable). Path must exist; catalog ids from `k2 agent context catalog` (wiki:index|home|hygiene, subagents:pack, manager:pack, k2:pack, connections|heartbeats|skills:roster, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
         {"name": "--launch", "arg": null, "description": "Start the agent's session after provisioning."},
         {"name": "--onboard", "arg": "msg", "description": "Send msg to the agent after it starts (implies --launch)."},
         {"name": "--dry-run", "arg": null, "description": "Print the exact action plan; change nothing."},
@@ -9549,7 +9549,7 @@ cmd_schema() {
     },
     {
       "name": "agent context",
-      "usage": "k2 agent context <list|add|remove|on|off|move|show|regen|presets> [args] [--json]",
+      "usage": "k2 agent context <list|add|remove|on|off|move|show|regen|catalog> [args] [--json]",
       "description": "Day-2 management of the always-on AGENTS.md context stack (context hamburger): pinned layers (Agent/Project/Tooling) plus optional ordered path layers. Workspace from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD. Exit codes: 0 ok, 1 error, 2 bad usage, 3 precondition (e.g. duplicate_layer), 4 not found.",
       "args": [{"name": "subcommand", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Machine-readable JSON (daemon body; mutations include ok/layer/regen)."}]
@@ -9563,9 +9563,9 @@ cmd_schema() {
     },
     {
       "name": "agent context add",
-      "usage": "k2 agent context add <path|preset> [--label name] [--json]",
-      "description": "Add an optional layer by workspace-relative path or preset id (wiki:index, manager:pack, k2:pack, …). Regenerates AGENTS.md.",
-      "args": [{"name": "path_or_preset", "required": true}],
+      "usage": "k2 agent context add <path|catalog-id> [--label name] [--json]",
+      "description": "Add an optional layer by workspace-relative path or catalog id (see `k2 agent context catalog`: wiki:*, subagents:pack, manager:pack, k2:pack, *:roster, …). Regenerates AGENTS.md.",
+      "args": [{"name": "path_or_catalog", "required": true}],
       "flags": [
         {"name": "--label", "arg": "name", "description": "Optional display label for the layer."},
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -9617,11 +9617,11 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
-      "name": "agent context presets",
-      "usage": "k2 agent context presets [--json]",
-      "description": "List built-in context layer presets (wiki:index, wiki:home, manager:pack, k2:pack).",
+      "name": "agent context catalog",
+      "usage": "k2 agent context catalog [--json]",
+      "description": "List the local context catalog (built-in path seeds, static packs, live rosters). Includes wiki:index|home|hygiene, subagents:pack, manager:pack, k2:pack, connections:roster, heartbeats:roster, skills:roster.",
       "args": [],
-      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (full metadata: kind, recommended, author, version, tags, description)."}]
     },
     {
       "name": "preset list",
@@ -10691,9 +10691,9 @@ cmd_onboarding_adopt() {
 }
 
 # k2 onboarding later [project-path]
-#   "Do it later" — drops .k2so/.skip-harness-management so K2SO won't
+#   "Do it later" — drops .k2so/.skip-harness-management so K2 won't
 #   touch CLAUDE.md / GEMINI.md / .cursor/rules / etc. on subsequent
-#   regens. K2SO's internal SKILL still gets written so heartbeats and
+#   regens. K2's internal SKILL still gets written so heartbeats and
 #   agent launches keep working. Reversible by removing the flag.
 cmd_onboarding_later() {
     local target="${1:-$PWD}"
@@ -10703,7 +10703,7 @@ cmd_onboarding_later() {
 
 # k2 onboarding fresh [project-path]
 #   Run the workspace regen normally, archiving any pre-existing
-#   harness files to .k2so/migration/ and replacing them with K2SO
+#   harness files to .k2so/migration/ and replacing them with K2
 #   symlinks. Equivalent to the renderer's "Start Fresh" button.
 cmd_onboarding_fresh() {
     local target="${1:-$PWD}"
@@ -11012,7 +11012,7 @@ SUBCOMMANDS
   folders                   List folders this workspace has created
 
 ORGANIZING YOUR INBOX
-  K2SO doesn't impose a folder taxonomy. Organize your inbox the way
+  K2 doesn't impose a folder taxonomy. Organize your inbox the way
   you'd organize email — create folders that fit your workflow:
     inbox move <id> projects/    # active work items
     inbox move <id> reference/   # things to remember
@@ -11870,9 +11870,12 @@ FLAGS
                           see `k2 project list`). Already a member = reported
                           no-op. The FIRST member of an empty project becomes
                           its Point of Contact.
-  --context <path|preset> Seed an always-on AGENTS.md layer after open (repeatable).
-                          Explicit paths must exist or hire fails. Presets
-                          (wiki:index, manager:pack, k2:pack, …) warn if the file
+  --context <path|catalog-id>
+                          Seed an always-on AGENTS.md layer after open (repeatable).
+                          Explicit paths must exist or hire fails. Catalog ids from
+                          `k2 agent context catalog` (wiki:index|home|hygiene,
+                          subagents:pack, manager:pack, k2:pack,
+                          connections|heartbeats|skills:roster) warn if the file
                           is missing and still stack. Same layer on re-hire = no-op.
                           Day-2: k2 agent context …
   --launch                Start the agent's session after provisioning
@@ -11887,6 +11890,8 @@ EXAMPLES
       --connect "Manager" --onboard "Welcome aboard — read your persona and check in."
   k2 agent hire ~/agents/researcher --template researcher --project "Blue Harbor"
   k2 agent hire ~/agents/mgr --template manager --context manager:pack --context wiki:index
+  k2 agent hire ~/agents/ops --context wiki:hygiene --context connections:roster \
+      --context skills:roster
 EOF
 }
 
@@ -12205,7 +12210,7 @@ cmd_agent_hire() {
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--project requires a project name or id (see: k2 project list)"; exit 2; }
                 projects+=("$2"); shift 2 ;;
             --context)
-                [ $# -ge 2 ] || { _agent_err "bad_usage" "--context requires a path or preset id (e.g. wiki:index, manager:pack)"; exit 2; }
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--context requires a path or catalog id (see: k2 agent context catalog)"; exit 2; }
                 contexts+=("$2"); shift 2 ;;
             --launch) launch=true; shift ;;
             --onboard)
@@ -12461,7 +12466,7 @@ if registered:
                 existing_context_sources.add(src)
 
 def context_is_path(token):
-    """Match k2 agent context add heuristic: path-like vs preset id."""
+    """Match k2 agent context add heuristic: path-like vs catalog id."""
     t = token or ""
     return (
         "/" in t
@@ -12592,17 +12597,35 @@ for ctx in wanted_contexts:
         else:
             a["status"] = "pending"
     else:
-        a["kind"] = "preset"
-        a["preset"] = ctx
-        # Source tags for common presets (best-effort plan-time skip).
+        a["kind"] = "catalog"
+        a["catalog"] = ctx
+        # Source tags for built-in catalog entries (best-effort plan-time skip).
+        # Keep in sync with daemon list_catalog() + aliases in resolve_catalog_id().
+        # Live rosters + static packs + wiki path seeds.
         src_guess = {
-            "wiki:index": "preset:wiki-index",
-            "wiki:home": "preset:wiki-home",
-            "manager:pack": "preset:manager",
-            "manager": "preset:manager",
-            "k2:pack": "preset:k2-agent",
-            "k2-agent": "preset:k2-agent",
-            "k2": "preset:k2-agent",
+            "wiki:index": "catalog:wiki-index",
+            "wiki:home": "catalog:wiki-home",
+            "wiki:hygiene": "catalog:wiki-hygiene",
+            "wiki-hygiene": "catalog:wiki-hygiene",
+            "hygiene": "catalog:wiki-hygiene",
+            "subagents:pack": "catalog:subagents",
+            "subagents": "catalog:subagents",
+            "always-use-subagents": "catalog:subagents",
+            "use-subagents": "catalog:subagents",
+            "manager:pack": "catalog:manager",
+            "manager": "catalog:manager",
+            "workspace-manager": "catalog:manager",
+            "k2:pack": "catalog:k2-agent",
+            "k2-agent": "catalog:k2-agent",
+            "k2": "catalog:k2-agent",
+            "connections:roster": "catalog:connections-roster",
+            "connections": "catalog:connections-roster",
+            "roster": "catalog:connections-roster",
+            "heartbeats:roster": "catalog:heartbeats-roster",
+            "heartbeats": "catalog:heartbeats-roster",
+            "skills:roster": "catalog:skills-roster",
+            "skills": "catalog:skills-roster",
+            "skills-index": "catalog:skills-roster",
         }.get(ctx)
         if src_guess and src_guess in existing_context_sources:
             a.update(status="skipped", reason="already stacked")
@@ -12661,8 +12684,8 @@ def emit(ok, changed):
             if a.get("becamePoc"):
                 line += " (first member — Point of Contact)"
         elif step == "seed-context":
-            if a.get("kind") == "preset":
-                line = "context: preset %s" % a.get("preset", a.get("context"))
+            if a.get("kind") == "catalog":
+                line = "context: catalog %s" % a.get("catalog", a.get("context"))
             else:
                 line = "context: %s" % (a.get("path") or a.get("context"))
             if a.get("warn"):
@@ -12695,7 +12718,7 @@ def step_failed(action, code, hint, exit_code=None):
     if exit_code is None:
         # Align with agent-family exits when possible.
         c = (code or "").lower()
-        if c in ("bad_usage", "path_escape", "preset_unknown", "usage"):
+        if c in ("bad_usage", "path_escape", "catalog_unknown", "usage"):
             exit_code = 2
         elif c in ("duplicate_layer", "refused", "precondition"):
             exit_code = 3
@@ -12858,14 +12881,14 @@ for a in by_step.get("join-project", []):
         changed = True
 
 # 6c. seed context layers (after workspace is open/registered).
-#     Explicit paths already validated at plan time. Preset missing file
+#     Explicit paths already validated at plan time. Catalog missing file
 #     → warn on stderr and continue. Duplicate → skipped (idempotent).
 for a in by_step.get("seed-context", []):
     if a["status"] != "pending":
         continue
     body = {"project": path}
-    if a.get("kind") == "preset":
-        body["preset"] = a.get("preset") or a.get("context")
+    if a.get("kind") == "catalog":
+        body["catalog"] = a.get("catalog") or a.get("context")
     else:
         body["path"] = a.get("path") or a.get("context")
     resp = http_post_json("/cli/context/add", body)
@@ -12879,15 +12902,15 @@ for a in by_step.get("seed-context", []):
             a["status"] = "skipped"
             a["reason"] = "already stacked"
             continue
-        if code == "preset_unknown":
-            step_failed(a, "preset_unknown",
-                        "unknown context preset '%s': %s — see: k2 agent context presets"
+        if code == "catalog_unknown":
+            step_failed(a, "catalog_unknown",
+                        "unknown context catalog id '%s': %s — see: k2 agent context catalog"
                         % (a.get("context"), hint))
         if a.get("kind") == "path":
             step_failed(a, code if code in ("not_found", "path_escape", "bad_usage") else "daemon_error",
                         "context seed failed for %s: %s" % (a.get("context"), hint))
-        # Preset soft-fail: warn + skip (do not abort hire).
-        sys.stderr.write("warning: context seed skipped for preset '%s': %s\n"
+        # Catalog soft-fail: warn + skip (do not abort hire).
+        sys.stderr.write("warning: context seed skipped for catalog id '%s': %s\n"
                          % (a.get("context"), hint))
         a["status"] = "skipped"
         a["reason"] = hint
@@ -12906,8 +12929,8 @@ for a in by_step.get("seed-context", []):
     a["layerId"] = layer.get("id")
     a["path"] = layer.get("path") or a.get("path")
     exists = layer.get("exists")
-    if a.get("kind") == "preset" and exists is False:
-        warn = "preset file missing on disk: %s (layer stacked; fill file or regen later)" % (
+    if a.get("kind") == "catalog" and exists is False:
+        warn = "catalog pack file missing on disk: %s (layer stacked; fill file or regen later)" % (
             layer.get("path") or a.get("context"))
         sys.stderr.write("warning: %s\n" % warn)
         a["warn"] = warn
@@ -13155,22 +13178,28 @@ System (pinned) layers: Agent persona, PROJECT.md, Tooling footer — toggleable
 with on/off (ids pinned:agent|pinned:project|pinned:tooling, or short aliases
 agent|project|tooling). Optional layers are ordered path references you can
 add, toggle, reorder, or remove. The daemon composes them into .k2/AGENTS.md
-on every mutate. Hire can seed layers: k2 agent hire <dir> --context <path|preset>
+on every mutate. Hire can seed layers: k2 agent hire <dir> --context <path|catalog-id>
 
 USAGE
   k2 agent context <command> [args] [flags]
 
 COMMANDS
   list                    Show system layers (on/off) + optional layers
-  add <path|preset>       Add an optional layer (path or preset id, e.g. wiki:index,
-                          manager:pack, k2:pack)
+  add <path|id>           Add an optional layer (workspace path or catalog id —
+                          run `catalog` for the full local list)
   remove <id|path>        Drop an optional layer (file on disk is kept)
   on <id|path|system>     Enable optional or system layer
   off <id|path|system>    Disable optional or system layer
   move <id|path> <where>  Reorder: absolute position n, or up|down|top|bottom
   show [--outline]        Preview composed AGENTS.md (or section outline)
   regen                   Force-compose AGENTS.md from the current stack
-  presets                 List built-in layer presets
+  catalog                 List the local context catalog (path / static / live)
+
+LOCAL CATALOG (also hire --context)
+  Path:   wiki:index, wiki:home
+  Static: wiki:hygiene, subagents:pack, manager:pack, k2:pack
+  Live:   connections:roster, heartbeats:roster, skills:roster
+  (Aliases work too — e.g. manager, connections, hygiene, subagents.)
 
 WORKSPACE
   Resolved from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD (same as other
@@ -13179,15 +13208,21 @@ WORKSPACE
 FLAGS
   --label <name>          With add: optional display label
   --outline               With show: section headings only
-  --json                  Machine-readable output
+  --json                  Machine-readable output (catalog: full metadata)
 
 EXIT CODES
   0 ok · 1 error · 2 bad usage · 3 precondition (e.g. duplicate layer) · 4 not found
 
 EXAMPLES
   k2 agent context list
+  k2 agent context catalog
+  k2 agent context catalog --json
   k2 agent context add wiki:index
+  k2 agent context add wiki:hygiene
+  k2 agent context add subagents:pack
   k2 agent context add manager:pack
+  k2 agent context add connections:roster
+  k2 agent context add skills:roster
   k2 agent context add docs/architecture.md --label arch
   k2 agent context off wiki-index
   k2 agent context off pinned:tooling
@@ -13201,7 +13236,7 @@ EOF
 # Map daemon error.code → agent-family exit status.
 _context_exit_for_code() {
     case "${1:-}" in
-        bad_usage|path_escape|preset_unknown|usage|invalid_move|invalid_position)
+        bad_usage|path_escape|catalog_unknown|usage|invalid_move|invalid_position)
             return 2 ;;
         duplicate_layer|refused|precondition|agents_create_connections_disabled)
             return 3 ;;
@@ -13265,7 +13300,7 @@ def fail(code, hint, exit_code=1):
 
 def exit_for(code):
     c = (code or "").lower()
-    if c in ("bad_usage", "path_escape", "preset_unknown", "usage",
+    if c in ("bad_usage", "path_escape", "catalog_unknown", "usage",
              "invalid_move", "invalid_position"):
         return 2
     if c in ("duplicate_layer", "refused", "precondition"):
@@ -13331,11 +13366,11 @@ if err is not None:
     sys.exit(exit_for(code))
 
 # Some routes use ok:false without error object
-if d.get("ok") is False and not d.get("layers") and "pinned" not in d and "presets" not in d and "content" not in d and "outline" not in d and "text" not in d:
+if d.get("ok") is False and not d.get("layers") and "pinned" not in d and "catalog" not in d and "content" not in d and "outline" not in d and "text" not in d:
     fail("daemon_error", "unexpected response: %s" % json.dumps(d)[:300], 1)
 
 # 404 with HTML / empty structured body
-if status == 404 and "ok" not in d and "layers" not in d and "presets" not in d:
+if status == 404 and "ok" not in d and "layers" not in d and "catalog" not in d:
     fail("not_found", "route %s not found (is the context-hamburger daemon build running?)" % route, 4)
 
 print(raw)
@@ -13452,7 +13487,7 @@ else:
 print("")
 print("OPTIONAL  (order = AGENTS.md)")
 if not layers:
-    print("  (none — add with: k2 agent context add <path|preset>)")
+    print("  (none — add with: k2 agent context add <path|catalog-id>)")
 else:
     # Sort by position if present
     def pos_key(L):
@@ -13466,7 +13501,7 @@ else:
         label = (L.get("label") or "").strip()
         if not label:
             src = (L.get("source") or "")
-            if src.startswith("preset:"):
+            if src.startswith("catalog:"):
                 label = src.split(":", 1)[1]
             else:
                 path = (L.get("path") or "")
@@ -13480,25 +13515,42 @@ else:
 PYEOF
 }
 
-_context_format_presets() {
+_context_format_catalog() {
     RAW="$1" python3 - <<'PYEOF'
 import json, os, sys
 d = json.loads(os.environ["RAW"])
-presets = d.get("presets") or d.get("items") or []
+items = d.get("catalog") or d.get("items") or []
 if isinstance(d, list):
-    presets = d
-if not presets:
-    print("(no context presets registered)")
+    items = d
+if not items:
+    print("(no context catalog items registered)")
     sys.exit(0)
-print("%-16s  %-28s  %s" % ("ID", "PATH", "LABEL"))
-for p in presets:
+# Prefer daemon kind when present; otherwise leave blank.
+print("%-18s  %-6s  %-36s  %s" % ("ID", "KIND", "PATH", "LABEL"))
+for p in items:
     if not isinstance(p, dict):
         print(p)
         continue
-    pid = p.get("id") or p.get("preset") or "?"
+    pid = p.get("id") or "?"
     path = p.get("path") or p.get("defaultPath") or ""
     label = p.get("label") or p.get("name") or ""
-    print("%-16s  %-28s  %s" % (pid, path, label))
+    kind = (p.get("kind") or "").strip()
+    if not kind:
+        # Infer for older daemons without kind on the wire.
+        src = (p.get("source") or "")
+        if "roster" in pid or src.endswith("-roster") or "connections-roster" in src:
+            kind = "live"
+        elif pid.startswith("wiki:index") or pid.startswith("wiki:home") or "/wiki/" in path:
+            kind = "path"
+        elif "hygiene" in pid or "pack" in pid or "catalog/" in path:
+            kind = "static"
+        else:
+            kind = "?"
+    print("%-18s  %-6s  %-36s  %s" % (pid, kind, path, label))
+    desc = (p.get("description") or "").strip()
+    if desc:
+        # Soft-wrap one indent line for Browse-friendly reading in terminal.
+        print("    %s" % desc)
 PYEOF
 }
 
@@ -13547,7 +13599,7 @@ cmd_agent_context() {
         move)     cmd_agent_context_move "$@" ;;
         show)     cmd_agent_context_show "$@" ;;
         regen)    cmd_agent_context_regen "$@" ;;
-        presets)  cmd_agent_context_presets "$@" ;;
+        catalog)  cmd_agent_context_catalog "$@" ;;
         --help|-h)
             cmd_help_agent_context
             exit 0
@@ -13595,25 +13647,24 @@ cmd_agent_context_add() {
                 label="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context add <path|preset> [--label name] [--json]"
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context add <path|catalog-id> [--label name] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$target" ]; then target="$1"; else
-                    _agent_err "bad_usage" "unexpected extra argument '$1' — usage: k2 agent context add <path|preset> [--label name] [--json]"
+                    _agent_err "bad_usage" "unexpected extra argument '$1' — usage: k2 agent context add <path|catalog-id> [--label name] [--json]"
                     exit 2
                 fi
                 shift ;;
         esac
     done
     if [ -z "$target" ]; then
-        _agent_err "bad_usage" "missing <path|preset> — usage: k2 agent context add <path|preset> [--label name] [--json]"
+        _agent_err "bad_usage" "missing <path|catalog-id> — usage: k2 agent context add <path|catalog-id> [--label name] [--json]"
         exit 2
     fi
     local project body raw rc=0
     project=$(_context_project_path)
-    # Preset heuristic: contains ":" and is not an absolute/relative path
-    # with a drive or leading slash-only weirdness. Paths with "/" or
-    # ending in .md are always paths.
+    # Catalog-id heuristic: paths with "/" or ending in .md are always paths;
+    # otherwise treat the token as a catalog id (wiki:index, manager:pack, …).
     body=$(TARGET="$target" LABEL="$label" PROJECT="$project" python3 - <<'PYEOF'
 import json, os
 target = os.environ["TARGET"]
@@ -13631,8 +13682,8 @@ is_path = (
 if is_path:
     body["path"] = target
 else:
-    # preset id (wiki:index, manager, etc.)
-    body["preset"] = target
+    # catalog id (wiki:index, manager:pack, …)
+    body["catalog"] = target
 if label:
     body["label"] = label
 print(json.dumps(body))
@@ -13875,29 +13926,29 @@ else:
 PYEOF
 }
 
-cmd_agent_context_presets() {
+cmd_agent_context_catalog() {
     if _wants_help "$@"; then cmd_help_agent_context; exit 0; fi
     local as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
             -*)
-                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context presets [--json]"
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent context catalog [--json]"
                 exit 2 ;;
             *)
-                _agent_err "bad_usage" "unexpected argument '$1' — usage: k2 agent context presets [--json]"
+                _agent_err "bad_usage" "unexpected argument '$1' — usage: k2 agent context catalog [--json]"
                 exit 2 ;;
         esac
     done
     local project raw rc=0
     project=$(_context_project_path)
-    raw=$(_context_http "$project" GET "/cli/context/presets") || rc=$?
+    raw=$(_context_http "$project" GET "/cli/context/catalog") || rc=$?
     [ "$rc" -ne 0 ] && exit "$rc"
     if $as_json; then
         printf '%s\n' "$raw"
         return 0
     fi
-    _context_format_presets "$raw"
+    _context_format_catalog "$raw"
 }
 
 cmd_help_skills() {
@@ -13922,7 +13973,7 @@ SKILLS vs AGENT
 
   Spawning sessions pre-loaded with a skill is your harness's job
   (Claude Code's sub-agent spawning, Cursor's worktree management).
-  K2SO no longer provides a `delegate` verb — see `k2 help-deprecated`.
+  K2 no longer provides a `delegate` verb — see `k2 help-deprecated`.
 
   Skills live at `.k2/skills/<name>/SKILL.md` (consolidated home as of
   Phase 2.5b). The legacy `.k2so/agents/` and `.k2so/agent-templates/`
@@ -13951,7 +14002,7 @@ Show or modify workspace settings. Without flags: prints current settings.
 
 WORKSPACE MODE
   --mode <off|agent|manager>
-                            off: K2SO ignores this workspace
+                            off: K2 ignores this workspace
                             agent: workspace has a primary agent
                             manager: workspace coordinates other workspaces
 
@@ -14035,7 +14086,7 @@ EOF
 
 cmd_help_deprecated() {
     cat <<'EOF'
-K2SO retired verbs → new equivalents
+K2 retired verbs → new equivalents
 
 HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
 
@@ -14055,7 +14106,7 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
   agents triage                   → workspace triage
   delegate <agent> <file>         → Your harness handles worktree+spawn now
                                      (Claude Code sub-agent, Cursor worktree,
-                                     Tauri Cmd+T). K2SO no longer manages
+                                     Tauri Cmd+T). K2 no longer manages
                                      the spawn lifecycle. For skill profile
                                      content, use `k2 skills profile <name>`
                                      and load it into your harness.
@@ -14073,7 +14124,7 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
   agents lock <n>                 → skills lock <name> (debugging only)
   agents unlock <n>               → skills lock <name> --release
   agents launch <n>               → your IDE/harness's session-start
-                                       feature; K2SO no longer manages spawn
+                                       feature; K2 no longer manages spawn
   agents profile <n>              → skills profile <name>
                                        (or `workspace profile`)
   agents status <n>               → workspace status (or `checkin --status`)
@@ -14144,9 +14195,9 @@ EOF
 
 cmd_help_internal() {
     cat <<'EOF'
-K2SO CLI — Internal surface (rare; used by agent runtimes)
+K2 CLI — Internal surface (rare; used by agent runtimes)
 
-These verbs exist for orchestrators and tools that integrate with K2SO.
+These verbs exist for orchestrators and tools that integrate with K2.
 Humans rarely run them directly.
 
 TERMINAL (raw PTY I/O)
@@ -14304,9 +14355,9 @@ cmd_workspace_triage() {
 
 cmd_help_v2_daily() {
     cat <<'EOF'
-K2SO CLI — workspace orchestration for AI agents
+K2 CLI — workspace orchestration for AI agents
 
-A workspace = a folder K2SO manages, with exactly one primary agent
+A workspace = a folder K2 manages, with exactly one primary agent
 that reads its inbox, applies skills to work, and coordinates with
 other workspaces. A Project is different: a NAMED GROUP of workspaces
 with one shared chat + one PoC agent (see PROJECTS below).
@@ -14404,14 +14455,14 @@ INFO
   help --advanced                       Power-user verbs (heartbeat, daemon, etc.)
   help --internal                       Orchestrator-RPC verbs (rare)
   help-deprecated                       Map: old verb → new equivalent
-  glossary [<term>]                     Define K2SO-specific terms (try `glossary inbox`)
+  glossary [<term>]                     Define K2-specific terms (try `glossary inbox`)
   whats-new                             Changelog popup
   version                               CLI version
 
 ENVIRONMENT
-  K2SO_DAEMON_URL     Remote daemon URL (default: localhost — see K2SO Connect)
-  K2SO_PROJECT_PATH   Workspace root (default: $PWD)
-  K2SO_AGENT_NAME     Default sender for `msg --from`
+  K2_PROJECT_PATH     Workspace root (default: $PWD; also K2SO_PROJECT_PATH)
+  K2_AGENT_NAME       Default sender for `msg --from` (also K2SO_AGENT_NAME)
+  K2_PORT / token      From K2 terminal env, or ~/.k2/daemon.port + daemon.token
 
 Run `k2 glossary <term>` for any unfamiliar word (workspace, skill,
 inbox, heartbeat, etc.).
@@ -14420,7 +14471,7 @@ EOF
 
 cmd_help_v2_advanced() {
     cat <<'EOF'
-K2SO CLI — Power-user surface
+K2 CLI — Power-user surface
 
 Includes all daily verbs above, plus:
 
@@ -14518,7 +14569,7 @@ SKILLS (documentation profiles — NOT spawnable; harness handles spawn)
   skills regenerate [<name>]                    Refresh SKILL.md files
 
 UPDATE
-  update                                        Update K2SO app (default: --app)
+  update                                        Update K2 app (default: --app)
   update --app                                  Same: check/install app updates
   update --cli                                  Update this CLI script
   update --list                                 Show available versions
@@ -21472,7 +21523,7 @@ case "${1:-help}" in
         ;;
     context)
         # Top-level teach string — stack lives under `k2 agent context`.
-        echo "Use: k2 agent context <list|add|remove|on|off|move|show|regen|presets>" >&2
+        echo "Use: k2 agent context <list|add|remove|on|off|move|show|regen|catalog>" >&2
         echo "Day-2 management of the always-on AGENTS.md context stack (context hamburger)." >&2
         echo "See: k2 agent context --help" >&2
         exit 2
@@ -21618,7 +21669,7 @@ case "${1:-help}" in
             delete|remove)
                 fail_deprecated "agents delete" "k2 skills remove <name> or k2 workspace remove <path>" ;;
             launch)
-                fail_deprecated "agents launch" "your IDE/harness's session-start feature; K2SO no longer manages session spawn" ;;
+                fail_deprecated "agents launch" "your IDE/harness's session-start feature; K2 no longer manages session spawn" ;;
             generate-md)
                 fail_deprecated "agents generate-md" "k2 skills regenerate [<name>]" ;;
             profile)
@@ -21674,14 +21725,14 @@ case "${1:-help}" in
         ;;
     delegate)
         # Phase 2.1 A23: hard-deprecated. Modern harnesses (Claude Code,
-        # Cursor) create worktrees + spawn sub-agents natively. K2SO no
+        # Cursor) create worktrees + spawn sub-agents natively. K2 no
         # longer manages the spawn lifecycle.
         cat >&2 <<EOF
 Error: 'delegate' is deprecated.
 
 Modern harnesses (Claude Code, Cursor, etc.) create worktrees and
 spawn agents natively — use your IDE's sub-agent / worktree feature
-instead. K2SO no longer manages the spawn lifecycle.
+instead. K2 no longer manages the spawn lifecycle.
 
 For applying a skill profile to specific work without a fresh worktree,
 see 'k2 skills profile <name>' for the SKILL.md content; load it
@@ -21975,7 +22026,7 @@ EOF
         shift; cmd_inbox "$@"
         ;;
     glossary)
-        # Phase 2.1 A10: K2SO glossary lookup.
+        # Phase 2.1 A10: K2 glossary lookup.
         shift; cmd_glossary "$@"
         ;;
     help-deprecated)

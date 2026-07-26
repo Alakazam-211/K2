@@ -257,10 +257,10 @@ export default function Settings(): React.JSX.Element {
         }`}
       >
         {activeSection === 'general' && (
-          /* When local: full width (Canonical Agent Flow needs room). When
-             remote: half/half with Connected host controls on the right. */
+          /* General owns its own chrome (full-width tabs) + scroll.
+             Remote: half/half with Connected host controls on the right. */
           <div className="flex h-full min-h-0">
-            <div className="flex-1 min-w-0 overflow-y-auto p-6">
+            <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
               <GeneralSection />
             </div>
             {isRemote && (

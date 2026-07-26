@@ -117,16 +117,21 @@ fn compose_agents_md(project_path: &str) -> String {
     );
 
     if inc_agent {
-        if let Some(primary) = find_primary_agent(project_path) {
-            let agent_md = agent_dir(project_path, &primary).join("AGENT.md");
-            if let Ok(raw) = fs::read_to_string(&agent_md) {
-                let body = strip_frontmatter(&raw);
-                let body = body.trim();
-                if !body.is_empty() {
-                    out.push_str("## Agent\n\n");
-                    out.push_str(body);
-                    out.push_str("\n\n");
-                }
+        // Match pinned_info / Settings: prefer primary agent path, else the
+        // unified `.k2/agent/AGENT.md` even when frontmatter has no `name:`
+        // (common for pre-hamburger workspaces that just dropped a persona file).
+        let agent_md = if let Some(primary) = find_primary_agent(project_path) {
+            agent_dir(project_path, &primary).join("AGENT.md")
+        } else {
+            crate::workspace::agent_identity::workspace_agent_path(project_path).join("AGENT.md")
+        };
+        if let Ok(raw) = fs::read_to_string(&agent_md) {
+            let body = strip_frontmatter(&raw);
+            let body = body.trim();
+            if !body.is_empty() {
+                out.push_str("## Agent\n\n");
+                out.push_str(body);
+                out.push_str("\n\n");
             }
         }
     }
@@ -146,8 +151,10 @@ fn compose_agents_md(project_path: &str) -> String {
 
     // Optional context layers (enabled only, position order). Missing files
     // emit a MISSING comment and continue — boot-safe, never panic.
+    // Live-generated layers (connections roster) never depend on disk.
     for layer in list_enabled_layers(project_path) {
-        if !layer.exists {
+        let live = crate::workspace::context_layers::is_live_generated_layer(&layer);
+        if !live && !layer.exists {
             out.push_str(&format!(
                 "<!-- K2 context layer MISSING: {} -->\n\n",
                 layer.path
@@ -332,7 +339,9 @@ command surface.
 ## Always-on context (AGENTS.md hamburger)
 ```
 k2 agent context list|add|on|off|move|regen   # manage stack layers
-k2 agent hire <dir> --context wiki:index --context <path>   # seed at hire
+k2 agent hire <dir> --context wiki:hygiene --context connections:roster
+k2 agent context catalog                                    # local context catalog
+k2 agent context add manager:pack                           # day-2 stack
 ```
 Optional path layers compose into `.k2/AGENTS.md` with Agent / Project /
 Tooling. Prefer short standing orders; load skills for depth.
@@ -378,6 +387,10 @@ lays the symlinks directly.
 fn publish_canonical_agents_md(project_path: &str) -> PathBuf {
     use crate::skills::version::{ensure_skill_up_to_date, SKILL_VERSION_CANONICAL_AGENT};
     let dot = crate::workspace_dot_dir(project_path);
+
+    // Refresh live-generated context packs (e.g. connections roster) so
+    // on-disk FileViewer / wiki mirrors match what compose inlines.
+    crate::workspace::context_layers::sync_live_generated_layers(project_path);
 
     let canonical = dot.join("AGENTS.md");
     log_if_err(
@@ -1611,6 +1624,39 @@ mod tests {
                 && agents_md.contains("## Tooling"),
             "pinned sections must all be present",
         );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    /// Pre-hamburger workspaces often have `.k2/agent/AGENT.md` with no
+    /// `name:` frontmatter — Settings still lists the file as pinned:agent;
+    /// compose must include the body (not only when find_primary_agent hits).
+    #[test]
+    fn compose_agents_md_includes_persona_without_frontmatter_name() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        let agent_dir = proj.join(".k2/agent");
+        fs::create_dir_all(&agent_dir).unwrap();
+        fs::write(
+            agent_dir.join("AGENT.md"),
+            "# Legacy Agent Persona\n\nPLAIN-PERSONA-MARKER protect the pipeline.\n",
+        )
+        .unwrap();
+        fs::write(
+            proj.join(".k2/PROJECT.md"),
+            "# Legacy Project\n\nPLAIN-PROJECT-MARKER db-primary.\n",
+        )
+        .unwrap();
+
+        let agents_md = compose_agents_md(path);
+        assert!(
+            agents_md.contains("PLAIN-PERSONA-MARKER"),
+            "persona without frontmatter name must still compose into AGENTS.md; got:\n{agents_md}"
+        );
+        assert!(
+            agents_md.contains("PLAIN-PROJECT-MARKER"),
+            "PROJECT.md must still compose"
+        );
+        assert!(agents_md.contains("## Agent"), "Agent section heading required");
         fs::remove_dir_all(&proj).ok();
     }
 

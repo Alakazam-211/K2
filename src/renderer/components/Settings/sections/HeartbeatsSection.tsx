@@ -678,9 +678,16 @@ interface HistoryPanelProps {
    *  parent to collapse the right column when agentMode is 'off' AND no
    *  historical audit rows exist. */
   onEmptyChange?: (empty: boolean) => void
+  /** When true, fill parent height and scroll the list independently
+   *  (Heartbeats tab two-column layout). */
+  fillHeight?: boolean
 }
 
-export function HistoryPanel({ projectPath, onEmptyChange }: HistoryPanelProps): React.JSX.Element {
+export function HistoryPanel({
+  projectPath,
+  onEmptyChange,
+  fillHeight = false,
+}: HistoryPanelProps): React.JSX.Element {
   const [fires, setFires] = useState<HeartbeatFire[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -721,10 +728,10 @@ export function HistoryPanel({ projectPath, onEmptyChange }: HistoryPanelProps):
   }, [fires])
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
+    <div className={fillHeight ? 'flex flex-col h-full min-h-0' : undefined}>
+      <div className={`flex items-center justify-between mb-2 ${fillHeight ? 'flex-shrink-0' : ''}`}>
         <div>
-          <h3 className="text-xs font-medium text-[var(--color-text-primary)]">History</h3>
+          <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Run history</h3>
           <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
             Last 50 heartbeat fires. Refreshes every 15s.
           </p>
@@ -741,7 +748,13 @@ export function HistoryPanel({ projectPath, onEmptyChange }: HistoryPanelProps):
         </button>
       </div>
 
-      <div className="border border-[var(--color-border)] max-h-[420px] overflow-y-auto">
+      <div
+        className={
+          fillHeight
+            ? 'flex-1 min-h-0 overflow-y-auto border border-[var(--color-border)] [scrollbar-gutter:stable]'
+            : 'border border-[var(--color-border)] max-h-[420px] overflow-y-auto'
+        }
+      >
         {loading ? (
           <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">Loading…</div>
         ) : fires.length === 0 ? (

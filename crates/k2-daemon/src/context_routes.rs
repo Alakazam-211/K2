@@ -11,7 +11,7 @@
 //! | POST   | `/cli/context/move` |
 //! | GET    | `/cli/context/show?project=&outline=` |
 //! | POST   | `/cli/context/regen` |
-//! | GET    | `/cli/context/presets` |
+//! | GET    | `/cli/context/catalog` |
 //!
 //! Auth: `token_ok` (owner or connect-user session) — same tier as other
 //! workspace mutates. POST-only mutations 405 on GET.
@@ -69,7 +69,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
     let resp = match path {
         "/cli/context/layers" => handle_layers(params),
         "/cli/context/show" => handle_show(params),
-        "/cli/context/presets" => handle_presets(),
+        "/cli/context/catalog" => handle_catalog(),
         // POST-only mutations hit via GET chain → 405.
         "/cli/context/add"
         | "/cli/context/remove"
@@ -157,12 +157,12 @@ fn handle_show(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
-fn handle_presets() -> CliResponse {
-    let presets = context_layers::list_presets();
+fn handle_catalog() -> CliResponse {
+    let catalog = context_layers::list_catalog();
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
-            "presets": presets,
+            "catalog": catalog,
         })
         .to_string(),
     )
@@ -173,8 +173,9 @@ struct AddBody {
     project: String,
     #[serde(default)]
     path: Option<String>,
+    /// Catalog id (e.g. wiki:index, manager:pack). Alias field `preset` accepted? No — unreleased.
     #[serde(default)]
-    preset: Option<String>,
+    catalog: Option<String>,
     #[serde(default)]
     label: Option<String>,
 }
@@ -191,7 +192,7 @@ fn handle_add(body: &[u8]) -> CliResponse {
     match context_layers::add_layer(
         &project_path,
         parsed.path.as_deref(),
-        parsed.preset.as_deref(),
+        parsed.catalog.as_deref(),
         parsed.label.as_deref(),
     ) {
         Ok(layer) => {
@@ -398,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn post_add_and_presets() {
+    fn post_add_and_catalog() {
         let root = unique_root("add");
         let path = root.to_str().unwrap().to_string();
         let pid = register(&path);
@@ -423,41 +424,61 @@ mod tests {
         assert_eq!(v["error"]["code"], "duplicate_layer");
 
         // Presets GET
-        let resp = dispatch("/cli/context/presets", &HashMap::new()).unwrap();
+        let resp = dispatch("/cli/context/catalog", &HashMap::new()).unwrap();
         assert_eq!(resp.status, "200 OK");
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
-        let presets = v["presets"].as_array().unwrap();
-        assert!(presets.len() >= 4, "wiki + manager + k2 packs");
+        let presets = v["catalog"].as_array().unwrap();
+        assert!(presets.len() >= 9, "wiki + hygiene + subagents + packs + live rosters");
         assert!(
             presets.iter().any(|p| p["id"] == "manager:pack"),
-            "manager:pack preset listed"
+            "manager:pack catalog listed"
         );
         assert!(
             presets.iter().any(|p| p["id"] == "k2:pack"),
-            "k2:pack preset listed"
+            "k2:pack catalog listed"
+        );
+        assert!(
+            presets.iter().any(|p| p["id"] == "connections:roster"),
+            "connections:roster catalog listed"
+        );
+        assert!(
+            presets.iter().any(|p| p["id"] == "wiki:hygiene"),
+            "wiki:hygiene catalog listed"
+        );
+        assert!(
+            presets.iter().any(|p| p["id"] == "subagents:pack"),
+            "subagents:pack catalog listed"
+        );
+        assert!(
+            presets.iter().any(|p| p["id"] == "heartbeats:roster"),
+            "heartbeats:roster catalog listed"
+        );
+        assert!(
+            presets.iter().any(|p| p["id"] == "skills:roster"),
+            "skills:roster catalog listed"
         );
 
         cleanup(&path, &pid);
     }
 
     #[test]
-    fn pack_preset_materializes_and_system_toggle() {
+    fn pack_catalog_materializes_and_system_toggle() {
         let root = unique_root("pack");
         let path = root.to_str().unwrap().to_string();
         let pid = register(&path);
 
         let body = serde_json::json!({
             "project": path,
-            "preset": "manager:pack"
+            "catalog": "manager:pack"
         })
         .to_string();
         let resp = dispatch_post("/cli/context/add", body.as_bytes());
         assert_eq!(resp.status, "200 OK", "body={}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
-        assert_eq!(v["layer"]["source"], "preset:manager");
+        assert_eq!(v["layer"]["source"], "catalog:manager");
         assert_eq!(v["layer"]["exists"], true);
         assert!(
-            root.join(".k2/context/presets/manager.md").is_file(),
+            root.join(".k2/context/catalog/manager.md").is_file(),
             "manager pack file must materialize"
         );
 

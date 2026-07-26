@@ -7,7 +7,7 @@
 1. Run `k2so checkin` to see your state: peer messages, recent activity, pending reviews, and inbox arrivals.
 2. Triage your inbox (`k2so inbox`) — read top-level items (`k2so inbox read <id>`), file them with `k2so inbox move <id> <folder>` (folders are agent-organized, like email).
 3. If you have items in your active folder (`k2so inbox list active`), resume the highest-priority one. Pick up where you left off — your prior session transcript is your best context.
-4. To reply to a sender: `k2so inbox respond <id> "text"`. To raise something with another workspace: `k2so msg <workspace> "text"` (live) or `k2so msg <workspace> --inbox --title "..." --body "..."` (async).
+4. To reply to a sender: `k2so inbox respond <id> "text"`. To raise something with another workspace: `k2so msg <workspace> "text"` (live) or `k2so msg <workspace> --inbox-wake <path>` / `--inbox-silent <path>` (tray package; recipient opens with `k2so inbox read <id>`).
 5. Report status as you work: `k2so checkin --status "..."`. When done, `k2so checkin --done` (or `k2so done`).
 
 Check for messages from peers every wake — live `msg` deliveries arrive in your session immediately; inbox items wait until you read them.

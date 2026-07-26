@@ -9126,6 +9126,12 @@ TRAY DELIVERY (work packages)
   `.k2/inbox/<id>.files/<filename>`. Multi-file: all files are sidecars
   under one `<id>.files/` with a single cover note listing them.
 
+  Remote tray (`agent::host` / `name@host`): repoints at the K2 Connect
+  host that owns the tray (Servers / connect-tokens / ServerSwitcher).
+  Live text over federation does NOT upload files — no Connect host
+  credentials → hard fail with teaching. Not `k2 mail`; recipient opens
+  with `k2 inbox read <id>`.
+
 RELATED VERBS
   k2 inbox list | read <id> | move | archive
       Manage YOUR workspace's tray (receive/triage). Unchanged.
@@ -9362,9 +9368,9 @@ cmd_schema() {
   "commands": [
     {
       "name": "msg",
-      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace> --inbox-silent|--inbox-wake <path> [path…]",
-      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; for long content or files use --inbox-wake / --inbox-silent. Federated peers: agent::host (prefer) or legacy agent@host — never mail. Wire form fp::ws::agent is k2 fed send only.",
-      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or federated agent::host"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
+      "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace|agent::host> --inbox-silent|--inbox-wake <path> [path…]",
+      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; for long content or files use --inbox-wake / --inbox-silent. Live federated peers: agent::host over federation. Tray agent::host needs a K2 Connect host token (not federation). Wire form fp::ws::agent is k2 fed send only — never mail.",
+      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or agent::host (live=federation; tray=Connect host)"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
       "flags": [
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
         {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
@@ -13657,6 +13663,83 @@ _msg_inbox_cli_post_json() {
         --data-raw "$body" 2>/dev/null
 }
 
+# BEGIN_MSG_INBOX_FS_AUTH
+# True when /cli/fs/upload-* JSON body means gate/auth failure (403, invalid
+# token, forbidden, not-owner). Scoped in-cell passports hit this path —
+# they cannot stage via /cli/fs/* (owner or connect-user token required).
+_msg_inbox_is_fs_auth_error() {
+    local response="$1"
+    if [ -z "$response" ]; then
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        case "$response" in
+            *"invalid or missing token"*|*"403"*|*"forbidden"*|*"Forbidden"*|\
+            *"not owner"*|*"owner_only"*|*"unauthorized"*|*"Unauthorized"*)
+                return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+    echo "$response" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+needles = (
+    "invalid or missing token",
+    "forbidden",
+    "not owner",
+    "owner_only",
+    "unauthorized",
+    "not authorized",
+    "permission denied",
+    "invalid token",
+    "missing token",
+)
+try:
+    d = json.loads(raw)
+except Exception:
+    s = raw.lower()
+    sys.exit(0 if any(n in s for n in needles) or "403" in s else 1)
+err = d.get("error")
+parts = []
+if isinstance(err, dict):
+    for k in ("code", "hint", "message", "error", "reason"):
+        v = err.get(k)
+        if v is not None:
+            parts.append(str(v))
+    code = str(err.get("code") or "").lower()
+    if code in ("forbidden", "owner_only", "unauthorized", "invalid_token",
+                "not_owner", "gated", "auth", "permission_denied"):
+        sys.exit(0)
+elif isinstance(err, str):
+    parts.append(err)
+elif err is not None:
+    parts.append(str(err))
+# Also scan top-level code/hint (some arms use flat shape).
+for k in ("code", "hint", "message", "status"):
+    v = d.get(k)
+    if v is not None:
+        parts.append(str(v))
+s = " ".join(parts).lower()
+if any(n in s for n in needles):
+    sys.exit(0)
+if "403" in s:
+    sys.exit(0)
+sys.exit(1)
+' 2>/dev/null
+}
+
+# Clear teaching for passport/token failures on tray staging uploads.
+# Prefer exit 3 (gate-like) at call sites after this prints.
+_msg_inbox_teach_fs_auth() {
+    cat >&2 <<'EOF'
+Error: staging a file onto the host requires an owner or K2 Connect user token.
+In-cell agent passports cannot call /cli/fs/* for remote upload.
+Same-machine: ensure the daemon can read the path (loopback) so no upload is needed.
+Remote: run k2 as the human/owner session against that server, or use a connect-user token.
+EOF
+}
+# END_MSG_INBOX_FS_AUTH
+
 # Upload local file to daemon staging dir. Echoes remote absolute path.
 # Args: <local_abs_path> <remote_dir> <filename>
 _msg_inbox_upload_file() {
@@ -13707,6 +13790,10 @@ with open(out, "w", encoding="utf-8") as o:
         local resp remote_path
         resp=$(_msg_inbox_cli_post_json_file "/cli/fs/upload-binary" "$body_file" "$mt")
         rm -f "$body_file"
+        if _msg_inbox_is_fs_auth_error "${resp:-}"; then
+            _msg_inbox_teach_fs_auth
+            return 3
+        fi
         remote_path=$(echo "$resp" | python3 -c '
 import json, sys
 try:
@@ -13721,6 +13808,10 @@ if not p:
     sys.exit(1)
 print(p)
 ' 2>/dev/null) || {
+            if _msg_inbox_is_fs_auth_error "${resp:-}"; then
+                _msg_inbox_teach_fs_auth
+                return 3
+            fi
             echo "Error: upload-binary failed for $(basename "$local_path"): ${resp:-no response}" >&2
             return 1
         }
@@ -13767,6 +13858,11 @@ with open(out, "w", encoding="utf-8") as o:
         fi
         local resp
         resp=$(_msg_inbox_cli_post_json_file "/cli/fs/upload-chunk" "$body_file" 120)
+        if _msg_inbox_is_fs_auth_error "${resp:-}"; then
+            rm -f "$body_file"
+            _msg_inbox_teach_fs_auth
+            return 3
+        fi
         if [ "$is_last" = "true" ]; then
             remote_path=$(echo "$resp" | python3 -c '
 import json, sys
@@ -13783,6 +13879,10 @@ if not p:
 print(p)
 ' 2>/dev/null) || {
                 rm -f "$body_file"
+                if _msg_inbox_is_fs_auth_error "${resp:-}"; then
+                    _msg_inbox_teach_fs_auth
+                    return 3
+                fi
                 echo "Error: upload-chunk finalize failed: ${resp:-no response}" >&2
                 return 1
             }
@@ -13798,6 +13898,10 @@ if d.get("error"):
     sys.exit(1)
 ' 2>/dev/null; then
                 rm -f "$body_file"
+                if _msg_inbox_is_fs_auth_error "${resp:-}"; then
+                    _msg_inbox_teach_fs_auth
+                    return 3
+                fi
                 echo "Error: upload-chunk failed at offset $offset: ${resp:-no response}" >&2
                 return 1
             fi
@@ -13814,10 +13918,12 @@ if d.get("error"):
 }
 
 # Stage local file under <ws>/.k2/tmp/msg-inbox/ on the daemon. Echoes remote path.
+# Exit 3 on passport/fs-auth gate (teaching already printed); 1 on other errors.
 _msg_inbox_stage_file() {
     local target="$1"
     local local_path="$2"
     local ws_path filename remote_dir remote_path
+    local rc=0
     ws_path=$(_msg_inbox_resolve_ws_path "$target")
     if [ -z "$ws_path" ]; then
         # Fall back: if target looks absolute, use it; else fail loudly.
@@ -13832,7 +13938,10 @@ _msg_inbox_stage_file() {
     filename=$(basename "$local_path")
     # Prefer .k2/ layout (0.40+); write_upload creates the tree.
     remote_dir="${ws_path}/.k2/tmp/msg-inbox"
-    remote_path=$(_msg_inbox_upload_file "$local_path" "$remote_dir" "$filename") || return 1
+    remote_path=$(_msg_inbox_upload_file "$local_path" "$remote_dir" "$filename") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        return "$rc"
+    fi
     printf '%s' "$remote_path"
     return 0
 }
@@ -13961,12 +14070,61 @@ cmd_msg_inbox_form() {
     # paths[] to /cli/inbox/deliver; remote multi packs a flat tar.gz,
     # stages via upload-binary/chunk, then /cli/inbox/deliver-bundle.
     #
+    # Remote tray routing (agent::host / name@host): unlike live text msg
+    # (federation), file packages must land on the daemon that owns the
+    # target tray. When Connect credentials exist for <host>, save/restore
+    # BASE_URL+TOKEN, repoint at that host, and deliver with the bare
+    # workspace/agent name. No Connect token → hard fail (federation
+    # cannot upload files). Local peer names stay on the active daemon.
+    #
     # #36: recipient is workspace=<token> (same as live msg) — stamp_principal
     # never overwrites workspace=/target=.
     local target="$1"
     shift
     local mode="$1"   # silent | wake
     shift
+
+    # ── Remote Connect host repoint (tray only; save/restore globals) ──
+    local _tray_saved_base_url="${BASE_URL}"
+    local _tray_saved_token="${TOKEN}"
+    local _tray_remote_applied=0
+    _tray_restore_env() {
+        if [ "${_tray_remote_applied}" = "1" ]; then
+            BASE_URL="${_tray_saved_base_url}"
+            TOKEN="${_tray_saved_token}"
+            _tray_remote_applied=0
+        fi
+    }
+    # Restore on normal function return (exit ends the process anyway).
+    trap '_tray_restore_env' RETURN
+
+    _split_remote_target "$target"
+    if [ "${_IS_WIRE_FORM:-0}" = "1" ]; then
+        echo "k2 msg: '${target}' looks like federation wire form (<fp>::<workspace>::<agent>)." >&2
+        echo "  Tray file send needs a Connect host user form:  k2 msg <agent>::<host> --inbox-wake <path>" >&2
+        echo "  Wire form is for:              k2 fed send <fp>::<ws>::<agent> \"text\"" >&2
+        return 2
+    fi
+    if [ -n "${_REMOTE_HOST}" ]; then
+        local _tray_tok=""
+        _tray_tok="$(_remote_token_for_host "$_REMOTE_HOST" "")"
+        if [ -z "$_tray_tok" ]; then
+            cat >&2 <<EOF
+Error: tray file send needs a K2 Connect host for ${_REMOTE_HOST} (add/sign-in under Servers, or switch ServerSwitcher).
+Live text msg over federation does not upload files.
+EOF
+            return 2
+        fi
+        if ! _apply_remote_host "$_REMOTE_HOST" ""; then
+            cat >&2 <<EOF
+Error: tray file send needs a K2 Connect host for ${_REMOTE_HOST} (add/sign-in under Servers, or switch ServerSwitcher).
+Live text msg over federation does not upload files.
+EOF
+            return 2
+        fi
+        _tray_remote_applied=1
+        target="$_BARE_TARGET"
+    fi
 
     local title="" body="" priority="" from="" path=""
     local positional=()
@@ -14073,13 +14231,16 @@ cmd_msg_inbox_form() {
                 fi
             fi
             # Remote (or local FS skew): pack flat tar.gz → stage → deliver-bundle.
-            local bundle_local
+            local bundle_local stage_rc=0
             bundle_local=$(_msg_inbox_pack_tar_gz "${abs_paths[@]}") || exit 1
-            staged_path=$(_msg_inbox_stage_file "$target" "$bundle_local") || {
+            staged_path=$(_msg_inbox_stage_file "$target" "$bundle_local") || stage_rc=$?
+            if [ "$stage_rc" -ne 0 ]; then
                 rm -f "$bundle_local"
+                # Passport/fs-auth teaching already printed (exit 3).
+                [ "$stage_rc" -eq 3 ] && exit 3
                 echo "Error: failed to stage multi-file bundle on daemon for inbox deliver" >&2
                 exit 1
-            }
+            fi
             rm -f "$bundle_local"
             response=$(_msg_inbox_post_deliver_bundle "$staged_path")
             _msg_inbox_delete_staged "$staged_path"
@@ -14100,10 +14261,13 @@ cmd_msg_inbox_form() {
         fi
 
         if [[ "$need_upload" == "true" ]]; then
-            staged_path=$(_msg_inbox_stage_file "$target" "${abs_paths[0]}") || {
+            local stage_rc=0
+            staged_path=$(_msg_inbox_stage_file "$target" "${abs_paths[0]}") || stage_rc=$?
+            if [ "$stage_rc" -ne 0 ]; then
+                [ "$stage_rc" -eq 3 ] && exit 3
                 echo "Error: failed to stage local file on daemon for inbox deliver" >&2
                 exit 1
-            }
+            fi
             deliver_path="$staged_path"
             response=$(_msg_inbox_post_deliver_single "$deliver_path")
             # Best-effort cleanup of staging copy (package already owns bytes).

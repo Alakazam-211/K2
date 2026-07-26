@@ -150,10 +150,12 @@ How to drive the K2 agent system from a workspace via the `k2` CLI.
 ## Send work to a workspace
 ```
 k2 msg <workspace-name> "live chat — appears in the running session"
-k2 msg <workspace-name> --inbox --title "..." --body "..."   # queue (email-style)
+k2 msg <workspace-name> --inbox-wake <path> [path…]     # package + knock (preferred)
+k2 msg <workspace-name> --inbox-silent <path> [path…]   # package only, no notify
 ```
-`msg` (live form) fails loudly when the recipient isn't running — use `--inbox`
-to queue a task the recipient reads on its own schedule.
+`msg` (live form) fails loudly when the recipient isn't running — use
+`--inbox-wake` / `--inbox-silent` to land a durable tray package the recipient
+opens with `k2 inbox read <id>` on their own schedule. Not `k2 mail`.
 
 ## View activity
 ```
@@ -768,7 +770,7 @@ pub fn ensure_all_skills_up_to_date(project_path: &str) {
 // `k2so agents create`, `k2so heartbeat wake`, `k2so agent complete`,
 // …) into every regenerated SKILL.md. Phase 2.1 retired those verbs
 // in favor of the A25 surface (`k2so skills *`, `k2so workspace *`,
-// `k2so inbox compose`, `k2so msg --inbox`, `k2so heartbeat signal
+// `k2so inbox compose`, `k2so msg --inbox-wake|--inbox-silent`, `k2so heartbeat signal
 // wake`). Phase 2.5d moved the canonical bodies into
 // `skills/content.rs` and pinned them with the Tier 2.2
 // `assert_no_deprecated_verbs` snapshot tests; the body of

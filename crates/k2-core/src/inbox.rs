@@ -2,7 +2,7 @@
 //!
 //! Replaces the pre-Phase-2.1 `.k2so/work/{inbox,active,done}/` layout.
 //! A workspace's inbox is its email-like channel: items arrive from
-//! other workspaces (via `msg --inbox`) or are composed by the
+//! other workspaces (via `msg --inbox-wake|--inbox-silent`) or are composed by the
 //! workspace's own agent (via `inbox compose`). The agent organizes
 //! triage by filing items into folders it creates on demand — there's
 //! no system-imposed taxonomy.

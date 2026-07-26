@@ -226,11 +226,12 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
     skill.push_str("## Team — Connected Workspaces\n\n");
     skill.push_str("These are other workspace-agents you can collaborate with. Each is itself an agent (hands, memory, skills) — peers, not subordinates.\n\n");
     skill.push_str("To message one — or read what they're doing:\n\n");
-    skill.push_str("    k2so msg <workspace-name> \"your message\"           # live (SHORT messages only)\n");
-    skill.push_str("    k2so msg <workspace-name> --inbox \"your message\"   # drops into their inbox (no length limit)\n");
-    skill.push_str("    k2so read <workspace-name>                          # read their live terminal (peek before you inject)\n\n");
-    skill.push_str("The recipient reads a live `msg` immediately if running, or an inbox item on their next heartbeat / session start.\n\n");
-    skill.push_str("**`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text — longer or multi-line content gets truncated by their terminal input widget. Use `--inbox` for anything substantial (task briefs, file contents, multi-line notes).\n\n");
+    skill.push_str("    k2so msg <workspace-name> \"your message\"              # live (SHORT messages only)\n");
+    skill.push_str("    k2so msg <workspace-name> --inbox-wake <path> [path…]  # package + knock (preferred)\n");
+    skill.push_str("    k2so msg <workspace-name> --inbox-silent <path> [path…] # package only, no notify\n");
+    skill.push_str("    k2so read <workspace-name>                             # read their live terminal (peek before you inject)\n\n");
+    skill.push_str("The recipient reads a live `msg` immediately if running, or a tray package via `k2so inbox read <id>` on their own schedule. Not `k2 mail`.\n\n");
+    skill.push_str("**`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text — longer or multi-line content gets truncated by their terminal input widget. Use `--inbox-wake` / `--inbox-silent` for anything substantial (task briefs, file contents, multi-line notes).\n\n");
     skill.push_str("**`read` for human-in-the-loop:** before injecting into another agent (especially one waiting on a human), `k2so read <workspace-name>` shows the last ~50 lines of its live terminal so you can see what it's doing or waiting on. Add `--agent <name>` for a specific agent, `--lines N` for more history.\n\n");
 
     match crate::connections::list_peers(project_path) {
@@ -335,14 +336,15 @@ k2so done                                      # shortcut for `checkin --done`
 ```
 k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
 k2so msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
-k2so msg <workspace> --inbox --title "..." --body "..."  # inbox delivery (email — no length limit)
+k2so msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
+k2so msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
 k2so msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)
 k2so read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
 ```
 
-`msg` (live form) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` otherwise (no silent inbox fallback). Use `--inbox` when the recipient should read on their own schedule.
+`msg` (live form) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` otherwise (no silent inbox fallback). Use `--inbox-wake` / `--inbox-silent` when the recipient should open a durable package with `k2so inbox read <id>` on their own schedule. Not `k2 mail`.
 
-**`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text. Longer or multi-line content gets **truncated** by the recipient's terminal input widget — use `--inbox` for anything substantial (briefs, file contents, multi-line notes). This length limit is the reason the inbox exists.
+**`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text. Longer or multi-line content gets **truncated** by the recipient's terminal input widget — use `--inbox-wake` / `--inbox-silent` for anything substantial (briefs, file contents, multi-line notes). This length limit is the reason the inbox exists.
 
 **`read` (the read complement to `msg`):** `k2so read <workspace>` returns the last N lines (default 50) of that workspace's live terminal — its primary/coordinator session, or a specific `--agent <name>`. Use it for human-in-the-loop: peek what an agent is doing or waiting on *before* you inject a `msg`, or to diagnose a stuck agent. If the workspace is asleep, `k2so sessions live <workspace>` shows whether it has any live session.
 
@@ -480,13 +482,14 @@ k2so done                           # shortcut for `checkin --done`
 ```
 k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
 k2so msg <workspace> "text"                              # live (call/IM — SHORT messages only)
-k2so msg <workspace> --inbox --title "..." --body "..."  # inbox (email — no length limit)
+k2so msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
+k2so msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
 k2so read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
 ```
 
-`msg` (live) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` if the recipient is offline (no silent fallback). Use `--inbox` to queue a task the recipient reads on their own schedule.
+`msg` (live) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` if the recipient is offline (no silent fallback). Use `--inbox-wake` / `--inbox-silent` to land a durable tray package the recipient opens with `k2so inbox read <id>` on their own schedule. Not `k2 mail`.
 
-**`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text — longer or multi-line content gets **truncated** by their terminal input widget. Use `--inbox` for anything substantial. (This length limit is why the inbox exists.)
+**`msg` length limit:** live `msg` is injected into the recipient's input line, so it's for short, single-line text — longer or multi-line content gets **truncated** by their terminal input widget. Use `--inbox-wake` / `--inbox-silent` for anything substantial. (This length limit is why the inbox exists.)
 
 **`read` for human-in-the-loop:** `k2so read <workspace>` returns the last N lines (default 50) of that workspace's live terminal so you can see what an agent is doing or waiting on *before* injecting a `msg` — or to diagnose a stuck agent. Add `--agent <name>` for a specific agent.
 
@@ -688,14 +691,15 @@ k2so heartbeat log [-n N]
 k2so connections list                                    # who's wired up to me / workspaces with live agents
 k2so talk <workspace> "text"                             # BETA: read their screen FIRST, then send (THE collab verb)
 k2so msg <workspace> "text"                              # live delivery (call/IM — SHORT messages only)
-k2so msg <workspace> --inbox --title "..." --body "..."  # inbox delivery (email — no length limit)
+k2so msg <workspace> --inbox-wake <path> [path…]         # package + knock (preferred; no length limit)
+k2so msg <workspace> --inbox-silent <path> [path…]       # package only, no notify
 k2so msg <workspace> --signal <kind> --payload '{...}'   # typed signal (advanced)
 k2so read <workspace> [--lines N] [--agent <name>]       # read its live terminal (peek before you inject)
 ```
 
-`msg` (live form) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` otherwise. Use `--inbox` for queued tasks read on the recipient's schedule.
+`msg` (live form) succeeds only when the bytes land in the recipient's running session — fails loudly with `reason` + `hint` otherwise. Use `--inbox-wake` / `--inbox-silent` for durable tray packages the recipient opens with `k2so inbox read <id>` on their schedule. Not `k2 mail`.
 
-**`msg` length limit:** live `msg` is injected into the recipient's input line — short, single-line text only. Longer/multi-line content gets **truncated** by their terminal input widget; use `--inbox` for anything substantial. (That limit is why the inbox exists.)
+**`msg` length limit:** live `msg` is injected into the recipient's input line — short, single-line text only. Longer/multi-line content gets **truncated** by their terminal input widget; use `--inbox-wake` / `--inbox-silent` for anything substantial. (That limit is why the inbox exists.)
 
 **`read`** returns the last N lines (default 50) of a workspace's live terminal — its primary/coordinator session, or a specific `--agent <name>`. Use it for human-in-the-loop: see what an agent is doing or waiting on before injecting a `msg`, or diagnose a stuck agent.
 
@@ -1483,7 +1487,7 @@ mod tests {
         let project_path = format!("/tmp/manager-team-msg-{}", Uuid::new_v4());
         let body = generate_manager_skill_content(&project_path, "MsgTeach");
 
-        // Both forms must be teachable: plain and --inbox. The
+        // Both forms must be teachable: plain live + tray flags. The
         // workspace==agent model relies on `k2so msg <workspace>` as
         // the primary peer-communication primitive.
         assert!(
@@ -1491,8 +1495,16 @@ mod tests {
             "team section must teach plain `k2so msg <workspace-name>` form:\n{body}"
         );
         assert!(
-            body.contains("k2so msg <workspace-name> --inbox"),
-            "team section must teach `--inbox` form for queued delivery:\n{body}"
+            body.contains("k2so msg <workspace-name> --inbox-wake"),
+            "team section must teach `--inbox-wake` tray form:\n{body}"
+        );
+        assert!(
+            body.contains("--inbox-silent"),
+            "team section must teach `--inbox-silent` tray form:\n{body}"
+        );
+        assert!(
+            !body.contains("--inbox \"your message\""),
+            "team section must not teach bare `--inbox` for tray:\n{body}"
         );
     }
 

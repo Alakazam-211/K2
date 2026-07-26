@@ -1537,7 +1537,7 @@ mod tests {
             body.contains("docs/agent-contract.md"),
             "k2-cli skill must point custom agents at the agent contract",
         );
-        // Context hamburger (0.40.65): lean always-on stack management.
+        // Context hamburger (0.40.64): lean always-on stack management.
         assert!(
             body.contains("k2 agent context"),
             "k2-cli skill must teach `k2 agent context`",

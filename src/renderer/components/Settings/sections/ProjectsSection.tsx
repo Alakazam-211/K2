@@ -1431,11 +1431,9 @@ function ProjectDetail({
             <SettingsGroup title="Connections">
               <AgentsCreateConnectionsToggle project={project} fetchProjects={fetchProjects} />
             </SettingsGroup>
-            {(isManagerMode || agentMode === 'custom') && (
-              <SettingsGroup title="Connected Workspaces">
-                <ConnectedWorkspacesPanel projectId={project.id} />
-              </SettingsGroup>
-            )}
+            <SettingsGroup title="Connected Workspaces">
+              <ConnectedWorkspacesPanel projectId={project.id} />
+            </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
               <button
@@ -1460,168 +1458,21 @@ function ProjectDetail({
               />
             </SettingsGroup>
 
-          <SettingsGroup title="Agent Settings">
+          {/* Agent types (Off / Custom / K2 / Manager) retired — every workspace
+              is effectively a custom agent. Role guidance lives in the stack chips
+              (Workspace Manager / K2 Agent). This section is only Canonical Agent. */}
+          <SettingsGroup title="Canonical Agent">
             <div className="space-y-2">
               <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-                Mode controls agent features (heartbeats, role skills, worktrees) — not the
-                always-on context pack. Edit persona and project knowledge from the stack
-                above (View + Edit). Manager / K2 / Custom no longer rewrite AGENTS.md by type alone.
+                Unify harness files (CLAUDE.md, AGENTS.md, …) safely into the context stack.
+                Persona and project knowledge are edited above; optional Manager / K2 guidance
+                are stack chips, not agent types.
               </p>
-              <div className="flex gap-1">
-                {(['off', 'agent', 'manager', 'custom'] as const).map((mode) => {
-                  const isActive = agentMode === mode || (mode === 'manager' && isManagerMode)
-                  const labels = { off: 'Off', custom: 'Custom Agent', agent: 'K2 Agent', manager: 'Workspace Manager' }
-                  return (
-                    <button
-                      key={mode}
-                      onClick={async () => {
-                        const currentMode = project.agentMode || 'off'
-                        if (currentMode === mode) return
-
-                        const fromLabel = currentMode === 'off' ? null : labels[currentMode as keyof typeof labels]
-                        const toLabel = labels[mode]
-
-                        if (mode === 'off') {
-                          const confirmed = await useConfirmDialogStore.getState().confirm({
-                            title: `Disable ${fromLabel} Mode`,
-                            message: [
-                              'This will:',
-                              '',
-                              '• Move CLAUDE.md to .k2so/CLAUDE.md.disabled',
-                              '• Your content is preserved and restored if you re-enable',
-                              '• The heartbeat will be turned off if active',
-                            ].join('\n'),
-                            confirmLabel: 'Disable',
-                          })
-                          if (!confirmed) return
-                        } else if (mode === 'custom') {
-                          const lines = [
-                            'Enable a custom agent for this workspace (heartbeat + persona).',
-                            '',
-                            'What happens:',
-                            '• Agent features turn on; edit persona from the context stack (Agent layer → Edit)',
-                            '• Always-on context is the stack above — not rewritten by this mode',
-                            '• Worktrees are disabled in this mode',
-                          ]
-                          if (currentMode !== 'off') {
-                            lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
-                          }
-                          const confirmed = await useConfirmDialogStore.getState().confirm({
-                            title: `Enable ${toLabel} Mode`,
-                            message: lines.join('\n'),
-                            confirmLabel: `Enable ${toLabel} Mode`,
-                          })
-                          if (!confirmed) return
-                        } else if (mode === 'agent') {
-                          const lines = [
-                            'Enable K2 Agent features for planning workflows.',
-                            '',
-                            'What happens:',
-                            '• Planner role skill becomes available (loadable, not auto-stacked)',
-                            '• Always-on context stays the AGENTS.md stack above',
-                            '• If a user-written CLAUDE.md exists, it won\'t be overwritten',
-                          ]
-                          if (currentMode !== 'off') {
-                            lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
-                          }
-                          const confirmed = await useConfirmDialogStore.getState().confirm({
-                            title: `Enable ${toLabel} Mode`,
-                            message: lines.join('\n'),
-                            confirmLabel: `Enable ${toLabel} Mode`,
-                          })
-                          if (!confirmed) return
-                        } else if (mode === 'manager') {
-                          const lines = [
-                            'Enable Workspace Manager features (delegation, templates, worktrees).',
-                            '',
-                            'What happens:',
-                            '• Manager role skill becomes available (loadable, not auto-stacked)',
-                            '• Always-on context stays the AGENTS.md stack above',
-                            '• A manager agent is created automatically',
-                          ]
-                          if (currentMode !== 'off') {
-                            lines.push('', `Switching from ${fromLabel}:`, '• The current CLAUDE.md will be moved to .k2so/CLAUDE.md.disabled')
-                          }
-                          const confirmed = await useConfirmDialogStore.getState().confirm({
-                            title: `Enable ${toLabel} Mode`,
-                            message: lines.join('\n'),
-                            confirmLabel: `Enable ${toLabel} Mode`,
-                          })
-                          if (!confirmed) return
-                        }
-
-                        if (currentMode !== 'off') {
-                          await daemonCliPost('agents/disable-workspace-claude-md', {
-                            project_path: project.path,
-                          }).catch(console.error)
-                        }
-
-                        await daemonCliPost('projects/update', { id: project.id, agentMode: mode })
-                        emitProjectsChanged()
-
-                        if (mode === 'agent' || mode === 'manager') {
-                          await daemonCliPost('agents/regenerate-workspace-skill', {
-                            project_path: project.path,
-                          }).catch(console.error)
-                        }
-
-                        if (mode === 'off' && project.heartbeatEnabled) {
-                          await daemonCliPost('projects/update', { id: project.id, heartbeatEnabled: 0 })
-                          emitProjectsChanged()
-                        }
-
-                        await fetchProjects()
-                      }}
-                      className={`flex-1 px-2 py-1.5 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
-                        isActive
-                          ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
-                          : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'
-                      }`}
-                    >
-                      {labels[mode]}
-                    </button>
-                  )
-                })}
-              </div>
-
-              <p className="text-[10px] text-[var(--color-text-muted)]">
-                {agentMode === 'off' && 'No agent features enabled for this workspace. Always-on context stack still applies when agents run.'}
-                {agentMode === 'custom' && 'Custom Agent — heartbeat + persona. Always-on docs live in the context stack, not in this mode choice.'}
-                {agentMode === 'agent' && 'K2 Agent — planner workflows + loadable role skill. Add planner notes to the context stack if you want them always-on.'}
-                {isManagerMode && 'Workspace Manager — delegation + templates. Manager guidance is a loadable skill; stack optional layers for always-on docs.'}
-              </p>
-
-              {isManagerMode && (
-                <div className="pt-2 border-t border-[var(--color-border)]">
-                  <RoleSkillButton
-                    role="workspace-manager"
-                    projectPath={project.path}
-                    onOpen={() => { setAgentEditorName('__workspace_manager__'); setAgentEditorOpen(true) }}
-                  />
-                </div>
-              )}
-              {agentMode === 'agent' && (
-                <div className="pt-2 border-t border-[var(--color-border)]">
-                  <RoleSkillButton
-                    role="k2-agent"
-                    projectPath={project.path}
-                    onOpen={() => { setAgentEditorName('__k2_agent__'); setAgentEditorOpen(true) }}
-                  />
-                </div>
-              )}
-              <div className="pt-2 border-t border-[var(--color-border)]">
-                <CanonicalAgentButton
-                  probes={canonicalProbes}
-                  projectPath={project.path}
-                  onOpen={(mode) => setCanonicalModalMode(mode)}
-                />
-              </div>
-
-              {isManagerMode && (
-                <div className="pt-2">
-                  <ProjectAgentsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
-                </div>
-              )}
+              <CanonicalAgentButton
+                probes={canonicalProbes}
+                projectPath={project.path}
+                onOpen={(mode) => setCanonicalModalMode(mode)}
+              />
             </div>
           </SettingsGroup>
 
@@ -1636,28 +1487,17 @@ function ProjectDetail({
 
         {settingsTab === 'schedule' && (
           <div className="space-y-4">
-            {agentMode !== 'off' ? (
-              <>
-                <HeartbeatsPanel
-                  key={`hb-${hbRefreshNonce}`}
-                  projectPath={project.path}
-                  agentMode={project.agentMode || null}
-                  agentName={primaryAgentName
-                    || project.name.toLowerCase().replace(/\s+/g, '-')}
-                  onConfigureWakeup={(row) => setWakeupEditingHb(row)}
-                />
-                <ShowHeartbeatSessionsToggle projectPath={project.path} />
-              </>
-            ) : (
-              <p className="text-xs text-[var(--color-text-muted)]">
-                Turn on an agent mode under <button type="button" className="text-[var(--color-accent)] underline no-drag cursor-pointer" onClick={() => setSettingsTab('context')}>Context</button> to configure heartbeats.
-              </p>
-            )}
-            {/* Single HistoryPanel mount: hide when Off+empty, keep mounted so onEmptyChange
-                can re-show history if fires appear later. */}
-            <div className={agentMode === 'off' && historyEmpty ? 'hidden' : undefined}>
-              <HistoryPanel projectPath={project.path} onEmptyChange={setHistoryEmpty} />
-            </div>
+            {/* Agent types retired — always show heartbeats (custom agent default). */}
+            <HeartbeatsPanel
+              key={`hb-${hbRefreshNonce}`}
+              projectPath={project.path}
+              agentMode={project.agentMode || 'custom'}
+              agentName={primaryAgentName
+                || project.name.toLowerCase().replace(/\s+/g, '-')}
+              onConfigureWakeup={(row) => setWakeupEditingHb(row)}
+            />
+            <ShowHeartbeatSessionsToggle projectPath={project.path} />
+            <HistoryPanel projectPath={project.path} onEmptyChange={setHistoryEmpty} />
           </div>
         )}
 

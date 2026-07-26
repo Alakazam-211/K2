@@ -75,9 +75,13 @@ pub fn register_workspace(path: &str) -> Result<String, String> {
     conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
 
     let insert_result = (|| -> Result<(), String> {
+        // Context hamburger: workspaces are always "custom" agents going
+        // forward (no Off/Manager/K2 type UX). Set agent_mode=custom +
+        // agent_enabled=1 on create so heartbeats / agent features work
+        // without a mode radio.
         conn.execute(
-            "INSERT INTO projects (id, name, path, color, tab_order, worktree_mode, icon_url, focus_group_id) \
-             VALUES (?1, ?2, ?3, '#3b82f6', ?4, 0, NULL, NULL)",
+            "INSERT INTO projects (id, name, path, color, tab_order, worktree_mode, icon_url, focus_group_id, agent_mode, agent_enabled) \
+             VALUES (?1, ?2, ?3, '#3b82f6', ?4, 0, NULL, NULL, 'custom', 1)",
             rusqlite::params![project_id, name, path, tab_order],
         )
         .map_err(|e| format!("Failed to create project: {}", e))?;

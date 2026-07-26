@@ -261,4 +261,16 @@ export const DEFAULT_PRESET_CHIPS: ContextPreset[] = [
     label: 'Wiki home',
     source: 'preset:wiki-home',
   },
+  {
+    id: 'manager:pack',
+    path: '.k2/context/presets/manager.md',
+    label: 'Workspace Manager',
+    source: 'preset:manager',
+  },
+  {
+    id: 'k2:pack',
+    path: '.k2/context/presets/k2-agent.md',
+    label: 'K2 Agent',
+    source: 'preset:k2-agent',
+  },
 ]

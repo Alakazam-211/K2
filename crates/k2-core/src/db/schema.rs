@@ -157,7 +157,8 @@ impl Project {
                 created_at: row.get(12)?,
                 agent_enabled: row.get(13)?,
                 heartbeat_enabled: row.get(14)?,
-                agent_mode: row.get::<_, String>(15).unwrap_or_else(|_| "off".to_string()),
+                // Default custom (not off) — agent types UX retired; field kept for now.
+                agent_mode: row.get::<_, String>(15).unwrap_or_else(|_| "custom".to_string()),
                 state_id: row.get(16).ok(),
                 heartbeat_mode: row.get::<_, String>(17).unwrap_or_else(|_| "off".to_string()),
                 heartbeat_schedule: row.get(18).ok().flatten(),
@@ -196,7 +197,8 @@ impl Project {
                     created_at: row.get(12)?,
                     agent_enabled: row.get(13)?,
                     heartbeat_enabled: row.get(14)?,
-                    agent_mode: row.get::<_, String>(15).unwrap_or_else(|_| "off".to_string()),
+                    // Default custom (not off) — agent types UX retired; field kept for now.
+                agent_mode: row.get::<_, String>(15).unwrap_or_else(|_| "custom".to_string()),
                     state_id: row.get(16).ok(),
                     heartbeat_mode: row.get::<_, String>(17).unwrap_or_else(|_| "off".to_string()),
                     heartbeat_schedule: row.get(18).ok().flatten(),

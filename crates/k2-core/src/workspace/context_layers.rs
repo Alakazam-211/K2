@@ -127,7 +127,9 @@ impl std::error::Error for ContextError {}
 
 // ── Presets ───────────────────────────────────────────────────────────
 
-/// Built-in presets (v1 minimum).
+/// Built-in presets: wiki seeds + role guidance packs (Workspace Manager / K2 Agent).
+/// Manager & K2 packs materialize the same generated role markdown that used to
+/// be woven into AGENT.md when those agent types were selected.
 pub fn list_presets() -> Vec<ContextPreset> {
     vec![
         ContextPreset {
@@ -142,18 +144,99 @@ pub fn list_presets() -> Vec<ContextPreset> {
             label: "Wiki home".into(),
             source: "preset:wiki-home".into(),
         },
+        ContextPreset {
+            id: "manager:pack".into(),
+            path: ".k2/context/presets/manager.md".into(),
+            label: "Workspace Manager".into(),
+            source: "preset:manager".into(),
+        },
+        ContextPreset {
+            id: "k2:pack".into(),
+            path: ".k2/context/presets/k2-agent.md".into(),
+            label: "K2 Agent".into(),
+            source: "preset:k2-agent".into(),
+        },
     ]
 }
 
-fn resolve_preset(preset_id: &str) -> Result<ContextPreset, ContextError> {
+fn known_preset_ids() -> String {
     list_presets()
         .into_iter()
-        .find(|p| p.id == preset_id)
+        .map(|p| p.id)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn resolve_preset(preset_id: &str) -> Result<ContextPreset, ContextError> {
+    let id = preset_id.trim();
+    // Accept short aliases (product language + skill dir names).
+    let canonical = match id {
+        "manager" | "workspace-manager" | "preset:manager" => "manager:pack",
+        "k2-agent" | "k2" | "k2so-agent" | "preset:k2-agent" => "k2:pack",
+        other => other,
+    };
+    list_presets()
+        .into_iter()
+        .find(|p| p.id == canonical)
         .ok_or_else(|| {
             ContextError::PresetUnknown(format!(
-                "unknown preset '{preset_id}'; known: wiki:index, wiki:home"
+                "unknown preset '{preset_id}'; known: {}",
+                known_preset_ids()
             ))
         })
+}
+
+fn is_materializing_pack(preset: &ContextPreset) -> bool {
+    matches!(
+        preset.source.as_str(),
+        "preset:manager" | "preset:k2-agent"
+    )
+}
+
+/// Write Manager / K2 role markdown under the workspace on first add (idempotent).
+/// Uses the same generators that previously fed AGENT.md for those agent types.
+fn materialize_pack_if_needed(
+    project_path: &str,
+    preset: &ContextPreset,
+    rel_path: &str,
+) -> Result<(), ContextError> {
+    if !is_materializing_pack(preset) {
+        return Ok(());
+    }
+    let abs = Path::new(project_path).join(rel_path);
+    if abs.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = abs.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            ContextError::Db(format!(
+                "cannot create context preset directory {}: {e}",
+                parent.display()
+            ))
+        })?;
+    }
+    let project_name = Path::new(project_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "workspace".to_string());
+    let body = match preset.source.as_str() {
+        "preset:manager" => {
+            crate::skills::content::generate_manager_skill_content(project_path, &project_name)
+        }
+        "preset:k2-agent" => {
+            let agent_name = crate::workspace::agent_identity::resolve_agent_name(project_path)
+                .unwrap_or_else(|| "k2-agent".to_string());
+            crate::skills::content::generate_k2so_agent_skill_content(&project_name, &agent_name)
+        }
+        _ => return Ok(()),
+    };
+    fs::write(&abs, body).map_err(|e| {
+        ContextError::Db(format!(
+            "cannot write context pack {}: {e}",
+            abs.display()
+        ))
+    })?;
+    Ok(())
 }
 
 // ── Project resolution ────────────────────────────────────────────────
@@ -547,6 +630,8 @@ pub fn add_layer(
         // Preset paths are fixed relative strings; still normalize to confirm
         // they land under the workspace (and rewrite `.k2/` vs `.k2so/` if needed).
         let rel = normalize_preset_path(project_path, &p.path)?;
+        // Manager / K2 packs: materialize generated role markdown on first add.
+        materialize_pack_if_needed(project_path, &p, &rel)?;
         (rel, p.source, Some(p.label))
     } else {
         let rel = normalize_layer_path(project_path, path.unwrap())?;
@@ -1184,6 +1269,33 @@ mod tests {
         let presets = list_presets();
         assert!(presets.iter().any(|p| p.id == "wiki:index"));
         assert!(presets.iter().any(|p| p.id == "wiki:home"));
+        assert!(presets.iter().any(|p| p.id == "manager:pack"));
+        assert!(presets.iter().any(|p| p.id == "k2:pack"));
+    }
+
+    #[test]
+    fn pack_presets_materialize_on_first_add() {
+        let root = unique_root("pack");
+        let path = root.to_str().unwrap();
+        let _pid = register_project(path);
+
+        let manager_abs = root.join(".k2/context/presets/manager.md");
+        assert!(!manager_abs.exists());
+
+        let layer = add_layer(path, None, Some("manager:pack"), None).expect("manager pack");
+        assert_eq!(layer.source, "preset:manager");
+        assert_eq!(layer.path, ".k2/context/presets/manager.md");
+        assert!(manager_abs.is_file(), "manager pack must materialize");
+        assert!(layer.exists);
+
+        let err = add_layer(path, None, Some("manager:pack"), None).expect_err("dup");
+        assert_eq!(err.code(), "duplicate_layer");
+
+        let k2_layer = add_layer(path, None, Some("k2-agent"), None).expect("k2 alias");
+        assert_eq!(k2_layer.source, "preset:k2-agent");
+        assert!(root.join(".k2/context/presets/k2-agent.md").is_file());
+
+        cleanup_project(path, &_pid);
     }
 
     #[test]

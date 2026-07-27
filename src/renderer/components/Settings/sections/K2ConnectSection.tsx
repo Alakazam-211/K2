@@ -26,7 +26,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { getDaemonWs, daemonHttpBase, invalidateDaemonWs } from '@/kessel/daemon-ws'
+import { getDaemonWs, getLocalDaemonWs, daemonHttpBase, invalidateDaemonWs } from '@/kessel/daemon-ws'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { SettingEntry } from '../searchManifest'
 import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
@@ -187,10 +187,15 @@ interface TunnelConfigView {
 // token, a Response not a throw) is orthogonal and stays inside the op;
 // invalidateDaemonWs is the between-retries hook so a rotated port/token is
 // re-read.
+// Tunnel is always THIS Mac's daemon (expose local). Never use the
+// active remote host — when the user is remoted into iascm.k2.dev (etc.)
+// getDaemonWs() would hit the remote and (a) fire cross-origin POSTs
+// with Content-Type that flaky preflights reject, and (b) thrash the
+// connection story while Access/Users correctly talks to the remote.
 async function tunnelGet(suffix: string): Promise<Response> {
   return withRemoteRetry(async () => {
     const send = async (): Promise<Response> => {
-      const creds = await getDaemonWs()
+      const creds = await getLocalDaemonWs()
       const sep = suffix.includes('?') ? '&' : '?'
       return fetch(`${daemonHttpBase(creds)}/cli/tunnel/${suffix}${sep}token=${creds.token}`, { method: 'GET' })
     }
@@ -204,7 +209,7 @@ async function tunnelGet(suffix: string): Promise<Response> {
 async function tunnelPost(suffix: string, body?: unknown): Promise<Response> {
   return withRemoteRetry(async () => {
     const send = async (): Promise<Response> => {
-      const creds = await getDaemonWs()
+      const creds = await getLocalDaemonWs()
       const sep = suffix.includes('?') ? '&' : '?'
       return fetch(`${daemonHttpBase(creds)}/cli/tunnel/${suffix}${sep}token=${creds.token}`, {
         method: 'POST',
@@ -512,49 +517,60 @@ export function K2ConnectSection({
     } catch { /* ignore */ }
   }
 
-  // Load config + status on mount, then poll status while mounted.
+  // Load per-panel. Tunnel I/O is LOCAL-only (see tunnelGet). Users /
+  // policies talk to the ACTIVE host (getDaemonWs). Do not poll tunnel
+  // status while the Access panel is open on a remote — that used to
+  // hammer the remote tunnel routes and amplify reconnect spam.
   useEffect(() => {
-    void (async () => {
-      await loadConfig()
-      void refreshStatus()
-      // K2 #629: resolve the viewer's role FIRST so the management UI
-      // gates correctly; only load the user list + policy when the viewer
-      // can actually manage users (else those routes 403).
+    let cancelled = false
+    let interval: ReturnType<typeof setInterval> | null = null
+
+    if (panel === 'tunnel') {
+      void (async () => {
+        if (isRemote) return // expose UI is local-only; see isRemote note
+        await loadConfig()
+        if (cancelled) return
+        void refreshStatus()
+      })()
+      // Restore the k2.dev account session from the keychain (local).
+      void (async () => {
+        const stored = await readAccountSession()
+        if (!stored || cancelled) return
+        try {
+          const fresh = await refreshSession(stored.refreshToken)
+          if (cancelled) return
+          setSession(fresh)
+          if (fresh.refreshToken !== stored.refreshToken || fresh.email !== stored.email) {
+            await saveAccountSession(fresh.refreshToken, fresh.email)
+          }
+          const subs = await listSubdomains(fresh.accessToken)
+          if (!cancelled) setSubdomains(subs)
+        } catch {
+          await clearAccountSession()
+          if (!cancelled) setSession(null)
+        }
+      })()
+      if (!isRemote) {
+        interval = setInterval(() => void refreshStatus(), 5000)
+      }
+    } else if (panel === 'people' || panel === 'policies') {
+      // Active-host whoami + users (remote-aware).
       void (async () => {
         const role = await refreshWhoami()
+        if (cancelled) return
         if (canManageUsers(role)) {
           void refreshUsers()
           void refreshPolicy()
         }
       })()
-    })()
-    // Restore the account session from the keychain (independent of the
-    // tunnel-config load above — must NOT block it).
-    void (async () => {
-      const stored = await readAccountSession()
-      if (!stored) return
-      try {
-        const fresh = await refreshSession(stored.refreshToken)
-        setSession(fresh)
-        // Double-prompt fix: ONLY re-persist when the refresh token actually
-        // rotated (or the email changed). Re-writing an UNCHANGED keychain
-        // item resets its ACL and drops the user's "Always Allow" grant, so
-        // an unchanged session must leave the item — and its grant — intact.
-        if (fresh.refreshToken !== stored.refreshToken || fresh.email !== stored.email) {
-          await saveAccountSession(fresh.refreshToken, fresh.email)
-        }
-        const subs = await listSubdomains(fresh.accessToken)
-        setSubdomains(subs)
-      } catch {
-        // Expired / revoked — drop the stale credentials, stay logged out.
-        await clearAccountSession()
-        setSession(null)
-      }
-    })()
-    const interval = setInterval(() => void refreshStatus(), 5000)
-    return () => clearInterval(interval)
+    }
+
+    return () => {
+      cancelled = true
+      if (interval) clearInterval(interval)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [panel, isRemote])
 
   const refreshStatus = async (): Promise<void> => {
     try {

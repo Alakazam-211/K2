@@ -594,6 +594,12 @@ export function subscribeToWorkspaceSessionEvents(
           // frame (the daemon emits `tab_order_changed` ~4×/sec during a remote
           // reorder). No double-adoption: only the tab-events subscriber acts.
           break
+        case 'fs_changed':
+          // APP-LEVEL multi-writer FS refresh — owned by the app-level
+          // Active-state socket (`subscribeToActiveState` → onFsChanged).
+          // Daemon still fans app-level frames to per-workspace sockets;
+          // swallow here so remote hosts don't spam "unknown event kind".
+          break
         default: {
           // Unknown kind — forward-compat, just log.
           const unknown = (msg as { kind?: string }).kind ?? 'unknown'

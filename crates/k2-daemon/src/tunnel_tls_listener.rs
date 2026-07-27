@@ -279,7 +279,7 @@ async fn accept_loop(
 ) {
     loop {
         match listener.accept().await {
-            Ok((tcp, _peer)) => {
+            Ok((tcp, peer)) => {
                 // H2: take a global connection permit BEFORE spawning the
                 // per-connection task so the listener can't be driven to FD
                 // exhaustion / unbounded task growth. We `try_acquire` (never
@@ -293,7 +293,7 @@ async fn accept_loop(
                     Err(_) => {
                         log_debug!(
                             "[daemon/e2e] connection cap ({MAX_E2E_CONNECTIONS}) reached \
-                             — dropping inbound connection from {_peer}"
+                             — dropping inbound connection from {peer}"
                         );
                         drop(tcp); // close the FD now; do not spawn.
                         continue;
@@ -307,7 +307,13 @@ async fn accept_loop(
                     // released when this task (and thus `_permit`) drops.
                     let _permit = permit;
                     if let Err(e) = serve_one(tcp, acceptor, http_port).await {
-                        log_debug!("[daemon/e2e] connection ended: {e}");
+                        // 0.40.68 / GH#57: include peer so client-side flaps
+                        // (repeated handshake eof from one source) are
+                        // diagnosable without packet capture. Peer is the
+                        // frpc local hop (usually 127.0.0.1) when E2E sits
+                        // behind the tunnel — still distinguishes concurrent
+                        // dialers and timestamps the storm.
+                        log_debug!("[daemon/e2e] connection ended peer={peer}: {e}");
                     }
                 });
             }

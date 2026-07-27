@@ -17,7 +17,13 @@ import {
   shouldShowReloadButton,
   isWedgePatternEstablished,
   arbiterProvesHostReady,
+  advanceWedgeFailureClock,
+  isFlapPatternEstablished,
+  pruneFlapTimestamps,
   WEDGE_PATTERN_MS,
+  WEDGE_CLEAR_OK_STREAK,
+  WEDGE_FLAP_THRESHOLD,
+  WEDGE_FLAP_WINDOW_MS,
 } from './ConnectionGate'
 
 const status = (over: Partial<{ version: string; protocol: number; phase: string; detail: string }> = {}) => ({
@@ -188,32 +194,110 @@ describe('shouldShowReloadButton (overlay escape hatch)', () => {
 })
 
 // 0.40.48 — the wedge detector's pure rules. The incident signature is a
-// SUSTAINED run of transport-healthy-but-HTTP-failing boot probes (WKWebView
-// reusing a poisoned pooled connection that 404s at the tunnel edge); a
-// genuine reboot produces network-level errors or resolves quickly. These
-// two rules decide (a) when the run is long enough to consult the
-// out-of-webview arbiter and (b) whether the arbiter's answer PROVES the
-// host healthy (⇒ the webview pool is poisoned).
-describe('isWedgePatternEstablished (consecutive-http-failure clock)', () => {
+// SUSTAINED run of webview boot-probe failures while the arbiter still
+// sees the host ready. 0.40.48 originally tracked only {kind:'http'};
+// 0.40.68 / GH#57 generalizes to http OR network (TLS handshake eof
+// flaps) and adds flap + ok-streak helpers. These rules decide (a) when
+// the run is long enough to consult the out-of-webview arbiter and (b)
+// whether the arbiter's answer PROVES the host healthy (⇒ webview path
+// is poisoned / thrashing).
+describe('isWedgePatternEstablished (consecutive webview-failure clock)', () => {
   const t0 = 1_750_000_000_000
 
-  it('no http-failure run in progress → never established', () => {
+  it('no failure run in progress → never established', () => {
+    expect(isWedgePatternEstablished({ failingSince: null, now: t0 })).toBe(false)
+    // Back-compat alias from 0.40.48:
     expect(isWedgePatternEstablished({ httpFailingSince: null, now: t0 })).toBe(false)
   })
 
   it('a run younger than the threshold is not yet a wedge', () => {
     expect(
-      isWedgePatternEstablished({ httpFailingSince: t0, now: t0 + WEDGE_PATTERN_MS - 1 }),
+      isWedgePatternEstablished({ failingSince: t0, now: t0 + WEDGE_PATTERN_MS - 1 }),
     ).toBe(false)
   })
 
   it('a run at/past the threshold is established', () => {
     expect(
-      isWedgePatternEstablished({ httpFailingSince: t0, now: t0 + WEDGE_PATTERN_MS }),
+      isWedgePatternEstablished({ failingSince: t0, now: t0 + WEDGE_PATTERN_MS }),
     ).toBe(true)
     expect(
       isWedgePatternEstablished({ httpFailingSince: t0, now: t0 + WEDGE_PATTERN_MS * 5 }),
     ).toBe(true)
+  })
+})
+
+describe('advanceWedgeFailureClock (0.40.68 ok-streak clear)', () => {
+  const t0 = 1_750_000_000_000
+
+  it('non-ok starts the failure clock and zeros the ok streak', () => {
+    expect(
+      advanceWedgeFailureClock({ probeOk: false, failingSince: null, okStreak: 3, now: t0 }),
+    ).toEqual({ failingSince: t0, okStreak: 0 })
+    expect(
+      advanceWedgeFailureClock({
+        probeOk: false,
+        failingSince: t0 - 1000,
+        okStreak: 1,
+        now: t0,
+      }),
+    ).toEqual({ failingSince: t0 - 1000, okStreak: 0 })
+  })
+
+  it('a single ok does NOT clear failingSince (GH#57 split-second healthy)', () => {
+    const mid = advanceWedgeFailureClock({
+      probeOk: true,
+      failingSince: t0,
+      okStreak: 0,
+      now: t0 + 1000,
+    })
+    expect(mid.failingSince).toBe(t0)
+    expect(mid.okStreak).toBe(1)
+    expect(mid.okStreak).toBeLessThan(WEDGE_CLEAR_OK_STREAK)
+  })
+
+  it('WEDGE_CLEAR_OK_STREAK consecutive oks clear the failure clock', () => {
+    let state = { failingSince: t0 as number | null, okStreak: 0 }
+    for (let i = 0; i < WEDGE_CLEAR_OK_STREAK; i++) {
+      state = advanceWedgeFailureClock({
+        probeOk: true,
+        failingSince: state.failingSince,
+        okStreak: state.okStreak,
+        now: t0 + i,
+      })
+    }
+    expect(state).toEqual({ failingSince: null, okStreak: 0 })
+  })
+})
+
+describe('isFlapPatternEstablished (0.40.68 / GH#57 thrash)', () => {
+  const t0 = 1_750_000_000_000
+
+  it('below threshold → not established', () => {
+    expect(
+      isFlapPatternEstablished({
+        reconnectSurfacedAt: [t0, t0 + 1000, t0 + 2000],
+        now: t0 + 3000,
+      }),
+    ).toBe(false)
+  })
+
+  it('threshold surfaces inside the window → established', () => {
+    const stamps = Array.from({ length: WEDGE_FLAP_THRESHOLD }, (_, i) => t0 + i * 1000)
+    expect(isFlapPatternEstablished({ reconnectSurfacedAt: stamps, now: t0 + 10_000 })).toBe(true)
+  })
+
+  it('old stamps outside the window do not count', () => {
+    const stamps = Array.from(
+      { length: WEDGE_FLAP_THRESHOLD },
+      (_, i) => t0 - WEDGE_FLAP_WINDOW_MS - 10_000 + i * 100,
+    )
+    expect(isFlapPatternEstablished({ reconnectSurfacedAt: stamps, now: t0 })).toBe(false)
+  })
+
+  it('pruneFlapTimestamps drops aged entries', () => {
+    expect(
+      pruneFlapTimestamps([t0 - WEDGE_FLAP_WINDOW_MS - 1, t0 - 1000, t0], t0),
+    ).toEqual([t0 - 1000, t0])
   })
 })
 

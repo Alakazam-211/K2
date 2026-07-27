@@ -524,6 +524,24 @@ export function subscribeToWorkspaceSessionEvents(
 
     if (stopped) return
 
+    // 0.40.68 / GH#57: tear down any prior socket BEFORE opening a new
+    // one. Leaving a half-open CONNECTING/CLOSING WS alongside a new
+    // dial caused attach/detach thrash and mid-handshake EOF on the
+    // daemon E2E listener (client aborted the abandoned handshake).
+    if (socket) {
+      const prev = socket
+      socket = null
+      try {
+        prev.onopen = null
+        prev.onmessage = null
+        prev.onerror = null
+        prev.onclose = null
+        prev.close(1000, 'reconnect')
+      } catch {
+        // ignore
+      }
+    }
+
     // Pragmatic WS auth: in-memory session token on the query (desktop +
     // web). Hosted-web HTTP uses cookie-only; browsers also send the
     // k2_session cookie on same-origin WS upgrades as a second factor.
@@ -1020,6 +1038,22 @@ export function subscribeToActiveState(): UnsubscribeFn {
     }
     if (stopped) return
 
+    // 0.40.68 / GH#57: close prior socket before redial (see session-events
+    // workspace subscriber — same attach/detach thrash class).
+    if (socket) {
+      const prev = socket
+      socket = null
+      try {
+        prev.onopen = null
+        prev.onmessage = null
+        prev.onerror = null
+        prev.onclose = null
+        prev.close(1000, 'reconnect')
+      } catch {
+        // ignore
+      }
+    }
+
     // Empty path → app-level subscriber (not scoped to one workspace).
     const url = `${daemonWsBase(creds)}/cli/sessions/events?path=&token=${encodeURIComponent(creds.token)}`
     let ws: WebSocket
@@ -1232,6 +1266,22 @@ export function subscribeToWorkspaceTabEvents(
       return
     }
     if (stopped) return
+
+    // 0.40.68 / GH#57: close prior socket before redial (see session-events
+    // workspace subscriber — same attach/detach thrash class).
+    if (socket) {
+      const prev = socket
+      socket = null
+      try {
+        prev.onopen = null
+        prev.onmessage = null
+        prev.onerror = null
+        prev.onclose = null
+        prev.close(1000, 'reconnect')
+      } catch {
+        // ignore
+      }
+    }
 
     const url = `${daemonWsBase(creds)}/cli/sessions/events?path=${encodeURIComponent(workspacePath)}&token=${encodeURIComponent(creds.token)}`
     let ws: WebSocket

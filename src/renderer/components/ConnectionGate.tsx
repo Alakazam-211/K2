@@ -320,33 +320,50 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
   }
 }
 
-// ── Wedge detector (0.40.48 connection resilience) ─────────────────────────
+// ── Wedge detector (0.40.48 connection resilience; 0.40.68 flap coverage) ──
 //
-// THE INCIDENT: after a remote server reboot, WKWebView kept reusing a
-// poisoned pooled HTTP/2 connection whose every request failed at the tunnel
-// edge with HTTP 404 ("no route found"). The connection is TRANSPORT-healthy
-// (so the pool never evicts it, and JS has no eviction lever), but
-// HTTP-level dead — the recovery poll itself rode the same pool, so
-// recovery.kind sat on 'reconnecting' forever. Only a full app restart
-// cleared it.
+// THE 0.40.48 INCIDENT: after a remote server reboot, WKWebView kept reusing
+// a poisoned pooled HTTP/2 connection whose every request failed at the
+// tunnel edge with HTTP 404 ("no route found"). The connection is
+// TRANSPORT-healthy (so the pool never evicts it, and JS has no eviction
+// lever), but HTTP-level dead — the recovery poll itself rode the same
+// pool, so recovery.kind sat on 'reconnecting' forever. Only a full app
+// restart cleared it.
 //
-// THE DETECTOR: a sustained run of {kind:'http'} boot probes (transport
-// works, HTTP fails) is the wedge signature — a genuine reboot produces
-// 'network' errors, or resolves quickly. After WEDGE_PATTERN_MS of it we ask
-// the Rust-side ARBITER (`remote_boot_probe` — a FRESH OS-level reqwest
-// socket, completely outside the webview's pool) for a second opinion. If
-// the arbiter reaches the daemon and sees phase 'ready' while the webview
-// still can't, the pool is PROVEN poisoned → escalate:
-//   step 1 — auto `window.location.reload()` once (guarded by a
-//            sessionStorage flag; a reload tears down the page's fetch
-//            context and usually gets a fresh pool);
-//   step 2 — if the pattern re-establishes after the reload, surface the
-//            'wedged' recovery state: banner copy + a Restart K2 button
-//            (user click only — never an auto-restart).
+// THE 0.40.68 INCIDENT (GH#57 / scout.k2.dev): tunnel + external boot-status
+// STABLE, but the desktop client flapped "Reconnecting…" after a blip.
+// Daemon logs showed ~10s cadence of
+//   `[daemon/e2e] connection ended: TLS handshake failed: tls handshake eof`
+// (client closed mid-handshake) and brief session_events attach/detach.
+// Webview probes returned {kind:'network'}, NOT {kind:'http'} — so the
+// 0.40.48 detector (http-only) never armed, and a single intermittent 'ok'
+// kept resetting any failure clock. Quit+relaunch still fixed it (fresh
+// network process / connection pool).
+//
+// THE DETECTOR (generalized): a sustained run of WEBVIEW boot-probe
+// failures (http OR network) while the out-of-webview ARBITER
+// (`remote_boot_probe` — fresh OS-level reqwest, http1_only) still sees
+// phase 'ready' proves the problem is the webview path, not the host:
+//   step 1 — auto `window.location.reload()` once (sessionStorage-guarded);
+//   step 2 — if the pattern re-establishes after reload → 'wedged' +
+//            Restart K2 button (user click only — never auto-restart).
+// Clearing the failure clock requires a SHORT STREAK of consecutive 'ok'
+// probes so a one-tick "healthy for a split second" cannot infinite-reset.
+// A FLAP clock (many reconnecting surfaces in a short window + arbiter
+// ready) escalates on the same path without waiting for a continuous fail
+// run — that is GH#57's attach/detach signature.
 
-/** How long the transport-healthy-but-HTTP-failing pattern must persist
- *  before the out-of-webview arbiter is consulted. */
+/** How long an uninterrupted webview-failure run must persist before the
+ *  out-of-webview arbiter is consulted. */
 export const WEDGE_PATTERN_MS = 60_000
+/** Consecutive successful webview probes required before we treat a failure
+ *  run as over (0.40.68 — single blip-ok must not clear the clock). */
+export const WEDGE_CLEAR_OK_STREAK = 2
+/** Rolling window for the flap detector (connected↔reconnecting thrash). */
+export const WEDGE_FLAP_WINDOW_MS = 45_000
+/** How many times we may surface 'reconnecting' inside the flap window
+ *  before consulting the arbiter for a cold rebuild (0.40.68 / GH#57). */
+export const WEDGE_FLAP_THRESHOLD = 4
 /** Minimum spacing between arbiter probes while the pattern persists (the
  *  arbiter is cheap, but there's no point re-proving a wedge every tick). */
 const WEDGE_ARBITER_MIN_INTERVAL_MS = 30_000
@@ -358,14 +375,77 @@ function wedgeReloadFlagKey(hostKey: string): string {
   return `k2.wedge-reloaded:${hostKey}`
 }
 
-/** Pure rule: has the consecutive-http-failure run lasted long enough to
- *  consult the arbiter? `httpFailingSince` is the timestamp of the FIRST
- *  probe in the current uninterrupted {kind:'http'} run (null = no run). */
+/** Pure rule: has the consecutive webview-failure run lasted long enough to
+ *  consult the arbiter? `failingSince` is the timestamp of the FIRST probe
+ *  in the current uninterrupted non-ok run (null = no run).
+ *
+ *  Back-compat: callers may still pass `httpFailingSince` (0.40.48 name);
+ *  it is treated as an alias for `failingSince`. */
 export function isWedgePatternEstablished(opts: {
-  httpFailingSince: number | null
+  failingSince?: number | null
+  /** @deprecated 0.40.48 name — use `failingSince`. */
+  httpFailingSince?: number | null
   now: number
 }): boolean {
-  return opts.httpFailingSince !== null && opts.now - opts.httpFailingSince >= WEDGE_PATTERN_MS
+  const since =
+    opts.failingSince !== undefined ? opts.failingSince : (opts.httpFailingSince ?? null)
+  return since !== null && opts.now - since >= WEDGE_PATTERN_MS
+}
+
+/**
+ * Pure reducer for the failure-clock + ok-streak used by the wedge detector.
+ * - Non-ok probe → start/keep the failure run; reset ok streak.
+ * - Ok probe → increment ok streak; only clear `failingSince` after
+ *   {@link WEDGE_CLEAR_OK_STREAK} consecutive oks (so a one-tick recovery
+ *   blip cannot infinite-reset a flap).
+ */
+export function advanceWedgeFailureClock(opts: {
+  probeOk: boolean
+  failingSince: number | null
+  okStreak: number
+  now: number
+}): { failingSince: number | null; okStreak: number } {
+  if (!opts.probeOk) {
+    return {
+      failingSince: opts.failingSince ?? opts.now,
+      okStreak: 0,
+    }
+  }
+  const okStreak = opts.okStreak + 1
+  if (okStreak >= WEDGE_CLEAR_OK_STREAK) {
+    return { failingSince: null, okStreak: 0 }
+  }
+  return { failingSince: opts.failingSince, okStreak }
+}
+
+/**
+ * Pure rule (0.40.68 / GH#57): has the client thrash-flipped into the
+ * reconnecting banner often enough, inside the rolling window, that we
+ * should consult the arbiter for a cold rebuild even if the continuous
+ * failure clock was reset by intermittent 'ok' probes?
+ *
+ * `reconnectSurfacedAt` is a list of timestamps when recovery was painted
+ * as reconnecting (after debounce / authoritative boot phase).
+ */
+export function isFlapPatternEstablished(opts: {
+  reconnectSurfacedAt: readonly number[]
+  now: number
+  windowMs?: number
+  threshold?: number
+}): boolean {
+  const windowMs = opts.windowMs ?? WEDGE_FLAP_WINDOW_MS
+  const threshold = opts.threshold ?? WEDGE_FLAP_THRESHOLD
+  const recent = opts.reconnectSurfacedAt.filter((t) => opts.now - t <= windowMs)
+  return recent.length >= threshold
+}
+
+/** Keep only timestamps inside the flap window (pure; for clock hygiene). */
+export function pruneFlapTimestamps(
+  timestamps: readonly number[],
+  now: number,
+  windowMs: number = WEDGE_FLAP_WINDOW_MS,
+): number[] {
+  return timestamps.filter((t) => now - t <= windowMs)
 }
 
 /** Pure rule: does the arbiter's out-of-webview /boot-status result prove
@@ -587,10 +667,16 @@ export function ConnectionGate(): React.ReactElement {
     // shouldRefreshCredsOnAccept. Covers the first-poll-errors case too
     // (fetchBootStatus null → wait → flag set → later accept refreshes).
     let sawNonAccept = false
-    // Wedge detector (0.40.48): start of the current uninterrupted run of
-    // {kind:'http'} boot probes (transport healthy, HTTP failing — the
-    // poisoned-pool signature). Reset by any 'ok' or 'network' probe.
-    let httpFailingSince: number | null = null
+    // Wedge detector (0.40.48 + 0.40.68): start of the current webview
+    // failure run (http OR network — GH#57 TLS-handshake-eof flaps are
+    // network-class). Cleared only after WEDGE_CLEAR_OK_STREAK consecutive
+    // oks so a one-tick "healthy for a split second" cannot infinite-reset.
+    let failingSince: number | null = null
+    let wedgeOkStreak = 0
+    // Flap detector (0.40.68 / GH#57): timestamps when we painted the
+    // reconnecting banner. Many surfaces in a short window + arbiter ready
+    // ⇒ cold rebuild even if intermittent oks kept resetting failingSince.
+    let reconnectSurfacedAt: number[] = []
     // Throttle for the out-of-webview arbiter probe.
     let lastArbiterAt = 0
     // Step 2 latched: the wedge survived the auto-reload; the 'wedged'
@@ -645,39 +731,54 @@ export function ConnectionGate(): React.ReactElement {
       if (cancelled) return
       // Policies keep their old input shape: any failed probe folds to null.
       const status = probe.kind === 'ok' ? probe.status : null
-      // Wedge tracking (0.40.48): only a REMOTE host can wedge (the local
-      // loopback daemon has no tunnel edge / shared pooled origin). Track
-      // consecutive transport-healthy-but-HTTP-failing probes; any 'ok' or
-      // 'network' outcome breaks the run.
-      if (isRemote && probe.kind === 'http') {
-        if (httpFailingSince === null) httpFailingSince = Date.now()
+      // Wedge tracking (0.40.48 + 0.40.68): only a REMOTE host can wedge
+      // (local loopback has no tunnel / shared pooled origin). Any non-ok
+      // webview probe advances the failure clock; ok probes need a streak
+      // to clear it (advanceWedgeFailureClock).
+      const nowMs = Date.now()
+      if (isRemote) {
+        const advanced = advanceWedgeFailureClock({
+          probeOk: probe.kind === 'ok',
+          failingSince,
+          okStreak: wedgeOkStreak,
+          now: nowMs,
+        })
+        failingSince = advanced.failingSince
+        wedgeOkStreak = advanced.okStreak
       } else {
-        httpFailingSince = null
+        failingSince = null
+        wedgeOkStreak = 0
       }
-      if (
+      const sustainedFail =
         isRemote &&
         !wedgeConfirmed &&
-        isWedgePatternEstablished({ httpFailingSince, now: Date.now() }) &&
-        Date.now() - lastArbiterAt >= WEDGE_ARBITER_MIN_INTERVAL_MS
+        isWedgePatternEstablished({ failingSince, now: nowMs })
+      const flapFail =
+        isRemote &&
+        !wedgeConfirmed &&
+        isFlapPatternEstablished({ reconnectSurfacedAt, now: nowMs })
+      if (
+        (sustainedFail || flapFail) &&
+        nowMs - lastArbiterAt >= WEDGE_ARBITER_MIN_INTERVAL_MS
       ) {
-        lastArbiterAt = Date.now()
+        lastArbiterAt = nowMs
         const active = useConnectHostStore.getState().activeHost
         if (active !== 'local') {
           const verdict = await arbiterBootProbe(active)
           if (cancelled) return
           if (arbiterProvesHostReady(verdict)) {
             // PROVEN: a fresh OS-level socket reaches the daemon and it's
-            // 'ready', while the webview's own probes have failed at the
-            // HTTP layer for ≥ WEDGE_PATTERN_MS. The webview pool is
-            // poisoned. Escalate.
+            // 'ready', while the webview path is failing or flapping. The
+            // webview connection layer is poisoned / thrashing. Escalate.
             const flagKey = wedgeReloadFlagKey(hostKey)
             if (sessionStorage.getItem(flagKey) !== '1') {
               // Step 1 (once per page load): a reload rebuilds the page's
               // fetch context, which usually gets a fresh connection pool.
               console.warn(
-                '[connection-gate] webview connection pool is wedged for',
+                '[connection-gate] webview connection path is wedged/flapping for',
                 active.hostname,
-                '(arbiter reached the daemon; webview cannot) — auto-reloading to clear it',
+                flapFail ? '(flap pattern)' : '(sustained fail)',
+                '— arbiter reached the daemon; auto-reloading to clear it',
               )
               sessionStorage.setItem(flagKey, '1')
               window.location.reload()
@@ -687,7 +788,7 @@ export function ConnectionGate(): React.ReactElement {
             // Latch the 'wedged' state; the RecoveryBanner renders the copy
             // + the Restart K2 button. NEVER auto-restart.
             console.error(
-              '[connection-gate] wedge persisted through a page reload for',
+              '[connection-gate] wedge/flap persisted through a page reload for',
               active.hostname,
               '— surfacing Restart K2',
             )
@@ -825,10 +926,14 @@ export function ConnectionGate(): React.ReactElement {
             acceptedInstanceId = status.instanceId
           }
         }
-        // A healthy accept ends any wedge episode: clear the tracker, the
-        // step-2 latch, and the step-1 reload flag (so a NEW wedge later in
-        // this app run gets its auto-reload chance again).
-        httpFailingSince = null
+        // A healthy accept ends the continuous-failure wedge episode.
+        // Hard-clear the failure clock (whoami survived — stronger than a
+        // lone /boot-status ok). Do NOT clear reconnectSurfacedAt here:
+        // GH#57 flaps alternate brief accepts with drops, and wiping the
+        // flap clock on every ok would never hit WEDGE_FLAP_THRESHOLD.
+        // Timestamps age out via pruneFlapTimestamps / effect re-run only.
+        failingSince = null
+        wedgeOkStreak = 0
         wedgeConfirmed = false
         sessionStorage.removeItem(wedgeReloadFlagKey(hostKey))
         // Fix B: a LOCAL accept after any non-accept poll means the daemon
@@ -902,6 +1007,10 @@ export function ConnectionGate(): React.ReactElement {
           // clears it via the accept branch), but it must not repaint the
           // banner back to "reconnecting automatically" when it can't.
           if (!wedgeConfirmed) {
+            // 0.40.68 / GH#57: record each banner surface for the flap
+            // detector (thrash between connected and reconnecting).
+            const t = Date.now()
+            reconnectSurfacedAt = pruneFlapTimestamps([...reconnectSurfacedAt, t], t)
             useConnectHostStore.getState().setRecovery(
               deriveRecovery({
                 bootStatus: bootingAuthoritative

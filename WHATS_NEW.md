@@ -3,6 +3,20 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.68 — Connect reconnection flap fix
+
+### K2 Connect
+
+- After a brief drop while signed into a hosted server, the app no longer
+  loops forever on **Reconnecting…** when the server itself is healthy.
+  The client now detects a thrashing webview connection path (including
+  network / TLS handshake failures, not only HTTP 404s), cold-rebuilds
+  once, and if needed asks you to **Restart K2** instead of flapping.
+- Session event sockets close cleanly before redialing, which stops
+  attach/detach thrash against a healthy tunnel.
+
+---
+
 ## 0.40.67 — Connect stability + host-scoped Servers
 
 ### K2 Connect

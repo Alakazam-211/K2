@@ -136,7 +136,7 @@ Deep dive: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 - **Not an IDE replacement** — agent management infrastructure with a serious terminal UI  
 - **Not a model company** — bring Claude / Codex / Gemini / … yourself  
-- **Not “only while the window is open”** — the daemon owns the loops  
+- **Not a laptop app** — once your agents work the way you want, they perform best on a **server** that never loses internet or power. Develop and tune on your Mac; run the fleet headless where the machine stays up.
 
 ---
 

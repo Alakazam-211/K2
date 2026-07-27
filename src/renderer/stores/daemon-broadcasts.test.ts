@@ -179,10 +179,15 @@ afterEach(() => {
 // ── active-agents (#675.2) ──────────────────────────────────────────────
 
 describe('active-agents — agent_status_changed cutover', () => {
+  afterEach(async () => {
+    const { stopAgentPolling } = await import('./active-agents')
+    stopAgentPolling()
+  })
+
   it('subscribes (no interval) when supported and refetches via lifecycle handler', async () => {
     vi.useFakeTimers()
     const setInterval = vi.spyOn(globalThis, 'setInterval')
-    const { startAgentPolling, stopAgentPolling, useActiveAgentsStore } = await import(
+    const { startAgentPolling, useActiveAgentsStore } = await import(
       './active-agents'
     )
     const handle = vi
@@ -196,17 +201,24 @@ describe('active-agents — agent_status_changed cutover', () => {
     expect(setInterval).not.toHaveBeenCalled()
 
     // Firing the subscribed event maps through the canonical lifecycle path.
+    // 4th arg is optional workspacePath from the daemon broadcast.
     ev.reg.agent[0]({ paneId: 'p1', tabId: 't1', status: 'start' })
-    expect(handle).toHaveBeenCalledWith('p1', 't1', 'start')
+    expect(handle).toHaveBeenCalledWith('p1', 't1', 'start', undefined)
 
-    stopAgentPolling()
+    ev.reg.agent[0]({
+      paneId: 'p2',
+      tabId: 't2',
+      status: 'stop',
+      workspacePath: '/ws/foo',
+    })
+    expect(handle).toHaveBeenCalledWith('p2', 't2', 'stop', '/ws/foo')
   })
 
   it('falls back to the poll interval when NOT supported (no subscription)', async () => {
     vi.useFakeTimers()
     supports.value = false
     const setInterval = vi.spyOn(globalThis, 'setInterval')
-    const { startAgentPolling, stopAgentPolling, useActiveAgentsStore } = await import(
+    const { startAgentPolling, useActiveAgentsStore } = await import(
       './active-agents'
     )
     vi.spyOn(useActiveAgentsStore.getState(), 'pollOnce').mockResolvedValue(undefined)
@@ -214,8 +226,6 @@ describe('active-agents — agent_status_changed cutover', () => {
     startAgentPolling()
     expect(ev.reg.agent.length).toBe(0)
     expect(setInterval).toHaveBeenCalledTimes(1)
-
-    stopAgentPolling()
   })
 })
 
@@ -230,9 +240,14 @@ describe('active-agents — agent_status_changed cutover', () => {
 // with NO poll firing.
 
 describe('active-agents — live-session dot push (#688)', () => {
+  afterEach(async () => {
+    const { stopAgentPolling } = await import('./active-agents')
+    stopAgentPolling()
+  })
+
   it('SessionAdded adds the cwd to liveSessionCwds (dot turns green, no poll)', async () => {
     vi.useFakeTimers()
-    const { startAgentPolling, stopAgentPolling, useActiveAgentsStore, projectHasLiveSession } =
+    const { startAgentPolling, useActiveAgentsStore, projectHasLiveSession } =
       await import('./active-agents')
     vi.spyOn(useActiveAgentsStore.getState(), 'pollOnce').mockResolvedValue(undefined)
 
@@ -268,13 +283,11 @@ describe('active-agents — live-session dot push (#688)', () => {
         '/ws/pinned',
       ),
     ).toBe(true)
-
-    stopAgentPolling()
   })
 
   it('SessionRemoved removes the cwd from liveSessionCwds (dot greys)', async () => {
     vi.useFakeTimers()
-    const { startAgentPolling, stopAgentPolling, useActiveAgentsStore } = await import(
+    const { startAgentPolling, useActiveAgentsStore } = await import(
       './active-agents'
     )
     vi.spyOn(useActiveAgentsStore.getState(), 'pollOnce').mockResolvedValue(undefined)
@@ -301,13 +314,11 @@ describe('active-agents — live-session dot push (#688)', () => {
       agent_name: 'projP',
     })
     expect(useActiveAgentsStore.getState().liveSessionCwds.has('/ws/pinned')).toBe(false)
-
-    stopAgentPolling()
   })
 
   it('SessionRemoved keeps the cwd green while another session shares it', async () => {
     vi.useFakeTimers()
-    const { startAgentPolling, stopAgentPolling, useActiveAgentsStore } = await import(
+    const { startAgentPolling, useActiveAgentsStore } = await import(
       './active-agents'
     )
     vi.spyOn(useActiveAgentsStore.getState(), 'pollOnce').mockResolvedValue(undefined)
@@ -338,8 +349,6 @@ describe('active-agents — live-session dot push (#688)', () => {
       agent_name: 'tab-x',
     })
     expect(useActiveAgentsStore.getState().liveSessionCwds.has('/ws/shared')).toBe(false)
-
-    stopAgentPolling()
   })
 })
 

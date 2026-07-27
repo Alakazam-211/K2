@@ -17,6 +17,7 @@ import { emit } from '@tauri-apps/api/event'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
 import { showContextMenu } from '@/lib/context-menu'
+import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { usePageViewStore } from '@/stores/page-view'
 import { startCloneTo, startCloneToThisComputer } from '@/lib/start-clone-to'
@@ -25,7 +26,6 @@ import ResizeHandle from './ResizeHandle'
 import WorktreeDialog from './WorktreeDialog'
 import ProjectAvatar from './ProjectAvatar'
 import PresenceWorkspaceAvatars from '@/components/Presence/PresenceWorkspaceAvatars'
-import SectionItem from './SectionItem'
 import FocusGroupDropdown from './FocusGroupDropdown'
 import ActiveBar from './ActiveBar'
 import { KeyCombo } from '@/components/KeySymbol'
@@ -368,7 +368,6 @@ function ProjectItem({
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
   const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
   const setActiveWorkspace = useProjectsStore((s) => s.setActiveWorkspace)
-  const assignWorkspaceToSection = useProjectsStore((s) => s.assignWorkspaceToSection)
   const fetchProjects = useProjectsStore((s) => s.fetchProjects)
 
   const handleClick = useCallback(() => {
@@ -390,7 +389,6 @@ function ProjectItem({
       const ws = (project.workspaces ?? []).find((w) => w.id === workspaceId)
       if (!ws) return
 
-      const sections = project.sections || []
       const isWorktree = ws.type === 'worktree'
       const workspacePath = ws.worktreePath ?? project.path
 
@@ -405,8 +403,9 @@ function ProjectItem({
 
       const menuItems: Array<{ id: string; label: string; type?: string }> = []
 
-      // Open in Finder / Wiki
+      // Open in Finder / path / Wiki
       menuItems.push({ id: 'ws-open-finder', label: 'Open in Finder' })
+      menuItems.push({ id: 'ws-copy-path', label: 'Copy Path' })
       menuItems.push({ id: 'ws-view-wiki', label: 'View Wiki' })
 
       // Open in Editor submenu
@@ -415,19 +414,6 @@ function ProjectItem({
         for (const editor of editors) {
           menuItems.push({ id: `ws-editor:${editor.id}`, label: `Open in ${editor.label}` })
         }
-      }
-
-      // Move to Section (only if sections exist)
-      if (sections.length > 0) {
-        menuItems.push({ id: 'move-header', label: '', type: 'separator' })
-        for (const sec of sections) {
-          const isCurrent = ws.sectionId === sec.id
-          menuItems.push({
-            id: `section:${sec.id}`,
-            label: `${sec.name}${isCurrent ? ' *' : ''}`
-          })
-        }
-        menuItems.push({ id: 'section:none', label: 'No Section' })
       }
 
       // Close / Recycle (only for worktree type, not the main branch workspace)
@@ -441,17 +427,16 @@ function ProjectItem({
 
       if (clickedId === 'ws-open-finder') {
         await invoke('projects_open_in_finder', { path: workspacePath })
+      } else if (clickedId === 'ws-copy-path') {
+        await navigator.clipboard.writeText(workspacePath).catch((err) =>
+          console.warn('[sidebar] ws-copy-path', err),
+        )
       } else if (clickedId === 'ws-view-wiki') {
         // Wiki lives under the worktree path when present (same as Finder).
         usePageViewStore.getState().openWiki(workspacePath)
       } else if (clickedId?.startsWith('ws-editor:')) {
         const editorId = clickedId.replace('ws-editor:', '')
         await invoke('projects_open_in_editor', { editorId, path: workspacePath })
-      } else if (clickedId === 'section:none') {
-        await assignWorkspaceToSection(workspaceId, null)
-      } else if (clickedId?.startsWith('section:')) {
-        const sectionId = clickedId.replace('section:', '')
-        await assignWorkspaceToSection(workspaceId, sectionId)
       } else if (clickedId === 'ws-close') {
         // Prevent closing the last worktree
         if ((project.workspaces ?? []).length <= 1) {
@@ -493,12 +478,10 @@ function ProjectItem({
         }
       }
     },
-    [project, assignWorkspaceToSection, fetchProjects]
+    [project, fetchProjects]
   )
 
-  // Split worktrees into ungrouped and grouped by section
-  const ungroupedWorkspaces = (project.workspaces ?? []).filter((ws) => !ws.sectionId)
-  const sections = project.sections || []
+  const workspaces = project.workspaces ?? []
 
   // Only poll git info for the active project to avoid hammering git on all repos
   const { data: gitInfo } = useGitInfo(isActive ? project.path : undefined)
@@ -574,8 +557,7 @@ function ProjectItem({
 
       {isExpanded && (
         <div className="mt-0.5 mb-0.5">
-          {/* Ungrouped worktrees first */}
-          {ungroupedWorkspaces.map((workspace, wsIdx) => (
+          {workspaces.map((workspace, wsIdx) => (
             <WorkspaceButton
               key={workspace.id}
               workspace={workspace}
@@ -586,25 +568,6 @@ function ProjectItem({
               shortcutIndex={shortcutIndex !== undefined ? shortcutIndex + wsIdx : undefined}
             />
           ))}
-
-          {/* Sections with their worktrees */}
-          {sections.map((section) => {
-            const sectionWorkspaces = (project.workspaces ?? []).filter(
-              (ws) => ws.sectionId === section.id
-            )
-
-            return (
-              <SectionItem
-                key={section.id}
-                section={section}
-                workspaces={sectionWorkspaces}
-                projectPath={project.path}
-                activeWorkspaceId={activeWorkspaceId}
-                onWorkspaceClick={handleWorkspaceClick}
-                onWorkspaceContextMenu={(e, wsId) => handleWorkspaceContextMenu(e, wsId)}
-              />
-            )
-          })}
         </div>
       )}
 
@@ -671,9 +634,7 @@ export default function Sidebar(): React.JSX.Element {
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const removeProject = useProjectsStore((s) => s.removeProject)
   const addProject = useProjectsStore((s) => s.addProject)
-  const renameProject = useProjectsStore((s) => s.renameProject)
   const fetchProjects = useProjectsStore((s) => s.fetchProjects)
-  const createSection = useProjectsStore((s) => s.createSection)
 
   const reorderProjects = useProjectsStore((s) => s.reorderProjects)
   const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
@@ -858,21 +819,31 @@ export default function Sidebar(): React.JSX.Element {
         // ignore
       }
 
-      // Build menu items -- add worktree option if worktreeMode is enabled
-      const menuItems: Array<{
-        id: string
-        label: string
-        type?: string
-      }> = [
+      // Build menu items -- pin/Active sit above Open in [IDE] so the
+      // day-to-day placement actions stay above the (often long) editor list.
+      const menuItems: ContextMenuItemDef[] = [
         { id: 'settings', label: 'Workspace Settings' },
         { id: 'view-wiki', label: 'View Wiki' },
         { id: 'separator-settings', label: '', type: 'separator' },
-        { id: 'rename', label: 'Rename' },
+        // Display name vs folder path is unsolved — folder renames are
+        // too invasive. Keep the row visible (disabled + badge) so the
+        // intent stays on the map without a broken prompt.
+        {
+          id: 'rename',
+          label: 'Rename',
+          enabled: false,
+          badge: 'coming soon',
+        },
         { id: 'open-finder', label: 'Open in Finder' },
-        { id: 'focus-window', label: 'Open in Focus Window' }
+        { id: 'copy-path', label: 'Copy Path' },
+        { id: 'focus-window', label: 'Open in Focus Window' },
+        { id: 'separator-pin', label: '', type: 'separator' },
+        { id: 'toggle-pin', label: project.pinned ? 'Unpin' : 'Pin to Top' },
+        { id: 'toggle-active', label: project.manuallyActive ? 'Remove from Active Bar' : 'Add to Active Bar' },
+        ...(!project.manuallyActive ? [{ id: 'active-24h', label: 'Active for 24hrs' }] : []),
       ]
 
-      // Add editor items
+      // Open in [IDE] — after pin/Active so a long editor list doesn't bury them.
       if (editors.length > 0) {
         menuItems.push({ id: 'separator-editors', label: '', type: 'separator' })
         for (const editor of editors) {
@@ -882,15 +853,7 @@ export default function Sidebar(): React.JSX.Element {
 
       menuItems.push(
         { id: 'separator-wt', label: '', type: 'separator' },
-        { id: 'new-worktree', label: 'New Worktree...' },
-        { id: 'new-section', label: 'New Section...' }
-      )
-
-      menuItems.push(
-        { id: 'separator-pin', label: '', type: 'separator' },
-        { id: 'toggle-pin', label: project.pinned ? 'Unpin' : 'Pin to Top' },
-        { id: 'toggle-active', label: project.manuallyActive ? 'Remove from Active Bar' : 'Add to Active Bar' },
-        ...(!project.manuallyActive ? [{ id: 'active-24h', label: 'Active for 24hrs' }] : [])
+        { id: 'new-worktree', label: 'New Worktree...' }
       )
 
       // "Clone to <host>" — migrate this LOCAL workspace onto a connected K2
@@ -926,13 +889,12 @@ export default function Sidebar(): React.JSX.Element {
         const hostId = clickedId.replace('clone-to:', '')
         const host = useConnectHostStore.getState().hosts.find((h) => h.id === hostId)
         if (host) void startCloneTo(project.path, project.name, host)
-      } else if (clickedId === 'rename') {
-        const newName = window.prompt('Rename workspace:', project.name)
-        if (newName && newName.trim() && newName !== project.name) {
-          await renameProject(projectId, newName.trim())
-        }
       } else if (clickedId === 'open-finder') {
         await invoke('projects_open_in_finder', { path: project.path })
+      } else if (clickedId === 'copy-path') {
+        await navigator.clipboard.writeText(project.path).catch((err) =>
+          console.warn('[sidebar] copy-path', err),
+        )
       } else if (clickedId === 'focus-window') {
         await invoke('projects_open_focus_window', { projectId: project.id })
       } else if (clickedId?.startsWith('editor:')) {
@@ -940,11 +902,6 @@ export default function Sidebar(): React.JSX.Element {
         await invoke('projects_open_in_editor', { editorId, path: project.path })
       } else if (clickedId === 'new-worktree') {
         setWorktreeDialog({ projectId: project.id, projectPath: project.path })
-      } else if (clickedId === 'new-section') {
-        const sectionName = window.prompt('Section name:')
-        if (sectionName && sectionName.trim()) {
-          await createSection(project.id, sectionName.trim())
-        }
       } else if (clickedId === 'toggle-pin') {
         await daemonCliPost('projects/update', { id: projectId, pinned: project.pinned ? 0 : 1 })
         void emit('sync:projects').catch(() => {})
@@ -970,7 +927,7 @@ export default function Sidebar(): React.JSX.Element {
         })
       }
     },
-    [projects, renameProject, fetchProjects, createSection]
+    [projects, fetchProjects]
   )
 
   return (

@@ -324,6 +324,7 @@ async fn overview_lists_live_session_with_status_matching_event_source() {
             pane_id: sid.clone(),
             tab_id: agent_address.to_string(),
             status: "start".into(),
+            workspace_path: None,
         });
         // Drain to our probe (global bus may carry other events).
         let stream_status = futures_block(async {

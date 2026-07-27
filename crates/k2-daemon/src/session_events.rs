@@ -188,11 +188,15 @@ pub enum SessionEvent {
     /// the canonical `start`/`stop`/`permission` buckets.
     ///
     /// Wire: `{ "kind": "agent_status_changed", "paneId": string,
-    /// "tabId": string, "status": "start"|"stop"|"permission" }`.
+    /// "tabId": string, "status": "start"|"stop"|"permission",
+    /// "workspacePath"?: string }`.
     ///
     /// `paneId` is the `K2SO_PANE_ID` (== terminal id) the PTY was
     /// spawned with — the same key `agent:lifecycle` carries today and
     /// the renderer already correlates spinners against.
+    /// `workspacePath` is the daemon-authoritative project path for
+    /// Active-bar / toast attribution (remote-safe; optional for older
+    /// emitters).
     AgentStatusChanged {
         #[serde(rename = "paneId")]
         pane_id: String,
@@ -201,6 +205,8 @@ pub enum SessionEvent {
         /// Canonical bucket: `start` (working) | `stop` (idle) |
         /// `permission` (awaiting approval).
         status: String,
+        #[serde(rename = "workspacePath", default, skip_serializing_if = "Option::is_none")]
+        workspace_path: Option<String>,
     },
 
     /// 0.40.39 — daemon-side per-session activity (session_activity.rs,
@@ -869,12 +875,26 @@ mod tests {
             pane_id: "term-1".into(),
             tab_id: "tab-1".into(),
             status: "start".into(),
+            workspace_path: None,
         });
         assert_eq!(json["kind"], "agent_status_changed");
         assert_eq!(json["paneId"], "term-1");
         assert_eq!(json["tabId"], "tab-1");
         assert_eq!(json["status"], "start");
+        // workspacePath omitted when None (skip_serializing_if).
         assert_keys(&json, &["kind", "paneId", "tabId", "status"]);
+
+        let json_path = as_json(&SessionEvent::AgentStatusChanged {
+            pane_id: "term-1".into(),
+            tab_id: "tab-1".into(),
+            status: "stop".into(),
+            workspace_path: Some("/home/k2/agents/Cortana".into()),
+        });
+        assert_eq!(json_path["workspacePath"], "/home/k2/agents/Cortana");
+        assert_keys(
+            &json_path,
+            &["kind", "paneId", "tabId", "status", "workspacePath"],
+        );
     }
 
     #[test]
@@ -1116,6 +1136,7 @@ mod tests {
             pane_id: pane.clone(),
             tab_id: "tab-x".into(),
             status: "start".into(),
+            workspace_path: None,
         });
 
         // Drain until our probe arrives (the global bus may carry other

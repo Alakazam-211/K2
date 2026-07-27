@@ -29,15 +29,250 @@ import {
 } from '@/stores/session-events'
 
 /**
- * Best-effort display name for a pane's agent, for completion / permission
- * toasts. Prefer the workspace name (matches Active bar), then the tab title,
- * then the CLI command running in the pane.
+ * Daemon-broadcast workspace path per pane (from agent_status_changed /
+ * session_activity_changed). First-class for remote hosts — the client
+ * must not invent ownership from the *viewed* workspace.
  */
-function resolvePaneAgentLabel(
-  paneId: string,
-  paneProjectMap: Map<string, string>,
-): string | null {
-  const projectId = paneProjectMap.get(paneId)
+const _daemonPaneWorkspacePath = new Map<string, string>()
+
+/** Record a daemon-authoritative path for a pane (strong bind source). */
+function noteDaemonPaneWorkspacePath(paneId: string, workspacePath: string | null | undefined): void {
+  if (!paneId || !workspacePath) return
+  const trimmed = workspacePath.trim()
+  if (!trimmed) return
+  _daemonPaneWorkspacePath.set(paneId, trimmed)
+  const projectId = matchProjectIdByPath(trimmed)
+  if (projectId) {
+    _weakPaneProjectBinds.delete(paneId)
+    useActiveAgentsStore.getState().bindPaneProject(paneId, projectId)
+  }
+}
+
+/**
+ * Strong ownership only — never the *viewed* workspace.
+ * 1) daemon broadcast path (remote-safe)
+ * 2) project id embedded in agent-chat / heartbeat terminal ids
+ * 3) workspace stash key (`projectId:workspaceId`) containing this pane
+ * 4) terminal cwd matched to a registered project path
+ */
+function resolveStrongProjectId(paneId: string): string | null {
+  if (!paneId) return null
+
+  const daemonPath = _daemonPaneWorkspacePath.get(paneId)
+  if (daemonPath) {
+    const byDaemon = matchProjectIdByPath(daemonPath)
+    if (byDaemon) return byDaemon
+  }
+
+  const parsed = parseTerminalId(paneId)
+  if (parsed) {
+    if (parsed.kind === 'agent_chat' || parsed.kind === 'heartbeat_chat') {
+      return parsed.projectId
+    }
+    if (parsed.kind === 'worktree' || parsed.kind === 'legacy_worktree') {
+      const projects = useProjectsStore.getState().projects
+      for (const p of projects) {
+        if ((p.workspaces ?? []).some((w) => w.id === parsed.workspaceId)) {
+          return p.id
+        }
+      }
+    }
+  }
+
+  // Stashed workspace keys are `${projectId}:${workspaceId}` — if the pane
+  // lives in that snapshot, the project id in the key is authoritative
+  // (even when cwd metadata is missing). Local-only supplement.
+  const fromStash = findProjectIdInTabStash(paneId)
+  if (fromStash) return fromStash
+
+  const cwd = findTerminalCwdForPane(paneId)
+  if (cwd) {
+    const byPath = matchProjectIdByPath(cwd)
+    if (byPath) return byPath
+  }
+
+  return null
+}
+
+/**
+ * Best-effort owner for labels / navigation.
+ * Strong signals first; then map; active project ONLY if the pane is in
+ * the current (foreground) tab strip — never for background agents.
+ */
+function resolveOwnProjectId(paneId: string): string | null {
+  const strong = resolveStrongProjectId(paneId)
+  if (strong) return strong
+
+  const mapped = useActiveAgentsStore.getState().paneProjectMap.get(paneId)
+  // Reject a map entry that is clearly a foreground mis-stamp: it equals
+  // the viewed project but this pane is not in the current tab strip.
+  if (mapped) {
+    const active = useProjectsStore.getState().activeProjectId
+    if (mapped === active && !findTabForPane(paneId)) {
+      // fall through — don't trust it
+    } else {
+      return mapped
+    }
+  }
+
+  if (findTabForPane(paneId)) {
+    return useProjectsStore.getState().activeProjectId
+  }
+  return null
+}
+
+/** Pane ids bound only via "active project" fallback — eligible for
+ *  eviction when the pane is not in the foreground tab strip (classic
+ *  mis-stamp that painted the viewed workspace's orange Active-bar dot).
+ *  Strong binds (agent-chat id / cwd / stash key) are never weak. */
+const _weakPaneProjectBinds = new Set<string>()
+
+/**
+ * Re-bind pane→project from strong signals. Evicts *weak* map entries that
+ * equal the viewed project while the pane is not in the current tabs.
+ * Returns the project id after rebind, if any.
+ */
+function ensurePaneProjectBound(paneId: string): string | null {
+  const strong = resolveStrongProjectId(paneId)
+  const store = useActiveAgentsStore.getState()
+  if (strong) {
+    _weakPaneProjectBinds.delete(paneId)
+    store.bindPaneProject(paneId, strong)
+    return strong
+  }
+
+  const active = useProjectsStore.getState().activeProjectId
+  // Pane is in the foreground tab strip → active project is a legitimate
+  // owner (plain terminal in the workspace you're looking at).
+  if (findTabForPane(paneId) && active) {
+    store.bindPaneProject(paneId, active)
+    // Foreground-tab bind is weak only until a strong signal appears —
+    // still correct while the tab remains; if the user switches away and
+    // this was a mis-stamp of a *different* agent's hook, eviction below
+    // on the next ensure call cleans it when findTabForPane is false.
+    _weakPaneProjectBinds.add(paneId)
+    return active
+  }
+
+  const mapped = store.paneProjectMap.get(paneId)
+  // Drop a weak mis-stamp: bound to the viewed project, pane not here.
+  if (
+    mapped &&
+    active &&
+    mapped === active &&
+    _weakPaneProjectBinds.has(paneId)
+  ) {
+    const next = new Map(store.paneProjectMap)
+    next.delete(paneId)
+    useActiveAgentsStore.setState({ paneProjectMap: next })
+    _weakPaneProjectBinds.delete(paneId)
+    return null
+  }
+  return mapped ?? null
+}
+
+/** Longest-prefix path match so worktrees under a parent repo win. */
+function matchProjectIdByPath(cwd: string): string | null {
+  const projects = useProjectsStore.getState().projects
+  let best: { id: string; len: number } | null = null
+  for (const p of projects) {
+    const candidates = [
+      p.path,
+      ...(p.workspaces ?? []).map((w) => w.worktreePath).filter(Boolean),
+    ] as string[]
+    for (const path of candidates) {
+      if (!path) continue
+      if (
+        cwd === path ||
+        cwd.startsWith(path.endsWith('/') ? path : `${path}/`) ||
+        cwd.startsWith(path.endsWith('\\') ? path : `${path}\\`)
+      ) {
+        if (!best || path.length > best.len) best = { id: p.id, len: path.length }
+      }
+    }
+  }
+  return best?.id ?? null
+}
+
+type TabLike = {
+  paneGroups: Map<string, { id?: string; items: Array<{ type: string; data: unknown }> }>
+}
+
+function tabContainsPane(tab: TabLike, paneId: string): boolean {
+  if (tab.paneGroups.has(paneId)) return true
+  for (const [pgId, pg] of tab.paneGroups) {
+    if (pgId === paneId || pg.id === paneId) return true
+    for (const item of pg.items) {
+      if (item.type !== 'terminal' && item.type !== 'agent') continue
+      const data = item.data as TerminalItemData & { terminalId?: string }
+      if (data.terminalId === paneId) return true
+    }
+  }
+  return false
+}
+
+function findProjectIdInTabStash(paneId: string): string | null {
+  const ts = useTabsStore.getState()
+  // Foreground layout is the active project — not a "stash" signal by itself.
+  for (const [key, snap] of Object.entries(ts.backgroundWorkspaces)) {
+    const inSnap =
+      snap.tabs.some((t) => tabContainsPane(t as never, paneId)) ||
+      snap.extraGroups.some((g) => g.tabs.some((t) => tabContainsPane(t as never, paneId)))
+    if (!inSnap) continue
+    // key = `${projectId}:${workspaceId}` — UUIDs have no colons.
+    const colon = key.indexOf(':')
+    if (colon > 0) return key.slice(0, colon)
+  }
+  return null
+}
+
+function findTerminalCwdForPane(paneId: string): string | null {
+  const scanTabs = (tabs: TabLike[]): string | null => {
+    for (const tab of tabs) {
+      for (const [, pg] of tab.paneGroups) {
+        for (const item of pg.items) {
+          if (item.type !== 'terminal' && item.type !== 'agent') continue
+          const data = item.data as TerminalItemData
+          if (data.terminalId === paneId && data.cwd) return data.cwd
+        }
+      }
+      if (tab.paneGroups.has(paneId)) {
+        for (const item of tab.paneGroups.get(paneId)!.items) {
+          if (item.type === 'terminal' || item.type === 'agent') {
+            const data = item.data as TerminalItemData
+            if (data.cwd) return data.cwd
+          }
+        }
+      }
+    }
+    return null
+  }
+
+  const ts = useTabsStore.getState()
+  let cwd = scanTabs(ts.tabs as never)
+  if (cwd) return cwd
+  for (const g of ts.extraGroups) {
+    cwd = scanTabs(g.tabs as never)
+    if (cwd) return cwd
+  }
+  for (const snap of Object.values(ts.backgroundWorkspaces)) {
+    cwd = scanTabs(snap.tabs as never)
+    if (cwd) return cwd
+    for (const g of snap.extraGroups) {
+      cwd = scanTabs(g.tabs as never)
+      if (cwd) return cwd
+    }
+  }
+  return null
+}
+
+/**
+ * Best-effort display name for a pane's agent, for completion / permission
+ * toasts. Prefer the OWNING workspace name (not the viewed one), then tab
+ * title / CLI command.
+ */
+function resolvePaneAgentLabel(paneId: string): string | null {
+  const projectId = resolveOwnProjectId(paneId)
   if (projectId) {
     const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
     if (project?.name) return project.name
@@ -71,11 +306,89 @@ function resolvePaneAgentLabel(
       if (hit.tabTitle || hit.command) break
     }
   }
+  // Background workspaces (agent finished while user is elsewhere).
+  if (!hit.tabTitle && !hit.command) {
+    for (const snap of Object.values(tabsState.backgroundWorkspaces)) {
+      hit = scanTabs(snap.tabs)
+      if (hit.tabTitle || hit.command) break
+      for (const g of snap.extraGroups) {
+        hit = scanTabs(g.tabs)
+        if (hit.tabTitle || hit.command) break
+      }
+      if (hit.tabTitle || hit.command) break
+    }
+  }
 
-  // Poll-path style: command is a fine secondary label when we lack a workspace.
   if (hit.tabTitle) return hit.tabTitle
   if (hit.command) return hit.command
   return null
+}
+
+/** Find the tab (any column group) that currently hosts `paneId`. */
+function findTabForPane(
+  paneId: string,
+): { tabId: string; groupIndex: number } | null {
+  const tabsState = useTabsStore.getState()
+  for (const tab of tabsState.tabs) {
+    if (tab.paneGroups.has(paneId)) return { tabId: tab.id, groupIndex: 0 }
+  }
+  for (let gi = 0; gi < tabsState.extraGroups.length; gi++) {
+    for (const tab of tabsState.extraGroups[gi].tabs) {
+      if (tab.paneGroups.has(paneId)) return { tabId: tab.id, groupIndex: gi + 1 }
+    }
+  }
+  return null
+}
+
+/**
+ * Toast "View" / "Switch to tab" — open the workspace that owns the pane,
+ * then select its tab. Pre-0.40.65 only called setActiveTab on the *current*
+ * workspace's tab list, so a finish toast for a background agent (e.g.
+ * ProposalWriter while viewing Cortana) never left the foreground workspace.
+ */
+function navigateToPane(
+  paneId: string,
+  opts?: { clearReview?: boolean },
+): void {
+  // Re-resolve ownership at click time (map may have been wrong if the
+  // pane started while another workspace was foregrounded).
+  const projectId = resolveOwnProjectId(paneId)
+
+  const selectAndClear = (): boolean => {
+    const hit = findTabForPane(paneId)
+    if (!hit) return false
+    if (hit.groupIndex === 0) {
+      useTabsStore.getState().setActiveTab(hit.tabId)
+    } else {
+      useTabsStore.getState().setActiveTabInGroup(hit.groupIndex, hit.tabId)
+    }
+    if (opts?.clearReview) {
+      const store = useActiveAgentsStore.getState()
+      const statuses = new Map(store.paneStatuses)
+      statuses.set(paneId, 'idle')
+      useActiveAgentsStore.setState({ paneStatuses: statuses })
+    }
+    return true
+  }
+
+  void (async () => {
+    const ps = useProjectsStore.getState()
+    if (projectId && projectId !== ps.activeProjectId) {
+      const project = ps.projects.find((p) => p.id === projectId)
+      const ws = project?.workspaces?.[0]
+      if (project && ws) {
+        // Same gesture as the Active bar row click — stash current tabs,
+        // restore this workspace's layout (async).
+        ps.setActiveWorkspace(project.id, ws.id)
+        for (let i = 0; i < 40; i++) {
+          if (findTabForPane(paneId)) break
+          await new Promise((r) => setTimeout(r, 50))
+        }
+      }
+    }
+    // Same workspace (or restore finished / never found): select if present.
+    selectAndClear()
+  })()
 }
 
 export type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
@@ -228,6 +541,10 @@ function cancelUnseenDone(paneId: string): void {
  *  user isn't looking at the pane, mark it unseen-done + chime. */
 function armUnseenDone(paneId: string): void {
   cancelUnseenDone(paneId)
+  // Re-attribute BEFORE the mark can light a project square. A lifecycle
+  // start that stamped activeProjectId (viewed workspace) would otherwise
+  // paint the orange Active-bar dot on the wrong agent.
+  ensurePaneProjectBound(paneId)
   // 0.40.39 — daemon-truth gate (same false-idle class as the spinner
   // fix): a hidden pane's parked client feed writes a false idle and
   // used to arm this timer ~1s after switch-away, chiming ~5.5s later
@@ -245,6 +562,9 @@ function armUnseenDone(paneId: string): void {
   }
   const timer = setTimeout(() => {
     _unseenDoneTimers.delete(paneId)
+    // Re-bind again at fire time — stash/cwd may have been unavailable
+    // when the stop event first landed.
+    ensurePaneProjectBound(paneId)
     const s = useActiveAgentsStore.getState()
     // Merged status (0.40.39): the client map alone reports false idle
     // for parked panes — daemon truth must veto the chime at fire time
@@ -257,6 +577,10 @@ function armUnseenDone(paneId: string): void {
     // racing write could land between cancel and fire.
     if (status === 'working' || status === 'permission') return
     if (paneIsVisible(paneId)) return
+    // Mark unseen-done on the pane (tab amber + chime). Active-bar orange
+    // only lights when paneProjectMap has a trustworthy bind
+    // (`projectHasUnseenDone` joins the two maps) — ensurePaneProjectBound
+    // above strips mis-stamps that equal the viewed workspace.
     const next = new Map(s.unseenDone)
     next.set(paneId, Date.now())
     useActiveAgentsStore.setState({ unseenDone: next })
@@ -349,7 +673,13 @@ interface ActiveAgentsState {
    *  re-entered working, or its session closed). Cheap no-op when the
    *  pane isn't marked. */
   markSeen: (paneId: string) => void
-  handleLifecycleEvent: (paneId: string, tabId: string, eventType: string) => void
+  handleLifecycleEvent: (
+    paneId: string,
+    tabId: string,
+    eventType: string,
+    /** Daemon-broadcast workspace path (remote-safe attribution). */
+    workspacePath?: string | null,
+  ) => void
   /** 0.40.39 — apply a daemon-side activity transition. */
   applyDaemonActivity: (e: {
     workspacePath: string
@@ -504,6 +834,10 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       e.paneGroupId ??
       paneAgentAlias.get(e.agentName) ??
       e.agentName
+    // Daemon always includes workspacePath on session_activity_changed —
+    // bind before status so orange dots / toasts attribute correctly on
+    // remote hosts (no local tab stash required).
+    noteDaemonPaneWorkspacePath(paneId, e.workspacePath)
     const next: PaneStatus = e.status
     const map = new Map(get().daemonPaneStatuses)
     const prev = map.get(paneId)
@@ -556,37 +890,26 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     if (isWorking) notePaneActive(paneId)
     else if (current === 'working') armUnseenDone(paneId)
 
-    // Bind paneId → activeProjectId on the first 'working' transition
-    // so getProjectStatus() can attribute the spinner to a workspace
-    // (drives the sidebar Active section + IconRail dots). Mirrors
-    // what handleLifecycleEvent does on a 'start' hook event — but
-    // for v2 panes whose working state comes from terminal-title
-    // OSC events rather than from agent lifecycle hooks, this is the
-    // only path that populates the map. Without it, paneStatuses
-    // says 'working' but no project owns the spinner.
+    // Bind pane → OWNING project on first 'working'. Prefer strong
+    // signals; title OSC usually only arrives for mounted (foreground)
+    // panes so activeProjectId is a last resort HERE (marked weak so a
+    // later ensure can evict it if the pane was never really here).
     if (isWorking && !paneProjectMap.has(paneId)) {
-      const ps = useProjectsStore.getState()
-      // P1.A — a pinned-Chat pane (terminalId `agent-chat:<projectId>`)
-      // must attribute its working state to ITS OWN project, not to
-      // whatever workspace the user happens to be viewing when the first
-      // braille tick fires. The pinned Chat has no lifecycle hook, so this
-      // title-activity path was the only binder — and it latched to
-      // `activeProjectId`, which mis-bound the spinner whenever the user
-      // was looking at a different workspace. Parse the paneId: if it's an
-      // agent-chat id, use its embedded projectId; only fall back to
-      // `activeProjectId` for non-agent-chat panes (e.g. plain Cmd+T
-      // terminals that legitimately belong to the foreground workspace).
-      const parsed = parseTerminalId(paneId)
-      const ownProjectId =
-        parsed?.kind === 'agent_chat' ? parsed.projectId : null
-      const boundProjectId = ownProjectId ?? ps.activeProjectId
-      if (boundProjectId) {
-        const newPaneProjectMap = new Map(paneProjectMap)
-        newPaneProjectMap.set(paneId, boundProjectId)
-        set({ paneProjectMap: newPaneProjectMap })
-        // Also touches lastInteractionAt → 24h Active Bar tenure.
-        ps.touchInteraction(boundProjectId)
+      const strong = resolveStrongProjectId(paneId)
+      let boundProjectId = strong ?? resolveOwnProjectId(paneId)
+      let weak = false
+      if (!boundProjectId) {
+        boundProjectId = useProjectsStore.getState().activeProjectId
+        weak = true
       }
+      if (boundProjectId) {
+        get().bindPaneProject(paneId, boundProjectId)
+        if (weak || !strong) _weakPaneProjectBinds.add(paneId)
+        useProjectsStore.getState().touchInteraction(boundProjectId)
+      }
+    } else if (isWorking) {
+      // Correct a prior mis-stamp if we now have a strong signal.
+      ensurePaneProjectBound(paneId)
     }
   },
 
@@ -616,13 +939,10 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       // this pane ever emits (same P1.A discipline as
       // recordTitleActivity: an agent-chat pane binds to its OWN
       // embedded project, not whatever workspace is foregrounded).
+      ensurePaneProjectBound(paneId)
       if (!get().paneProjectMap.has(paneId)) {
-        const parsed = parseTerminalId(paneId)
-        const ownProjectId =
-          parsed?.kind === 'agent_chat' ? parsed.projectId : null
-        const boundProjectId =
-          ownProjectId ?? useProjectsStore.getState().activeProjectId
-        if (boundProjectId) get().bindPaneProject(paneId, boundProjectId)
+        const bound = resolveOwnProjectId(paneId)
+        if (bound) get().bindPaneProject(paneId, bound)
       }
       // Reuse the hook path (status + toast + dedupe)…
       get().handleLifecycleEvent(paneId, '', 'permission')
@@ -658,18 +978,29 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     if (!paneId || !projectId) return
     const { paneProjectMap } = get()
     if (paneProjectMap.get(paneId) === projectId) return
+    // Explicit bind (AgentChatPane, tests, strong ensure) is never weak.
+    _weakPaneProjectBinds.delete(paneId)
     const newPaneProjectMap = new Map(paneProjectMap)
     newPaneProjectMap.set(paneId, projectId)
     set({ paneProjectMap: newPaneProjectMap })
   },
 
-  handleLifecycleEvent: (paneId: string, _tabId: string, eventType: string) => {
+  handleLifecycleEvent: (
+    paneId: string,
+    _tabId: string,
+    eventType: string,
+    workspacePath?: string | null,
+  ) => {
     const toast = useToastStore.getState()
     const { paneStatuses } = get()
     const newStatuses = new Map(paneStatuses)
 
     // Record the hook fire so the poll-based cleanup doesn't race us.
     _hookEventAt.set(paneId, Date.now())
+
+    // Daemon-broadcast path (agent_status_changed.workspacePath) — strong
+    // bind for remote-safe Active-bar attribution.
+    if (workspacePath) noteDaemonPaneWorkspacePath(paneId, workspacePath)
 
     // Slice 5 — a lifecycle event supersedes any TITLE-owned permission
     // marking: once a hook speaks for a pane, its permission state is
@@ -684,14 +1015,12 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       // F4 — the pane is active again: anchor the spawn grace, cancel a
       // pending done-debounce, clear any lingering unseen-done mark.
       notePaneActive(paneId)
-      // Record which project this pane belongs to
-      const ps = useProjectsStore.getState()
-      if (ps.activeProjectId) {
-        const newPaneProjectMap = new Map(get().paneProjectMap)
-        newPaneProjectMap.set(paneId, ps.activeProjectId)
-        set({ paneProjectMap: newPaneProjectMap })
-        // Touch interaction on the active project — this triggers Active Bar
-        ps.touchInteraction(ps.activeProjectId)
+      // Strong bind only — never activeProjectId. Background agents finish
+      // while another workspace is viewed; stamping the viewed project
+      // painted its Active-bar square orange.
+      const ownProjectId = ensurePaneProjectBound(paneId)
+      if (ownProjectId) {
+        useProjectsStore.getState().touchInteraction(ownProjectId)
       }
     } else if (eventType === 'permission') {
       // Skip duplicate permission toast if already in permission state
@@ -699,28 +1028,20 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       newStatuses.set(paneId, 'permission')
       // F4 — permission counts as active (the agent isn't done).
       notePaneActive(paneId)
+      ensurePaneProjectBound(paneId)
       if (currentStatus === 'permission') {
         set({ paneStatuses: newStatuses })
         return
       }
       // Notify user that agent needs attention — name the workspace when known.
-      const agentLabel = resolvePaneAgentLabel(paneId, get().paneProjectMap)
+      const agentLabel = resolvePaneAgentLabel(paneId)
       toast.addToast(
         agentLabel ? `${agentLabel} needs your permission` : 'An agent needs your permission',
         'info',
         5000,
         {
           label: 'View',
-          onClick: () => {
-            // Find which tab contains this pane and switch to it
-            const tabsState = useTabsStore.getState()
-            for (const tab of tabsState.tabs) {
-              if (tab.paneGroups.has(paneId)) {
-                tabsState.setActiveTab(tab.id)
-                break
-              }
-            }
-          },
+          onClick: () => navigateToPane(paneId),
         }
       )
     } else if (eventType === 'stop') {
@@ -733,10 +1054,11 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
 
       // F4 — hook-driven completion (working|permission → done). Debounced:
       // only a stop that survives the window with the user not looking
-      // marks unseen-done (and chimes).
+      // marks unseen-done (and chimes). ensurePaneProjectBound runs inside.
       armUnseenDone(paneId)
 
-      // Check if the pane's tab is currently active
+      // Check if the pane's tab is currently active *in the foreground*
+      // workspace — not "any" workspace.
       const tabsState = useTabsStore.getState()
       let isInActiveTab = false
       for (const tab of tabsState.tabs) {
@@ -748,27 +1070,15 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       newStatuses.set(paneId, isInActiveTab ? 'idle' : 'review')
 
       if (!isInActiveTab) {
-        // Prefer the workspace name (Active bar label); fall back to tab
-        // title / CLI command so the toast isn't a generic "An agent…".
-        const agentLabel = resolvePaneAgentLabel(paneId, get().paneProjectMap)
+        ensurePaneProjectBound(paneId)
+        const agentLabel = resolvePaneAgentLabel(paneId)
         toast.addToast(
           agentLabel ? `${agentLabel} has finished working` : 'An agent has finished working',
           'success',
           4000,
           {
             label: 'View',
-            onClick: () => {
-              for (const tab of tabsState.tabs) {
-                if (tab.paneGroups.has(paneId)) {
-                  tabsState.setActiveTab(tab.id)
-                  // Clear review status when user navigates to it
-                  const statuses = new Map(get().paneStatuses)
-                  statuses.set(paneId, 'idle')
-                  set({ paneStatuses: statuses })
-                  break
-                }
-              }
-            },
+            onClick: () => navigateToPane(paneId, { clearReview: true }),
           }
         )
       }
@@ -921,14 +1231,13 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       const oldAgent = oldAgents.get(terminalId)
       if (oldAgent?.status === 'active' && newAgent.status === 'idle') {
         if (!paneStatuses.has(terminalId)) {
-          const { tabId, groupIndex } = newAgent
           toast.addToast(
             `${newAgent.command} is waiting for input in "${newAgent.tabTitle}"`,
             'info',
             5000,
             {
               label: 'Switch to tab',
-              onClick: () => useTabsStore.getState().setActiveTabInGroup(groupIndex, tabId),
+              onClick: () => navigateToPane(terminalId),
             }
           )
         }
@@ -938,14 +1247,13 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     for (const [terminalId, oldAgent] of oldAgents) {
       if (!newAgents.has(terminalId) && oldAgent.status === 'active') {
         if (!paneStatuses.has(terminalId)) {
-          const { tabId, groupIndex } = oldAgent
           toast.addToast(
             `${oldAgent.command} finished in "${oldAgent.tabTitle}"`,
             'success',
             4000,
             {
               label: 'Switch to tab',
-              onClick: () => useTabsStore.getState().setActiveTabInGroup(groupIndex, tabId),
+              onClick: () => navigateToPane(terminalId, { clearReview: true }),
             }
           )
         }
@@ -1082,7 +1390,12 @@ export function startAgentPolling(): void {
     // we re-`pollOnce` (via onAppHello) to backfill any missed transitions +
     // refresh the live-session set.
     agentStatusUnsub = onAgentStatusChanged((e) => {
-      useActiveAgentsStore.getState().handleLifecycleEvent(e.paneId, e.tabId, e.status)
+      useActiveAgentsStore.getState().handleLifecycleEvent(
+        e.paneId,
+        e.tabId,
+        e.status,
+        e.workspacePath,
+      )
     })
     agentHelloUnsub = onAppHello(() => {
       useActiveAgentsStore.getState().pollOnce()
@@ -1718,6 +2031,8 @@ export function stopAgentPolling(): void {
 export function __resetAgentStateForHostSwitch(): void {
   _hookEventAt.clear()
   _titlePermissionPanes.clear()
+  _weakPaneProjectBinds.clear()
+  _daemonPaneWorkspacePath.clear()
   // F4 — unseen-done marks/timers are keyed by the LOCAL host's paneIds.
   for (const timer of _unseenDoneTimers.values()) {
     clearTimeout(timer)

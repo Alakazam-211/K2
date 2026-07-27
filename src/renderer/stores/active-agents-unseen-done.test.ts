@@ -94,6 +94,9 @@ function surfacePaneVisible(): void {
 /** Drive a hook-observed run long enough to clear the spawn grace, then stop. */
 function workThenStop(): void {
   const store = useActiveAgentsStore.getState()
+  // Own project known a priori (production resolves via cwd / stash key /
+  // agent-chat id — tests use a plain terminal id).
+  store.bindPaneProject(PANE, PROJECT)
   store.handleLifecycleEvent(PANE, '', 'start')
   vi.advanceTimersByTime(6_000) // past the 5s spawn grace
   store.handleLifecycleEvent(PANE, '', 'stop')
@@ -219,6 +222,7 @@ describe('F4 — unseen-done state machine', () => {
 
   it('scan-driven title idle arms too — pinned-chat completions dot without hooks', () => {
     const store = useActiveAgentsStore.getState()
+    store.bindPaneProject(PANE, PROJECT)
     store.recordTitleActivity(PANE, true)
     vi.advanceTimersByTime(6_000)
     store.recordTitleActivity(PANE, false)

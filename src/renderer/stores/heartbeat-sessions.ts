@@ -228,47 +228,41 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
     set({ loading: true, lastError: null })
 
     try {
-      // 0.40.48 host-aware fix: the Tauri commands go IN-PROCESS to the
-      // LOCAL machine's k2_core (not even the local daemon), so with a
-      // remote host active the sidebar showed THIS Mac's heartbeats —
-      // usually none, rendered as a perpetually-empty/"Loading…" panel —
-      // instead of the host's. When the active host is remote, load from
-      // ITS `/cli/heartbeat/*` routes (host-aware daemonCliGet; same
-      // routes the `k2` CLI uses, present on every supported daemon) and
-      // derive liveness from the rows' own daemon-stamped
-      // `activeTerminalId` instead of local PTY telemetry.
+      // Roster always comes from the ACTIVE host's daemon via
+      // `/cli/heartbeat/*` (host-aware daemonCliGet) — same path the CLI
+      // and remote panel use. Pre-0.40.65 the LOCAL host still went through
+      // Tauri `k2so_heartbeat_list` → in-process k2_core DB. That process
+      // can open a *different* file than the long-running daemon (Stage A
+      // dual-read prefers `k2.db` when present; a stray empty `k2.db` made
+      // the drawer report "Project not found" while the sidebar — which
+      // already used the daemon — listed the workspace fine).
+      //
+      // Local still enriches liveness with in-app PTY telemetry when
+      // available; remote trusts daemon-stamped `activeTerminalId`.
       const isRemote = useConnectHostStore.getState().activeHost !== 'local'
+      const [activeRows, archivedRows] = await Promise.all([
+        daemonCliGet<HeartbeatRow[]>('heartbeat/list', { project: projectPath }),
+        daemonCliGet<HeartbeatRow[]>('heartbeat/list-archived', {
+          project: projectPath,
+        }),
+      ])
+
+      let active: HeartbeatEntry[]
       if (isRemote) {
-        const [activeRows, archivedRows] = await Promise.all([
-          daemonCliGet<HeartbeatRow[]>('heartbeat/list', { project: projectPath }),
-          daemonCliGet<HeartbeatRow[]>('heartbeat/list-archived', {
-            project: projectPath,
-          }),
-        ])
-        const active: HeartbeatEntry[] = activeRows.map((row) => ({
+        active = activeRows.map((row) => ({
           row,
           ...deriveRemoteState(row),
         }))
-        const archived: HeartbeatEntry[] = archivedRows.map((row) => ({
+      } else {
+        const [running, agentName] = await Promise.all([
+          terminalListRunning().catch((): RunningAgentInfo[] => []),
+          resolvePrimaryAgent(projectPath),
+        ])
+        active = activeRows.map((row) => ({
           row,
-          state: 'archived' as const,
-          liveTerminalId: null,
+          ...deriveState(row, agentName, projectPath, running),
         }))
-        set({ active, archived, loadedFor: projectPath, loading: false })
-        return
       }
-
-      const [activeRows, archivedRows, running, agentName] = await Promise.all([
-        invoke<HeartbeatRow[]>('k2so_heartbeat_list', { projectPath }),
-        invoke<HeartbeatRow[]>('k2so_heartbeat_list_archived', { projectPath }),
-        terminalListRunning().catch((): RunningAgentInfo[] => []),
-        resolvePrimaryAgent(projectPath),
-      ])
-
-      const active: HeartbeatEntry[] = activeRows.map((row) => ({
-        row,
-        ...deriveState(row, agentName, projectPath, running),
-      }))
       const archived: HeartbeatEntry[] = archivedRows.map((row) => ({
         row,
         state: 'archived' as const,

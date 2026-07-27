@@ -124,6 +124,9 @@ export interface AgentStatusChangedEvent {
   tabId: string
   /** Canonical bucket: `start` (working) | `stop` (idle) | `permission`. */
   status: 'start' | 'stop' | 'permission'
+  /** Daemon-authoritative workspace path (0.40.65+). Remote-safe
+   *  attribution for Active-bar / finish toasts. Absent on older daemons. */
+  workspacePath?: string | null
 }
 
 /** APP-LEVEL (0.40.39) — daemon-side per-session activity transition

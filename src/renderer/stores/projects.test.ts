@@ -1,10 +1,10 @@
 // Plan B (Bulk-1) — vitest coverage for the projects store after migrating
-// its DB-backed actions OFF the Tauri `projects_*`/`workspaces_*`/`sections_*`
-// invoke proxy ONTO the host-aware `daemonCli*` HTTP layer.
+// its DB-backed actions OFF the Tauri `projects_*`/`workspaces_*` invoke
+// proxy ONTO the host-aware `daemonCli*` HTTP layer.
 //
 // What this asserts:
 //   - fetchProjects   → GET `projects/list` + per-project `workspaces/list`
-//                       and `sections/list` with snake_case `project_id`
+//                       with snake_case `project_id`
 //   - renameProject   → POST `projects/update`  + emits sync:projects
 //   - reorderProjects → optimistic local reorder + POST `projects/reorder`
 //                       + emits sync:projects; success path does NOT refetch
@@ -12,8 +12,6 @@
 //                       success path does NOT refetch; failure rolls back
 //   - removeProject   → POST `workspace-layouts/delete` + `projects/delete`
 //                       + emits sync:projects
-//   - createSection   → POST `sections/create`  (NO sync — old shim emitted none)
-//   - assignWorkspaceToSection → POST `sections/assign` (camelCase, no sync)
 //   - setManuallyActive → POST `projects/update` + emits sync:projects
 //   - touchInteraction  → POST `projects/touch-interaction` (NO sync)
 //
@@ -158,16 +156,12 @@ describe('projects store — Plan B host-aware migration', () => {
     _resetProjectsChangedSyncForTests()
   })
 
-  it('fetchProjects GETs projects/list then workspaces/list + sections/list per project (snake_case)', async () => {
+  it('fetchProjects GETs projects/list then workspaces/list per project (snake_case)', async () => {
     daemonCliGet.mockImplementation((route: string, params?: Record<string, unknown>) => {
       if (route === 'projects/list') return Promise.resolve([mkProject('p1')])
       if (route === 'workspaces/list') {
         expect(params).toEqual({ project_id: 'p1' })
         return Promise.resolve([{ id: 'w1', projectId: 'p1', sectionId: null, type: 'main', branch: null, name: 'main', tabOrder: 0, worktreePath: null, navVisible: 1, createdAt: 1 }])
-      }
-      if (route === 'sections/list') {
-        expect(params).toEqual({ project_id: 'p1' })
-        return Promise.resolve([])
       }
       throw new Error(`unexpected GET ${route}`)
     })
@@ -176,13 +170,12 @@ describe('projects store — Plan B host-aware migration', () => {
 
     expect(daemonCliGet).toHaveBeenCalledWith('projects/list')
     expect(daemonCliGet).toHaveBeenCalledWith('workspaces/list', { project_id: 'p1' })
-    expect(daemonCliGet).toHaveBeenCalledWith('sections/list', { project_id: 'p1' })
+    expect(daemonCliGet).not.toHaveBeenCalledWith('sections/list', expect.anything())
 
     const projects = useProjectsStore.getState().projects as ProjectWithWorkspaces[]
     expect(projects).toHaveLength(1)
     expect(projects[0].id).toBe('p1')
     expect(projects[0].workspaces).toHaveLength(1)
-    expect(projects[0].sections).toEqual([])
   })
 
   it('renameProject POSTs projects/update (camelCase) and emits sync:projects', async () => {
@@ -202,8 +195,6 @@ describe('projects store — Plan B host-aware migration', () => {
     b.tabOrder = 1
     a.workspaces = []
     b.workspaces = []
-    a.sections = []
-    b.sections = []
     useProjectsStore.setState({ projects: [a, b] })
 
     daemonCliPost.mockResolvedValueOnce({ success: true })
@@ -223,7 +214,6 @@ describe('projects store — Plan B host-aware migration', () => {
     c.tabOrder = 2
     for (const p of [a, b, c]) {
       p.workspaces = []
-      p.sections = []
     }
     useProjectsStore.setState({ projects: [a, b, c] })
 
@@ -257,8 +247,6 @@ describe('projects store — Plan B host-aware migration', () => {
     b.tabOrder = 1
     a.workspaces = []
     b.workspaces = []
-    a.sections = []
-    b.sections = []
     useProjectsStore.setState({ projects: [a, b] })
 
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -277,7 +265,6 @@ describe('projects store — Plan B host-aware migration', () => {
     const p = mkProject('p-color') as unknown as ProjectWithWorkspaces
     p.color = '#ffffff'
     p.workspaces = []
-    p.sections = []
     useProjectsStore.setState({ projects: [p] })
 
     let resolvePost!: (v: unknown) => void
@@ -309,7 +296,6 @@ describe('projects store — Plan B host-aware migration', () => {
     const p = mkProject('p-color-fail') as unknown as ProjectWithWorkspaces
     p.color = '#3b82f6'
     p.workspaces = []
-    p.sections = []
     useProjectsStore.setState({ projects: [p] })
 
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -348,7 +334,6 @@ describe('projects store — Plan B host-aware migration', () => {
     const p = mkProject('p-echo') as unknown as ProjectWithWorkspaces
     p.color = '#fff'
     p.workspaces = []
-    p.sections = []
     useProjectsStore.setState({ projects: [p] })
     daemonCliPost.mockResolvedValueOnce({ success: true })
 
@@ -380,25 +365,7 @@ describe('projects store — Plan B host-aware migration', () => {
     expect(emitMock).toHaveBeenCalledWith('sync:projects')
   })
 
-  it('createSection POSTs sections/create and does NOT emit sync (old shim emitted none)', async () => {
-    daemonCliPost.mockResolvedValueOnce({ success: true })
-    daemonCliGet.mockResolvedValue([])
 
-    await useProjectsStore.getState().createSection('p1', 'Group', '#abc')
-
-    expect(daemonCliPost).toHaveBeenCalledWith('sections/create', { projectId: 'p1', name: 'Group', color: '#abc' })
-    expect(emitMock).not.toHaveBeenCalledWith('sync:projects')
-  })
-
-  it('assignWorkspaceToSection POSTs sections/assign (camelCase) without sync', async () => {
-    daemonCliPost.mockResolvedValueOnce({ success: true })
-    daemonCliGet.mockResolvedValue([])
-
-    await useProjectsStore.getState().assignWorkspaceToSection('w1', 'sec1')
-
-    expect(daemonCliPost).toHaveBeenCalledWith('sections/assign', { workspaceId: 'w1', sectionId: 'sec1' })
-    expect(emitMock).not.toHaveBeenCalledWith('sync:projects')
-  })
 
   it('setManuallyActive POSTs projects/pin (canonical-active) and emits sync:projects', async () => {
     // #672 — the active host is 'local' in tests, which serverSupports()

@@ -86,6 +86,11 @@ impl AgentHookEventSink for DaemonBroadcastSink {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
+            let workspace_path = payload
+                .get("workspacePath")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
             // `eventType` is the canonical bucket (start/stop/permission)
             // that `handle_hook_complete` already mapped before emitting.
             if let Some(status) = payload.get("eventType").and_then(|v| v.as_str()) {
@@ -94,6 +99,7 @@ impl AgentHookEventSink for DaemonBroadcastSink {
                         pane_id,
                         tab_id,
                         status: status.to_string(),
+                        workspace_path,
                     },
                 );
             }

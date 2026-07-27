@@ -17,8 +17,8 @@ export const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
 export const MAX_ICON_SIZE = 256 * 1024  // 256KB
 
 // ── Polling intervals ────────────────────────────────────────────────
-// Five sidebar components call `useGitInfo` for the same workspace
-// path (App, IconRail, SectionItem, Sidebar ×4). At a 5s interval
+// Several sidebar components call `useGitInfo` for the same workspace
+// path (App, IconRail, Sidebar). At a 5s interval
 // that's a `repo.statuses()` per workspace every second across the
 // renderer — and each call walks the worktree's tracked-file tree
 // loading `.gitattributes` per directory. On a JS workspace with

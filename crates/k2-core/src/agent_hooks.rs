@@ -296,6 +296,12 @@ pub struct AgentLifecycleEvent {
     pub tab_id: String,
     /// One of "start" / "stop" / "permission".
     pub event_type: String,
+    /// Absolute workspace / project path this pane belongs to (daemon-
+    /// authoritative). Clients map this to a project id for Active-bar
+    /// attribution so remote hosts never depend on local tab stashes.
+    /// `None` when the pane cannot be resolved (unknown session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
 }
 
 /// Map a raw hook event name onto the three-bucket canonical taxonomy.
@@ -343,6 +349,31 @@ pub fn parse_query_params(url: &str) -> HashMap<String, String> {
 // calling HTTP layer (daemon or src-tauri) so these stay protocol-
 // agnostic. Hosts wrap the return with HTTP serialization.
 
+/// Resolve the workspace path that owns `pane_id` for lifecycle broadcast
+/// attribution. Prefer the registered project's path for this terminal;
+/// fall back to the hook's PWD (`cwd` query param). Never invents a path.
+fn resolve_workspace_path_for_pane(
+    pane_id: &str,
+    hook_cwd: Option<&str>,
+) -> Option<String> {
+    if !pane_id.is_empty() {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        if let Ok(Some(s)) =
+            crate::db::schema::WorkspaceSession::get_by_terminal_id(&conn, pane_id)
+        {
+            if let Ok(p) = crate::db::schema::Project::get(&conn, &s.project_id) {
+                if !p.path.is_empty() {
+                    return Some(p.path);
+                }
+            }
+        }
+    }
+    hook_cwd
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// POST a canonicalized lifecycle event to the hook sink + update the
 /// `agent_sessions` row keyed by `pane_id` (= terminal_id = the
 /// `K2SO_PANE_ID` env var the PTY is spawned with).
@@ -363,23 +394,36 @@ pub fn handle_hook_complete(params: &HashMap<String, String>) -> &'static str {
     let pane_id = params.get("paneId").cloned().unwrap_or_default();
     let tab_id = params.get("tabId").cloned().unwrap_or_default();
     let raw_event = params.get("eventType").cloned().unwrap_or_default();
+    // Optional cwd from the hook script (`cwd=$PWD`) — used when the
+    // pane is not yet (or never) in workspace_sessions.
+    let hook_cwd = params
+        .get("cwd")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let canonical_opt = map_event_type(&raw_event);
     record_recent_event(&raw_event, canonical_opt, &pane_id, &tab_id);
 
     if let Some(canonical) = canonical_opt {
+        // Daemon-authoritative workspace path for remote-safe attribution.
+        // Prefer the registered project path for this terminal; fall back
+        // to the hook's PWD when the session row is missing (tab PTYs).
+        let workspace_path = resolve_workspace_path_for_pane(&pane_id, hook_cwd.as_deref());
+
         let event = AgentLifecycleEvent {
             pane_id: pane_id.clone(),
             tab_id: tab_id.clone(),
             event_type: canonical.to_string(),
+            workspace_path: workspace_path.clone(),
         };
 
         crate::log_debug!(
-            "[agent-hooks] {} → {} (pane={}, tab={})",
+            "[agent-hooks] {} → {} (pane={}, tab={}, path={:?})",
             raw_event,
             canonical,
             pane_id,
-            tab_id
+            tab_id,
+            workspace_path
         );
         emit(
             HookEvent::AgentLifecycle,

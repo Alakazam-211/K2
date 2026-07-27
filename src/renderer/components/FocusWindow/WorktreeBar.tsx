@@ -135,11 +135,6 @@ export default function WorktreeBar({ project }: WorktreeBarProps): React.JSX.El
     )
   }
 
-  // Group worktrees by section for the horizontal bar
-  const sections = project.sections || []
-  const ungroupedWorkspaces = project.workspaces.filter((ws) => !ws.sectionId)
-  const hasSections = sections.length > 0
-
   const showMergeDialog = useMergeDialogStore((s) => s.show)
   const showContextMenu = useContextMenuStore((s) => s.show)
 
@@ -214,35 +209,7 @@ export default function WorktreeBar({ project }: WorktreeBarProps): React.JSX.El
         className="flex items-center h-[32px] min-h-[32px] bg-[var(--color-bg)] border-b border-[var(--color-border)] select-none no-drag overflow-x-auto overflow-y-hidden"
       >
         <div className="flex items-center h-full">
-          {/* Ungrouped worktrees */}
-          {ungroupedWorkspaces.map(renderWorkspaceTab)}
-
-          {/* Section groups */}
-          {hasSections && sections.map((section) => {
-            const sectionWorkspaces = project.workspaces.filter(
-              (ws) => ws.sectionId === section.id
-            )
-
-            if (sectionWorkspaces.length === 0) return null
-
-            return (
-              <div key={section.id} className="flex items-center h-full">
-                {/* Section label divider */}
-                <div
-                  className="flex items-center h-full px-2 text-[9px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] border-r border-[var(--color-border)] select-none"
-                  style={{
-                    borderLeft: section.color
-                      ? `3px solid ${section.color}`
-                      : '1px solid var(--color-border)',
-                    background: 'rgba(255,255,255,0.02)'
-                  }}
-                >
-                  {section.name}
-                </div>
-                {sectionWorkspaces.map(renderWorkspaceTab)}
-              </div>
-            )
-          })}
+          {project.workspaces.map(renderWorkspaceTab)}
 
           {/* Add worktree button */}
           {worktreeMode && (

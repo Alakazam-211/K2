@@ -7,11 +7,22 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### UI polish
 
-- **Finished-agent toast** names the workspace (or tab) that finished —
-  not a generic “An agent has finished working.”
+- **Finished-agent toast** and Active-bar orange dots attribute the
+  workspace that **actually** finished — via the daemon lifecycle
+  broadcast (`workspacePath` on `agent_status_changed`), so remote hosts
+  stay correct. **View** switches to that workspace.
+- Heartbeats drawer always loads the roster from the **daemon** (local
+  too), so a stray empty `k2.db` can't report "Project not found" while
+  the sidebar still shows the workspace.
 - **Tab reorder** drop indicator lines up with the real slot (no left
   offset from pinned Inbox/Chat tabs).
 - **View Wiki** is on the workspace right-click menu (and worktree rows).
+- **Copy Path** on workspace (and worktree) right-click — clipboard the
+  folder path without opening Finder.
+- Removed unused **New Section…** worktree-grouping (sidebar + focus
+  window). Worktrees list flat again.
+- Workspace **Rename** is marked **coming soon** (disabled) — display
+  names without folder renames are still to be designed.
 - **Projects tab** auto-selects the first project when you open it with
   nothing selected.
 

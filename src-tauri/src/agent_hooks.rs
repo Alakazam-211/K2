@@ -260,6 +260,7 @@ if [ -n "$K2_HOOK_SOCK_SCOPED" ] && [ -S "$K2_HOOK_SOCK_SCOPED" ]; then
         --data-urlencode "paneId=$K2SO_PANE_ID" \
         --data-urlencode "tabId=$K2SO_TAB_ID" \
         --data-urlencode "eventType=$EVENT_TYPE" \
+        --data-urlencode "cwd=$PWD" \
         >/dev/null 2>&1; then
         exit 0
     fi
@@ -285,6 +286,7 @@ curl -sG "http://127.0.0.1:$K2SO_PORT/hook/complete" \
     --data-urlencode "paneId=$K2SO_PANE_ID" \
     --data-urlencode "tabId=$K2SO_TAB_ID" \
     --data-urlencode "eventType=$EVENT_TYPE" \
+    --data-urlencode "cwd=$PWD" \
     --data-urlencode "token=$K2SO_HOOK_TOKEN" \
     >/dev/null 2>&1 || true
 

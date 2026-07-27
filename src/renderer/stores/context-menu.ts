@@ -5,6 +5,8 @@ export interface ContextMenuItemDef {
   label: string
   type?: string
   enabled?: boolean
+  /** Small pill next to the label (e.g. "coming soon" for disabled stubs). */
+  badge?: string
 }
 
 interface ContextMenuState {

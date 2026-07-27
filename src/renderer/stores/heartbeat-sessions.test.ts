@@ -72,19 +72,19 @@ beforeEach(() => {
 
 describe('heartbeat-sessions refresh failure path (the "Loading…" mask fix)', () => {
   it('a FAILED first load still sets loadedFor so the panel can show the error', async () => {
-    invokeMock.mockRejectedValue(new Error('tauri command exploded'))
+    daemonCliGetMock.mockRejectedValue(new Error('daemon list exploded'))
     await useHeartbeatSessionsStore.getState().refresh('/ws/a')
     const s = useHeartbeatSessionsStore.getState()
     // The gate the panel keys on: loadedFor === projectPath must hold even
     // on failure, or "Loading…" masks the error forever.
     expect(s.loadedFor).toBe('/ws/a')
-    expect(s.lastError).toContain('tauri command exploded')
+    expect(s.lastError).toContain('daemon list exploded')
     expect(s.loading).toBe(false)
   })
 
   it('a failed load for a NEW project clears the previous project\'s rows', async () => {
     primeLoaded('/ws/old')
-    invokeMock.mockRejectedValue(new Error('boom'))
+    daemonCliGetMock.mockRejectedValue(new Error('boom'))
     await useHeartbeatSessionsStore.getState().refresh('/ws/new')
     const s = useHeartbeatSessionsStore.getState()
     expect(s.loadedFor).toBe('/ws/new')
@@ -94,7 +94,7 @@ describe('heartbeat-sessions refresh failure path (the "Loading…" mask fix)', 
 
   it('a transient re-refresh failure for the SAME project keeps its rows', async () => {
     primeLoaded('/ws/a')
-    invokeMock.mockRejectedValue(new Error('blip'))
+    daemonCliGetMock.mockRejectedValue(new Error('blip'))
     await useHeartbeatSessionsStore.getState().refresh('/ws/a')
     const s = useHeartbeatSessionsStore.getState()
     expect(s.loadedFor).toBe('/ws/a')
@@ -103,16 +103,22 @@ describe('heartbeat-sessions refresh failure path (the "Loading…" mask fix)', 
   })
 
   it('a successful load still lands rows + loadedFor and clears lastError', async () => {
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === 'k2so_heartbeat_list') return [ROW]
-      if (cmd === 'k2so_heartbeat_list_archived') return []
-      return null
+    daemonCliGetMock.mockImplementation(async (route: string) => {
+      if (route === 'heartbeat/list') return [ROW]
+      if (route === 'heartbeat/list-archived') return []
+      throw new Error(`unexpected route ${route}`)
     })
     await useHeartbeatSessionsStore.getState().refresh('/ws/a')
     const s = useHeartbeatSessionsStore.getState()
     expect(s.loadedFor).toBe('/ws/a')
     expect(s.lastError).toBeNull()
     expect(s.active).toHaveLength(1)
+    // Roster comes from the daemon on local too (not k2so_heartbeat_list).
+    expect(daemonCliGetMock).toHaveBeenCalledWith('heartbeat/list', { project: '/ws/a' })
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'k2so_heartbeat_list',
+      expect.anything(),
+    )
   })
 })
 

@@ -1,11 +1,11 @@
 import { create } from 'zustand'
 import { emit } from '@tauri-apps/api/event'
-// Plan B — projects/workspaces/sections are host-aware daemon data: route
-// them through the `/cli/*` HTTP layer (local OR remote) instead of the
-// localhost-pinned Tauri `projects_*`/`workspaces_*`/`sections_*` invoke
-// proxy. The old Tauri shims emitted `sync:projects` from Rust on each
-// mutation so other windows re-fetch; we now re-emit that event from the
-// renderer after each successful mutation (see `emitProjectsChanged`).
+// Plan B — projects/workspaces are host-aware daemon data: route them
+// through the `/cli/*` HTTP layer (local OR remote) instead of the
+// localhost-pinned Tauri `projects_*`/`workspaces_*` invoke proxy. The
+// old Tauri shims emitted `sync:projects` from Rust on each mutation so
+// other windows re-fetch; we now re-emit that event from the renderer
+// after each successful mutation (see `emitProjectsChanged`).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 // #672 — canonical daemon-owned Active. Gestures route through the
 // activate/pin/dismiss daemon routes (capability-gated); the renderer no
@@ -154,7 +154,7 @@ export function activateProject(projectId: string): void {
 let hasLoadedFromDaemon = false
 
 /**
- * Plan B cross-window sync: the old Tauri `projects_*` / `sections_*`
+ * Plan B cross-window sync: the old Tauri `projects_*`
  * mutation commands emitted `sync:projects` from Rust so OTHER windows
  * (focus windows, second main window) re-fetch their project list. Now
  * that the renderer talks to the daemon directly, that Rust-side emit no
@@ -172,6 +172,7 @@ function emitProjectsChanged(): void {
 interface Workspace {
   id: string
   projectId: string
+  /** Legacy DB column; worktree grouping sections were removed from the UI. */
   sectionId: string | null
   type: string
   branch: string | null
@@ -179,16 +180,6 @@ interface Workspace {
   tabOrder: number
   worktreePath: string | null
   navVisible: number
-  createdAt: number
-}
-
-export interface WorkspaceSection {
-  id: string
-  projectId: string
-  name: string
-  color: string | null
-  isCollapsed: number
-  tabOrder: number
   createdAt: number
 }
 
@@ -238,7 +229,6 @@ interface Project {
 
 export interface ProjectWithWorkspaces extends Project {
   workspaces: Workspace[]
-  sections: WorkspaceSection[]
 }
 
 interface ProjectsState {
@@ -262,11 +252,6 @@ interface ProjectsState {
    *  `projects/update`, rolls back on failure. Does NOT full-refetch on success. */
   setProjectColor: (id: string, color: string) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
-  createSection: (projectId: string, name: string, color?: string) => Promise<void>
-  deleteSection: (id: string) => Promise<void>
-  renameSection: (id: string, name: string) => Promise<void>
-  updateSection: (id: string, updates: { name?: string; color?: string | null; isCollapsed?: number }) => Promise<void>
-  assignWorkspaceToSection: (workspaceId: string, sectionId: string | null) => Promise<void>
   touchInteraction: (projectId: string) => void
   setManuallyActive: (projectId: string, active: boolean) => Promise<void>
 }
@@ -288,7 +273,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       activeHostKey(useConnectHostStore.getState().activeHost) === fetchHostKey
     try {
       // GET query params are snake_case (the daemon reads `project_id`);
-      // the camelCase Project/Workspace/Section response shapes match the
+      // the camelCase Project/Workspace response shapes match the
       // Rust structs' `#[serde(rename_all = "camelCase")]` so no remap.
       const projectListRaw = await daemonCliGet<Project[]>('projects/list')
       // Daemon data is host-aware: a host swap (or an older/odd remote) can
@@ -298,22 +283,15 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // store. (`?.` at consumers can't save a truthy non-array.)
       const projectList = Array.isArray(projectListRaw) ? projectListRaw : []
 
-      // Fetch workspaces and sections for each project
+      // Fetch workspaces for each project. (Workspace "sections" UI was
+      // removed — we no longer call sections/list.)
       const projectsWithWorkspaces: ProjectWithWorkspaces[] = await Promise.all(
         projectList.map(async (project: Project) => {
           const wsRaw = await daemonCliGet<Workspace[]>('workspaces/list', { project_id: project.id })
           const ws: Workspace[] = Array.isArray(wsRaw) ? wsRaw : []
-          let secs: WorkspaceSection[] = []
-          try {
-            const secsRaw = await daemonCliGet<WorkspaceSection[]>('sections/list', { project_id: project.id })
-            secs = Array.isArray(secsRaw) ? secsRaw : []
-          } catch {
-            // sections table might not exist yet
-          }
           return {
             ...project,
             workspaces: ws,
-            sections: secs
           }
         })
       )
@@ -820,55 +798,6 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       await get().fetchProjects()
     } catch (err) {
       console.error('[projects] renameProject failed:', err)
-    }
-  },
-
-  // sections_* mutations did NOT emit a cross-window sync from the old
-  // Tauri shims (workspace_sections.rs has no `app.emit`), so no
-  // `emitProjectsChanged()` here — the local `fetchProjects()` refresh is
-  // the only contract.
-  createSection: async (projectId: string, name: string, color?: string) => {
-    try {
-      await daemonCliPost('sections/create', { projectId, name, color })
-      await get().fetchProjects()
-    } catch (err) {
-      console.error('[projects] createSection failed:', err)
-    }
-  },
-
-  deleteSection: async (id: string) => {
-    try {
-      await daemonCliPost('sections/delete', { id })
-      await get().fetchProjects()
-    } catch (err) {
-      console.error('[projects] deleteSection failed:', err)
-    }
-  },
-
-  renameSection: async (id: string, name: string) => {
-    try {
-      await daemonCliPost('sections/update', { id, name })
-      await get().fetchProjects()
-    } catch (err) {
-      console.error('[projects] renameSection failed:', err)
-    }
-  },
-
-  updateSection: async (id: string, updates: { name?: string; color?: string | null; isCollapsed?: number }) => {
-    try {
-      await daemonCliPost('sections/update', { id, ...updates })
-      await get().fetchProjects()
-    } catch (err) {
-      console.error('[projects] updateSection failed:', err)
-    }
-  },
-
-  assignWorkspaceToSection: async (workspaceId: string, sectionId: string | null) => {
-    try {
-      await daemonCliPost('sections/assign', { workspaceId, sectionId })
-      await get().fetchProjects()
-    } catch (err) {
-      console.error('[projects] assignWorkspaceToSection failed:', err)
     }
   },
 

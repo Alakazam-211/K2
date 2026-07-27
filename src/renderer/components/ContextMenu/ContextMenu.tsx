@@ -185,7 +185,9 @@ export default function ContextMenu(): React.JSX.Element | null {
           <button
             key={item.id}
             style={{
-              display: 'block',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
               width: '100%',
               padding: '5px 12px',
               border: 'none',
@@ -201,7 +203,6 @@ export default function ContextMenu(): React.JSX.Element | null {
               lineHeight: '1.4',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
-              textOverflow: 'ellipsis'
             }}
             onMouseEnter={() => {
               if (!isDisabled) setFocusedIndex(index)
@@ -215,7 +216,35 @@ export default function ContextMenu(): React.JSX.Element | null {
             }}
             disabled={isDisabled}
           >
-            {item.label}
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {item.label}
+            </span>
+            {item.badge ? (
+              <span
+                style={{
+                  flexShrink: 0,
+                  fontSize: '9px',
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  lineHeight: 1.2,
+                  padding: '2px 5px',
+                  borderRadius: 3,
+                  color: 'var(--color-text-muted)',
+                  background: 'var(--color-wash-3, rgba(255,255,255,0.06))',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                {item.badge}
+              </span>
+            ) : null}
           </button>
         )
       })}

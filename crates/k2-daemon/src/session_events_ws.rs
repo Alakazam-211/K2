@@ -497,6 +497,7 @@ mod tests {
             pane_id: "t".into(),
             tab_id: "tab".into(),
             status: "start".into(),
+            workspace_path: None,
         };
         // S1 presence — the roster is daemon-global, same routing class.
         let presence = SessionEvent::PresenceChanged { roster: vec![] };

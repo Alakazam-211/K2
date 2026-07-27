@@ -712,14 +712,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0090_feedback_tickets",
             include_str!("../../drizzle_sql/0090_feedback_tickets.sql"),
         ),
-        // 0091 (Context hamburger): optional AGENTS.md layers as path
+        // 0091 (Context context management stack): optional AGENTS.md layers as path
         // references per project (order + enabled + source + label).
         // Bodies never stored; empty stack = today's compose.
         (
             "0091_project_context_layers",
             include_str!("../../drizzle_sql/0091_project_context_layers.sql"),
         ),
-        // 0092 (Context hamburger): system layers (AGENT / PROJECT / Tooling)
+        // 0092 (Context context management stack): system layers (AGENT / PROJECT / Tooling)
         // are toggleable, default ON.
         (
             "0092_project_context_system_flags",

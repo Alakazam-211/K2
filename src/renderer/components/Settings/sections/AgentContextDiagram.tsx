@@ -1,6 +1,6 @@
 import React from 'react'
 
-// Context hamburger (prd-context-hamburger-v1): always-on AGENTS.md is a
+// Context management stack (prd-context-hamburger-v1): always-on AGENTS.md is a
 // stack of markdown sources — pinned (AGENT + PROJECT + Tooling) plus
 // optional ordered layers — composed server-side. Harness files stay
 // read-only symlink mirrors of the generated `.k2/AGENTS.md`.
@@ -44,7 +44,7 @@ export function AgentContextDiagram(): React.JSX.Element {
       <div className="grid gap-2 items-stretch" style={{ gridTemplateColumns: 'minmax(0,1.1fr) auto minmax(0,0.95fr) auto minmax(0,1.15fr)' }}>
         {/* Stage 1: CONTEXT STACK — pinned + optional layers. */}
         <div className="flex flex-col gap-1.5">
-          <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">Context stack (hamburger)</div>
+          <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">Context management stack</div>
           <div className="border border-violet-400/50 bg-violet-400/10 px-2 py-1.5">
             <div className="text-[11px] font-semibold text-violet-200">AGENT.md</div>
             <div className="text-[8px] font-mono text-violet-200/60 mt-0.5 truncate">.k2/agent/AGENT.md</div>

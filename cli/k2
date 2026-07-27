@@ -9550,7 +9550,7 @@ cmd_schema() {
     {
       "name": "agent context",
       "usage": "k2 agent context <list|add|remove|on|off|move|show|regen|catalog> [args] [--json]",
-      "description": "Day-2 management of the always-on AGENTS.md context stack (context hamburger): pinned layers (Agent/Project/Tooling) plus optional ordered path layers. Workspace from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD. Exit codes: 0 ok, 1 error, 2 bad usage, 3 precondition (e.g. duplicate_layer), 4 not found.",
+      "description": "Day-2 management of the always-on AGENTS.md context management stack: pinned layers (Agent/Project/Tooling) plus optional ordered path layers. Workspace from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD. Exit codes: 0 ok, 1 error, 2 bad usage, 3 precondition (e.g. duplicate_layer), 4 not found.",
       "args": [{"name": "subcommand", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Machine-readable JSON (daemon body; mutations include ok/layer/regen)."}]
     },
@@ -13163,7 +13163,7 @@ if not d.get("dryRun"):
 PYEOF
 }
 
-# ── Context hamburger — `k2 agent context …` (prd-context-hamburger-v1) ──
+# ── Context management stack — `k2 agent context …` (prd-context-hamburger-v1) ──
 #
 # Day-2 stack management for always-on AGENTS.md layers. Daemon SSOT via
 # /cli/context/* (owner token + project= like other agent verbs).
@@ -13172,7 +13172,7 @@ PYEOF
 
 cmd_help_agent_context() {
     cat <<'EOF'
-k2 agent context — manage the always-on AGENTS.md context stack (hamburger)
+k2 agent context — manage the always-on AGENTS.md context management stack
 
 System (pinned) layers: Agent persona, PROJECT.md, Tooling footer — toggleable
 with on/off (ids pinned:agent|pinned:project|pinned:tooling, or short aliases
@@ -13371,7 +13371,7 @@ if d.get("ok") is False and not d.get("layers") and "pinned" not in d and "catal
 
 # 404 with HTML / empty structured body
 if status == 404 and "ok" not in d and "layers" not in d and "catalog" not in d:
-    fail("not_found", "route %s not found (is the context-hamburger daemon build running?)" % route, 4)
+    fail("not_found", "route %s not found (is the context-stack daemon build running?)" % route, 4)
 
 print(raw)
 PYEOF
@@ -21504,7 +21504,7 @@ case "${1:-help}" in
             # arm with the real fleet-view semantics (PRD §3).
             list)   shift 2; cmd_agent_list "$@" ;;
             retire) shift 2; cmd_agent_retire "$@" ;;
-            # Context hamburger — day-2 AGENTS.md layer stack
+            # Context management stack — day-2 AGENTS.md layer stack
             # (prd-context-hamburger-v1).
             context) shift 2; cmd_agent_context "$@" ;;
             --help|-h|'') cmd_help_agent; exit 0 ;;
@@ -21524,7 +21524,7 @@ case "${1:-help}" in
     context)
         # Top-level teach string — stack lives under `k2 agent context`.
         echo "Use: k2 agent context <list|add|remove|on|off|move|show|regen|catalog>" >&2
-        echo "Day-2 management of the always-on AGENTS.md context stack (context hamburger)." >&2
+        echo "Day-2 management of the always-on AGENTS.md context management stack." >&2
         echo "See: k2 agent context --help" >&2
         exit 2
         ;;

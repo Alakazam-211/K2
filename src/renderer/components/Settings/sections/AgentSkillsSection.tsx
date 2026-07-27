@@ -60,7 +60,7 @@ export function AgentSkillsSection(): React.JSX.Element {
       <div className="text-xs text-[var(--color-text-muted)] mb-4 space-y-2 leading-relaxed max-w-3xl">
         <p>
           Different AI tools look for project notes in different files. Always-on context is a{' '}
-          <span className="text-[var(--color-text-secondary)]">context stack</span> (the hamburger):
+          <span className="text-[var(--color-text-secondary)]">context management stack</span>:
           pinned{' '}
           <span className="font-mono text-[var(--color-text-secondary)]">AGENT.md</span> (persona) +{' '}
           <span className="font-mono text-[var(--color-text-secondary)]">PROJECT.md</span> (project) +

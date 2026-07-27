@@ -3,10 +3,10 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
-## 0.41.0 — Context hamburger: always-on AGENTS.md stack
+## 0.41.0 — Context management stack: always-on AGENTS.md
 
 Always-on workspace context is a **stack of markdown layers** that K2
-composes into `.k2/AGENTS.md` — the “context hamburger.”
+composes into `.k2/AGENTS.md` — the **context management stack**.
 
 ### Stack model
 
@@ -32,14 +32,14 @@ Catalog ids include `wiki:index`, `wiki:home`, **`wiki:hygiene`**,
 
 ### Settings
 
-Workspace Settings has a **Context stack** editor (View/Edit, system
-toggles, **Browse catalog**). Day-2 management is
+Workspace Settings has a **Context management stack** editor (View/Edit,
+system toggles, **Browse catalog**). Day-2 management is
 `k2 agent context …`; hire only **seeds** layers with `--context`.
 
 ### Soft size warn
 
 Stacks over ~64 KiB show a soft warning so always-on context stays lean.
-Load skills for depth; keep hamburger layers short.
+Load skills for depth; keep stack layers short.
 
 ---
 

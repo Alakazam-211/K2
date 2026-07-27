@@ -62,8 +62,8 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.list', section: 'projects', label: 'Workspaces', description: 'All registered projects + focus groups', keywords: ['workspaces', 'projects', 'focus groups'] },
   { id: 'projects.add', section: 'projects', label: 'Add Workspace', description: 'Register a new project directory', keywords: ['add', 'new', 'workspace', 'project', 'folder'] },
   { id: 'projects.focus-groups', section: 'projects', label: 'Focus Groups', description: 'Organize workspaces into tabbed folders', keywords: ['focus', 'groups', 'tabs'] },
-  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context stack', description: 'Toggle AGENT.md / PROJECT.md / layers that compose into AGENTS.md', keywords: ['context', 'hamburger', 'agents.md', 'project.md', 'persona', 'wiki'] },
-  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context (AGENTS.md stack)', description: 'Pinned + optional markdown layers composed into .k2/AGENTS.md', keywords: ['context', 'stack', 'hamburger', 'agents.md', 'layers', 'wiki', 'always-on'] },
+  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context stack', description: 'Toggle AGENT.md / PROJECT.md / layers that compose into AGENTS.md', keywords: ['context', 'stack', 'agents.md', 'project.md', 'persona', 'wiki'] },
+  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context (AGENTS.md stack)', description: 'Pinned + optional markdown layers composed into .k2/AGENTS.md', keywords: ['context', 'stack', 'stack', 'agents.md', 'layers', 'wiki', 'always-on'] },
   { id: 'projects.heartbeat', section: 'projects', label: 'Heartbeat Schedule', description: 'Scheduled / hourly / off per-project heartbeat mode', keywords: ['heartbeat', 'schedule', 'cron', 'hourly', 'scheduled'] },
   { id: 'projects.agents', section: 'projects', label: 'Project Agents', description: 'Custom agent personas + wake-up files per workspace', keywords: ['agent', 'persona', 'wakeup', 'create'] },
   { id: 'projects.worktrees', section: 'projects', label: 'Worktree Folders', description: 'Enable/disable per-agent git worktrees', keywords: ['worktree', 'git', 'branch'] },
@@ -3597,6 +3597,5 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
     </div>
   )
 }
-
 
 

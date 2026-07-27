@@ -1,4 +1,4 @@
-//! Daemon `/cli/context/*` routes — context hamburger (AGENTS.md layer stack).
+//! Daemon `/cli/context/*` routes — context management stack (AGENTS.md layer stack).
 //!
 //! See `.k2/prds/prd-context-hamburger-v1.md` §7.
 //!

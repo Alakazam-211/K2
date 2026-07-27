@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Context hamburger — `k2 agent context …` CLI smoke.
+# Context management stack — `k2 agent context …` CLI smoke.
 #
 # Covers:
 #   1. bash -n on cli/k2

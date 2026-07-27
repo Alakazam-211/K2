@@ -1,4 +1,4 @@
-// Typed helpers for the context-hamburger stack (always-on AGENTS.md layers).
+// Typed helpers for the context management stack (always-on AGENTS.md layers).
 //
 // SSOT lives in the daemon SQLite table `project_context_layers`. The UI only
 // mutates via these /cli/context/* routes — compose/regen is server-side.

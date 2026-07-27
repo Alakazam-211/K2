@@ -1,4 +1,4 @@
-//! Context hamburger — optional AGENTS.md layer stack (path references).
+//! Context management stack — optional AGENTS.md layer stack (path references).
 //!
 //! Always-on workspace context is a **stack of markdown files** composed into
 //! `.k2/AGENTS.md`. Pinned layers (primary AGENT.md, PROJECT.md, Tooling

@@ -744,7 +744,7 @@ async fn handle_one_request(
             // wrapping the update_project_setting allowlist; token_ok +
             // require_post in the dedicated arm below.
             | "/cli/workspace/set"
-            // Context hamburger (prd-context-hamburger-v1) — optional
+            // Context management stack (prd-context-hamburger-v1) — optional
             // AGENTS.md layer stack mutations. JSON-bodied POSTs;
             // token_ok + require_post in the dedicated arm below.
             // Reads (layers/show/presets) are GETs via cli::dispatch.
@@ -3142,7 +3142,7 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
-        // Context hamburger — `/cli/context/*` mutations (add / remove /
+        // Context management stack — `/cli/context/*` mutations (add / remove /
         // set-enabled / move / regen). JSON-bodied POSTs; token_ok +
         // require_post. Handlers run in spawn_blocking (SQLite + FS compose).
         p if is_post && post_allowed && p.starts_with("/cli/context/") => {

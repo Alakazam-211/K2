@@ -75,7 +75,7 @@ pub fn register_workspace(path: &str) -> Result<String, String> {
     conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
 
     let insert_result = (|| -> Result<(), String> {
-        // Context hamburger: workspaces are always "custom" agents going
+        // Context management stack: workspaces are always "custom" agents going
         // forward (no Off/Manager/K2 type UX). Set agent_mode=custom +
         // agent_enabled=1 on create so heartbeats / agent features work
         // without a mode radio.

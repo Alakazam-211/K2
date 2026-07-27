@@ -119,7 +119,7 @@ fn compose_agents_md(project_path: &str) -> String {
     if inc_agent {
         // Match pinned_info / Settings: prefer primary agent path, else the
         // unified `.k2/agent/AGENT.md` even when frontmatter has no `name:`
-        // (common for pre-hamburger workspaces that just dropped a persona file).
+        // (common for pre-stack workspaces that just dropped a persona file).
         let agent_md = if let Some(primary) = find_primary_agent(project_path) {
             agent_dir(project_path, &primary).join("AGENT.md")
         } else {
@@ -336,7 +336,7 @@ must honor (PTY spawn, prompt intake, `k2 respond`, declared danger flags) is
 `docs/agent-contract.md` in the K2 repository; `k2 preset --help` has the
 command surface.
 
-## Always-on context (AGENTS.md hamburger)
+## Always-on context (context management stack)
 ```
 k2 agent context list|add|on|off|move|regen   # manage stack layers
 k2 agent hire <dir> --context wiki:hygiene --context connections:roster
@@ -1537,7 +1537,7 @@ mod tests {
             body.contains("docs/agent-contract.md"),
             "k2-cli skill must point custom agents at the agent contract",
         );
-        // Context hamburger (0.41.0): lean always-on stack management.
+        // Context management stack (0.41.0): lean always-on stack management.
         assert!(
             body.contains("k2 agent context"),
             "k2-cli skill must teach `k2 agent context`",
@@ -1627,7 +1627,7 @@ mod tests {
         fs::remove_dir_all(&proj).ok();
     }
 
-    /// Pre-hamburger workspaces often have `.k2/agent/AGENT.md` with no
+    /// Pre-stack workspaces often have `.k2/agent/AGENT.md` with no
     /// `name:` frontmatter — Settings still lists the file as pinned:agent;
     /// compose must include the body (not only when find_primary_agent hits).
     #[test]

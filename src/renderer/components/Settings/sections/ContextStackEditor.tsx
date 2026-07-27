@@ -53,7 +53,7 @@ type Selected =
   | null
 
 /**
- * Per-workspace always-on context stack editor (context hamburger).
+ * Per-workspace always-on context stack editor (context management stack).
  *
  * Full-height page split:
  *   Left  — stack + add chips + Canonical Agent

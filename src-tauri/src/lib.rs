@@ -702,7 +702,8 @@ pub fn run() {
     k2_core::enrich_path_from_login_shell();
 
     // 0.40.0 rebrand — one-time ~/.k2so → ~/.k2 home migration. MUST run
-    // before db::init_database() below: the DB now lives at ~/.k2/k2so.db,
+    // before db::init_database() below: the DB lives under ~/.k2/ (k2.db if
+    // present, else legacy k2so.db — endgame Stage A dual-read).
     // and opening it first would create a fresh empty ~/.k2 (abandoning
     // the user's data in ~/.k2so and forcing the migration's Conflict
     // branch — caught by the convergence rig, 2026-06-10). The daemon

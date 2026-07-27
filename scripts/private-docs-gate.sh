@@ -7,7 +7,7 @@
 # `.k2/` is gitignored, so these docs can only leak via a deliberate
 # `git add -f` — this gate makes that a CI failure instead of an incident.
 #
-# Wired into .github/workflows/checks.yml next to k2so-gate.sh.
+# Wired into .github/workflows/checks.yml next to k2-home-gate.sh.
 set -euo pipefail
 
 # Deny-list of TRACKED doc names that mark cloud-business content.

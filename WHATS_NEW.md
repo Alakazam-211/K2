@@ -3,6 +3,28 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.65 — Leave the k2so name behind (home gate + DB dual-read)
+
+### Canonical home paths
+
+- CI’s **k2-home-gate** (was `k2so-gate`) blocks new hardcoded `~/.k2so`
+  path literals. Allowlist is only deliberate compat tests and migration.
+- Dev helpers (`web-serve`, web client smoke) resolve the daemon port via
+  **`~/.k2` only** — the compat symlink still covers upgraded machines.
+
+### Endgame Stage A — database filename
+
+- The daemon **opens `k2.db` when it already exists**, otherwise
+  `k2so.db` (unchanged create path for fresh installs this release).
+- Prepares the rename lane without rewriting live data yet
+  (writer flip is a later endgame stage).
+
+### Repo hygiene
+
+- Developer changelogs live under `docs/changelog/` (not the repo root).
+
+---
+
 ## 0.40.64 — Context management stack: always-on AGENTS.md
 
 Always-on workspace context is a **stack of markdown layers** that K2

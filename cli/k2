@@ -3429,7 +3429,9 @@ print('yes' if (agent_inbox or ws_inbox) else 'no')
     session_info=$(python3 -c "
 import json, os, sqlite3
 try:
-    db = os.path.expanduser('$K2_HOME/k2so.db')
+    db = os.path.expanduser('$K2_HOME/k2.db')
+    if not os.path.isfile(db):
+        db = os.path.expanduser('$K2_HOME/k2so.db')
     conn = sqlite3.connect(db)
     project = '$PROJECT'
     row = conn.execute('SELECT id FROM projects WHERE path = ?', (project,)).fetchone()

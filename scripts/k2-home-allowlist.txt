@@ -1,0 +1,19 @@
+# k2-home-gate allowlist (prd-k2so-cleanup-v1 §5 / prd-k2so-endgame-v1).
+# Format: <repo-relative path> :: <required substring on the hit line>
+# A substring of * allows the whole file. EVERY entry needs a reason.
+# Shrink freely; grow only with review.
+
+# Migration code names the past by definition — it moves/symlinks the old
+# home and its tests build .k2so fixtures on purpose.
+crates/k2-core/src/migration_home.rs :: *
+
+# Legacy frpc probe candidate (endgame B-L4 deletes this when field-clean).
+crates/k2-core/src/tunnel/connector.rs :: .k2so/bin/frpc
+
+# CLI fallback for a machine whose home migration has not run yet.
+cli/k2 :: K2_HOME="${HOME}/.k2so"
+
+# Clean-VM pairing smoke: deliberately asserts the ~/.k2so → ~/.k2
+# compat symlink still works (0.40.33/34 regression class). Not app code.
+scripts/vm-newuser-pair-guest.sh :: *
+scripts/vm-newuser-pair-smoke.sh :: *

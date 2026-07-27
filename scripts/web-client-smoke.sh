@@ -61,10 +61,8 @@ fail() {
 
 if [[ -n "${K2_HEARTBEAT_PORT_FILE:-}" ]]; then
   PORT_FILE="$K2_HEARTBEAT_PORT_FILE"
-elif [[ -f "$HOME/.k2/heartbeat.port" ]]; then
-  PORT_FILE="$HOME/.k2/heartbeat.port"
 else
-  PORT_FILE="$HOME/.k2so/heartbeat.port"
+  PORT_FILE="$HOME/.k2/heartbeat.port"
 fi
 
 if [[ -z "${K2_DAEMON_PORT:-}" ]]; then

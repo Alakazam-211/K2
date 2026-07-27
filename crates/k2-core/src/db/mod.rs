@@ -127,11 +127,30 @@ pub fn init_for_tests() -> Arc<ReentrantMutex<Connection>> {
     }
 }
 
-/// Open (or create) the K2SO database at ~/.k2so/k2so.db, run all
-/// migrations, seed default data, and populate the process-wide
-/// [`SHARED`] connection. Returns an `Arc` handle so the caller can
-/// store it in `AppState.db` AND the shared static points at the same
-/// physical connection.
+/// Resolve the on-disk SQLite path under a K2 home dir (`~/.k2` in prod).
+///
+/// Endgame Stage A (prd-k2so-endgame-v1): **prefer `k2.db` if it exists**,
+/// else use legacy `k2so.db` (create path for fresh installs until Stage B
+/// flips the writer). When both exist, prefer `k2.db` and leave the dual
+/// real-file conflict for Stage B's boot guard.
+pub fn resolve_home_db_path(db_dir: &std::path::Path) -> std::path::PathBuf {
+    let new = db_dir.join("k2.db");
+    if new.exists() {
+        new
+    } else {
+        db_dir.join("k2so.db")
+    }
+}
+
+/// Open (or create) the K2 database under `~/.k2/`, run all migrations,
+/// seed default data, and populate the process-wide [`SHARED`] connection.
+/// Returns an `Arc` handle so the caller can store it in `AppState.db`
+/// AND the shared static points at the same physical connection.
+///
+/// Filename: **endgame Stage A** prefers `k2.db` when it already exists;
+/// otherwise opens/creates legacy `k2so.db` so a Stage-A-only release does
+/// not rewrite on-disk data. Stage B flips the writer / renames (see
+/// `prd-k2so-endgame-v1.md`).
 ///
 /// Safe to call exactly once per process. A second call returns the
 /// already-initialized handle (tests that reuse the binary hit this).
@@ -149,7 +168,7 @@ pub fn init_database() -> Result<Arc<ReentrantMutex<Connection>>> {
     std::fs::create_dir_all(&db_dir)
         .map_err(|e| rusqlite::Error::InvalidParameterName(format!("Could not create ~/.k2 directory: {}", e)))?;
 
-    let db_path = db_dir.join("k2so.db");
+    let db_path = resolve_home_db_path(&db_dir);
     let conn = open_with_resilience(&db_path)?;
 
     // Self-heal: clean orphan rows whose parent `projects` row was
@@ -1093,7 +1112,46 @@ mod tests {
             SEQ.fetch_add(1, AtomicOrdering::Relaxed)
         ));
         std::fs::create_dir_all(&base).unwrap();
+        // Tests open a private path; either filename is fine for open().
         base.join("k2so.db")
+    }
+
+    #[test]
+    fn resolve_home_db_path_prefers_k2_db_when_present() {
+        let base = std::env::temp_dir().join(format!(
+            "k2-db-resolve-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        // Neither → legacy create path (Stage A writer not flipped).
+        assert_eq!(
+            resolve_home_db_path(&base),
+            base.join("k2so.db"),
+            "neither file: still create k2so.db until Stage B"
+        );
+        std::fs::write(base.join("k2so.db"), b"old").unwrap();
+        assert_eq!(
+            resolve_home_db_path(&base),
+            base.join("k2so.db"),
+            "only legacy: honor k2so.db"
+        );
+        std::fs::write(base.join("k2.db"), b"new").unwrap();
+        assert_eq!(
+            resolve_home_db_path(&base),
+            base.join("k2.db"),
+            "both present: prefer k2.db"
+        );
+        std::fs::remove_file(base.join("k2so.db")).unwrap();
+        assert_eq!(
+            resolve_home_db_path(&base),
+            base.join("k2.db"),
+            "only k2.db: use it"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     // ── Migration runner ──────────────────────────────────────────

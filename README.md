@@ -23,11 +23,6 @@
 </p>
 
 <p align="center">
-  You don’t have to sit in the room for them to keep working.<br/>
-  The <strong>daemon</strong> is the product — desktop, web, and phone are viewers.
-</p>
-
-<p align="center">
   <a href="https://github.com/Alakazam-211/K2/releases/latest"><strong>⬇ Download</strong></a>
   &nbsp;·&nbsp;
   <a href="https://k2.dev">Website</a>
@@ -43,92 +38,45 @@
 
 ---
 
-## Host an agent team — not a single chat tab
+## Host an agent team, not a single agent
 
-K2 is **agent server software**. Not a traditional IDE. Not a model vendor.
+K2 is **agent server software** — not a traditional IDE, not a model provider.
 
-Your agents run on **your machine** with the CLI tools you already pay for — Claude Code, Codex, Gemini, Pi, Hermes, and more. They keep running when you close the window. Your team can log in, watch live terminals, and manage the fleet from anywhere.
+Your agents run on **your machine** with the CLI tools you already use. They keep working when you close the window. Your team can log in, watch live, and manage the fleet from anywhere.
 
-| | |
-|---|---|
-| **Your keys** | Bring your own model accounts — K2 doesn’t sell inference |
-| **Your hardware** | Mac desktop today · Linux daemon (beta) · headless server |
-| **Multiplayer** | Humans *and* agents on one server — roles, presence, shared screens |
-| **Fair Source** | [FSL-1.1-Apache-2.0](LICENSE.md) — free to use & self-host |
+**Your keys. Your hardware. Full visibility.**
 
 ---
 
-## What an agent has
+## What you get
 
-An **agent** on K2 is durable infrastructure you host — not a disposable chat.
+### Agent teams on your server
 
-| | Capability |
-|---|------------|
-| **Hands** | Real terminal (PTY) + filesystem on a project |
-| **Identity** | Persona & standing orders (`AGENT.md`) |
-| **Knowledge** | Project truth (`PROJECT.md`) you control |
-| **Context stack** | Lean always-on `AGENTS.md` — composed layers, not a mystery blob |
-| **Skills** | Loadable playbooks for depth (keep always-on short) |
-| **Heartbeats** | Scheduled wakes — work continues without you babysitting |
-| **Connections** | Discover, message, and hand work to other agents |
-| **API** | Same agent, addressable over HTTPS when you expose the server |
+Stand up a **team of agents**, not one disposable chat. Name them, house them on real projects, leave them running under a daemon that doesn’t sleep when the UI closes.
 
-```bash
-# Hire an agent, seed context, wire it into the fleet
-k2 agent hire ~/agents/ops --name "Ops" \
-  --context wiki:hygiene --context connections:roster
-k2 agent context catalog          # local context catalog
-k2 agent context add manager:pack
-k2 msg mobile-app "API cursors shipped — update the client"
-```
+### Multiplayer — people and agents
 
----
+One server is a place **your team logs into**. Presence, roles, shared live terminals, grant-the-keyboard, audit. Humans manage; agents work; everyone sees the same truth.
 
-## Why K2
+### Agents that work together
 
-### Agents as infrastructure
+Agents discover each other, **message** across projects, and hand off work without you as the relay. Cross-repo collaboration becomes “tell the other agent,” not copy-paste between windows.
 
-Stand agents up like services: name, home directory, connections, heartbeats, context stack. Leave them under the **daemon** — not under “is the app window open?”
+### Any coding agent you already pay for
 
-### Multiplayer agent management
+Claude Code, Codex, Gemini, Copilot, Grok, Cursor, OpenCode, Goose, Pi, Hermes — **if it runs in a terminal, it runs on K2.** Bring your own subscriptions. No wrapper SDK required.
 
-One server is a place **your team logs into**. Presence, Owner / Admin / Member roles, live shared terminals, grant-the-keyboard, audit. Manage a fleet; don’t only “run a prompt.”
+### Always-on context, one truth for every harness
 
-### Teams of agents that run the business
+Project knowledge and agent persona compile into a single always-on entrypoint every tool can read. Edit once — Claude, Codex, Cursor, and the rest stay in sync. Keep it lean; load skills when you need depth.
 
-Agents **message each other** (`k2 msg`, inbox), stay **connected** across projects, and move work without a human copy-paste relay. Cross-repo becomes “tell the other agent.”
+### Reach your machine from anywhere
 
-### Context management stack
-
-Always-on context is a **stack of markdown layers** → `.k2/AGENTS.md`:
-
-- **System** — persona, project, tooling pointer  
-- **Optional** — wiki packs, role packs, live rosters (connections / heartbeats / skills)  
-- **Day-2** — Settings UI + `k2 agent context …` + **catalog**  
-
-Harnesses (Claude, Codex, Gemini, Cursor, …) symlink to the same generated entrypoint. Edit sources once — every tool sees the same truth.
-
-### Any CLI agent (your subscription)
-
-If it runs in a terminal, it runs on K2. No wrapper SDK required.
-
-**Claude · Codex · Gemini · Copilot · Grok · Cursor · OpenCode · Goose · Pi · Hermes · + custom presets**
-
-Launch roster: `k2 preset` · hire with `--agent`.
-
-### Daemon-first — manage from anywhere
-
-- Sessions keep running when the UI is closed  
-- **[K2 Connect](https://k2.dev/k2-connect)** — tunnel, `your-name.k2.dev`, remote files, clone-to, multi-user  
-- **Companion apps** — phone in your pocket  
+**[K2 Connect](https://k2.dev/k2-connect)** tunnels your daemon to `your-name.k2.dev`. Remote workspaces, files, clone-to, multi-user access. Companion apps for phone. Same terminals, live — from the train.
 
 ### Agents as API endpoints
 
-Build agents on K2, then **serve** them:
-
-- Message a real agent from CI, cron, or GitHub Actions  
-- Spawn sandboxed sessions over HTTPS  
-- Watch API work as live tabs in the app  
+Build agents on K2, then **serve** them. Message a real agent from CI or cron. Spawn sandboxed sessions over HTTPS. Watch API-started work as live tabs in the app.
 
 ```bash
 curl -X POST "https://your-name.k2.dev/v1/w/api/message" \
@@ -136,19 +84,24 @@ curl -X POST "https://your-name.k2.dev/v1/w/api/message" \
   -d '{"text":"deploy when tests pass","from":"CI bot"}'
 ```
 
-→ [API docs](https://k2.dev/docs/api)
+[API docs →](https://k2.dev/docs/api)
+
+### Terminal-first workspace
+
+Serious terminals, worktrees, files, review, and styles — built to manage agents, not to replace your editor of choice. Open anything in Cursor/VS Code when you want; K2 stays the control plane.
+
+### Daemon-first (close the laptop)
+
+Agents run against the **K2 daemon**, not the window. Shut the lid — sessions keep going. Every viewer reconnects to the same live state.
 
 ---
 
 ## Quick start
 
-### Download
-
 | | |
 |---|---|
-| **macOS** | [Latest release](https://github.com/Alakazam-211/K2/releases/latest) |
-| **All platforms** | [k2.dev/download](https://k2.dev/download) (Linux daemon beta) |
-| **Site** | [k2.dev](https://k2.dev) |
+| **Download** | [Latest release](https://github.com/Alakazam-211/K2/releases/latest) · [All platforms](https://k2.dev/download) |
+| **Product** | [k2.dev](https://k2.dev) |
 | **Community** | [Discord](https://discord.gg/73b3sg6pSQ) |
 
 ### Build from source
@@ -170,10 +123,10 @@ Release: `cargo tauri build`.
 
 | Piece | Role |
 |-------|------|
-| **`k2-daemon`** | Source of truth — terminals, heartbeats, SQLite, HTTP/WS, headless server |
-| **Desktop / web** | Thin clients — render truth, send gestures |
-| **`k2` CLI** | What humans *and* agents use day-to-day |
-| **Stack** | Tauri v2 · React · Rust · SQLite · high-quality terminals |
+| **Daemon** | Source of truth — always on, headless-capable |
+| **Desktop / web / mobile** | Thin viewers on the same server |
+| **`k2` CLI** | Day-to-day surface for humans and agents |
+| **Stack** | Tauri v2 · React · Rust · SQLite |
 
 Deep dive: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -181,41 +134,26 @@ Deep dive: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## What K2 is not
 
-- **Not an IDE replacement** — it’s agent management infrastructure with a serious terminal UI  
-- **Not a model provider** — bring Claude / Codex / Gemini / … yourself  
+- **Not an IDE replacement** — agent management infrastructure with a serious terminal UI  
+- **Not a model company** — bring Claude / Codex / Gemini / … yourself  
 - **Not “only while the window is open”** — the daemon owns the loops  
 
 ---
 
 ## Community
 
-| | |
-|---|---|
-| **[Discord](https://discord.gg/73b3sg6pSQ)** | K2 community — ship notes, help, feedback |
-| **[Issues](https://github.com/Alakazam-211/K2/issues)** | Bugs & feature requests |
-| **[What's New](WHATS_NEW.md)** | Product highlights by version |
-| **[Contributing](CONTRIBUTING.md)** | Dev setup, presets, styles |
+- **[Discord](https://discord.gg/73b3sg6pSQ)** — K2 community  
+- **[Issues](https://github.com/Alakazam-211/K2/issues)** — bugs & features  
+- **[What's New](WHATS_NEW.md)** — product highlights by version  
+- **[Contributing](CONTRIBUTING.md)** — dev setup  
 
 ---
 
 ## Fair Source
 
-[FSL-1.1-Apache-2.0](LICENSE.md) — free for personal and internal/business use; each release converts to Apache 2.0 two years later. Source fully visible.
+[FSL-1.1-Apache-2.0](LICENSE.md) — free for personal and internal/business use; each release converts to Apache 2.0 two years later.
 
-Commercial multi-tenant hosting is covered **via official K2 Connect** — see [COMMERCIAL_HOSTING_GRANT.md](COMMERCIAL_HOSTING_GRANT.md).
-
----
-
-## Developing & testing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-```bash
-cargo tauri dev
-./tests/cli-integration-test.sh
-./tests/behavior-test-tier1.sh
-./tests/behavior-test-tier3.sh
-```
+Commercial multi-tenant hosting via official **K2 Connect** — [COMMERCIAL_HOSTING_GRANT.md](COMMERCIAL_HOSTING_GRANT.md).
 
 ---
 

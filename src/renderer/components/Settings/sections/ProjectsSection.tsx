@@ -2161,10 +2161,16 @@ function ContextLayerFileEditor({
               </div>
             ) : (
               <CodeEditor
-                value={content}
-                onChange={setContent}
-                language="markdown"
-                path={filePath}
+                code={content}
+                filePath={filePath}
+                onSave={async (c) => {
+                  try {
+                    await daemonCliPost('fs/write-file', { path: filePath, content: c })
+                  } catch {
+                    /* write failed — leave buffer for retry */
+                  }
+                }}
+                onChange={(c) => setContent(c)}
               />
             )}
           </div>

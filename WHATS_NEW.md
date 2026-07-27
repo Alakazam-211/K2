@@ -1,7 +1,7 @@
 # K2 — What's New
 
-User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
-files in the repo root for the full developer-facing changelog.
+User-facing highlights of recent updates. Developer-facing per-version notes
+live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.40.64 — Context management stack: always-on AGENTS.md
 
@@ -2727,7 +2727,7 @@ got a lot tidier — same product, cleaner bones. Things you'll notice:
   tiers. Old verbs like `k2so delegate`, `k2so work create`, `k2so
   who`, `k2so roster` now print a helpful error pointing at their
   replacement (`k2so inbox compose`, `k2so connections list`, etc.).
-  See `release-notes-0.39.0.md` for the full deprecation map.
+  See `docs/changelog/release-notes-0.39.0.md` for the full deprecation map.
 
 - **Storage shapes consolidated**: `.k2so/work/` → `.k2so/inbox/` and
   `.k2so/agents/<name>/` → `.k2so/skills/<harness>/`. The daemon
@@ -2745,7 +2745,7 @@ got a lot tidier — same product, cleaner bones. Things you'll notice:
   the new CLI verbs, chat-history dedup for Pi / Codex / Cursor-IDE
   parsers, trash test infra hardened against macOS Touch ID flakes.
 
-Plus a long list of internal cleanup — see `release-notes-0.39.0.md`
+Plus a long list of internal cleanup — see `docs/changelog/release-notes-0.39.0.md`
 for the developer-facing catalog.
 
 ## 0.38.13 — Faster launch + smarter memory threshold

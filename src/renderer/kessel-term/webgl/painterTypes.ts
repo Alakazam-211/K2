@@ -7,7 +7,7 @@
 // receives the merged snapshot + scroll position + selection + theme
 // on React commits AND, while scrolling, directly from the pane's
 // display-aligned wheel rAF (the vsync scroll pump — commit-cadence
-// painting was the scroll-hop cause; LEARNINGS-webgl-scroll.md). It
+// painting was the scroll-hop cause; docs/learnings/LEARNINGS-webgl-scroll.md). It
 // never talks to the wire and never schedules its own frames —
 // `render()` is the only entry point, which is what keeps the DOM
 // strip a one-flag-flip fallback. Design:

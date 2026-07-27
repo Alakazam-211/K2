@@ -172,7 +172,7 @@ echo "  Done."
 # This is intentionally a hard gate — if the entry is missing, the
 # release halts BEFORE any build/sign/notarize work so the developer
 # has to write the user-facing notes first. WHATS_NEW.md is curated
-# user-friendly language (separate audience from release-notes-X.Y.Z.md
+# user-friendly language (separate audience from docs/changelog/release-notes-X.Y.Z.md
 # which goes to the GitHub release body).
 echo ""
 echo "Step 1.5: Verifying WHATS_NEW.md has an entry for ${VERSION}..."

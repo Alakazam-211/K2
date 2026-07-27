@@ -15,7 +15,7 @@
 //   2. style-store textGamma               — effective value for the
 //      active style (loaded from per-style storage or preset)
 //
-// See PLAN-text-gamma-per-style.md / LEARNINGS-webgl-scroll.md §chonky.
+// See PLAN-text-gamma-per-style.md / docs/learnings/LEARNINGS-webgl-scroll.md §chonky.
 
 import type { StyleMeta, StylePaletteMeta, StyleScheme } from '@/styles.generated'
 

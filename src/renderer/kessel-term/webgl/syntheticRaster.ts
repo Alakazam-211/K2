@@ -158,7 +158,7 @@ export function arcStroke(
  *    dim/opacity as `alpha` — the strokes rasterize pre-colored
  *    (solid fillRects, NOT CSS gradients: WebKit has no solid-fill
  *    fast path for gradients, which was the grid-scroll cost —
- *    LEARNINGS-dom-grids.md). Shade specs (`spec.alpha`) compose
+ *    docs/learnings/LEARNINGS-dom-grids.md). Shade specs (`spec.alpha`) compose
  *    multiplicatively with `alpha`, mirroring the shader's
  *    coverage × instance-alpha and the DOM's rgba × opacity. */
 export function drawSyntheticGlyph(

@@ -1,7 +1,7 @@
 {
   "name": "k2",
   "version": "0.40.63",
-  "description": "Developer workspace with terminal panes, git worktrees, and agent presets",
+  "description": "Multiplayer Agent Management Platform — agents as infrastructure",
   "author": "Alakazam Labs",
   "license": "FSL-1.1-Apache-2.0",
   "scripts": {

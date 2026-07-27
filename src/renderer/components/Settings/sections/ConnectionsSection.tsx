@@ -18,6 +18,10 @@
 //     "Pair from this Mac" (local address-book credentials for the other
 //     end). External agents on the right stay host-aware.
 //
+// FOLLOW-UP (review soon): discover/pair/"is it a peer?" is hard unless
+// this device already has the other server signed in. Top bar must stay
+// client-local. See docs/known-issues/connect-servers-pair-ux-followup.md
+//
 // Selecting/connecting a host reuses the top-bar switcher path
 // (`pickHost`) so a host without a remembered token drops into the same
 // full-screen sign-in.

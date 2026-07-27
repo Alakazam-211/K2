@@ -9,16 +9,20 @@
 // token goes to the OS keychain ONLY when "Remember password" is on, else
 // it's kept in memory for the session.
 //
-// The list is ALWAYS this Mac's address book (same source as the top-bar
-// ServerSwitcher) — including while signed into a remote. That keeps
-// cloud↔cloud "Pair as federated peer" reachable: Pair pins the ACTIVE
-// daemon to the tile host. External agents on the right stay host-aware.
+// Address book vs remote peers:
+//   - Active host = Local → left pane is THIS Mac's saved servers (same
+//     source as the top-bar ServerSwitcher) + add/edit form.
+//   - Active host = remote → left pane is THAT server's federation peers
+//     (`GET /cli/federation/peers` on the active daemon) so operators can
+//     see who the cloud is federated with. Pairing a NEW peer still uses
+//     "Pair from this Mac" (local address-book credentials for the other
+//     end). External agents on the right stay host-aware.
 //
 // Selecting/connecting a host reuses the top-bar switcher path
 // (`pickHost`) so a host without a remembered token drops into the same
 // full-screen sign-in.
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   useConnectHostStore,
   rememberPassword,
@@ -43,7 +47,12 @@ import {
   type CheckSummary,
   type FederationState,
 } from '@/lib/host-ops'
-import { autoPairWithHost, isTrustedPeerHost } from '@/lib/federation'
+import {
+  autoPairWithHost,
+  isTrustedPeerHost,
+  listFederationPeers,
+  type FederationPeer,
+} from '@/lib/federation'
 import { isConnectionLevelError } from '@/lib/remote-retry'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import { recoveryStatusText } from '@/lib/remote-recovery'
@@ -137,12 +146,8 @@ export function ConnectionsSection(): React.JSX.Element {
   const removeHost = useConnectHostStore((s) => s.removeHost)
   const pickHost = useConnectHostStore((s) => s.pickHost)
 
-  // The address book is always the LOCAL CLIENT's saved servers
-  // (~/.k2so/connect-hosts.json on this Mac) — never the remote machine's book.
-  // We keep it visible while signed into a remote so operators can Pair cloud
-  // servers to each other (autoPairWithHost uses the ACTIVE daemon + the tile).
-  // Top-bar ServerSwitcher also reads this same local store (no "Inception").
-  // The right pane (FederationOverview) stays host-aware for external agents.
+  // Device address book = per-CLIENT (this Mac). Federation peer list =
+  // per ACTIVE daemon. Right pane (FederationOverview) is always host-aware.
   const isLocalActive = activeHost === 'local'
   const activeHostLabel = isLocalActive ? 'This Mac' : activeHost.label || activeHost.hostname
 
@@ -301,62 +306,57 @@ export function ConnectionsSection(): React.JSX.Element {
 
   return (
     <div className="w-full h-full min-h-0 flex flex-col">
-      {/* Middle split: address book (left) | external agents (right).
-          Trusted peer pins live on each server tile — no separate peer list. */}
+      {/* Middle split: left = address book (local) OR active-host peers (remote)
+          | right = external agents on the active daemon. */}
       <div className="flex flex-1 min-h-0">
       <div className="flex-1 min-w-0 overflow-y-auto pr-3 [scrollbar-gutter:stable]">
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Servers</h2>
       <p className="text-[10px] text-[var(--color-text-muted)] mb-4">
-        K2 servers saved on this Mac. Passwords stay in the OS keychain only when
-        “Remember password” is on. Peer trust on each tile is relative to{' '}
-        <span className="text-[var(--color-text-secondary)]">{activeHostLabel}</span>
         {isLocalActive
-          ? ' (this device).'
-          : ' — pair another server while signed in here to federate the two clouds.'}
+          ? 'K2 servers this Mac connects to. Passwords stay in the OS keychain only when “Remember password” is on. Peer trust on each tile is relative to This Mac.'
+          : (
+            <>
+              Federated peers of{' '}
+              <span className="text-[var(--color-text-secondary)]">{activeHostLabel}</span>
+              {' '}(this cloud’s server graph). This Mac’s address book stays in the
+              top-bar switcher; use “Pair from this Mac” below to add a new peer.
+            </>
+          )}
       </p>
 
-      {/* Local client address book — always shown (even while remote is active). */}
+      {isLocalActive ? (
+      <>
       {/* Local — always present, never editable. */}
       <div className="flex items-center gap-2 mb-2 px-3 py-2 border border-[var(--color-border)]">
         <span
           className="w-2 h-2 flex-shrink-0 rounded-full"
-          style={{ backgroundColor: activeHost === 'local' ? statusColor(connectionStatus) : 'var(--color-neutral)' }}
+          style={{ backgroundColor: statusColor(connectionStatus) }}
         />
         <div className="flex flex-col min-w-0">
           <span className="text-xs text-[var(--color-text-primary)]">Local</span>
           <span className="text-[10px] text-[var(--color-text-muted)]">This Mac · bundled daemon</span>
         </div>
-        {activeHost === 'local' ? (
-          <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">Active</span>
-        ) : (
-          <button onClick={() => pickHost('local')} className={`ml-auto ${BTN_ACCENT}`}>
-            Connect
-          </button>
-        )}
+        <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">Active</span>
       </div>
 
-      {/* Saved hosts — sorted alphabetically by display label (case-insensitive).
-          'Local' is the separate pinned tile above this list. */}
+      {/* Saved hosts — sorted alphabetically by display label (case-insensitive). */}
       <div className="space-y-2" data-settings-id="connections.list">
         {(Array.isArray(hosts) ? hosts.slice() : [])
           .sort((a, b) =>
             (a.label || a.hostname).localeCompare(b.label || b.hostname, undefined, { sensitivity: 'base' })
           )
-          .map((h) => {
-          const isActive = activeHost !== 'local' && activeHost.id === h.id
-          return (
+          .map((h) => (
             <HostTile
               key={h.id}
               host={h}
-              isActive={isActive}
+              isActive={false}
               connectionStatus={connectionStatus}
               activePeerSideLabel={activeHostLabel}
               onEdit={() => beginEdit(h)}
               onRemove={() => removeHost(h.id)}
               onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
             />
-          )
-        })}
+          ))}
         {hosts.length === 0 && (
           <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">No saved servers yet.</div>
         )}
@@ -428,11 +428,209 @@ export function ConnectionsSection(): React.JSX.Element {
           + Add a server
         </button>
       )}
+      </>
+      ) : (
+        <ActiveHostPeersPanel
+          hostLabel={activeHostLabel}
+          refreshKey={fedRefreshKey}
+          localHosts={Array.isArray(hosts) ? hosts : []}
+          onPeersChanged={() => setFedRefreshKey((n) => n + 1)}
+          onConnectLocal={() => pickHost('local')}
+        />
+      )}
       </div>
 
       <div className="flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] pl-6 pr-3 [scrollbar-gutter:stable]">
         <FederationOverview refreshKey={fedRefreshKey} />
       </div>
+      </div>
+    </div>
+  )
+}
+
+/** When the active host is a REMOTE cloud, list THAT daemon's federation
+ *  peers (not this Mac's address book). Pair-from-this-Mac uses local
+ *  saved hosts only for the Pair action — no per-tile settings/get probes
+ *  (those caused CORS storms against offline rpm tiles while on iascm). */
+function ActiveHostPeersPanel({
+  hostLabel,
+  refreshKey,
+  localHosts,
+  onPeersChanged,
+  onConnectLocal,
+}: {
+  hostLabel: string
+  refreshKey: number
+  localHosts: ConnectHost[]
+  onPeersChanged: () => void
+  onConnectLocal: () => void
+}): React.JSX.Element {
+  const [loading, setLoading] = useState(true)
+  const [available, setAvailable] = useState(true)
+  const [peers, setPeers] = useState<FederationPeer[]>([])
+  const [pairBusyHost, setPairBusyHost] = useState<string | null>(null)
+  const [pairMsg, setPairMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    const res = await listFederationPeers()
+    if (!res.available) {
+      setAvailable(false)
+      setPeers([])
+    } else {
+      setAvailable(true)
+      setPeers(
+        res.data
+          .slice()
+          .sort((a, b) =>
+            (a.label || a.subdomain || a.fingerprint).localeCompare(
+              b.label || b.subdomain || b.fingerprint,
+              undefined,
+              { sensitivity: 'base' },
+            ),
+          ),
+      )
+    }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    void reload()
+  }, [reload, refreshKey, hostLabel])
+
+  const pairableLocal = localHosts.filter((h) => h.token.length > 0)
+
+  const handlePair = async (h: ConnectHost): Promise<void> => {
+    setPairBusyHost(h.id)
+    setPairMsg(null)
+    try {
+      await autoPairWithHost(h.hostname)
+      setPairMsg({
+        ok: true,
+        text: `Paired ${hostLabel} ↔ ${h.label || h.hostname}.`,
+      })
+      onPeersChanged()
+      await reload()
+    } catch (e) {
+      setPairMsg({
+        ok: false,
+        text: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setPairBusyHost(null)
+    }
+  }
+
+  const trustColor = (t: string): string => {
+    if (t === 'trusted') return 'var(--color-status-ok-soft)'
+    if (t === 'pending') return 'var(--color-status-warn-amber-bright)'
+    return 'var(--color-text-muted)'
+  }
+
+  return (
+    <div data-settings-id="connections.active-host-peers">
+      <div className="flex items-center gap-2 mb-3 px-3 py-2 border border-[var(--color-border)]">
+        <span
+          className="w-2 h-2 flex-shrink-0 rounded-full"
+          style={{ backgroundColor: '#3fb950' }}
+        />
+        <div className="flex flex-col min-w-0">
+          <span className="text-xs text-[var(--color-text-primary)] truncate">{hostLabel}</span>
+          <span className="text-[10px] text-[var(--color-text-muted)]">Active remote · federation peers</span>
+        </div>
+        <button onClick={onConnectLocal} className={`ml-auto ${BTN_SECONDARY}`}>
+          This Mac
+        </button>
+      </div>
+
+      <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] mb-2 px-1">
+        Peers of {hostLabel}
+      </div>
+      {loading ? (
+        <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">Loading peers…</div>
+      ) : !available ? (
+        <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 leading-relaxed">
+          Federation peers are unavailable on this host (federation off, not owner/admin, or unreachable).
+          Enable federation under Tunnel → Policies while signed into this server.
+        </div>
+      ) : peers.length === 0 ? (
+        <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">
+          No federated peers yet. Pair a server from this Mac below.
+        </div>
+      ) : (
+        <div className="space-y-2 mb-4">
+          {peers.map((p) => (
+            <div
+              key={p.fingerprint}
+              className="px-3 py-2 border border-[var(--color-border)] space-y-1"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-[var(--color-text-primary)] font-medium truncate">
+                  {p.label || p.subdomain || p.fingerprint.slice(0, 12)}
+                </span>
+                <span
+                  className="text-[9px] uppercase tracking-wider font-semibold flex-shrink-0"
+                  style={{ color: trustColor(p.trust) }}
+                >
+                  {p.trust}
+                </span>
+              </div>
+              <div className="text-[10px] text-[var(--color-text-muted)] font-mono truncate">
+                {p.subdomain ? `${p.subdomain}.k2.dev` : p.fingerprint.slice(0, 24) + '…'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="border-t border-[var(--color-border)] pt-3 mt-2">
+        <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] mb-1 px-1">
+          Pair from this Mac
+        </div>
+        <p className="text-[10px] text-[var(--color-text-muted)] mb-2 px-1 leading-relaxed">
+          Mutual trust between {hostLabel} and another server you&apos;re signed into on this client.
+          Does not probe offline hosts for settings — Pair only.
+        </p>
+        {pairableLocal.length === 0 ? (
+          <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">
+            No signed-in servers on this Mac. Switch to This Mac to add/sign in, then return here to pair.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {pairableLocal.map((h) => (
+              <div
+                key={h.id}
+                className="flex items-center justify-between gap-2 px-3 py-2 border border-[var(--color-border)]"
+              >
+                <div className="min-w-0">
+                  <div className="text-xs text-[var(--color-text-primary)] truncate">
+                    {h.label || h.hostname}
+                  </div>
+                  <div className="text-[10px] text-[var(--color-text-muted)] font-mono truncate">
+                    {h.hostname}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={pairBusyHost === h.id}
+                  onClick={() => void handlePair(h)}
+                  className={`${BTN_ACCENT} flex-shrink-0`}
+                >
+                  {pairBusyHost === h.id ? 'Pairing…' : 'Pair'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {pairMsg && (
+          <div
+            className={`mt-2 text-[10px] px-1 ${
+              pairMsg.ok ? 'text-[var(--color-status-ok-soft)]' : 'text-[var(--color-status-error-soft)]'
+            }`}
+          >
+            {pairMsg.text}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -515,6 +713,8 @@ function HostTile({
   // Best-effort federation badge: fetch THIS host's settings on mount (and
   // whenever its base/token change). Never blocks the tile render; any
   // failure (signed out / unreachable / field absent) collapses to "—".
+  // Only runs when HostTile is mounted (local address book) — remote mode
+  // uses ActiveHostPeersPanel and does not probe every saved host.
   useEffect(() => {
     if (signedOut) {
       setFederation('unknown')

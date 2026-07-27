@@ -265,7 +265,7 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
           terminalListRunning().catch((): RunningAgentInfo[] => []),
           resolvePrimaryAgent(projectPath),
         ])
-        const runningList = asArray(running)
+        const runningList = asArray<RunningAgentInfo>(running)
         active = activeRows.map((row) => ({
           row,
           ...deriveState(row, agentName, projectPath, runningList),

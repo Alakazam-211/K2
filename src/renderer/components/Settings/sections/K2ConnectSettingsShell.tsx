@@ -21,7 +21,7 @@ const BLURBS: Record<ConnectTab, string> = {
     'Expose this device’s daemon (left) and set host policies for the active daemon (right).',
   people: 'Who can connect in to this daemon — users, roles, and password policy.',
   servers:
-    'This Mac’s address book (always shown) — sign-in, update/restart, and Pair relative to the active host. External agents on the right are host-aware.',
+    'On This Mac: your saved servers. On a remote: that host’s federation peers (pair new ones from this Mac’s signed-in servers). External agents on the right are host-aware.',
 }
 
 export function K2ConnectSettingsShell(): React.JSX.Element {

@@ -3,7 +3,7 @@
 User-facing highlights of recent updates. See `release-notes-X.Y.Z.md`
 files in the repo root for the full developer-facing changelog.
 
-## 0.41.0 — Context management stack: always-on AGENTS.md
+## 0.40.64 — Context management stack: always-on AGENTS.md
 
 Always-on workspace context is a **stack of markdown layers** that K2
 composes into `.k2/AGENTS.md` — the **context management stack**.

@@ -4,6 +4,7 @@ import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError } from '
 import { jittered } from '@/lib/backoff'
 import { agentDisplayName } from '@/lib/workspace-agent'
 import { isBuiltinAgentType } from '@/lib/agent-type'
+import { asArray } from '@/lib/as-array'
 import { terminalKill } from '@/lib/terminal-daemon'
 import type { MosaicNode, MosaicDirection } from 'react-mosaic-component'
 import { RESUMABLE_CLI_TOOLS } from '@shared/constants'
@@ -447,9 +448,11 @@ function closeTerminalForRenderer(data: TerminalItemData): void {
  */
 async function liveSubscriberCountForProject(projectId: string): Promise<number> {
   try {
-    const agents = await daemonCliGet<Array<{ agentName?: string; subscriberCount?: number }>>('agents/running')
+    const agents = asArray<{ agentName?: string; subscriberCount?: number }>(
+      await daemonCliGet('agents/running'),
+    )
     let max = 0
-    for (const a of agents ?? []) {
+    for (const a of agents) {
       if (!a || a.agentName !== projectId) continue
       const c = typeof a.subscriberCount === 'number' ? a.subscriberCount : 0
       if (c > max) max = c
@@ -2257,10 +2260,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         // 0.40.48 host-aware: the primary agent must come from the same
         // host the live PTY runs on (same core fn as the old Tauri
         // bridge, via the pre-existing /cli/agents/list route).
-        const agents = await daemonCliGet<Array<{
-          name: string
-          agentType: string
-        }>>('agents/list', { project: projectPath }).catch(() => [])
+        const agents = asArray<{ name: string; agentType: string }>(
+          await daemonCliGet('agents/list', { project: projectPath }).catch(() => []),
+        )
         agentName = agents.find((a) =>
           a.agentType === 'custom' || a.agentType === 'manager' || isBuiltinAgentType(a.agentType)
         )?.name ?? agents[0]?.name ?? null

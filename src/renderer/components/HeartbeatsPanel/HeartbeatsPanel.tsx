@@ -110,7 +110,9 @@ export function HeartbeatsPanel(): React.JSX.Element {
   // alphabetical order within each enabled / disabled group, and the
   // section grouping still reflects the heartbeat's actual state
   // (resumable stays resumable, just sorted last).
-  const sortedActive = [...active].sort(
+  // Defensive: store should always hold arrays, but a remote/host glitch
+  // must never take down the whole SPA on spread during render.
+  const sortedActive = (Array.isArray(active) ? active.slice() : []).sort(
     (a, b) => Number(b.row.enabled) - Number(a.row.enabled),
   )
   const live = sortedActive.filter((e) => e.state === 'live')

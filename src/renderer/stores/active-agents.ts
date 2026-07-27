@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import {
   terminalCreate,
   terminalExists,
@@ -1188,8 +1189,12 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     // reap; without it the dot would never light for a normal workspace.
     const liveCwds = new Set(running.map((r) => r.cwd))
     try {
-      const agentSessions = await daemonCliGet<Array<{ cwd: string }>>('agents/running')
-      for (const a of agentSessions) liveCwds.add(a.cwd)
+      const agentSessions = asArray<{ cwd: string }>(
+        await daemonCliGet('agents/running'),
+      )
+      for (const a of agentSessions) {
+        if (a?.cwd) liveCwds.add(a.cwd)
+      }
     } catch {
       // Daemon momentarily unreachable — keep the legacy set for this cycle.
     }

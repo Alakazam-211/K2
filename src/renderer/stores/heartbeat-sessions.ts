@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { terminalListRunning } from '@/lib/terminal-daemon'
 import { serverSupports } from '@/lib/server-capabilities'
 import { daemonCliGet, RecoveringError } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { useConnectHostStore } from '@/stores/connect-host'
 import {
@@ -242,12 +243,16 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
       // Local still enriches liveness with in-app PTY telemetry when
       // available; remote trusts daemon-stamped `activeTerminalId`.
       const isRemote = useConnectHostStore.getState().activeHost !== 'local'
-      const [activeRows, archivedRows] = await Promise.all([
-        daemonCliGet<HeartbeatRow[]>('heartbeat/list', { project: projectPath }),
-        daemonCliGet<HeartbeatRow[]>('heartbeat/list-archived', {
+      // Remote hosts must never land a non-array in the store — panel
+      // render does `[...active].sort` and would black-screen the SPA.
+      const activeRows = asArray<HeartbeatRow>(
+        await daemonCliGet('heartbeat/list', { project: projectPath }),
+      )
+      const archivedRows = asArray<HeartbeatRow>(
+        await daemonCliGet('heartbeat/list-archived', {
           project: projectPath,
         }),
-      ])
+      )
 
       let active: HeartbeatEntry[]
       if (isRemote) {
@@ -260,9 +265,10 @@ export const useHeartbeatSessionsStore = create<HeartbeatSessionsState>((set, ge
           terminalListRunning().catch((): RunningAgentInfo[] => []),
           resolvePrimaryAgent(projectPath),
         ])
+        const runningList = asArray(running)
         active = activeRows.map((row) => ({
           row,
-          ...deriveState(row, agentName, projectPath, running),
+          ...deriveState(row, agentName, projectPath, runningList),
         }))
       }
       const archived: HeartbeatEntry[] = archivedRows.map((row) => ({

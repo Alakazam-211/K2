@@ -10,6 +10,7 @@
 // through `AppHandle::emit` so the renderer contract stays the same.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 
 // Wire shape mirrors `crates/k2so-core/src/terminal/grid_types.rs::GridUpdate`.
 // Kept here only as a type re-export hook; consumers can `import type
@@ -107,5 +108,7 @@ export interface RunningTerminalInfo {
   command: string | null
 }
 export async function terminalListRunning(): Promise<RunningTerminalInfo[]> {
-  return daemonCliGet<RunningTerminalInfo[]>('terminal/list-running')
+  // Remote hosts / parse edge cases can return a non-array body; never
+  // hand a non-iterable to callers that spread/map it (AppErrorBoundary).
+  return asArray<RunningTerminalInfo>(await daemonCliGet('terminal/list-running'))
 }

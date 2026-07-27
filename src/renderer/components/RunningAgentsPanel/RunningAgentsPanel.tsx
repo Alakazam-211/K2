@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { terminalListRunning, terminalWrite } from '@/lib/terminal-daemon'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { asArray } from '@/lib/as-array'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useTabsStore } from '@/stores/tabs'
 import { useProjectsStore } from '@/stores/projects'
@@ -69,15 +70,19 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
         // panel said "no active sessions" while agents were clearly live.
         // The legacy route is still unioned in (dedup by id) for any
         // stragglers spawned through the old path.
-        const [v2, legacy] = await Promise.all([
-          daemonCliGet<RunningAgentInfo[]>('agents/running').catch(() => [] as RunningAgentInfo[]),
+        const [v2Raw, legacyRaw] = await Promise.all([
+          daemonCliGet('agents/running').catch(() => [] as unknown),
           terminalListRunning().catch(() => [] as RunningAgentInfo[]),
         ])
+        // Remote list endpoints occasionally return a non-array body
+        // (empty parse, envelope object). Spreading that used to crash
+        // the whole SPA: "Spread syntax requires ...iterable…".
+        const v2 = asArray<RunningAgentInfo>(v2Raw)
+        const legacy = asArray<RunningAgentInfo>(legacyRaw)
         const seen = new Set(v2.map((a) => a.terminalId))
-        const result: RunningAgentInfo[] = [
-          ...v2,
-          ...(legacy as RunningAgentInfo[]).filter((a) => !seen.has(a.terminalId)),
-        ]
+        const result: RunningAgentInfo[] = v2.concat(
+          legacy.filter((a) => !seen.has(a.terminalId)),
+        )
         // Enrich with tab titles from frontend state
         const tabsState = useTabsStore.getState()
         const allTabs = [

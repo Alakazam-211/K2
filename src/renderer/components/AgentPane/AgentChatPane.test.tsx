@@ -428,10 +428,9 @@ describe('#683 daemon-owned path — broadcast re-attach / idle', () => {
 describe('#689 remount guard — SessionAdded echo is a no-op', () => {
   it('SessionAdded for the ALREADY-ATTACHED session does NOT remount TerminalPane', async () => {
     render(<AgentChatPane agentName="agent" projectPath="/ws" />)
-    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
-    // mount = ensure(false) → ready with sessionId 'sess-1' (the mock).
-    // TerminalPane mounted exactly once.
-    expect(h.terminalMountCount.value).toBe(1)
+    // waitFor the mount counter, not just the DOM node: the probe increments
+    // in useEffect, which can lag the first paint under full-suite load.
+    await waitFor(() => expect(h.terminalMountCount.value).toBe(1))
 
     // The daemon echoes SessionAdded for the SAME session we just ensured.
     h.sessionHandlers.current!.onAdded!({
@@ -448,8 +447,7 @@ describe('#689 remount guard — SessionAdded echo is a no-op', () => {
 
   it('SessionAdded for a DIFFERENT session DOES re-attach (remount)', async () => {
     render(<AgentChatPane agentName="agent" projectPath="/ws" />)
-    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
-    expect(h.terminalMountCount.value).toBe(1)
+    await waitFor(() => expect(h.terminalMountCount.value).toBe(1))
 
     // A genuine change — the daemon respawned on a new session.
     h.sessionHandlers.current!.onAdded!({
@@ -465,8 +463,7 @@ describe('#689 remount guard — SessionAdded echo is a no-op', () => {
   it('refresh (forceRespawn) re-attaches, and the new session’s echo is then a no-op', async () => {
     // mount returns sess-1; the refresh ensure returns sess-2.
     render(<AgentChatPane agentName="agent" projectPath="/ws" />)
-    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
-    expect(h.terminalMountCount.value).toBe(1)
+    await waitFor(() => expect(h.terminalMountCount.value).toBe(1))
 
     h.daemonCliPost.mockResolvedValueOnce({
       sessionId: 'sess-2',

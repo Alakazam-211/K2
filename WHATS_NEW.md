@@ -3,6 +3,27 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.67 — Connect stability + host-scoped Servers
+
+### K2 Connect
+
+- **Servers** tab is host-scoped: on **This Mac** you manage your saved
+  servers; when signed into a remote you see **that host’s federation
+  peers** (pair new ones via “Pair from this Mac”). The top-bar switcher
+  still lists **your** servers so you can always return to Local.
+- Opening **Access** no longer pokes the active remote’s tunnel APIs
+  (tunnel config stays on **this Mac**), which was thrashing reconnects
+  and emptying the workspace list after Settings.
+- Safer remote list handling so a bad or empty daemon response can’t
+  black-screen the app with a spread/iterable error.
+
+### Files
+
+- Directory listings tolerate unexpected `fs/read-dir` shapes instead of
+  failing the Files panel.
+
+---
+
 ## 0.40.66 — Endgame Stage A: agent type dual-read + copy terminal id
 
 ### Tabs

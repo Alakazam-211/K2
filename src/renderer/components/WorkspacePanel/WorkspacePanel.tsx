@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core'
 // k2so_agents_*/inbox/workspace_relations host calls stay on Tauri
 // invoke (host-only, out of scope).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { isBuiltinAgentType } from '@/lib/agent-type'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { usePageViewStore } from '@/stores/page-view'
@@ -123,7 +124,8 @@ export default function WorkspacePanel(): React.JSX.Element {
       return agents.find((a) => a.agentType === 'custom') ?? agents[0] ?? null
     }
     if (agentMode === 'agent') {
-      return agents.find((a) => a.agentType === 'k2so') ?? agents[0] ?? null
+      // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
+      return agents.find((a) => isBuiltinAgentType(a.agentType)) ?? agents[0] ?? null
     }
     return agents[0] ?? null
   }, [agents, agentMode, isManagerMode])

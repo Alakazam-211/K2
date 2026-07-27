@@ -3,6 +3,30 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.66 — Endgame Stage A: agent type dual-read + copy terminal id
+
+### Tabs
+
+- **Copy Terminal ID** on tab right-click works in **GA** for every
+  terminal session tab — not only fresh CLI-agent launches. Uses the
+  daemon session id when live (what `k2 terminal write` expects), so
+  agents can target that PTY directly.
+
+### Endgame Stage A — agent type
+
+- Readers treat **`k2` and legacy `k2so` as the same builtin agent type**
+  (daemon, skill/wake paths, and UI). Writers still store `k2so` until a
+  later stage migrates values.
+- Single helpers (`is_builtin_agent_type` / `isBuiltinAgentType`) own every
+  comparison so a future value migration cannot strand old or new rows.
+
+### Upgrade notes
+
+- No data rewrite this release. Fresh and upgraded installs keep existing
+  `agent_mode` / frontmatter spellings; both spellings just work.
+
+---
+
 ## 0.40.65 — Polish + leave the k2so name behind
 
 ### UI polish

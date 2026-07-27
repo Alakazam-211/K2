@@ -7,6 +7,7 @@ import { usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
 import { agentChatId } from '@/lib/terminal-id'
+import { resolveCopyableTerminalId } from '@/lib/copy-terminal-id'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliPost } from '@/lib/daemon-cli'
@@ -352,22 +353,25 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const allTabs = groupIndex === 0 ? useTabsStore.getState().tabs : useTabsStore.getState().extraGroups[groupIndex - 1]?.tabs ?? []
     const hasOtherTabs = allTabs.length > 1
 
-    // Check if this tab has a running CLI tool — get the terminal ID for copy
+    // Terminal id for agents / `k2 terminal write` — prefer the daemon
+    // session UUID (registered by TerminalPane at spawn). NOT gated on
+    // `command`: kessel layouts drop command on serialize, which used to
+    // hide this menu in GA while fresh dev sessions still showed it.
     const tab = allTabs.find((t) => t.id === tabId)
     let tabTerminalId: string | null = null
     let fileViewerPath: string | null = null
     if (tab) {
-      for (const [, pg] of tab.paneGroups) {
-        for (const item of pg.items) {
-          if (item.type === 'terminal') {
-            const d = item.data as TerminalItemData
-            if (d.command) { tabTerminalId = d.terminalId; break }
-          } else if (item.type === 'file-viewer') {
-            const d = item.data as { filePath?: string }
-            if (d.filePath) { fileViewerPath = d.filePath; break }
+      const sessions = usePinnedSizeStore.getState().sessions
+      const items = Array.from(tab.paneGroups.values()).flatMap((pg) => pg.items)
+      tabTerminalId = resolveCopyableTerminalId(items, sessions)
+      for (const item of items) {
+        if (item.type === 'file-viewer') {
+          const d = item.data as { filePath?: string }
+          if (d.filePath) {
+            fileViewerPath = d.filePath
+            break
           }
         }
-        if (tabTerminalId || fileViewerPath) break
       }
     }
 
@@ -430,15 +434,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     } else if (clickedId === 'copy-file-path' && fileViewerPath) {
       navigator.clipboard.writeText(fileViewerPath).catch((err) => console.warn('[tab-bar] copy-file-path', err))
     } else if (clickedId === 'copy-terminal-id' && tabTerminalId) {
-      // 0.37.11 — Copy the RAW terminal id (v2 session UUID or
-      // canonical key). Pre-fix this constructed a
-      // `<workspace>:<agent>` "qualified" string which was nice to
-      // read but did NOT work as input to any K2 CLI verb. The
-      // daemon's `terminal read` / `terminal write` accept either
-      // the bare v2 session UUID (in `active_terminal_id` shape)
-      // or the v2 canonical key (`<project_id>` post-0.37.5).
-      // `tabTerminalId` is already one of those — copy verbatim.
-      navigator.clipboard.writeText(tabTerminalId).catch(() => {})
+      // Prefer daemon session UUID (from pin-store map); else
+      // attachAgentName / renderer terminalId. See resolveCopyableTerminalId.
+      navigator.clipboard.writeText(tabTerminalId).catch((err) =>
+        console.warn('[tab-bar] copy-terminal-id', err),
+      )
     } else if (clickedId === 'open-terminal') {
       // Find the cwd from the tab's first terminal pane
       const tabsState = useTabsStore.getState()

@@ -243,7 +243,8 @@ pub fn write_agent_skill_file(project_path: &str, agent_name: &str, agent_type: 
             "manager",
             SKILL_VERSION_MANAGER,
         ),
-        "k2so" => (
+        // Stage A dual-read: `k2` and legacy `k2so` share the builtin skill.
+        "k2so" | "k2" => (
             generate_k2so_agent_skill_content(&project_name, agent_name),
             "k2so-agent",
             SKILL_VERSION_K2SO_AGENT,
@@ -287,7 +288,8 @@ pub fn write_agent_skill_file(project_path: &str, agent_name: &str, agent_type: 
             "K2SO Workspace Manager commands for {} — checkin, delegate, message, reserve files",
             agent_name
         ),
-        "k2so" => format!(
+        // Stage A dual-read: `k2` and legacy `k2so` share the builtin description.
+        "k2so" | "k2" => format!(
             "K2SO Agent commands for {} — full surface (checkin, heartbeats, work, messaging, reserves)",
             agent_name
         ),
@@ -633,7 +635,8 @@ r#"## Role
                 role = role,
             )
         }
-        "k2so" => {
+        // Stage A dual-read: `k2` and legacy `k2so` share the builtin body.
+        "k2so" | "k2" => {
             format!(
 r#"You are the K2SO Agent for the {project_name} workspace — the top-level planner and orchestrator.
 

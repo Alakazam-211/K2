@@ -76,7 +76,11 @@ pub fn k2so_heartbeat_add(
         .ok()
         .flatten();
     let mode_str = mode.unwrap_or_default();
-    if !matches!(mode_str.as_str(), "custom" | "manager" | "k2so-agent") {
+    // Stage A dual-read: stored `k2so`, CLI-canonical `k2`, and the
+    // historic skill-tag misspelling `k2so-agent` all mean builtin mode.
+    if !(matches!(mode_str.as_str(), "custom" | "manager" | "k2so-agent")
+        || crate::workspace::agent_identity::is_builtin_agent_type(&mode_str))
+    {
         return Err(
             "Workspace is not configured as an agent. Set mode to Custom, Workspace Manager, or K2SO Agent first (Settings → Workspaces or `k2so mode <type>`)."
                 .to_string(),

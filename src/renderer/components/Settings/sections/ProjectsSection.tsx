@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { listen, emit } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { isBuiltinAgentType } from '@/lib/agent-type'
 import {
   addRemoteConnection,
   removeRemoteConnection,
@@ -2575,7 +2576,8 @@ function K2SOAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { pr
     const ensure = async () => {
       try {
         const agents = await invoke<(K2soAgentInfo & { agentType?: string })[]>('k2so_agents_list', { projectPath })
-        const existing = agents.find((a: any) => a.agentType === 'k2so')
+        // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
+        const existing = agents.find((a: any) => isBuiltinAgentType(a.agentType))
         if (existing) {
           setAgentName(existing.name)
         } else {

@@ -3,6 +3,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { usePinnedSizeStore } from '@/stores/pinned-size'
 import { useProjectsStore } from '@/stores/projects'
 import { useContextMenuStore } from '@/stores/context-menu'
+import { resolveCopyableTerminalId } from '@/lib/copy-terminal-id'
 import { applyPinSize, resolvePinSessionId } from './pinSizeMenu'
 import PinDimensionsModal from './PinDimensionsModal'
 import { Surface } from '@/components/ui'
@@ -145,24 +146,37 @@ export function PaneTabBar({
     [flashPinHint]
   )
 
-  // Pane tabs have no other right-click behavior — the menu is just
-  // the pin entry, gated on the item resolving to a live session.
+  // Right-click: Copy Terminal ID (GA — agents target the PTY) + pin
+  // dimensions when a live Kessel session is registered.
   const handleItemContextMenu = useCallback(
-    async (e: React.MouseEvent, sessionId: string) => {
+    async (e: React.MouseEvent, item: Item, pinSessionId: string | null) => {
       e.preventDefault()
       e.stopPropagation()
       const x = e.clientX
       const y = e.clientY
-      const pinned = usePinnedSizeStore.getState().pins[sessionId] ?? null
-      const clickedId = await useContextMenuStore.getState().show(x, y, [
-        pinned
-          ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
-          : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
-      ])
-      if (clickedId === 'pin-dimensions') {
-        setPinModalSessionId(sessionId)
-      } else if (clickedId === 'unpin-dimensions') {
-        handleUnpin(sessionId)
+      const sessions = usePinnedSizeStore.getState().sessions
+      const copyId = resolveCopyableTerminalId([item], sessions)
+      const menuItems = [
+        ...(copyId ? [{ id: 'copy-terminal-id', label: 'Copy Terminal ID' }] : []),
+        ...(pinSessionId
+          ? [
+              ...(copyId ? [{ id: 'pin-separator', label: '', type: 'separator' as const }] : []),
+              usePinnedSizeStore.getState().pins[pinSessionId]
+                ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
+                : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
+            ]
+          : []),
+      ]
+      if (menuItems.length === 0) return
+      const clickedId = await useContextMenuStore.getState().show(x, y, menuItems)
+      if (clickedId === 'copy-terminal-id' && copyId) {
+        navigator.clipboard.writeText(copyId).catch((err) =>
+          console.warn('[pane-tab-bar] copy-terminal-id', err),
+        )
+      } else if (clickedId === 'pin-dimensions' && pinSessionId) {
+        setPinModalSessionId(pinSessionId)
+      } else if (clickedId === 'unpin-dimensions' && pinSessionId) {
+        handleUnpin(pinSessionId)
       }
     },
     [handleUnpin]
@@ -263,11 +277,7 @@ export function PaneTabBar({
               }}
               onClick={() => onActivate(index)}
               onMouseDown={(e) => handleItemMouseDown(e, item.id)}
-              onContextMenu={
-                pinSessionId
-                  ? (e) => void handleItemContextMenu(e, pinSessionId)
-                  : undefined
-              }
+              onContextMenu={(e) => void handleItemContextMenu(e, item, pinSessionId)}
             >
               <span className="truncate" style={{ lineHeight: '24px' }}>
                 {getTabLabel(item)}

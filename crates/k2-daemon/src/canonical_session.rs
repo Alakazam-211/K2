@@ -396,8 +396,10 @@ pub fn boot_sweep_ensure_canonical_sessions() {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let mut stmt = match conn.prepare(
+            // Stage A dual-read: include CLI-canonical `k2` alongside
+            // the still-stored legacy `k2so` spelling.
             "SELECT id, path, COALESCE(agent_enabled, 0) FROM projects \
-             WHERE agent_mode IN ('custom', 'manager', 'k2so')",
+             WHERE agent_mode IN ('custom', 'manager', 'k2so', 'k2')",
         ) {
             Ok(s) => s,
             Err(_) => return,

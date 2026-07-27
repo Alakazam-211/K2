@@ -183,6 +183,23 @@ pub fn agent_type_for(project_path: &str, agent_name: &str) -> String {
     "agent-template".to_string()
 }
 
+/// Endgame L2 (Stage A): `'k2'` and legacy `'k2so'` are the **same**
+/// builtin agent type. Every reader comparison must go through here so
+/// a later Stage-B value migration (`agent_type='k2'`) cannot strand a
+/// reader that still only accepts the legacy spelling.
+///
+/// Writer flip is **not** this stage — stored values stay `"k2so"` until
+/// Stage B; this only makes readers dual-tolerant.
+pub fn is_builtin_agent_type(t: &str) -> bool {
+    t == "k2" || t == "k2so"
+}
+
+/// True when `a` and `b` name the same agent type under Stage-A dual-read
+/// (builtin `k2`/`k2so` are synonyms; everything else is exact).
+pub fn agent_types_equal(a: &str, b: &str) -> bool {
+    a == b || (is_builtin_agent_type(a) && is_builtin_agent_type(b))
+}
+
 /// Find the workspace's primary scheduleable agent.
 ///
 /// A workspace is one-of Custom / K2SO Agent / Workspace Manager
@@ -237,7 +254,9 @@ pub fn find_primary_agent(project_path: &str) -> Option<String> {
     let type_for_mode = |mode: &str| match mode {
         "custom" => "custom",
         "manager" => "manager",
-        "k2so" | "agent" => "k2so",
+        // Stage A dual-read: CLI-canonical `k2`, stored legacy `k2so`,
+        // and the UI historic `agent` synonym all mean the builtin type.
+        "k2so" | "k2" | "agent" => "k2so",
         _ => "",
     };
 
@@ -251,7 +270,8 @@ pub fn find_primary_agent(project_path: &str) -> Option<String> {
                         continue;
                     }
                     let name = entry.file_name().to_string_lossy().to_string();
-                    if agent_type_for(project_path, &name) == wanted {
+                    // Dual-read: frontmatter may already say `type: k2`.
+                    if agent_types_equal(&agent_type_for(project_path, &name), wanted) {
                         return Some(name);
                     }
                 }
@@ -281,7 +301,8 @@ pub fn find_primary_agent(project_path: &str) -> Option<String> {
         }
         let name = entry.file_name().to_string_lossy().to_string();
         let agent_type = agent_type_for(project_path, &name);
-        if matches!(agent_type.as_str(), "custom" | "manager" | "k2so") {
+        if matches!(agent_type.as_str(), "custom" | "manager") || is_builtin_agent_type(&agent_type)
+        {
             return Some(name);
         }
     }
@@ -395,6 +416,25 @@ mod tests {
         let fm = parse_frontmatter("---\n: lonely\nkey:\nrole: eng\n---\n");
         assert_eq!(fm.len(), 1);
         assert_eq!(fm.get("role"), Some(&"eng".to_string()));
+    }
+
+    #[test]
+    fn is_builtin_agent_type_accepts_k2_and_legacy_k2so() {
+        assert!(is_builtin_agent_type("k2"));
+        assert!(is_builtin_agent_type("k2so"));
+        assert!(!is_builtin_agent_type("custom"));
+        assert!(!is_builtin_agent_type("manager"));
+        assert!(!is_builtin_agent_type("agent"));
+        assert!(!is_builtin_agent_type(""));
+    }
+
+    #[test]
+    fn agent_types_equal_treats_k2_and_k2so_as_synonyms() {
+        assert!(agent_types_equal("k2", "k2so"));
+        assert!(agent_types_equal("k2so", "k2"));
+        assert!(agent_types_equal("custom", "custom"));
+        assert!(!agent_types_equal("k2", "custom"));
+        assert!(!agent_types_equal("manager", "k2so"));
     }
 
     // ── #70: DB-canonical name resolution ───────────────────────────

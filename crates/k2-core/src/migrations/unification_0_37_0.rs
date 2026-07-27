@@ -543,7 +543,8 @@ fn resolve_primary_for_migration(project_path: &str, agent_mode: &str) -> Option
     let wanted = match agent_mode {
         "custom" => "custom",
         "manager" => "manager",
-        "k2so" | "agent" => "k2so",
+        // Stage A dual-read: CLI-canonical `k2` + UI historic `agent`.
+        "k2so" | "k2" | "agent" => "k2so",
         _ => return None,
     };
     let rd = fs::read_dir(&agents_root).ok()?;
@@ -555,7 +556,10 @@ fn resolve_primary_for_migration(project_path: &str, agent_mode: &str) -> Option
         if name == "__lead__" || name == ".archive" {
             continue;
         }
-        if agent_type_for(project_path, &name) == wanted {
+        if crate::workspace::agent_identity::agent_types_equal(
+            &agent_type_for(project_path, &name),
+            wanted,
+        ) {
             return Some(name);
         }
     }

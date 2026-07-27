@@ -57,7 +57,10 @@ pub fn archive_orphan_top_tier_agents(project_path: &str) -> Vec<String> {
             continue;
         }
         let agent_type = agent_type_for(project_path, &name);
-        if matches!(agent_type.as_str(), "custom" | "manager" | "k2so") {
+        // Stage A dual-read: builtin `k2` is a synonym of legacy `k2so`.
+        if matches!(agent_type.as_str(), "custom" | "manager")
+            || crate::workspace::agent_identity::is_builtin_agent_type(&agent_type)
+        {
             orphans.push(name);
         }
     }

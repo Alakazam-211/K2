@@ -526,7 +526,9 @@ fn classify_skill_dir(dir: &Path) -> Option<String> {
     let mapped = match raw_type.as_str() {
         "pod-leader" | "coordinator" | "manager" => "manager",
         "custom" => "custom",
-        "k2so" => "k2so",
+        // Stage A dual-read: frontmatter may already say `type: k2`.
+        // Normalize to the still-canonical writer key (`k2so`) until Stage B.
+        "k2so" | "k2" => "k2so",
         "agent-template" => "agent-template",
         _ => {
             let is_mgr = fm.get("manager").map(|v| v == "true").unwrap_or(false)

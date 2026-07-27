@@ -38,7 +38,9 @@ pub fn stored_agent_mode_value(mode: &str) -> &str {
 /// operators only ever see the documented vocabulary.
 pub fn display_agent_mode(stored: &str) -> &str {
     match stored {
-        "k2so" | "agent" => "k2",
+        // Stage A: both spellings (plus the UI historic `agent` synonym)
+        // display as the CLI-canonical `k2`.
+        "k2so" | "k2" | "agent" => "k2",
         other => other,
     }
 }

@@ -49,7 +49,8 @@ pub fn wakeup_template_for(agent_type: &str) -> Option<&'static str> {
     match agent_type {
         "manager" | "coordinator" | "pod-leader" => Some(WAKEUP_TEMPLATE_MANAGER),
         "custom" => Some(WAKEUP_TEMPLATE_CUSTOM),
-        "k2so" => Some(WAKEUP_TEMPLATE_K2SO),
+        // Stage A dual-read: `k2` and legacy `k2so` share the builtin template.
+        "k2so" | "k2" => Some(WAKEUP_TEMPLATE_K2SO),
         _ => None,
     }
 }
@@ -553,6 +554,8 @@ mod tests {
     fn wakeup_template_for_known_types() {
         assert!(wakeup_template_for("manager").is_some());
         assert!(wakeup_template_for("k2so").is_some());
+        // Stage A dual-read: CLI-canonical spelling shares the builtin template.
+        assert!(wakeup_template_for("k2").is_some());
         assert!(wakeup_template_for("custom").is_some());
         assert!(wakeup_template_for("agent-template").is_none());
         assert!(wakeup_template_for("bogus").is_none());

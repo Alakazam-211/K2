@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { isBuiltinAgentType } from '@/lib/agent-type'
 import { AIFileEditor } from '../AIFileEditor/AIFileEditor'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import Markdown from '@/components/Markdown/Markdown'
@@ -136,7 +137,8 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
   const agentPrompt = useMemo(() => {
     if (!context) return ''
     const isCustom = context.agentType === 'custom'
-    const isK2SO = context.agentType === 'k2so'
+    // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
+    const isK2SO = isBuiltinAgentType(context.agentType)
 
     const typeLabel = isK2SO ? 'K2 Agent' : isCustom ? 'Custom Agent' : context.isCoordinator ? 'Workspace Manager' : 'Agent Template'
 

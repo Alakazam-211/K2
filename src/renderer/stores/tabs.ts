@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError } from '@/lib/daemon-cli'
 import { jittered } from '@/lib/backoff'
 import { agentDisplayName } from '@/lib/workspace-agent'
+import { isBuiltinAgentType } from '@/lib/agent-type'
 import { terminalKill } from '@/lib/terminal-daemon'
 import type { MosaicNode, MosaicDirection } from 'react-mosaic-component'
 import { RESUMABLE_CLI_TOOLS } from '@shared/constants'
@@ -1221,7 +1222,8 @@ export function ensurePinnedAgentTabForMode(
         // Find the primary agent: manager/coordinator first, then first custom, then first agent
         const manager = agents.find((a) => a.isManager || a.agentType === 'manager' || a.agentType === 'coordinator')
         const custom = agents.find((a) => a.agentType === 'custom')
-        const k2so = agents.find((a) => a.agentType === 'k2so')
+        // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
+        const k2so = agents.find((a) => isBuiltinAgentType(a.agentType))
         if (agentMode === 'manager' || agentMode === 'coordinator') {
           agentName = manager?.name ?? agents[0].name
         } else if (agentMode === 'custom') {
@@ -2260,7 +2262,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
           agentType: string
         }>>('agents/list', { project: projectPath }).catch(() => [])
         agentName = agents.find((a) =>
-          a.agentType === 'custom' || a.agentType === 'manager' || a.agentType === 'k2so'
+          a.agentType === 'custom' || a.agentType === 'manager' || isBuiltinAgentType(a.agentType)
         )?.name ?? agents[0]?.name ?? null
       } catch { /* fall back to spawn-fresh path */ }
       if (agentName) {

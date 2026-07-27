@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { isBuiltinAgentType } from '@/lib/agent-type'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -209,12 +210,14 @@ export default function AgentsPanel(): React.JSX.Element {
   }
 
   if (agentMode === 'custom' || agentMode === 'agent') {
-    const targetType = agentMode === 'custom' ? 'custom' : 'k2so'
     const label = agentMode === 'custom' ? 'Custom Agent' : 'K2 Agent'
     const typeDesc = agentMode === 'custom'
       ? 'A single agent that runs from its persona on the heartbeat. No K2 infrastructure is injected.'
       : 'A planner agent that builds PRDs, milestones, and technical plans for this workspace.'
-    const singleAgent = agents.find((a) => a.agentType === targetType)
+    // Stage A dual-read: builtin mode accepts both `k2` and legacy `k2so`.
+    const singleAgent = agents.find((a) =>
+      agentMode === 'custom' ? a.agentType === 'custom' : isBuiltinAgentType(a.agentType),
+    )
 
     return (
       <div className="h-full flex flex-col overflow-hidden">
@@ -273,7 +276,9 @@ export default function AgentsPanel(): React.JSX.Element {
   // Manager mode — show manager + agent templates
 
   const manager = agents.find((a) => a.isCoordinator)
-  const agentTemplates = agents.filter((a) => !a.isCoordinator && a.agentType !== 'custom' && a.agentType !== 'k2so')
+  const agentTemplates = agents.filter(
+    (a) => !a.isCoordinator && a.agentType !== 'custom' && !isBuiltinAgentType(a.agentType),
+  )
   const totalDelegated = agentTemplates.reduce((sum, a) => sum + a.inboxCount + a.activeCount, 0)
   const totalDone = agentTemplates.reduce((sum, a) => sum + a.doneCount, 0)
 

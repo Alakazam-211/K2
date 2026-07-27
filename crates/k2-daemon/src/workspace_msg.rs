@@ -758,7 +758,8 @@ fn resolve_spawn_name(project_path: &str, agent_mode: &str) -> String {
     }
     // 3. Degenerate path → role label, else a generic constant.
     match agent_mode {
-        "custom" | "manager" | "k2so" => agent_mode.to_string(),
+        // Stage A dual-read: `k2` is a synonym of legacy stored `k2so`.
+        "custom" | "manager" | "k2so" | "k2" => agent_mode.to_string(),
         _ => "agent".to_string(),
     }
 }

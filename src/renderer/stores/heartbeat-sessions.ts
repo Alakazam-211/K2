@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { terminalListRunning } from '@/lib/terminal-daemon'
 import { serverSupports } from '@/lib/server-capabilities'
 import { daemonCliGet, RecoveringError } from '@/lib/daemon-cli'
+import { isBuiltinAgentType } from '@/lib/agent-type'
 import { useConnectHostStore } from '@/stores/connect-host'
 import {
   subscribeToWorkspaceTabEvents,
@@ -208,7 +209,8 @@ export async function resolvePrimaryAgent(projectPath: string): Promise<string |
       return list.find((a) => a.agentType === 'custom')?.name ?? list[0].name
     }
     if (agentMode === 'agent') {
-      return list.find((a) => a.agentType === 'k2so')?.name ?? list[0].name
+      // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
+      return list.find((a) => isBuiltinAgentType(a.agentType))?.name ?? list[0].name
     }
     return list[0].name
   } catch {

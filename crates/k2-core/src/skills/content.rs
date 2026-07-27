@@ -1194,7 +1194,9 @@ pub fn compose_agent_wake_context(
     md.push_str(&format!("- `{}/done/` — move items here when complete\n\n", work_dir_abs.to_string_lossy()));
 
     // Other agents — for managers, include profile paths so they can read agent.md files
-    let is_manager_lead = agent_type == "manager" || agent_type == "k2so";
+    // Stage A dual-read: builtin `k2` is a synonym of legacy `k2so`.
+    let is_manager_lead = agent_type == "manager"
+        || crate::workspace::agent_identity::is_builtin_agent_type(&agent_type);
     if !other_agents.is_empty() {
         if is_manager_lead {
             md.push_str("## Your Team\n\n");

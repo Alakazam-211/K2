@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { isBuiltinAgentType } from '@/lib/agent-type'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { useTabsStore } from '@/stores/tabs'
 import {
@@ -292,7 +293,7 @@ export async function openHeartbeatTarget(
       { projectPath },
     ).catch(() => [] as Array<{ name: string; agentType: string }>)
     const agentName = agents.find((a) =>
-      a.agentType === 'custom' || a.agentType === 'manager' || a.agentType === 'k2so',
+      a.agentType === 'custom' || a.agentType === 'manager' || isBuiltinAgentType(a.agentType),
     )?.name ?? agents[0]?.name ?? null
     if (!agentName) {
       console.warn('[HeartbeatSessionPicker] no agent resolved for pinned-chat open:', projectPath)

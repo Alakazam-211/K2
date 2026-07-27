@@ -338,7 +338,7 @@ export function ConnectionsSection(): React.JSX.Element {
       {/* Saved hosts — sorted alphabetically by display label (case-insensitive).
           'Local' is the separate pinned tile above this list. */}
       <div className="space-y-2" data-settings-id="connections.list">
-        {[...hosts]
+        {(Array.isArray(hosts) ? hosts.slice() : [])
           .sort((a, b) =>
             (a.label || a.hostname).localeCompare(b.label || b.hostname, undefined, { sensitivity: 'base' })
           )

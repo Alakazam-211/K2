@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
@@ -86,14 +87,16 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
       setLoading(true)
       setError(null)
       try {
-        const all = await daemonCliGet<DirEntry[]>('fs/read-dir', { path: dir })
+        const all = normalizeFsReadDir(
+          await daemonCliGet('fs/read-dir', { path: dir }),
+        ) as DirEntry[]
         const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name)
         const dirs = all.filter((e) => e.isDirectory).sort(byName)
         const files =
           mode === 'file'
             ? all.filter((e) => !e.isDirectory && (accept ? accept(e.name) : true)).sort(byName)
             : []
-        setEntries([...dirs, ...files])
+        setEntries(dirs.concat(files))
         setCwd(dir)
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : String(err))

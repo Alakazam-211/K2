@@ -15,6 +15,7 @@ import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
 import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
+import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { onFsChanged } from '@/stores/session-events'
 import { useStyleStore } from '@/stores/style'
@@ -43,7 +44,10 @@ function parentDir(path: string): string {
 
 /** Dirs before files, then locale-aware name order (Finder-ish). */
 function sortEntriesFoldersFirst(entries: FileEntry[]): FileEntry[] {
-  return [...entries].sort((a, b) => {
+  // Copy via slice (not spread) so a non-iterable never throws the opaque
+  // "Spread syntax requires ...iterable[Symbol.iterator]" WebKit/Bun error
+  // in the Files panel. Callers should pass normalizeFsReadDir output.
+  return entries.slice().sort((a, b) => {
     if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
   })
@@ -646,7 +650,9 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       // Search root + common subdirectories for .env* files
       const searchPaths = [rootPath]
       // Also check common config locations
-      const rootEntries = await daemonCliGet<FileEntry[]>('fs/read-dir', { path: rootPath, show_hidden: true })
+      const rootEntries = normalizeFsReadDir(
+        await daemonCliGet('fs/read-dir', { path: rootPath, show_hidden: true }),
+      ) as FileEntry[]
       for (const e of rootEntries) {
         if (e.isDirectory && !e.name.startsWith('.') && !['node_modules', 'target', 'dist', 'build', '.git', 'vendor'].includes(e.name)) {
           searchPaths.push(e.path)
@@ -656,7 +662,9 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       const allEnvFiles: FileEntry[] = []
       for (const dir of searchPaths) {
         try {
-          const entries = await daemonCliGet<FileEntry[]>('fs/read-dir', { path: dir, show_hidden: true })
+          const entries = normalizeFsReadDir(
+            await daemonCliGet('fs/read-dir', { path: dir, show_hidden: true }),
+          ) as FileEntry[]
           for (const e of entries) {
             if (!e.isDirectory && (e.name.startsWith('.env') || e.name === 'env' || e.name.endsWith('.env'))) {
               allEnvFiles.push(e)
@@ -701,10 +709,12 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
   const loadAiConfig = useCallback(async () => {
     try {
-      const entries = await daemonCliGet<FileEntry[]>('fs/read-dir', {
-        path: rootPath,
-        show_hidden: true,
-      })
+      const entries = normalizeFsReadDir(
+        await daemonCliGet('fs/read-dir', {
+          path: rootPath,
+          show_hidden: true,
+        }),
+      ) as FileEntry[]
       const matched = entries.filter((e) =>
         AI_CONFIG_PATTERNS.some((p) => p.match(e))
       )
@@ -753,10 +763,16 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
     const work = (async () => {
       try {
-        const raw = await daemonCliGet<FileEntry[]>('fs/read-dir', {
-          path: dirPath,
-          show_hidden: true,
-        })
+        // Normalize before sort — a non-array body used to throw
+        // "Spread syntax requires ...iterable[Symbol.iterator] to be a
+        // function" into the Files panel after host/auth churn (e.g.
+        // visiting K2 Connect → Access).
+        const raw = normalizeFsReadDir(
+          await daemonCliGet('fs/read-dir', {
+            path: dirPath,
+            show_hidden: true,
+          }),
+        ) as FileEntry[]
         const entries = sortEntriesFoldersFirst(raw)
         setCache((prev) => new Map(prev).set(dirPath, entries))
       } catch (err) {

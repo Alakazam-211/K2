@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { AIFileEditor } from '../AIFileEditor/AIFileEditor'
 import { CodeEditor } from '../FileViewerPane/CodeEditor'
 import { parseCustomThemeJson, serializeThemeToJson, DEFAULT_COLORS, DEFAULT_SYNTAX } from '@/lib/editor-themes'
@@ -175,12 +176,12 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
     if (!themePath && !themesDir) return
     try {
       // Scan for most recent json in the dir
-      const entries = await daemonCliGet<{ name: string; path: string; isDirectory: boolean; modifiedAt: number }[]>(
-        'fs/read-dir', { path: themesDir! }
+      const entries = normalizeFsReadDir(
+        await daemonCliGet('fs/read-dir', { path: themesDir! }),
       )
       const matching = entries
-        .filter((e: any) => !e.isDirectory && e.name.endsWith('.json') && !e.name.startsWith('.'))
-        .sort((a: any, b: any) => b.modifiedAt - a.modifiedAt)
+        .filter((e) => !e.isDirectory && e.name.endsWith('.json') && !e.name.startsWith('.'))
+        .sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0))
       const target = matching[0]
       if (!target) {
         console.log('[theme-creator] Manual refresh: no .json files found in', themesDir)

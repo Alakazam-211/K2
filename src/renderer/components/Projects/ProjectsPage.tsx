@@ -38,7 +38,7 @@ import ProjectDashboard from './ProjectDashboard'
 import DashboardPresetsMenu from './DashboardPresetsMenu'
 import ProjectChatPanel from './ProjectChatPanel'
 import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
-import { fetchProjectGroupShow, type ProjectGroupShow } from './projects-api'
+import { fetchProjectGroupShow, partitionPinned, type ProjectGroupShow } from './projects-api'
 import {
   FEEDBACK_TAB,
   orderedDashboards,
@@ -214,6 +214,18 @@ export default function ProjectsPage(): React.JSX.Element | null {
     if (!isOpen) return
     void useProjectGroupsStore.getState().fetchGroups()
   }, [isOpen, revision])
+
+  // Auto-select the first project (pinned section first, then list order)
+  // when opening the Projects tab with nothing selected — avoids the empty
+  // "Select a project…" shell on every cold open.
+  useEffect(() => {
+    if (!isOpen) return
+    if (selectedGroupId) return
+    if (!groups || groups.length === 0) return
+    const { pinned, unpinned } = partitionPinned(groups)
+    const first = pinned[0] ?? unpinned[0]
+    if (first) useProjectGroupsStore.getState().selectGroup(first.id)
+  }, [isOpen, groups, selectedGroupId])
 
   // Fetch the selected group's show view (members + dashboards) on
   // selection change and on events.

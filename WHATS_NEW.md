@@ -3,7 +3,17 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.65 — Leave the k2so name behind (home gate + DB dual-read)
+## 0.40.65 — Polish + leave the k2so name behind
+
+### UI polish
+
+- **Finished-agent toast** names the workspace (or tab) that finished —
+  not a generic “An agent has finished working.”
+- **Tab reorder** drop indicator lines up with the real slot (no left
+  offset from pinned Inbox/Chat tabs).
+- **View Wiki** is on the workspace right-click menu (and worktree rows).
+- **Projects tab** auto-selects the first project when you open it with
+  nothing selected.
 
 ### Canonical home paths
 

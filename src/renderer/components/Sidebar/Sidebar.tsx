@@ -18,6 +18,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
 import { showContextMenu } from '@/lib/context-menu'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { usePageViewStore } from '@/stores/page-view'
 import { startCloneTo, startCloneToThisComputer } from '@/lib/start-clone-to'
 import { useGitInfo } from '@/hooks/useGit'
 import ResizeHandle from './ResizeHandle'
@@ -404,8 +405,9 @@ function ProjectItem({
 
       const menuItems: Array<{ id: string; label: string; type?: string }> = []
 
-      // Open in Finder
+      // Open in Finder / Wiki
       menuItems.push({ id: 'ws-open-finder', label: 'Open in Finder' })
+      menuItems.push({ id: 'ws-view-wiki', label: 'View Wiki' })
 
       // Open in Editor submenu
       if (editors.length > 0) {
@@ -439,6 +441,9 @@ function ProjectItem({
 
       if (clickedId === 'ws-open-finder') {
         await invoke('projects_open_in_finder', { path: workspacePath })
+      } else if (clickedId === 'ws-view-wiki') {
+        // Wiki lives under the worktree path when present (same as Finder).
+        usePageViewStore.getState().openWiki(workspacePath)
       } else if (clickedId?.startsWith('ws-editor:')) {
         const editorId = clickedId.replace('ws-editor:', '')
         await invoke('projects_open_in_editor', { editorId, path: workspacePath })
@@ -860,6 +865,7 @@ export default function Sidebar(): React.JSX.Element {
         type?: string
       }> = [
         { id: 'settings', label: 'Workspace Settings' },
+        { id: 'view-wiki', label: 'View Wiki' },
         { id: 'separator-settings', label: '', type: 'separator' },
         { id: 'rename', label: 'Rename' },
         { id: 'open-finder', label: 'Open in Finder' },
@@ -912,6 +918,8 @@ export default function Sidebar(): React.JSX.Element {
 
       if (clickedId === 'settings') {
         useSettingsStore.getState().openSettings('projects', project.id)
+      } else if (clickedId === 'view-wiki') {
+        usePageViewStore.getState().openWiki(project.path)
       } else if (clickedId === 'clone-here') {
         startCloneToThisComputer(project.path, project.name)
       } else if (clickedId?.startsWith('clone-to:')) {

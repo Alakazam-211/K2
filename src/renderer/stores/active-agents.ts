@@ -28,6 +28,56 @@ import {
   onSessionActivityChanged,
 } from '@/stores/session-events'
 
+/**
+ * Best-effort display name for a pane's agent, for completion / permission
+ * toasts. Prefer the workspace name (matches Active bar), then the tab title,
+ * then the CLI command running in the pane.
+ */
+function resolvePaneAgentLabel(
+  paneId: string,
+  paneProjectMap: Map<string, string>,
+): string | null {
+  const projectId = paneProjectMap.get(paneId)
+  if (projectId) {
+    const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
+    if (project?.name) return project.name
+  }
+
+  const tabsState = useTabsStore.getState()
+  const scanTabs = (
+    tabs: typeof tabsState.tabs,
+  ): { tabTitle: string | null; command: string | null } => {
+    for (const tab of tabs) {
+      for (const [, pg] of tab.paneGroups) {
+        for (const item of pg.items) {
+          if (item.type !== 'terminal') continue
+          const data = item.data as TerminalItemData
+          if (data.terminalId !== paneId) continue
+          const cmd = data.command ?? data.commandHint ?? null
+          return { tabTitle: tab.title || null, command: cmd }
+        }
+      }
+      if (tab.paneGroups.has(paneId)) {
+        return { tabTitle: tab.title || null, command: null }
+      }
+    }
+    return { tabTitle: null, command: null }
+  }
+
+  let hit = scanTabs(tabsState.tabs)
+  if (!hit.tabTitle && !hit.command) {
+    for (const group of tabsState.extraGroups) {
+      hit = scanTabs(group.tabs)
+      if (hit.tabTitle || hit.command) break
+    }
+  }
+
+  // Poll-path style: command is a fine secondary label when we lack a workspace.
+  if (hit.tabTitle) return hit.tabTitle
+  if (hit.command) return hit.command
+  return null
+}
+
 export type PaneStatus = 'idle' | 'working' | 'permission' | 'review'
 
 /** 0.40.39 merge rule (pure, exported for tests) — the effective pane
@@ -653,9 +703,10 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
         set({ paneStatuses: newStatuses })
         return
       }
-      // Notify user that agent needs attention
+      // Notify user that agent needs attention — name the workspace when known.
+      const agentLabel = resolvePaneAgentLabel(paneId, get().paneProjectMap)
       toast.addToast(
-        'An agent needs your permission',
+        agentLabel ? `${agentLabel} needs your permission` : 'An agent needs your permission',
         'info',
         5000,
         {
@@ -697,8 +748,11 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
       newStatuses.set(paneId, isInActiveTab ? 'idle' : 'review')
 
       if (!isInActiveTab) {
+        // Prefer the workspace name (Active bar label); fall back to tab
+        // title / CLI command so the toast isn't a generic "An agent…".
+        const agentLabel = resolvePaneAgentLabel(paneId, get().paneProjectMap)
         toast.addToast(
-          'An agent has finished working',
+          agentLabel ? `${agentLabel} has finished working` : 'An agent has finished working',
           'success',
           4000,
           {

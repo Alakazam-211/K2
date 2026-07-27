@@ -2123,7 +2123,7 @@ cmd_daemon_uninstall() {
     [ "${1:-}" = "--yes" ] || [ "${1:-}" = "-y" ] && force=1
     if [ "$force" != "1" ]; then
         echo "This will remove the K2 daemon launch agent and stop the daemon."
-        echo "Your workspace data (~/.k2/k2so.db, agent files) is preserved."
+        echo "Your workspace data (~/.k2 database + agent files) is preserved."
         printf "Proceed? [y/N] "
         read -r answer
         case "$answer" in
@@ -5231,17 +5231,22 @@ cmd_signal() {
     # path as the workspace id, which FK-violates against
     # projects.id (UUIDs) and silently drops audit.
     local workspace_id="$PROJECT"
-    if [ -f "$K2_HOME/k2so.db" ] && command -v sqlite3 >/dev/null 2>&1; then
+    # Endgame Stage A: prefer k2.db when present, else legacy k2so.db
+    # (same resolve as k2_core::db::resolve_home_db_path).
+    local _k2_db="$K2_HOME/k2.db"
+    [ -f "$_k2_db" ] || _k2_db="$K2_HOME/k2so.db"
+    if [ -f "$_k2_db" ] && command -v sqlite3 >/dev/null 2>&1; then
         # SQL-escape single quotes in the path (doubled per SQL spec).
         local _safe_path="${PROJECT//\'/\'\'}"
         local _resolved
-        _resolved=$(sqlite3 "$K2_HOME/k2so.db" \
+        _resolved=$(sqlite3 "$_k2_db" \
             "SELECT id FROM projects WHERE path = '${_safe_path}' LIMIT 1;" 2>/dev/null || true)
         if [ -n "$_resolved" ]; then
             workspace_id="$_resolved"
         fi
         unset _safe_path _resolved
     fi
+    unset _k2_db
 
     local body
     body=$(python3 <<PY

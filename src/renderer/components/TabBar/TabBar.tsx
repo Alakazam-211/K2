@@ -263,13 +263,24 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         }
       }
 
-      // Find which tab slot the cursor is over
+      // Find which tab slot the cursor is over. Use each element's
+      // data-tab-reorder-index (full tabs-array index) — NOT the NodeList
+      // ordinal. System-agent / pinned-file tabs omit the attribute, so
+      // enumerating i=0..N would offset the drop indicator left by the
+      // count of those fixed tabs.
       if (!tabBarRef.current) return
       const items = tabBarRef.current.querySelectorAll<HTMLElement>('[data-tab-reorder-index]')
       let dropIdx = 0
       for (let i = 0; i < items.length; i++) {
-        const rect = items[i].getBoundingClientRect()
-        if (ev.clientX > rect.left + rect.width / 2) dropIdx = i + 1
+        const el = items[i]
+        const rect = el.getBoundingClientRect()
+        const tabIdx = parseInt(el.dataset.tabReorderIndex ?? '', 10)
+        if (Number.isNaN(tabIdx)) continue
+        if (ev.clientX < rect.left + rect.width / 2) {
+          dropIdx = tabIdx
+          break
+        }
+        dropIdx = tabIdx + 1
       }
       reorderDropRef.current = dropIdx
       setReorderDropIndex(dropIdx)

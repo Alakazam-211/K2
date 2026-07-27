@@ -96,6 +96,14 @@ export function ProjectsSection(): React.JSX.Element {
     }
   }, [initialProjectId])
 
+  // Projects often load after mount — seed the first row so the detail
+  // panel isn't blank on a cold open of Settings → Projects.
+  useEffect(() => {
+    if (selectedProjectId) return
+    if (projects.length === 0) return
+    setSelectedProjectId(projects[0].id)
+  }, [projects, selectedProjectId])
+
   const [newGroupName, setNewGroupName] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)

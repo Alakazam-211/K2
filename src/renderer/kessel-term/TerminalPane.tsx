@@ -77,6 +77,7 @@ import {
   quotePathForImageDrop,
 } from '@/lib/file-drag'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { isWebClient } from '@/lib/is-web'
 import { executeRemoteDrop } from '@/lib/handle-remote-drop'
 import {
   anchorScrollPx,
@@ -3057,26 +3058,41 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (shadowInputRef.current) shadowInputRef.current.value = ''
     }
     const onPaste = (e: ClipboardEvent) => {
-      const text = e.clipboardData?.getData('text') ?? ''
+      // Prefer text/plain; some browsers only populate that on paste.
+      const text =
+        e.clipboardData?.getData('text/plain') ||
+        e.clipboardData?.getData('text') ||
+        ''
       e.preventDefault()
       commitScrollPx(0)
 
       // Finder's Cmd+C copies file refs via NSFilenamesPboardType,
       // which WKWebView doesn't expose through the web clipboard
-      // API. Query the native pasteboard: if file paths are
-      // present, paste them shell-escaped (matching v1's drag-drop
-      // behavior). Fall back to text paste otherwise.
-      daemonCliGet<string[]>('fs/clipboard-paths')
-        .then((paths) => {
-          if (paths && paths.length > 0) {
-            sendInput(buildDropPayload(paths))
-            return
-          }
-          if (text) sendInput(text)
-        })
-        .catch(() => {
-          if (text) sendInput(text)
-        })
+      // API. Query the native pasteboard ONLY when the LOCAL macOS
+      // daemon shares the user's pasteboard (Bundled desktop). On the
+      // hosted web client — or when signed into a remote host —
+      // fs/clipboard-paths hits the wrong machine (or adds a remote
+      // RTT that delays/drops paste). Paste clipboard text immediately
+      // in those cases (fs_commands.rs documents this Connect caveat).
+      const active = useConnectHostStore.getState().activeHost
+      const canQueryLocalFinderPaths =
+        !isWebClient() && active === 'local'
+
+      if (!canQueryLocalFinderPaths) {
+        if (text) sendInput(text)
+      } else {
+        daemonCliGet<string[]>('fs/clipboard-paths')
+          .then((paths) => {
+            if (paths && paths.length > 0) {
+              sendInput(buildDropPayload(paths))
+              return
+            }
+            if (text) sendInput(text)
+          })
+          .catch(() => {
+            if (text) sendInput(text)
+          })
+      }
       // Always clear; preventDefault blocks the browser's own insert,
       // but onInput fires after paste — clearing here keeps the
       // textarea empty so the input handler's `text.length === 0`

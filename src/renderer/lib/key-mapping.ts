@@ -81,6 +81,24 @@ export function keyEventToSequence(e: KeyboardEvent, mode: number = 0): string |
     }
   }
 
+  // ── Paste chords — let the browser fire a `paste` event ───────────
+  // Ctrl+V maps to 0x16 (SYN) in the generic Ctrl+letter table below,
+  // which would preventDefault the key and never deliver clipboard
+  // text. That breaks the hosted web client (and Windows/Linux users
+  // generally), who paste with Ctrl+V. Ctrl+Shift+V is the common
+  // "paste" chord in Linux terminals too. Return null so TerminalPane's
+  // `paste` listener (and the browser default) can own the chord.
+  // Quoted-insert (bash) remains available via Ctrl+Q / Ctrl+V in a
+  // real TTY when needed; product priority is paste.
+  if (
+    e.ctrlKey &&
+    !e.altKey &&
+    !e.metaKey &&
+    (key === 'v' || key === 'V')
+  ) {
+    return null
+  }
+
   // ── Arrow keys ────────────────────────────────────────────────────
   // Critical: shells like zsh enable APP_CURSOR mode, which changes
   // arrow key sequences from CSI (\x1b[) to SS3 (\x1bO) format.

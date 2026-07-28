@@ -624,33 +624,43 @@ export function AlacrittyTerminalView({
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     if (!ptyIdRef.current) return
-    const text = e.clipboardData.getData('text')
+    const text =
+      e.clipboardData.getData('text/plain') || e.clipboardData.getData('text')
     e.preventDefault()
 
-    // Finder's CMD+C copies file references via NSFilenamesPboardType, which
-    // WKWebView doesn't expose to the web clipboard API. Query the native
-    // pasteboard — if file paths are present, paste them shell-escaped to
-    // match drag-drop behavior.
-    daemonCliGet<string[]>('fs/clipboard-paths').then((paths) => {
-      if (!ptyIdRef.current) return
-      if (paths && paths.length > 0) {
-        terminalWrite(ptyIdRef.current, buildDropPayload(paths))
-        return
-      }
-      if (!text) return
+    const writeText = (payload: string): void => {
+      if (!ptyIdRef.current || !payload) return
       const MAX_PASTE_BYTES = 10 * 1024 * 1024
-      if (text.length > MAX_PASTE_BYTES) {
+      if (payload.length > MAX_PASTE_BYTES) {
         useToastStore.getState().addToast(
-          `Paste too large (${(text.length / 1024 / 1024).toFixed(1)}MB, max 10MB)`,
-          'error'
+          `Paste too large (${(payload.length / 1024 / 1024).toFixed(1)}MB, max 10MB)`,
+          'error',
         )
         return
       }
-      terminalWrite(ptyIdRef.current, text)
-    }).catch(() => {
-      if (!text || !ptyIdRef.current) return
-      terminalWrite(ptyIdRef.current, text)
-    })
+      terminalWrite(ptyIdRef.current, payload)
+    }
+
+    // Finder path bridge only when the local macOS daemon owns the
+    // user's pasteboard. Web + remote host: paste text immediately.
+    const active = useConnectHostStore.getState().activeHost
+    if (active !== 'local') {
+      writeText(text)
+      return
+    }
+
+    daemonCliGet<string[]>('fs/clipboard-paths')
+      .then((paths) => {
+        if (!ptyIdRef.current) return
+        if (paths && paths.length > 0) {
+          terminalWrite(ptyIdRef.current, buildDropPayload(paths))
+          return
+        }
+        writeText(text)
+      })
+      .catch(() => {
+        writeText(text)
+      })
   }, [])
 
   // ── Scroll — throttled + accumulated ─────────────────────────────────

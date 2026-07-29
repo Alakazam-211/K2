@@ -3,6 +3,21 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.69 — Composer resize + web paste
+
+### Tabs / terminal
+
+- **Message the agent** box grows and shrinks with your text again, without
+  staying too tall or clipping the placeholder when you clear the draft.
+- Resting size is back to a single line.
+
+### Hosted web
+
+- **Ctrl+V / Cmd+V** paste works in the terminal (Ctrl+V no longer gets
+  swallowed as a control character).
+
+---
+
 ## 0.40.68 — Connect reconnection flap fix
 
 ### K2 Connect

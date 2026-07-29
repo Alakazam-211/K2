@@ -26,13 +26,6 @@ import {
 } from './terminalCompose'
 
 const MAX_TEXTAREA_HEIGHT = 160 // px — auto-grow cap before internal scroll
-// Single-line floor: 12px font × 1.4 line-height + 4px padding top/bottom +
-// 2px border top/bottom. Empty drafts stay on this floor so a long
-// placeholder cannot pin the box multi-line-tall, and clearing multi-line
-// text shrinks back cleanly (the old autoGrow only grew/shrunk via
-// scrollHeight, which after multi-line content often left a too-tall or
-// too-short box that clipped/backed into the hint).
-const MIN_TEXTAREA_HEIGHT = Math.ceil(12 * 1.4 + 4 + 4 + 2 + 2)
 
 interface TerminalComposeBarProps {
   /** Resolved PTY SessionId for this pane — the pane's `terminalId`. */
@@ -93,24 +86,20 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   }, [draft, draftKey])
 
   // Auto-grow the textarea to fit its content, capped at MAX_TEXTAREA_HEIGHT.
-  // Empty drafts force the single-line floor (placeholder may wrap visually
-  // but must not leave the box multi-line tall). Content: measure after
-  // collapsing height to 0 so shrink-on-delete works; clamp to [MIN, MAX].
+  // Empty: clear the inline height so `rows={1}` restores the original
+  // single-line resting size (a forced px floor was taller than stock).
+  // Non-empty: collapse to 0 first so scrollHeight reflects current value
+  // only — that is what makes shrink-on-delete work (the original bug).
+  // Long placeholders may clip at rest; they must not pin multi-line height.
   const autoGrow = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
     if (!el.value) {
-      el.style.height = `${MIN_TEXTAREA_HEIGHT}px`
+      el.style.height = ''
       return
     }
-    // Collapse first so scrollHeight reflects the current value only —
-    // not a previously inflated height (the classic shrink-fail pattern).
     el.style.height = '0px'
-    const next = Math.min(
-      Math.max(el.scrollHeight, MIN_TEXTAREA_HEIGHT),
-      MAX_TEXTAREA_HEIGHT,
-    )
-    el.style.height = `${next}px`
+    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`
   }, [])
 
   useEffect(() => {
@@ -181,11 +170,8 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
           border: '1px solid var(--color-border)',
           borderRadius: 0,
           padding: '4px 6px',
-          minHeight: MIN_TEXTAREA_HEIGHT,
-          height: MIN_TEXTAREA_HEIGHT,
           maxHeight: MAX_TEXTAREA_HEIGHT,
           overflowY: 'auto',
-          boxSizing: 'border-box',
         }}
       />
     </div>

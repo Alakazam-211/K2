@@ -111,20 +111,19 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     clearStuckBodyUserSelect()
   }, [show.id])
 
-  // Auto-grow the composer with content. Collapse height first so
-  // deleting lines shrinks the box; empty drafts floor at one line so a
-  // long "Message …" placeholder cannot pin multi-line height.
+  // Auto-grow the composer with content. Empty → clear inline height
+  // (natural rows=1 resting size). Non-empty → collapse then measure so
+  // shrink-on-delete works without a too-tall forced floor.
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
-    const MIN = 36
     const MAX = 240
     if (!el.value) {
-      el.style.height = `${MIN}px`
+      el.style.height = ''
       return
     }
     el.style.height = '0px'
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, MIN), MAX)}px`
+    el.style.height = `${Math.min(el.scrollHeight, MAX)}px`
   }, [draft])
   const [sendError, setSendError] = useState<string | null>(null)
   const [lastPost, setLastPost] = useState<LastPost | null>(null)

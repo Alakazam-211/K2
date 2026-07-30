@@ -3,6 +3,40 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.70 — Browser pane reopen + API host-session defaults
+
+### Embedded browser
+
+- Re-opening an **embedded browser** tab no longer fails with
+  `add_child failed: a webview with label browser-… already exists` after a
+  desync (reload / missed close). K2 now closes any leftover Tauri webview
+  for that tab before creating a new one — no restart required.
+
+### `/v1` host sessions (integrators)
+
+- **`api_skip_permissions` defaults ON** so API-spawned host sessions keep
+  auto-approve flags and do not stall on headless HITL permission prompts.
+  Opt out per workspace when you want fail-closed stripping:
+  `k2 workspace api-skip-permissions set <ws> off`
+- New CLI: `k2 workspace api-skip-permissions get|set <ws> on|off`
+
+### Agents / settings
+
+- **Agent display name** is back on the workspace Agent tab (under icon and
+  color). Renaming updates the technical name too so federated
+  `name::host` stamps stay in sync; names must be unique on the server.
+- Top-bar **server switcher** lists saved servers **A–Z** by label (Local
+  stays first).
+
+### Upgrade notes
+
+- Existing workspaces with `api_skip_permissions` unset become ON (migration
+  0093). Explicit off remains off.
+- Client app update is required for the browser-pane fix (daemon-only
+  restarts do not clear Tauri webview labels).
+
+---
+
 ## 0.40.69 — Composer resize + web paste
 
 ### Tabs / terminal

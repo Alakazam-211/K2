@@ -1423,6 +1423,18 @@ function ProjectDetail({
                 </div>
               </div>
 
+              {/* Agent display name — restored on the Agent tab Identity group
+                  (below icon + color). Was only reachable via manager/custom
+                  persona helpers after the settings-tab redesign; users lost
+                  the obvious place to rename the agent. Saves via
+                  setAgentDisplayName → AGENT.md display_name frontmatter. */}
+              <div className="py-2 border-t border-[var(--color-border)]">
+                <AgentDisplayNameField
+                  projectPath={project.path}
+                  helpText="Agent name for UI and federated addresses (name::host). Must be unique on this server. Does not move the workspace directory."
+                />
+              </div>
+
               {/* Focus Group */}
               {focusGroupsEnabled && (
                 <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">

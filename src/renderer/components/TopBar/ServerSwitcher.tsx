@@ -3,7 +3,8 @@
 //
 // Dropdown contents (PRD §1):
 //   - "Local" (local bundled daemon) — always first, never needs auth.
-//   - every saved ConnectHost.
+//   - every saved ConnectHost, alphabetical by label (case-insensitive;
+//     hostname as tiebreaker so the list is stable).
 //   - "Add a server…" — routes to Settings → Connections (the address
 //     book). We do NOT add inline in the dropdown (PRD §1).
 //
@@ -133,6 +134,20 @@ export default function ServerSwitcher(): React.JSX.Element {
 
   const activeLabel = activeHost === 'local' ? 'Local' : activeHost.label
 
+  // Saved remotes only — Local stays pinned first below. Sort by display
+  // label so a long address book is scannable; hostname breaks ties.
+  const hostsSorted = [...hosts].sort((a, b) => {
+    const byLabel = a.label.localeCompare(b.label, undefined, {
+      sensitivity: 'base',
+      numeric: true,
+    })
+    if (byLabel !== 0) return byLabel
+    return a.hostname.localeCompare(b.hostname, undefined, {
+      sensitivity: 'base',
+      numeric: true,
+    })
+  })
+
   const pick = useCallback(
     (h: 'local' | ConnectHost) => {
       // Re-picking the ALREADY-ACTIVE remote is the user's manual "reconnect"
@@ -250,9 +265,9 @@ export default function ServerSwitcher(): React.JSX.Element {
             onClick={() => pick('local')}
           />
 
-          {hosts.length > 0 && <div className="my-1 h-px bg-[var(--color-border)]" />}
+          {hostsSorted.length > 0 && <div className="my-1 h-px bg-[var(--color-border)]" />}
 
-          {hosts.map((h) => {
+          {hostsSorted.map((h) => {
             const isActive = activeHost !== 'local' && activeHost.id === h.id
             return (
               <SwitcherRow

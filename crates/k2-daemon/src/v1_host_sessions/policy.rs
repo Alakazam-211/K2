@@ -233,13 +233,12 @@ pub(crate) fn resolve_host_spawn(
     let command = resolved.command.clone();
     let mut args = resolved.args.clone();
 
-    // (2) DANGER-FLAG POLICY (PRD §3, LOCKED default): unlike cells, do NOT
-    // force auto-approve — on the host the agent's own permission prompts are
-    // a safety layer. Strip the UNION of the preset's DECLARED danger_flags
-    // (migration-0070 metadata) and the legacy hardcoded floor unless the
-    // workspace owner explicitly opted in (per-workspace
-    // `api_skip_permissions`, default OFF, fail-closed on unknown
-    // workspace/NULL).
+    // (2) DANGER-FLAG POLICY (prd-api-skip-permissions-default-on-v1):
+    // `/v1` host-sessions are headless. Product default is
+    // `api_skip_permissions` ON (NULL/1) so auto-approve flags stay on
+    // the argv. Owners may opt OUT (explicit 0) to restore stripping —
+    // on the host the agent's own permission prompts are then a safety
+    // layer again. Unknown workspace path still fail-closes OFF.
     //
     // HONEST RESIDUAL when the metadata is unknown (`danger_flags == None`:
     // a fully custom command with no preset row, or a preset whose
@@ -250,10 +249,8 @@ pub(crate) fn resolve_host_spawn(
     // warning so the operator can declare the flags on the preset row
     // (or accept the residual); we deliberately do NOT guess-strip
     // unknown args (a false positive would break the agent's argv).
-    // Unattended host sessions (API + public wiki chat) need skip-permissions
-    // every spawn. Opt-in via api_skip_permissions OR durable wiki_public_chat
-    // (enabling public chat sets the former; both checked so chat works even
-    // if skip was cleared by hand).
+    // Also keep skip ON when durable wiki_public_chat is enabled (both
+    // checked so chat works even if skip was cleared by hand).
     let skip_permissions_opt_in =
         k2_core::workspace::settings::get_api_skip_permissions(ws_path)
             || k2_core::workspace::settings::get_wiki_public_chat(ws_path);
@@ -449,11 +446,12 @@ mod tests {
     }
 
     /// The core resolver contract: cwd PINNED to the workspace path, the
-    /// default (claude) command with `--dangerously-skip-permissions`
-    /// STRIPPED and `--session-id <sid>` spliced, principal key staged,
-    /// host-minted `api-` name, forced session id, sandbox None.
+    /// default (claude) command keeps `--dangerously-skip-permissions`
+    /// (product default ON for headless /v1) and `--session-id <sid>`
+    /// spliced, principal key staged, host-minted `api-` name, forced
+    /// session id, sandbox None.
     #[test]
-    fn resolve_pins_cwd_strips_danger_and_splices_session_id() {
+    fn resolve_pins_cwd_keeps_danger_by_default_and_splices_session_id() {
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-default";
         insert_project("v1host-policy-default", ws_path);
@@ -469,18 +467,17 @@ mod tests {
 
         // cwd PINNED — the registered workspace path, verbatim.
         assert_eq!(spawn.cwd, ws_path);
-        // The workspace default resolves to the built-in claude preset; the
-        // danger flag is STRIPPED (default OFF) and the premint spliced.
+        // Product default ON: auto-approve flags kept; premint spliced.
         assert_eq!(spawn.command.as_deref(), Some("claude"));
         let args = spawn.args.as_deref().expect("args present");
         assert!(
-            !args.iter().any(|a| a == "--dangerously-skip-permissions"),
-            "auto-approve must be stripped by default; args={args:?}"
+            args.iter().any(|a| a == "--dangerously-skip-permissions"),
+            "auto-approve kept by default (api_skip_permissions ON); args={args:?}"
         );
-        assert_eq!(
-            args,
-            &["--session-id".to_string(), sid.to_string()][..],
-            "claude premint convention with the FORCED id"
+        assert!(
+            args.iter().any(|a| a == "--session-id")
+                && args.iter().any(|a| a == &sid.to_string()),
+            "claude premint convention with the FORCED id; args={args:?}"
         );
         // Principal key staged; nothing else in the curated env.
         let env = spawn.env.as_ref().expect("env present");
@@ -496,18 +493,18 @@ mod tests {
         assert_eq!(spawn.rows, 40);
     }
 
-    /// Owner opt-in (`api_skip_permissions=1`) keeps the preset's flags.
+    /// Explicit opt-out (`api_skip_permissions=0`) strips auto-approve flags.
     #[test]
-    fn opt_in_keeps_auto_approve_flags() {
+    fn opt_out_strips_auto_approve_flags() {
         k2_core::db::init_for_tests();
-        let ws_path = "/tmp/k2-v1host-policy-optin";
-        insert_project("v1host-policy-optin", ws_path);
+        let ws_path = "/tmp/k2-v1host-policy-optout";
+        insert_project("v1host-policy-optout", ws_path);
         k2_core::workspace::settings::update_project_setting(
             ws_path,
             "api_skip_permissions",
-            "1",
+            "0",
         )
-        .expect("set opt-in");
+        .expect("set opt-out");
         let sid = SessionId::new();
 
         let spawn = resolve_host_spawn(
@@ -519,8 +516,8 @@ mod tests {
         );
         let args = spawn.args.as_deref().expect("args");
         assert!(
-            args.iter().any(|a| a == "--dangerously-skip-permissions"),
-            "opt-in keeps the preset's flag; args={args:?}"
+            !args.iter().any(|a| a == "--dangerously-skip-permissions"),
+            "opt-out strips the preset's flag; args={args:?}"
         );
         // Owner principal stages no key.
         assert_eq!(spawn.env.as_ref().map(|e| e.len()), Some(0));
@@ -542,9 +539,15 @@ mod tests {
             true,
             &ApiHostSessionRequest::default(),
         );
-        assert_eq!(
-            spawn.args.as_deref(),
-            Some(&["--resume".to_string(), sid.to_string()][..]),
+        let args = spawn.args.as_deref().expect("args");
+        // Default ON keeps auto-approve; resume grammar is still present.
+        assert!(
+            args.iter().any(|a| a == "--dangerously-skip-permissions"),
+            "default ON keeps danger flag; args={args:?}"
+        );
+        assert!(
+            args.windows(2).any(|w| w[0] == "--resume" && w[1] == sid.to_string()),
+            "resume grammar must splice forced sid; args={args:?}"
         );
     }
 
@@ -617,10 +620,15 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(
-            spawn.args.as_deref(),
-            Some(&["--resume".to_string(), "20260706_090000_abcdef".to_string()][..]),
-            "resume grammar must carry the provider-minted target, never the forced sid"
+        let args = spawn.args.as_deref().expect("args");
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--resume" && w[1] == "20260706_090000_abcdef"),
+            "resume grammar must carry the provider-minted target, never the forced sid; args={args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a == &forced.to_string()),
+            "forced sid must not appear in resume argv; args={args:?}"
         );
         assert_eq!(
             spawn.forced_session_id,
@@ -779,14 +787,19 @@ mod tests {
         );
     }
 
-    /// W2 fail-closed inversion fix: a custom preset that DECLARES its own
-    /// auto-approve flag (`--auto-yes`, not in the hardcoded floor) gets it
-    /// STRIPPED on API spawn by default.
+    /// Opt-out: a custom preset that DECLARES its own auto-approve flag
+    /// (`--auto-yes`, not in the hardcoded floor) gets it STRIPPED.
     #[test]
-    fn declared_custom_danger_flag_is_stripped() {
+    fn declared_custom_danger_flag_is_stripped_when_opted_out() {
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-declared-flag";
         insert_project("v1host-policy-declared-flag", ws_path);
+        k2_core::workspace::settings::update_project_setting(
+            ws_path,
+            "api_skip_permissions",
+            "0",
+        )
+        .expect("set opt-out");
         configure_custom_agent(
             ws_path,
             "zz-policy-agent --auto-yes --model fast",
@@ -812,14 +825,20 @@ mod tests {
         );
     }
 
-    /// NULL-metadata preset (danger_flags unknown): the hardcoded floor is
-    /// STILL stripped, and — the documented residual — an unaudited custom
-    /// auto-approve flag survives because it cannot be known.
+    /// NULL-metadata preset + opt-out: the hardcoded floor is STILL stripped,
+    /// and — the documented residual — an unaudited custom auto-approve flag
+    /// survives because it cannot be known.
     #[test]
-    fn null_metadata_preset_still_strips_the_floor() {
+    fn null_metadata_preset_still_strips_the_floor_when_opted_out() {
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-null-meta";
         insert_project("v1host-policy-null-meta", ws_path);
+        k2_core::workspace::settings::update_project_setting(
+            ws_path,
+            "api_skip_permissions",
+            "0",
+        )
+        .expect("set opt-out");
         configure_custom_agent(
             ws_path,
             "zz-nullmeta-agent --dangerously-skip-permissions --auto-yes",

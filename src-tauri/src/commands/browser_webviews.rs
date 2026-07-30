@@ -68,6 +68,14 @@ mod real {
     /// `rect` (logical px, main-window coordinate space). Idempotent per item:
     /// an existing view for the id is closed first — reactivation after the
     /// 30-min lifecycle destroy (§6.4) goes through here again.
+    ///
+    /// Label uniqueness is enforced by **Tauri's registry** (`app.get_webview`),
+    /// not only our in-memory `views` map. The map can desync after a renderer
+    /// reload, a missed `browser_close`, or a panic that drops the map entry
+    /// without closing the native child — then `add_child` collides on the
+    /// deterministic label `browser-<item_id>` ("a webview with label …
+    /// already exists"). Same reconcile pattern as focus windows
+    /// (`projects.rs` + `get_webview_window`).
     #[tauri::command]
     pub async fn browser_create(
         app: AppHandle,
@@ -80,12 +88,19 @@ mod real {
             .get_window("main")
             .ok_or_else(|| "main window not found".to_string())?;
 
-        // Replace-if-exists keeps the registry the single source of truth.
+        let label = format!("browser-{item_id}");
+
+        // (1) Our map — close + drop if we still track this item.
         if let Some(old) = views(&app).0.lock().unwrap().remove(&item_id) {
             let _ = old.close();
         }
+        // (2) Tauri is authoritative for label uniqueness. If a native
+        // webview still holds `browser-<id>` after a map desync, close it
+        // before add_child so re-open never hard-collides.
+        if let Some(existing) = app.get_webview(&label) {
+            let _ = existing.close();
+        }
 
-        let label = format!("browser-{item_id}");
         // on_navigation: scheme gate for EVERY in-page navigation, not just our
         // own `navigate` calls — the return bool vetoes the load (§6.5).
         let builder = WebviewBuilder::new(&label, WebviewUrl::External(parsed))
@@ -166,10 +181,18 @@ mod real {
 
     /// Destroy the child view (tab close / 30-min hidden lifecycle). URL is
     /// retained renderer-side; reactivation re-creates.
+    ///
+    /// Closes both our map entry and any Tauri-registered webview for the
+    /// deterministic label — so a desynced map still frees the label for a
+    /// later `browser_create`.
     #[tauri::command]
     pub async fn browser_close(app: AppHandle, item_id: String) -> Result<(), String> {
+        let label = format!("browser-{item_id}");
         if let Some(view) = views(&app).0.lock().unwrap().remove(&item_id) {
             view.close().map_err(|e| e.to_string())?;
+        }
+        if let Some(existing) = app.get_webview(&label) {
+            let _ = existing.close();
         }
         Ok(())
     }

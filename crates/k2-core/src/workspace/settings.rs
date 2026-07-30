@@ -75,10 +75,10 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // Sandbox v2 (PRD §G2 #1) — per-workspace sandbox FS mode. Values:
         // 'overlay' | 'ro+scratch' (default 'overlay'). See `get_workspace_fs_mode`.
         "sandbox_fs_mode",
-        // Host sessions F1 (prd-v1-api-completion §3) — owner opt-in for
-        // API-spawned HOST sessions to keep the agent preset's dangerous
-        // auto-approve flags. Values: '1' | '0' (default 0/OFF, fail-closed).
-        // See `get_api_skip_permissions`.
+        // Host sessions F1 (prd-v1-api-completion §3) — whether API-spawned
+        // HOST sessions keep the agent preset's dangerous auto-approve flags.
+        // Values: '1' | '0'. Product default ON (headless /v1); '0' = opt-out.
+        // See `get_api_skip_permissions` + migration 0093.
         "api_skip_permissions",
         // W6 (0.40.30) — per-workspace default agent (0063 column): an
         // `agent_presets` preset id, or a legacy command first-token.
@@ -270,7 +270,7 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 agent_enabled, \
                 pinned, name, use_session_stream, allow_remote_instruct, \
                 dns_manage_enabled, agents_can_create_connections, \
-                api_guest_policy, wiki_public_chat \
+                api_guest_policy, wiki_public_chat, api_skip_permissions \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -291,6 +291,11 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
             } else {
                 guest_raw
             };
+            // Host-sessions: NULL / missing → default ON (0093).
+            let api_skip = match row.get::<_, Option<i64>>(12).unwrap_or(None) {
+                None => true,
+                Some(v) => v != 0,
+            };
             Ok(serde_json::json!({
                 "mode": row.get::<_, String>(0).unwrap_or_else(|_| "off".to_string()),
                 "worktreeMode": row.get::<_, i64>(1).unwrap_or(0) == 1,
@@ -310,6 +315,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "apiGuestPolicy": api_guest_policy,
                 // Phase 1 — public wiki chat opt-in (default OFF).
                 "wikiPublicChat": row.get::<_, i64>(11).unwrap_or(0) == 1,
+                // Host-sessions F1 — keep auto-approve on /v1 spawns (default ON).
+                "apiSkipPermissions": api_skip,
             }))
         },
     )
@@ -398,24 +405,33 @@ pub fn get_allow_remote_instruct(project_path: &str) -> bool {
     .unwrap_or(false)
 }
 
-/// Host sessions F1 (prd-v1-api-completion §3) — read the PER-WORKSPACE
-/// "API host sessions may keep dangerous auto-approve flags" opt-in for
-/// `project_path`. Returns `false` (fail-closed) when the project isn't
-/// registered or the column reads NULL (the 0069 backfill). When OFF (the
-/// default) the host-session policy resolver STRIPS the known auto-approve
-/// flags (`--dangerously-skip-permissions`, …) from the workspace's resolved
-/// agent command — on the host the agent's own permission prompts are a
-/// safety layer, unlike inside a microVM cell.
+/// Host sessions F1 (prd-v1-api-completion §3) — whether API-spawned HOST
+/// sessions for `project_path` keep dangerous auto-approve flags.
+///
+/// **Default ON** (prd-api-skip-permissions-default-on-v1): `/v1` is headless
+/// — a HITL permission gate with no human stalls the session. Semantics:
+///
+/// - No project row → `false` (unknown path still fail-closed).
+/// - Column `NULL` → `true` (unset = product default ON; 0093 backfills NULL→1).
+/// - `1` → `true`.
+/// - `0` → `false` (owner opt-out via CLI / workspace set).
+///
+/// When OFF the host-session policy resolver STRIPS known auto-approve flags
+/// (`--dangerously-skip-permissions`, …) from the resolved agent command.
 pub fn get_api_skip_permissions(project_path: &str) -> bool {
     let db = crate::db::shared();
     let conn = db.lock();
-    conn.query_row(
+    match conn.query_row(
         "SELECT api_skip_permissions FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
-        |row| row.get::<_, i64>(0),
-    )
-    .map(|v| v == 1)
-    .unwrap_or(false)
+        |row| row.get::<_, Option<i64>>(0),
+    ) {
+        // Unknown / unregistered path — fail closed.
+        Err(_) => false,
+        // NULL column (pre-0093 residual or never written) → default ON.
+        Ok(None) => true,
+        Ok(Some(v)) => v != 0,
+    }
 }
 
 /// Phase 0b — EFFECTIVE API guest policy for `project_path`.

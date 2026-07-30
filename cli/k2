@@ -3830,6 +3830,161 @@ EOF
     esac
 }
 
+# Host-sessions F1 / prd-api-skip-permissions-default-on-v1 —
+# per-workspace flag: whether /v1 host-session spawns keep auto-approve flags.
+# Product default ON; explicit off = fail-closed strip.
+#
+#   k2 workspace api-skip-permissions get <ws>
+#   k2 workspace api-skip-permissions set <ws> on|off|1|0
+#
+# Storage: projects.api_skip_permissions via POST /cli/workspace/set.
+cmd_workspace_api_skip_permissions() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        get)
+            local target="${1:-}"
+            [[ -z "$target" ]] && {
+                echo "Usage: k2 workspace api-skip-permissions get <workspace>" >&2
+                exit 2
+            }
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            # Read via settings surface when present; fall back to workspace/set
+            # round-trip is write-only — use projects list / a small probe through
+            # daemon: POST set is not needed for get. Prefer settings GET if it
+            # exposes the field; else use a lightweight SQLite-free path: the
+            # daemon's workspace set allowlist is write-only, so we query
+            # /cli/settings?project= which mirrors project columns used by UI.
+            cli_request "/cli/settings" "project=$(urlencode "$resolved_path")" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if isinstance(d, dict) and d.get("error"):
+    err = d["error"]
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % err, file=sys.stderr)
+    sys.exit(1)
+# Accept camelCase or snake_case; default-ON when key absent (product default).
+if "apiSkipPermissions" in d:
+    v = d.get("apiSkipPermissions")
+elif "api_skip_permissions" in d:
+    v = d.get("api_skip_permissions")
+else:
+    # Settings may not surface the column — report default ON honestly.
+    print("on  (default; settings response did not include api_skip_permissions)")
+    sys.exit(0)
+# Normalize bool/int/str
+if v is True or v == 1 or v == "1" or (isinstance(v, str) and v.lower() in ("on", "true", "yes")):
+    print("on")
+elif v is False or v == 0 or v == "0" or (isinstance(v, str) and v.lower() in ("off", "false", "no")):
+    print("off")
+elif v is None:
+    print("on  (default)")
+else:
+    print("on" if v else "off")
+'
+            ;;
+        set)
+            local target="${1:-}"
+            local mode="${2:-}"
+            [[ -z "$target" || -z "$mode" ]] && {
+                echo "Usage: k2 workspace api-skip-permissions set <workspace> on|off|1|0" >&2
+                exit 2
+            }
+            local val=""
+            case "$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')" in
+                on|1|true|yes)  val="1" ;;
+                off|0|false|no) val="0" ;;
+                *)
+                    echo "Error: expected on|off|1|0, got: $mode" >&2
+                    exit 2
+                    ;;
+            esac
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            local body
+            body=$(python3 -c 'import json,sys
+print(json.dumps({
+    "project": sys.argv[1],
+    "fields": {"api_skip_permissions": sys.argv[2]},
+}))' "$resolved_path" "$val")
+            cli_post_json "/cli/workspace/set" "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if d.get("error") or d.get("ok") is False:
+    err = d.get("error")
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % (err or raw[:200]), file=sys.stderr)
+    sys.exit(1)
+val = None
+for a in d.get("actions") or []:
+    if a.get("field") == "api_skip_permissions":
+        val = a.get("value")
+        if a.get("status") == "skipped":
+            state = "on" if str(val) in ("1", "true", "True") else "off"
+            print("api_skip_permissions already %s (unchanged)." % state)
+            sys.exit(0)
+if val is None:
+    val = ""
+state = "on" if str(val) in ("1", "true", "True") else "off"
+print("api_skip_permissions set to %s." % state)
+'
+            ;;
+        ""|-h|--help|help)
+            cat <<'EOF' >&2
+Usage: k2 workspace api-skip-permissions get|set <workspace> [on|off]
+
+Whether /v1 host-session spawns keep agent auto-approve flags
+(--dangerously-skip-permissions, etc.). Product default is ON (headless
+/v1 cannot answer a HITL gate). Opt out for fail-closed stripping.
+
+  get <ws>              Print on|off (default on when unset)
+  set <ws> on|1         Keep auto-approve flags on API host-session spawns
+  set <ws> off|0        Strip auto-approve flags (pre-0.40.x fail-closed)
+
+Also: POST /cli/workspace/set {"project":"…","fields":{"api_skip_permissions":"0"|"1"}}
+EOF
+            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
+            exit 2
+            ;;
+        *)
+            echo "Unknown api-skip-permissions subcommand: $sub" >&2
+            echo "Usage: k2 workspace api-skip-permissions get|set <workspace> …" >&2
+            exit 2
+            ;;
+    esac
+}
+
 # B3a (sandbox) — set/clear the PER-WORKSPACE Anthropic API key (BYO key).
 # Owner-only daemon route (`/cli/workspace/api-key`, POST). The key rides the
 # JSON BODY (never the URL/query) so it isn't logged by intermediaries. An
@@ -9647,7 +9802,7 @@ cmd_schema() {
     {
       "name": "preset add",
       "usage": "k2 preset add --id <slug> --command '<argv string>' [--label <l>] [--icon <e>] [--danger-flag <f>]... [--env K=V]... [--readiness <v>] [--json]",
-      "description": "Add a CUSTOM agent preset (owner/admin only). Declared --danger-flag values are stripped from API host-session spawns unless the workspace opts in (api_skip_permissions); --env is staged into the agent's process at spawn; --readiness = 'bracketed-paste' | 'settle:<ms>'. See docs/agent-contract.md.",
+      "description": "Add a CUSTOM agent preset (owner/admin only). Declared --danger-flag values are kept on API host-session spawns by default (api_skip_permissions ON); opt out per workspace to strip them. --env is staged into the agent's process at spawn; --readiness = 'bracketed-paste' | 'settle:<ms>'. See docs/agent-contract.md.",
       "args": [],
       "flags": [
         {"name": "--id", "arg": "slug", "description": "Preset id (1-64 chars: letters, digits, . _ -) — the stable handle hire --agent references."},
@@ -11075,6 +11230,8 @@ API / HOST-SESSIONS
   api-guest-policy set <ws> <text>  Set policy re-injected every /v1 turn
   api-guest-policy set <ws> --file <path>
   api-guest-policy set <ws> --default   Clear → platform default
+  api-skip-permissions get <ws>     Show if /v1 host spawns keep auto-approve (default on)
+  api-skip-permissions set <ws> on|off   Opt in/out of auto-approve on API host spawns
 
 `<path>` defaults to K2_PROJECT_PATH or PWD.
 
@@ -11086,6 +11243,8 @@ EXAMPLES
   k2 workspace update --field role --value "frontend lead"
   k2 workspace api-guest-policy get my-wiki
   k2 workspace api-guest-policy set my-wiki "Read-only; use k2 respond --final"
+  k2 workspace api-skip-permissions get my-api-ws
+  k2 workspace api-skip-permissions set my-api-ws off
 EOF
 }
 
@@ -21202,9 +21361,9 @@ server knows (Claude, Codex, Gemini, ... plus your own). A preset is a
 command string plus metadata the daemon uses at spawn time:
 
   danger-flags   the agent's OWN auto-approve flags (e.g. --yes-always).
-                 Declaring them lets the API host-session policy strip
-                 them (fail-closed) unless the workspace opted in via
-                 api_skip_permissions.
+                 On API host-session spawns they are KEPT by default
+                 (api_skip_permissions ON). Opt out per workspace to strip
+                 them (fail-closed).
   env            environment variables staged into the agent's process
                  (e.g. OPENAI_BASE_URL for a local-LLM harness).
   readiness      when prompt injection may fire: 'bracketed-paste'
@@ -21254,9 +21413,9 @@ FLAGS
   --label <label>         Display label (default: the id)
   --icon <emoji>          Icon shown in Settings/pickers
   --danger-flag <flag>    Declare ONE of the agent's own auto-approve
-                          flags (repeatable). Declared flags are
-                          stripped from API host-session spawns unless
-                          the workspace sets api_skip_permissions.
+                          flags (repeatable). Kept on API host-session
+                          spawns by default; stripped if the workspace
+                          sets api_skip_permissions off.
   --env K=V               Environment variable staged at spawn
                           (repeatable). Values may hold secrets — they
                           are never logged by the daemon.
@@ -21797,7 +21956,9 @@ EOF
             api-key)           shift 2; cmd_workspace_set_api_key "$@" ;;
             # Phase 0b — owner API guest policy (host-session inject every turn).
             api-guest-policy)  shift 2; cmd_workspace_api_guest_policy "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|api-guest-policy|...> [args]" >&2; exit 1 ;;
+            # Host-sessions: keep/strip auto-approve flags on /v1 spawns (default ON).
+            api-skip-permissions) shift 2; cmd_workspace_api_skip_permissions "$@" ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|api-guest-policy|api-skip-permissions|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

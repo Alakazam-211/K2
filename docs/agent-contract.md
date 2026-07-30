@@ -155,12 +155,15 @@ safety layer, so:
 
 - Declare your agent's auto-approve flags in the preset:
   `k2 preset add --id my-agent --command 'my-agent --auto-yes' --danger-flag --auto-yes`.
-- API host-session spawns **strip the union** of your declared flags and K2's
-  audited floor from the argv — fail-closed — unless the workspace owner
-  explicitly opted in (`api_skip_permissions`, per workspace, default OFF).
-- A preset with **no declared flags is treated as unknown, never as safe**: the
-  floor is still stripped and the daemon logs the honest residual (flags it has
-  never audited can't be stripped). Declaring is what closes that gap.
+- API host-session spawns keep your declared auto-approve flags by default
+  (`api_skip_permissions` per workspace, **default ON** — `/v1` is headless and
+  cannot answer a HITL gate). Owners who want fail-closed stripping can opt out:
+  `k2 workspace api-skip-permissions set <ws> off`.
+- When skip-permissions is OFF, host-session spawns **strip the union** of your
+  declared flags and K2's audited floor from the argv. A preset with **no
+  declared flags is treated as unknown, never as safe**: only the floor is
+  stripped and the daemon logs the honest residual. Declaring is what closes
+  that gap.
 
 Owner-initiated spawns (tabs, wake, heartbeats) run the preset command as
 configured — stripping applies to the API door.

@@ -31,6 +31,7 @@ import {
   subscribeToWorkspaceTabEvents,
   onSessionAddedApp,
   onSessionRemovedApp,
+  onAppHello,
   onOpenUrl,
   onceRecovered,
   type SessionAddedEvent,
@@ -5294,11 +5295,72 @@ export function dropApiSpawnedSession(event: SessionRemovedEvent): boolean {
   return true
 }
 
+/**
+ * Hydrate-on-connect (option B / Sales dogfood): late-joining GUIs miss
+ * live `SessionAdded` for API host-sessions / sandbox cells spawned while
+ * offline. Snapshot live PTYs whose `agentName` is in the host-minted
+ * `api-…` namespace and run the same adopt path as a live event.
+ *
+ * `list-for-workspace?path=/` matches every absolute cwd (same rule as
+ * Feedback's live-session probe). Backend is assumed `"host"` when we
+ * only have the name prefix — real microvm cells also use `api-…` but
+ * attach still reuses the existing PTY via `attachAgentName`; wrong
+ * orange label is a polish follow-up (extend list endpoint with backend).
+ *
+ * Returns how many tabs were newly adopted (0 if all already surfaced
+ * or daemon empty/unreachable). Exported for unit tests.
+ */
+export async function hydrateApiSandboxSessions(): Promise<number> {
+  let rows: DaemonSessionRow[] | null = null
+  try {
+    rows = await daemonCliGet<DaemonSessionRow[]>('sessions/list-for-workspace', {
+      path: '/',
+    })
+  } catch (err) {
+    console.warn('[tabs] api-session hydrate list failed:', err)
+    return 0
+  }
+  if (!Array.isArray(rows)) return 0
+
+  let adopted = 0
+  for (const row of rows) {
+    if (!row || !row.isV2) continue
+    const agentName = row.agentName
+    if (typeof agentName !== 'string' || !agentName.startsWith('api-')) continue
+    const sessionId = row.sessionId
+    if (typeof sessionId !== 'string' || !sessionId) continue
+
+    const event: SessionAddedEvent = {
+      kind: 'session_added',
+      workspace_path: typeof row.cwd === 'string' ? row.cwd : '',
+      pane_group_id: null,
+      agent_name: agentName,
+      command: row.command ?? null,
+      args: Array.isArray(row.args) ? row.args : [],
+      session_id: sessionId,
+      isV2: true,
+      sandbox_backend: 'host',
+    }
+    try {
+      if (adoptApiSandboxSession(event)) adopted += 1
+    } catch (err) {
+      console.warn('[tabs] api-session hydrate adopt failed:', agentName, err)
+    }
+  }
+  if (adopted > 0) {
+    console.warn(`[tabs] api-session hydrate — adopted ${adopted} live api- session(s)`)
+  }
+  return adopted
+}
+
 /** Wire the app-level API-session adoption + reaper-close consumers. Call
  *  ONCE at app boot. Returns an unsubscribe fn. The registries are
  *  module-level and survive host switches, so a single registration covers
  *  the app lifetime; on a host switch the new host's app-level WS feeds the
- *  same registries. */
+ *  same registries.
+ *
+ *  Also hydrates on every app-level `hello` (connect / reconnect / host
+ *  switch) so late joiners get tabs for api- sessions already running. */
 export function initApiSandboxTabAdoption(): UnsubscribeFn {
   const offAdded = onSessionAddedApp((event) => {
     try {
@@ -5314,9 +5376,15 @@ export function initApiSandboxTabAdoption(): UnsubscribeFn {
       console.warn('[tabs] api-session drop failed:', err)
     }
   })
+  const offHello = onAppHello(() => {
+    void hydrateApiSandboxSessions()
+  })
+  // Immediate pass in case hello already fired before we registered.
+  void hydrateApiSandboxSessions()
   return () => {
     offAdded()
     offRemoved()
+    offHello()
   }
 }
 

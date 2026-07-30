@@ -49,9 +49,13 @@ vi.mock('@tauri-apps/api/event', () => ({
 const cli = vi.hoisted(() => ({
   getImpl: (async (route: string) =>
     route === 'workspace-layouts/load' ? null : []) as (route: string, params?: unknown) => Promise<unknown>,
+  listSessionsImpl: (async () => [] as unknown[]) as () => Promise<unknown>,
 }))
 vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (route: string, params?: unknown) => cli.getImpl(route, params)),
+  daemonCliGet: vi.fn(async (route: string, params?: unknown) => {
+    if (route === 'sessions/list-for-workspace') return cli.listSessionsImpl()
+    return cli.getImpl(route, params)
+  }),
   daemonCliPost: vi.fn(async () => ({})),
 }))
 vi.mock('@/lib/daemon-reconnect', () => ({ onDaemonConnected: vi.fn() }))
@@ -73,7 +77,7 @@ vi.mock('@/kessel/daemon-ws', () => ({
 // tests can fire SessionAdded / SessionRemoved through init.
 const ev = vi.hoisted(() => {
   type Fn = (...a: unknown[]) => void
-  return { added: [] as Fn[], removed: [] as Fn[] }
+  return { added: [] as Fn[], removed: [] as Fn[], hello: [] as Fn[] }
 })
 vi.mock('./session-events', () => ({
   subscribeToWorkspaceSessionEvents: vi.fn(() => () => undefined),
@@ -86,12 +90,17 @@ vi.mock('./session-events', () => ({
     ev.removed.push(fn)
     return () => void (ev.removed = ev.removed.filter((f) => f !== fn))
   }),
+  onAppHello: vi.fn((fn: (...a: unknown[]) => void) => {
+    ev.hello.push(fn)
+    return () => void (ev.hello = ev.hello.filter((f) => f !== fn))
+  }),
 }))
 
 import {
   useTabsStore,
   adoptApiSandboxSession,
   dropApiSpawnedSession,
+  hydrateApiSandboxSessions,
   initApiSandboxTabAdoption,
   type Tab,
   type TerminalItemData,
@@ -162,6 +171,8 @@ function resetStore(): void {
   })
   ev.added = []
   ev.removed = []
+  ev.hello = []
+  cli.listSessionsImpl = async () => []
   mem.clear()
 }
 
@@ -335,6 +346,60 @@ describe('dropApiSpawnedSession', () => {
     expect(useTabsStore.getState().tabs).toHaveLength(1)
     ev.removed[0](apiRemovedEvent({ agent_name: spawn.agent_name }))
     expect(useTabsStore.getState().tabs).toHaveLength(0)
+    unsub()
+  })
+
+  it('hydrateApiSandboxSessions adopts live api- rows from list-for-workspace', async () => {
+    cli.listSessionsImpl = async () => [
+      {
+        sessionId: 'live-sess-1',
+        agentName: 'api-owner-live-live-live-live',
+        command: 'claude',
+        args: ['--session-id', 'live-sess-1'],
+        cwd: '/home/k2/ai/sales',
+        isV2: true,
+      },
+      {
+        // non-api: ignore
+        sessionId: 'tab-sess',
+        agentName: 'tab-abc',
+        command: 'bash',
+        args: [],
+        cwd: '/home/k2/ai/sales',
+        isV2: true,
+      },
+    ]
+    const n = await hydrateApiSandboxSessions()
+    expect(n).toBe(1)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+    const t = onlyTerminalItem()!
+    expect(t.data.attachAgentName).toBe('api-owner-live-live-live-live')
+    expect(t.data.sessionId).toBe('live-sess-1')
+    expect(t.data.sandboxBackend).toBe('host')
+    // de-dupe on second hydrate
+    expect(await hydrateApiSandboxSessions()).toBe(0)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+  })
+
+  it('init hello triggers hydrate', async () => {
+    cli.listSessionsImpl = async () => [
+      {
+        sessionId: 'hello-sess',
+        agentName: 'api-owner-hello-hello-hello-hello',
+        command: null,
+        args: [],
+        cwd: '/tmp/ws',
+        isV2: true,
+      },
+    ]
+    const unsub = initApiSandboxTabAdoption()
+    // immediate hydrate on init
+    await vi.waitFor(() => {
+      expect(useTabsStore.getState().tabs.length).toBeGreaterThanOrEqual(1)
+    })
+    // hello re-runs hydrate (de-dupe → still 1)
+    await Promise.resolve(ev.hello[0]?.())
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
     unsub()
   })
 })

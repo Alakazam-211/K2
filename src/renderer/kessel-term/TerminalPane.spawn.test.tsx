@@ -124,6 +124,11 @@ vi.mock('@/stores/connect-host', () => ({
 }))
 
 import { TerminalPane } from './TerminalPane'
+import {
+  FALLBACK_SPAWN_COLS,
+  FALLBACK_SPAWN_ROWS,
+  measurePaneFit,
+} from './measurePaneFit'
 
 // ── Global stubs (jsdom gaps) ─────────────────────────────────────────────
 
@@ -157,12 +162,25 @@ class StubWebSocket {
 }
 
 /** Spawn-recording fetch. Every POST to /cli/sessions/v2/spawn is
- *  captured; the response satisfies TerminalPane's boot() contract. */
-function installFetchSpy(): { spawnCalls: () => number } {
+ *  captured (URL + JSON body); the response satisfies TerminalPane's
+ *  boot() contract. */
+function installFetchSpy(): {
+  spawnCalls: () => number
+  spawnBodies: () => Array<Record<string, unknown>>
+} {
   const calls: string[] = []
-  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+  const bodies: Array<Record<string, unknown>> = []
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
-    if (url.includes('/cli/sessions/v2/spawn')) calls.push(url)
+    if (url.includes('/cli/sessions/v2/spawn')) {
+      calls.push(url)
+      const raw = init?.body
+      if (typeof raw === 'string') {
+        bodies.push(JSON.parse(raw) as Record<string, unknown>)
+      } else {
+        bodies.push({})
+      }
+    }
     return {
       ok: true,
       status: 200,
@@ -176,7 +194,61 @@ function installFetchSpy(): { spawnCalls: () => number } {
       text: async () => '',
     } as unknown as Response
   }) as unknown as typeof fetch
-  return { spawnCalls: () => calls.length }
+  return {
+    spawnCalls: () => calls.length,
+    spawnBodies: () => bodies,
+  }
+}
+
+/** Install getBoundingClientRect so the font probe + pane box are
+ *  measurable under jsdom (default rect is 0×0). */
+function installGeometry(opts: {
+  cellWidth: number
+  cellHeight: number
+  paneWidth: number
+  paneHeight: number
+}): () => void {
+  const original = HTMLElement.prototype.getBoundingClientRect
+  HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    // Font probe span: hidden absolute 'W' used by cell-metrics layout.
+    const isProbe =
+      this.tagName === 'SPAN' &&
+      this.textContent === 'W' &&
+      (this as HTMLElement).style?.visibility === 'hidden'
+    if (isProbe) {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: opts.cellHeight,
+        right: opts.cellWidth,
+        width: opts.cellWidth,
+        height: opts.cellHeight,
+        toJSON() {
+          return this
+        },
+      } as DOMRect
+    }
+    // Pane container (and anything else): use pane box. Zero-size tests
+    // pass paneWidth/Height 0 so measurePaneFit returns null → fallback.
+    return {
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      bottom: opts.paneHeight,
+      right: opts.paneWidth,
+      width: opts.paneWidth,
+      height: opts.paneHeight,
+      toJSON() {
+        return this
+      },
+    } as DOMRect
+  }
+  return () => {
+    HTMLElement.prototype.getBoundingClientRect = original
+  }
 }
 
 /** Deterministic settle: flush the microtask queue through enough turns
@@ -256,5 +328,59 @@ describe('lazy spawn — restored never-attached bare tabs', () => {
     view.rerender(pane(true))
     await settle()
     expect(spawnCalls()).toBe(1)
+  })
+})
+
+describe('measure-first spawn body cols/rows', () => {
+  it('POSTs measured pane fit when container + cell metrics are measurable (not 120×40)', async () => {
+    const restoreGeo = installGeometry({
+      cellWidth: 8,
+      cellHeight: 16,
+      paneWidth: 800,
+      paneHeight: 640,
+    })
+    try {
+      const expected = measurePaneFit({ width: 800, height: 640 }, 8, 16)
+      expect(expected).not.toBeNull()
+      expect(expected).not.toEqual({ cols: 120, rows: 40 })
+
+      const { spawnCalls, spawnBodies } = installFetchSpy()
+      render(pane(true))
+      await waitFor(() => expect(spawnCalls()).toBe(1))
+
+      const body = spawnBodies()[0]
+      expect(body).toBeDefined()
+      expect(body.cols).toBe(expected!.cols)
+      expect(body.rows).toBe(expected!.rows)
+      expect(body.cols).not.toBe(120)
+      expect(body.rows).not.toBe(40)
+    } finally {
+      restoreGeo()
+    }
+  })
+
+  it('zero-size container uses FALLBACK_SPAWN (80×24), not toy 120×40, and does not crash', async () => {
+    const restoreGeo = installGeometry({
+      cellWidth: 8,
+      cellHeight: 16,
+      paneWidth: 0,
+      paneHeight: 0,
+    })
+    try {
+      const { spawnCalls, spawnBodies } = installFetchSpy()
+      render(pane(true))
+      await waitFor(() => expect(spawnCalls()).toBe(1))
+
+      const body = spawnBodies()[0]
+      expect(body).toBeDefined()
+      expect(body.cols).toBe(FALLBACK_SPAWN_COLS)
+      expect(body.rows).toBe(FALLBACK_SPAWN_ROWS)
+      expect(body.cols).toBe(80)
+      expect(body.rows).toBe(24)
+      expect(body.cols).not.toBe(120)
+      expect(body.rows).not.toBe(40)
+    } finally {
+      restoreGeo()
+    }
   })
 })

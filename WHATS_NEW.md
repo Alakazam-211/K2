@@ -3,6 +3,23 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.71 — Tunnel E2E listener self-heal (hosted reachability)
+
+### Silent “daemon active, subdomain dark” after frpc drops
+
+- If the **E2E TLS listener** dies while the daemon process stays up (or frpc
+  exits in a network cascade), K2 now **detects the dead loopback port,
+  re-binds the listener, and rewrites frpc** to the new live port — without a
+  full daemon restart (agent PTYs survive).
+- Closes the gap left after 0.40.61’s “reuse frozen localPort” fix: a
+  once-recorded dead port no longer blocks self-heal forever.
+- **Hosted operators:** upgrade the Linux daemon on any box that has shown
+  external `HTTP 000` / connection refused while `systemctl` still said
+  `active` (nsi / acv / luzz class). After update, verify with
+  `curl https://<sub>.k2.dev/boot-status`, not only process liveness.
+
+---
+
 ## 0.40.70 — Browser pane reopen + API host-session defaults
 
 ### Embedded browser

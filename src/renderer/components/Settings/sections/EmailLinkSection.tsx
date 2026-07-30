@@ -225,15 +225,19 @@ function OauthConnect({
             if (res.flow !== 'loopback' || !res.authorizationUrl || !res.state) {
               throw new Error('Daemon did not return a client-capture authorization URL')
             }
-            const browserItemId = `oauth-gmail-${res.linkId}`
+            // Narrow for the async complete path (TS does not keep the guard).
+            const oauthState = res.state
+            const authorizationUrl = res.authorizationUrl
+            const linkId = res.linkId
+            const browserItemId = `oauth-gmail-${linkId}`
             setFlow({
               kind: 'loopback',
               provider: 'gmail',
-              linkId: res.linkId,
+              linkId,
               hint: res.hint,
               deadlineMs: Date.now() + OAUTH_MAX_MS,
               clientCapture: true,
-              authorizationUrl: res.authorizationUrl,
+              authorizationUrl,
               browserItemId,
             })
             setBusy(null)
@@ -246,14 +250,14 @@ function OauthConnect({
                   error?: string | null
                 }>('oauth_loopback_wait', {
                   captureId: bind.captureId,
-                  expectedState: res.state,
+                  expectedState: oauthState,
                   timeoutSecs: 300,
                 })
                 if (captureCancelRef.current !== bind.captureId) return
                 await linkOauthComplete({
-                  linkId: res.linkId,
+                  linkId,
                   code: capture.code ?? undefined,
-                  state: capture.state ?? res.state,
+                  state: capture.state ?? oauthState,
                   error: capture.error ?? undefined,
                 })
               } catch (e) {

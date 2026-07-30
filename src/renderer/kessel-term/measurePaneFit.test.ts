@@ -1,11 +1,14 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 
 import {
+  contentBoxSize,
   FALLBACK_SPAWN_COLS,
   FALLBACK_SPAWN_ROWS,
   measurePaneFit,
   MIN_FIT_COLS,
   MIN_FIT_ROWS,
+  probeCellMetrics,
 } from './measurePaneFit'
 
 // Canonical cell size used by TerminalPane tests / DOM probe defaults.
@@ -82,4 +85,86 @@ describe('measurePaneFit', () => {
       rows: 40,
     })
   })
+
+  it('content-box vs border-box disagree when padding crosses a cell boundary', () => {
+    // Documents why callers must pass content-box (RO contentRect), not
+    // getBoundingClientRect border-box, into measurePaneFit.
+    const contentW = 800
+    const padL = 4
+    const contentFit = measurePaneFit({ width: contentW, height: 640 }, CW, CH)
+    const borderFit = measurePaneFit(
+      { width: contentW + padL, height: 640 + padL },
+      CW,
+      CH,
+    )
+    expect(contentFit).not.toBeNull()
+    expect(borderFit).not.toBeNull()
+    expect(borderFit!.cols).not.toBe(contentFit!.cols)
+  })
 })
+
+describe('contentBoxSize', () => {
+  it('returns client minus padding (RO contentRect parity)', () => {
+    const el = document.createElement('div')
+    Object.defineProperty(el, 'clientWidth', { configurable: true, value: 804 })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, value: 644 })
+    const orig = window.getComputedStyle.bind(window)
+    window.getComputedStyle = (() =>
+      ({
+        paddingLeft: '4px',
+        paddingRight: '0px',
+        paddingTop: '4px',
+        paddingBottom: '0px',
+      }) as unknown as CSSStyleDeclaration) as typeof window.getComputedStyle
+    try {
+      expect(contentBoxSize(el)).toEqual({ width: 800, height: 640 })
+    } finally {
+      window.getComputedStyle = orig
+    }
+  })
+
+  it('returns null for null/zero client size', () => {
+    expect(contentBoxSize(null)).toBeNull()
+    const el = document.createElement('div')
+    Object.defineProperty(el, 'clientWidth', { configurable: true, value: 0 })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, value: 0 })
+    expect(contentBoxSize(el)).toBeNull()
+  })
+})
+
+describe('probeCellMetrics', () => {
+  it('DOM path uses fontSize × config line-height for height', () => {
+    const orig = HTMLElement.prototype.getBoundingClientRect
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      return {
+        width: 8,
+        height: 16,
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: 16,
+        right: 8,
+        toJSON() {
+          return this
+        },
+      } as DOMRect
+    }
+    try {
+      const m = probeCellMetrics({
+        fontFamily: 'monospace',
+        fontSize: 13,
+        useWebgl: false,
+        dpr: 1,
+        charTracking: 1,
+        lineHeightMultiplier: 1.4,
+        configLineHeightMultiplier: 1.2,
+      })
+      expect(m.width).toBe(8)
+      expect(m.height).toBe(Math.ceil(13 * 1.2))
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = orig
+    }
+  })
+})
+

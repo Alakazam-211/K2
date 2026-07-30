@@ -125,6 +125,7 @@ vi.mock('@/stores/connect-host', () => ({
 
 import { TerminalPane } from './TerminalPane'
 import {
+  contentBoxSize,
   FALLBACK_SPAWN_COLS,
   FALLBACK_SPAWN_ROWS,
   measurePaneFit,
@@ -163,7 +164,11 @@ class StubWebSocket {
 
 /** Spawn-recording fetch. Every POST to /cli/sessions/v2/spawn is
  *  captured (URL + JSON body); the response satisfies TerminalPane's
- *  boot() contract. */
+ *  boot() contract.
+ *
+ *  Response cols/rows are daemon-echo placeholders only — they are NOT
+ *  the client's spawn intent (request body is what we assert). Echoed
+ *  here as 0 so readers do not mistake them for the old toy 120×40. */
 function installFetchSpy(): {
   spawnCalls: () => number
   spawnBodies: () => Array<Record<string, unknown>>
@@ -187,8 +192,9 @@ function installFetchSpy(): {
       json: async () => ({
         sessionId: 'sess-test-1',
         agentName: 'tab-test',
-        cols: 120,
-        rows: 40,
+        // Daemon-echo only — not client request intent.
+        cols: 0,
+        rows: 0,
         reused: false,
       }),
       text: async () => '',
@@ -200,15 +206,33 @@ function installFetchSpy(): {
   }
 }
 
-/** Install getBoundingClientRect so the font probe + pane box are
- *  measurable under jsdom (default rect is 0×0). */
+/**
+ * Install geometry so font probe + content-box measurement work under
+ * jsdom. Spawn uses {@link contentBoxSize} (clientWidth − padding),
+ * matching ResizeObserver contentRect — not getBoundingClientRect.
+ *
+ * Pane defaults mirror TerminalPane padding `4px 0 0 4px` (top+left).
+ */
 function installGeometry(opts: {
   cellWidth: number
   cellHeight: number
-  paneWidth: number
-  paneHeight: number
+  /** Content-box width/height (RO contentRect). */
+  contentWidth: number
+  contentHeight: number
+  paddingLeft?: number
+  paddingTop?: number
+  paddingRight?: number
+  paddingBottom?: number
 }): () => void {
-  const original = HTMLElement.prototype.getBoundingClientRect
+  const padL = opts.paddingLeft ?? 4
+  const padT = opts.paddingTop ?? 4
+  const padR = opts.paddingRight ?? 0
+  const padB = opts.paddingBottom ?? 0
+  // client* includes padding (border-box content+padding, no border).
+  const clientW = opts.contentWidth + padL + padR
+  const clientH = opts.contentHeight + padT + padB
+
+  const originalGbr = HTMLElement.prototype.getBoundingClientRect
   HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
     // Font probe span: hidden absolute 'W' used by cell-metrics layout.
     const isProbe =
@@ -230,24 +254,69 @@ function installGeometry(opts: {
         },
       } as DOMRect
     }
-    // Pane container (and anything else): use pane box. Zero-size tests
-    // pass paneWidth/Height 0 so measurePaneFit returns null → fallback.
+    // Border-box ≈ client size (no border). Deliberately NOT equal to
+    // content box when padding > 0 — tests that use border-box for
+    // measurePaneFit would drift by pad (the Issue 1 class of bug).
     return {
       x: 0,
       y: 0,
       top: 0,
       left: 0,
-      bottom: opts.paneHeight,
-      right: opts.paneWidth,
-      width: opts.paneWidth,
-      height: opts.paneHeight,
+      bottom: clientH,
+      right: clientW,
+      width: clientW,
+      height: clientH,
       toJSON() {
         return this
       },
     } as DOMRect
   }
+
+  const cwDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+  const chDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    configurable: true,
+    get() {
+      const isProbe =
+        this.tagName === 'SPAN' &&
+        this.textContent === 'W' &&
+        (this as HTMLElement).style?.visibility === 'hidden'
+      return isProbe ? opts.cellWidth : clientW
+    },
+  })
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+    configurable: true,
+    get() {
+      const isProbe =
+        this.tagName === 'SPAN' &&
+        this.textContent === 'W' &&
+        (this as HTMLElement).style?.visibility === 'hidden'
+      return isProbe ? opts.cellHeight : clientH
+    },
+  })
+
+  const originalGcs = window.getComputedStyle.bind(window)
+  window.getComputedStyle = ((el: Element, pseudo?: string | null) => {
+    const base = originalGcs(el, pseudo ?? undefined)
+    return new Proxy(base, {
+      get(target, prop, receiver) {
+        if (prop === 'paddingLeft') return `${padL}px`
+        if (prop === 'paddingRight') return `${padR}px`
+        if (prop === 'paddingTop') return `${padT}px`
+        if (prop === 'paddingBottom') return `${padB}px`
+        const v = Reflect.get(target, prop, receiver)
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v
+      },
+    }) as CSSStyleDeclaration
+  }) as typeof window.getComputedStyle
+
   return () => {
-    HTMLElement.prototype.getBoundingClientRect = original
+    HTMLElement.prototype.getBoundingClientRect = originalGbr
+    if (cwDesc) Object.defineProperty(HTMLElement.prototype, 'clientWidth', cwDesc)
+    else delete (HTMLElement.prototype as unknown as { clientWidth?: unknown }).clientWidth
+    if (chDesc) Object.defineProperty(HTMLElement.prototype, 'clientHeight', chDesc)
+    else delete (HTMLElement.prototype as unknown as { clientHeight?: unknown }).clientHeight
+    window.getComputedStyle = originalGcs
   }
 }
 
@@ -332,12 +401,13 @@ describe('lazy spawn — restored never-attached bare tabs', () => {
 })
 
 describe('measure-first spawn body cols/rows', () => {
-  it('POSTs measured pane fit when container + cell metrics are measurable (not 120×40)', async () => {
+  it('POSTs measured content-box fit when pane is measurable (not 120×40)', async () => {
+    // content 800×640 with pad 4 top/left — RO contentRect path.
     const restoreGeo = installGeometry({
       cellWidth: 8,
       cellHeight: 16,
-      paneWidth: 800,
-      paneHeight: 640,
+      contentWidth: 800,
+      contentHeight: 640,
     })
     try {
       const expected = measurePaneFit({ width: 800, height: 640 }, 8, 16)
@@ -359,12 +429,60 @@ describe('measure-first spawn body cols/rows', () => {
     }
   })
 
+  it('spawn cols/rows match RO contentRect path (content-box parity, not border-box)', async () => {
+    // contentW % cellW ∈ {0,1,2,3} is the Issue 1 trap: border-box
+    // (content+pad) floored after −4 yields one extra col vs content-box.
+    const cellW = 8
+    const cellH = 16
+    const contentW = 800 // 800 % 8 === 0 → border-box path would be cols+1
+    const contentH = 640
+    const padL = 4
+    const padT = 4
+    const restoreGeo = installGeometry({
+      cellWidth: cellW,
+      cellHeight: cellH,
+      contentWidth: contentW,
+      contentHeight: contentH,
+      paddingLeft: padL,
+      paddingTop: padT,
+    })
+    try {
+      const roFit = measurePaneFit({ width: contentW, height: contentH }, cellW, cellH)
+      // What the old (buggy) border-box path would compute:
+      const borderW = contentW + padL
+      const borderH = contentH + padT
+      const borderFit = measurePaneFit({ width: borderW, height: borderH }, cellW, cellH)
+      expect(roFit).not.toBeNull()
+      expect(borderFit).not.toBeNull()
+      // Prove the sizes actually diverge for this fixture — otherwise
+      // the parity test would not catch a regression to border-box.
+      expect(borderFit!.cols).not.toBe(roFit!.cols)
+
+      const { spawnCalls, spawnBodies } = installFetchSpy()
+      render(pane(true))
+      await waitFor(() => expect(spawnCalls()).toBe(1))
+
+      const body = spawnBodies()[0]
+      // Must match content-box / RO, not border-box.
+      expect(body.cols).toBe(roFit!.cols)
+      expect(body.rows).toBe(roFit!.rows)
+      expect(body.cols).not.toBe(borderFit!.cols)
+
+      // contentBoxSize on the mounted pane agrees with the fixture.
+      const el = document.querySelector('[data-terminal-container]') as HTMLElement | null
+      expect(el).not.toBeNull()
+      expect(contentBoxSize(el)).toEqual({ width: contentW, height: contentH })
+    } finally {
+      restoreGeo()
+    }
+  })
+
   it('zero-size container uses FALLBACK_SPAWN (80×24), not toy 120×40, and does not crash', async () => {
     const restoreGeo = installGeometry({
       cellWidth: 8,
       cellHeight: 16,
-      paneWidth: 0,
-      paneHeight: 0,
+      contentWidth: 0,
+      contentHeight: 0,
     })
     try {
       const { spawnCalls, spawnBodies } = installFetchSpy()

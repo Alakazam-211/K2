@@ -118,9 +118,11 @@ import { shouldApplyOsc52Frame } from './oscClipboard'
 import { pickSeamColor } from './seamColor'
 import { computeScaleLayout } from './scaleLayout'
 import {
+  contentBoxSize,
   FALLBACK_SPAWN_COLS,
   FALLBACK_SPAWN_ROWS,
   measurePaneFit,
+  probeCellMetrics,
 } from './measurePaneFit'
 import { usePinnedSizeStore, type PinnedSize } from '@/stores/pinned-size'
 
@@ -849,10 +851,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // where the first snapshot is still the old toy 120×40. Declared
   // early so the spawn effect (above the sendResize block) can seed it.
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null)
-  // Cell metrics state lives early so measure-first spawn can gate on
-  // readiness (boolean dep only — font size tweaks must not re-POST).
-  // The layout probe that fills these values is declared with the
-  // other metric consumers further below.
+  // Dims most recently WRITTEN to the wire (vs lastResizeRef = most
+  // recently measured). Seeded with spawn dims because the PTY is born
+  // at that size — prevents foreground catch-up from re-emitting the
+  // same resize and arming hold-and-scale needlessly.
+  const lastSentResizeRef = useRef<{ cols: number; rows: number } | null>(null)
+  // Cell metrics state lives early so measure-first spawn can read the
+  // live ref. The layout probe that fills these values is declared with
+  // the other metric consumers further below.
   const [cellMetrics, setCellMetrics] = useState({ width: 0, height: 0 })
   const cellMetricsRef = useRef(cellMetrics)
   cellMetricsRef.current = cellMetrics
@@ -1228,52 +1234,47 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         : undefined)
       setPhase({ kind: 'spawning' })
 
-      // Measure-first spawn: same fit math as ResizeObserver so the PTY
-      // is born at pane size (no toy 120×40 → full-window reflow). When
-      // the box is unmeasurable, prefer last known fit, else VT 80×24
-      // (FALLBACK_SPAWN_*) — never invent 120×40 as the happy path.
+      // Measure-first spawn: same fit math + same content-box as
+      // ResizeObserver so the PTY is born at pane size (no toy 120×40
+      // → full-window reflow, no ±1 col/row drift vs first RO fire).
+      // When the box is unmeasurable, prefer last known fit, else VT
+      // 80×24 (FALLBACK_SPAWN_*) — never invent 120×40 as the happy path.
       //
       // Cell metrics: prefer the live ref (layout probe). If still 0×0
       // (spawn effect can race the first metrics commit under some
-      // schedules), run the same font probe synchronously so a
-      // measurable pane never falls through to the toy/fallback path.
+      // schedules), run the shared font probe so a measurable pane never
+      // falls through to the toy/fallback path.
       let cw = cellMetricsRef.current.width
       let ch = cellMetricsRef.current.height
-      if (!(cw > 0 && ch > 0) && typeof document !== 'undefined') {
-        const span = document.createElement('span')
-        span.style.cssText = `font-family: ${config.font.family}; font-size: ${fontSize}px; position: absolute; visibility: hidden; white-space: pre;`
-        span.textContent = 'W'
-        document.body.appendChild(span)
-        const probe = span.getBoundingClientRect()
-        document.body.removeChild(span)
-        if (!useWebgl) {
-          cw = probe.width
-          ch = Math.max(1, Math.ceil(fontSize * config.font.lineHeightMultiplier))
-        } else {
-          const dprNow =
-            typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
-          const measuredW = Math.floor(probe.width * dprNow) / dprNow
-          const tracked = Math.max(0.5, measuredW * charTracking)
-          cw = Math.max(1 / dprNow, Math.floor(tracked * dprNow) / dprNow)
-          ch = Math.max(1, Math.ceil(fontSize * lineHeightMultiplier))
-        }
+      if (!(cw > 0 && ch > 0)) {
+        const probed = probeCellMetrics({
+          fontFamily: config.font.family,
+          fontSize,
+          useWebgl,
+          dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+          charTracking,
+          lineHeightMultiplier,
+          configLineHeightMultiplier: config.font.lineHeightMultiplier,
+        })
+        cw = probed.width
+        ch = probed.height
         if (cw > 0 && ch > 0) {
           cellMetricsRef.current = { width: cw, height: ch }
         }
       }
-      const rect = containerRef.current?.getBoundingClientRect()
-      const measured = measurePaneFit(
-        rect ? { width: rect.width, height: rect.height } : null,
-        cw,
-        ch,
-      )
+      // Content box (not getBoundingClientRect border box) — must match
+      // RO contentRect under border-box + pane padding.
+      const content = contentBoxSize(containerRef.current)
+      const measured = measurePaneFit(content, cw, ch)
       const fit =
         measured ??
         lastResizeRef.current ??
         { cols: FALLBACK_SPAWN_COLS, rows: FALLBACK_SPAWN_ROWS }
-      // Seed claim / RO paths immediately so set_active rides measured
-      // dims and the first ResizeObserver fire is a no-op when stable.
+      // Seed claim / RO / catch-up paths immediately so set_active rides
+      // measured dims, the first RO fire is a no-op when stable, and
+      // foreground catch-up does not re-emit the spawn size.
       lastResizeRef.current = { cols: fit.cols, rows: fit.rows }
+      lastSentResizeRef.current = { cols: fit.cols, rows: fit.rows }
 
       const spawnBody = {
         agent_name: agentName,
@@ -2353,37 +2354,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   }, [dpr])
 
   // ── Cell metrics probe (state declared early near containerRef) ─
+  // Shared probeCellMetrics keeps layout + measure-first spawn boot
+  // in lockstep (WebGL dpr/tracking quantization included).
   useLayoutEffect(() => {
-    const span = document.createElement('span')
-    span.style.cssText = `font-family: ${config.font.family}; font-size: ${fontSize}px; position: absolute; visibility: hidden; white-space: pre;`
-    span.textContent = 'W'
-    document.body.appendChild(span)
-    const rect = span.getBoundingClientRect()
-    document.body.removeChild(span)
-    // WebGL painter: quantize the cell width to the device grid —
-    // floor(css × dpr) / dpr — so EVERY cellMetrics consumer (cursor
-    // overlay, shadow IME textarea, hit tests, resize col math)
-    // shares the painter's exact device cell width (brief §1.3: the
-    // painter must floor to integer device px; quantizing the shared
-    // metric keeps the DOM overlays pixel-aligned with the canvas
-    // instead of drifting sub-pixel-per-column). DOM path keeps the
-    // fractional measurement byte-identically and ignores the WebGL
-    // spacing knobs (line height + tracking) so DOM stays the stable
-    // reference while tuning WebGL.
-    if (!useWebgl) {
-      setCellMetrics({
-        width: rect.width,
-        height: Math.max(1, Math.ceil(fontSize * config.font.lineHeightMultiplier)),
-      })
-      return
-    }
-    const measured = Math.floor(rect.width * dpr) / dpr
-    const tracked = Math.max(0.5, measured * charTracking)
-    const width = Math.max(1 / dpr, Math.floor(tracked * dpr) / dpr)
-    setCellMetrics({
-      width,
-      height: Math.max(1, Math.ceil(fontSize * lineHeightMultiplier)),
-    })
+    setCellMetrics(
+      probeCellMetrics({
+        fontFamily: config.font.family,
+        fontSize,
+        useWebgl,
+        dpr,
+        charTracking,
+        lineHeightMultiplier,
+        configLineHeightMultiplier: config.font.lineHeightMultiplier,
+      }),
+    )
   }, [
     fontSize,
     config.font.family,
@@ -2640,15 +2624,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // Generalizes naturally to mobile companion: any subscriber that
   // sends `set_active:true` becomes the resize authority for that
   // session until another claims or it disconnects.
-  // lastResizeRef is declared early (near containerRef) so spawn can
-  // seed measured dims before claim / ResizeObserver fire.
-  // Dims most recently WRITTEN to the wire (vs `lastResizeRef` = most
-  // recently measured). The two diverge only while hidden — sendResize
-  // records without emitting — and the foreground catch-up effect
-  // below flushes the difference exactly once on show.
-  const lastSentResizeRef = useRef<{ cols: number; rows: number } | null>(
-    null,
-  )
+  // lastResizeRef + lastSentResizeRef are declared early (near
+  // containerRef) so spawn can seed measured dims before claim / RO.
 
   // ── Resize hold-and-scale bookkeeping (black-flash fix, client
   // half) ─────────────────────────────────────────────────────────

@@ -189,17 +189,33 @@ if [ -z "$IP" ]; then
 fi
 echo "  IP=$IP"
 
-for _ in $(seq 1 40); do
-  if ssh_to 'echo SSH_OK' 2>/dev/null | grep -q SSH_OK; then
-    echo "  SSH ready"
-    break
+# Wait for *stable* guest SSH. Cirrus/tart guests often accept one login
+# while still settling; a single success followed by an immediate recheck
+# was flaking release Step 7.5 (log: "SSH ready" then FATAL on next hop).
+# Require 3 consecutive OK probes before proceeding — no single-shot
+# recheck that can fail under set -o pipefail.
+SSH_OK_STREAK=0
+SSH_ERR_LOG="/tmp/k2-vm-ssh-err-$$.txt"
+: >"$SSH_ERR_LOG"
+for _ in $(seq 1 60); do
+  if out=$(ssh_to 'echo SSH_OK' 2>>"$SSH_ERR_LOG") && printf '%s' "$out" | grep -q SSH_OK; then
+    SSH_OK_STREAK=$((SSH_OK_STREAK + 1))
+    if [ "$SSH_OK_STREAK" -ge 3 ]; then
+      echo "  SSH ready (stable ×${SSH_OK_STREAK})"
+      break
+    fi
+  else
+    SSH_OK_STREAK=0
   fi
-  sleep 4
+  sleep 3
 done
-if ! ssh_to 'echo SSH_OK' 2>/dev/null | grep -q SSH_OK; then
-  echo "FATAL: SSH to guest failed (user=$SSH_USER). Cirrus images use admin/admin." >&2
+if [ "$SSH_OK_STREAK" -lt 3 ]; then
+  echo "FATAL: SSH to guest failed (user=$SSH_USER @ ${IP}). Cirrus images use admin/admin." >&2
+  echo "       Last ssh/sshpass errors (if any):" >&2
+  tail -20 "$SSH_ERR_LOG" >&2 || true
   exit 1
 fi
+rm -f "$SSH_ERR_LOG"
 
 # Clean slate on guest
 ssh_to 'rm -rf ~/k2-gk-testdata ~/.k2 ~/.k2so 2>/dev/null; mkdir -p ~/k2-gk-testdata; true'

@@ -3,9 +3,29 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.71 — Tunnel E2E listener self-heal (hosted reachability)
+## 0.40.71 — Remote TUI scroll attach + tunnel E2E self-heal
 
-### Silent “daemon active, subdomain dark” after frpc drops
+### Terminal — smooth remote TUI scroll (attach-size lifecycle)
+
+Fullscreen Claude/Grok (and other mouse-mode TUIs) over **K2 Connect** no
+longer go molasses after a cold open or tab return when the session first
+attached at the wrong size.
+
+- **Client** measures the pane and spawns the PTY at real cols×rows (no more
+  happy-path **120×40** toy spawn that forced a full reflow).
+- **Daemon** pre-snaps reuse/attach to the last claimer size before the first
+  grid snapshot, and applies attach-critical resizes **synchronously** (no
+  120ms debounce gap that left the first frame wrong).
+- Short **attach/resize settle fence** stops a reflow from tripping k1 pause →
+  fat full-snapshot resync under long-haul RTT.
+- **Upgrade both** the desktop app (or hosted web client) **and** the remote
+  daemon for the full win. Daemon-only still softens recovery; measure-first
+  needs the client.
+- Experimental **Remote Pace** remains available as an opt-in Terminal toggle
+  (default **OFF**) for future latency experiments — leave it off for the
+  smooth path validated in this release.
+
+### Tunnel — silent “daemon active, subdomain dark” after frpc drops
 
 - If the **E2E TLS listener** dies while the daemon process stays up (or frpc
   exits in a network cascade), K2 now **detects the dead loopback port,

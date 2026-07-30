@@ -80,6 +80,16 @@ pub fn read_https_port() -> Option<u16> {
     raw.trim().parse::<u16>().ok().filter(|p| *p != 0)
 }
 
+/// Remove the published HTTPS-listener port file (best-effort).
+///
+/// Called when the E2E accept loop dies or the daemon is about to re-bind so
+/// readers do not treat a **dead** port as live. Idempotent if the file is
+/// already gone.
+pub fn clear_https_port() {
+    let path = https_port_path();
+    let _ = fs::remove_file(&path);
+}
+
 /// Signature of the daemon-registered "ensure the E2E HTTPS listener is up"
 /// hook. Given the daemon's cleartext HTTP port, it must (idempotently)
 /// obtain/install the per-subdomain cert, bind + spawn the rustls listener if
@@ -540,6 +550,23 @@ mod tests {
                 kp2.serialize_pem(),
                 "second load must reuse the SAME persisted key, not regenerate"
             );
+        });
+    }
+
+    #[test]
+    fn clear_https_port_removes_published_file() {
+        with_temp_home(|| {
+            publish_https_port(41234).expect("publish");
+            assert_eq!(read_https_port(), Some(41234));
+            clear_https_port();
+            assert_eq!(
+                read_https_port(),
+                None,
+                "clear must remove tunnel-https.port so ensure can re-bind"
+            );
+            // Idempotent.
+            clear_https_port();
+            assert_eq!(read_https_port(), None);
         });
     }
 

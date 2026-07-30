@@ -41,11 +41,15 @@ use tokio_rustls::TlsAcceptor;
 
 use k2_core::log_debug;
 
-/// The live HTTPS-listener port, set the first time the listener binds
-/// (boot `maybe_spawn` OR on-demand `ensure_spawned`). Makes spawning
-/// idempotent: a second ensure/spawn returns this rather than binding a
-/// duplicate listener. `None` until the listener is up.
-static HTTPS_PORT: OnceLock<u16> = OnceLock::new();
+/// The live HTTPS-listener port while the accept loop is up.
+///
+/// **Not** a `OnceLock`: the accept task can die (panic, OS close, FD
+/// exhaustion) while the daemon process stays alive. A OnceLock would keep
+/// returning the **dead** port forever → frpc dials connection-refused →
+/// silent external outage (luzz 2026-07-29, nsi/acv class). We store
+/// `Option<u16>` so death can clear the record and [`ensure_spawned_blocking`]
+/// can re-bind. Still serialized by [`SPAWN_LOCK`] on spawn.
+static HTTPS_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 
 /// Serializes concurrent on-demand spawns so two simultaneous tunnel starts
 /// can't race into two listeners. Cheap — held only across the bind, not the
@@ -54,6 +58,40 @@ static SPAWN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn spawn_lock() -> &'static Mutex<()> {
     SPAWN_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn https_port_slot() -> &'static Mutex<Option<u16>> {
+    HTTPS_PORT.get_or_init(|| Mutex::new(None))
+}
+
+fn recorded_https_port() -> Option<u16> {
+    *https_port_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+
+fn set_recorded_https_port(port: u16) {
+    *https_port_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = Some(port);
+}
+
+/// Clear the in-process port record + on-disk publish so ensure can re-bind.
+fn clear_recorded_https_port() {
+    *https_port_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = None;
+    k2_core::tunnel::tls::clear_https_port();
+}
+
+/// Loopback TCP probe — true if *something* accepts on `127.0.0.1:port`.
+/// Used to detect a stale recorded port after the accept loop died.
+fn loopback_port_live(port: u16) -> bool {
+    if port == 0 {
+        return false;
+    }
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
 }
 
 /// How often the cert-renewal loop wakes to check the installed cert's
@@ -162,13 +200,9 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
         .map_err(|e| format!("read HTTPS listener addr: {e}"))?
         .port();
 
-    // Record the live port so concurrent/later ensure calls are idempotent
-    // (return this port instead of binding a second listener). First writer
-    // wins; we're inside SPAWN_LOCK on the on-demand path so there's no race.
-    let _ = HTTPS_PORT.set(https_port);
-
-    // Publish the port so the tunnel connector points frpc's `localPort`
-    // here (and not at the cleartext HTTP port).
+    // Record + publish the live port. Under SPAWN_LOCK on the ensure path so
+    // concurrent ensures don't bind two listeners.
+    set_recorded_https_port(https_port);
     k2_core::tunnel::tls::publish_https_port(https_port)
         .map_err(|e| format!("publish HTTPS port: {e}"))?;
 
@@ -182,7 +216,29 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
 
     {
         let cfg = shared_config.clone();
+        let bound_port = https_port;
         tokio::spawn(async move {
+            // If the accept task ends or panics, clear the recorded port so
+            // the next ensure/self-heal rebinds instead of returning a dead
+            // OnceLock-style port (luzz silent outage class).
+            struct ClearPortOnDrop {
+                port: u16,
+            }
+            impl Drop for ClearPortOnDrop {
+                fn drop(&mut self) {
+                    // Only clear if we still own this generation — a newer
+                    // respawn may already have published a different port.
+                    if recorded_https_port() == Some(self.port) {
+                        log_debug!(
+                            "[daemon/e2e] E2E accept loop ended — clearing recorded \
+                             port {} so ensure can re-bind",
+                            self.port
+                        );
+                        clear_recorded_https_port();
+                    }
+                }
+            }
+            let _guard = ClearPortOnDrop { port: bound_port };
             accept_loop(listener, cfg, http_port).await;
         });
     }
@@ -208,8 +264,10 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
 /// before frpc forwards to it, instead of erroring when boot never published
 /// a port (e.g. the subdomain was configured after the daemon booted).
 ///
-/// Idempotent + serialized:
-///   * if a listener is already up, returns its recorded port immediately;
+/// Idempotent + serialized + **liveness-aware**:
+///   * if a listener is recorded **and** still accepts on loopback, return it;
+///   * if recorded but **dead** (accept task gone — luzz 2026-07-29), clear
+///     and re-bind (new ephemeral port);
 ///   * otherwise takes [`spawn_lock`], re-checks (double-checked locking),
 ///     and drives the async [`spawn_listener`] to completion on the provided
 ///     tokio runtime `handle` (we're on a blocking thread, so `block_on`).
@@ -217,16 +275,25 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
 /// Errors loud — issuance/bind failure or a still-empty subdomain returns an
 /// `Err` the connector propagates; it never silently forwards cleartext.
 fn ensure_spawned_blocking(handle: tokio::runtime::Handle, http_port: u16) -> Result<u16, String> {
-    // Fast path: already running.
-    if let Some(p) = HTTPS_PORT.get() {
-        return Ok(*p);
+    // Fast path: recorded port still accepts → live.
+    if let Some(p) = recorded_https_port() {
+        if loopback_port_live(p) {
+            return Ok(p);
+        }
+        log_debug!(
+            "[daemon/e2e] recorded HTTPS port {p} is not accepting — will re-bind \
+             (listener death / silent external outage class)"
+        );
     }
 
     let _g = spawn_lock().lock().unwrap_or_else(|p| p.into_inner());
-    // Re-check under the lock — another start may have spawned it while we
-    // waited for the lock.
-    if let Some(p) = HTTPS_PORT.get() {
-        return Ok(*p);
+    // Re-check under the lock — another ensure may have respawned while we
+    // waited, OR we need to clear a confirmed-dead record before re-bind.
+    if let Some(p) = recorded_https_port() {
+        if loopback_port_live(p) {
+            return Ok(p);
+        }
+        clear_recorded_https_port();
     }
 
     let cfg = k2_core::tunnel::config::load().map_err(|e| format!("load tunnel config: {e}"))?;
@@ -318,6 +385,23 @@ async fn accept_loop(
                 });
             }
             Err(e) => {
+                // Transient accept errors: log + continue. Fatal/closed
+                // listener: exit the loop so ClearPortOnDrop runs and
+                // ensure can re-bind (without this we spin forever with a
+                // dead recorded port).
+                let fatal = e.kind() == std::io::ErrorKind::ConnectionAborted
+                    || e.kind() == std::io::ErrorKind::NotConnected
+                    || e.kind() == std::io::ErrorKind::BrokenPipe
+                    || e.raw_os_error() == Some(9) // EBADF
+                    || e.raw_os_error() == Some(22) // EINVAL (closed on some platforms)
+                    || e.to_string().contains("os error 9");
+                if fatal {
+                    log_debug!(
+                        "[daemon/e2e] fatal accept error — ending accept loop so \
+                         ensure can re-bind: {e}"
+                    );
+                    break;
+                }
                 log_debug!("[daemon/e2e] accept error: {e}");
             }
         }

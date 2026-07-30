@@ -714,8 +714,8 @@ fn re_resolve_live_local_port(e2e: bool, daemon_http_port: u16, current: u16) ->
     if !e2e {
         return current;
     }
-    // ensure_https_port → daemon hook → HTTPS_PORT OnceLock (true live SoT).
-    // Fall back to the published file, then the current freeze.
+    // ensure_https_port → daemon hook (liveness-aware re-bind if accept loop
+    // died) → live port. Fall back to the published file, then the freeze.
     match super::tls::ensure_https_port(daemon_http_port) {
         Ok(p) if p != 0 => {
             // Re-publish so tunnel-https.port can't drift from the live port.
@@ -959,9 +959,10 @@ fn wait_for_exit(
     }
 }
 
-/// Periodic localPort desync probe. Returns true when the frozen port is
-/// unreachable and re-resolving the live E2E listener yields a **different**
-/// port (the luzz 44407-vs-42265 class). Never invents free ports.
+/// Periodic localPort desync / E2E-listener-death probe. Returns true when
+/// the frozen port is unreachable and we obtained a **reachable** live E2E
+/// port (possibly after the daemon hook re-bound a dead listener — luzz
+/// 2026-07-29 listeners=0 class). Never invents free ports.
 fn probe_local_desync(
     ticks_since_probe: &mut u32,
     local_port: &AtomicU16,
@@ -977,19 +978,65 @@ fn probe_local_desync(
     if port == 0 || local_port_reachable(port) {
         return false;
     }
+    // ensure_https_port (daemon hook) must re-bind if the accept loop died;
+    // re_resolve never invents free ports on its own.
     let live = re_resolve_live_local_port(e2e, daemon_http_port, port);
+    if !local_port_reachable(live) {
+        crate::log_debug!(
+            "[tunnel] WARN: local target 127.0.0.1:{port} unreachable and ensure \
+             did not restore a live E2E listener (got {live}) — will retry next probe"
+        );
+        return false;
+    }
     if live == port {
-        // Same port still dead — not a desync we can rewrite away.
+        // Frozen port is accepting again (transient blip) — no frpc rewrite.
         return false;
     }
     crate::log_debug!(
         "[tunnel] WARN: local target 127.0.0.1:{port} unreachable; live listener is \
-         {live} — self-healing frpc localPort (Bug B desync)"
+         {live} — self-healing frpc localPort (Bug B desync / E2E respawn)"
     );
     // Stash the resolved live port so the outcome handler rewrites without
     // a second ensure call that could race.
     local_port.store(live, Ordering::SeqCst);
     true
+}
+
+/// Before respawning frpc after an exit, ensure the E2E listener is still
+/// up (or re-bound) and rewrite frpc.toml if the live port moved. Closes
+/// the luzz gap: frpc exit → restart while E2E sockets are gone and the
+/// old localPort is frozen dead.
+fn ensure_live_local_port_before_respawn(
+    e2e: bool,
+    daemon_http_port: u16,
+    port_slot: &AtomicU16,
+    cfg: &TunnelConfig,
+    relay: &RelayEndpoint,
+) {
+    if !e2e {
+        return;
+    }
+    let frozen = port_slot.load(Ordering::SeqCst);
+    let live = re_resolve_live_local_port(true, daemon_http_port, frozen);
+    if live == 0 {
+        return;
+    }
+    if live != frozen {
+        crate::log_debug!(
+            "[tunnel] pre-respawn: E2E port moved {frozen} → {live}; rewriting frpc.toml"
+        );
+        port_slot.store(live, Ordering::SeqCst);
+        let _ = super::tls::publish_https_port(live);
+        if let Err(e) = write_relay_config(cfg, relay, live, e2e) {
+            crate::log_debug!("[tunnel] WARN: pre-respawn rewrite frpc.toml failed: {e}");
+        }
+        return;
+    }
+    if !local_port_reachable(live) {
+        crate::log_debug!(
+            "[tunnel] WARN: pre-respawn: E2E localPort {live} still unreachable after ensure"
+        );
+    }
 }
 
 /// Spawn the frpc child once and start the supervisor thread that
@@ -1191,6 +1238,16 @@ fn spawn_supervised(
                         );
                         std::thread::sleep(backoff);
                         backoff = (backoff * 2).min(max_backoff);
+                        // luzz class: E2E listener can die in the same cascade
+                        // that killed frpc. Re-ensure + rewrite BEFORE respawn
+                        // so we never point a new frpc at listeners=0.
+                        ensure_live_local_port_before_respawn(
+                            e2e,
+                            daemon_http_port,
+                            &port_slot,
+                            &cfg_thread,
+                            selector.current(),
+                        );
                     }
                     ChildOutcome::WatchdogKill => {
                         // The watchdog killed a live-but-stuck child whose
@@ -2544,6 +2601,21 @@ mod tests {
             // E2E off: freeze is sticky (no re-pick).
             assert_eq!(re_resolve_live_local_port(false, 9999, 42265), 42265);
         });
+    }
+
+    /// When the frozen localPort is dead and ensure cannot restore a live
+    /// listener, probe must NOT thrash (return false). After the daemon hook
+    /// re-binds (live port differs), probe returns true so frpc rewrites.
+    #[test]
+    fn probe_local_desync_false_when_no_live_listener() {
+        let port = AtomicU16::new(39999); // almost certainly closed
+        let mut ticks = LOCAL_TARGET_PROBE_EVERY;
+        // e2e=false → re_resolve returns current; still unreachable → false.
+        assert!(
+            !probe_local_desync(&mut ticks, &port, false, 18080),
+            "must not self-heal when no live alternate port exists"
+        );
+        assert_eq!(port.load(Ordering::SeqCst), 39999);
     }
 
     #[test]

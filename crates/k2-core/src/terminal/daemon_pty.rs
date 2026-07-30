@@ -1442,6 +1442,42 @@ impl DaemonPtySession {
         }
     }
 
+    /// Attach-critical resize: pin clamp + same-dims skip, but
+    /// **always** applies synchronously — never parks in the trailing
+    /// [`RESIZE_DEBOUNCE_MS`] window. Used by spawn-reuse fit and grid
+    /// attach pre-snap so the spawn response / first snapshot is
+    /// already at the target size even if a resize landed in the last
+    /// ~120ms. Ordinary Resize / SetActive traffic continues to use
+    /// [`Self::request_resize`] (burst coalescing stays intact).
+    ///
+    /// Cancels any coalesced `pending` target (this call is the
+    /// authoritative final geometry). Returns live PTY dims after the
+    /// call (pin-clamped when pinned).
+    pub fn apply_resize_now(session: &Arc<Self>, cols: u16, rows: u16) -> (u16, u16) {
+        let (cols, rows) = match session.pinned() {
+            Some(pinned) => pinned,
+            None => (cols, rows),
+        };
+        let cols = cols.max(1);
+        let rows = rows.max(1);
+        // Hold the gate across the apply so a trailing flusher cannot
+        // interleave with (or re-apply after) this sync land.
+        let mut gate = session.resize_gate.lock();
+        let current = Self::current_dims(session);
+        if (cols, rows) == current {
+            // Drop any older pending target — live size already matches.
+            gate.pending = None;
+            return current;
+        }
+        gate.pending = None;
+        gate.last_applied = Some(Instant::now());
+        session
+            .resizes_applied
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        session.resize(cols, rows);
+        Self::current_dims(session)
+    }
+
     /// Live PTY/Term dims, for the same-dims resize skip. Briefly
     /// locks the Term (same FairMutex the snapshot path uses).
     fn current_dims(session: &Self) -> (u16, u16) {
@@ -2253,6 +2289,57 @@ mod tests {
             term_dims(&s),
             (100, 30),
             "first resize must apply synchronously"
+        );
+    }
+
+    /// Attach-critical path: even inside the debounce window,
+    /// `apply_resize_now` must land the target before returning (spawn
+    /// reuse / grid pre-snap cannot wait on the trailing flusher).
+    #[cfg(unix)]
+    #[test]
+    fn apply_resize_now_bypasses_debounce_window() {
+        let s = spawn_cat_session();
+        // Open the debounce window with a leading apply.
+        DaemonPtySession::request_resize(&s, 100, 30);
+        assert_eq!(term_dims(&s), (100, 30));
+        // A request_resize inside the window is deferred...
+        DaemonPtySession::request_resize(&s, 90, 25);
+        assert_eq!(
+            term_dims(&s),
+            (100, 30),
+            "in-window request_resize must stay deferred"
+        );
+        // ...but apply_resize_now must land immediately and cancel the
+        // pending 90×25 so the flusher cannot reflow later.
+        let live = DaemonPtySession::apply_resize_now(&s, 194, 62);
+        assert_eq!(live, (194, 62), "apply_resize_now return value");
+        assert_eq!(
+            term_dims(&s),
+            (194, 62),
+            "apply_resize_now must apply synchronously inside debounce window"
+        );
+        // Outwait the old debounce window: pending was cleared, so the
+        // flusher must not move the PTY back to 90×25.
+        std::thread::sleep(Duration::from_millis(RESIZE_DEBOUNCE_MS * 2));
+        assert_eq!(
+            term_dims(&s),
+            (194, 62),
+            "cleared pending must not flush after apply_resize_now"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_resize_now_same_dims_is_noop() {
+        let s = spawn_cat_session();
+        DaemonPtySession::request_resize(&s, 100, 30);
+        let before = s.resizes_applied();
+        let live = DaemonPtySession::apply_resize_now(&s, 100, 30);
+        assert_eq!(live, (100, 30));
+        assert_eq!(
+            s.resizes_applied(),
+            before,
+            "same-dims apply_resize_now must not count as a resize"
         );
     }
 

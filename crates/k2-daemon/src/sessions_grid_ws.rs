@@ -384,17 +384,19 @@ fn decide_set_active(current: u64, subscriber_id: u64, active: bool) -> SetActiv
 ///   displacing any prior claimer (most-recent-claim-wins). 0.39.43
 ///   (PRD `daemon-multi-client-arbitration.md` Issue A): if the claim
 ///   carried the viewer's viewport `cols`/`rows`, record them on the
-///   session AND immediately [`DaemonPtySession::resize`] the PTY to
-///   them — the active viewer drives the size the instant they claim,
-///   no waiting for a follow-up `Resize`. Dims are optional for
-///   back-compat: an older client that claims with no dims records the
-///   claim but leaves the PTY size untouched (pre-0.39.43 behavior).
+///   session AND [`DaemonPtySession::request_resize`] the PTY to them
+///   (debounced; same-dims is a free no-op) — the active viewer drives
+///   the size the instant they claim, no waiting for a follow-up
+///   `Resize`. Dims are optional for back-compat: an older client that
+///   claims with no dims records the claim but leaves the PTY size
+///   untouched (pre-0.39.43 behavior).
 /// - **Release** — CAS-clear the active subscriber so a viewer that
 ///   took over concurrently isn't accidentally cleared.
 /// - **NoOp** — redundant claim/release for the claimer id itself: if
-///   the (re)claim carried new cols/rows, still store + resize when
-///   they differ (attach-size PR2 — claimer dims stay authoritative
-///   even on an idempotent re-assert). Pure release NoOp is silent.
+///   the (re)claim carried new cols/rows, still store +
+///   [`DaemonPtySession::request_resize`] when they differ (attach-size
+///   PR2 — claimer dims stay authoritative even on an idempotent
+///   re-assert). Pure release NoOp is silent.
 ///
 /// Returns the outcome so callers/tests can assert what happened.
 /// Extracted from the WS loop so the store + resize behavior is
@@ -696,25 +698,30 @@ pub async fn serve_session_grid_connection(
         crate::grid_emitter::attach(&session, &pane_id, proto_k1);
 
     // Attach-size PR2 — pre-snap resize. Order: subscribe (above) →
-    // optional resize to last known claimer fit → ONE initial snapshot.
-    // Without this, a reattach after a measured claim still first-
-    // snaps at whatever the PTY last happened to be (often VT 80×24
-    // from a headless ensure), then set_active reflows → k1 fat resync.
-    // `request_resize` no-ops same-dims and pin-clamps, so this is free
-    // when size is already correct. Non-claimers still receive the
-    // snapshot at the claimer's size (one logical PTY size).
+    // optional sync resize to last known claimer fit → ONE initial
+    // snapshot. Uses `apply_resize_now` (not debounced `request_resize`)
+    // so a resize in the last ~120ms cannot leave the first frame at
+    // the old size. Same-dims + pin clamp are free no-ops; we then
+    // refresh `active_*` from live reality so a pin-clamped land does
+    // not re-target a blocked size on the next attach. Non-claimers
+    // still receive the snapshot at the claimer's size (one logical
+    // PTY size).
     {
         use std::sync::atomic::Ordering;
         let ac = session.active_cols.load(Ordering::Relaxed);
         let ar = session.active_rows.load(Ordering::Relaxed);
         if ac > 0 && ar > 0 {
-            DaemonPtySession::request_resize(&session, ac, ar);
+            let live = DaemonPtySession::apply_resize_now(&session, ac, ar);
+            session.active_cols.store(live.0, Ordering::Relaxed);
+            session.active_rows.store(live.1, Ordering::Relaxed);
             log_debug!(
-                "[daemon/sessions_grid_ws] pre-snap resize session={} sub={} cols={} rows={}",
+                "[daemon/sessions_grid_ws] pre-snap resize session={} sub={} target={}x{} live={}x{}",
                 session.session_id,
                 subscriber_id,
                 ac,
                 ar,
+                live.0,
+                live.1,
             );
         }
     }

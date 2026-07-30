@@ -1320,16 +1320,17 @@ fn current_dims(session: &DaemonPtySession) -> (u16, u16) {
 
 /// Honor a spawn body's cols/rows against a live session (reuse path).
 ///
-/// When the requested fit differs from the live PTY, store it as the
-/// last claimer dims and resize immediately so the next grid attach's
-/// initial snapshot is already at the target size. Same-dims is a
-/// no-op via [`DaemonPtySession::request_resize`]. Returns the dims
-/// that should be echoed in the spawn response (post-resize reality).
+/// When the requested fit differs from the live PTY, store claimer
+/// dims and apply via [`DaemonPtySession::apply_resize_now`] (sync:
+/// pin clamp + same-dims skip, **no** trailing debounce) so the spawn
+/// response and the next grid attach's initial snapshot are already
+/// at the target size — even if a resize landed in the last ~120ms.
 ///
-/// Headless callers that omit cols/rows land on the serde defaults
-/// (80×24) — fresh-spawn last resort. On reuse that still applies the
-/// default when it differs; callers that want "keep existing" must
-/// send the live size (or not re-spawn).
+/// Serde defaults omit → 80×24. On **reuse**, applying that default
+/// would shrink a measured live session when older/headless callers
+/// re-POST without cols; so a body that is exactly VT 80×24 keeps the
+/// live size when it differs. Fresh spawn still opens at 80×24 as the
+/// true last-resort. Explicit non-default body always wins.
 fn apply_spawn_fit(
     session: &std::sync::Arc<DaemonPtySession>,
     cols: u16,
@@ -1340,19 +1341,48 @@ fn apply_spawn_fit(
     let cols = cols.max(1);
     let rows = rows.max(1);
     let (cur_c, cur_r) = current_dims(session);
+
+    // Omit / serde default on reuse: keep live geometry (do not
+    // clobber a measured pane with VT last-resort).
+    let is_vt_default = cols == default_cols() && rows == default_rows();
+    if is_vt_default && (cur_c, cur_r) != (cols, rows) {
+        if session.active_cols.load(Ordering::Relaxed) == 0
+            || session.active_rows.load(Ordering::Relaxed) == 0
+        {
+            session.active_cols.store(cur_c, Ordering::Relaxed);
+            session.active_rows.store(cur_r, Ordering::Relaxed);
+        }
+        log_debug!(
+            "[v2-spawn] reuse keep-live (body is VT default 80×24) session={} live={}x{}",
+            session.session_id,
+            cur_c,
+            cur_r,
+        );
+        return (cur_c, cur_r);
+    }
+
     if (cols, rows) != (cur_c, cur_r) {
+        // Intent first; apply_resize_now returns pin-clamped reality.
         session.active_cols.store(cols, Ordering::Relaxed);
         session.active_rows.store(rows, Ordering::Relaxed);
-        DaemonPtySession::request_resize(session, cols, rows);
+        let live = DaemonPtySession::apply_resize_now(session, cols, rows);
+        // Refresh claimer dims from post-apply reality so a later
+        // attach pre-snap does not re-target a pin-blocked size.
+        session.active_cols.store(live.0, Ordering::Relaxed);
+        session.active_rows.store(live.1, Ordering::Relaxed);
         log_debug!(
-            "[v2-spawn] reuse pre-snap resize session={} {}x{} → {}x{}",
+            "[v2-spawn] reuse pre-snap resize session={} {}x{} → {}x{} (live={}x{})",
             session.session_id,
             cur_c,
             cur_r,
             cols,
             rows,
+            live.0,
+            live.1,
         );
-    } else if session.active_cols.load(Ordering::Relaxed) == 0
+        return live;
+    }
+    if session.active_cols.load(Ordering::Relaxed) == 0
         || session.active_rows.load(Ordering::Relaxed) == 0
     {
         // Seed claimer dims so a subsequent grid attach pre-snap
@@ -1360,8 +1390,6 @@ fn apply_spawn_fit(
         session.active_cols.store(cols, Ordering::Relaxed);
         session.active_rows.store(rows, Ordering::Relaxed);
     }
-    // Re-read: pin clamp / debounce same-dims skip may leave live dims
-    // different from the request (e.g. pinned session).
     current_dims(session)
 }
 

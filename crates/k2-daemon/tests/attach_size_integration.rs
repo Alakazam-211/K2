@@ -8,8 +8,11 @@
 //! Pins (fail loudly):
 //!   1. Fresh spawn with `{cols:194, rows:62}` → PTY + first grid snap match
 //!   2. Reuse with new cols/rows → resize before first WS snapshot
-//!   3. Headless omit cols/rows → still 80×24 (serde last-resort)
+//!   3. Headless omit cols/rows (fresh) → still 80×24 (serde last-resort)
 //!   4. Non-claimer resize still ignored (claim policy unchanged)
+//!   5. Omit-on-reuse of a measured session keeps live size (no shrink)
+//!   6. Reuse inside debounce window still lands sync (apply_resize_now)
+//!   7. Same-dims set_active after attach does not reflow
 
 #![cfg(unix)]
 
@@ -60,12 +63,16 @@ async fn http_post(port: u16, path_and_query: &str, body: &str) -> (String, Stri
     (status, body)
 }
 
-fn pty_dims(session_id: &str) -> (u16, u16) {
-    let s = v2_session_map::lookup_by_session_id(
+fn session_arc(session_id: &str) -> std::sync::Arc<k2_core::terminal::DaemonPtySession> {
+    v2_session_map::lookup_by_session_id(
         &k2_core::session::SessionId::parse(session_id)
             .unwrap_or_else(|| panic!("bad session id: {session_id}")),
     )
-    .unwrap_or_else(|| panic!("session {session_id} not in v2 map"));
+    .unwrap_or_else(|| panic!("session {session_id} not in v2 map"))
+}
+
+fn pty_dims(session_id: &str) -> (u16, u16) {
+    let s = session_arc(session_id);
     let tm = s.term();
     let t = tm.lock();
     (t.columns() as u16, t.screen_lines() as u16)
@@ -73,15 +80,50 @@ fn pty_dims(session_id: &str) -> (u16, u16) {
 
 fn claimer_dims(session_id: &str) -> (u16, u16) {
     use std::sync::atomic::Ordering;
-    let s = v2_session_map::lookup_by_session_id(
-        &k2_core::session::SessionId::parse(session_id)
-            .unwrap_or_else(|| panic!("bad session id: {session_id}")),
-    )
-    .unwrap_or_else(|| panic!("session {session_id} not in v2 map"));
+    let s = session_arc(session_id);
     (
         s.active_cols.load(Ordering::Relaxed),
         s.active_rows.load(Ordering::Relaxed),
     )
+}
+
+fn resizes_applied(session_id: &str) -> u64 {
+    session_arc(session_id).resizes_applied()
+}
+
+/// Poll until PTY dims match `want` or panic with last-seen value.
+fn assert_dims_settle(session_id: &str, want: (u16, u16), what: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let got = pty_dims(session_id);
+        if got == want {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("{what}: PTY dims never settled to {want:?} (last saw {got:?})");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Poll until some subscriber holds `active_subscriber` (claim landed).
+/// Dims alone are not enough: same-size claim is a resize no-op but
+/// still must stamp the claimer id before non-active resizes are gated.
+fn assert_has_active_claimer(session_id: &str, what: &str) {
+    use std::sync::atomic::Ordering;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let active = session_arc(session_id)
+            .active_subscriber
+            .load(Ordering::Relaxed);
+        if active != 0 {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("{what}: active_subscriber never left 0");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 async fn spawn_cat(
@@ -234,7 +276,7 @@ async fn reuse_new_fit_resizes_before_first_ws_snap() {
     assert_eq!(claimer_dims(&sid2), (194, 62));
 
     // First attach snapshot must already be at the new fit (single snap).
-    let (_ws, snap_c, snap_r) =
+    let (mut ws, snap_c, snap_r) =
         connect_grid_first_snap(daemon.port, &sid2, OWNER_TOKEN).await;
     assert_eq!(
         (snap_c, snap_r),
@@ -242,10 +284,32 @@ async fn reuse_new_fit_resizes_before_first_ws_snap() {
         "first WS snapshot after reuse must be at new fit (no 80×24 intermediate)"
     );
 
+    // 7. Same-dims set_active after attach must not reflow the PTY.
+    let applied_before = resizes_applied(&sid2);
+    ws.send(Message::Text(
+        serde_json::json!({
+            "action": "set_active",
+            "active": true,
+            "cols": 194,
+            "rows": 62,
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .expect("set_active same dims");
+    // request_resize same-dims is a free no-op — poll briefly then assert.
+    assert_dims_settle(&sid2, (194, 62), "same-dims claim must leave PTY put");
+    assert_eq!(
+        resizes_applied(&sid2),
+        applied_before,
+        "same-dims set_active must not count a PTY reflow"
+    );
+
     close_session(daemon.port, agent).await;
 }
 
-/// 3. Headless / omit cols → still 80×24.
+/// 3. Headless / omit cols (fresh) → still 80×24.
 #[tokio::test(flavor = "multi_thread")]
 async fn headless_omit_cols_defaults_to_80x24() {
     let _g = lock();
@@ -279,33 +343,14 @@ async fn headless_omit_cols_defaults_to_80x24() {
 #[tokio::test(flavor = "multi_thread")]
 async fn non_claimer_resize_still_ignored() {
     let _g = lock();
-    // Seed a connect-user with viewer role so the grid connection is
-    // non-claimer-capable by default (member without grant).
-    let prev_home = std::env::var_os("HOME");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!(
-        "k2-attach-size-viewer-{}-{nanos}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&tmp).expect("temp HOME");
-    std::env::set_var("HOME", &tmp);
-
     let daemon = test_harness::start(OWNER_TOKEN).await;
 
-    // Owner spawns at 100×30; a second grid connection without claimer
-    // capability must not move the PTY.
+    // Owner spawns at 100×30; a second connection that is not the active
+    // claimer (and later viewer-mode) must not move the PTY.
     let agent = "attach-size-non-claimer";
     let (sid, _) = spawn_cat(daemon.port, agent, Some(100), Some(30)).await;
     assert_eq!(pty_dims(&sid), (100, 30));
 
-    // Owner claims (so active is set) then we open a second owner
-    // connection that will send resize as a non-active subscriber —
-    // the classic multi-client arbitration gate: only active claimer
-    // resizes. Simpler path without connect-users: second owner WS
-    // without set_active, first holds claim via set_active.
     let (mut owner_ws, snap_c, snap_r) =
         connect_grid_first_snap(daemon.port, &sid, OWNER_TOKEN).await;
     assert_eq!((snap_c, snap_r), (100, 30));
@@ -323,14 +368,15 @@ async fn non_claimer_resize_still_ignored() {
         ))
         .await
         .expect("set_active");
-    // Give the claim a tick to land.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(pty_dims(&sid), (100, 30));
+    // Claim must land (active_subscriber != 0) before we open a second
+    // socket — with active==0 the resize gate is first-resize-wins.
+    assert_has_active_claimer(&sid, "owner set_active claim");
+    assert_dims_settle(&sid, (100, 30), "owner claim at spawn size");
 
-    // Second connection (also owner token → claimer-capable by default)
-    // but NOT active: resize must be dropped.
+    // Second owner connection, NOT active: resize must be dropped.
     let (mut other_ws, _, _) =
         connect_grid_first_snap(daemon.port, &sid, OWNER_TOKEN).await;
+    let applied_before = resizes_applied(&sid);
     other_ws
         .send(Message::Text(
             serde_json::json!({
@@ -343,14 +389,23 @@ async fn non_claimer_resize_still_ignored() {
         ))
         .await
         .expect("non-active resize");
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // Poll: dims must stay put and no new resize may land.
+    let deadline = std::time::Instant::now() + Duration::from_millis(300);
+    while std::time::Instant::now() < deadline {
+        assert_eq!(
+            pty_dims(&sid),
+            (100, 30),
+            "non-active claimer resize must be ignored (mid-poll)"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(
-        pty_dims(&sid),
-        (100, 30),
-        "non-active claimer resize must be ignored"
+        resizes_applied(&sid),
+        applied_before,
+        "non-active resize must not apply"
     );
 
-    // True viewer-mode: flip second connection to viewer and try again.
+    // Viewer-mode: flip second connection and try again.
     other_ws
         .send(Message::Text(
             serde_json::json!({ "action": "set_mode", "mode": "viewer" })
@@ -371,20 +426,106 @@ async fn non_claimer_resize_still_ignored() {
         ))
         .await
         .expect("viewer resize");
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    assert_eq!(
-        pty_dims(&sid),
-        (100, 30),
-        "viewer-mode resize must be ignored"
-    );
+    let deadline = std::time::Instant::now() + Duration::from_millis(300);
+    while std::time::Instant::now() < deadline {
+        assert_eq!(
+            pty_dims(&sid),
+            (100, 30),
+            "viewer-mode resize must be ignored (mid-poll)"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     close_session(daemon.port, agent).await;
     let _ = other_ws;
     let _ = owner_ws;
+}
 
-    match prev_home {
-        Some(p) => std::env::set_var("HOME", p),
-        None => std::env::remove_var("HOME"),
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
+/// 5. Omit-on-reuse of a measured session keeps live size (no shrink to 80×24).
+#[tokio::test(flavor = "multi_thread")]
+async fn omit_on_reuse_keeps_live_measured_size() {
+    let _g = lock();
+    let daemon = test_harness::start(OWNER_TOKEN).await;
+    let agent = "attach-size-omit-reuse-keep";
+
+    let (sid1, body1) = spawn_cat(daemon.port, agent, Some(194), Some(62)).await;
+    assert_eq!(body1["reused"], false);
+    assert_eq!(pty_dims(&sid1), (194, 62));
+
+    // Older/headless re-POST without cols → serde default 80×24. Must NOT
+    // clobber the measured live session.
+    let (sid2, body2) = spawn_cat(daemon.port, agent, None, None).await;
+    assert_eq!(sid2, sid1, "must reuse");
+    assert_eq!(body2["reused"], true, "must be reused: {body2}");
+    assert_eq!(
+        body2["cols"], 194,
+        "reuse response must echo live cols, not VT default: {body2}"
+    );
+    assert_eq!(
+        body2["rows"], 62,
+        "reuse response must echo live rows, not VT default: {body2}"
+    );
+    assert_eq!(
+        pty_dims(&sid2),
+        (194, 62),
+        "omit-on-reuse must keep live measured size"
+    );
+
+    close_session(daemon.port, agent).await;
+}
+
+/// 6. Reuse inside the debounce window still lands sync via apply_resize_now.
+#[tokio::test(flavor = "multi_thread")]
+async fn reuse_inside_debounce_window_lands_before_first_snap() {
+    let _g = lock();
+    let daemon = test_harness::start(OWNER_TOKEN).await;
+    let agent = "attach-size-debounce-race";
+
+    let (sid, body) = spawn_cat(daemon.port, agent, Some(80), Some(24)).await;
+    assert_eq!(body["reused"], false);
+    assert_eq!(pty_dims(&sid), (80, 24));
+
+    // Open the debounce window with a claimer resize (request_resize path).
+    let (mut ws, _, _) = connect_grid_first_snap(daemon.port, &sid, OWNER_TOKEN).await;
+    ws.send(Message::Text(
+        serde_json::json!({
+            "action": "set_active",
+            "active": true,
+            "cols": 100,
+            "rows": 30,
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .expect("set_active open debounce");
+    assert_dims_settle(&sid, (100, 30), "claim open debounce window");
+
+    // Immediately reuse with measured fit — must land NOW, not after 120ms.
+    let (sid2, body2) = spawn_cat(daemon.port, agent, Some(194), Some(62)).await;
+    assert_eq!(sid2, sid);
+    assert_eq!(body2["reused"], true, "{body2}");
+    assert_eq!(
+        body2["cols"], 194,
+        "spawn response must echo post-fit cols (not deferred): {body2}"
+    );
+    assert_eq!(body2["rows"], 62, "spawn response rows: {body2}");
+    assert_eq!(
+        pty_dims(&sid2),
+        (194, 62),
+        "reuse inside debounce window must apply_resize_now synchronously"
+    );
+
+    // Drop the old WS (it held the claim) and attach fresh — first snap
+    // must already be 194×62.
+    drop(ws);
+    let (_ws2, snap_c, snap_r) =
+        connect_grid_first_snap(daemon.port, &sid2, OWNER_TOKEN).await;
+    assert_eq!(
+        (snap_c, snap_r),
+        (194, 62),
+        "first snap after debounce-window reuse must be pane-sized"
+    );
+
+    close_session(daemon.port, agent).await;
 }

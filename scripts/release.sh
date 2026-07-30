@@ -3,6 +3,15 @@
 # Builds, signs, notarizes, and releases K2 with both DMG and update bundle.
 # Also publishes the hosted-web SPA bundle to Cloudflare R2 (phase 3).
 #
+# RUN LOCATION (critical):
+#   Run this on the build Mac (z3mbpZ) from a LOCAL GUI terminal session
+#   (iTerm / Terminal.app under the logged-in desktop user) — NOT plain SSH.
+#   SSH-only sessions hit codesign "errSecInternalComponent" (login keychain
+#   "User interaction is not allowed"), often first on the frpc sidecar.
+#   Durable how-to (incl. AppleScript→iTerm launcher from SSH):
+#     .k2/wiki/Release - Unattended release.sh.md
+#     .k2/wiki/Release - Build Sign Notarize.md
+#
 # RELEASE_REPO selects the GitHub repo for `gh release create` + all
 # manifest/download URLs. Defaults to the new K2 home; override with
 # K2_RELEASE_REPO=Alakazam-211/K2SO for an old-repo (bridge) release.
@@ -10,8 +19,8 @@
 # Prerequisites:
 #   - TAURI_SIGNING_PRIVATE_KEY env var (or ~/.tauri/k2-updater.key)
 #   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD env var
-#   - Apple signing identity in keychain
-#   - gh CLI authenticated
+#   - Apple signing identity in keychain (GUI login session — see above)
+#   - gh CLI authenticated (or GH_TOKEN / GITHUB_TOKEN)
 #
 # Web-bundle publish (R2) — best-effort by default so desktop release is not
 # blocked by R2 TLS warmup / missing laptop creds (Ops caveat on brand-new R2):

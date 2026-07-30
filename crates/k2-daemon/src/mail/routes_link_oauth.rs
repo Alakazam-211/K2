@@ -18,10 +18,16 @@
 //! VAULTS them (`ext-inbox-<id>-oauth`), and nothing here logs or returns
 //! them (prd §7/§10, pre-mortem #9/#15).
 //!
-//! REMOTE-Gmail: Gmail's loopback needs the user's browser on the daemon's
-//! machine. When the daemon cannot open a system browser, `start` returns
-//! a `remote_unsupported` TEACHING error — it never hangs (§3b, pre-mortem
-//! #8). Microsoft (device flow) has no such limit — it works local + remote.
+//! REMOTE-Gmail: Google's mail scope is not device-flow eligible, so Gmail
+//! uses auth-code + loopback. When the desktop client is talking to a
+//! **remote** daemon it passes `clientCapture: true` + a **client-local**
+//! `redirectUri` (`http://127.0.0.1:<port>/cb`): the daemon does **not**
+//! open a browser; the client opens the system browser on the user's
+//! machine, captures the loopback code, and POSTs
+//! `/cli/mail/link/oauth/complete`. When the client does not do that and
+//! the daemon cannot open a system browser, `start` returns
+//! `remote_unsupported` (teach, never hang). Microsoft (device flow) has
+//! no such limit — it works local + remote without capture.
 //!
 //! No real network in this module's tests: the flow ENGINE ([`run_device_
 //! flow`]/[`run_loopback_flow`]/[`serve_loopback`]) is injected with
@@ -140,6 +146,46 @@ fn insert_pending(link_id: &str, address: &str) {
             link_id.to_string(),
             LinkEntry { status: LinkStatus::Pending, address: address.to_string(), hint: None },
         );
+}
+
+// ── Client-capture secrets (remote Gmail) ───────────────────────────────
+//
+// When the K2 desktop app links Gmail against a remote daemon, the
+// **client** binds 127.0.0.1 and captures Google's redirect; the daemon
+// only holds PKCE verifier + state until `/complete` arrives. These
+// secrets NEVER go on the status response.
+
+struct ClientCapture {
+    provider: OauthProvider,
+    project_id: String,
+    address: String,
+    state: String,
+    verifier: String,
+    redirect_uri: String,
+    expires_at: Instant,
+}
+
+fn capture_registry() -> &'static Mutex<HashMap<String, ClientCapture>> {
+    static REG: OnceLock<Mutex<HashMap<String, ClientCapture>>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Accept only loopback redirect URIs the desktop client may bind.
+fn validate_client_redirect_uri(uri: &str) -> Result<(), String> {
+    let uri = uri.trim();
+    // http://127.0.0.1:<port>/cb  or  http://localhost:<port>/cb  (+ optional trailing path only /cb)
+    let ok = (uri.starts_with("http://127.0.0.1:") || uri.starts_with("http://localhost:"))
+        && uri.contains("/cb")
+        && !uri.contains('@')
+        && uri.len() < 128;
+    if ok {
+        Ok(())
+    } else {
+        Err(
+            "redirectUri must be http://127.0.0.1:<port>/cb (client loopback only)"
+                .to_string(),
+        )
+    }
 }
 
 fn set_terminal(link_id: &str, status: LinkStatus, hint: Option<String>) {
@@ -461,7 +507,24 @@ fn parse_loopback_request(req: &str) -> LoopbackCapture {
 /// Open `url` in the daemon machine's SYSTEM browser (never a webview —
 /// Google rejects webviews, prd §2). A spawn failure (no opener / headless
 /// / remote daemon) is the "remote_unsupported" signal the caller teaches.
+///
+/// Linux headless: `xdg-open` often **spawns successfully** with no
+/// `DISPLAY` and does nothing visible — that used to return "browser
+/// opened" while the user stared at an empty Settings card. Refuse when
+/// there is no usable display so the desktop client must use clientCapture.
 fn open_in_system_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let display = std::env::var("DISPLAY").unwrap_or_default();
+        let wayland = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+        if display.trim().is_empty() && wayland.trim().is_empty() {
+            return Err(
+                "no DISPLAY/WAYLAND_DISPLAY — this host is headless; use the K2 desktop \
+                 app's client-capture Gmail flow (in-app browser)"
+                    .into(),
+            );
+        }
+    }
     #[cfg(target_os = "macos")]
     let opener = "open";
     #[cfg(not(target_os = "macos"))]
@@ -483,15 +546,20 @@ struct StartBody {
     address: String,
     provider: String,
     workspace: String,
+    /// When true (desktop client on a **remote** daemon), the client binds
+    /// loopback + opens the browser; the daemon only mints PKCE/state and
+    /// waits for `POST …/complete`. Requires `redirect_uri`.
+    client_capture: bool,
+    /// Client-local `http://127.0.0.1:<port>/cb` (required with client_capture).
+    redirect_uri: String,
 }
 
 /// POST `/cli/mail/link/oauth/start` — begin an OAuth link. Microsoft →
-/// device-code (returns `userCode`+`verificationUrl`); Gmail → bind the
-/// loopback + open the system browser (returns "waiting"). A SERVER-SIDE
-/// task then polls/exchanges and, on success, creates the row + vaults the
-/// tokens. Runs in the dispatcher's `spawn_blocking` (device_start dials
-/// the provider; the loopback binds a listener). Codes/tokens are NEVER in
-/// the response.
+/// device-code (returns `userCode`+`verificationUrl`); Gmail → either
+/// server-side loopback + system browser (local daemon) or **client
+/// capture** (`clientCapture` + `redirectUri`: return `authorizationUrl`,
+/// no browser on the daemon). A SERVER-SIDE task (or `/complete`) then
+/// exchanges and vaults tokens. Codes/tokens are NEVER in the response.
 pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
     let b: StartBody = match serde_json::from_slice(body) {
         Ok(b) => b,
@@ -540,7 +608,25 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
     let address = b.address.trim().to_string();
     let link_id = uuid::Uuid::new_v4().to_string();
     match provider.config().default_flow {
-        FlowKind::DeviceCode => start_device(provider, &link_id, &project_id, &address),
+        FlowKind::DeviceCode => {
+            if b.client_capture {
+                return error_response(
+                    "400 Bad Request",
+                    "usage",
+                    "clientCapture is only for Gmail loopback — Microsoft uses device flow",
+                );
+            }
+            start_device(provider, &link_id, &project_id, &address)
+        }
+        FlowKind::Loopback if b.client_capture => {
+            start_loopback_client_capture(
+                provider,
+                &link_id,
+                &project_id,
+                &address,
+                b.redirect_uri.trim(),
+            )
+        }
         FlowKind::Loopback => start_loopback(provider, &link_id, &project_id, &address),
     }
 }
@@ -693,6 +779,228 @@ fn start_loopback(
         "linkId": link_id,
         "hint": "a browser window opened — approve access there; this terminal is waiting",
     }))
+}
+
+/// Gmail remote path: client binds 127.0.0.1 and will open the browser.
+/// Daemon holds PKCE verifier + state until `POST …/complete`. Never opens
+/// a browser on the daemon host.
+fn start_loopback_client_capture(
+    provider: OauthProvider,
+    link_id: &str,
+    project_id: &str,
+    address: &str,
+    redirect_uri: &str,
+) -> CliResponse {
+    if redirect_uri.is_empty() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "clientCapture requires redirectUri (http://127.0.0.1:<port>/cb)",
+        );
+    }
+    if let Err(h) = validate_client_redirect_uri(redirect_uri) {
+        return error_response("400 Bad Request", "usage", &h);
+    }
+    let state = uuid::Uuid::new_v4().to_string();
+    let pkce = match oauth::generate_pkce() {
+        Ok(p) => p,
+        Err(e) => {
+            return error_response(
+                "502 Bad Gateway",
+                "engine",
+                &format!("could not initialize the secure link: {e}"),
+            )
+        }
+    };
+    let url = match oauth::loopback_build_url(provider, None, redirect_uri, &state, &pkce.challenge)
+    {
+        Ok(u) => u,
+        Err(e) => {
+            return error_response(
+                "502 Bad Gateway",
+                "engine",
+                &format!("could not build the consent URL: {e}"),
+            )
+        }
+    };
+    insert_pending(link_id, address);
+    {
+        let mut map = capture_registry().lock().unwrap_or_else(|p| p.into_inner());
+        // Drop expired captures so a long-lived daemon does not accumulate.
+        let now = Instant::now();
+        map.retain(|_, c| c.expires_at > now);
+        map.insert(
+            link_id.to_string(),
+            ClientCapture {
+                provider,
+                project_id: project_id.to_string(),
+                address: address.to_string(),
+                state: state.clone(),
+                verifier: pkce.verifier.clone(),
+                redirect_uri: redirect_uri.to_string(),
+                expires_at: Instant::now() + Duration::from_secs(300),
+            },
+        );
+    }
+    // authorizationUrl is public (state + challenge only). Verifier stays here.
+    ok_json(serde_json::json!({
+        "ok": true,
+        "flow": "loopback",
+        "linkId": link_id,
+        "authorizationUrl": url,
+        "state": state,
+        "clientCapture": true,
+        "hint": "open the authorization URL in a browser on this machine; the app captures the redirect",
+    }))
+}
+
+// ── POST /cli/mail/link/oauth/complete (owner; client-capture only) ─────
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct CompleteBody {
+    link_id: String,
+    /// Authorization code from Google's redirect (empty if `error` set).
+    code: String,
+    /// Must match the `state` issued on start (CSRF).
+    state: String,
+    /// Provider error from the redirect (`access_denied`, etc.).
+    error: String,
+}
+
+/// POST `/cli/mail/link/oauth/complete` — desktop client finished the
+/// loopback capture. Body may carry `code`+`state` or `error`+`state`.
+/// Daemon validates state against the capture registry, exchanges (PKCE),
+/// vaults tokens. The code is single-use and never returned on status.
+pub fn handle_link_oauth_complete(body: &[u8]) -> CliResponse {
+    let b: CompleteBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => {
+            return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}"))
+        }
+    };
+    let link_id = b.link_id.trim();
+    if link_id.is_empty() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'linkId' — the id returned by oauth/start",
+        );
+    }
+    // Validate state BEFORE consuming the capture so a wrong-state probe
+    // cannot burn a live linkId (owner still holds the real complete).
+    let cap = {
+        let mut map = capture_registry().lock().unwrap_or_else(|p| p.into_inner());
+        let Some(existing) = map.get(link_id) else {
+            return error_response(
+                "404 Not Found",
+                "not_found",
+                "no client-capture link for this linkId — it may have expired; start again",
+            );
+        };
+        if Instant::now() > existing.expires_at {
+            map.remove(link_id);
+            set_terminal(
+                link_id,
+                LinkStatus::Expired,
+                Some(
+                    "the link expired before the browser returned — try Connect Gmail again"
+                        .into(),
+                ),
+            );
+            return error_response(
+                "410 Gone",
+                "expired",
+                "the link expired before the browser returned — try Connect Gmail again",
+            );
+        }
+        if oauth::validate_state(&existing.state, b.state.trim()).is_err() {
+            // Leave the capture in place for the real client complete.
+            return error_response(
+                "400 Bad Request",
+                "usage",
+                "state mismatch — start the Gmail link again",
+            );
+        }
+        // State matched — consume once (no second exchange / replay).
+        map.remove(link_id).expect("capture present after get")
+    };
+    if !b.error.trim().is_empty() {
+        let err = b.error.trim();
+        let status = if err == "access_denied" {
+            LinkStatus::Denied
+        } else {
+            LinkStatus::Error
+        };
+        set_terminal(
+            link_id,
+            status,
+            Some(format!("the browser returned '{err}'")),
+        );
+        return ok_json(serde_json::json!({
+            "ok": true,
+            "state": status.as_str(),
+            "linkId": link_id,
+        }));
+    }
+    let code = b.code.trim();
+    if code.is_empty() {
+        set_terminal(
+            link_id,
+            LinkStatus::Error,
+            Some("the redirect carried no authorization code".into()),
+        );
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'code' (or set 'error' if the user denied access)",
+        );
+    }
+    // Exchange on a worker path (caller is already spawn_blocking in the
+    // mail POST arm). Verifier never leaves this process.
+    let secrets = FileSecretStore::default();
+    let http = ReqwestHttp::default();
+    let now = chrono::Utc::now().timestamp();
+    match oauth::loopback_exchange(
+        cap.provider,
+        code,
+        &cap.redirect_uri,
+        &cap.verifier,
+        None,
+        None,
+        &http,
+    ) {
+        Ok(tokens) => {
+            complete_with_tokens(
+                &secrets,
+                cap.provider,
+                link_id,
+                &cap.project_id,
+                &cap.address,
+                &tokens,
+                now,
+            );
+            let map = registry().lock().unwrap_or_else(|p| p.into_inner());
+            let state = map
+                .get(link_id)
+                .map(|e| e.status.as_str())
+                .unwrap_or("connected");
+            ok_json(serde_json::json!({
+                "ok": true,
+                "state": state,
+                "linkId": link_id,
+                "address": cap.address,
+            }))
+        }
+        Err(e) => {
+            set_terminal(link_id, LinkStatus::Error, Some(format!("oauth error: {e}")));
+            error_response(
+                "502 Bad Gateway",
+                "engine",
+                &format!("token exchange failed: {e}"),
+            )
+        }
+    }
 }
 
 // ── GET /cli/mail/link/oauth/status (owner) ─────────────────────────────
@@ -878,6 +1186,114 @@ mod tests {
             br#"{"address":"a@b.example","provider":"microsoft","workspace":"no-such-ws-xyz"}"#,
         );
         assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+    }
+
+    #[test]
+    fn validate_client_redirect_uri_accepts_loopback_only() {
+        assert!(validate_client_redirect_uri("http://127.0.0.1:54321/cb").is_ok());
+        assert!(validate_client_redirect_uri("http://localhost:9/cb").is_ok());
+        assert!(validate_client_redirect_uri("https://127.0.0.1:1/cb").is_err());
+        assert!(validate_client_redirect_uri("http://evil.com/cb").is_err());
+        assert!(validate_client_redirect_uri("http://127.0.0.1:1/other").is_err());
+        assert!(validate_client_redirect_uri("http://user@127.0.0.1:1/cb").is_err());
+    }
+
+    #[test]
+    fn client_capture_requires_redirect_and_rejects_microsoft() {
+        let pid = insert_project();
+        let ws = format!("/tmp/loauth-{}", &pid[..8]);
+        // Microsoft + clientCapture → usage
+        let body = serde_json::json!({
+            "address": "a@b.example",
+            "provider": "microsoft",
+            "workspace": ws,
+            "clientCapture": true,
+            "redirectUri": "http://127.0.0.1:9/cb",
+        });
+        let resp = handle_link_oauth_start(body.to_string().as_bytes());
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(
+            body_json(&resp)["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("clientCapture"),
+            "{}",
+            resp.body
+        );
+        // Gmail clientCapture without redirectUri
+        let body = serde_json::json!({
+            "address": "a@b.example",
+            "provider": "gmail",
+            "workspace": ws,
+            "clientCapture": true,
+        });
+        let resp = handle_link_oauth_start(body.to_string().as_bytes());
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(
+            body_json(&resp)["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains("redirect"),
+            "{}",
+            resp.body
+        );
+        cleanup(&pid);
+    }
+
+    #[test]
+    fn client_capture_start_returns_authorization_url_without_browser() {
+        let pid = insert_project();
+        let ws = format!("/tmp/loauth-{}", &pid[..8]);
+        let body = serde_json::json!({
+            "address": "you@gmail.com",
+            "provider": "gmail",
+            "workspace": ws,
+            "clientCapture": true,
+            "redirectUri": "http://127.0.0.1:54321/cb",
+        });
+        let resp = handle_link_oauth_start(body.to_string().as_bytes());
+        // If baked Gmail client is REPLACE_ME, loopback_build_url may still
+        // succeed with a placeholder client id — we only require the shape.
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let j = body_json(&resp);
+        assert_eq!(j["flow"], "loopback");
+        assert_eq!(j["clientCapture"], true);
+        assert!(j["linkId"].as_str().unwrap().len() > 8);
+        assert!(j["authorizationUrl"].as_str().unwrap().starts_with("https://"));
+        assert!(j["state"].as_str().unwrap().len() > 8);
+        let lid = j["linkId"].as_str().unwrap().to_string();
+        let st = j["state"].as_str().unwrap().to_string();
+        // Wrong state → usage, capture still live
+        let bad = serde_json::json!({
+            "linkId": lid,
+            "code": "fake",
+            "state": "not-the-state",
+        });
+        let c = handle_link_oauth_complete(bad.to_string().as_bytes());
+        assert_eq!(c.status, "400 Bad Request", "{}", c.body);
+        // Real complete with access_denied terminates cleanly
+        let denied = serde_json::json!({
+            "linkId": lid,
+            "state": st,
+            "error": "access_denied",
+        });
+        let d = handle_link_oauth_complete(denied.to_string().as_bytes());
+        assert_eq!(d.status, "200 OK", "{}", d.body);
+        assert_eq!(body_json(&d)["state"], "denied");
+        let params: HashMap<String, String> =
+            HashMap::from([("linkId".to_string(), lid)]);
+        assert_eq!(body_json(&handle_link_oauth_status(&params))["state"], "denied");
+        cleanup(&pid);
+    }
+
+    #[test]
+    fn complete_unknown_link_is_not_found() {
+        let resp = handle_link_oauth_complete(
+            br#"{"linkId":"ghost","code":"x","state":"y"}"#,
+        );
+        assert_eq!(resp.status, "404 Not Found");
+        assert_eq!(body_json(&resp)["error"]["code"], "not_found");
     }
 
     #[test]

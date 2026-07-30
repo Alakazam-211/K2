@@ -599,12 +599,14 @@ async fn handle_one_request(
             // `link/*` = the Settings UI's aliases for external add/remove.
             | "/cli/mail/link/add"
             | "/cli/mail/link/remove"
-            // O4: begin an OAuth link (Gmail loopback / Microsoft device
-            // flow); owner-or-admin via is_owner_level_mutation's
+            // O4: begin / complete an OAuth link (Gmail loopback /
+            // Microsoft device / remote client-capture complete);
+            // owner-or-admin via is_owner_level_mutation's
             // /cli/mail/link/oauth/ prefix. The server-side poll/exchange
             // (blocking reqwest + a loopback listener) rides this arm's
             // spawn_blocking; the paired status GET is owner-gated below.
             | "/cli/mail/link/oauth/start"
+            | "/cli/mail/link/oauth/complete"
             // S1 BYO OAuth client — the owner sets/clears their OWN
             // per-provider OAuth client id + (Gmail) secret. Owner-or-admin
             // via is_owner_level_mutation's /cli/mail/oauth-config/ prefix.

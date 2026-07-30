@@ -496,17 +496,13 @@ export async function removeLinkedInbox(
 //
 // Provider-owned OAuth linking. Instead of a typed app-password, the daemon
 // runs the provider's device/loopback consent flow and vaults the resulting
-// refresh token server-side — the UI NEVER sees an access/refresh token or
-// an auth code, only the human-facing `userCode` / `verificationUrl` and the
-// terminal `state`. Two shapes come back from `start` (discriminated on
-// `flow`):
-//   • Microsoft → DEVICE flow: show the code + URL, the user approves in any
-//     browser, we poll `status`.
-//   • Gmail → LOOPBACK flow: the daemon opened the SYSTEM browser server-side
-//     (so this only works when the daemon is local). We poll `status`.
-// A Gmail link attempted against a REMOTE/headless daemon can't open a
-// browser and comes back HTTP 409 `remote_unsupported` — a thrown error the
-// caller special-cases via `mailErrorInfo` (a teaching case, not a crash).
+// refresh token server-side — the UI NEVER sees an access/refresh token.
+// Three shapes:
+//   • Microsoft → DEVICE flow: show the code + URL, poll `status`.
+//   • Gmail local → LOOPBACK: daemon opens system browser, poll `status`.
+//   • Gmail remote → clientCapture: desktop binds 127.0.0.1, opens browser
+//     here, POSTs code to `mail/link/oauth/complete`, then poll `status`.
+// Headless CLI without clientCapture still gets HTTP 409 `remote_unsupported`.
 
 /** POST /cli/mail/link/oauth/start result — discriminated on `flow`. Codes/
  *  tokens are NEVER present beyond `userCode`/`verificationUrl`. */
@@ -521,22 +517,43 @@ export type OauthStartResult =
       expiresIn: number
     }
   | {
-      /** Gmail loopback flow: the daemon opened the local system browser. */
+      /** Gmail loopback: daemon-opened browser (local) or clientCapture. */
       flow: 'loopback'
       linkId: string
       hint?: string
+      /** Present when the desktop must open the browser + capture redirect. */
+      clientCapture?: boolean
+      /** Google consent URL (clientCapture only). */
+      authorizationUrl?: string
+      /** CSRF state the client loopback must match (clientCapture only). */
+      state?: string
     }
 
 /** POST /cli/mail/link/oauth/start — kicks off the provider consent flow.
- *  Owner/Primary-gated (403 if not permitted). Gmail on a remote/headless
- *  daemon throws HTTP 409 `remote_unsupported` (inspect via `mailErrorInfo`;
- *  render the teaching message, not a poll card). No token is ever returned. */
+ *  Owner/Primary-gated. Pass `clientCapture` + `redirectUri` when the
+ *  desktop is on a remote daemon (Gmail). No token is ever returned. */
 export async function linkOauthStart(args: {
   address: string
   provider: 'gmail' | 'microsoft'
   workspace: string
+  /** Desktop remote path: client binds loopback + opens browser. */
+  clientCapture?: boolean
+  /** `http://127.0.0.1:<port>/cb` from `oauth_loopback_bind`. */
+  redirectUri?: string
 }): Promise<OauthStartResult> {
   return daemonCliPost('mail/link/oauth/start', args)
+}
+
+/** POST /cli/mail/link/oauth/complete — relay a client-captured code (or
+ *  provider error) so the daemon can PKCE-exchange + vault. Never returns
+ *  tokens. */
+export async function linkOauthComplete(args: {
+  linkId: string
+  code?: string
+  state: string
+  error?: string
+}): Promise<{ ok: boolean; state: string; linkId: string; address?: string }> {
+  return daemonCliPost('mail/link/oauth/complete', args)
 }
 
 /** GET /cli/mail/link/oauth/status?linkId=… — long-poll the consent flow.

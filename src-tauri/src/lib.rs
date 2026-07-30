@@ -1453,6 +1453,10 @@ pub fn run() {
             commands::browser_webviews::browser_current_url,
             commands::browser_webviews::browser_close,
             commands::browser_webviews::browser_devtools,
+            // Remote Gmail OAuth — client-local loopback capture.
+            commands::oauth_loopback::oauth_loopback_bind,
+            commands::oauth_loopback::oauth_loopback_wait,
+            commands::oauth_loopback::oauth_loopback_cancel,
             // Projects — host-only verbs (folder picker, icon upload,
             // OS-integration "open in" actions, editor discovery, focus
             // window). All DB-backed project CRUD moved off the Tauri

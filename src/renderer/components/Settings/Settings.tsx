@@ -324,7 +324,10 @@ export default function Settings(): React.JSX.Element {
         )}
         {activeSection === 'email-link' && (
           <SectionErrorBoundary>
-            <EmailLinkSection />
+            {/* h-full so Gmail OAuth BrowserPane dock gets a real height. */}
+            <div className="h-full min-h-0 flex flex-col">
+              <EmailLinkSection />
+            </div>
           </SectionErrorBoundary>
         )}
         {activeSection === 'wake-scheduler' && (

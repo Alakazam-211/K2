@@ -3,6 +3,33 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.72 — Remote Gmail link + browser overlays
+
+### Email Link — Gmail on a remote / headless daemon
+
+- **Connect Gmail** no longer depends on a browser opening on the **server**.
+  When you're signed into a remote host, K2 binds loopback on **your Mac**,
+  opens Google consent **inside Settings** (embedded browser), and relays the
+  auth code to the daemon for the token exchange (PKCE stays on the daemon).
+- The consent **URL is always shown** (copy + open outside K2) if you need it.
+- Headless Linux hosts no longer fake “a browser opened” when there is no
+  `DISPLAY` / Wayland — they teach client-capture instead of hanging.
+
+### Embedded browser
+
+- Browser tabs no longer float **on top of Settings** (or Projects / Feedback /
+  Wiki). Opening Settings hides the native webview until you leave.
+- Settings embeds (Gmail consent) correctly create the webview once the panel
+  has a real size — no more address bar URL with “Enter a URL…” forever.
+
+### Upgrade notes
+
+- **Desktop app + daemon** both need 0.40.72 for remote Gmail link (client
+  capture APIs + UI). Older apps against a new daemon get a clear headless
+  error; new apps against an old daemon won't complete the relay.
+
+---
+
 ## 0.40.71 — Remote TUI scroll attach + tunnel E2E self-heal
 
 ### Terminal — smooth remote TUI scroll (attach-size lifecycle)

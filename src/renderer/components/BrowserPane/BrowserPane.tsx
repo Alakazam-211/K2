@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
+import { usePageViewStore } from '@/stores/page-view'
+import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
 import { webFeatures } from '@/web/features'
 
@@ -17,9 +19,10 @@ import { webFeatures } from '@/web/features'
  *    150ms settle re-assert after window resizes (tauri #10131/#14843
  *    manifest as stale child bounds after resize/restore).
  *  - visibility bridge: `useIsTabVisible()` (tab visible AND this item
- *    active in its pane group) drives `browser_set_visible` — a hidden
- *    DOM pane must also hide the native view or it would float over
- *    whatever replaced it.
+ *    active in its pane group) plus Settings / full-page overlays drive
+ *    `browser_set_visible` — native child webviews float OVER the DOM, so
+ *    hiding the workspace with `display:none` is not enough (Settings
+ *    was showing Google sign-in still painted on Companion).
  *  - lifecycle: the webview is created lazily on FIRST visibility (so a
  *    restored background layout doesn't load pages invisibly) and
  *    `browser_close`d on unmount (item/tab close).
@@ -36,6 +39,12 @@ interface BrowserPaneProps {
   paneGroupId: string
   /** Canonical URL from the tabs store (BrowserItemData.url). */
   url: string
+  /**
+   * Settings / modal embed: always treat as visible (ignore tab
+   * visibility), and do not stamp the tabs store. Still uses the same
+   * native child-webview docking as tab panes.
+   */
+  standalone?: boolean
 }
 
 interface Rect {
@@ -56,8 +65,22 @@ function normalizeUrl(raw: string): string {
   return `https://${trimmed}`
 }
 
-export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProps): React.JSX.Element {
-  const visible = useIsTabVisible()
+export function BrowserPane({
+  itemId,
+  tabId,
+  paneGroupId,
+  url,
+  standalone = false,
+}: BrowserPaneProps): React.JSX.Element {
+  const tabVisible = useIsTabVisible()
+  // Settings is a fixed overlay while the workspace stays mounted (display:none
+  // only). Projects / Feedback / Wiki are full-page overlays on top of agents.
+  // Native WKWebViews ignore that DOM hide — force them off unless this pane
+  // is the intentional Settings embed (`standalone`).
+  const settingsOpen = useSettingsStore((s) => s.settingsOpen)
+  const appPage = usePageViewStore((s) => s.page)
+  const workspaceCovered = settingsOpen || appPage !== 'agents'
+  const visible = standalone ? true : tabVisible && !workspaceCovered
   const setBrowserItemState = useTabsStore((s) => s.setBrowserItemState)
 
   // Content area the native view docks onto (below the chrome bar).
@@ -78,6 +101,9 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
    *  echo loop where the poll stamps the store, the store re-renders us
    *  with a new `url` prop, and the prop effect re-navigates. */
   const lastKnownUrlRef = useRef<string>('')
+  /** URL we want loaded once the dock has a non-zero rect (Settings embeds
+   *  often measure 0×0 on the first paint, then grow). */
+  const pendingUrlRef = useRef<string>('')
   const visibleRef = useRef(visible)
   visibleRef.current = visible
 
@@ -96,10 +122,49 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
     return { x: r.x, y: r.y, width: r.width, height: r.height }
   }, [])
 
+  const createView = useCallback(async (targetUrl: string): Promise<void> => {
+    // Hosted web: no native child webview — stay on the unavailable stub.
+    if (!webFeatures.browserPane) {
+      setUnavailable(true)
+      return
+    }
+    const normalized = normalizeUrl(targetUrl)
+    if (!normalized) return
+    pendingUrlRef.current = normalized
+    const rect = measureRect()
+    if (!rect) {
+      // Dock not laid out yet (common in Settings full-pane embeds). ResizeObserver
+      // will retry when the content area gets a real size — do NOT clear pending.
+      return
+    }
+    setError(null)
+    try {
+      await invoke('browser_create', { itemId, url: normalized, rect })
+      createdRef.current = true
+      setCreated(true)
+      setUnavailable(false)
+      lastKnownUrlRef.current = normalized
+      pendingUrlRef.current = ''
+    } catch (e) {
+      const msg = String(e)
+      if (msg.includes(STUB_ERROR_FRAGMENT)) {
+        setUnavailable(true)
+      } else {
+        setError(msg)
+      }
+    }
+  }, [itemId, measureRect])
+
   const scheduleBoundsPush = useCallback(() => {
     if (rafRef.current !== null) return
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null
+      // First-paint retry: Settings OAuth dock often starts at 0×0 then
+      // expands; createView no-ops until measureRect succeeds.
+      if (!createdRef.current && visibleRef.current && pendingUrlRef.current) {
+        void createView(pendingUrlRef.current)
+        return
+      }
       if (!createdRef.current) return
       const rect = measureRect()
       if (!rect) return
@@ -108,7 +173,7 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
         // effects own recovery.
       })
     })
-  }, [itemId, measureRect])
+  }, [itemId, measureRect, createView])
 
   useEffect(() => {
     const el = contentRef.current
@@ -123,6 +188,8 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
       settleTimerRef.current = setTimeout(scheduleBoundsPush, 150)
     }
     window.addEventListener('resize', onWindowResize)
+    // Double-rAF: wait for flex layout after Settings panel expands.
+    requestAnimationFrame(() => scheduleBoundsPush())
     return () => {
       ro.disconnect()
       window.removeEventListener('resize', onWindowResize)
@@ -133,32 +200,6 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
       }
     }
   }, [scheduleBoundsPush])
-
-  // ── Create / navigate ───────────────────────────────────────────────
-  const createView = useCallback(async (targetUrl: string): Promise<void> => {
-    // Hosted web: no native child webview — stay on the unavailable stub.
-    if (!webFeatures.browserPane) {
-      setUnavailable(true)
-      return
-    }
-    const rect = measureRect()
-    if (!rect) return // hidden — the visibility effect retries on show
-    setError(null)
-    try {
-      await invoke('browser_create', { itemId, url: targetUrl, rect })
-      createdRef.current = true
-      setCreated(true)
-      setUnavailable(false)
-      lastKnownUrlRef.current = targetUrl
-    } catch (e) {
-      const msg = String(e)
-      if (msg.includes(STUB_ERROR_FRAGMENT)) {
-        setUnavailable(true)
-      } else {
-        setError(msg)
-      }
-    }
-  }, [itemId, measureRect])
 
   const navigateView = useCallback(async (targetUrl: string): Promise<void> => {
     setError(null)
@@ -221,14 +262,17 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
           lastKnownUrlRef.current = current
           if (!addressFocusedRef.current) setAddress(current)
           // Stamp the store so serialize captures in-page navigation.
-          setBrowserItemState(tabId, paneGroupId, itemId, { url: current })
+          // Standalone embeds (Settings OAuth) are not tab items.
+          if (!standalone) {
+            setBrowserItemState(tabId, paneGroupId, itemId, { url: current })
+          }
         } catch {
           // View gone (close race) — the interval is cleared by unmount.
         }
       })()
     }, 1500)
     return () => clearInterval(timer)
-  }, [visible, created, itemId, tabId, paneGroupId, setBrowserItemState])
+  }, [visible, created, itemId, tabId, paneGroupId, setBrowserItemState, standalone])
 
   // ── Handlers ────────────────────────────────────────────────────────
   const handleSubmit = useCallback(() => {
@@ -237,13 +281,24 @@ export function BrowserPane({ itemId, tabId, paneGroupId, url }: BrowserPaneProp
     setAddress(target)
     // Stamp immediately so the layout autosave captures the intent even
     // if create/navigate fails or the poll hasn't run yet.
-    setBrowserItemState(tabId, paneGroupId, itemId, { url: target })
+    if (!standalone) {
+      setBrowserItemState(tabId, paneGroupId, itemId, { url: target })
+    }
     if (createdRef.current) {
       void navigateView(target)
     } else {
       void createView(target)
     }
-  }, [address, tabId, paneGroupId, itemId, setBrowserItemState, navigateView, createView])
+  }, [
+    address,
+    tabId,
+    paneGroupId,
+    itemId,
+    setBrowserItemState,
+    navigateView,
+    createView,
+    standalone,
+  ])
 
   const handleReload = useCallback(() => {
     const target = lastKnownUrlRef.current || normalizeUrl(address)

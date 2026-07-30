@@ -38,6 +38,7 @@
 //! | POST /cli/mail/external/add       | mail/routes_external.rs |
 //! | POST /cli/mail/external/remove    | mail/routes_external.rs |
 //! | POST /cli/mail/link/oauth/start   | mail/routes_link_oauth.rs |
+//! | POST /cli/mail/link/oauth/complete| mail/routes_link_oauth.rs |
 //! | GET  /cli/mail/link/oauth/status  | mail/routes_link_oauth.rs |
 //! | POST /cli/mail/oauth-config/set   | mail/routes_oauth_config.rs |
 //! | POST /cli/mail/oauth-config/clear | mail/routes_oauth_config.rs |
@@ -171,8 +172,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // handlers (the CLI verb is `k2 mail link`); aliased below.
         | "/cli/mail/link/add"
         | "/cli/mail/link/remove"
-        // O4: begin an OAuth link (POST-only; GET on it → 405).
+        // O4: begin / complete an OAuth link (POST-only; GET → 405).
         | "/cli/mail/link/oauth/start"
+        | "/cli/mail/link/oauth/complete"
         // S1 BYO OAuth client set/clear (POST-only; GET on them → 405).
         | "/cli/mail/oauth-config/set"
         | "/cli/mail/oauth-config/clear"
@@ -223,10 +225,12 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         // via `external/*`. Same handlers, no behavior difference.
         "/cli/mail/link/add" => routes_external::handle_external_add(body),
         "/cli/mail/link/remove" => routes_external::handle_external_remove(body),
-        // O4: begin an OAuth link (Gmail loopback / Microsoft device flow).
+        // O4: begin / complete an OAuth link (Gmail loopback / Microsoft
+        // device flow / remote client-capture complete).
         // Owner-gated (is_owner_level_mutation's /cli/mail/link/oauth/
         // prefix); the server-side flow runs in this arm's spawn_blocking.
         "/cli/mail/link/oauth/start" => routes_link_oauth::handle_link_oauth_start(body),
+        "/cli/mail/link/oauth/complete" => routes_link_oauth::handle_link_oauth_complete(body),
         // S1 BYO OAuth client: owner sets/clears their per-provider client.
         "/cli/mail/oauth-config/set" => routes_oauth_config::handle_oauth_config_set(body),
         "/cli/mail/oauth-config/clear" => routes_oauth_config::handle_oauth_config_clear(body),

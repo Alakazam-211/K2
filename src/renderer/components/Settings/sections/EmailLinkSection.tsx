@@ -23,11 +23,14 @@
 // form is open and clears it on submit/close.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { BrowserPane } from '@/components/BrowserPane/BrowserPane'
 import { useProjectsStore } from '@/stores/projects'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useWindowModeStore } from '@/stores/window-mode'
+import { webFeatures } from '@/web/features'
 import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown } from '../controls/SettingControls'
 import { InboxAccessPanel } from './InboxAccessPanel'
@@ -36,6 +39,7 @@ import {
   clearOauthClient,
   fetchInboxes,
   fetchOauthConfig,
+  linkOauthComplete,
   linkOauthStart,
   linkOauthStatus,
   mailErrorInfo,
@@ -130,12 +134,11 @@ function CopyButton({ text, title }: { text: string; title?: string }): React.JS
 
 // ── OAuth connect (Gmail / Microsoft — no app-password, O4 flows) ─────────
 //
-// The provider-owned path: no host/port/password to type. `start` returns a
-// DEVICE flow (Microsoft — show a code + verification URL, poll) or a
-// LOOPBACK flow (Gmail — the daemon opened the local browser, poll). Gmail
-// against a remote daemon 409s `remote_unsupported` — a teaching card, not a
-// poll. Tokens/codes are NEVER rendered (only `userCode`/`verificationUrl`
-// and the terminal `state`/`address`/`hint` ever come back).
+// Gmail: client-side loopback + **embedded BrowserPane on this Settings
+// page** (same native child-webview as tab browsers). The IMAP app-password
+// form is hidden while the session is live. Works for local and remote
+// daemons (PKCE verifier stays on the daemon; code is relayed via complete).
+// Microsoft: device flow card (coming soon). Tokens never render.
 
 const OAUTH_POLL_MS = 3000
 const OAUTH_MAX_MS = 10 * 60 * 1000 // hard bound if the provider gives none
@@ -144,7 +147,17 @@ type OauthProvider = 'gmail' | 'microsoft'
 
 type OauthFlow =
   | { kind: 'device'; provider: 'microsoft'; linkId: string; userCode: string; verificationUrl: string; deadlineMs: number }
-  | { kind: 'loopback'; provider: 'gmail'; linkId: string; hint?: string; deadlineMs: number }
+  | {
+      kind: 'loopback'
+      provider: 'gmail'
+      linkId: string
+      hint?: string
+      deadlineMs: number
+      clientCapture: true
+      authorizationUrl: string
+      /** Stable native webview registry key for BrowserPane. */
+      browserItemId: string
+    }
 
 type OauthResult =
   | { kind: 'connected'; address?: string }
@@ -155,10 +168,13 @@ type OauthResult =
 function OauthConnect({
   canMutate,
   onConnected,
+  onSessionActiveChange,
 }: {
   canMutate: boolean
-  /** Refresh the connected-inbox list + select the new inbox (dismisses the card). */
+  /** Refresh the connected-inbox list + select the new inbox. */
   onConnected: (address: string) => void
+  /** Parent hides IMAP chrome and expands the panel while the browser is up. */
+  onSessionActiveChange?: (active: boolean) => void
 }): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
 
@@ -167,8 +183,19 @@ function OauthConnect({
   const [busy, setBusy] = useState<OauthProvider | null>(null)
   const [flow, setFlow] = useState<OauthFlow | null>(null)
   const [result, setResult] = useState<OauthResult | null>(null)
+  // Cancel in-flight client-capture wait when the user resets or unmounts.
+  const captureCancelRef = useRef<string | null>(null)
 
   const canStart = canMutate && busy === null && project.trim().length > 0 && address.trim().length > 0
+  const gmailSession =
+    flow?.kind === 'loopback' && flow.clientCapture && flow.authorizationUrl
+      ? flow
+      : null
+
+  useEffect(() => {
+    onSessionActiveChange?.(gmailSession !== null)
+    return () => onSessionActiveChange?.(false)
+  }, [gmailSession, onSessionActiveChange])
 
   const start = useCallback(
     async (provider: OauthProvider): Promise<void> => {
@@ -177,6 +204,75 @@ function OauthConnect({
       setFlow(null)
       setResult(null)
       try {
+        if (provider === 'gmail') {
+          // Always client-capture from the Email Link UI so consent runs
+          // inside K2 (embedded browser), not a system window the user
+          // may never see when they only have K2 focused / remote desktop.
+          const bind = await invoke<{
+            captureId: string
+            redirectUri: string
+            port: number
+          }>('oauth_loopback_bind')
+          captureCancelRef.current = bind.captureId
+          try {
+            const res = await linkOauthStart({
+              address: address.trim(),
+              provider: 'gmail',
+              workspace: project.trim(),
+              clientCapture: true,
+              redirectUri: bind.redirectUri,
+            })
+            if (res.flow !== 'loopback' || !res.authorizationUrl || !res.state) {
+              throw new Error('Daemon did not return a client-capture authorization URL')
+            }
+            const browserItemId = `oauth-gmail-${res.linkId}`
+            setFlow({
+              kind: 'loopback',
+              provider: 'gmail',
+              linkId: res.linkId,
+              hint: res.hint,
+              deadlineMs: Date.now() + OAUTH_MAX_MS,
+              clientCapture: true,
+              authorizationUrl: res.authorizationUrl,
+              browserItemId,
+            })
+            setBusy(null)
+            // Wait + complete in the background; status poll drives the UI.
+            void (async () => {
+              try {
+                const capture = await invoke<{
+                  code?: string | null
+                  state?: string | null
+                  error?: string | null
+                }>('oauth_loopback_wait', {
+                  captureId: bind.captureId,
+                  expectedState: res.state,
+                  timeoutSecs: 300,
+                })
+                if (captureCancelRef.current !== bind.captureId) return
+                await linkOauthComplete({
+                  linkId: res.linkId,
+                  code: capture.code ?? undefined,
+                  state: capture.state ?? res.state,
+                  error: capture.error ?? undefined,
+                })
+              } catch (e) {
+                if (captureCancelRef.current !== bind.captureId) return
+                setResult({ kind: 'error', message: mailErrorMessage(e) })
+                setFlow(null)
+              } finally {
+                if (captureCancelRef.current === bind.captureId) {
+                  captureCancelRef.current = null
+                }
+              }
+            })()
+            return
+          } catch (e) {
+            await invoke('oauth_loopback_cancel', { captureId: bind.captureId }).catch(() => undefined)
+            captureCancelRef.current = null
+            throw e
+          }
+        }
         const res = await linkOauthStart({
           address: address.trim(),
           provider,
@@ -193,24 +289,20 @@ function OauthConnect({
             deadlineMs: Date.now() + Math.min(bound, OAUTH_MAX_MS),
           })
         } else {
-          setFlow({
-            kind: 'loopback',
-            provider: 'gmail',
-            linkId: res.linkId,
-            hint: res.hint,
-            deadlineMs: Date.now() + OAUTH_MAX_MS,
+          // Unexpected non-capture loopback from daemon — teach, don't hang.
+          setResult({
+            kind: 'error',
+            message: res.hint ?? 'Gmail link started without an in-app browser URL. Update the daemon and try again.',
           })
         }
       } catch (e) {
-        // Gmail on a remote/headless daemon → HTTP 409 remote_unsupported:
-        // the daemon's browser opener can't spawn here. Teach, don't poll.
         const info = mailErrorInfo(e)
         if (info.code === 'remote_unsupported') {
           setResult({
             kind: 'remote_unsupported',
             message:
               info.hint ??
-              'Gmail must be linked on the machine running this K2 daemon. You’re connected to a remote daemon, so the browser can’t open here.',
+              'Gmail must be linked from the K2 desktop app (it shows Google consent in-app). A headless CLI on the server cannot open a browser.',
           })
         } else {
           setResult({ kind: 'error', message: mailErrorMessage(e) })
@@ -222,9 +314,6 @@ function OauthConnect({
     [canStart, address, project],
   )
 
-  // ── Poll link/oauth/status every 3s while a flow is live. Bounded by the
-  //    provider's expiry (or 10 min). Terminal states clear the flow, which
-  //    tears down the interval via cleanup — no leaked timers. ────────────
   const onConnectedRef = useRef(onConnected)
   onConnectedRef.current = onConnected
   useEffect(() => {
@@ -248,7 +337,6 @@ function OauthConnect({
           setResult({ kind: 'failed', state: s.state, hint: s.hint })
           setFlow(null)
         }
-        // 'pending' → keep polling.
       } catch (e) {
         if (cancelled) return
         setResult({ kind: 'error', message: mailErrorMessage(e) })
@@ -256,7 +344,7 @@ function OauthConnect({
       }
     }
     const id = window.setInterval(() => void tick(), OAUTH_POLL_MS)
-    void tick() // fire immediately so the user isn't waiting 3s for the first read
+    void tick()
     return () => {
       cancelled = true
       window.clearInterval(id)
@@ -264,8 +352,23 @@ function OauthConnect({
   }, [flow, address])
 
   const reset = useCallback((): void => {
+    const cap = captureCancelRef.current
+    captureCancelRef.current = null
+    if (cap) {
+      void invoke('oauth_loopback_cancel', { captureId: cap }).catch(() => undefined)
+    }
     setFlow(null)
     setResult(null)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      const cap = captureCancelRef.current
+      captureCancelRef.current = null
+      if (cap) {
+        void invoke('oauth_loopback_cancel', { captureId: cap }).catch(() => undefined)
+      }
+    }
   }, [])
 
   const inputCls =
@@ -273,13 +376,92 @@ function OauthConnect({
 
   const disabledField = busy !== null || flow !== null
 
+  // ── Full-page Gmail consent: replaces IMAP + OAuth chrome ───────────
+  if (gmailSession) {
+    return (
+      <div className="flex flex-col h-full min-h-0" data-settings-id="email-link.oauth-browser">
+        <div className="flex-shrink-0 px-4 pt-4 pb-3 space-y-2 border-b border-[var(--color-border)]">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 space-y-1">
+              <h2 className="text-base font-medium text-[var(--color-text-primary)]">
+                Approve Google access
+              </h2>
+              <p className="text-[11px] text-[var(--color-text-muted)]">
+                Sign in and allow K2 in the browser below. When Google finishes, this page updates
+                automatically — you can stay in Settings.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={reset}
+              className="px-2.5 py-1 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0">URL</span>
+            <code className="flex-1 min-w-0 truncate text-[10px] font-mono text-[var(--color-text-secondary)] select-all">
+              {gmailSession.authorizationUrl}
+            </code>
+            <CopyButton text={gmailSession.authorizationUrl} title="Copy consent URL" />
+            <button
+              type="button"
+              onClick={() =>
+                void openUrl(gmailSession.authorizationUrl).catch(() => {
+                  useToastStore.getState().addToast('Could not open system browser', 'error')
+                })
+              }
+              className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
+              title="Open in the system browser if the in-app view is blocked"
+            >
+              Open outside K2
+            </button>
+          </div>
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            {gmailSession.hint ?? 'Waiting for approval…'}
+          </p>
+        </div>
+        {/* absolute inset-0 so the dock has a real non-zero rect for
+            browser_create (flex-1 alone can stay 0×0 for a frame in Settings). */}
+        <div className="flex-1 min-h-[280px] relative bg-[var(--color-bg)]">
+          <div className="absolute inset-0 flex flex-col">
+            {webFeatures.browserPane ? (
+              <BrowserPane
+                itemId={gmailSession.browserItemId}
+                tabId="settings-oauth-gmail"
+                paneGroupId="settings-oauth-gmail"
+                url={gmailSession.authorizationUrl}
+                standalone
+              />
+            ) : (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+                <p className="text-[12px] text-[var(--color-text-secondary)] max-w-md">
+                  In-app browser is not available here. Open the consent URL in your system browser,
+                  then return to K2 — the link still completes automatically.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void openUrl(gmailSession.authorizationUrl)}
+                  className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
+                >
+                  Open consent page
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-3" data-settings-id="email-link.oauth">
       <SectionTitle>Connect with Google or Microsoft</SectionTitle>
       <p className="text-[11px] text-[var(--color-text-muted)]">
         No app-password needed — approve access in your provider and K2 stores the connection in the
         daemon vault. Pick the <strong>Primary</strong> workspace and enter the account&rsquo;s email
-        so K2 can label the pending link.
+        so K2 can label the pending link. Gmail opens Google consent <strong>in this page</strong>.
       </p>
 
       <div className="grid grid-cols-2 gap-3">
@@ -312,7 +494,7 @@ function OauthConnect({
           type="button"
           disabled={!canStart}
           onClick={() => void start('gmail')}
-          title={canMutate ? 'Open Google consent on this machine' : 'Not available in viewer mode'}
+          title={canMutate ? 'Open Google consent in K2' : 'Not available in viewer mode'}
           className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
         >
           {busy === 'gmail' ? 'Starting…' : 'Connect Gmail'}
@@ -330,7 +512,6 @@ function OauthConnect({
         </button>
       </div>
 
-      {/* ── Live flow / result card ── */}
       {flow?.kind === 'device' && (
         <div className="border border-[var(--color-border)] px-3 py-3 space-y-2">
           <p className="text-[11px] text-[var(--color-text-secondary)]">
@@ -359,17 +540,6 @@ function OauthConnect({
           </div>
           <p className="text-[10px] text-[var(--color-text-muted)]">
             Waiting for approval… this card updates automatically.
-          </p>
-        </div>
-      )}
-
-      {flow?.kind === 'loopback' && (
-        <div className="border border-[var(--color-border)] px-3 py-3 space-y-1">
-          <p className="text-[11px] text-[var(--color-text-secondary)]">
-            A browser window opened on this machine — approve access there.
-          </p>
-          <p className="text-[10px] text-[var(--color-text-muted)]">
-            {flow.hint ?? 'Waiting for approval… this card updates automatically.'}
           </p>
         </div>
       )}
@@ -707,9 +877,11 @@ function OauthAppsSection({ canMutate }: { canMutate: boolean }): React.JSX.Elem
 function AddInboxForm({
   canMutate,
   onAdded,
+  onGmailOauthActive,
 }: {
   canMutate: boolean
   onAdded: (address: string) => void
+  onGmailOauthActive?: (active: boolean) => void
 }): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
 
@@ -722,9 +894,18 @@ function AddInboxForm({
   const [displayName, setDisplayName] = useState('')
   const [draftsFolder, setDraftsFolder] = useState('')
   const [password, setPassword] = useState('')
+  const [gmailOauthActive, setGmailOauthActive] = useState(false)
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const handleGmailOauthActive = useCallback(
+    (active: boolean): void => {
+      setGmailOauthActive(active)
+      onGmailOauthActive?.(active)
+    },
+    [onGmailOauthActive],
+  )
 
   const canSubmit =
     canMutate &&
@@ -779,152 +960,169 @@ function AddInboxForm({
   const inputCls =
     'px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
 
+  // Single OauthConnect mount: when Gmail session is active it expands
+  // to full pane and the IMAP/app-password chrome is not rendered.
   return (
-    <div className="grid gap-6 grid-cols-[minmax(0,42rem)]">
-      <div className="min-w-0" data-settings-id="email-link.add">
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">Connect an inbox</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
-          Connect one of your email accounts and pick the workspace that will be its{' '}
-          <strong>Primary</strong>. K2 connects over IMAP to verify the account now; the Primary
-          manages the account and can later grant other workspaces read (or read + draft) access.
-          Agents read the inbox and save reply drafts with <span className="font-mono">k2 mail</span>{' '}
-          — you review and send from your own mail client. K2 never sends from the account.
-        </p>
+    <div
+      className={
+        gmailOauthActive
+          ? 'h-full min-h-0 flex flex-col'
+          : 'grid gap-6 grid-cols-[minmax(0,42rem)]'
+      }
+    >
+      {!gmailOauthActive && (
+        <div className="min-w-0" data-settings-id="email-link.add">
+          <h2 className="text-base font-medium text-[var(--color-text-primary)]">Connect an inbox</h2>
+          <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+            Connect one of your email accounts and pick the workspace that will be its{' '}
+            <strong>Primary</strong>. Prefer <strong>Connect Gmail</strong> (opens Google consent
+            in this page). Or use an app-password over IMAP below. The Primary manages the account
+            and can grant other workspaces access. K2 never sends from the account.
+          </p>
+        </div>
+      )}
+
+      <div className={gmailOauthActive ? 'flex-1 min-h-0 flex flex-col' : undefined}>
+        <OauthConnect
+          canMutate={canMutate}
+          onConnected={onAdded}
+          onSessionActiveChange={handleGmailOauthActive}
+        />
       </div>
 
-      <OauthConnect canMutate={canMutate} onConnected={onAdded} />
+      {!gmailOauthActive && <OauthAppsSection canMutate={canMutate} />}
 
-      <OauthAppsSection canMutate={canMutate} />
-
-      <div className="border-t border-[var(--color-border)] pt-4 space-y-3">
-        <SectionTitle>Or connect manually over IMAP (app-password)</SectionTitle>
-        <div className="grid grid-cols-2 gap-3">
-          {field(
-            'Primary workspace',
-            <SettingDropdown
-              value={project}
-              placeholder="Pick a workspace…"
-              options={projects.map((p) => ({ value: p.id, label: p.name }))}
-              onChange={(v) => setProject(v)}
-              menuAlign="left"
-              className={!canMutate || busy ? 'opacity-50 pointer-events-none' : undefined}
-            />,
-            'The workspace that manages the account and who else can use it.',
-          )}
-          {field(
-            'Email address',
-            <input
-              type="email"
-              value={address}
-              disabled={!canMutate || busy}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="you@gmail.com"
-              className={inputCls}
-            />,
-          )}
-          {field(
-            'IMAP host',
-            <input
-              type="text"
-              value={host}
-              disabled={!canMutate || busy}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder="imap.gmail.com"
-              className={inputCls}
-            />,
-          )}
-          <div className="grid grid-cols-2 gap-2">
+      {!gmailOauthActive && (
+        <div className="border-t border-[var(--color-border)] pt-4 space-y-3">
+          <SectionTitle>Or connect manually over IMAP (app-password)</SectionTitle>
+          <div className="grid grid-cols-2 gap-3">
             {field(
-              'Port',
+              'Primary workspace',
+              <SettingDropdown
+                value={project}
+                placeholder="Pick a workspace…"
+                options={projects.map((p) => ({ value: p.id, label: p.name }))}
+                onChange={(v) => setProject(v)}
+                menuAlign="left"
+                className={!canMutate || busy ? 'opacity-50 pointer-events-none' : undefined}
+              />,
+              'The workspace that manages the account and who else can use it.',
+            )}
+            {field(
+              'Email address',
               <input
-                type="text"
-                inputMode="numeric"
-                value={port}
+                type="email"
+                value={address}
                 disabled={!canMutate || busy}
-                onChange={(e) => setPort(e.target.value)}
-                placeholder="993"
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="you@gmail.com"
                 className={inputCls}
               />,
             )}
             {field(
-              'TLS',
-              <SettingDropdown
-                value={tls}
-                options={TLS_OPTIONS}
-                onChange={(v) => setTls(v)}
-                className={!canMutate || busy ? 'opacity-50 pointer-events-none' : undefined}
+              'IMAP host',
+              <input
+                type="text"
+                value={host}
+                disabled={!canMutate || busy}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder="imap.gmail.com"
+                className={inputCls}
               />,
             )}
+            <div className="grid grid-cols-2 gap-2">
+              {field(
+                'Port',
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={port}
+                  disabled={!canMutate || busy}
+                  onChange={(e) => setPort(e.target.value)}
+                  placeholder="993"
+                  className={inputCls}
+                />,
+              )}
+              {field(
+                'TLS',
+                <SettingDropdown
+                  value={tls}
+                  options={TLS_OPTIONS}
+                  onChange={(v) => setTls(v)}
+                  className={!canMutate || busy ? 'opacity-50 pointer-events-none' : undefined}
+                />,
+              )}
+            </div>
+            {field(
+              'Username',
+              <input
+                type="text"
+                value={username}
+                disabled={!canMutate || busy}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder={address.trim() || 'defaults to the address'}
+                className={inputCls}
+              />,
+            )}
+            {field(
+              'Display name (optional)',
+              <input
+                type="text"
+                value={displayName}
+                disabled={!canMutate || busy}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Rosson"
+                className={inputCls}
+              />,
+            )}
+            {field(
+              'Drafts folder (optional)',
+              <input
+                type="text"
+                value={draftsFolder}
+                disabled={!canMutate || busy}
+                onChange={(e) => setDraftsFolder(e.target.value)}
+                placeholder="auto-detect"
+                className={inputCls}
+              />,
+              'Blank = K2 finds it. A wrong name errors with the real folder list.',
+            )}
           </div>
-          {field(
-            'Username',
+
+          <div className="space-y-2">
+            <SectionTitle>App password</SectionTitle>
             <input
-              type="text"
-              value={username}
+              type="password"
+              value={password}
               disabled={!canMutate || busy}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder={address.trim() || 'defaults to the address'}
-              className={inputCls}
-            />,
-          )}
-          {field(
-            'Display name (optional)',
-            <input
-              type="text"
-              value={displayName}
-              disabled={!canMutate || busy}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Rosson"
-              className={inputCls}
-            />,
-          )}
-          {field(
-            'Drafts folder (optional)',
-            <input
-              type="text"
-              value={draftsFolder}
-              disabled={!canMutate || busy}
-              onChange={(e) => setDraftsFolder(e.target.value)}
-              placeholder="auto-detect"
-              className={inputCls}
-            />,
-            'Blank = K2 finds it. A wrong name errors with the real folder list.',
-          )}
+              autoComplete="new-password"
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="app-specific password"
+              className={`w-full ${inputCls}`}
+            />
+            <p className="text-[10px] text-[var(--color-text-muted)]">
+              Use an <span className="font-mono">app-specific password</span> (Gmail / Fastmail issue
+              these), not your login password. It&rsquo;s stored securely in the daemon vault and never
+              shown again — K2 never displays it back and never sends from this account.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 pb-6">
+            <button
+              type="button"
+              disabled={!canSubmit}
+              onClick={() => void submit()}
+              title={canMutate ? 'Connect and verify over IMAP' : 'Not available in viewer mode'}
+              className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+            >
+              {busy ? 'Connecting…' : 'Connect inbox'}
+            </button>
+            {error && (
+              <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
+            )}
+          </div>
         </div>
-      </div>
-
-      <div className="space-y-2">
-        <SectionTitle>App password</SectionTitle>
-        <input
-          type="password"
-          value={password}
-          disabled={!canMutate || busy}
-          autoComplete="new-password"
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="app-specific password"
-          className={`w-full ${inputCls}`}
-        />
-        <p className="text-[10px] text-[var(--color-text-muted)]">
-          Use an <span className="font-mono">app-specific password</span> (Gmail / Fastmail issue
-          these), not your login password. It&rsquo;s stored securely in the daemon vault and never
-          shown again — K2 never displays it back and never sends from this account.
-        </p>
-      </div>
-
-      <div className="flex items-center gap-2 pb-6">
-        <button
-          type="button"
-          disabled={!canSubmit}
-          onClick={() => void submit()}
-          title={canMutate ? 'Connect and verify over IMAP' : 'Not available in viewer mode'}
-          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-        >
-          {busy ? 'Connecting…' : 'Connect inbox'}
-        </button>
-        {error && (
-          <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
-        )}
-      </div>
+      )}
     </div>
   )
 }
@@ -1044,6 +1242,8 @@ export function EmailLinkSection(): React.JSX.Element {
   const [revision, setRevision] = useState(0)
   const bump = useCallback(() => setRevision((r) => r + 1), [])
   const [selection, setSelection] = useState<Selection>({ kind: 'add' })
+  /** Gmail OAuth embeds BrowserPane — right panel goes edge-to-edge. */
+  const [gmailOauthActive, setGmailOauthActive] = useState(false)
 
   // ── Load the connected-inbox table from the unified catalog, filtered
   //    to LINKED accounts. Cross-platform: no status/supported gate. ────
@@ -1182,9 +1382,19 @@ export function EmailLinkSection(): React.JSX.Element {
         </div>
 
         {/* ── Right panel ── */}
-        <div className="flex-1 overflow-y-auto p-6 min-h-0">
+        <div
+          className={
+            gmailOauthActive && (selection.kind === 'add' || selectedInbox === null)
+              ? 'flex-1 min-h-0 overflow-hidden p-0 flex flex-col'
+              : 'flex-1 overflow-y-auto p-6 min-h-0'
+          }
+        >
           {selection.kind === 'add' || selectedInbox === null ? (
-            <AddInboxForm canMutate={canMutate} onAdded={onAdded} />
+            <AddInboxForm
+              canMutate={canMutate}
+              onAdded={onAdded}
+              onGmailOauthActive={setGmailOauthActive}
+            />
           ) : (
             <InboxDetail
               inbox={selectedInbox}

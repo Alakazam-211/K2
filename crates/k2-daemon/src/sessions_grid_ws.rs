@@ -391,7 +391,10 @@ fn decide_set_active(current: u64, subscriber_id: u64, active: bool) -> SetActiv
 ///   claim but leaves the PTY size untouched (pre-0.39.43 behavior).
 /// - **Release** — CAS-clear the active subscriber so a viewer that
 ///   took over concurrently isn't accidentally cleared.
-/// - **NoOp** — redundant claim/release: no store, no resize, no log.
+/// - **NoOp** — redundant claim/release for the claimer id itself: if
+///   the (re)claim carried new cols/rows, still store + resize when
+///   they differ (attach-size PR2 — claimer dims stay authoritative
+///   even on an idempotent re-assert). Pure release NoOp is silent.
 ///
 /// Returns the outcome so callers/tests can assert what happened.
 /// Extracted from the WS loop so the store + resize behavior is
@@ -463,7 +466,22 @@ fn apply_set_active(
                 subscriber_id,
             );
         }
-        SetActiveOutcome::NoOp => {}
+        SetActiveOutcome::NoOp => {
+            // Already the claimer (or redundant release): still honor a
+            // dim update so a re-assert after measure-first spawn can
+            // move the PTY without waiting for a follow-up Resize.
+            if active {
+                if let (Some(c), Some(r)) = (cols, rows) {
+                    session
+                        .active_cols
+                        .store(c, std::sync::atomic::Ordering::Relaxed);
+                    session
+                        .active_rows
+                        .store(r, std::sync::atomic::Ordering::Relaxed);
+                    DaemonPtySession::request_resize(session, c, r);
+                }
+            }
+        }
     }
     outcome
 }
@@ -676,6 +694,30 @@ pub async fn serve_session_grid_connection(
     // binary-encoding, and dropping it on any exit path releases that.
     let (mut frames_rx, shared_emit_state, _format_reg) =
         crate::grid_emitter::attach(&session, &pane_id, proto_k1);
+
+    // Attach-size PR2 — pre-snap resize. Order: subscribe (above) →
+    // optional resize to last known claimer fit → ONE initial snapshot.
+    // Without this, a reattach after a measured claim still first-
+    // snaps at whatever the PTY last happened to be (often VT 80×24
+    // from a headless ensure), then set_active reflows → k1 fat resync.
+    // `request_resize` no-ops same-dims and pin-clamps, so this is free
+    // when size is already correct. Non-claimers still receive the
+    // snapshot at the claimer's size (one logical PTY size).
+    {
+        use std::sync::atomic::Ordering;
+        let ac = session.active_cols.load(Ordering::Relaxed);
+        let ar = session.active_rows.load(Ordering::Relaxed);
+        if ac > 0 && ar > 0 {
+            DaemonPtySession::request_resize(&session, ac, ar);
+            log_debug!(
+                "[daemon/sessions_grid_ws] pre-snap resize session={} sub={} cols={} rows={}",
+                session.session_id,
+                subscriber_id,
+                ac,
+                ar,
+            );
+        }
+    }
 
     // Initial full snapshot — READ-ONLY. No reset_damage (that would
     // starve every OTHER subscriber of the damage they haven't
@@ -1725,6 +1767,30 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    /// Attach-size PR2: a redundant claim (NoOp) that carries new dims
+    /// must still store + resize — claimer geometry stays authoritative
+    /// without waiting for a follow-up Resize frame.
+    #[cfg(unix)]
+    #[test]
+    fn reassert_claim_with_new_dims_still_resizes() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let s = spawn_test_session();
+        assert_eq!(
+            apply_set_active(&s, 7, true, Some(80), Some(24)),
+            SetActiveOutcome::Claim
+        );
+        assert_dims_settle(&s, (80, 24), "initial claim");
+
+        // Same claimer re-asserts with a measured pane fit.
+        let outcome = apply_set_active(&s, 7, true, Some(194), Some(62));
+        assert_eq!(outcome, SetActiveOutcome::NoOp, "same claimer reassert is NoOp");
+        assert_eq!(s.active_subscriber.load(Relaxed), 7);
+        assert_eq!(s.active_cols.load(Relaxed), 194);
+        assert_eq!(s.active_rows.load(Relaxed), 62);
+        assert_dims_settle(&s, (194, 62), "NoOp reassert must still resize");
     }
 
     #[cfg(unix)]

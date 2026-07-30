@@ -114,11 +114,34 @@ impl EnsurePinnedChatOutcome {
     }
 }
 
-/// Default PTY dimensions for a freshly-spawned pinned chat. The
-/// renderer ResizeObserver-corrects on attach, so these only matter
-/// for headless / mobile consumers until the first resize.
+/// Last-resort PTY dimensions when no live session fit and no stored
+/// claimer dims exist (true headless / first ensure with no client).
+/// Prefer real last geometry whenever a session is live — see
+/// [`session_fit_or_default`].
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
+
+/// Resolve cols/rows for an ensure response / spawn body.
+/// Prefer last claimer dims on the live session, else live PTY size,
+/// else VT 80×24. Never hardcode 80×24 when a stored fit exists.
+fn session_fit_or_default(session: &std::sync::Arc<k2_core::terminal::DaemonPtySession>) -> (u16, u16) {
+    use k2_core::terminal::Dimensions;
+    use std::sync::atomic::Ordering;
+    let ac = session.active_cols.load(Ordering::Relaxed);
+    let ar = session.active_rows.load(Ordering::Relaxed);
+    if ac > 0 && ar > 0 {
+        return (ac, ar);
+    }
+    let term_mutex = session.term();
+    let term = term_mutex.lock();
+    let cols = term.columns() as u16;
+    let rows = term.screen_lines() as u16;
+    if cols > 0 && rows > 0 {
+        (cols, rows)
+    } else {
+        (DEFAULT_COLS, DEFAULT_ROWS)
+    }
+}
 
 /// Idempotent find-or-spawn of a workspace's canonical pinned-chat
 /// session. See the module doc for the full contract.
@@ -196,14 +219,28 @@ pub fn ensure_pinned_chat(
     //    + stamps workspace_tab_sessions, and registration completes
     //    before this returns — so a concurrent ensure reuses the same
     //    session id (closes the #682 dup-in-use race).
+    // Prefer last known fit when a live session already exists (reuse
+    // path returns without re-spawning). Fresh spawn still uses VT
+    // 80×24 as true last-resort — no client measure on this headless
+    // ensure door.
+    let (spawn_cols, spawn_rows) =
+        if let Some(existing) = crate::v2_session_map::lookup_by_agent_name(&canonical_key) {
+            if existing.is_child_alive() && !force_respawn {
+                session_fit_or_default(&existing)
+            } else {
+                (DEFAULT_COLS, DEFAULT_ROWS)
+            }
+        } else {
+            (DEFAULT_COLS, DEFAULT_ROWS)
+        };
     let req = SpawnWorkspaceSessionRequest {
         agent_name: project_id.clone(),
         project_id: Some(project_id.clone()),
         cwd: resolved.cwd.clone(),
         command: Some(resolved.command.clone()),
         args: Some(resolved.args.clone()),
-        cols: DEFAULT_COLS,
-        rows: DEFAULT_ROWS,
+        cols: spawn_cols,
+        rows: spawn_rows,
         canonical_key: Some(canonical_key.clone()),
         // W2: the spawning preset's migration-0070 env (resume_chat
         // resolved it alongside command/args). Values never logged.
@@ -216,6 +253,14 @@ pub fn ensure_pinned_chat(
     let spawn_outcome =
         spawn_agent_session_v2_blocking(req).map_err(|e| format!("spawn failed: {e}"))?;
     let session_id = spawn_outcome.session_id.to_string();
+    // Echo real session geometry (claimer dims or live PTY), not the
+    // hardcoded default — clients attach with this as the expected size.
+    let (out_cols, out_rows) =
+        if let Some(live) = crate::v2_session_map::lookup_by_agent_name(&canonical_key) {
+            session_fit_or_default(&live)
+        } else {
+            (spawn_cols, spawn_rows)
+        };
 
     // 5. Stamp workspace_sessions.active_terminal_id (so the next
     //    attach resolves the live PTY without walking the in-memory
@@ -282,8 +327,8 @@ pub fn ensure_pinned_chat(
         resumed_existing: resolved.resumed_existing,
         command: resolved.command,
         args: resolved.args,
-        cols: DEFAULT_COLS,
-        rows: DEFAULT_ROWS,
+        cols: out_cols,
+        rows: out_rows,
         reused: spawn_outcome.reused,
         provider: resolved.provider,
         pending_session_discovery: resolved.pending_session_discovery,

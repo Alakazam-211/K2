@@ -519,9 +519,10 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
 
     let __t_total = std::time::Instant::now();
 
-    // Find-or-spawn: existing session wins. The response preserves
-    // whatever cols/rows the existing session was opened at — the
-    // caller will ResizeObserver-correct if its viewport differs.
+    // Find-or-spawn: existing live session wins. Client measure-first
+    // (PR1) posts real pane cols/rows; on reuse we honor that fit
+    // immediately so the first grid attach snapshot is already at the
+    // target size (no 80×24 snap → claim-resize → reflow storm).
     let __t_lookup = std::time::Instant::now();
     let existing = v2_session_map::lookup_by_agent_name(&req.agent_name);
     let lookup_ms = __t_lookup.elapsed().as_secs_f64() * 1000.0;
@@ -549,12 +550,12 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     let existing = existing.filter(|s| s.is_child_alive());
 
     if let Some(existing) = existing {
-        let (cols, rows) = current_dims(&existing);
+        let (cols, rows) = apply_spawn_fit(&existing, req.cols, req.rows);
         let session_id_str = existing.session_id.to_string();
         let total_ms = __t_total.elapsed().as_secs_f64() * 1000.0;
         log_debug!(
-            "[v2-perf] side=daemon SPAWN_SUMMARY session={} agent={} reused=true total_ms={:.3} lookup_ms={:.3} dpty_spawn_ms=0",
-            session_id_str, req.agent_name, total_ms, lookup_ms
+            "[v2-perf] side=daemon SPAWN_SUMMARY session={} agent={} reused=true total_ms={:.3} lookup_ms={:.3} dpty_spawn_ms=0 cols={} rows={}",
+            session_id_str, req.agent_name, total_ms, lookup_ms, cols, rows
         );
         let mut out = serde_json::json!({
             "sessionId": session_id_str,
@@ -926,6 +927,18 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             }
         }
     };
+    // Seed last-claimer dims at create so a grid attach before the first
+    // SetActive/Resize still pre-snaps to the body fit (fresh PTY is already
+    // at req.cols×rows — this only records the claimer size, no reflow).
+    {
+        use std::sync::atomic::Ordering;
+        session
+            .active_cols
+            .store(req.cols.max(1), Ordering::Relaxed);
+        session
+            .active_rows
+            .store(req.rows.max(1), Ordering::Relaxed);
+    }
     let dpty_spawn_ms = __t_spawn.elapsed().as_secs_f64() * 1000.0;
 
     // COMPAT-58 (#58 Phase 1 / PR-A) — per-cell UDS after PTY open.
@@ -1295,8 +1308,7 @@ pub fn handle_v2_close(body: &[u8]) -> HandlerResult {
 
 /// Read the current `{cols, rows}` from a session's alacritty Term.
 /// Used to populate the response for a reused session so the caller
-/// knows the actual dimensions (which may differ from what they
-/// requested if an earlier caller already sized the session).
+/// knows the actual dimensions after any pre-snap resize.
 fn current_dims(session: &DaemonPtySession) -> (u16, u16) {
     use k2_core::terminal::Dimensions;
     let term_mutex = session.term();
@@ -1304,6 +1316,53 @@ fn current_dims(session: &DaemonPtySession) -> (u16, u16) {
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;
     (cols, rows)
+}
+
+/// Honor a spawn body's cols/rows against a live session (reuse path).
+///
+/// When the requested fit differs from the live PTY, store it as the
+/// last claimer dims and resize immediately so the next grid attach's
+/// initial snapshot is already at the target size. Same-dims is a
+/// no-op via [`DaemonPtySession::request_resize`]. Returns the dims
+/// that should be echoed in the spawn response (post-resize reality).
+///
+/// Headless callers that omit cols/rows land on the serde defaults
+/// (80×24) — fresh-spawn last resort. On reuse that still applies the
+/// default when it differs; callers that want "keep existing" must
+/// send the live size (or not re-spawn).
+fn apply_spawn_fit(
+    session: &std::sync::Arc<DaemonPtySession>,
+    cols: u16,
+    rows: u16,
+) -> (u16, u16) {
+    use std::sync::atomic::Ordering;
+
+    let cols = cols.max(1);
+    let rows = rows.max(1);
+    let (cur_c, cur_r) = current_dims(session);
+    if (cols, rows) != (cur_c, cur_r) {
+        session.active_cols.store(cols, Ordering::Relaxed);
+        session.active_rows.store(rows, Ordering::Relaxed);
+        DaemonPtySession::request_resize(session, cols, rows);
+        log_debug!(
+            "[v2-spawn] reuse pre-snap resize session={} {}x{} → {}x{}",
+            session.session_id,
+            cur_c,
+            cur_r,
+            cols,
+            rows,
+        );
+    } else if session.active_cols.load(Ordering::Relaxed) == 0
+        || session.active_rows.load(Ordering::Relaxed) == 0
+    {
+        // Seed claimer dims so a subsequent grid attach pre-snap
+        // has something to work with even when size was already correct.
+        session.active_cols.store(cols, Ordering::Relaxed);
+        session.active_rows.store(rows, Ordering::Relaxed);
+    }
+    // Re-read: pin clamp / debounce same-dims skip may leave live dims
+    // different from the request (e.g. pinned session).
+    current_dims(session)
 }
 
 /// Subscribe to a freshly-spawned session's alacritty events on a

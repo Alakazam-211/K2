@@ -282,6 +282,17 @@ pub fn spawn_agent_session_v2_blocking(
 
     let session = DaemonPtySession::spawn(cfg)
         .map_err(|e| format!("v2 spawn failed: {e}"))?;
+    // Seed last-claimer dims at create (attach-size PR2) so a grid
+    // pre-snap has the body fit before the first SetActive.
+    {
+        use std::sync::atomic::Ordering;
+        session
+            .active_cols
+            .store(req.cols.max(1), Ordering::Relaxed);
+        session
+            .active_rows
+            .store(req.rows.max(1), Ordering::Relaxed);
+    }
 
     // COMPAT-58 — bind per-cell UDS after PTY open (bare-PTY → no chown).
     crate::session_token::activate_cell_uds(session_id, None);

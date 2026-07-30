@@ -2637,6 +2637,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // the requested dims arrives, or by a hard timeout after which we
   // render whatever we have unscaled (the daemon may have coalesced
   // the request away).
+  //
+  // Attach-size PR3 audit: the timeout MUST stay — an indefinite hold
+  // freezes a terminal the child legitimately cleared (see expiry
+  // handler). Do not remove RESIZE_HOLD_TIMEOUT_MS or block acks on it.
   const RESIZE_HOLD_TIMEOUT_MS = 500
   const [pendingResize, setPendingResize] = useState<{
     cols: number

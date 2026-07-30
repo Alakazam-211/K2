@@ -449,6 +449,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // active_reaper.rs). Leaving Active flips this false live and the
   // pane parks exactly as today. On a daemon without `canonical-active`
   // the mirror is empty ⇒ false ⇒ today's behavior.
+  //
+  // Attach-size PR3 audit: this is the retain-while-hidden path that
+  // stops Active-section tab flips from full remount → re-toy-spawn.
+  // Covered by AgentChatPane.test "pinned-chat retention — retainWhileHidden
+  // threading". Do not gate or drop this prop without replacing that test.
   const retainWhileHidden = useActiveStore((s) => s.activeProjectIds.has(projectId))
 
   // #689 — the session id TerminalPane is currently attached to. The

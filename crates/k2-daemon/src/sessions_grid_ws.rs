@@ -249,6 +249,173 @@ const UNACKED_FRAMES_MAX: usize = 32;
 /// quiet gap and ONE authoritative snapshot when it catches up.
 const UNACKED_BYTES_MAX: usize = 2 * 1024 * 1024;
 
+/// Attach / claimer-resize settle fence (PR3 / PRD §5).
+///
+/// After attach or an applied claimer resize, size settle can emit a
+/// burst of reflow frames. Under k1 ack pacing those trip
+/// pause → fat full resync, often repeatedly during the first few
+/// hundred ms ("death spiral").
+///
+/// **Choice (documented for the PRD alternatives):** for THIS
+/// connection only, while the fence is active:
+///   1. Forward frames while under the normal unacked cap (W=32 or
+///      any lower Remote Pace cap — fence is independent of W).
+///   2. Once credit would trip pause, **drop** further emitter
+///      frames instead of pausing; mark `dropped`.
+///   3. At fence end, if anything was dropped, send **one** latest
+///      READ-ONLY snapshot (same floor restamp as Lagged/ack-resync).
+///
+/// Rejected alternatives:
+/// - Coalesce-only at end without under-cap forward: delays useful
+///   content for the full window even when the client has credit.
+/// - Raise unacked cap / suppress pause without drop: still ships a
+///   reflow firehose into a slow client under W=8.
+///
+/// Multi-subscriber safe: the shared emitter is unchanged; only this
+/// connection's forwarder consults the fence. Remote Pace
+/// (pace=latest / W) is left alone — fence works with both W=32 and W=8.
+const ATTACH_SETTLE_FENCE_MS: u64 = 400;
+
+/// Per-connection attach/resize settle fence. Pure state machine —
+/// unit-tested below; the WS loop only drives arm / drop / deadline.
+#[derive(Debug, Clone, Default)]
+struct AttachSettleFence {
+    /// Wall-clock end of the active window. `None` = inactive.
+    until: Option<std::time::Instant>,
+    /// ≥1 emitter frame was dropped while the fence was active (or we
+    /// converted a pre-existing pause into a fence coalesce).
+    dropped: bool,
+}
+
+impl AttachSettleFence {
+    /// Arm a fresh fence starting at `now` (attach path).
+    fn arm(now: std::time::Instant) -> Self {
+        Self {
+            until: Some(now + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS)),
+            dropped: false,
+        }
+    }
+
+    /// (Re)arm after an applied claimer resize. Keeps any prior
+    /// `dropped` bit so a mid-fence rearm still coalesces to one snap.
+    fn rearm(&mut self, now: std::time::Instant) {
+        self.until =
+            Some(now + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS));
+    }
+
+    /// Convert an in-progress pause into fence coalesce: clear pause
+    /// at the call site, mark dropped, rearm. Covers "resize while
+    /// already paused" without a mid-fence fat resync.
+    fn rearm_clearing_pause(&mut self, now: std::time::Instant) {
+        self.rearm(now);
+        self.dropped = true;
+    }
+
+    fn is_active(&self, now: std::time::Instant) -> bool {
+        self.until.map(|u| now < u).unwrap_or(false)
+    }
+
+    fn deadline(&self) -> Option<std::time::Instant> {
+        self.until
+    }
+
+    fn note_dropped(&mut self) {
+        self.dropped = true;
+    }
+
+    /// A full resync already covered dropped damage (Lagged / ack path).
+    fn clear_dropped(&mut self) {
+        self.dropped = false;
+    }
+
+    /// Test/assert helper — production path uses `on_deadline` / `dropped`.
+    #[cfg(test)]
+    fn has_dropped(&self) -> bool {
+        self.dropped
+    }
+
+    /// True while active: the forwarder must not enter `paused`
+    /// (pause → resync death spiral is exactly what we prevent).
+    /// Pause suppression is applied via `should_trip_pause_after_enqueue`
+    /// with `fence_active`; this mirrors the policy for tests.
+    #[cfg(test)]
+    fn suppress_pause(&self, now: std::time::Instant) -> bool {
+        self.is_active(now)
+    }
+
+    /// Fence deadline reached: deactivate and report whether a
+    /// coalesce snapshot is required. Idempotent once inactive.
+    fn on_deadline(&mut self, now: std::time::Instant) -> bool {
+        match self.until {
+            Some(u) if now >= u => {
+                self.until = None;
+                let need = self.dropped;
+                self.dropped = false;
+                need
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Pure forward decision for one emitter frame under k1 pacing +
+/// optional settle fence. Extracted so low-credit attach sims and the
+/// live loop share one policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameFwd {
+    /// Client already paused (non-fence): drop; resync on next ack.
+    DropPaused,
+    /// Fence active and credit exhausted: drop; one snap at fence end.
+    DropFence,
+    /// Forward; if `trip_pause`, enter paused after enqueue (only when
+    /// fence is inactive).
+    Forward { trip_pause: bool },
+}
+
+fn decide_k1_frame_fwd(
+    paused: bool,
+    fence_active: bool,
+    unacked_frames: usize,
+    unacked_bytes: usize,
+    frames_max: usize,
+    bytes_max: usize,
+) -> FrameFwd {
+    if paused {
+        return FrameFwd::DropPaused;
+    }
+    let over = unacked_frames >= frames_max || unacked_bytes >= bytes_max;
+    if over {
+        if fence_active {
+            FrameFwd::DropFence
+        } else {
+            // Already at/over cap with nothing new enqueued — still
+            // drop (matches pre-PR3 "paused" arm which never forwards).
+            // Callers normally set paused on the frame that crossed the
+            // cap; this branch is defensive for race/reorder.
+            FrameFwd::DropPaused
+        }
+    } else {
+        // Enqueue will push one more frame; trip pause when THAT
+        // crosses the cap — but only outside the fence.
+        // Caller applies after enqueue with updated counts.
+        FrameFwd::Forward { trip_pause: false }
+    }
+}
+
+/// After a successful forward enqueue, should we enter `paused`?
+fn should_trip_pause_after_enqueue(
+    fence_active: bool,
+    unacked_frames: usize,
+    unacked_bytes: usize,
+    frames_max: usize,
+    bytes_max: usize,
+) -> bool {
+    if fence_active {
+        return false;
+    }
+    unacked_frames >= frames_max || unacked_bytes >= bytes_max
+}
+
 /// Ceiling on a forwarded OSC 52 payload (decoded bytes). Anything a
 /// human meaningfully copies fits far under this; vte's std build
 /// buffers OSC payloads UNBOUNDED (`osc_raw: Vec<u8>`,
@@ -854,13 +1021,64 @@ pub async fn serve_session_grid_connection(
     let mut unacked_bytes: usize = 0;
     let mut paused = false;
 
+    // PR3 attach settle fence — armed for the first few hundred ms
+    // after connect (and rearmed on applied claimer resize). See
+    // `AttachSettleFence` for the design choice. JSON (non-k1) clients
+    // never hit pause, so the fence is a no-op for them.
+    let mut settle_fence = AttachSettleFence::arm(std::time::Instant::now());
+
     // Main loop: event-driven. Every Wakeup from alacritty is a
     // cue to build_emit + send. Inbound messages route to
     // session.write() / session.resize(). No coalescing for v1 —
     // build_emit itself returns Skip when nothing changed, which
     // keeps the volume sane.
     loop {
+        // Fence deadline wake (recomputed each iteration so rearm moves it).
+        let fence_deadline = settle_fence.deadline().map(|d| {
+            // If already past, fire immediately (zero sleep).
+            let now = tokio::time::Instant::now();
+            let target = tokio::time::Instant::from_std(d);
+            if target <= now {
+                now
+            } else {
+                target
+            }
+        });
+
         tokio::select! {
+            // PR3: settle fence end — optional one coalesce snapshot.
+            _ = async {
+                match fence_deadline {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                let now = std::time::Instant::now();
+                if settle_fence.on_deadline(now) {
+                    // Dropped frames while fence was active → one
+                    // READ-ONLY latest snap. Shared emitter untouched.
+                    let snap = {
+                        let st = shared_emit_state.lock();
+                        let term_mutex = session.term();
+                        let term = term_mutex.lock();
+                        frame_floor = st.version;
+                        snapshot_term(&pane_id, &*term, frame_floor)
+                    };
+                    unacked.clear();
+                    unacked_bytes = 0;
+                    paused = false;
+                    log_debug!(
+                        "[daemon/sessions_grid_ws] settle fence end — coalesce \
+                         snapshot at floor {} for session {} sub {}",
+                        frame_floor,
+                        session.session_id,
+                        subscriber_id,
+                    );
+                    if send_snapshot(&mut write, &snap, proto_k1).await.is_err() {
+                        break;
+                    }
+                }
+            }
             // Re-auth heartbeat — see `auth_recheck` above. Closes the
             // socket the moment the connecting user is revoked.
             _ = auth_recheck.tick() => {
@@ -887,53 +1105,98 @@ pub async fn serve_session_grid_connection(
                 match frame {
                     Ok(f) => {
                         if f.version > frame_floor {
-                            if proto_k1 && paused {
-                                // Ack backlog over threshold: drop the
-                                // frame for THIS connection only. The
-                                // resync snapshot on the next ack is
-                                // stamped with a fresh floor, so every
-                                // frame skipped here is covered by it
-                                // — including `scrollback_appended`
-                                // rows, which are NOT idempotent and
-                                // must never be both skipped-then-
-                                // snapshotted AND replayed.
+                            let now = std::time::Instant::now();
+                            let fence_active = settle_fence.is_active(now);
+                            let fwd = if proto_k1 {
+                                decide_k1_frame_fwd(
+                                    paused,
+                                    fence_active,
+                                    unacked.len(),
+                                    unacked_bytes,
+                                    UNACKED_FRAMES_MAX,
+                                    UNACKED_BYTES_MAX,
+                                )
                             } else {
-                                let msg = if proto_k1 {
-                                    match &f.binary {
-                                        Some(b) => Message::Binary(b.to_vec()),
-                                        // Unreachable for floor-clearing
-                                        // frames (attach bumps the k1
-                                        // refcount before the floor is
-                                        // stamped); the JSON text is
-                                        // still a correct fallback —
-                                        // the client decodes both.
-                                        None => Message::Text(f.text.to_string()),
-                                    }
-                                } else {
-                                    Message::Text(f.text.to_string())
-                                };
-                                let payload_len = msg.len();
-                                if write.send(msg).await.is_err() {
-                                    break;
-                                }
-                                if proto_k1 {
-                                    unacked.push_back((f.version, payload_len));
-                                    unacked_bytes += payload_len;
-                                    if unacked.len() >= UNACKED_FRAMES_MAX
-                                        || unacked_bytes >= UNACKED_BYTES_MAX
-                                    {
-                                        if !paused {
-                                            log_debug!(
-                                                "[daemon/sessions_grid_ws] k1 ack backlog \
-                                                 ({} frames / {} bytes) — pausing deltas for \
-                                                 session {} sub {}",
-                                                unacked.len(),
-                                                unacked_bytes,
-                                                session.session_id,
-                                                subscriber_id,
-                                            );
-                                        }
+                                FrameFwd::Forward { trip_pause: false }
+                            };
+                            match fwd {
+                                FrameFwd::DropPaused => {
+                                    // Ack backlog over threshold: drop
+                                    // for THIS connection only. Resync
+                                    // snapshot on the next ack restamps
+                                    // the floor (covers scrollback_appended).
+                                    // Enter pause if we crossed the cap
+                                    // without the trip_pause path (e.g.
+                                    // fence just ended while unacked was
+                                    // already at the ceiling).
+                                    if !paused {
+                                        log_debug!(
+                                            "[daemon/sessions_grid_ws] k1 ack backlog \
+                                             ({} frames / {} bytes) — pausing deltas for \
+                                             session {} sub {}",
+                                            unacked.len(),
+                                            unacked_bytes,
+                                            session.session_id,
+                                            subscriber_id,
+                                        );
                                         paused = true;
+                                    }
+                                }
+                                FrameFwd::DropFence => {
+                                    // PR3: credit exhausted during settle
+                                    // fence — drop without pausing; one
+                                    // coalesce snap at fence end.
+                                    settle_fence.note_dropped();
+                                }
+                                FrameFwd::Forward { .. } => {
+                                    let msg = if proto_k1 {
+                                        match &f.binary {
+                                            Some(b) => Message::Binary(b.to_vec()),
+                                            // Unreachable for floor-clearing
+                                            // frames (attach bumps the k1
+                                            // refcount before the floor is
+                                            // stamped); the JSON text is
+                                            // still a correct fallback —
+                                            // the client decodes both.
+                                            None => Message::Text(f.text.to_string()),
+                                        }
+                                    } else {
+                                        Message::Text(f.text.to_string())
+                                    };
+                                    let payload_len = msg.len();
+                                    if write.send(msg).await.is_err() {
+                                        break;
+                                    }
+                                    if proto_k1 {
+                                        unacked.push_back((f.version, payload_len));
+                                        unacked_bytes += payload_len;
+                                        if should_trip_pause_after_enqueue(
+                                            fence_active,
+                                            unacked.len(),
+                                            unacked_bytes,
+                                            UNACKED_FRAMES_MAX,
+                                            UNACKED_BYTES_MAX,
+                                        ) {
+                                            if !paused {
+                                                log_debug!(
+                                                    "[daemon/sessions_grid_ws] k1 ack backlog \
+                                                     ({} frames / {} bytes) — pausing deltas for \
+                                                     session {} sub {}",
+                                                    unacked.len(),
+                                                    unacked_bytes,
+                                                    session.session_id,
+                                                    subscriber_id,
+                                                );
+                                            }
+                                            paused = true;
+                                        } else if fence_active
+                                            && (unacked.len() >= UNACKED_FRAMES_MAX
+                                                || unacked_bytes >= UNACKED_BYTES_MAX)
+                                        {
+                                            // Crossed the cap under the
+                                            // fence: next frames DropFence.
+                                            // Do not set paused.
+                                        }
                                     }
                                 }
                             }
@@ -962,6 +1225,9 @@ pub async fn serve_session_grid_connection(
                         unacked.clear();
                         unacked_bytes = 0;
                         paused = false;
+                        // Lagged recovery already restamped — clear any
+                        // pending fence coalesce so we don't double-snap.
+                        settle_fence.clear_dropped();
                         if send_snapshot(&mut write, &snap, proto_k1)
                             .await
                             .is_err()
@@ -1271,6 +1537,15 @@ pub async fn serve_session_grid_connection(
                                         DaemonPtySession::request_resize(
                                             &session, my_cols, my_rows,
                                         );
+                                        // PR3: input-steal claimer resize
+                                        // can reflow — rearm settle fence.
+                                        let now = std::time::Instant::now();
+                                        if paused {
+                                            paused = false;
+                                            settle_fence.rearm_clearing_pause(now);
+                                        } else {
+                                            settle_fence.rearm(now);
+                                        }
                                     }
                                     log_debug!(
                                         "[v2-perf] side=daemon stage=active_claim_via_input \
@@ -1334,6 +1609,16 @@ pub async fn serve_session_grid_connection(
                                     DaemonPtySession::request_resize(
                                         &session, cols, rows,
                                     );
+                                    // PR3: claimer resize can reflow for
+                                    // hundreds of ms — rearm the settle
+                                    // fence so pause→resync doesn't spiral.
+                                    let now = std::time::Instant::now();
+                                    if paused {
+                                        paused = false;
+                                        settle_fence.rearm_clearing_pause(now);
+                                    } else {
+                                        settle_fence.rearm(now);
+                                    }
                                 } else {
                                     log_debug!(
                                         "[v2-perf] side=daemon stage=resize_ignored \
@@ -1383,13 +1668,31 @@ pub async fn serve_session_grid_connection(
                                     );
                                     continue;
                                 }
-                                apply_set_active(
+                                let sa_outcome = apply_set_active(
                                     &session,
                                     subscriber_id,
                                     active,
                                     cols,
                                     rows,
                                 );
+                                // PR3: a claim (or NoOp reassert with dims)
+                                // that applied a resize can reflow — rearm
+                                // the settle fence. Pure release NoOps skip.
+                                let may_reflow = matches!(
+                                    sa_outcome,
+                                    SetActiveOutcome::Claim | SetActiveOutcome::NoOp
+                                ) && active
+                                    && cols.is_some()
+                                    && rows.is_some();
+                                if may_reflow {
+                                    let now = std::time::Instant::now();
+                                    if paused {
+                                        paused = false;
+                                        settle_fence.rearm_clearing_pause(now);
+                                    } else {
+                                        settle_fence.rearm(now);
+                                    }
+                                }
                             }
                             Ok(Inbound::SetMode { mode }) => {
                                 // S5 — per-window mode flip. Unknown values
@@ -1509,6 +1812,7 @@ pub async fn serve_session_grid_connection(
                                     unacked.clear();
                                     unacked_bytes = 0;
                                     paused = false;
+                                    settle_fence.clear_dropped();
                                     log_debug!(
                                         "[daemon/sessions_grid_ws] k1 ack (v{version}) after \
                                          backlog pause — resync snapshot at floor {} for \
@@ -1644,6 +1948,216 @@ async fn send_error_then_close(stream: &mut TcpStream, msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── PR3 attach settle fence ───────────────────────────────────
+    //
+    // Pure state machine + low-credit simulation. Fail loudly: any
+    // pause→resync during the fence window is a regression.
+
+    #[test]
+    fn fence_arms_for_attach_settle_window() {
+        let t0 = std::time::Instant::now();
+        let fence = AttachSettleFence::arm(t0);
+        assert!(fence.is_active(t0), "active at arm");
+        assert!(
+            fence.is_active(t0 + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS - 1)),
+            "active just before end"
+        );
+        assert!(
+            !fence.is_active(t0 + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS)),
+            "inactive at exact end"
+        );
+        assert!(fence.suppress_pause(t0));
+        assert!(!fence.has_dropped());
+    }
+
+    #[test]
+    fn fence_on_deadline_emits_at_most_one_coalesce_flag() {
+        let t0 = std::time::Instant::now();
+        let mut fence = AttachSettleFence::arm(t0);
+        fence.note_dropped();
+        let end = t0 + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS);
+        assert!(
+            fence.on_deadline(end),
+            "dropped frames must request one coalesce snapshot"
+        );
+        assert!(
+            !fence.on_deadline(end + std::time::Duration::from_millis(1)),
+            "second poll must not request another snapshot"
+        );
+        assert!(!fence.is_active(end));
+        assert!(!fence.has_dropped());
+    }
+
+    #[test]
+    fn fence_on_deadline_quiet_needs_no_snapshot() {
+        let t0 = std::time::Instant::now();
+        let mut fence = AttachSettleFence::arm(t0);
+        let end = t0 + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS);
+        assert!(
+            !fence.on_deadline(end),
+            "no drops → no coalesce snapshot"
+        );
+    }
+
+    #[test]
+    fn fence_rearm_extends_window_keeps_dropped() {
+        let t0 = std::time::Instant::now();
+        let mut fence = AttachSettleFence::arm(t0);
+        fence.note_dropped();
+        let mid = t0 + std::time::Duration::from_millis(200);
+        fence.rearm(mid);
+        assert!(
+            fence.is_active(mid + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS - 1))
+        );
+        assert!(fence.has_dropped(), "rearm must not clear dropped");
+    }
+
+    #[test]
+    fn fence_rearm_clearing_pause_marks_dropped() {
+        let t0 = std::time::Instant::now();
+        let mut fence = AttachSettleFence::arm(t0);
+        fence.rearm_clearing_pause(t0 + std::time::Duration::from_millis(50));
+        assert!(fence.has_dropped());
+        assert!(fence.is_active(t0 + std::time::Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn decide_fwd_drops_when_paused() {
+        assert_eq!(
+            decide_k1_frame_fwd(true, true, 0, 0, 8, UNACKED_BYTES_MAX),
+            FrameFwd::DropPaused
+        );
+    }
+
+    #[test]
+    fn decide_fwd_fence_drops_over_credit_without_pause() {
+        assert_eq!(
+            decide_k1_frame_fwd(false, true, 8, 0, 8, UNACKED_BYTES_MAX),
+            FrameFwd::DropFence
+        );
+        assert!(
+            !should_trip_pause_after_enqueue(true, 32, 0, 8, UNACKED_BYTES_MAX),
+            "fence must suppress pause even far over cap"
+        );
+    }
+
+    #[test]
+    fn decide_fwd_outside_fence_trips_pause_after_enqueue() {
+        assert!(should_trip_pause_after_enqueue(
+            false,
+            8,
+            0,
+            8,
+            UNACKED_BYTES_MAX
+        ));
+        assert!(!should_trip_pause_after_enqueue(
+            false,
+            7,
+            0,
+            8,
+            UNACKED_BYTES_MAX
+        ));
+    }
+
+    /// Simulated attach + synthetic repaint under low credit (W=8 and
+    /// W=32): during the fence, pause is never entered and at most one
+    /// coalesce resync is produced at fence end.
+    fn sim_attach_repaint_under_credit(frames_max: usize, repaint_frames: usize) -> (usize, bool) {
+        let t0 = std::time::Instant::now();
+        let mut fence = AttachSettleFence::arm(t0);
+        let mut unacked_frames = 0usize;
+        let mut unacked_bytes = 0usize;
+        let mut paused = false;
+        let mut pause_entered = false;
+        let mut resyncs = 0usize;
+        const PAYLOAD: usize = 1024;
+
+        for _ in 0..repaint_frames {
+            let now = t0; // all frames inside the window
+            let fence_active = fence.is_active(now);
+            match decide_k1_frame_fwd(
+                paused,
+                fence_active,
+                unacked_frames,
+                unacked_bytes,
+                frames_max,
+                UNACKED_BYTES_MAX,
+            ) {
+                FrameFwd::DropPaused => {
+                    // Would require a later ack-resync.
+                }
+                FrameFwd::DropFence => {
+                    fence.note_dropped();
+                }
+                FrameFwd::Forward { .. } => {
+                    unacked_frames += 1;
+                    unacked_bytes += PAYLOAD;
+                    if should_trip_pause_after_enqueue(
+                        fence_active,
+                        unacked_frames,
+                        unacked_bytes,
+                        frames_max,
+                        UNACKED_BYTES_MAX,
+                    ) {
+                        paused = true;
+                        pause_entered = true;
+                    }
+                }
+            }
+        }
+
+        let end = t0 + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS);
+        if fence.on_deadline(end) {
+            resyncs += 1;
+            // Coalesce snap clears backlog like the live path.
+            unacked_frames = 0;
+            unacked_bytes = 0;
+            paused = false;
+        }
+        // A pause that survived the fence would force an ack-resync.
+        if paused {
+            resyncs += 1;
+        }
+        let _ = (unacked_frames, unacked_bytes);
+        (resyncs, pause_entered)
+    }
+
+    #[test]
+    fn sim_attach_low_credit_w8_at_most_one_resync_no_pause() {
+        let (resyncs, pause_entered) = sim_attach_repaint_under_credit(8, 50);
+        assert!(
+            !pause_entered,
+            "pause must be suppressed during fence under W=8"
+        );
+        assert!(
+            resyncs <= 1,
+            "expected ≤1 coalesce resync during fence, got {resyncs}"
+        );
+        assert_eq!(resyncs, 1, "50 frames under W=8 must drop and coalesce once");
+    }
+
+    #[test]
+    fn sim_attach_credit_w32_at_most_one_resync_no_pause() {
+        let (resyncs, pause_entered) = sim_attach_repaint_under_credit(32, 80);
+        assert!(
+            !pause_entered,
+            "pause must be suppressed during fence under W=32"
+        );
+        assert!(
+            resyncs <= 1,
+            "expected ≤1 coalesce resync during fence, got {resyncs}"
+        );
+        assert_eq!(resyncs, 1, "80 frames under W=32 must drop and coalesce once");
+    }
+
+    #[test]
+    fn sim_attach_under_credit_quiet_zero_resync() {
+        // Fewer frames than W: nothing dropped, no coalesce.
+        let (resyncs, pause_entered) = sim_attach_repaint_under_credit(32, 10);
+        assert!(!pause_entered);
+        assert_eq!(resyncs, 0, "under-cap attach must not force a resync");
+    }
 
     // Issue #8: the active-viewer claim/release handler must be
     // idempotent. These tests pin the pure decision so a future edit

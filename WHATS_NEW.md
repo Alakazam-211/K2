@@ -3,6 +3,35 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.73 — Hosted web file drop
+
+### Hosted web (k2.dev / browser SPA)
+
+- **Drag-and-drop files** from your machine into the hosted client now uploads
+  to the connected host (same `fs/upload-binary` / chunked path as the desktop
+  remote-drop flow — Drive-style File API, no Tauri).
+- Drop onto a **folder** in Files → lands in that folder.
+- Drop onto a **terminal** → uploads into the workspace’s **`.k2/downloads/`**
+  (created if missing) and **injects the host path** into the session so the
+  agent can open it — same product behavior as remote desktop drops.
+- Drop elsewhere → “Save to…” picker when the host needs a destination.
+- Works over plain **HTTP** LAN/dev origins (non-secure context): toasts,
+  transfers, and tab restore no longer crash with
+  `crypto.randomUUID is not a function`.
+
+### Desktop app
+
+- Unchanged drop behavior. This release is additive for the hosted web client
+  (and the UUID helper is harmless on secure/desktop contexts).
+
+### Upgrade notes
+
+- **Hosted web only** needs this client build for browser drag-upload.
+- Daemon already supports the upload routes; no special daemon version gate
+  beyond a current host with `fs/upload-binary` (all post-remote-files hosts).
+
+---
+
 ## 0.40.72 — Remote Gmail link + browser overlays
 
 ### Email Link — Gmail on a remote / headless daemon

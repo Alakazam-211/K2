@@ -78,7 +78,11 @@ import {
 } from '@/lib/file-drag'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
-import { executeRemoteDrop } from '@/lib/handle-remote-drop'
+import {
+  executeBrowserFileDrop,
+  executeRemoteDrop,
+} from '@/lib/handle-remote-drop'
+import { filesFromDataTransfer } from '@/lib/external-drop-router'
 import {
   anchorScrollPx,
   clampScrollPx,
@@ -4066,10 +4070,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // below: data-terminal-id / data-terminal-kind / data-workspace-path).
   //
   // Two pane-local entry points remain:
-  //   1. React `onDrop` — rare fallback when Tauri dragDropEnabled is off
-  //      (or hosted web HTML5 drops). Does its own upload for remote.
+  //   1. React `onDrop` — rare fallback when Tauri dragDropEnabled is off,
+  //      and the primary path for hosted-web HTML5 File drops (this
+  //      handler stopPropagates, so the window router never sees them).
+  //      Uploads to `<cwd>/.k2/downloads/` then injects the remote path.
   //   2. `k2so:terminal-write` — internal FileTree drags (file-drag.ts)
-  //      + the external-drop-router inject path.
+  //      + the external-drop-router inject path (desktop Tauri).
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -4102,6 +4108,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           } else {
             sendInput(buildDropPayload(paths))
           }
+          return
+        }
+
+        // Hosted web (or any browser without File.path): upload the
+        // File bytes to workspace `.k2/downloads/`, then inject the
+        // host path into the PTY so the agent can open them — same
+        // product path as remote desktop terminal drops.
+        const browserFiles = filesFromDataTransfer(e.dataTransfer)
+        if (browserFiles.length > 0) {
+          void executeBrowserFileDrop(
+            browserFiles,
+            { kind: 'terminal' },
+            { workspacePath: cwd || undefined },
+            buildDropPayload,
+          ).then((payload) => {
+            if (payload) sendInput(payload)
+          })
           return
         }
       }

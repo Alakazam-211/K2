@@ -21,7 +21,11 @@ import { useTabsStore } from '@/stores/tabs'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useToastStore } from '@/stores/toast'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { executeRemoteDrop } from '@/lib/handle-remote-drop'
+import {
+  executeBrowserFileDrop,
+  executeRemoteDrop,
+} from '@/lib/handle-remote-drop'
+import { filesFromDataTransfer } from '@/lib/external-drop-router'
 
 // ── Types matching Rust GridUpdate / CompactLine / StyleSpan ──────────
 
@@ -724,7 +728,7 @@ export function AlacrittyTerminalView({
     e.stopPropagation()
     if (!ptyIdRef.current) return
 
-    // Handle files dropped from Finder
+    // Handle files dropped from Finder / browser
     const files = e.dataTransfer.files
     if (files.length > 0) {
       const paths: string[] = []
@@ -751,6 +755,22 @@ export function AlacrittyTerminalView({
         } else {
           terminalWrite(ptyIdRef.current, buildDropPayload(paths))
         }
+        return
+      }
+
+      // Hosted web: no File.path — upload to `.k2/downloads/` + inject.
+      const browserFiles = filesFromDataTransfer(e.dataTransfer)
+      if (browserFiles.length > 0) {
+        const pty = ptyIdRef.current
+        void executeBrowserFileDrop(
+          browserFiles,
+          { kind: 'terminal' },
+          { workspacePath: cwd || undefined },
+          buildDropPayload,
+        ).then((payload) => {
+          if (payload && pty) terminalWrite(pty, payload)
+        })
+        return
       }
     }
 

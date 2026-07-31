@@ -9,6 +9,7 @@
 // natural safe stopping points of every chunked transfer.
 
 import { create } from 'zustand'
+import { randomUUID } from '@/lib/random-uuid'
 
 export type TransferKind = 'upload' | 'download' | 'compress' | 'extract'
 
@@ -38,7 +39,7 @@ export const useTransferProgressStore = create<TransferProgressState>((set, get)
   transfers: [],
 
   begin: (kind, label) => {
-    const id = crypto.randomUUID()
+    const id = randomUUID()
     set((s) => ({
       transfers: [...s.transfers, { id, kind, label, fraction: null, cancelRequested: false }],
     }))

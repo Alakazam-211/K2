@@ -4,7 +4,14 @@ import ReactDOM from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
 import { ConnectionGate } from './components/ConnectionGate'
 import { installExternalLinkHandler } from './lib/external-link-handler'
+import { installRandomUUIDPolyfill } from './lib/random-uuid'
 import { bootWebHostIfNeeded } from './web/boot-host'
+
+// Hosted web over plain HTTP (LAN IP / remote vite:dev:web) is not a
+// secure context — crypto.randomUUID is missing and toast/tabs/transfer
+// blow up on drop. Polyfill before any store runs.
+installRandomUUIDPolyfill()
+
 
 // 0.39.x (Issue #6): webview liveness HEARTBEAT.
 // Beat once synchronously the instant the bundle executes (so the

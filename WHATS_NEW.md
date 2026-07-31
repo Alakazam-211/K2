@@ -3,6 +3,37 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.74 — Cross-server tray file send (Connect token fix)
+
+### Inter-server agent file packages (`k2 msg --inbox-*`)
+
+Tray file send to another server (`k2 msg agent::host --inbox-silent|wake
+<path>`) no longer fails when the host is already in Servers and you’re
+signed in — if the desktop has a remembered Connect session for that host.
+
+- **CLI** resolves the destination token from `connect-tokens.json` (flexible
+  hostname match) **and** the OS keychain (same store as desktop Remember),
+  via the host id in `connect-hosts.json`.
+- **Desktop** mirrors remembered session tokens into
+  `~/.k2/connect-tokens.json` (0600) on sign-in and on boot hydrate so agents
+  and CLI can upload without hand-editing that file.
+- **Errors** state the real missing precondition (no session token for that
+  host) instead of a misleading “add / sign-in / ServerSwitcher” list when
+  those were already true. Live text over federation is unchanged and still
+  does **not** carry file bytes.
+- **Folders** are not supported — send a file or a `.zip`.
+
+Fixes the class of failure reported in GH #60 (Baden: federated file send
+refused despite registered host + account + trust + tunnel).
+
+### Upgrade notes
+
+- **Desktop app** 0.40.74+ (CLI is bundled with the app) for the fix.
+- After upgrade, open the app once (or re-sign-in to peer hosts with Remember)
+  so tokens mirror for CLI; then retry tray send from an agent.
+
+---
+
 ## 0.40.73 — Hosted web file drop
 
 ### Hosted web (k2.dev / browser SPA)

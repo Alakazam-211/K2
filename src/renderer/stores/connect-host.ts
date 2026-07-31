@@ -434,8 +434,47 @@ function persistHosts(hosts: ConnectHost[]): void {
 // localStorage or connect-hosts.json. Keyed by host id. All three are
 // best-effort + Tauri-only; they no-op (resolve) in the vitest/web env.
 
-/** Store a host's token in the keychain under its id. */
-export async function rememberToken(hostId: string, token: string): Promise<void> {
+/**
+ * Mirror a Connect session token into `~/.k2/connect-tokens.json` so the
+ * bash CLI (`k2 msg agent::host --inbox-silent …`) can upload tray files
+ * without hand-editing that file (GH #60). Best-effort; never throws.
+ */
+async function mirrorCliConnectToken(
+  hostname: string | undefined,
+  token: string | null,
+): Promise<void> {
+  const host = (hostname || '').trim()
+  if (!host) return
+  try {
+    if (token && token.length > 0) {
+      await invoke('connect_cli_token_upsert', { hostname: host, token })
+    } else {
+      await invoke('connect_cli_token_delete', { hostname: host })
+    }
+  } catch {
+    /* non-Tauri / write failure — CLI may still read keychain */
+  }
+}
+
+/** Look up hostname for a host id from the current store (runtime only). */
+function hostnameForHostId(hostId: string): string | undefined {
+  try {
+    return useConnectHostStore.getState().hosts.find((h) => h.id === hostId)?.hostname
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Store a host's token in the keychain under its id (+ CLI mirror).
+ * Pass `hostname` when known (login path) so the CLI mirror does not
+ * depend on store lookup order.
+ */
+export async function rememberToken(
+  hostId: string,
+  token: string,
+  hostname?: string,
+): Promise<void> {
   try {
     await invoke('k2_secret_set', {
       service: K2_CONNECT_KEYCHAIN_SERVICE,
@@ -445,6 +484,8 @@ export async function rememberToken(hostId: string, token: string): Promise<void
   } catch {
     /* keychain unavailable — caller keeps the token in memory */
   }
+  // CLI tray file send reads connect-tokens.json / keychain by hostname.
+  await mirrorCliConnectToken(hostname ?? hostnameForHostId(hostId), token)
 }
 
 /** Resolve a host's remembered token from the keychain, or null. */
@@ -469,6 +510,7 @@ export async function resolveToken(hostId: string): Promise<string | null> {
 
 /** Forget a host's remembered token (toggle-off / host removal). */
 export async function forgetToken(hostId: string): Promise<void> {
+  const hostname = hostnameForHostId(hostId)
   for (const service of [K2_CONNECT_KEYCHAIN_SERVICE, LEGACY_K2_CONNECT_KEYCHAIN_SERVICE]) {
     try {
       await invoke('k2_secret_delete', { service, account: hostId })
@@ -476,6 +518,7 @@ export async function forgetToken(hostId: string): Promise<void> {
       /* idempotent — a missing entry is fine */
     }
   }
+  await mirrorCliConnectToken(hostname, null)
 }
 
 // ── Keychain helpers (remembered-PASSWORD persistence) ──────────────────
@@ -653,7 +696,7 @@ export async function loginToHost(
   if (existing) {
     store.addHost({ ...existing, token: body.token, lastConnectedAt: Date.now() })
   }
-  await rememberToken(host.id, body.token)
+  await rememberToken(host.id, body.token, host.hostname)
   return { ok: true, token: body.token }
 }
 
@@ -910,10 +953,18 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
       }),
     )
 
-    // Mirror the resolved list back to localStorage (token-stripped) so a
-    // subsequent synchronous boot has the file's view.
+    // 3. Mirror any resolved tokens into connect-tokens.json so CLI tray
+    //    file send works after upgrade without forcing re-sign-in (GH #60).
+    //    Hosts must be in the store first for forget/remember id→hostname.
     persistHosts(resolved)
     set({ hosts: resolved })
+    await Promise.all(
+      resolved.map(async (h) => {
+        if (h.token && h.hostname) {
+          await mirrorCliConnectToken(h.hostname, h.token)
+        }
+      }),
+    )
   },
 }))
 

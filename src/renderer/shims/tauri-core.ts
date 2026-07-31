@@ -178,6 +178,11 @@ export async function invoke<T = unknown>(
   if (cmd === 'connect_hosts_read') {
     return defaultFor(cmd) as T
   }
+  // Desktop mirrors Connect tokens into ~/.k2/connect-tokens.json for the
+  // bash CLI. Web has no CLI tray path — no-op so hydrate/login don't warn.
+  if (cmd === 'connect_cli_token_upsert' || cmd === 'connect_cli_token_delete') {
+    return undefined as T
+  }
 
   if (KNOWN_NOOPS.has(cmd) || cmd.startsWith('plugin:')) {
     return defaultFor(cmd) as T

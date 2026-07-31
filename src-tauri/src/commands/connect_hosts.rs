@@ -107,6 +107,95 @@ pub fn connect_hosts_write(json: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── CLI token mirror (`~/.k2/connect-tokens.json`) ─────────────────────
+//
+// The bash CLI (`k2 msg agent::host --inbox-silent <file>`) cannot read
+// the OS keychain the same way Tauri does. It resolves destination-host
+// tokens from `connect-tokens.json` (0600). When the desktop remembers a
+// Connect session token, mirror it here keyed by hostname so agents and
+// CLI tray file send work without a hand-written token file (GH #60).
+
+fn tokens_path() -> PathBuf {
+    k2_home_dir().join("connect-tokens.json")
+}
+
+fn read_tokens_map() -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let file = tokens_path();
+    if !file.exists() {
+        return Ok(serde_json::Map::new());
+    }
+    let raw = fs::read_to_string(&file).map_err(|e| format!("read connect-tokens.json: {e}"))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("parse connect-tokens.json: {e}"))?;
+    match parsed {
+        serde_json::Value::Object(m) => Ok(m),
+        _ => Err("connect-tokens.json must be a JSON object".to_string()),
+    }
+}
+
+fn write_tokens_map(map: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    let dir = k2_home_dir();
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| format!("create ~/.k2: {e}"))?;
+    }
+    let file = tokens_path();
+    let tmp = file.with_extension("json.tmp");
+    let body = serde_json::to_string_pretty(&serde_json::Value::Object(map.clone()))
+        .map_err(|e| format!("serialize connect-tokens: {e}"))?;
+    fs::write(&tmp, body.as_bytes()).map_err(|e| format!("write {tmp:?}: {e}"))?;
+    restrict_mode(&tmp);
+    fs::rename(&tmp, &file).map_err(|e| format!("rename {tmp:?} -> {file:?}: {e}"))?;
+    restrict_mode(&file);
+    Ok(())
+}
+
+/// Upsert a hostname → session token for CLI tray / remote verbs.
+///
+/// `hostname` is the Connect host name (e.g. `claimchaser.k2.dev`). Empty
+/// hostname or token is rejected. Never logs the token value.
+#[tauri::command]
+pub fn connect_cli_token_upsert(hostname: String, token: String) -> Result<(), String> {
+    let host = hostname.trim().to_string();
+    if host.is_empty() {
+        return Err("hostname is empty".to_string());
+    }
+    if token.is_empty() {
+        return Err("token is empty".to_string());
+    }
+    let mut map = read_tokens_map()?;
+    map.insert(host, serde_json::Value::String(token));
+    write_tokens_map(&map)?;
+    log_debug!("[connect-tokens] upserted CLI token for a host (value not logged)");
+    Ok(())
+}
+
+/// Remove a hostname's CLI token mirror (sign-out / forget).
+///
+/// Idempotent: missing file or key is success.
+#[tauri::command]
+pub fn connect_cli_token_delete(hostname: String) -> Result<(), String> {
+    let host = hostname.trim().to_string();
+    if host.is_empty() {
+        return Ok(());
+    }
+    let file = tokens_path();
+    if !file.exists() {
+        return Ok(());
+    }
+    let mut map = read_tokens_map()?;
+    if map.remove(&host).is_none() {
+        // Also try bare / .k2.dev variants so forget matches upsert keying.
+        let bare = host
+            .trim_end_matches(".k2.dev")
+            .trim_end_matches(".K2.DEV")
+            .to_string();
+        map.remove(&bare);
+        map.remove(&format!("{bare}.k2.dev"));
+    }
+    write_tokens_map(&map)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +275,27 @@ mod tests {
         let _home = HomeGuard::set(&dir);
         assert!(connect_hosts_write("{}".to_string()).is_err());
         assert!(connect_hosts_write("\"nope\"".to_string()).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cli_token_upsert_round_trips_and_delete() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tmp_home("cli-tok");
+        let _home = HomeGuard::set(&dir);
+        connect_cli_token_upsert(
+            "claimchaser.k2.dev".to_string(),
+            "sess-abc".to_string(),
+        )
+        .unwrap();
+        let map = read_tokens_map().unwrap();
+        assert_eq!(
+            map.get("claimchaser.k2.dev").and_then(|v| v.as_str()),
+            Some("sess-abc")
+        );
+        connect_cli_token_delete("claimchaser.k2.dev".to_string()).unwrap();
+        let map2 = read_tokens_map().unwrap();
+        assert!(map2.get("claimchaser.k2.dev").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

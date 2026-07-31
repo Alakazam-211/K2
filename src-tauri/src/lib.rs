@@ -1723,6 +1723,8 @@ pub fn run() {
             // persisted to ~/.k2so/connect-hosts.json.
             commands::connect_hosts::connect_hosts_read,
             commands::connect_hosts::connect_hosts_write,
+            commands::connect_hosts::connect_cli_token_upsert,
+            commands::connect_hosts::connect_cli_token_delete,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {

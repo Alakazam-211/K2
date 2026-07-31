@@ -808,25 +808,221 @@ sys.stderr.write(json.dumps({"error":{"code":code,"hint":hint}},
     esac
 }
 
-# Resolve the owner token for a remote host. Precedence:
-#   1. explicit --token (arg $2)   2. $K2_REMOTE_TOKEN
-#   3. ~/.k2/connect-tokens.json  { "<host>": "<token>", ... }
+# Resolve the owner/session token for a remote Connect host. Precedence:
+#   1. explicit --token (arg $2)
+#   2. $K2_REMOTE_TOKEN
+#   3. ~/.k2/connect-tokens.json  { "<hostname>": "<token>", ... } with
+#      flexible key match (case, bare subdomain vs *.k2.dev)
+#   4. OS keychain (desktop "Remember" path): resolve host id from
+#      connect-hosts.json, then:
+#        macOS  → security find-generic-password (dev.k2.connect.host-token)
+#        Linux  → secret-tool lookup (same service name)
 # Echoes the token (empty when none found). connect-hosts.json is the
-# non-secret address book (no tokens by invariant); this sibling file is
-# the CLI-readable token store, 0600.
+# non-secret address book; connect-tokens.json is the CLI-readable store
+# (0600). GH #60: tray file send used to only exact-match connect-tokens
+# and ignored keychain, so a signed-in Servers host still failed.
 _remote_token_for_host() {
     local host="$1" explicit="${2:-}"
     if [ -n "$explicit" ]; then printf '%s' "$explicit"; return 0; fi
     if [ -n "${K2_REMOTE_TOKEN:-}" ]; then printf '%s' "$K2_REMOTE_TOKEN"; return 0; fi
-    local f="${K2_HOME}/connect-tokens.json"
-    if [ -f "$f" ] && command -v python3 >/dev/null 2>&1; then
-        python3 -c "
-import json,sys
-try:
-    print(json.load(open('''$f''')).get('''$host''','') or '')
-except Exception:
-    pass" 2>/dev/null
+    if ! command -v python3 >/dev/null 2>&1; then
+        return 0
     fi
+
+    # Flexible connect-tokens.json + host-id from connect-hosts.json.
+    # Prints either "TOKEN\t<tok>" or "HOSTID\t<id>" or nothing.
+    local resolved host_id tok=""
+    resolved=$(K2_HOME="$K2_HOME" python3 - "$host" <<'PY' 2>/dev/null
+import json, os, sys
+
+def bare(h: str) -> str:
+    h = (h or "").strip().lower()
+    while h.endswith(".k2.dev.k2.dev"):
+        h = h[: -len(".k2.dev")]
+    if h.endswith(".k2.dev"):
+        h = h[: -len(".k2.dev")]
+    return h
+
+def host_keys(h: str):
+    h = (h or "").strip()
+    if not h:
+        return []
+    b = bare(h)
+    keys = {h, h.lower(), b, f"{b}.k2.dev", f"{b}.K2.DEV"}
+    return [k for k in keys if k]
+
+want = sys.argv[1] if len(sys.argv) > 1 else ""
+home = os.environ.get("K2_HOME") or os.path.join(os.path.expanduser("~"), ".k2")
+# also try sibling .k2so if K2_HOME is .k2 (legacy layout)
+homes = [home]
+alt = os.path.join(os.path.expanduser("~"), ".k2so")
+if alt not in homes and os.path.isdir(alt):
+    homes.append(alt)
+
+want_keys = set(host_keys(want))
+want_bare = bare(want)
+
+# 1) connect-tokens.json flexible match
+for base in homes:
+    path = os.path.join(base, "connect-tokens.json")
+    if not os.path.isfile(path):
+        continue
+    try:
+        data = json.load(open(path))
+    except Exception:
+        continue
+    if not isinstance(data, dict):
+        continue
+    for k, v in data.items():
+        if not v or not isinstance(v, str):
+            continue
+        if k in want_keys or bare(k) == want_bare:
+            print("TOKEN\t%s" % v)
+            sys.exit(0)
+
+# 2) connect-hosts.json → host id for keychain lookup
+for base in homes:
+    path = os.path.join(base, "connect-hosts.json")
+    if not os.path.isfile(path):
+        continue
+    try:
+        data = json.load(open(path))
+    except Exception:
+        continue
+    if not isinstance(data, list):
+        continue
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        hn = entry.get("hostname") or ""
+        label = entry.get("label") or ""
+        hid = entry.get("id") or ""
+        if not hid:
+            continue
+        if hn in want_keys or bare(hn) == want_bare or bare(label) == want_bare:
+            print("HOSTID\t%s" % hid)
+            sys.exit(0)
+PY
+)
+    if [ -n "$resolved" ]; then
+        local kind val
+        IFS=$'\t' read -r kind val <<<"$resolved"
+        if [ "$kind" = "TOKEN" ] && [ -n "$val" ]; then
+            printf '%s' "$val"
+            return 0
+        fi
+        if [ "$kind" = "HOSTID" ] && [ -n "$val" ]; then
+            host_id="$val"
+        fi
+    fi
+
+    # 3) OS keychain — same service/account desktop rememberToken uses.
+    if [ -n "${host_id:-}" ]; then
+        if command -v security >/dev/null 2>&1; then
+            local svc
+            for svc in "dev.k2.connect.host-token" "com.k2so.connect.host-token"; do
+                tok=$(security find-generic-password -s "$svc" -a "$host_id" -w 2>/dev/null || true)
+                if [ -n "$tok" ]; then
+                    printf '%s' "$tok"
+                    return 0
+                fi
+            done
+        fi
+        if command -v secret-tool >/dev/null 2>&1; then
+            local svc
+            for svc in "dev.k2.connect.host-token" "com.k2so.connect.host-token"; do
+                tok=$(secret-tool lookup service "$svc" account "$host_id" 2>/dev/null || true)
+                if [ -n "$tok" ]; then
+                    printf '%s' "$tok"
+                    return 0
+                fi
+            done
+        fi
+    fi
+}
+
+# Diagnose why tray file send could not resolve a Connect token for <host>.
+# Prints multi-line stderr teaching for GH #60 (misleading "add/sign-in" text).
+_tray_token_missing_error() {
+    local host="$1"
+    local registered="no" has_tokens_file="no" has_host_id="no"
+    if command -v python3 >/dev/null 2>&1; then
+        local diag
+        diag=$(K2_HOME="$K2_HOME" python3 - "$host" <<'PY' 2>/dev/null
+import json, os, sys
+
+def bare(h):
+    h = (h or "").strip().lower()
+    while h.endswith(".k2.dev.k2.dev"):
+        h = h[: -len(".k2.dev")]
+    if h.endswith(".k2.dev"):
+        h = h[: -len(".k2.dev")]
+    return h
+
+want = sys.argv[1] if len(sys.argv) > 1 else ""
+want_bare = bare(want)
+home = os.environ.get("K2_HOME") or os.path.join(os.path.expanduser("~"), ".k2")
+homes = [home]
+alt = os.path.join(os.path.expanduser("~"), ".k2so")
+if alt not in homes and os.path.isdir(alt):
+    homes.append(alt)
+
+registered = False
+host_id = ""
+tokens_file = False
+for base in homes:
+    p = os.path.join(base, "connect-tokens.json")
+    if os.path.isfile(p):
+        tokens_file = True
+    p = os.path.join(base, "connect-hosts.json")
+    if not os.path.isfile(p):
+        continue
+    try:
+        data = json.load(open(p))
+    except Exception:
+        continue
+    if not isinstance(data, list):
+        continue
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        hn = entry.get("hostname") or ""
+        label = entry.get("label") or ""
+        if bare(hn) == want_bare or bare(label) == want_bare or hn.lower() == want.lower():
+            registered = True
+            host_id = entry.get("id") or ""
+            break
+print("registered=%s" % ("yes" if registered else "no"))
+print("tokens_file=%s" % ("yes" if tokens_file else "no"))
+print("host_id=%s" % ("yes" if host_id else "no"))
+PY
+)
+        while IFS= read -r line; do
+            case "$line" in
+                registered=*) registered="${line#registered=}" ;;
+                tokens_file=*) has_tokens_file="${line#tokens_file=}" ;;
+                host_id=*) has_host_id="${line#host_id=}" ;;
+            esac
+        done <<<"$diag"
+    fi
+
+    cat >&2 <<EOF
+Error: cannot upload tray files to ${host} — no Connect session token for that host.
+  host in address book:  ${registered}
+  connect-tokens.json:   ${has_tokens_file}
+  host id (for keychain): ${has_host_id}
+  active account / federation trust is NOT enough — file packages must
+  authenticate to the *destination* daemon (upload + inbox deliver).
+  Live text \`k2 msg agent::host "…"\` uses federation; tray files do not.
+
+Fix (pick one):
+  1. In the desktop app: Servers → sign in to ${host} with Remember on
+     (desktop mirrors the token for CLI), then retry.
+  2. Or put an owner/session token in \${K2_HOME}/connect-tokens.json:
+       { "${host}": "<token>" }   (chmod 600)
+  3. Or pass --token <tok> / set \$K2_REMOTE_TOKEN for this command.
+  Folders are not supported — send a file or a .zip.
+EOF
 }
 
 # Point the HTTP helpers at a remote host for the rest of this command
@@ -15333,17 +15529,12 @@ cmd_msg_inbox_form() {
         local _tray_tok=""
         _tray_tok="$(_remote_token_for_host "$_REMOTE_HOST" "")"
         if [ -z "$_tray_tok" ]; then
-            cat >&2 <<EOF
-Error: tray file send needs a K2 Connect host for ${_REMOTE_HOST} (add/sign-in under Servers, or switch ServerSwitcher).
-Live text msg over federation does not upload files.
-EOF
+            _tray_token_missing_error "$_REMOTE_HOST"
             return 2
         fi
         if ! _apply_remote_host "$_REMOTE_HOST" ""; then
-            cat >&2 <<EOF
-Error: tray file send needs a K2 Connect host for ${_REMOTE_HOST} (add/sign-in under Servers, or switch ServerSwitcher).
-Live text msg over federation does not upload files.
-EOF
+            # _apply_remote_host already printed a token-path hint; add tray context.
+            echo "Tray file send to ${_REMOTE_HOST} needs that host's Connect token (not federation)." >&2
             return 2
         fi
         _tray_remote_applied=1

@@ -79,8 +79,14 @@ const MIN_COMPATIBLE_PROTOCOL = 1
 
 /** Soft-reconnect cadence (K2 Connect step #4). After a remote host
  *  connects, poll its health at this interval so a tunnel drop is
- *  detected and surfaced as the dimmed overlay. */
-const REMOTE_HEALTH_POLL_MS = 4000
+ *  detected and surfaced as the dimmed overlay.
+ *
+ *  0.40.75: 25s (was 4s). Steady-state liveness only — first-connect
+ *  (500ms) and recovery backoff are separate. Hosted web (*.app.k2.dev)
+ *  routes every poll through the CF Worker; 4s × N open tabs blew the
+ *  free request cap. Real drops still surface via session-events WS
+ *  onclose while the tab is open. */
+const REMOTE_HEALTH_POLL_MS = 25_000
 /** How many CONSECUTIVE failed health-polls a connected remote must rack
  *  up before we call it a real drop. A single slow/blipped poll over a
  *  higher-latency tunnel must NOT trip the reconnect indicator while the
@@ -711,6 +717,19 @@ export function ConnectionGate(): React.ReactElement {
       return localPairedPolicy(appVersionRef.current)
     }
 
+    /** Schedule the next remote soft-health tick (jittered). No-op while the
+     *  tab is hidden — visibilitychange fires one immediate tick on show. */
+    const scheduleRemoteHealthTick = (): void => {
+      if (cancelled) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return
+      }
+      if (timeoutId !== null) clearTimeout(timeoutId)
+      timeoutId = setTimeout(() => {
+        void tick()
+      }, jittered(REMOTE_HEALTH_POLL_MS))
+    }
+
     const tick = async (): Promise<void> => {
       // Never poll toward a mount we can't authenticate: a remote host
       // with no session token must sign in first (the effect above opens
@@ -720,6 +739,19 @@ export function ConnectionGate(): React.ReactElement {
         if (cancelled) return
         setDecision({ kind: 'wait', reason: 'remote-needs-auth' })
         useConnectHostStore.getState().setConnectionStatus('connecting')
+        return
+      }
+      // 0.40.75: after first accept, suspend steady-state /boot-status
+      // polls while the tab is hidden (hosted web CF Worker request count).
+      // First-connect and recovery paths still run when visible. WS
+      // onclose still detects real drops for open tabs; a hidden tab
+      // re-probes once on become-visible.
+      if (
+        isRemote &&
+        acceptedOnce &&
+        typeof document !== 'undefined' &&
+        document.visibilityState === 'hidden'
+      ) {
         return
       }
       const policy = await ensurePolicy()
@@ -853,43 +885,12 @@ export function ConnectionGate(): React.ReactElement {
           }
         }
       }
-      // Runtime staleness probe (mirrors the daemon's own 5s WS re-auth
-      // heartbeat, from the other side): /boot-status is PUBLIC, so a remote
-      // restart/update that WIPED the in-memory connect-sessions still polls
-      // 'accept' here while every authed /cli/* call 403s and every WS
-      // reconnect loop spins on the dead token. Probe the session on each
-      // post-accept health tick; a confirmed-dead (401/403) session goes
-      // through the single-flight reviveRemoteSession — the SAME re-login
-      // flow boot uses — so the app self-heals in place instead of needing a
-      // relaunch. Only 'dead' acts ('unknown' is a blip); revival itself
-      // expires the token + raises RemoteSignIn only when the remembered
-      // password is missing/rejected, and its backoff caps re-login attempts.
-      //
-      // Recovery contract: 'dead' here is state 2 ('reauthenticating') —
-      // reviveRemoteSession paints it and folds its outcome back through the
-      // reducer (connected / signin-required / still reauthenticating).
-      // Awaited so this tick's poll cadence sees the settled state.
-      if (next.kind === 'accept' && isRemote && acceptedOnce) {
-        const active = useConnectHostStore.getState().activeHost
-        if (active !== 'local' && !!active.token && active.token.length > 0) {
-          const probe = await probeRemoteSession()
-          if (cancelled) return
-          if (probe === 'dead') {
-            await reviveRemoteSession(active.id)
-            if (cancelled) return
-          } else {
-            // 'alive', or a blip ('unknown' is never evidence of staleness):
-            // the host is up+ready and the session holds → connected. This
-            // also clears a prior 'reconnecting' banner on recovery.
-            useConnectHostStore.getState().setRecovery(
-              deriveRecovery({
-                bootStatus: { reachable: true, phase: 'ready' },
-                auth: probe === 'alive' ? 'ok' : 'unknown',
-              }),
-            )
-          }
-        }
-      }
+      // 0.40.75: NO per-tick whoami on the healthy post-accept path.
+      // First-connect still probes (above). Mid-session token death is
+      // handled by real /cli/* 401/403 + session-events WS onclose/hello
+      // (and reviveRemoteSession from those paths). Polling whoami every
+      // health tick doubled the hosted-web edge request rate for no gain
+      // while the tab is healthy.
       // Debounced-drop path: a REMOTE host that has already connected this
       // effect-run (post-accept health-poll) must not surface a single
       // blipped poll. Below REMOTE_DROP_THRESHOLD consecutive fails we keep
@@ -975,7 +976,8 @@ export function ConnectionGate(): React.ReactElement {
           // detected and surfaced as the soft-reconnect overlay (the App
           // stays mounted). Local stops polling on accept — its only
           // re-entry is an intentional auto-update/host-switch remount.
-          timeoutId = setTimeout(() => { void tick() }, REMOTE_HEALTH_POLL_MS)
+          // 0.40.75: jitter + visibility-aware schedule (see scheduleRemoteHealthTick).
+          scheduleRemoteHealthTick()
           return
         }
         return // local: stop polling; Phase 2 takes over
@@ -1046,11 +1048,31 @@ export function ConnectionGate(): React.ReactElement {
       timeoutId = setTimeout(() => { void tick() }, backoff)
     }
 
+    // 0.40.75: one probe when the tab becomes visible again after a
+    // hidden-period poll suspend (hosted-web request minimization).
+    const onVisibilityChange = (): void => {
+      if (cancelled) return
+      if (typeof document === 'undefined') return
+      if (document.visibilityState !== 'visible') return
+      if (!isRemote || !acceptedOnce) return
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+      void tick()
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange)
+    }
+
     void tick()
 
     return () => {
       cancelled = true
       if (timeoutId !== null) clearTimeout(timeoutId)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange)
+      }
     }
     // isRemote is fully determined by hostKey (local key === 'local').
     // `remoteNeedsAuth` is added so that OBTAINING a session token (same

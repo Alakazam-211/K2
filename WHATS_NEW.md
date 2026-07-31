@@ -3,6 +3,34 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.75 — Hosted web: fewer edge health polls
+
+### Hosted web / K2 Connect remote clients
+
+Open tabs against `*.app.k2.dev` (and other remote hosts) no longer hammer
+the edge with a dual `/boot-status` + `/cli/auth/whoami` probe every **4
+seconds**.
+
+- Steady-state health poll is **~25s** (was 4s), with **jitter** so many
+  tabs don’t lockstep.
+- **Hidden tabs pause** health polling; one probe fires when the tab is
+  visible again. Session WebSockets still detect real drops while the tab
+  is open.
+- Mid-session **whoami** every health tick is removed; first-connect still
+  validates the session before mount. Token death is handled via real
+  `/cli/*` 401/403 and session-events WS recovery.
+
+Cuts request volume on the Cloudflare Worker proxy lane dramatically
+(order-of-magnitude for always-open viewer tabs) without slowing first
+connect or recovery backoff.
+
+### Note
+
+Full `/v1` host-session capability envelope / spawn queue (Scout co-design
+PRD) remains design-locked for a follow-up train — not in this cut.
+
+---
+
 ## 0.40.74 — Cross-server tray file send (Connect token fix)
 
 ### Inter-server agent file packages (`k2 msg --inbox-*`)

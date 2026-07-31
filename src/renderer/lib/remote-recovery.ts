@@ -115,7 +115,10 @@ export function authSignalFromRevive(outcome: ReviveOutcome): AuthSignal {
 
 /** Steady-state health cadence for a connected / re-authenticating remote
  *  (matches ConnectionGate's REMOTE_HEALTH_POLL_MS). */
-export const RECOVERY_HEALTH_POLL_MS = 4000
+/** Steady-state re-poll when recovery is still 'connected' (soft blip).
+ *  0.40.75: 25s (was 4s) — match ConnectionGate REMOTE_HEALTH_POLL_MS so
+ *  hosted-web edge request volume stays bounded. */
+export const RECOVERY_HEALTH_POLL_MS = 25_000
 /** Backoff cap while a remote is confirmed down/booting (matches
  *  ConnectionGate's REMOTE_RECONNECT_MAX_MS). */
 export const RECOVERY_RECONNECT_MAX_MS = 8000

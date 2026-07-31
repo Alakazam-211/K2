@@ -32,6 +32,7 @@
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 /// A principal's stable identity key for the live-cell map. This is
 /// [`crate::routes::http::V1Principal::display_id`]: the sentinel `"owner"` for
@@ -44,9 +45,15 @@ pub enum QuotaError {
     /// This principal already holds `per_principal_cap` live cells → 429
     /// `{"code":"concurrent-cell-cap"}`.
     PerPrincipalCap,
+    /// This workspace already holds `workspace_cap` live cells → 429
+    /// `{"code":"workspace-cell-cap"}`.
+    WorkspaceCap,
     /// The daemon already holds `global_cap` live cells across ALL principals →
     /// 429 `{"code":"cell-capacity"}`.
     GlobalCap,
+    /// Waited in the spawn queue until max wait; still no slot → 429
+    /// `{"code":"spawn-queue-timeout"}`.
+    QueueTimeout,
 }
 
 impl QuotaError {
@@ -54,7 +61,9 @@ impl QuotaError {
     pub fn code(&self) -> &'static str {
         match self {
             QuotaError::PerPrincipalCap => "concurrent-cell-cap",
+            QuotaError::WorkspaceCap => "workspace-cell-cap",
             QuotaError::GlobalCap => "cell-capacity",
+            QuotaError::QueueTimeout => "spawn-queue-timeout",
         }
     }
 
@@ -64,18 +73,22 @@ impl QuotaError {
             QuotaError::PerPrincipalCap => {
                 "concurrent sandbox cell limit reached for this principal"
             }
+            QuotaError::WorkspaceCap => {
+                "concurrent host-session limit reached for this workspace"
+            }
             QuotaError::GlobalCap => "sandbox cell capacity reached for this daemon",
+            QuotaError::QueueTimeout => {
+                "timed out waiting in the spawn queue for a free cell slot"
+            }
         }
     }
 }
 
-/// The PURE counter state: per-principal live-cell counts + the global total.
-/// The total is kept as a separate field (not summed from the map) so the global
-/// check is O(1) and so a principal's entry can be pruned at 0 without losing the
-/// total. Fully testable with no I/O.
+/// The PURE counter state: per-principal + per-workspace + global total.
 #[derive(Debug, Default)]
 pub struct QuotaState {
     per_principal: HashMap<PrincipalKey, usize>,
+    per_workspace: HashMap<String, usize>,
     total: usize,
 }
 
@@ -90,17 +103,19 @@ impl QuotaState {
         self.per_principal.get(key).copied().unwrap_or(0)
     }
 
+    #[cfg(test)]
+    pub fn workspace_count(&self, ws: &str) -> usize {
+        self.per_workspace.get(ws).copied().unwrap_or(0)
+    }
+
     /// Total live cells across all principals (asserted by unit tests only).
     #[cfg(test)]
     pub fn total(&self) -> usize {
         self.total
     }
 
-    /// Atomically check BOTH caps and, only if BOTH pass, increment this
-    /// principal's count and the global total. Checks are inclusive: a request
-    /// is admitted iff `current < cap` for both. The per-principal cap is
-    /// checked FIRST so a principal at its own limit gets the specific
-    /// `concurrent-cell-cap` code rather than a misleading global one.
+    /// Atomically check principal + optional workspace + global caps.
+    /// Order: principal → workspace → global (most specific first).
     ///
     /// On `Err` NOTHING is mutated — the caller has acquired no slot and must
     /// NOT release.
@@ -110,33 +125,61 @@ impl QuotaState {
         per_principal_cap: usize,
         global_cap: usize,
     ) -> Result<(), QuotaError> {
+        self.try_acquire_ws(key, None, per_principal_cap, usize::MAX, global_cap)
+    }
+
+    pub fn try_acquire_ws(
+        &mut self,
+        key: &str,
+        workspace: Option<&str>,
+        per_principal_cap: usize,
+        workspace_cap: usize,
+        global_cap: usize,
+    ) -> Result<(), QuotaError> {
         let current = self.count_for(key);
         if current >= per_principal_cap {
             return Err(QuotaError::PerPrincipalCap);
+        }
+        if let Some(ws) = workspace {
+            let wc = self.per_workspace.get(ws).copied().unwrap_or(0);
+            if wc >= workspace_cap {
+                return Err(QuotaError::WorkspaceCap);
+            }
         }
         if self.total >= global_cap {
             return Err(QuotaError::GlobalCap);
         }
         *self.per_principal.entry(key.to_string()).or_insert(0) += 1;
+        if let Some(ws) = workspace {
+            *self.per_workspace.entry(ws.to_string()).or_insert(0) += 1;
+        }
         self.total += 1;
         Ok(())
     }
 
-    /// Return one slot held by `key`. SATURATING: never underflows below 0 for
-    /// the principal or the total, and prunes the map entry at 0 so the map
-    /// doesn't grow unbounded with retired principals. A `release` for a key
-    /// that holds nothing is a no-op (defensive — should not happen if acquire /
-    /// release are balanced).
+    /// Return one slot held by `key` (+ optional workspace). SATURATING.
     pub fn release(&mut self, key: &str) {
-        let Some(slot) = self.per_principal.get_mut(key) else {
-            return;
-        };
-        if *slot <= 1 {
-            self.per_principal.remove(key);
-        } else {
-            *slot -= 1;
+        self.release_ws(key, None);
+    }
+
+    pub fn release_ws(&mut self, key: &str, workspace: Option<&str>) {
+        if let Some(slot) = self.per_principal.get_mut(key) {
+            if *slot <= 1 {
+                self.per_principal.remove(key);
+            } else {
+                *slot -= 1;
+            }
+            self.total = self.total.saturating_sub(1);
         }
-        self.total = self.total.saturating_sub(1);
+        if let Some(ws) = workspace {
+            if let Some(slot) = self.per_workspace.get_mut(ws) {
+                if *slot <= 1 {
+                    self.per_workspace.remove(ws);
+                } else {
+                    *slot -= 1;
+                }
+            }
+        }
     }
 }
 
@@ -144,21 +187,27 @@ impl QuotaState {
 static QUOTA: LazyLock<Mutex<QuotaState>> = LazyLock::new(|| Mutex::new(QuotaState::new()));
 
 /// Default per-principal cap for an API-key principal (env
-/// `K2_SANDBOX_PRINCIPAL_CELL_CAP`). Generous so own-use / light multi-tenant
-/// use is unhindered; the DoS bound is the GLOBAL ceiling.
-const DEFAULT_PRINCIPAL_CELL_CAP: usize = 5;
+/// `K2_SANDBOX_PRINCIPAL_CELL_CAP`). Multi-tab integrators (Scout = one key ×
+/// five spaces). Stock 5 was a one-interview cliff.
+const DEFAULT_PRINCIPAL_CELL_CAP: usize = 64;
 
 /// Default per-principal cap for the OWNER principal (env
-/// `K2_SANDBOX_OWNER_CELL_CAP`). Effectively "exempt" for own-use — the owner is
-/// the operator of THIS box and should never be DoS'd off their own daemon by
-/// this counter; the global ceiling still bounds the box.
+/// `K2_SANDBOX_OWNER_CELL_CAP`).
 const DEFAULT_OWNER_CELL_CAP: usize = 256;
 
 /// Default GLOBAL ceiling across all principals (env `K2_SANDBOX_MAX_CELLS`).
-/// Generous so own-use is unaffected. The REAL number for an untrusted-tenant
-/// box comes from a RAM benchmark (~floor(usable_RAM / 1GB), ~60-150 on 64GB per
-/// the P4 spec); this default is a safe placeholder, NOT a tuned value.
-const DEFAULT_GLOBAL_CELL_CAP: usize = 64;
+/// Product default **512** live cells/daemon (stock 64 was a prod cliff).
+const DEFAULT_GLOBAL_CELL_CAP: usize = 512;
+
+/// Max live API cells in one workspace (env `K2_SANDBOX_WORKSPACE_CELL_CAP`).
+const DEFAULT_WORKSPACE_CELL_CAP: usize = 15;
+
+/// Max seconds a spawn waits in the K2 queue when at cap
+/// (env `K2_SANDBOX_QUEUE_WAIT_SECS`). 0 = no wait (immediate 429).
+const DEFAULT_QUEUE_WAIT_SECS: u64 = 30;
+
+/// Poll interval while waiting in the spawn queue.
+const QUEUE_POLL_MS: u64 = 50;
 
 /// Read a positive-usize cap from an env var, falling back to `default` when the
 /// var is absent, empty, unparsable, or zero (a zero cap would brick the API
@@ -168,6 +217,18 @@ fn env_cap(var: &str, default: usize) -> usize {
         Ok(v) => v.trim().parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(default),
         Err(_) => default,
     }
+}
+
+fn queue_wait() -> Duration {
+    let secs = match std::env::var("K2_SANDBOX_QUEUE_WAIT_SECS") {
+        Ok(v) => v
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .unwrap_or(DEFAULT_QUEUE_WAIT_SECS),
+        Err(_) => DEFAULT_QUEUE_WAIT_SECS,
+    };
+    Duration::from_secs(secs)
 }
 
 /// The per-principal cap to apply to `principal_key`. The owner sentinel gets the
@@ -186,23 +247,70 @@ pub fn global_cap() -> usize {
     env_cap("K2_SANDBOX_MAX_CELLS", DEFAULT_GLOBAL_CELL_CAP)
 }
 
-/// PROCESS-GLOBAL acquire. Locks the global counter, resolves the caps for this
-/// principal (owner vs api-key) + the global ceiling from env, and atomically
-/// admits-and-increments or refuses. On `Ok` the caller now HOLDS a slot and is
-/// responsible for exactly one [`release`] (via the child-exit observer on the
-/// success path, or explicitly on an early spawn-door failure).
-pub fn try_acquire(principal_key: &str) -> Result<(), QuotaError> {
-    let per_principal = per_principal_cap_for(principal_key);
-    let global = global_cap();
-    let mut state = QUOTA.lock().expect("sandbox quota mutex poisoned");
-    state.try_acquire(principal_key, per_principal, global)
+pub fn workspace_cap() -> usize {
+    env_cap("K2_SANDBOX_WORKSPACE_CELL_CAP", DEFAULT_WORKSPACE_CELL_CAP)
 }
 
-/// PROCESS-GLOBAL release. Saturating; safe to call once per successful
-/// [`try_acquire`]. A no-op for an unknown / already-zero key.
+/// PROCESS-GLOBAL acquire (no workspace axis). Back-compat for sandbox family.
+pub fn try_acquire(principal_key: &str) -> Result<(), QuotaError> {
+    try_acquire_in_workspace(principal_key, None)
+}
+
+/// Acquire with optional per-workspace ceiling (host-sessions pass `Some(ws_path)`).
+/// When at capacity, **waits** up to `K2_SANDBOX_QUEUE_WAIT_SECS` (default 30s)
+/// polling for a free slot (S8 K2 spawn queue). On timeout → `QueueTimeout`.
+pub fn try_acquire_in_workspace(
+    principal_key: &str,
+    workspace: Option<&str>,
+) -> Result<(), QuotaError> {
+    let per_principal = per_principal_cap_for(principal_key);
+    let global = global_cap();
+    let ws_cap = workspace_cap();
+    let max_wait = queue_wait();
+    let deadline = Instant::now() + max_wait;
+    let mut last_err = QuotaError::PerPrincipalCap;
+    let mut attempted = false;
+    loop {
+        {
+            let mut state = QUOTA.lock().expect("sandbox quota mutex poisoned");
+            match state.try_acquire_ws(
+                principal_key,
+                workspace,
+                per_principal,
+                ws_cap,
+                global,
+            ) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_err = e;
+                    attempted = true;
+                }
+            }
+        }
+        if max_wait.is_zero() {
+            return Err(last_err);
+        }
+        if Instant::now() >= deadline {
+            // Waited the full window still full.
+            return Err(if attempted {
+                QuotaError::QueueTimeout
+            } else {
+                last_err
+            });
+        }
+        std::thread::sleep(Duration::from_millis(QUEUE_POLL_MS));
+    }
+}
+
+/// PROCESS-GLOBAL release (principal only). Prefer [`release_in_workspace`] when
+/// the acquire used a workspace key.
 pub fn release(principal_key: &str) {
+    release_in_workspace(principal_key, None);
+}
+
+pub fn release_in_workspace(principal_key: &str, workspace: Option<&str>) {
     let mut state = QUOTA.lock().expect("sandbox quota mutex poisoned");
-    state.release(principal_key);
+    state.release_ws(principal_key, workspace);
 }
 
 #[cfg(test)]

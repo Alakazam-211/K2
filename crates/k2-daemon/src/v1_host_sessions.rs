@@ -357,11 +357,15 @@ fn deliver_into_live(
         }
         ok
     };
+    // S4 R1: live inject is always resumed:true (same PTY).
     CliResponse::ok_json(
         serde_json::json!({
             "sessionId": echo_sid,
             "delivered": delivered,
             "live": true,
+            "resumed": true,
+            "workspace": ws_path,
+            "sandbox": "none",
         })
         .to_string(),
     )
@@ -431,12 +435,11 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
         }
     }
 
-    // CONCURRENT-SESSION CAP — the same per-principal + global quota the
-    // sandbox doors use (PRD §3: reused as-is). Acquire BEFORE any side
-    // effect; released by the child-exit observer on success, or explicitly
-    // on the early-failure paths below.
+    // CONCURRENT-SESSION CAP — principal + workspace + global (S7) with
+    // K2 spawn queue wait (S8). Live resume above never acquires.
+    // Released by the child-exit observer on success, or explicitly on early failure.
     let principal_key = principal.display_id();
-    if let Err(qe) = sandbox_quota::try_acquire(&principal_key) {
+    if let Err(qe) = sandbox_quota::try_acquire_in_workspace(&principal_key, Some(&ws_path)) {
         return CliResponse {
             status: "429 Too Many Requests",
             content_type: "application/json",
@@ -463,6 +466,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     let mut spawn_req =
         policy::resolve_host_spawn(principal, &ws_path, &session_id, is_resume, &req);
     spawn_req.principal_key = Some(principal_key.clone());
+    spawn_req.quota_workspace = Some(ws_path.clone());
     // Captured for the post-spawn adoption decision below (spawn_session
     // consumes the request).
     let spawn_command = spawn_req.command.clone().unwrap_or_default();
@@ -471,12 +475,58 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     // sandbox family (clamped 30..86400, default 180).
     let timeout_secs = crate::sandbox_reaper::normalize_timeout(req.timeout_secs);
 
+    // S1–S3: mint capability JWTs into host-curated env BEFORE spawn so the
+    // agent process sees K2_CAPABILITY_TOKEN at start (never in free-form prompt).
+    let mut caps_meta: Option<serde_json::Value> = None;
+    if let Some(caps_val) = req.capabilities.as_ref() {
+        let sid_str = session_id.to_string();
+        let exp_secs = timeout_secs.min(3600).max(1);
+        match crate::v1_capabilities::parse_capabilities(caps_val).and_then(|caps| {
+            crate::v1_capabilities::mint_and_stage(
+                &sid_str,
+                std::path::Path::new(&ws_path),
+                &caps,
+                exp_secs,
+                Some(principal_key.as_str()),
+                Some(slug.as_str()),
+            )
+        }) {
+            Ok(out) => {
+                if !out.env_value.is_empty() && out.env_value != "[]" {
+                    if let Some(env) = spawn_req.env.as_mut() {
+                        env.insert(
+                            crate::v1_capabilities::ENV_NAME.into(),
+                            out.env_value,
+                        );
+                    } else {
+                        let mut m = std::collections::HashMap::new();
+                        m.insert(
+                            crate::v1_capabilities::ENV_NAME.into(),
+                            out.env_value,
+                        );
+                        spawn_req.env = Some(m);
+                    }
+                }
+                caps_meta = Some(out.metadata);
+            }
+            Err(e) => {
+                sandbox_quota::release_in_workspace(&principal_key, Some(&ws_path));
+                return CliResponse {
+                    status: "400 Bad Request",
+                    content_type: "application/json",
+                    body: serde_json::json!({ "error": e, "code": "capabilities-invalid" })
+                        .to_string(),
+                };
+            }
+        }
+    }
+
     // Spawn through the PROVEN v2 internals (find-or-spawn can't collide —
     // the agent_name is a fresh host-minted `api-…` uuid).
     let result = v2_spawn::spawn_session(spawn_req);
     if result.status != "200 OK" {
         // No session ⇒ no child-exit observer ⇒ release the slot ourselves.
-        sandbox_quota::release(&principal_key);
+        sandbox_quota::release_in_workspace(&principal_key, Some(&ws_path));
         return CliResponse {
             status: result.status,
             content_type: "application/json",
@@ -575,18 +625,22 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     let stream_tok = stream_token::mint(&sid);
     let grid = format!("/cli/sessions/grid?session={session_id_str}&token={stream_tok}");
 
-    // FROZEN spawn wire shape (PRD §3): exactly these five keys, with the
-    // honest `"sandbox":"none"` label.
-    CliResponse::ok_json(
-        serde_json::json!({
-            "sessionId": session_id_str,
-            "agentName": agent_name,
-            "workspace": slug,
-            "sandbox": "none",
-            "stream": { "grid": grid },
-        })
-        .to_string(),
-    )
+    // Spawn / dead-resume response. S4: `resumed` is true only on live path;
+    // fresh spawn omits or false; dead re-spawn is false (new PTY).
+    let mut body = serde_json::json!({
+        "sessionId": session_id_str,
+        "agentName": agent_name,
+        "workspace": slug,
+        "sandbox": "none",
+        "stream": { "grid": grid },
+    });
+    if is_resume {
+        body["resumed"] = serde_json::json!(false);
+    }
+    if let Some(meta) = caps_meta {
+        body["capabilities"] = meta;
+    }
+    CliResponse::ok_json(body.to_string())
 }
 
 /// `GET /v1/w/<ws>/host-sessions` — list this workspace's api-spawned host

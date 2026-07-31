@@ -182,6 +182,7 @@ pub(crate) fn resolve_spawn(
         // and stamps the principal key here AFTER resolve, so the child-exit
         // observer can release it. The resolver leaves it `None`.
         principal_key: None,
+        quota_workspace: None,
         // The ephemeral `/v1/sandboxes` path is NOT workspace-scoped: no overlay
         // mount, and the session id is minted by the spawn (no persistent layer
         // to key). Both are `Some` only on the workspace-scoped door below.
@@ -793,6 +794,7 @@ pub(crate) fn resolve_workspace_session(
         // child-exit observer NEVER deletes the RW dirs (resume needs them).
         ephemeral_cwd: None,
         principal_key: None,
+        quota_workspace: None,
         overlay: Some(overlay),
         // FORCE the host-decided session id so the returned/addressable id
         // equals the persistent-layer + `.jsonl` key.

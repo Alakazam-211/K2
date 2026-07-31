@@ -79,6 +79,11 @@ pub struct ApiHostSessionRequest {
     /// this workspace's own api-spawned session index at the route door.
     #[serde(default)]
     pub session: Option<String>,
+    /// Capability envelope hints (PRD S1–S3). Optional. Absent → no staged handle.
+    /// Unknown shape rejected at the door (not silently ignored when present
+    /// but invalid — see `v1_capabilities::parse_capabilities`).
+    #[serde(default)]
+    pub capabilities: Option<serde_json::Value>,
 }
 
 /// The legacy hardcoded FLOOR of known auto-approve flags. Since W2
@@ -400,6 +405,7 @@ pub(crate) fn resolve_host_spawn(
         ephemeral_cwd: None,
         // Stamped by the route door AFTER quota acquire (mirrors sandboxes).
         principal_key: None,
+        quota_workspace: None,
         overlay: None,
         // FORCE the host-decided id so the returned/addressable sessionId
         // equals the conversation id spliced into the agent argv above.

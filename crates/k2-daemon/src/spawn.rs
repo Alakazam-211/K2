@@ -312,6 +312,7 @@ pub fn spawn_agent_session_v2_blocking(
         session.clone(),
         None,
         None,
+        None,
         // P4-H6: daemon-internal spawns are never microVM-backed → no per-session
         // uid was allocated → nothing to free.
         None,

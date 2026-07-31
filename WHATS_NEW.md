@@ -26,8 +26,9 @@ connect or recovery backoff.
 
 ### Note
 
-Full `/v1` host-session capability envelope / spawn queue (Scout co-design
-PRD) remains design-locked for a follow-up train — not in this cut.
+Host-session **capability envelope end-state** (JWKS, `resumed`, work-completion
+reaper, higher concurrent caps + spawn queue) lands in the next train after
+this ConnectionGate cut — see branch `feat/host-session-endstate`.
 
 ---
 

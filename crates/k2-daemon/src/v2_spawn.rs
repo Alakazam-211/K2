@@ -146,6 +146,11 @@ pub struct SpawnRequest {
     /// crash/OOM/kill-9, so the counter can never leak).
     #[serde(skip)]
     pub principal_key: Option<String>,
+    /// Quota workspace path when the slot was acquired with a per-workspace
+    /// ceiling (host-sessions). `#[serde(skip)]`. Paired with `principal_key`
+    /// on ChildExit release so workspace counts never leak.
+    #[serde(skip)]
+    pub quota_workspace: Option<String>,
     /// Sandbox v2 — the WORKSPACE-SCOPED **MIRROR** mount spec produced by the
     /// policy-resolver ([`crate::v1_sandboxes::policy::resolve_workspace_session`]).
     /// `#[serde(skip)]` so it NEVER arrives off the wire (a caller can never
@@ -1096,6 +1101,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         session.clone(),
         req.ephemeral_cwd.clone(),
         req.principal_key.clone(),
+        req.quota_workspace.clone(),
         // P4-H6: the per-session uid this cell holds. The observer is the SINGLE
         // authoritative teardown — it frees the uid + removes the per-session
         // egress table on ChildExit (fires on clean exit AND crash/OOM/kill-9),
@@ -1417,6 +1423,8 @@ pub fn spawn_child_exit_observer(
     session: std::sync::Arc<DaemonPtySession>,
     ephemeral_cwd: Option<PathBuf>,
     principal_key: Option<String>,
+    // Workspace path when quota was acquired with a per-workspace ceiling.
+    quota_workspace: Option<String>,
     // P4-H6: the per-session worker uid this cell holds (`Some` only for a
     // microVM cell the door allocated for). Freed back to the pool + its
     // per-session egress table removed in the ChildExit arm — the SINGLE
@@ -1578,10 +1586,14 @@ pub fn spawn_child_exit_observer(
                     // EVERY non-API caller (no acquire happened) → no-op,
                     // default-OFF parity. Saturating in `sandbox_quota::release`.
                     if let Some(pk) = principal_key.as_ref() {
-                        crate::sandbox_quota::release(pk);
-                        log_debug!(
-                            "[v1-sandbox] released concurrent-cell quota slot for principal={} session={}",
+                        crate::sandbox_quota::release_in_workspace(
                             pk,
+                            quota_workspace.as_deref(),
+                        );
+                        log_debug!(
+                            "[v1-sandbox] released concurrent-cell quota slot for principal={} ws={:?} session={}",
+                            pk,
+                            quota_workspace,
                             session_id
                         );
                     }

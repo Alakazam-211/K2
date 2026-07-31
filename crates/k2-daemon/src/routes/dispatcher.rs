@@ -4080,6 +4080,13 @@ async fn handle_one_request(
                         text,
                         final_,
                     );
+                    // S9: work-completion reaper — non-final keeps Working;
+                    // --final enters grace window.
+                    if let Some(sid) =
+                        k2_core::session::SessionId::parse(&validated.session_id)
+                    {
+                        crate::sandbox_reaper::on_respond(&sid, final_);
+                    }
                     crate::cli_response::CliResponse::ok_json(
                         serde_json::json!({ "ok": true, "seq": seq }).to_string(),
                     )
@@ -4338,6 +4345,13 @@ async fn handle_one_request(
                 "/v1/ping" => {
                     let _ = stream.read(&mut buf).await;
                     crate::misc_routes::handle_v1_ping(&principal.display_id())
+                }
+                // S1: public JWKS for capability JWT verify (still behind
+                // api_enabled + v1 auth so the surface isn't a free oracle
+                // when the API is dark).
+                "/v1/jwks" => {
+                    let _ = stream.read(&mut buf).await;
+                    crate::v1_capabilities::handle_v1_jwks()
                 }
                 // F3 gate split: with K2_API on but K2_SANDBOX_API off, the
                 // `/v1/sandboxes*` family is SURFACE-ABSENT — the same uniform

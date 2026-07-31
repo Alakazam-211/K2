@@ -120,6 +120,7 @@ pub mod v1_sandboxes;
 // Behind the /v1 surface gate (K2_API, default OFF); honestly labeled
 // `"sandbox":"none"`.
 pub mod v1_host_sessions;
+pub mod v1_capabilities;
 // F2 (sandbox): per-session agent response log + principal→session ownership map
 // backing GET /v1/sandboxes/<id>/messages. Reached ONLY via the K2_SANDBOX_API
 // surface (default OFF) + the scoped /cli/respond cell verb.

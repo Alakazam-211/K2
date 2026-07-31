@@ -133,6 +133,19 @@ parking_lot = "0.12"
 # DOCX, images). A streaming WS endpoint is Phase 3 work.
 base64 = "0.22"
 
+# Host-session capability envelope (PRD S1–S3): ES256 JWT mint + JWKS.
+# `jsonwebtoken` signs/verifies compact JWS (use_pem for EncodingKey from
+# PKCS8 PEM); `p256` generates + parses ~/.k2/capability-signing.pem and
+# extracts JWKS x/y coordinates.
+jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
+p256 = { version = "0.13", default-features = false, features = [
+    "ecdsa",
+    "pem",
+    "pkcs8",
+    "std",
+    "arithmetic",
+] }
+
 # Files-drawer multi-writer live refresh — recursive FS watcher on the
 # daemon machine so agent shell writes + other-client mutations fan out
 # as SessionEvent::FsChanged. Same notify 7 line as src-tauri (macos_fsevent

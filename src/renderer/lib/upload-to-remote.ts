@@ -16,6 +16,10 @@
 //     Bounded by the daemon's 10 GiB `MAX_TRANSFER_SIZE` + a free-disk
 //     check on the first chunk (`total_bytes`).
 //
+// Hosted web (VITE_WEB): no filesystem paths — HTML5 `File` drops are
+// uploaded via {@link uploadBrowserFile} (same daemon routes, bytes from
+// the browser File API — same idea as Google Drive in a tab).
+//
 // `uploadFileChunked` is the ONE chunk loop — `clone-to.ts` delegates to
 // it too, so a transfer-layer fix lands in both features at once.
 //
@@ -263,5 +267,96 @@ async function runUploadToRemote(
     localPath,
     size,
     { dir: destDir, filename, idPrefix: 'drop', uploadId, ...hooks },
+  )
+}
+
+// ── Hosted web: File API → same daemon upload routes ──────────────────
+
+/**
+ * Encode bytes as standard base64 (browser `btoa`). Chunked so large
+ * files do not blow the call stack via `String.fromCharCode(...big)`.
+ */
+export function bytesToBase64(data: ArrayBuffer | Uint8Array): string {
+  const u8 = data instanceof Uint8Array ? data : new Uint8Array(data)
+  const chunk = 0x8000
+  let binary = ''
+  for (let i = 0; i < u8.length; i += chunk) {
+    const slice = u8.subarray(i, Math.min(i + chunk, u8.length))
+    binary += String.fromCharCode.apply(null, slice as unknown as number[])
+  }
+  return btoa(binary)
+}
+
+/**
+ * Upload a browser `File` (HTML5 drop / file input) to the active daemon.
+ * Same single-shot vs chunked split as {@link uploadToRemote}; reads via
+ * `File.slice` / `arrayBuffer` instead of Tauri path commands.
+ */
+export async function uploadBrowserFile(
+  file: File,
+  destDir: string,
+  hooks: TransferHooks = {},
+): Promise<string> {
+  const filename = file.name || 'upload.bin'
+  const size = file.size
+  const hostKey = activeHostKey(useConnectHostStore.getState().activeHost)
+  // Flight key uses a synthetic "path" so concurrent same-name drops on
+  // different Files do not falsely join (name alone is not unique).
+  const flightKey = uploadToRemoteFlightKey(
+    `browser:${filename}:${size}:${file.lastModified}`,
+    destDir,
+    hostKey,
+  )
+  const existing = inflightUploads.get(flightKey)
+  if (existing) return existing
+
+  const flight = runUploadBrowserFile(file, destDir, hooks, flightKey).finally(() => {
+    if (inflightUploads.get(flightKey) === flight) {
+      inflightUploads.delete(flightKey)
+    }
+    inflightUploadIds.delete(flightKey)
+  })
+  inflightUploads.set(flightKey, flight)
+  return flight
+}
+
+async function runUploadBrowserFile(
+  file: File,
+  destDir: string,
+  hooks: TransferHooks,
+  flightKey: string,
+): Promise<string> {
+  const filename = file.name || 'upload.bin'
+  const size = file.size
+
+  if (size <= SINGLE_SHOT_MAX_BYTES) {
+    if (hooks.isCancelled?.()) {
+      throw new TransferCancelledError(`Upload of ${filename} cancelled.`)
+    }
+    const buf = await file.arrayBuffer()
+    const base64 = bytesToBase64(buf)
+    const res = await daemonCliPost<{ path: string }>('fs/upload-binary', {
+      dir: destDir,
+      filename,
+      base64,
+    })
+    hooks.onProgress?.(size, size)
+    return res.path
+  }
+
+  const uploadId = chunkedUploadIdForFlight(flightKey, 'web-drop')
+  return uploadFileChunked(
+    {
+      daemonCliPost,
+      readLocalFileRange: async (_path, offset, len) => {
+        const blob = file.slice(offset, offset + len)
+        const buf = await blob.arrayBuffer()
+        return bytesToBase64(buf)
+      },
+    },
+    // path is only used for logging / id in the loop — File reads use slice.
+    filename,
+    size,
+    { dir: destDir, filename, idPrefix: 'web-drop', uploadId, ...hooks },
   )
 }

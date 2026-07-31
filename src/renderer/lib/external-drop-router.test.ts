@@ -12,6 +12,7 @@ import {
   panelOwnsFolderPath,
   findFileTreePanelAt,
   notifyFileTreeRefresh,
+  filesFromDataTransfer,
   FILE_TREE_EXTERNAL_DROP_EVENT,
 } from './external-drop-router'
 import { BRACKETED_PASTE_START, BRACKETED_PASTE_END } from './file-drag'
@@ -232,3 +233,24 @@ describe('notifyFileTreeRefresh — multi-panel', () => {
   })
 })
 
+
+// ── Hosted web File list helper ─────────────────────────────────────────
+
+describe('filesFromDataTransfer', () => {
+  it('returns empty for null / empty list', () => {
+    expect(filesFromDataTransfer(null)).toEqual([])
+    const dt = { files: { length: 0, item: () => null } } as unknown as DataTransfer
+    expect(filesFromDataTransfer(dt)).toEqual([])
+  })
+
+  it('collects File items in order', () => {
+    const a = new File([new Uint8Array([1])], 'a.txt', { type: 'text/plain' })
+    const b = new File([new Uint8Array([2])], 'b.txt', { type: 'text/plain' })
+    const list = {
+      length: 2,
+      item: (i: number) => (i === 0 ? a : i === 1 ? b : null),
+    }
+    const dt = { files: list } as unknown as DataTransfer
+    expect(filesFromDataTransfer(dt).map((f) => f.name)).toEqual(['a.txt', 'b.txt'])
+  })
+})

@@ -25,7 +25,7 @@
 // resolved destDir (+ host) joins one in-flight promise so a leaked or
 // double-fired handler cannot mint a second remote copy.
 
-import { uploadToRemote } from './upload-to-remote'
+import { uploadBrowserFile, uploadToRemote } from './upload-to-remote'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useToastStore } from '@/stores/toast'
 import { useTransferProgressStore } from '@/stores/transfer-progress'
@@ -231,6 +231,65 @@ async function runRemoteDropUploads(
   )
 
   if (inject && buildPayload) {
+    return buildPayload(remotePaths)
+  }
+  return null
+}
+
+/**
+ * Hosted-web counterpart of {@link executeRemoteDrop}: HTML5 `File` list
+ * instead of Tauri local paths. Always uploads (no "local path paste").
+ */
+export async function executeBrowserFileDrop(
+  files: File[],
+  target: DropTarget,
+  ctx: DropContext,
+  buildPayload?: (remotePaths: string[]) => string,
+): Promise<string | null> {
+  if (!files || files.length === 0) return null
+
+  const dest = resolveDropDestination(target, ctx)
+  let destDir = dest.destDir
+  if (destDir === null) {
+    const open = ctx.openPicker ?? useRemoteFolderPickerStore.getState().open
+    destDir = await open()
+    if (!destDir) return null
+  }
+
+  const toast = useToastStore.getState()
+  const noun = files.length === 1 ? 'file' : `${files.length} files`
+  const remotePaths: string[] = []
+  try {
+    for (const file of files) {
+      const label = file.name || 'upload.bin'
+      const transfers = useTransferProgressStore.getState()
+      const tid = transfers.begin('upload', label)
+      try {
+        const remote = await uploadBrowserFile(file, destDir, {
+          onProgress: (sent, total) =>
+            useTransferProgressStore.getState().update(tid, total > 0 ? sent / total : 1),
+          isCancelled: () => useTransferProgressStore.getState().isCancelRequested(tid),
+        })
+        remotePaths.push(remote)
+      } finally {
+        useTransferProgressStore.getState().end(tid)
+      }
+    }
+  } catch (err) {
+    if ((err as { cancelled?: boolean })?.cancelled === true) {
+      toast.addToast('Upload cancelled', 'info', 3000)
+      return null
+    }
+    toast.addToast(
+      `Upload failed: ${err instanceof Error ? err.message : String(err)}`,
+      'error',
+    )
+    return null
+  }
+
+  toast.addToast(`Uploaded ${noun} to the host`, 'success', 3000)
+
+  if (dest.inject && buildPayload) {
     return buildPayload(remotePaths)
   }
   return null

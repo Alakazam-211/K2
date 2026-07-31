@@ -29,6 +29,7 @@ vi.mock('@/stores/connect-host', () => ({
 import {
   uploadToRemote,
   uploadToRemoteFlightKey,
+  bytesToBase64,
   uploadFileChunked,
   SINGLE_SHOT_MAX_BYTES,
   __clearUploadToRemoteFlightsForTests,
@@ -201,3 +202,16 @@ describe('uploadFileChunked — stable uploadId option', () => {
     expect(posts.map((p) => p.offset)).toEqual([0, 2])
   })
 })
+
+
+describe('bytesToBase64', () => {
+  it('encodes known bytes', () => {
+    const u8 = new Uint8Array([77, 97, 110])
+    expect(bytesToBase64(u8)).toBe('TWFu')
+  })
+
+  it('encodes empty buffer', () => {
+    expect(bytesToBase64(new Uint8Array(0))).toBe('')
+  })
+})
+

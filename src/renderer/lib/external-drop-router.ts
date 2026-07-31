@@ -19,15 +19,17 @@
 // FileTree refresh after a folder drop is a CustomEvent on the panel so the
 // tree does not need a second drag-drop listener.
 
-import { executeRemoteDrop } from './handle-remote-drop'
+import { executeBrowserFileDrop, executeRemoteDrop } from './handle-remote-drop'
 import { planLocalExternalDrop } from './external-drop'
 import { daemonCliPost } from './daemon-cli'
 import { terminalWrite } from './terminal-daemon'
 import {
+  isFileDragActive,
   isImagePath,
   quotePathForImageDrop,
   bracketPaste,
 } from './file-drag'
+import { isWebClient } from './is-web'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
 import { useFileUndoStore } from '@/stores/file-undo'
@@ -349,13 +351,70 @@ export async function routeExternalDrop(
   }
 }
 
+// ── Hosted web: HTML5 File drops ──────────────────────────────────────
+
+/**
+ * Collect `File` objects from a browser drop. Ignores empty lists.
+ * Folder drops are best-effort (browsers differ); file-only is the
+ * supported product path (same as Drive for single files).
+ */
+export function filesFromDataTransfer(dt: DataTransfer | null): File[] {
+  if (!dt?.files || dt.files.length === 0) return []
+  const out: File[] = []
+  for (let i = 0; i < dt.files.length; i++) {
+    const f = dt.files.item(i)
+    if (f) out.push(f)
+  }
+  return out
+}
+
+/**
+ * Route HTML5 `File` drops (hosted web). Always uploads to the active
+ * daemon — there are no local filesystem paths in the browser.
+ */
+export async function routeBrowserFileDrop(
+  files: File[],
+  position: { x: number; y: number },
+  doc: Document = document,
+): Promise<void> {
+  if (!files || files.length === 0) return
+
+  const target = hitTestExternalDrop(position, doc)
+
+  switch (target.kind) {
+    case 'terminal': {
+      const payload = await executeBrowserFileDrop(
+        files,
+        { kind: 'terminal' },
+        { workspacePath: target.workspacePath || undefined },
+        buildTerminalDropPayload,
+      )
+      if (payload) injectIntoTerminal(target, payload)
+      return
+    }
+    case 'folder': {
+      await executeBrowserFileDrop(files, { kind: 'folder', path: target.path }, {})
+      notifyFileTreeRefresh(target.path, doc)
+      return
+    }
+    case 'miss': {
+      await executeBrowserFileDrop(files, { kind: 'miss' }, {})
+      return
+    }
+  }
+}
+
 // ── Single-subscriber mount ───────────────────────────────────────────
 
 /**
- * Mount the ONE window-level `tauri://drag-drop` listener for external OS
- * drops. Call once from App. Returns a teardown that unsubscribes even if
- * `listen()` is still pending (Strict Mode / remount leak guard — same
- * pattern as the former App miss handler's `ddTorndown`).
+ * Mount the ONE window-level drop listener for external OS drops.
+ *
+ * - **Desktop (Tauri):** `tauri://drag-drop` with local filesystem paths.
+ * - **Hosted web:** HTML5 `dragover` + `drop` with browser `File` objects
+ *   (upload via File API — same product idea as Drive in a tab).
+ *
+ * Call once from App. Returns a teardown that unsubscribes even if
+ * `listen()` is still pending (Strict Mode / remount leak guard).
  */
 export function mountExternalDropRouter(): () => void {
   const unlisteners: Array<() => void> = []
@@ -363,6 +422,41 @@ export function mountExternalDropRouter(): () => void {
   const track = (fn: () => void) => {
     if (torndown) fn()
     else unlisteners.push(fn)
+  }
+
+  if (isWebClient()) {
+    // Required: without preventDefault on dragover, the browser never fires drop.
+    const onDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer) return
+      // Only claim OS file drops, not text/link drags.
+      const types = e.dataTransfer.types
+      const hasFiles =
+        (typeof types.includes === 'function' && types.includes('Files')) ||
+        (types as unknown as { contains?: (t: string) => boolean }).contains?.('Files')
+      if (!hasFiles) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+    const onDrop = (e: DragEvent) => {
+      // In-window FileTree drags use the tauri-plugin-drag path on desktop;
+      // on web they use HTML5 too — skip when our internal drag is active.
+      if (isFileDragActive()) return
+      const files = filesFromDataTransfer(e.dataTransfer)
+      if (files.length === 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      void routeBrowserFileDrop(files, { x: e.clientX, y: e.clientY })
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onDrop)
+    track(() => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onDrop)
+    })
+    return () => {
+      torndown = true
+      unlisteners.forEach((fn) => fn())
+    }
   }
 
   import('@tauri-apps/api/event')
@@ -378,7 +472,6 @@ export function mountExternalDropRouter(): () => void {
       ).then(track)
     })
     .catch((err) => {
-      // Hosted web / non-Tauri: no native OS path drops — ignore.
       if (import.meta.env.DEV) {
         console.debug('[external-drop-router] listen unavailable', err)
       }

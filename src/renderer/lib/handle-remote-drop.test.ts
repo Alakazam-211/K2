@@ -23,6 +23,8 @@ import {
 const uploadMock = vi.fn<(local: string, dir: string) => Promise<string>>()
 vi.mock('./upload-to-remote', () => ({
   uploadToRemote: (local: string, dir: string) => uploadMock(local, dir),
+  // Hosted-web path (not exercised here) — keep export surface complete.
+  uploadBrowserFile: async (file: File, dir: string) => `${dir}/${file.name}`,
 }))
 vi.mock('@/stores/toast', () => ({
   useToastStore: { getState: () => ({ addToast: () => {} }) },

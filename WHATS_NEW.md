@@ -3,6 +3,22 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.79 — Host-session list: no phantom `live:true`
+
+### List liveness matches real PTY processes
+
+After a daemon restart (or any mid-flight kill), `GET /v1/w/<ws>/host-sessions`
+could still report `live: true` for cells with no backing process (scout
+0.40.78 finding — S9/list lag). KillMode correctly killed the cgroup; the
+list only checked map *presence*, not child liveness.
+
+- `live` requires a map entry **and** a living child (`is_child_alive`, now
+  also OS `kill(pid,0)` when ChildExit was missed).
+- Reaper + list path **reconcile** dead map entries so phantoms cannot linger.
+- Dead-resume `resumed: false` path was already correct; this fixes the list.
+
+---
+
 ## 0.40.78 — Soft-reconnect recovery clear + host-session workspace slug
 
 ### Remote “Reconnecting…” stuck while terminals still work

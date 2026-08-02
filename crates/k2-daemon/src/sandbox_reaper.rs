@@ -160,6 +160,11 @@ async fn run() {
     log_debug!("[sandbox-reaper] started — tick={}s (work-completion gate)", t.as_secs());
     loop {
         tokio::time::sleep(t).await;
+        // Scout 0.40.78: drop map entries whose child is already dead so
+        // host-sessions list cannot report phantom live:true (restart /
+        // KillMode / missed ChildExit). Map is empty right after boot; this
+        // catches mid-lifetime zombies.
+        crate::v2_session_map::reconcile_dead_children();
         let expired: Vec<SessionId> = {
             let Ok(m) = REG.lock() else { continue };
             let now = Instant::now();

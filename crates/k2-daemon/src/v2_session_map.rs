@@ -389,6 +389,21 @@ pub fn lookup_by_session_id(id: &SessionId) -> Option<Arc<DaemonPtySession>> {
         .cloned()
 }
 
+/// Unregister map entries whose PTY child is already dead (ChildExit missed
+/// or process killed out-of-band). Used by host-sessions list and the
+/// sandbox reaper so `live:true` cannot lag process death (scout 0.40.78
+/// phantom-live cells after restart / mid-flight kill).
+pub fn reconcile_dead_children() {
+    let dead_keys: Vec<String> = snapshot()
+        .into_iter()
+        .filter(|(_, s)| !s.is_child_alive())
+        .map(|(name, _)| name)
+        .collect();
+    for key in dead_keys {
+        let _ = unregister(&key);
+    }
+}
+
 /// Every registered (agent_name, session) pair. Returning owned
 /// Arcs lets the caller drop the map lock before doing expensive
 /// work against the sessions. Ordering is unspecified.

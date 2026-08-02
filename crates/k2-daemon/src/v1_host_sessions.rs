@@ -752,16 +752,14 @@ pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliR
             }
         }
     }
+    // Drop map entries whose child already exited but never unregistered
+    // (restart-orphans / missed ChildExit). Cheap O(live sessions).
+    crate::v2_session_map::reconcile_dead_children();
+
     let sessions: Vec<serde_json::Value> = by_sid
         .into_iter()
         .map(|(sid, (agent, last_seen))| {
-            // Liveness for THIS session: agent_name map key (premint) OR
-            // SessionId (adopted provider-minted ids). Deduped so one sid
-            // cannot paint multiple historical agent rows as live.
-            let live = crate::v2_session_map::lookup_by_agent_name(&agent).is_some()
-                || SessionId::parse(&sid)
-                    .and_then(|s| crate::v2_session_map::lookup_by_session_id(&s))
-                    .is_some();
+            let live = host_session_row_is_live(&sid, &agent);
             serde_json::json!({
                 "sessionId": sid,
                 "agentName": agent,
@@ -773,6 +771,41 @@ pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliR
     CliResponse::ok_json(
         serde_json::json!({ "workspace": slug, "sessions": sessions }).to_string(),
     )
+}
+
+/// Whether a host-sessions list row is truly live (backing PTY child alive).
+///
+/// Map presence alone is insufficient: a KillMode restart (or any death
+/// without ChildExit→unregister) left phantom `live:true` rows (scout
+/// 0.40.78 finding — S9/list lag). Always require [`DaemonPtySession::is_child_alive`].
+///
+/// Identity:
+/// - UUID `sessionId` matching the map entry's daemon SessionId (premint / resume)
+/// - else live under `agentName` for adopted provider-minted ids (DB sid ≠ daemon sid)
+fn host_session_row_is_live(sid: &str, agent: &str) -> bool {
+    if let Some(id) = SessionId::parse(sid) {
+        if let Some(s) = crate::v2_session_map::lookup_by_session_id(&id) {
+            return s.is_child_alive();
+        }
+    }
+    let Some(s) = crate::v2_session_map::lookup_by_agent_name(agent) else {
+        return false;
+    };
+    if !s.is_child_alive() {
+        return false;
+    }
+    // Premint / UUID resume: agent live only counts if this row's sid is the PTY's id.
+    if let Some(id) = SessionId::parse(sid) {
+        if s.session_id == id {
+            return true;
+        }
+        // Adopted self-minting providers: stamped sid is provider-minted; PTY
+        // uses a different daemon SessionId. Host `api-…` names are 1:1 with
+        // one spawn, so agent-name liveness is the row's liveness.
+        return agent.starts_with("api-");
+    }
+    // Non-UUID sid (e.g. hermes) — agent_name is the only handle.
+    true
 }
 
 /// `POST /v1/w/<ws>/host-sessions/<id>` — MESSAGE-LIVE: inject the caller's

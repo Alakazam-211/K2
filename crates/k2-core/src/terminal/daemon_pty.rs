@@ -1105,14 +1105,31 @@ impl DaemonPtySession {
         label
     }
 
-    /// Whether the child PID is still alive. Returns `false` once
-    /// the alacritty `ChildExit` event has been observed and
-    /// `mark_child_exited` was called (typically from the daemon's
-    /// child-exit observer task). Used by the spawn helper's
-    /// idempotency check and the `agents running` reaping pass to
-    /// recognize stale entries before reporting them as live.
+    /// Whether the child is still alive for "is this session live?" probes.
+    ///
+    /// Returns `false` once the alacritty `ChildExit` event has been observed
+    /// (`mark_child_exited`). Also returns `false` if we have a recorded PID
+    /// and the OS says that process is gone (kill(pid, 0) fails) — covers
+    /// KillMode/cgroup/SIGKILL paths where ChildExit never reaches the
+    /// observer and the map would otherwise report phantom live sessions
+    /// (scout 0.40.78 list finding).
     pub fn is_child_alive(&self) -> bool {
-        !self.child_exited.load(std::sync::atomic::Ordering::Acquire)
+        if self.child_exited.load(std::sync::atomic::Ordering::Acquire) {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            if let Some(pid) = self.child_pid() {
+                if pid > 0 {
+                    // 0 signal = existence check; ESRCH ⇒ process is gone.
+                    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+                    if rc != 0 {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
     }
 
     /// Flip the `child_exited` flag. Called by the child-exit

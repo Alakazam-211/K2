@@ -119,6 +119,9 @@ impl QuotaState {
     ///
     /// On `Err` NOTHING is mutated — the caller has acquired no slot and must
     /// NOT release.
+    ///
+    /// Used by unit tests; process free functions call [`Self::try_acquire_ws`].
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn try_acquire(
         &mut self,
         key: &str,
@@ -158,6 +161,8 @@ impl QuotaState {
     }
 
     /// Return one slot held by `key` (+ optional workspace). SATURATING.
+    /// Used by unit tests; process free functions call [`Self::release_ws`].
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn release(&mut self, key: &str) {
         self.release_ws(key, None);
     }

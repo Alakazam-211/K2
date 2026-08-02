@@ -71,7 +71,8 @@ pub struct MintOutcome {
     pub env_value: String,
     /// Non-secret response metadata (`staged`, `env`, `expires_at`, `jtis`).
     pub metadata: serde_json::Value,
-    /// jtis minted (same as metadata.jtis).
+    /// jtis minted (same as metadata.jtis). Read by tests; callers may use metadata.
+    #[allow(dead_code)]
     pub jtis: Vec<String>,
 }
 
@@ -467,6 +468,9 @@ pub fn mint_and_stage(
 /// **non-secret** metadata `Value` for the spawn/resume response body.
 ///
 /// `timeout_secs` becomes JWT lifetime (`min(timeout_secs, 3600)`).
+/// Host-session routes call [`mint_and_stage`] directly; this wrapper is for
+/// tests and future callers.
+#[allow(dead_code)]
 pub fn mint_and_stage_for_session(
     caps_val: &serde_json::Value,
     session_id: &str,

@@ -32,6 +32,13 @@ cold-spawn. S5 documents: `resource` must be `interview:<id>` (else 400
 `capabilities-invalid`); dead-resume keeps a **stable** `sessionId` with
 `resumed: false` as the sole re-spawn discriminator.
 
+### Cap 429 after queue wait (F6) + list endpoint (F7)
+
+- After the 30s spawn queue wait, 429 now keeps the **blocking cap code**
+  (`workspace-cell-cap` / …) instead of always `spawn-queue-timeout`.
+- `GET /v1/w/<ws>/host-sessions` documented in S5; list is **one row per
+  sessionId** so historical agent rows don’t all flip `live:true` on respawn.
+
 ---
 
 ## 0.40.77 — Public `/v1/jwks` (envelope verify fix)

@@ -1,13 +1,16 @@
 //! Work-completion-aware reaper for API host-sessions / sandbox cells.
 //!
 //! ## States (S9)
-//! - **Working** — inject / register / non-final `k2 respond` → never idle-reaped.
-//! - **Grace** — after `k2 respond --final`, short window (~10s) then may reap.
-//! - **Idle** — last activity aged out with no work-in-progress → reap when idle > timeout.
-//! - **Hard wall** — `timeout_secs` from first register (or last hard-wall reset) always
-//!   bounds never-final hangs; Working still dies at the wall.
+//! - **Working** — inject / register / non-final `k2 respond` → **never**
+//!   reaped for silence. There is **no classic idle-window** that kills a
+//!   Working cell (client cannot prove "idle dies / working lives" by waiting
+//!   on silence alone — only Grace vs Working + hard wall).
+//! - **Grace** — after `k2 respond --final`, short window
+//!   ([`FINAL_GRACE_SECS`] = 10s) then may reap.
+//! - **Hard wall** — `timeout_secs` from first register always bounds
+//!   never-final hangs; **Working still dies at the wall**.
 //!
-//! Idle activity still stamped by spawn / message-live / resume inject.
+//! Activity stamped by spawn / message-live / resume inject (re-enters Working).
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};

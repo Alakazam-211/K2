@@ -738,16 +738,28 @@ pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliR
         }
     };
 
-    let sessions: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|(sid, agent, last_seen)| {
-            // Liveness: the `api-…` agent_name IS the v2 map's registration
-            // key, so it resolves for BOTH id shapes — including adopted
-            // provider-minted ids, whose live PTY runs under a different
-            // (forced daemon) SessionId. The SessionId lookup stays as a
-            // fallback for a row whose PTY outlived its map key shape.
-            let live = crate::v2_session_map::lookup_by_agent_name(agent).is_some()
-                || SessionId::parse(sid)
+    // F7: one row per sessionId (latest last_seen wins). Historical rows with
+    // the same sessionId but older agentName used to all flip live:true when
+    // SessionId lookup hit a fresh respawn — integrators must key on
+    // sessionId, not sessionId+agentName.
+    let mut by_sid: std::collections::BTreeMap<String, (String, i64)> =
+        std::collections::BTreeMap::new();
+    for (sid, agent, last_seen) in rows {
+        match by_sid.get(&sid) {
+            Some((_, prev)) if *prev >= last_seen => {}
+            _ => {
+                by_sid.insert(sid, (agent, last_seen));
+            }
+        }
+    }
+    let sessions: Vec<serde_json::Value> = by_sid
+        .into_iter()
+        .map(|(sid, (agent, last_seen))| {
+            // Liveness for THIS session: agent_name map key (premint) OR
+            // SessionId (adopted provider-minted ids). Deduped so one sid
+            // cannot paint multiple historical agent rows as live.
+            let live = crate::v2_session_map::lookup_by_agent_name(&agent).is_some()
+                || SessionId::parse(&sid)
                     .and_then(|s| crate::v2_session_map::lookup_by_session_id(&s))
                     .is_some();
             serde_json::json!({

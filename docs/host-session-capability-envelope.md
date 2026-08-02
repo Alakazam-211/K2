@@ -278,10 +278,29 @@ A cryptographically valid JWT is **not** enough. On every agent callback your ap
 
 ### 4.2 S9 work-completion reaper
 
-- Inject / register → **Working** (not idle-reaped).  
-- Non-final `k2 respond` → stay Working.  
-- `k2 respond --final` → short **grace** then may reap.  
-- **Hard wall** = `timeout_secs` from register.
+| Number | Value | Role |
+|--------|-------|------|
+| `timeout_secs` | request, default **180**, Scout multi-turn **600** | **Hard wall** from register — kills Working too |
+| Grace after `--final` | **10s** (`FINAL_GRACE_SECS`) | Only path that reaps a finished cell without waiting for the wall |
+| Reaper tick | **15s** (env `K2_SANDBOX_REAPER_TICK_SECS`) | Poll cadence |
+
+Behavior:
+
+- Inject / register / non-final `k2 respond` → **Working** — **never** reaped for silence.
+- There is **no classic idle-window** (no “N seconds since last activity → reap
+  while Working”). A silent-but-working cell and a silent idle cell that never
+  called `--final` both stay Working until the **hard wall**.
+- `k2 respond --final` → **Grace** → reap after **~10s** (unless a new inject
+  re-enters Working).
+- **Hard wall** = `timeout_secs` from register (always wins).
+
+**Client verification of S9 differentiation:** spawn A with continuous work /
+no `--final`; spawn B that reaches `--final`; with `timeout_secs` large (e.g.
+600), within ~20–30s B should die (grace) while A lives. Probing with
+resume/inject **re-stamps Working** and cannot observe pure idle.
+
+K2-side unit evidence: `sandbox_reaper::tests::{working_survives_idle_window,
+grace_reaps_after_deadline, hard_wall_reaps_working}`.
 
 ### 4.3 Inject / auto-retry (no model cancel)
 
@@ -297,16 +316,54 @@ Live resume is **queue-exempt / cap-neutral**.
 
 ## 5. Concurrent ceilings + stable 429 codes
 
-Defaults (env-overridable): **principal 64** / **workspace 15** / **global 512**. Queue wait default **30s** then:
+Defaults (env-overridable): **principal 64** / **workspace 15** / **global 512**.
+
+**Queue (S8):** when at a cap, spawn **waits** up to `K2_SANDBOX_QUEUE_WAIT_SECS`
+(default **30s**) polling for a free slot. On deadline still full → **429 with
+the blocking cap’s code** (`workspace-cell-cap` / `concurrent-cell-cap` /
+`cell-capacity`). Pre-0.40.78 this always became `spawn-queue-timeout` after
+the wait (pilot F6 — workspace-15 never appeared under sustained load).
+`K2_SANDBOX_QUEUE_WAIT_SECS=0` → immediate refuse, same codes.
 
 | `code` | Meaning |
 |--------|---------|
 | `concurrent-cell-cap` | Per-API-key principal full |
 | `workspace-cell-cap` | This workspace full |
 | `cell-capacity` | Daemon global full |
-| `spawn-queue-timeout` | Waited full window, still full |
+| `spawn-queue-timeout` | Legacy / reserved (post-0.40.78 acquire path surfaces concrete cap codes after wait) |
 
 Map all four to an **honest retry** UX — never an infinite spinner.
+
+---
+
+## 5.1 `GET /v1/w/<ws>/host-sessions` (list)
+
+**Intended API** (audit): authorized workspace → list `api-…` host sessions.
+
+```http
+GET /v1/w/sales/host-sessions
+Authorization: Bearer k2sk_…
+```
+
+```json
+{
+  "workspace": "sales",
+  "sessions": [
+    {
+      "sessionId": "a1b2c3d4-…",
+      "agentName": "api-…",
+      "live": true,
+      "lastSeenAt": 1754140000
+    }
+  ]
+}
+```
+
+- **One row per `sessionId`** (latest `lastSeenAt` wins if historical agent rows
+  share the id).
+- **`live`:** true if that session’s PTY is in the daemon map.
+- **Adoption:** key on **`sessionId`**, not `sessionId`+`agentName` (agentName
+  can rotate across respawns under the same handle).
 
 ---
 

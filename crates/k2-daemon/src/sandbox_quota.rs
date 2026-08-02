@@ -263,7 +263,18 @@ pub fn try_acquire(principal_key: &str) -> Result<(), QuotaError> {
 
 /// Acquire with optional per-workspace ceiling (host-sessions pass `Some(ws_path)`).
 /// When at capacity, **waits** up to `K2_SANDBOX_QUEUE_WAIT_SECS` (default 30s)
-/// polling for a free slot (S8 K2 spawn queue). On timeout → `QueueTimeout`.
+/// polling for a free slot (S8 K2 spawn queue).
+///
+/// On deadline (still full): returns the **last concrete cap** that refused
+/// (`workspace-cell-cap` / `concurrent-cell-cap` / `cell-capacity`) — not a
+/// uniform `spawn-queue-timeout`. Pre-0.40.78 always collapsed to
+/// `spawn-queue-timeout` after the wait, so sustained-loop load never surfaced
+/// the workspace-15 code (pilot F6). Set `K2_SANDBOX_QUEUE_WAIT_SECS=0` for
+/// immediate refuse with the same codes (no wait).
+///
+/// `spawn-queue-timeout` remains a stable code string for integrators; it is
+/// returned only when the wait path cannot recover a concrete cap (should not
+/// happen on the normal acquire loop).
 pub fn try_acquire_in_workspace(
     principal_key: &str,
     workspace: Option<&str>,
@@ -285,8 +296,9 @@ pub fn try_acquire_in_workspace(
                     return Err(err);
                 }
                 if Instant::now() >= deadline {
-                    // Waited the full window still full → distinct integrator code.
-                    return Err(QuotaError::QueueTimeout);
+                    // F6: keep the blocking cap code after the wait so Scout
+                    // sees workspace-cell-cap (etc.), not only spawn-queue-timeout.
+                    return Err(err);
                 }
                 std::thread::sleep(Duration::from_millis(QUEUE_POLL_MS));
             }

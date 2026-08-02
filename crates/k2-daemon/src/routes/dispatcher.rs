@@ -878,7 +878,10 @@ async fn handle_one_request(
     // state" invariant now that migrations run AFTER the listener binds.
     // See `crate::boot_status`.
     if !crate::boot_status::is_ready()
-        && !matches!(path.as_str(), "/ping" | "/health" | "/boot-status")
+        && !matches!(
+            path.as_str(),
+            "/ping" | "/health" | "/boot-status" | "/v1/jwks"
+        )
     {
         let _ = stream.read(&mut buf).await;
         super::http::send_response(
@@ -4291,6 +4294,18 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // GET /v1/jwks — PUBLIC (unauthenticated), same tier as /boot-status.
+        // Capability envelope verify requires the verifier (e.g. Scout) to
+        // fetch public keys with NO K2 secret. Gating this behind an API key
+        // reintroduced "app holds a long-lived K2 credential" and broke the
+        // ES256+JWKS contract (pilot finding #1, 0.40.76). Public keys only —
+        // no secrets; standard OIDC/JWKS practice. Served even when the /v1
+        // API surface is dark (keys remain public regardless of spawn doors).
+        "/v1/jwks" => {
+            let _ = stream.read(&mut buf).await;
+            let r = crate::v1_capabilities::handle_v1_jwks();
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // ── P3a (sandbox / K2-as-a-server) — the EXTERNAL `/v1/*` surface.
         //
         // DARK BY DEFAULT: with the surface gate OFF (the shipped default)
@@ -4305,6 +4320,8 @@ async fn handle_one_request(
         // engine can't sandbox", the `can_sandbox()` check inside the
         // handlers). When ON, each route gates on `v1_principal` (owner token
         // OR a valid non-revoked API key, Bearer-preferred).
+        //
+        // EXCEPTION: `/v1/jwks` is handled ABOVE without auth (public keys).
         p if p.starts_with("/v1/") => {
             if !crate::misc_routes::api_enabled() {
                 let _ = stream.read(&mut buf).await;
@@ -4345,13 +4362,6 @@ async fn handle_one_request(
                 "/v1/ping" => {
                     let _ = stream.read(&mut buf).await;
                     crate::misc_routes::handle_v1_ping(&principal.display_id())
-                }
-                // S1: public JWKS for capability JWT verify (still behind
-                // api_enabled + v1 auth so the surface isn't a free oracle
-                // when the API is dark).
-                "/v1/jwks" => {
-                    let _ = stream.read(&mut buf).await;
-                    crate::v1_capabilities::handle_v1_jwks()
                 }
                 // F3 gate split: with K2_API on but K2_SANDBOX_API off, the
                 // `/v1/sandboxes*` family is SURFACE-ABSENT — the same uniform

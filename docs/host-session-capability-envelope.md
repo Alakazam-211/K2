@@ -169,10 +169,13 @@ History-replay of prompt tokens is moot for the envelope path (token is out of p
 
 ```http
 GET /v1/jwks
-Authorization: Bearer k2sk_…
 ```
 
-Requires API surface enabled. Response:
+**Unauthenticated (public)** — same tier as `/boot-status`. No API key required.
+(Pilot holds only public EC keys; requiring a K2 secret would defeat asymmetric
+verify. Served even if the rest of `/v1` spawn doors are dark.)
+
+Response:
 
 ```json
 {

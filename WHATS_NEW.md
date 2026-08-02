@@ -3,6 +3,22 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.77 — Public `/v1/jwks` (envelope verify fix)
+
+### `/v1/jwks` is unauthenticated
+
+Pilot final-test (0.40.76) found `GET /v1/jwks` returned **401** without an
+API key. That broke the ES256 contract: Scout must fetch public keys with
+**no** long-lived K2 secret.
+
+- **`GET /v1/jwks` is public** (no Bearer required), same tier as `/boot-status`.
+- Served even when the `/v1` spawn surface is dark — keys are public either way.
+- Still returns only JWKS public material (no secrets).
+
+Integrator note: [`docs/host-session-capability-envelope.md`](docs/host-session-capability-envelope.md).
+
+---
+
 ## 0.40.76 — Host-session capability envelope (testable)
 
 ### `/v1` host-sessions — capability envelope + multi-turn reliability

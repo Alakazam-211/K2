@@ -847,4 +847,69 @@ mod tests {
             resolve_audience("https://x.example/r/{resource_id}/z", "interview:ivw_99").unwrap();
         assert_eq!(resolved, "https://x.example/r/ivw_99/z");
     }
+
+    /// Atomic remint: second mint for the same session_id replaces stage-file
+    /// content entirely (no torn merge). File is a valid JSON array of
+    /// `{actions, token}` entries (k2-dev-web 0.40.76 integrator contract).
+    #[test]
+    fn stage_file_remint_replaces_content() {
+        let _home = crate::test_support::TempHome::new();
+        let workspace = _home.path().join("ws-remint");
+        fs::create_dir_all(&workspace).expect("ws");
+
+        let sid = "sess-remint-1";
+        let caps_get = parse_capabilities(&serde_json::json!([sample_cap(&["GET"])]))
+            .expect("parse get");
+        let caps_post = parse_capabilities(&serde_json::json!([sample_cap(&["POST"])]))
+            .expect("parse post");
+
+        let first = mint_and_stage(sid, &workspace, &caps_get, 120, None, None).expect("mint1");
+        let staged_path = workspace.join(".k2/caps").join(format!("{sid}.json"));
+        assert!(staged_path.is_file(), "stage file after first mint");
+        let after_first = fs::read_to_string(&staged_path).expect("read1");
+        assert_eq!(after_first, first.env_value, "disk must match first env_value");
+
+        let second = mint_and_stage(sid, &workspace, &caps_post, 120, None, None).expect("mint2");
+        let after_second = fs::read_to_string(&staged_path).expect("read2");
+        assert_eq!(
+            after_second, second.env_value,
+            "second remint must replace stage file content"
+        );
+        assert_ne!(
+            after_second, first.env_value,
+            "remint must not leave first mint payload"
+        );
+        assert_ne!(
+            first.jtis, second.jtis,
+            "remint mints fresh jtis (not reuse)"
+        );
+
+        // Valid JSON array; each entry has actions + token (non-empty JWT).
+        let package: Vec<serde_json::Value> =
+            serde_json::from_str(&after_second).expect("stage file must be valid JSON array");
+        assert_eq!(package.len(), 1, "one capability staged");
+        let entry = &package[0];
+        assert!(
+            entry.get("actions").and_then(|a| a.as_array()).is_some(),
+            "entry must have actions array: {entry}"
+        );
+        assert_eq!(entry["actions"], serde_json::json!(["POST"]));
+        let token = entry
+            .get("token")
+            .and_then(|t| t.as_str())
+            .expect("entry must have token string");
+        assert!(
+            token.split('.').count() == 3 && !token.is_empty(),
+            "token must look like a JWT (3 segments): {token}"
+        );
+        // First mint's GET action must not leak into the replaced file.
+        assert_ne!(entry["actions"], serde_json::json!(["GET"]));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&staged_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "reminted stage file must stay 0600, got {mode:o}");
+        }
+    }
 }

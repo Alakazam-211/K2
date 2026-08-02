@@ -268,37 +268,24 @@ pub fn try_acquire_in_workspace(
     let ws_cap = workspace_cap();
     let max_wait = queue_wait();
     let deadline = Instant::now() + max_wait;
-    let mut last_err = QuotaError::PerPrincipalCap;
-    let mut attempted = false;
     loop {
-        {
+        match {
             let mut state = QUOTA.lock().expect("sandbox quota mutex poisoned");
-            match state.try_acquire_ws(
-                principal_key,
-                workspace,
-                per_principal,
-                ws_cap,
-                global,
-            ) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    last_err = e;
-                    attempted = true;
+            state.try_acquire_ws(principal_key, workspace, per_principal, ws_cap, global)
+        } {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                if max_wait.is_zero() {
+                    // Immediate refuse — surface the concrete cap that blocked us.
+                    return Err(err);
                 }
+                if Instant::now() >= deadline {
+                    // Waited the full window still full → distinct integrator code.
+                    return Err(QuotaError::QueueTimeout);
+                }
+                std::thread::sleep(Duration::from_millis(QUEUE_POLL_MS));
             }
         }
-        if max_wait.is_zero() {
-            return Err(last_err);
-        }
-        if Instant::now() >= deadline {
-            // Waited the full window still full.
-            return Err(if attempted {
-                QuotaError::QueueTimeout
-            } else {
-                last_err
-            });
-        }
-        std::thread::sleep(Duration::from_millis(QUEUE_POLL_MS));
     }
 }
 
@@ -476,4 +463,100 @@ mod tests {
         assert_eq!(env_cap(var, 7), 12, "valid positive override (trimmed)");
         std::env::remove_var(var);
     }
+
+    /// Per-workspace ceiling via `try_acquire_ws`: N ok, N+1 → `WorkspaceCap`
+    /// with machine code `workspace-cell-cap`. Refused acquire mutates nothing.
+    #[test]
+    fn workspace_cap_hits_workspace_cell_cap() {
+        let mut s = QuotaState::new();
+        let per_principal = 100; // non-binding
+        let ws_cap = 3;
+        let global = 1000; // non-binding
+        let ws = "/tmp/ws-a";
+        for i in 0..ws_cap {
+            assert!(
+                s.try_acquire_ws("P", Some(ws), per_principal, ws_cap, global)
+                    .is_ok(),
+                "workspace acquire {i} within cap must succeed",
+            );
+        }
+        assert_eq!(s.workspace_count(ws), ws_cap);
+        assert_eq!(s.count_for("P"), ws_cap);
+        assert_eq!(s.total(), ws_cap);
+
+        let err = s
+            .try_acquire_ws("P", Some(ws), per_principal, ws_cap, global)
+            .expect_err("N+1 workspace must be refused");
+        assert_eq!(err, QuotaError::WorkspaceCap);
+        assert_eq!(err.code(), "workspace-cell-cap");
+        assert_eq!(
+            s.workspace_count(ws),
+            ws_cap,
+            "refused workspace acquire must not increment"
+        );
+        assert_eq!(s.total(), ws_cap);
+
+        // Independent workspace still admits.
+        assert!(
+            s.try_acquire_ws("P", Some("/tmp/ws-b"), per_principal, ws_cap, global)
+                .is_ok(),
+            "other workspace is independent of ws-a cap",
+        );
+        assert_eq!(s.workspace_count(ws), ws_cap);
+        assert_eq!(s.workspace_count("/tmp/ws-b"), 1);
+
+        // Release frees one workspace slot so the original admits again.
+        s.release_ws("P", Some(ws));
+        assert_eq!(s.workspace_count(ws), ws_cap - 1);
+        assert!(
+            s.try_acquire_ws("P", Some(ws), per_principal, ws_cap, global)
+                .is_ok(),
+            "freed workspace slot is reusable",
+        );
+        assert_eq!(s.workspace_count(ws), ws_cap);
+    }
+
+    /// Check order: principal → workspace → global (most specific first).
+    #[test]
+    fn workspace_cap_checked_before_global() {
+        let mut s = QuotaState::new();
+        // Workspace full at 1; global would also be full if we got there.
+        s.try_acquire_ws("P", Some("ws"), 10, 1, 1).unwrap();
+        let err = s
+            .try_acquire_ws("P", Some("ws"), 10, 1, 1)
+            .expect_err("must refuse");
+        assert_eq!(
+            err,
+            QuotaError::WorkspaceCap,
+            "workspace reported before global when both would bind"
+        );
+        assert_eq!(err.code(), "workspace-cell-cap");
+    }
+
+    /// Frozen 429 `code` strings for the integrator envelope (0.40.76).
+    /// QueueTimeout is only produced by the process-global wait loop; pure
+    /// `QuotaState` cannot emit it, but the code mapping must stay stable.
+    #[test]
+    fn quota_error_codes_match_contract() {
+        assert_eq!(QuotaError::PerPrincipalCap.code(), "concurrent-cell-cap");
+        assert_eq!(QuotaError::WorkspaceCap.code(), "workspace-cell-cap");
+        assert_eq!(QuotaError::GlobalCap.code(), "cell-capacity");
+        assert_eq!(QuotaError::QueueTimeout.code(), "spawn-queue-timeout");
+
+        // Messages are non-empty and non-secret (no paths/ids).
+        for e in [
+            QuotaError::PerPrincipalCap,
+            QuotaError::WorkspaceCap,
+            QuotaError::GlobalCap,
+            QuotaError::QueueTimeout,
+        ] {
+            assert!(!e.message().is_empty(), "{e:?} message empty");
+            assert!(
+                !e.message().contains('/'),
+                "{e:?} message must not leak paths: {}",
+                e.message()
+            );
+        }
+    }
+
 }

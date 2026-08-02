@@ -73,6 +73,18 @@ Content-Type: application/json
 same value on cold-spawn, live-resume (`resumed: true`), and dead-resume
 (`resumed: false`). Integrators may key plan→session registries on it.
 
+**Resource namespace:** each capability `resource` **must** be `interview:<id>`
+(e.g. `interview:ivw_abc`). Other prefixes (e.g. `space:…`) are rejected with
+**400** `capabilities-invalid` (`must start with "interview:"`). Do not send
+Scout plan/space ids without the `interview:` prefix.
+
+**Response shape (one envelope for all paths):** session/status fields are
+always **top-level**. `capabilities` is **only** the non-secret mint metadata
+sub-object (`staged` / `env` / `expires_at` / `jtis`) — never a container for
+`sessionId` / `workspace` / `resumed` / `delivered` / `live`. Live-resume adds
+top-level `resumed`/`live`/`delivered`; cold-spawn adds `agentName` + `stream`
+and omits `resumed` (fresh). Dead-resume is cold shape + `resumed: false`.
+
 Fresh spawn **omits** `resumed`.
 
 ### 2.2 Staging (file SSOT + re-send obligation)
@@ -148,10 +160,27 @@ Content-Type: application/json
 }
 ```
 
-**Response includes** `resumed: true`, `live: true`, `delivered`, and (when caps sent) `capabilities: { staged, env, expires_at, jtis: [<new>, …] }`.
+**Example response (same top-level field homes as cold-spawn; live flags added):**
+
+```json
+{
+  "sessionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "delivered": true,
+  "live": true,
+  "resumed": true,
+  "workspace": "sales",
+  "sandbox": "none",
+  "capabilities": {
+    "staged": true,
+    "env": "K2_CAPABILITY_TOKEN",
+    "expires_at": "2026-08-02T12:10:00Z",
+    "jtis": ["jti-read-003", "jti-write-004"]
+  }
+}
+```
 
 - Caps present → **fresh mint**, atomic file overwrite, **new jtis**.
-- Caps omitted → **no remint**.
+- Caps omitted → **no remint** (and no `capabilities` key on the response).
 - Prior jtis remain cryptographically valid until **their** `exp`. For **single-valid** semantics, **add old jtis to your local revoke set** when you receive the new set (recommended for Scout). K2 does **not** server-invalidate old jtis.
 
 Same optional fields on `POST /v1/w/<ws>/host-sessions/<id>` (message-live).
@@ -159,6 +188,10 @@ Same optional fields on `POST /v1/w/<ws>/host-sessions/<id>` (message-live).
 ### 2.5 Dead resume (`resumed: false`) — **normative sequence**
 
 When the cell is **dead**, the same POST body with `session` + **`capabilities[]` re-sent** does a **full re-spawn** (new live PTY), returns **`resumed: false`**, and **mints into the cap file** as part of that spawn.
+
+**`sessionId` stays STABLE** — it is the same id the integrator addressed.
+`resumed: false` is the **sole** re-spawn discriminator (new PTY under the
+same handle). Do **not** expect a new `sessionId` on dead-resume.
 
 **Integrator sequence for final-test (aligned):**
 

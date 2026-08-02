@@ -24,6 +24,14 @@ blocked until quit+relaunch.
 Live-resume responses returned the filesystem path; cold-spawn / dead-resume
 returned the URL slug. Normalized to the **slug** on all three paths.
 
+### Host-session response shape (F5) + S5 nits
+
+Session/status fields stay **top-level** on live-resume; `capabilities` is only
+mint metadata (`staged` / `env` / `expires_at` / `jtis`) — same home as
+cold-spawn. S5 documents: `resource` must be `interview:<id>` (else 400
+`capabilities-invalid`); dead-resume keeps a **stable** `sessionId` with
+`resumed: false` as the sole re-spawn discriminator.
+
 ---
 
 ## 0.40.77 — Public `/v1/jwks` (envelope verify fix)

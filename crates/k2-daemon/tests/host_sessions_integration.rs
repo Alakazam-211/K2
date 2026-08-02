@@ -937,6 +937,14 @@ async fn message_live_and_spawn_prompt_reach_the_pty() {
     assert_eq!(m["sessionId"], serde_json::json!(session_id));
     // F4: workspace is the URL slug on live paths too (not the abs path).
     assert_eq!(m["workspace"], "hs-inject", "live must return slug; body={resp}");
+    // F5: session/status fields are top-level — never nested under capabilities.
+    assert!(m.get("sessionId").is_some(), "F5 top-level sessionId; body={resp}");
+    assert!(m.get("workspace").is_some(), "F5 top-level workspace; body={resp}");
+    if let Some(caps) = m.get("capabilities") {
+        assert!(caps.get("sessionId").is_none(), "F5 sessionId not under capabilities; body={resp}");
+        assert!(caps.get("workspace").is_none(), "F5 workspace not under capabilities; body={resp}");
+        assert!(caps.get("resumed").is_none(), "F5 resumed not under capabilities; body={resp}");
+    }
     assert_text_appears(&session_id, "hs-live-message-marker", "message-live").await;
 
     // Cross-principal message-live is refused (uniform 404): a key granted
@@ -1296,6 +1304,13 @@ async fn self_minting_provider_adoption_lists_and_resumes() {
     assert_eq!(r["sessionId"], serde_json::json!(provider_sid), "echo the ADDRESSED id");
     // F4: same slug as cold-spawn / dead-resume — never absolute path.
     assert_eq!(r["workspace"], "hs-adopt", "live resume must return slug; body={resp}");
+    // F5: session fields top-level (not nested under capabilities).
+    assert_eq!(r["resumed"], true, "body={resp}");
+    assert!(r.get("sessionId").is_some());
+    if let Some(caps) = r.get("capabilities") {
+        assert!(caps.get("sessionId").is_none(), "F5; body={resp}");
+        assert!(caps.get("workspace").is_none(), "F5; body={resp}");
+    }
     assert_text_appears(&spawn_sid, "hs-adopt-live-resume", "live resume into same PTY").await;
 
     // (4) Message-live ADDRESSED BY the adopted id (owner recorded at

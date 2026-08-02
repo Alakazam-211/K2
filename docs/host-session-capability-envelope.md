@@ -19,28 +19,28 @@ One API key may spawn many `sessionId`s. Each session gets its own short-lived c
 
 ---
 
-## 2. Wire sample
+## 2. Wire samples (concrete)
 
 ### 2.1 Spawn (cold) with capabilities
 
 ```http
-POST /v1/w/<workspace-slug>/host-sessions
-Authorization: Bearer <k2sk_…>
+POST /v1/w/sales/host-sessions
+Authorization: Bearer k2sk_…
 Content-Type: application/json
 
 {
-  "prompt": "Task text only — no secrets.",
+  "prompt": "Ground on Phase-1 answers and write sales findings for this interview. Credentials are in the capability file — never paste them into chat.",
   "timeout_secs": 600,
   "capabilities": [
     {
       "kind": "http_callback",
-      "audience": "https://your.app/api/v1/interviews/{resource_id}/phase1",
+      "audience": "https://scout.example/api/v1/interviews/{resource_id}/phase1",
       "resource": "interview:ivw_abc",
       "actions": ["GET"]
     },
     {
       "kind": "http_callback",
-      "audience": "https://your.app/api/v1/interviews/{resource_id}/results",
+      "audience": "https://scout.example/api/v1/interviews/{resource_id}/results",
       "resource": "interview:ivw_abc",
       "actions": ["POST"]
     }
@@ -48,100 +48,206 @@ Content-Type: application/json
 }
 ```
 
-**Response (shape):** `sessionId`, `agentName`, `workspace`, `sandbox: "none"`, `stream.grid`, optional `capabilities: { staged, env, expires_at, jtis }`. Fresh spawn **omits** `resumed` (or treats as non-resume).
+**Example response (non-secret):**
 
-**Staging:**
-
-- File (multi-turn SSOT): `{workspace}/.k2/caps/<sessionId>.json` — JSON array `[{ "actions": [...], "token": "<jwt>" }, …]`, mode **0600**.
-- Env (turn-0 only): `K2_CAPABILITY_TOKEN` = same JSON string at process start. **Live resume cannot update env.**
-
-### 2.2 Live resume / inject (same PTY)
-
-```http
-POST /v1/w/<workspace-slug>/host-sessions
-Authorization: Bearer <k2sk_…>
-Content-Type: application/json
-
+```json
 {
-  "session": "<sessionId>",
-  "prompt": "Continue…",
-  "timeout_secs": 600,
-  "capabilities": [ /* same shape; re-send to remint */ ]
+  "sessionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "agentName": "api-…",
+  "workspace": "sales",
+  "sandbox": "none",
+  "stream": { "grid": "/cli/sessions/grid?session=…&token=…" },
+  "capabilities": {
+    "staged": true,
+    "env": "K2_CAPABILITY_TOKEN",
+    "expires_at": "2026-08-02T12:10:00Z",
+    "jtis": ["jti-read-001", "jti-write-002"]
+  }
 }
 ```
 
-- **`resumed: true`** — same live PTY; **queue-exempt / cap-neutral**.
-- If `capabilities[]` present → **fresh JWTs**, atomic overwrite of the cap file, **new `jtis`** in response.
-- If `capabilities[]` omitted → **no remint** (always re-send on multi-turn envelope path).
-- Prior jtis remain valid until **their** `exp`. For single-valid-token semantics, **revoke old jtis in your app** (Scout-local). K2 does **not** server-invalidate prior jtis on remint.
+Fresh spawn **omits** `resumed`.
 
-Message-live: `POST /v1/w/<ws>/host-sessions/<id>` with the same optional `prompt` / `capabilities` / `timeout_secs`.
+### 2.2 Staging (file SSOT + re-send obligation)
 
-### 2.3 Dead resume
+| Channel | When | Notes |
+|---------|------|--------|
+| **File** `{workspace}/.k2/caps/<sessionId>.json` | Every mint / remint | Multi-turn **SSOT**. Mode **0600**. Atomic write: temp + `rename()`. |
+| **Env** `K2_CAPABILITY_TOKEN` | Cold spawn only | Same JSON string as the file. **Live resume cannot update env.** |
 
-Same body with `session` when the PTY is gone → **new live cell**, **`resumed: false`**, full spawn path + caps mint. Treat as lost turn-1 cell state (no silent continue).
+**Re-send-caps-on-resume (required for multi-turn envelope):**  
+On every multi-turn resume / continue, **ALWAYS re-send `capabilities[]`** so K2 remints and overwrites the cap file.  
+**Omit `capabilities[]` ⇒ no remint ⇒ file may be stale.** Do not write with a stale file after a long gap or after `resumed: false` without remint.
 
-### 2.4 JWKS + verify (concrete)
+### 2.3 Cap-file schema (what the agent parses each turn)
 
-```http
-GET /v1/jwks
-Authorization: Bearer <k2sk_…>
+Path: `{workspace}/.k2/caps/<sessionId>.json`
+
+**Schema:** a JSON **array** of objects (one per capability mint). Each object:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `actions` | `string[]` | Granted HTTP methods, e.g. `["GET"]` or `["POST"]` |
+| `token` | `string` | Compact ES256 JWT |
+
+**No other required top-level fields** in the file for v1. Response metadata (`jtis`, `expires_at`) is on the **HTTP response**, not necessarily mirrored in the file.
+
+**Example file contents** (after spawn or remint; tokens abbreviated):
+
+```json
+[
+  {
+    "actions": ["GET"],
+    "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ii4uLiJ9.eyJpc3MiOiJrMi1ob3N0LXNlc3Npb25zIiwiYXVkIjoiaHR0cHM6Ly9zY291dC5leGFtcGxlL2FwaS92MS9pbnRlcnZpZXdzL2l2d19hYmMvcGhhc2UxIiwic3ViIjoiYTFiMmMzZDQtLi4uIiwicmVzb3VyY2UiOiJpbnRlcnZpZXc6aXZ3X2FiYyIsImFjdGlvbnMiOlsiR0VUIl0sImV4cCI6MTc1NDE0MDAwMCwiaWF0IjoxNzU0MTM2NDAwLCJqdGkiOiJqdGktcmVhZC0wMDEifQ.…"
+  },
+  {
+    "actions": ["POST"],
+    "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ii4uLiJ9.eyJpc3MiOiJrMi1ob3N0LXNlc3Npb25zIiwiYXVkIjoiaHR0cHM6Ly9zY291dC5leGFtcGxlL2FwaS92MS9pbnRlcnZpZXdzL2l2d19hYmMvcmVzdWx0cyIsInN1YiI6ImExYjJjM2Q0LS4uLiIsInJlc291cmNlIjoiaW50ZXJ2aWV3Oml2d19hYmMiLCJhY3Rpb25zIjpbIlBPU1QiXSwiZXhwIjoxNzU0MTQwMDAwLCJpYXQiOjE3NTQxMzY0MDAsImp0aSI6Imp0aS13cml0ZS0wMDIifQ.…"
+  }
+]
 ```
 
-(Requires API surface enabled; same auth as other `/v1/*` routes.)
+**Agent obligation:** at the **start of each turn**, re-read this file and pick the JWT whose `actions` match the method you will call. **Do not cache turn-1’s JWT** across turns.
 
-**Response:** `{ "keys": [ { "kty":"EC", "crv":"P-256", "x", "y", "use":"sig", "alg":"ES256", "kid" } ] }`
+### 2.4 Live resume (`resumed: true`)
 
-**App MUST verify each capability JWT:**
+```http
+POST /v1/w/sales/host-sessions
+Authorization: Bearer k2sk_…
+Content-Type: application/json
 
-| Check | Value |
-|--------|--------|
-| Signature | ES256 against JWKS `kid` |
-| `alg` | `ES256` |
-| `iss` | `k2-host-sessions` (constant) |
-| `aud` | Exact audience URL for this endpoint (after `{resource_id}` resolution) |
-| `sub` | Host-session id (`sessionId`) if you track it |
-| `resource` | Equals the interview/plan id implied by your URL plan |
-| HTTP method | ∈ JWT `actions` |
-| `exp` | Not expired |
-| `jti` | Not in your **local revoke set** |
+{
+  "session": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "prompt": "Continue synthesis for this interview.",
+  "timeout_secs": 600,
+  "capabilities": [
+    {
+      "kind": "http_callback",
+      "audience": "https://scout.example/api/v1/interviews/{resource_id}/phase1",
+      "resource": "interview:ivw_abc",
+      "actions": ["GET"]
+    },
+    {
+      "kind": "http_callback",
+      "audience": "https://scout.example/api/v1/interviews/{resource_id}/results",
+      "resource": "interview:ivw_abc",
+      "actions": ["POST"]
+    }
+  ]
+}
+```
 
-**Signing key (pilot):** private key at **`~/.k2/capability-signing.pem`** (mode 0600) on the **daemon host**, generated on first use. **STATIC for the pilot — no rotation procedure yet.** Public material only via `GET /v1/jwks`. Full rotation runbook = post-pilot ops debt.
+**Response includes** `resumed: true`, `live: true`, `delivered`, and (when caps sent) `capabilities: { staged, env, expires_at, jtis: [<new>, …] }`.
 
-### 2.5 Agent obligation
+- Caps present → **fresh mint**, atomic file overwrite, **new jtis**.
+- Caps omitted → **no remint**.
+- Prior jtis remain cryptographically valid until **their** `exp`. For **single-valid** semantics, **add old jtis to your local revoke set** when you receive the new set (recommended for Scout). K2 does **not** server-invalidate old jtis.
 
-At the **start of each turn**, re-read `.k2/caps/<sessionId>.json` (or `K2_CAPABILITY_TOKEN` only if still on first process start). **Do not cache turn-1’s JWT** across turns.
+Same optional fields on `POST /v1/w/<ws>/host-sessions/<id>` (message-live).
+
+### 2.5 Dead resume (`resumed: false`) — **normative sequence**
+
+When the cell is **dead**, the same POST body with `session` + **`capabilities[]` re-sent** does a **full re-spawn** (new live PTY), returns **`resumed: false`**, and **mints into the cap file** as part of that spawn.
+
+**Integrator sequence for final-test (aligned):**
+
+```
+1. Detect resumed: false  (lost live continuity / turn-1 cell state)
+2. Re-send capabilities[] on that (or immediate follow-up) host-sessions call
+3. K2 fresh-mints → atomic overwrite of .k2/caps/<sessionId>.json
+4. Agent starts / re-reads cap file
+5. ONLY THEN perform turn-2 writes  (no write rides a stale file)
+```
+
+History-replay of prompt tokens is moot for the envelope path (token is out of prompt). Do **not** silent-continue as if turn-1 init still holds.
 
 ---
 
-## 3. Reliability
+## 3. JWKS + verify layers
 
-### 3.1 `timeout_secs`
+### 3.1 Fetch JWKS
 
-- Clamp 30…86400; **default 180** if omitted (too short for multi-turn silent gen).
-- Integrator: `timeout_secs >= max_inter_shot_gap + turn_2_budget`.
+```http
+GET /v1/jwks
+Authorization: Bearer k2sk_…
+```
+
+Requires API surface enabled. Response:
+
+```json
+{
+  "keys": [
+    {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "…",
+      "y": "…",
+      "use": "sig",
+      "alg": "ES256",
+      "kid": "…"
+    }
+  ]
+}
+```
+
+### 3.2 Layer A — JWT validity (crypto + claims)
+
+| Check | Required value |
+|--------|----------------|
+| Signature | ES256 against JWKS entry matching `kid` |
+| `alg` | `ES256` |
+| `iss` | `k2-host-sessions` |
+| `aud` | Exact audience URL for **this** endpoint (after `{resource_id}` resolution) |
+| `sub` | Host-session `sessionId` (if you track binding) |
+| `exp` | Not expired |
+| `iat` | Present (issued-at) |
+
+### 3.3 Layer B — App AUTHZ (valid JWT ≠ authorized write)
+
+A cryptographically valid JWT is **not** enough. On every agent callback your app **must** also:
+
+| Check | Purpose |
+|--------|---------|
+| **`resource` equals the plan/interview id implied by the URL** | **Cross-plan guard** — token for plan A must not write plan B. If `aud` already encodes the interview endpoint uniquely, still bind `resource` to the URL plan id. |
+| **HTTP method ∈ JWT `actions`** | Verb grant (e.g. POST requires `"POST"` in `actions`) |
+| **`jti` not in your local revocation set** | Completion / remint single-valid / abuse (PRD decision 7) |
+
+### 3.4 Signing key (pilot)
+
+- Private: **`~/.k2/capability-signing.pem`** on the **daemon host** (mode 0600), generated on first use.  
+- **STATIC for the pilot — no rotation procedure yet.**  
+- Public: only via `GET /v1/jwks`. Full rotation runbook = post-pilot ops debt.
+
+---
+
+## 4. Reliability
+
+### 4.1 `timeout_secs`
+
+- Clamp 30…86400; **default 180** if omitted.  
+- Integrator: `timeout_secs >= max_inter_shot_gap + turn_2_budget`.  
 - **Scout multi-turn: 600** (and client poll ≥ 600).
 
-### 3.2 S9 work-completion reaper
+### 4.2 S9 work-completion reaper
 
-- Inject / register → **Working** (not idle-reaped).
-- Non-final `k2 respond` → stay Working.
-- `k2 respond --final` → short **grace** then may reap.
-- **Hard wall** = `timeout_secs` from register (never-final safety).
+- Inject / register → **Working** (not idle-reaped).  
+- Non-final `k2 respond` → stay Working.  
+- `k2 respond --final` → short **grace** then may reap.  
+- **Hard wall** = `timeout_secs` from register.
 
-### 3.3 Inject / auto-retry (no model cancel)
+### 4.3 Inject / auto-retry (no model cancel)
 
 1. Per-session **injection lock** serializes pastes.  
 2. Concurrent inject: wait or fail (**`pty_stalled`** / failed deliver) — not silent drop.  
 3. **No** cancel of in-flight LLM generation.  
 4. Retry into live-but-stuck may leave **two generations** in one cell.  
-5. Write safety = app **`turn_id` idempotency** (+ fences).  
+5. Write safety = app **`turn_id` idempotency** (+ AUTHZ layer §3.3).  
 
-Live resume does **not** take a new concurrent slot.
+Live resume is **queue-exempt / cap-neutral**.
 
 ---
 
-## 4. Concurrent ceilings + stable 429 codes
+## 5. Concurrent ceilings + stable 429 codes
 
 Defaults (env-overridable): **principal 64** / **workspace 15** / **global 512**. Queue wait default **30s** then:
 
@@ -156,15 +262,15 @@ Map all four to an **honest retry** UX — never an infinite spinner.
 
 ---
 
-## 5. Revocation
+## 6. Revocation
 
 | What | Who |
 |------|-----|
-| Capability JWT `jti` | **Scout-local** revoke set at verify time |
-| K2 API key | `k2 api-key revoke <id>` (owner-tier; not the Scout API key) |
+| Capability JWT `jti` | **App-local** revoke set (Scout). Prefer single-valid: revoke previous jtis when remint returns new ones. |
+| K2 API key | `k2 api-key revoke <id>` (owner-tier only) |
 
 ---
 
-## 6. Explicitly deferred (not in 0.40.76 integrator surface)
+## 7. Explicitly deferred (not in 0.40.76 integrator surface)
 
 OPS UI / mint-time `spawn_cap` product · rich queue position/cancel · sandbox-family envelope · full signing-key rotation runbook · busy/stuck API signal · `k2 cap` CLI.

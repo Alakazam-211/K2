@@ -51,8 +51,12 @@ pub enum QuotaError {
     /// The daemon already holds `global_cap` live cells across ALL principals →
     /// 429 `{"code":"cell-capacity"}`.
     GlobalCap,
-    /// Waited in the spawn queue until max wait; still no slot → 429
-    /// `{"code":"spawn-queue-timeout"}`.
+    /// Historical / reserved 429 `{"code":"spawn-queue-timeout"}`.
+    /// Pre-0.40.78 the queue-wait deadline always returned this and dropped the
+    /// concrete cap (pilot F6). Acquire now returns the blocking cap code after
+    /// wait; this variant stays for stable `code()` mapping + integrator docs
+    /// + unit tests (never constructed on the live path under default queue).
+    #[allow(dead_code)]
     QueueTimeout,
 }
 

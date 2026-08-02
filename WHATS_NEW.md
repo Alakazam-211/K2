@@ -3,6 +3,29 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.78 — Soft-reconnect recovery clear + host-session workspace slug
+
+### Remote “Reconnecting…” stuck while terminals still work
+
+After a brief remote blip, the banner could stay on **Reconnecting to …**
+and files/chat history could show `host is reconnecting — request skipped`
+even though the host was healthy and terminal I/O still worked.
+
+Root cause: soft health-poll recovery set `connectionStatus` back to
+connected but never cleared `recovery.kind` to `connected`. The banner and
+`cliFetch` gate key on **recovery**, not connectionStatus — so they stayed
+blocked until quit+relaunch.
+
+- Soft accept after a debounced drop now sets **`recovery → connected`**.
+- Terminal/grid path was never gated; control-plane UI matches it again.
+
+### Host-session `workspace` field is always the slug (F4)
+
+Live-resume responses returned the filesystem path; cold-spawn / dead-resume
+returned the URL slug. Normalized to the **slug** on all three paths.
+
+---
+
 ## 0.40.77 — Public `/v1/jwks` (envelope verify fix)
 
 ### `/v1/jwks` is unauthenticated

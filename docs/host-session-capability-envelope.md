@@ -1,6 +1,6 @@
 # Host-session capability envelope — integrator note (S5)
 
-**Version:** first adoptable cut / **0.40.76**  
+**Version:** first adoptable cut / **0.40.77** (JWKS public; 0.40.76 shipped envelope)  
 **Audience:** apps that spawn `/v1` host-sessions and need agents to call the app’s API (e.g. Scout).  
 **PRD:** `.k2/prds/prd-v1-host-session-capabilities-v1.md` §0  
 
@@ -66,6 +66,13 @@ Content-Type: application/json
 }
 ```
 
+`expires_at` is the earliest JWT `exp` among this mint (here both tokens share
+`exp=1785672600` → `2026-08-02T12:10:00Z`, matching the cap-file examples in §2.3).
+
+**`workspace` is always the URL slug** (`sales`), never the host filesystem path —
+same value on cold-spawn, live-resume (`resumed: true`), and dead-resume
+(`resumed: false`). Integrators may key plan→session registries on it.
+
 Fresh spawn **omits** `resumed`.
 
 ### 2.2 Staging (file SSOT + re-send obligation)
@@ -98,14 +105,18 @@ Path: `{workspace}/.k2/caps/<sessionId>.json`
 [
   {
     "actions": ["GET"],
-    "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ii4uLiJ9.eyJpc3MiOiJrMi1ob3N0LXNlc3Npb25zIiwiYXVkIjoiaHR0cHM6Ly9zY291dC5leGFtcGxlL2FwaS92MS9pbnRlcnZpZXdzL2l2d19hYmMvcGhhc2UxIiwic3ViIjoiYTFiMmMzZDQtLi4uIiwicmVzb3VyY2UiOiJpbnRlcnZpZXc6aXZ3X2FiYyIsImFjdGlvbnMiOlsiR0VUIl0sImV4cCI6MTc1NDE0MDAwMCwiaWF0IjoxNzU0MTM2NDAwLCJqdGkiOiJqdGktcmVhZC0wMDEifQ.…"
+    "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ii4uLiJ9.eyJpc3MiOiJrMi1ob3N0LXNlc3Npb25zIiwiYXVkIjoiaHR0cHM6Ly9zY291dC5leGFtcGxlL2FwaS92MS9pbnRlcnZpZXdzL2l2d19hYmMvcGhhc2UxIiwic3ViIjoiYTFiMmMzZDQtLi4uIiwicmVzb3VyY2UiOiJpbnRlcnZpZXc6aXZ3X2FiYyIsImFjdGlvbnMiOlsiR0VUIl0sImV4cCI6MTc4NTY3MjYwMCwiaWF0IjoxNzg1NjY5MDAwLCJqdGkiOiJqdGktcmVhZC0wMDEifQ.…"
   },
   {
     "actions": ["POST"],
-    "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ii4uLiJ9.eyJpc3MiOiJrMi1ob3N0LXNlc3Npb25zIiwiYXVkIjoiaHR0cHM6Ly9zY291dC5leGFtcGxlL2FwaS92MS9pbnRlcnZpZXdzL2l2d19hYmMvcmVzdWx0cyIsInN1YiI6ImExYjJjM2Q0LS4uLiIsInJlc291cmNlIjoiaW50ZXJ2aWV3Oml2d19hYmMiLCJhY3Rpb25zIjpbIlBPU1QiXSwiZXhwIjoxNzU0MTQwMDAwLCJpYXQiOjE3NTQxMzY0MDAsImp0aSI6Imp0aS13cml0ZS0wMDIifQ.…"
+    "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ii4uLiJ9.eyJpc3MiOiJrMi1ob3N0LXNlc3Npb25zIiwiYXVkIjoiaHR0cHM6Ly9zY291dC5leGFtcGxlL2FwaS92MS9pbnRlcnZpZXdzL2l2d19hYmMvcmVzdWx0cyIsInN1YiI6ImExYjJjM2Q0LS4uLiIsInJlc291cmNlIjoiaW50ZXJ2aWV3Oml2d19hYmMiLCJhY3Rpb25zIjpbIlBPU1QiXSwiZXhwIjoxNzg1NjcyNjAwLCJpYXQiOjE3ODU2NjkwMDAsImp0aSI6Imp0aS13cml0ZS0wMDIifQ.…"
   }
 ]
 ```
+
+Illustrative only (signature truncated). Payload claims: `exp=1785672600` /
+`iat=1785669000` → **12:10:00Z / 11:10:00Z** on `2026-08-02`, same wall-clock as
+response `expires_at` in §2.1.
 
 **Agent obligation:** at the **start of each turn**, re-read this file and pick the JWT whose `actions` match the method you will call. **Do not cache turn-1’s JWT** across turns.
 
@@ -171,9 +182,10 @@ History-replay of prompt tokens is moot for the envelope path (token is out of p
 GET /v1/jwks
 ```
 
-**Unauthenticated (public)** — same tier as `/boot-status`. No API key required.
-(Pilot holds only public EC keys; requiring a K2 secret would defeat asymmetric
-verify. Served even if the rest of `/v1` spawn doors are dark.)
+**No `Authorization` header. No API key.** Public — same tier as `/boot-status`
+(not behind the authenticated `/v1/*` arm). A verifier holds **no** K2 secret by
+design; requiring Bearer here would defeat asymmetric ES256 verify. Served even
+when the rest of the `/v1` spawn surface is dark (still only public key material).
 
 Response:
 

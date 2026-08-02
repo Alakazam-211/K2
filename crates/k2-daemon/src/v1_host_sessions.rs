@@ -396,12 +396,14 @@ fn deliver_into_live(
         ok
     };
     // S4 R1: live inject is always resumed:true (same PTY).
+    // F4: `workspace` is ALWAYS the URL slug (same as cold-spawn / dead-resume),
+    // never the filesystem path — integrators key plan→session registries on it.
     let mut body = serde_json::json!({
         "sessionId": echo_sid,
         "delivered": delivered,
         "live": true,
         "resumed": true,
-        "workspace": ws_path,
+        "workspace": slug,
         "sandbox": "none",
     });
     if let Some(meta) = caps_meta {

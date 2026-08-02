@@ -949,9 +949,19 @@ export function ConnectionGate(): React.ReactElement {
         // A soft health-poll skipped the unconditional setters above; apply
         // them on recovery so the gate flips back to 'connected' and the
         // banner clears.
+        //
+        // CRITICAL (0.40.78): also clear `recovery.kind`. Pre-0.40.78 only
+        // set `connectionStatus` here and left `recovery` latched on
+        // 'reconnecting' forever after a debounced soft drop — even when
+        // every later /boot-status accepted. Terminal/grid WS stayed live
+        // (not gated), but RecoveryBanner + `cliFetch` (`RecoveringError`:
+        // "host is reconnecting — request skipped") stayed blocked until
+        // quit+relaunch. First-connect already set recovery→connected
+        // after whoami; soft recovery never did.
         if (softPoll) {
           setDecision(next)
           useConnectHostStore.getState().setConnectionStatus('connected')
+          useConnectHostStore.getState().setRecovery({ kind: 'connected' })
         }
         // #638: cache the accepted host's version + protocol so
         // lib/server-capabilities can gate newer client features against an

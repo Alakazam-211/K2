@@ -116,6 +116,8 @@ mod sandbox_quota;
 mod v1_sandboxes;
 // F1: NON-SANDBOXED host sessions on /v1 (K2_API-gated; "sandbox":"none").
 mod v1_host_sessions;
+// Capability envelope (S1–S3): ES256 JWTs + GET /v1/jwks + cap-file staging.
+mod v1_capabilities;
 // F2 (sandbox): per-session agent response log + ownership map (GET .../messages).
 mod sandbox_responses;
 mod session_activity;

@@ -3,6 +3,35 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.76 — Host-session capability envelope (testable)
+
+### `/v1` host-sessions — capability envelope + multi-turn reliability
+
+Integrators (e.g. Scout) can request **scoped, short-lived capability JWTs**
+on host-session spawn/resume so agents call the app API **without** secrets
+in the free-form prompt.
+
+- Optional `capabilities[]` on spawn/resume → ES256 JWTs staged as
+  `K2_CAPABILITY_TOKEN` (spawn only) and **`.k2/caps/<sessionId>.json`**
+  (multi-turn SSOT; atomic rewrite on remint).
+- **`GET /v1/jwks`** for local verify (`iss=k2-host-sessions`, `alg=ES256`,
+  `aud` / `resource` / `actions` / `sub=sessionId`).
+- Live resume with `capabilities[]` **re-mints** to the cap file (not process
+  env). Prior jtis stay valid until `exp` (app-local revoke if needed).
+- **`resumed: true|false`** on session-addressed responses (live vs dead re-spawn).
+- **Work-completion reaper:** Working agents are not idle-reaped mid-job;
+  grace after `k2 respond --final`; hard wall = `timeout_secs`.
+- Concurrent defaults: principal **64** / workspace **15** / global **512**,
+  with wait-then-structured 429 (`concurrent-cell-cap`, `workspace-cell-cap`,
+  `cell-capacity`, `spawn-queue-timeout`).
+
+Integrator guide: [`docs/host-session-capability-envelope.md`](docs/host-session-capability-envelope.md).
+
+Signing key for the pilot is **static** at `~/.k2/capability-signing.pem`
+(rotation runbook later). Capability **jti** revoke remains app-local.
+
+---
+
 ## 0.40.75 — Hosted web: fewer edge health polls
 
 ### Hosted web / K2 Connect remote clients
@@ -23,12 +52,6 @@ seconds**.
 Cuts request volume on the Cloudflare Worker proxy lane dramatically
 (order-of-magnitude for always-open viewer tabs) without slowing first
 connect or recovery backoff.
-
-### Note
-
-Host-session **capability envelope end-state** (JWKS, `resumed`, work-completion
-reaper, higher concurrent caps + spawn queue) lands in the next train after
-this ConnectionGate cut — see branch `feat/host-session-endstate`.
 
 ---
 

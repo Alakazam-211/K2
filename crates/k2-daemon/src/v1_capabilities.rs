@@ -12,6 +12,8 @@
 //!
 //! Private key lives only on the daemon host at
 //! `~/.k2/capability-signing.pem` (mode 0600), generated on first use.
+//! **Pilot (0.40.76):** that key is STATIC (no rotation yet). Apps fetch
+//! public material from `GET /v1/jwks` (API surface must be enabled + auth).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -597,6 +599,8 @@ fn resolve_audience(audience: &str, resource: &str) -> Result<String, String> {
     Ok(resolved)
 }
 
+/// Atomic stage: write temp + `rename()` on the same filesystem so a concurrent
+/// agent re-read never sees a torn/partial JSON (k2-dev-web 0.40.76 flag).
 fn stage_file(workspace: &Path, session_id: &str, env_value: &str) -> Result<(), String> {
     let caps_dir = workspace.join(".k2").join("caps");
     fs::create_dir_all(&caps_dir).map_err(|e| format!("mkdir {}: {e}", caps_dir.display()))?;
@@ -609,7 +613,12 @@ fn stage_file(workspace: &Path, session_id: &str, env_value: &str) -> Result<(),
     }
 
     let dest = caps_dir.join(format!("{session_id}.json"));
-    let tmp = caps_dir.join(format!("{session_id}.json.tmp.{}", std::process::id()));
+    // Unique temp name avoids clobber races between concurrent remints.
+    let tmp = caps_dir.join(format!(
+        "{session_id}.json.tmp.{}.{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    ));
     fs::write(&tmp, env_value.as_bytes()).map_err(|e| format!("write {}: {e}", tmp.display()))?;
     restrict_mode(&tmp)?;
     fs::rename(&tmp, &dest).map_err(|e| {

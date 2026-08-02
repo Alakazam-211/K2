@@ -329,13 +329,51 @@ fn host_session_resumable(ws_path: &str, session_id: &str) -> bool {
 /// via profile-aware inject): settle → readiness dialect → screen
 /// quiescence → paste. `wait_ready = 0` was a mid-turn black hole (paste
 /// into a still-streaming Grok/Claude frame).
+/// Live inject / live-resume. Optionally re-mints capability JWTs to the
+/// session cap **file** when `capabilities` is present (process env is
+/// immutable — file is multi-turn SSOT; agent re-reads each turn).
 fn deliver_into_live(
     sid: &SessionId,
     echo_sid: &str,
     prompt: &str,
     ws_path: &str,
+    slug: &str,
+    principal_key: &str,
+    capabilities: Option<&serde_json::Value>,
+    timeout_secs: Option<u64>,
 ) -> CliResponse {
     crate::sandbox_reaper::stamp(sid);
+
+    // Live resume remint (0.40.76 / PRD): caps present → fresh JWTs + atomic
+    // file overwrite; omit → no remint. Never mutates live process env.
+    // Prior jtis stay valid until their exp (Scout-local revoke if single-valid).
+    let mut caps_meta: Option<serde_json::Value> = None;
+    if let Some(caps_val) = capabilities {
+        let exp_secs = crate::sandbox_reaper::normalize_timeout(timeout_secs)
+            .min(3600)
+            .max(1);
+        match crate::v1_capabilities::parse_capabilities(caps_val).and_then(|caps| {
+            crate::v1_capabilities::mint_and_stage(
+                echo_sid,
+                std::path::Path::new(ws_path),
+                &caps,
+                exp_secs,
+                Some(principal_key),
+                Some(slug),
+            )
+        }) {
+            Ok(out) => caps_meta = Some(out.metadata),
+            Err(e) => {
+                return CliResponse {
+                    status: "400 Bad Request",
+                    content_type: "application/json",
+                    body: serde_json::json!({ "error": e, "code": "capabilities-invalid" })
+                        .to_string(),
+                };
+            }
+        }
+    }
+
     let delivered = if prompt.is_empty() {
         // Nothing to inject — the touch (reaper re-arm) is the whole effect.
         true
@@ -358,17 +396,18 @@ fn deliver_into_live(
         ok
     };
     // S4 R1: live inject is always resumed:true (same PTY).
-    CliResponse::ok_json(
-        serde_json::json!({
-            "sessionId": echo_sid,
-            "delivered": delivered,
-            "live": true,
-            "resumed": true,
-            "workspace": ws_path,
-            "sandbox": "none",
-        })
-        .to_string(),
-    )
+    let mut body = serde_json::json!({
+        "sessionId": echo_sid,
+        "delivered": delivered,
+        "live": true,
+        "resumed": true,
+        "workspace": ws_path,
+        "sandbox": "none",
+    });
+    if let Some(meta) = caps_meta {
+        body["capabilities"] = meta;
+    }
+    CliResponse::ok_json(body.to_string())
 }
 
 /// Phase 0 capability gate for the host-sessions family. Missing cap → the
@@ -431,7 +470,16 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     if let Some(target) = resume_target.as_deref() {
         if let Some(live) = lookup_live_host_session(&ws_path, target) {
             let prompt = req.prompt.as_deref().unwrap_or("").trim().to_string();
-            return deliver_into_live(&live.session_id, target, &prompt, &ws_path);
+            return deliver_into_live(
+                &live.session_id,
+                target,
+                &prompt,
+                &ws_path,
+                &slug,
+                &principal.display_id(),
+                req.capabilities.as_ref(),
+                req.timeout_secs,
+            );
         }
     }
 
@@ -764,13 +812,28 @@ pub(crate) fn handle_v1_host_message(
         return uniform_ws_404();
     }
 
-    // Only `prompt` is taken from the body. Guest policy is host-resolved
-    // (never accept `api_guest_policy` / similar from the caller).
-    let prompt = serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("prompt").and_then(|x| x.as_str()).map(str::to_string))
-        .unwrap_or_default();
-    deliver_into_live(&live.session_id, &sid_seg, prompt.trim(), &ws_path)
+    // Body: prompt + optional capabilities[] (re-mint file) + optional timeout_secs
+    // for JWT lifetime. Guest policy is host-resolved (never from the caller).
+    let v = serde_json::from_slice::<serde_json::Value>(body).unwrap_or(serde_json::json!({}));
+    let prompt = v
+        .get("prompt")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let timeout_secs = v
+        .get("timeout_secs")
+        .and_then(|x| x.as_u64());
+    let caps = v.get("capabilities").cloned();
+    deliver_into_live(
+        &live.session_id,
+        &sid_seg,
+        prompt.trim(),
+        &ws_path,
+        &slug,
+        &requester,
+        caps.as_ref(),
+        timeout_secs,
+    )
 }
 
 /// `GET /v1/w/<ws>/host-sessions/<id>/messages?since=<seq>` — drain the

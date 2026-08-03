@@ -90,6 +90,9 @@ vi.mock('./tabs', () => ({
   // Agent-degeneralization S1 — per-workspace default-agent lazy reader,
   // registered at module load like the two above.
   registerProjectDefaultAgentGetter: vi.fn(),
+  // Host-session tab routing — projects path index for adopt-by-workspace_path.
+  registerProjectsPathIndex: vi.fn(),
+  runLeaveGuard: vi.fn(async () => true),
 }))
 vi.mock('./focus-groups', () => ({
   useFocusGroupsStore: {

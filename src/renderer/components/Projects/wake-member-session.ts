@@ -13,6 +13,50 @@ export type WakeCanonicalDeps = {
   ensurePinnedChat: (projectPath: string) => Promise<unknown>
 }
 
+/** Liveness snapshot for a dashboard terminal pane (lookup-by-agent). */
+export type MemberSessionPhase =
+  | { kind: 'live'; sessionId?: string }
+  | { kind: 'dormant' }
+  | { kind: 'error'; message: string }
+
+export type LookupByAgent = (workspaceId: string) => Promise<{
+  sessionAlive: boolean
+  sessionId: string | null
+}>
+
+/**
+ * Parallel liveness for every terminal workspace on a dashboard.
+ * Promise.all so multi-pane dashboards attach concurrently (not one-by-one).
+ */
+export async function resolveAllMemberSessions(
+  workspaceIds: string[],
+  lookup: LookupByAgent,
+): Promise<Record<string, MemberSessionPhase>> {
+  const unique = [...new Set(workspaceIds.filter(Boolean))]
+  const settled = await Promise.all(
+    unique.map(async (id) => {
+      try {
+        const r = await lookup(id)
+        if (r.sessionAlive) {
+          return [id, { kind: 'live' as const, sessionId: r.sessionId ?? undefined }] as const
+        }
+        return [id, { kind: 'dormant' as const }] as const
+      } catch (e) {
+        return [
+          id,
+          {
+            kind: 'error' as const,
+            message: e instanceof Error ? e.message : String(e),
+          },
+        ] as const
+      }
+    }),
+  )
+  const out: Record<string, MemberSessionPhase> = {}
+  for (const [id, phase] of settled) out[id] = phase
+  return out
+}
+
 /**
  * Wake a dormant canonical session for a client-watching surface.
  *

@@ -62,7 +62,9 @@ import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
 import {
   activateOnLiveSessionAttach,
+  resolveAllMemberSessions,
   wakeCanonicalMemberSession,
+  type MemberSessionPhase,
 } from './wake-member-session'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { Surface } from '@/components/ui'
@@ -200,52 +202,79 @@ function PaneChrome({
 
 type TermPhase =
   | { kind: 'checking' }
-  | { kind: 'live'; sessionId?: string }
-  | { kind: 'dormant' }
+  | MemberSessionPhase
   | { kind: 'waking' }
-  | { kind: 'error'; message: string }
+
+/** Stable placeholder while parent batch resolve runs (avoid new object each render). */
+const PHASE_CHECKING: TermPhase = { kind: 'checking' }
+const PHASE_DORMANT: TermPhase = { kind: 'dormant' }
+
+/** One lookup-by-agent (retry path after batch). */
+async function resolveMemberSession(workspaceId: string): Promise<TermPhase> {
+  const map = await resolveAllMemberSessions([workspaceId], async (agent) => {
+    const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(
+      'sessions/lookup-by-agent',
+      { agent },
+    )
+    return { sessionAlive: lookup.sessionAlive, sessionId: lookup.sessionId }
+  })
+  return map[workspaceId] ?? PHASE_DORMANT
+}
+
+/** Terminal workspace ids currently in the layout tree (deduped). */
+function terminalWorkspaceIdsInLayout(root: LayoutNode | null): string[] {
+  const ids: string[] = []
+  for (const pane of readingOrder(root)) {
+    if (isTerminalPane(pane) && !ids.includes(pane.workspaceId)) ids.push(pane.workspaceId)
+  }
+  return ids
+}
+
+const lookupByAgentForDashboard: (
+  workspaceId: string,
+) => Promise<{ sessionAlive: boolean; sessionId: string | null }> = async (agent) => {
+  const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(
+    'sessions/lookup-by-agent',
+    { agent },
+  )
+  return { sessionAlive: lookup.sessionAlive, sessionId: lookup.sessionId }
+}
 
 function DashboardTerminalPane({
   workspaceId,
   member,
   dashboardId,
+  /** Parent-batched liveness (Promise.all). When still checking, parent
+   *  has not committed the batch yet — show a brief placeholder. */
+  initialPhase,
 }: {
   workspaceId: string
   /** null when the workspace is no longer a project member / was
    *  unregistered — the pane degrades to a placeholder, never breaks. */
   member: ProjectGroupMemberInfo | null
   dashboardId: string
+  initialPhase: TermPhase
 }): React.JSX.Element {
   const projectPath = member?.path ?? null
-  const [phase, setPhase] = useState<TermPhase>({ kind: 'checking' })
+  const [phase, setPhase] = useState<TermPhase>(initialPhase)
 
-  // Canonical sessions run under the workspace's bare project-id key
-  // (the AgentChatPane attach key) — liveness via lookup-by-agent, the
-  // same resolution the feedback Terminal tab uses.
-  const resolve = useCallback(async (): Promise<TermPhase> => {
-    try {
-      const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(
-        'sessions/lookup-by-agent',
-        { agent: workspaceId },
-      )
-      if (lookup.sessionAlive) return { kind: 'live', sessionId: lookup.sessionId ?? undefined }
-      return { kind: 'dormant' }
-    } catch (e) {
-      return { kind: 'error', message: e instanceof Error ? e.message : String(e) }
-    }
-  }, [workspaceId])
-
+  // Track parent batch updates (e.g. layout gained a new pane → re-batch).
+  // Compare by kind+sessionId so stable PHASE_CHECKING / same live id
+  // does not thrash local wake/error state.
   useEffect(() => {
-    if (!projectPath) return
-    let cancelled = false
-    setPhase({ kind: 'checking' })
-    void resolve().then((p) => {
-      if (!cancelled) setPhase(p)
+    setPhase((prev) => {
+      if (prev.kind === 'waking') return prev // local wake in flight
+      if (
+        prev.kind === initialPhase.kind &&
+        (prev.kind !== 'live' ||
+          initialPhase.kind !== 'live' ||
+          prev.sessionId === initialPhase.sessionId)
+      ) {
+        return prev
+      }
+      return initialPhase
     })
-    return () => {
-      cancelled = true
-    }
-  }, [projectPath, resolve])
+  }, [initialPhase])
 
   // Live attach (wake success or passive attach of an already-alive PTY):
   // client is watching ⇒ Active. activateProject is deduped / no-op when
@@ -274,6 +303,12 @@ function DashboardTerminalPane({
     }
   }, [projectPath, workspaceId])
 
+  const retry = useCallback(async (): Promise<void> => {
+    setPhase({ kind: 'checking' })
+    const p = await resolveMemberSession(workspaceId)
+    setPhase(p)
+  }, [workspaceId])
+
   if (!member || !projectPath) {
     return (
       <PaneBody>
@@ -291,7 +326,7 @@ function DashboardTerminalPane({
     return (
       <PaneBody>
         <p className="text-[11px] text-[var(--color-status-error-soft)] max-w-[36ch]">{phase.message}</p>
-        <PaneActionButton onClick={() => void resolve().then(setPhase)}>Retry</PaneActionButton>
+        <PaneActionButton onClick={() => void retry()}>Retry</PaneActionButton>
       </PaneBody>
     )
   }
@@ -311,7 +346,8 @@ function DashboardTerminalPane({
 
   // live — attach in place: attachAgentName keys the idempotent
   // v2/spawn to the EXISTING daemon PTY (reused:true) — never a
-  // duplicate.
+  // duplicate. Parent batched lookups so N live panes mount in one
+  // commit → concurrent attach (not one-by-one).
   return (
     <TerminalPane
       terminalId={`proj-dash:${dashboardId}:${workspaceId}`}
@@ -792,6 +828,39 @@ export default function ProjectDashboard({
     [applyRoot],
   )
 
+  // ── Parallel session liveness (QoL: multi-pane simultaneous attach) ────
+  // Every terminal pane used to self-resolve lookup-by-agent, so N panes
+  // painted "Checking…" → TerminalPane one completion at a time. Batch
+  // with Promise.all and commit once so all live attaches start together.
+  const terminalWsIds = useMemo(() => terminalWorkspaceIdsInLayout(root), [root])
+  const terminalWsKey = terminalWsIds.join('\0')
+  const [sessionByWs, setSessionByWs] = useState<Record<string, TermPhase>>({})
+  const [sessionsBatchReady, setSessionsBatchReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const ids = terminalWsKey.length === 0 ? [] : terminalWsKey.split('\0')
+    if (ids.length === 0) {
+      setSessionByWs({})
+      setSessionsBatchReady(true)
+      return
+    }
+    setSessionsBatchReady(false)
+    void resolveAllMemberSessions(ids, lookupByAgentForDashboard).then((map) => {
+      if (cancelled) return
+      // Activate all live members in one pass (PRD §4.3.1) before panes
+      // mount TerminalPane — same obligation as per-pane attach, batched.
+      for (const [wsId, phase] of Object.entries(map)) {
+        if (phase.kind === 'live') activateOnLiveSessionAttach(wsId, activateProject)
+      }
+      setSessionByWs(map)
+      setSessionsBatchReady(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [terminalWsKey])
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   const membersById = useMemo(() => {
@@ -934,6 +1003,11 @@ export default function ProjectDashboard({
                       workspaceId={pane.workspaceId}
                       member={member}
                       dashboardId={dashboard.id}
+                      initialPhase={
+                        sessionsBatchReady
+                          ? (sessionByWs[pane.workspaceId] ?? PHASE_DORMANT)
+                          : PHASE_CHECKING
+                      }
                     />
                   ) : isHtmlDocPane(pane) ? (
                     <HtmlDocPane filePath={pane.filePath} />

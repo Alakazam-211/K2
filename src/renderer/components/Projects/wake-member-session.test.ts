@@ -5,6 +5,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   activateOnLiveSessionAttach,
+  resolveAllMemberSessions,
   wakeCanonicalMemberSession,
 } from './wake-member-session'
 
@@ -69,5 +70,35 @@ describe('activateOnLiveSessionAttach', () => {
     activateOnLiveSessionAttach('ws-live', activateProject)
     expect(activateProject).toHaveBeenCalledTimes(1)
     expect(activateProject).toHaveBeenCalledWith('ws-live')
+  })
+})
+
+describe('resolveAllMemberSessions', () => {
+  it('looks up all workspace ids in parallel and maps live/dormant', async () => {
+    const started: string[] = []
+    const lookup = vi.fn(async (id: string) => {
+      started.push(id)
+      // Overlapping in-flight: resolve only after both have started.
+      await Promise.resolve()
+      if (id === 'ws-a') return { sessionAlive: true, sessionId: 'sess-a' }
+      return { sessionAlive: false, sessionId: null }
+    })
+
+    const map = await resolveAllMemberSessions(['ws-a', 'ws-b', 'ws-a'], lookup)
+
+    expect(lookup).toHaveBeenCalledTimes(2) // deduped
+    expect(map['ws-a']).toEqual({ kind: 'live', sessionId: 'sess-a' })
+    expect(map['ws-b']).toEqual({ kind: 'dormant' })
+    expect(started.sort()).toEqual(['ws-a', 'ws-b'])
+  })
+
+  it('captures per-id errors without failing the batch', async () => {
+    const lookup = vi.fn(async (id: string) => {
+      if (id === 'bad') throw new Error('daemon down')
+      return { sessionAlive: true, sessionId: 'ok' }
+    })
+    const map = await resolveAllMemberSessions(['ok', 'bad'], lookup)
+    expect(map['ok']).toEqual({ kind: 'live', sessionId: 'ok' })
+    expect(map['bad']).toEqual({ kind: 'error', message: 'daemon down' })
   })
 })

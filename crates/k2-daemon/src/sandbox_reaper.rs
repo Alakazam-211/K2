@@ -1,14 +1,22 @@
 //! Work-completion-aware reaper for API host-sessions / sandbox cells.
 //!
-//! ## States (S9 + Rosson 2026-08-03: no short hard wall on busy work)
+//! ## Model (product lock 2026-08-03 — Scout / Julie / Rosson)
+//!
+//! Persistent-interview cells must survive user think-time and long mid-write
+//! turns. A spawn-time spend-cap (`timeout_secs` as hard wall) is incompatible
+//! with that shape.
+//!
 //! - **Working** — inject / register / non-final `k2 respond` → **never**
-//!   reaped for silence **and never** reaped by `timeout_secs` wall-clock.
-//!   Continuous productive work may run as long as the process lives.
-//!   Spend / runaway control = integrator **kill** + caps, not mid-write wall.
+//!   auto-reaped (no silence reap, no `timeout_secs` wall from spawn).
+//!   Continuous productive work may run past 300s+.
 //! - **Grace** — after `k2 respond --final`, short window
-//!   ([`FINAL_GRACE_SECS`] = 10s) then may reap (work completed).
+//!   ([`FINAL_GRACE_SECS`] = 10s) then reap (work completed).
+//! - **New activity** (inject / live-resume / non-final respond) cancels Grace
+//!   and re-enters Working (resets the completion path).
 //! - **`timeout_secs`** — still accepted on spawn (JWT lifetime clamp, client
-//!   budgets); it does **not** kill a Working cell.
+//!   poll budgets); it does **not** kill a Working cell.
+//! - **Spend control** — integrator **kill** + capability non-remint / caps,
+//!   not mid-write wall.
 //!
 //! Activity stamped by spawn / message-live / resume inject (re-enters Working).
 
@@ -21,6 +29,7 @@ use k2_core::session::SessionId;
 use tokio::task::JoinHandle;
 
 /// Fallback idle timeout when a request doesn't set `timeout_secs`.
+/// (JWT / client budget default; not a Working hard wall.)
 pub const DEFAULT_TIMEOUT_SECS: u64 = 180;
 const MIN_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 86_400;
@@ -30,7 +39,7 @@ pub const FINAL_GRACE_SECS: u64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
-    /// Agent is generating / mid-turn. Idle clock does not reap.
+    /// Agent is generating / mid-turn. Never auto-reaped.
     Working,
     /// After final respond; reap once grace elapses.
     Grace,
@@ -38,7 +47,7 @@ enum Phase {
 
 struct Entry {
     last_activity: Instant,
-    /// Spawn/register instant (retained; not used to kill Working).
+    /// Spawn/register instant (observability; not a kill clock).
     #[allow(dead_code)]
     registered_at: Instant,
     /// Requested `timeout_secs` (JWT/client budget; not a Working kill).
@@ -144,7 +153,8 @@ fn tick() -> Duration {
 }
 
 fn should_reap(e: &Entry, now: Instant) -> bool {
-    // Working is never auto-reaped (no short hard wall mid-write). Grace only.
+    // Working is never auto-reaped (no short hard wall mid-write; no pure
+    // idle kill while a turn is open). Grace only.
     match e.phase {
         Phase::Working => false,
         Phase::Grace => e.grace_until.map(|u| now >= u).unwrap_or(false),
@@ -157,7 +167,10 @@ pub fn spawn() -> JoinHandle<()> {
 
 async fn run() {
     let t = tick();
-    log_debug!("[sandbox-reaper] started — tick={}s (work-completion gate)", t.as_secs());
+    log_debug!(
+        "[sandbox-reaper] started — tick={}s (work-completion gate)",
+        t.as_secs()
+    );
     loop {
         tokio::time::sleep(t).await;
         // Scout 0.40.78: drop map entries whose child is already dead so
@@ -219,8 +232,8 @@ mod tests {
 
     #[test]
     fn working_survives_past_timeout_secs_wall() {
-        // Scout E-1 class: continuous work at timeout_secs=300 must not die
-        // solely because registered_at + wall elapsed.
+        // Scout E-1: continuous work at timeout_secs=300 must not die
+        // solely because registered_at + wall elapsed (plan b95c7409).
         let now = Instant::now();
         let entry = Entry {
             last_activity: now,
@@ -232,6 +245,24 @@ mod tests {
         assert!(
             !should_reap(&entry, now),
             "Working must not be reaped by timeout_secs hard wall"
+        );
+    }
+
+    #[test]
+    fn working_survives_long_mid_write_silence() {
+        // E-1 shape: inject once, then write continuously for > timeout without
+        // new API activity stamps — still Working → still alive.
+        let now = Instant::now();
+        let entry = Entry {
+            last_activity: now - Duration::from_secs(400),
+            registered_at: now - Duration::from_secs(400),
+            timeout: Duration::from_secs(300),
+            phase: Phase::Working,
+            grace_until: None,
+        };
+        assert!(
+            !should_reap(&entry, now),
+            "mid-write silence must not kill Working"
         );
     }
 
@@ -267,6 +298,16 @@ mod tests {
         register(id, 180);
         on_respond_final(&id);
         stamp(&id);
+        assert!(is_working(&id));
+        unregister(&id);
+    }
+
+    #[test]
+    fn non_final_respond_stays_working() {
+        let id = SessionId::new();
+        register(id, 180);
+        on_respond_final(&id);
+        on_respond(&id, false);
         assert!(is_working(&id));
         unregister(&id);
     }

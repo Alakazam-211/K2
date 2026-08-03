@@ -276,29 +276,33 @@ A cryptographically valid JWT is **not** enough. On every agent callback your ap
 - Integrator: `timeout_secs >= max_inter_shot_gap + turn_2_budget`.  
 - **Scout multi-turn: 600** (and client poll ≥ 600).
 
-### 4.2 S9 work-completion reaper
+### 4.2 S9 work-completion reaper (product lock 2026-08-03)
+
+Persistent-interview model: agents must live across user think-time and long
+mid-write turns. **No spawn-time hard wall.**
 
 | Number | Value | Role |
 |--------|-------|------|
-| `timeout_secs` | request, default **180** (clamp 30…86400) | Client budget / JWT lifetime clamp; **does not kill Working** |
-| Grace after `--final` | **10s** (`FINAL_GRACE_SECS`) | Reaps finished cells after final |
+| `timeout_secs` | request, default **180** (clamp 30…86400) | Client poll budget / JWT lifetime clamp; **does not kill Working** |
+| Grace after `--final` | **10s** (`FINAL_GRACE_SECS`) | Completion reap after final |
 | Reaper tick | **15s** (env `K2_SANDBOX_REAPER_TICK_SECS`) | Poll cadence |
 
 Behavior:
 
-- Inject / register / non-final `k2 respond` → **Working** — **never** reaped for
-  silence and **never** reaped solely because `timeout_secs` elapsed since spawn
-  (continuous productive work may run past 300s; spend control = **kill** + caps).
-- `k2 respond --final` → **Grace** → reap after **~10s** (unless a new inject
-  re-enters Working).
+- Inject / register / non-final `k2 respond` → **Working** — **never** auto-reaped
+  (no silence reap, no `timeout_secs` wall from spawn). Continuous productive
+  work (e.g. Scout E-1 16 fence qs mid-write past 300s) survives.
+- `k2 respond --final` → **Grace** → reap after **~10s** (unless a new inject /
+  non-final respond re-enters Working).
+- **Spend control** = integrator **`POST …/kill`** + capability non-remint / caps.
 
-**Client verification of S9 differentiation:** spawn A with continuous work /
-no `--final`; spawn B that reaches `--final`; with `timeout_secs` large (e.g.
-600), within ~20–30s B should die (grace) while A lives. Probing with
-resume/inject **re-stamps Working** and cannot observe pure idle.
+**Client verification (E-1 + completion):** spawn A with continuous mid-write /
+no `--final` at `timeout_secs=300` — must survive past 300s wall. Spawn B that
+reaches `--final` — dies within ~20–30s (grace). Resume/inject re-stamps Working.
 
 K2-side unit evidence: `sandbox_reaper::tests::{working_survives_idle_window,
-working_survives_past_timeout_secs_wall, grace_reaps_after_deadline}`.
+working_survives_past_timeout_secs_wall, working_survives_long_mid_write_silence,
+grace_reaps_after_deadline}`.
 
 ### 4.3 Inject / auto-retry (no model cancel)
 

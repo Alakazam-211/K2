@@ -3,15 +3,22 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.81 — K2 API Tokens settings + soft-disable
+## 0.40.81 — K2 API Tokens settings + host-session reaper reshape
 
-### Host-session reaper: no short hard wall on busy work
+### Host-session reaper: Working never dies on the wall
 
-Working host-sessions / sandbox cells are **no longer killed** when
-`timeout_secs` elapses from spawn (the 180/300s “hard wall”). Continuous
-productive work can run past client poll budgets; completion reaps via Grace
-after `k2 respond --final`. Integrator **kill** + capability non-remint remain
-the spend levers. Scout mid-write 300s reaps (E-1) are fixed by this change.
+Product lock (Scout / Julie / Rosson): persistent-interview cells must outlive
+user think-time — a spawn-time spend-cap was the wrong lever.
+
+- **Working** (inject / register / non-final `k2 respond`) → **never** auto-reaped
+  for silence and **never** killed when `timeout_secs` elapses from spawn.
+- **Grace** after `k2 respond --final` (~10s) → completion reap; new inject
+  cancels grace and re-enters Working.
+- **Spend control** = integrator **kill** + caps / non-remint (not mid-write wall).
+- `timeout_secs` remains a client poll / JWT budget clamp only.
+
+Scout E-1 (`timeout_secs=300`, continuous mid-write past the old hard wall)
+survives on this model.
 
 ### Settings: K2 API Tokens (global) + workspace API tab
 

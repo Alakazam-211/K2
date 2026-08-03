@@ -389,6 +389,19 @@ pub fn lookup_by_session_id(id: &SessionId) -> Option<Arc<DaemonPtySession>> {
         .cloned()
 }
 
+/// Reverse lookup: the map key (`agent_name`) for a live daemon
+/// [`SessionId`], if any. Used by host-session kill
+/// ([`crate::v1_host_sessions::handle_v1_host_kill`]) to force-unregister
+/// without needing the caller to know the agent name.
+pub fn agent_name_for_session_id(id: &SessionId) -> Option<String> {
+    shared()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(_, s)| s.session_id == *id)
+        .map(|(name, _)| name.clone())
+}
+
 /// Unregister map entries whose PTY child is already dead (ChildExit missed
 /// or process killed out-of-band). Used by host-sessions list and the
 /// sandbox reaper so `live:true` cannot lag process death (scout 0.40.78

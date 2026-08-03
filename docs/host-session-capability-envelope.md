@@ -361,9 +361,39 @@ Authorization: Bearer k2sk_…
 
 - **One row per `sessionId`** (latest `lastSeenAt` wins if historical agent rows
   share the id).
-- **`live`:** true if that session’s PTY is in the daemon map.
+- **`live`:** true if that session’s PTY is in the daemon map **and** the child
+  process is still alive (0.40.79 — no phantom `live:true` after restart/kill).
 - **Adoption:** key on **`sessionId`**, not `sessionId`+`agentName` (agentName
   can rotate across respawns under the same handle).
+
+---
+
+## 5.2 `POST /v1/w/<ws>/host-sessions/<id>/kill` (force-stop)
+
+**Integrator spend-cap / deliberate teardown** (0.40.79): force-stop a live
+host-session PTY without deleting the cap file or revoking JWTs.
+
+```http
+POST /v1/w/sales/host-sessions/a1b2c3d4-…/kill
+Authorization: Bearer k2sk_…
+```
+
+Empty body is OK. Authz matches message-live: `host_sessions` cap + workspace
+grant + session owner (`owner_of(sessionId) == principal`). Unknown / unowned /
+wrong-ws / canonical → **uniform 404** (no existence oracle).
+
+| Situation | Status | Body |
+|-----------|--------|------|
+| Owned + live | **200** | `{"sessionId","killed":true}` |
+| Owned + not live | **200** | `{"sessionId","killed":false,"reason":"not_live"}` |
+| Unknown / other principal / ungranted / canonical | **404** | `{"error":"no such workspace"}` |
+
+- Teardown is **force** (map unregister + kill); quota releases via the
+  child-exit observer — do not double-release.
+- Cap file under `.k2/caps/<sessionId>.json` and prior JWTs remain until natural
+  `exp` / app-local jti revoke (same as natural reaper death).
+- After `killed:true`, message-live / live-resume see a dead cell (404 /
+  dead-resume path).
 
 ---
 

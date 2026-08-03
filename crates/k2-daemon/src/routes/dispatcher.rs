@@ -4534,6 +4534,25 @@ async fn handle_one_request(
                                 &principal, ws, sid, since,
                             )
                         }
+                        // POST /v1/w/<ws>/host-sessions/<id>/kill — force-stop
+                        // the live PTY (integrator spend-cap). Empty body OK;
+                        // drain any POST body so keep-alive clients don't stall.
+                        // Must match as a four-segment arm (before the catch-all).
+                        ([ws, "host-sessions", sid, "kill"], true) => {
+                            let _body =
+                                super::http::read_post_body(&mut *stream, &mut buf).await;
+                            let (ws, sid) = (ws.to_string(), sid.to_string());
+                            let principal = principal.clone();
+                            tokio::task::spawn_blocking(move || {
+                                crate::v1_host_sessions::handle_v1_host_kill(
+                                    &principal, &ws, &sid,
+                                )
+                            })
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                        }
                         // Anything else under `/v1/w/` (wrong shape, wrong
                         // method, extra segments) → uniform 404, drain first.
                         _ => {

@@ -364,6 +364,7 @@ async fn gate_off_host_sessions_are_surface_absent() {
         ("GET", format!("/v1/w/x/host-sessions?token={OWNER_TOKEN}"), None),
         ("POST", format!("/v1/w/x/host-sessions/sid?token={OWNER_TOKEN}"), Some("{}")),
         ("GET", format!("/v1/w/x/host-sessions/sid/messages?token={OWNER_TOKEN}"), None),
+        ("POST", format!("/v1/w/x/host-sessions/sid/kill?token={OWNER_TOKEN}"), Some("{}")),
     ] {
         let (status, resp) = http_req(d.port, method, &path, body).await;
         assert_eq!(status, 404, "{method} {path} must be surface-absent; body={resp}");
@@ -1371,4 +1372,164 @@ async fn self_minting_provider_adoption_lists_and_resumes() {
     assert!(live_again, "resumed provider session must list live; body={resp}");
 
     close_session(d.port, &agent2).await;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 8 — POST …/host-sessions/<id>/kill (integrator spend-cap)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Spawn via API key → kill → 200 killed:true; map entry gone; second kill
+/// is idempotent killed:false reason:not_live; message-live after kill is 404.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_session_kill_force_stops_and_is_idempotent() {
+    let _g = lock();
+    let env = HostEnv::set(true);
+    let d = test_harness::start(OWNER_TOKEN).await;
+    setup_project("hs-kill");
+    configure_ws_agent("hs-kill", &env.shim());
+    let key = mint_api_key(d.port, "hs-kill-key", "hs-kill").await;
+
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-kill/host-sessions?token={key}"),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(status, 200, "spawn failed: {resp}");
+    let v = json(&resp);
+    let session_id = v["sessionId"].as_str().expect("sessionId").to_string();
+    let agent = v["agentName"].as_str().expect("agentName").to_string();
+
+    // Live in the map under the daemon SessionId (premint claude shim).
+    let sid = k2_core::session::SessionId::parse(&session_id).expect("valid session uuid");
+    assert!(
+        v2_session_map::lookup_by_session_id(&sid).is_some(),
+        "spawned session must be live in v2_session_map before kill"
+    );
+    assert!(
+        v2_session_map::lookup_by_agent_name(&agent).is_some(),
+        "spawned agent_name must be in the map before kill"
+    );
+
+    // First kill → 200 killed:true (empty body OK).
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-kill/host-sessions/{session_id}/kill?token={key}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "kill failed: {resp}");
+    let k = json(&resp);
+    assert_eq!(k["sessionId"], serde_json::json!(session_id), "body={resp}");
+    assert_eq!(k["killed"], true, "body={resp}");
+    assert!(k.get("reason").is_none(), "killed:true has no reason; body={resp}");
+
+    // Map entry gone (force unregister).
+    assert!(
+        v2_session_map::lookup_by_session_id(&sid).is_none(),
+        "session must leave v2_session_map after kill"
+    );
+    assert!(
+        v2_session_map::lookup_by_agent_name(&agent).is_none(),
+        "agent_name must leave the map after kill"
+    );
+
+    // Second kill → idempotent 200 killed:false reason:not_live (ownership
+    // still holds; not an existence oracle).
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-kill/host-sessions/{session_id}/kill?token={key}"),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(status, 200, "second kill must be idempotent; body={resp}");
+    let k2 = json(&resp);
+    assert_eq!(k2["sessionId"], serde_json::json!(session_id));
+    assert_eq!(k2["killed"], false, "body={resp}");
+    assert_eq!(k2["reason"], "not_live", "body={resp}");
+
+    // After kill, message-live is 404 (dead path / not live).
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-kill/host-sessions/{session_id}?token={key}"),
+        Some(r#"{"prompt":"should-404"}"#),
+    )
+    .await;
+    assert_eq!(status, 404, "message-live after kill must 404; body={resp}");
+}
+
+/// Cross-principal and ungranted-workspace kill → uniform 404 (no oracle).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_session_kill_refuses_other_principal_and_ungranted_ws() {
+    let _g = lock();
+    let env = HostEnv::set(true);
+    let d = test_harness::start(OWNER_TOKEN).await;
+    setup_project("hs-kill-authz");
+    configure_ws_agent("hs-kill-authz", &env.shim());
+    let owner_key = mint_api_key(d.port, "hs-kill-owner", "hs-kill-authz").await;
+    let other_key = mint_api_key(d.port, "hs-kill-other", "hs-kill-authz").await;
+    let ungranted = mint_api_key(d.port, "hs-kill-else", "hs-some-other-ws").await;
+
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-kill-authz/host-sessions?token={owner_key}"),
+        Some("{}"),
+    )
+    .await;
+    assert_eq!(status, 200, "spawn failed: {resp}");
+    let v = json(&resp);
+    let session_id = v["sessionId"].as_str().expect("sessionId").to_string();
+    let agent = v["agentName"].as_str().expect("agentName").to_string();
+
+    let uniform = r#"{"error":"no such workspace"}"#;
+
+    // Other principal (granted same workspace) cannot kill owner's session.
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-kill-authz/host-sessions/{session_id}/kill?token={other_key}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 404, "cross-principal kill must 404; body={resp}");
+    assert_eq!(resp, uniform, "cross-principal kill: uniform body");
+
+    // Ungranted workspace → same 404 (no oracle that the ws/session exists).
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-kill-authz/host-sessions/{session_id}/kill?token={ungranted}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 404, "ungranted ws kill must 404; body={resp}");
+    assert_eq!(resp, uniform, "ungranted kill: uniform body");
+
+    // Session still live — cross-principal must not have torn it down.
+    let sid = k2_core::session::SessionId::parse(&session_id).expect("valid session uuid");
+    assert!(
+        v2_session_map::lookup_by_session_id(&sid).is_some(),
+        "failed kill attempts must leave the session live"
+    );
+
+    // Owner can still kill.
+    let (status, resp) = http_req(
+        d.port,
+        "POST",
+        &format!("/v1/w/hs-kill-authz/host-sessions/{session_id}/kill?token={owner_key}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "owner kill failed: {resp}");
+    assert_eq!(json(&resp)["killed"], true, "body={resp}");
+
+    // Cleanup in case kill left map dirt (should be gone).
+    if v2_session_map::lookup_by_agent_name(&agent).is_some() {
+        close_session(d.port, &agent).await;
+    }
 }

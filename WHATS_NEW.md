@@ -3,7 +3,7 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.79 — Host-session list: no phantom `live:true`
+## 0.40.79 — Host-session list + kill API
 
 ### List liveness matches real PTY processes
 
@@ -16,6 +16,25 @@ list only checked map *presence*, not child liveness.
   also OS `kill(pid,0)` when ChildExit was missed).
 - Reaper + list path **reconcile** dead map entries so phantoms cannot linger.
 - Dead-resume `resumed: false` path was already correct; this fixes the list.
+
+### Host-session kill API (integrator spend-cap)
+
+```http
+POST /v1/w/<ws>/host-sessions/<sessionId>/kill
+Authorization: Bearer k2sk_…
+```
+
+Force-stops a live host-session PTY with the same ownership / workspace /
+non-oracle rules as message-live. Empty body OK.
+
+- **Live + owned** → `200 {"sessionId","killed":true}` (force map unregister +
+  kill; reaper unregisters; quota frees on child-exit — no double-release).
+- **Owned but not live** → `200 {"sessionId","killed":false,"reason":"not_live"}`
+  (idempotent).
+- **Unknown / other principal / ungranted / canonical** → uniform `404`.
+- Does **not** delete the cap file or revoke JWTs.
+
+Integrator note: [`docs/host-session-capability-envelope.md`](docs/host-session-capability-envelope.md) §5.2.
 
 ---
 

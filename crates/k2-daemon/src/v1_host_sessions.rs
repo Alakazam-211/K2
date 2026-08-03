@@ -7,6 +7,7 @@
 //! GET  /v1/w/<ws>/host-sessions              → list this ws's api-spawned host sessions
 //! POST /v1/w/<ws>/host-sessions/<id>         → message-live (inject into the PTY)
 //! GET  /v1/w/<ws>/host-sessions/<id>/messages?since=<seq>
+//! POST /v1/w/<ws>/host-sessions/<id>/kill    → force-stop the live PTY (integrator spend-cap)
 //! ```
 //!
 //! GATING: `misc_routes::api_enabled()` ONLY (`K2_API`, or the legacy
@@ -912,6 +913,173 @@ pub(crate) fn handle_v1_host_messages(
     crate::v1_sandboxes::handle_messages(principal, &sid, since)
 }
 
+/// Resolve the `api-…` agent_name for a host session from the durable tab
+/// index (same query shape as [`lookup_live_host_session`]'s adopted path).
+/// Fail-closed: DB error / no row → `None`.
+fn agent_name_from_tab_index(ws_path: &str, session_id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT wts.agent_name FROM workspace_tab_sessions wts \
+             JOIN projects p ON p.id = wts.project_id \
+             WHERE p.path = ?1 AND wts.session_id = ?2 \
+               AND wts.agent_name LIKE 'api-%' \
+             ORDER BY wts.last_seen_at DESC \
+             LIMIT 1",
+        )
+        .ok()?;
+    stmt.query_row(rusqlite::params![ws_path, session_id], |r| r.get::<_, String>(0))
+        .ok()
+}
+
+/// Kill-path ownership tombstones (sessionId → principal.display_id).
+///
+/// ChildExit runs `sandbox_responses::evict` after every PTY death, which
+/// drops the live owner record. Without a tombstone, a second kill on an
+/// already-killed session becomes a uniform 404 and breaks K6
+/// idempotency (`killed:false, reason:"not_live"`). Tombstones are
+/// principal-keyed so other callers still 404 (no existence oracle). Cap
+/// the map so a long-lived daemon cannot grow unbounded.
+fn kill_tombstones() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+const KILL_TOMBSTONE_CAP: usize = 8192;
+
+fn record_kill_tombstone(session_id: &str, principal: &str) {
+    let Ok(mut m) = kill_tombstones().lock() else {
+        return;
+    };
+    if m.len() >= KILL_TOMBSTONE_CAP {
+        // Bound growth: drop an arbitrary half when full (daemon-local
+        // cache; restart clears). Prefer a cheap bound over LRU complexity.
+        let drop_n = m.len() / 2;
+        let keys: Vec<String> = m.keys().take(drop_n).cloned().collect();
+        for k in keys {
+            m.remove(&k);
+        }
+    }
+    m.insert(session_id.to_string(), principal.to_string());
+}
+
+fn kill_tombstone_owner(session_id: &str) -> Option<String> {
+    kill_tombstones()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(session_id).cloned())
+}
+
+/// True when `requester` owns `session_id` via the live owner map OR a
+/// prior kill tombstone (K6 second-kill path after ChildExit eviction).
+fn principal_owns_host_session(session_id: &str, requester: &str) -> bool {
+    match crate::sandbox_responses::owner_of(session_id) {
+        Some(owner) if owner == requester => true,
+        _ => matches!(kill_tombstone_owner(session_id), Some(owner) if owner == requester),
+    }
+}
+
+/// `POST /v1/w/<ws>/host-sessions/<id>/kill` — force-stop a live host-session
+/// PTY for integrator spend-cap / deliberate teardown.
+///
+/// Authz mirrors message-live (host_sessions cap + ws grant + session owner
+/// via [`crate::sandbox_responses::owner_of`] == principal.display_id();
+/// canonical / unknown / unowned / wrong-ws → uniform 404). Empty body OK.
+///
+/// Idempotent for an owned session that is no longer live → 200
+/// `{"sessionId","killed":false,"reason":"not_live"}`. Live teardown uses
+/// force unregister ([`crate::v2_session_map::unregister`] + kill) and
+/// [`crate::sandbox_reaper::unregister`]. Quota is released by the
+/// child-exit observer when `session.kill()` fires — this handler does
+/// NOT double-release. Cap file / JWTs are left in place (K8).
+pub(crate) fn handle_v1_host_kill(
+    principal: &V1Principal,
+    ws_raw: &str,
+    sid_raw: &str,
+) -> CliResponse {
+    if let Err(resp) = require_host_sessions(principal) {
+        return resp;
+    }
+    let Some(slug) = decode_and_validate_segment(ws_raw) else {
+        return uniform_ws_404();
+    };
+    let Some(sid_seg) = decode_and_validate_segment(sid_raw) else {
+        return uniform_ws_404();
+    };
+    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    // CANONICAL OFF-LIMITS — never drive a workspace's canonical session here.
+    if session_is_canonical(&sid_seg) {
+        return uniform_ws_404();
+    }
+    // OWNERSHIP (default-deny): only the principal that spawned (or previously
+    // killed) this session may kill it — unknown and unowned are the SAME
+    // uniform 404. Tombstone covers post-ChildExit eviction (K6).
+    let requester = principal.display_id();
+    if !principal_owns_host_session(&sid_seg, &requester) {
+        return uniform_ws_404();
+    }
+    // Owned but not live → idempotent success (K6). Ownership is already
+    // proven; never 404 this case (that would reintroduce an existence oracle
+    // vs. "owned dead" vs. "never heard of").
+    let Some(live) = lookup_live_host_session(&ws_path, &sid_seg) else {
+        return CliResponse::ok_json(
+            serde_json::json!({
+                "sessionId": sid_seg,
+                "killed": false,
+                "reason": "not_live",
+            })
+            .to_string(),
+        );
+    };
+    // Workspace pin: a principal granted two workspaces can't cross-kill.
+    let cwd_matches = live
+        .cwd
+        .as_ref()
+        .map(|p| p.to_string_lossy() == ws_path)
+        .unwrap_or(false);
+    if !cwd_matches {
+        return uniform_ws_404();
+    }
+
+    // Resolve agent_name for force map unregister (preferred path — kills
+    // the child and drops the map entry in one chokepoint).
+    let agent_name = crate::v2_session_map::agent_name_for_session_id(&live.session_id)
+        .or_else(|| agent_name_from_tab_index(&ws_path, &sid_seg));
+
+    if let Some(ref name) = agent_name {
+        // Force unregister: no subscriber guard. Integrator kill is
+        // deliberate (like force:true on /cli/sessions/v2/close).
+        let _ = crate::v2_session_map::unregister(name);
+    } else {
+        // Live somehow without a map key — still kill the PTY so spend stops.
+        live.kill();
+    }
+    // Reaper keys on the daemon SessionId (may differ from the caller-facing
+    // adopted id for self-minting providers).
+    crate::sandbox_reaper::unregister(&live.session_id);
+    if let Some(parsed) = SessionId::parse(&sid_seg) {
+        if parsed != live.session_id {
+            crate::sandbox_reaper::unregister(&parsed);
+        }
+    }
+    // Stamp tombstone BEFORE returning so a racing second kill sees ownership
+    // even if ChildExit already ran `sandbox_responses::evict`.
+    record_kill_tombstone(&sid_seg, &requester);
+
+    CliResponse::ok_json(
+        serde_json::json!({
+            "sessionId": sid_seg,
+            "killed": true,
+        })
+        .to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1149,6 +1317,7 @@ mod tests {
             handle_v1_host_list(&no_host, "v1host-cap-deny"),
             handle_v1_host_message(&no_host, "v1host-cap-deny", "any-sid", b"{}"),
             handle_v1_host_messages(&no_host, "v1host-cap-deny", "any-sid", 0),
+            handle_v1_host_kill(&no_host, "v1host-cap-deny", "any-sid"),
         ] {
             assert_eq!(call.status, "404 Not Found", "body={}", call.body);
             assert!(
@@ -1265,6 +1434,46 @@ mod tests {
                 b"{}"
             )
             .status,
+            "404 Not Found",
+        );
+    }
+
+    /// kill: canonical / unknown / unowned → uniform 404; owned-but-not-live
+    /// is the idempotent 200 `{killed:false, reason:"not_live"}` (K6).
+    #[test]
+    fn kill_refuses_canonical_unknown_unowned_and_idempts_dead() {
+        k2_core::db::init_for_tests();
+        let pid = insert_project("v1host-kill", "/tmp/k2-v1host-kill");
+        insert_canonical_session(&pid, "v1host-kill-canon");
+
+        assert_eq!(
+            handle_v1_host_kill(&V1Principal::Owner, "v1host-kill", "v1host-kill-canon").status,
+            "404 Not Found",
+        );
+        // Unknown session (no owner record) → 404.
+        assert_eq!(
+            handle_v1_host_kill(&V1Principal::Owner, "v1host-kill", "v1host-kill-nope").status,
+            "404 Not Found",
+        );
+        // Owned by a DIFFERENT principal → identical 404 (no oracle).
+        crate::sandbox_responses::record_owner("v1host-kill-owned", "key-somebody-else");
+        assert_eq!(
+            handle_v1_host_kill(&V1Principal::Owner, "v1host-kill", "v1host-kill-owned").status,
+            "404 Not Found",
+        );
+        // Owned by THIS principal but NOT LIVE → 200 killed:false not_live.
+        crate::sandbox_responses::record_owner("v1host-kill-dead", "owner");
+        let r = handle_v1_host_kill(&V1Principal::Owner, "v1host-kill", "v1host-kill-dead");
+        assert_eq!(r.status, "200 OK", "body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["sessionId"], "v1host-kill-dead");
+        assert_eq!(v["killed"], false);
+        assert_eq!(v["reason"], "not_live");
+        // Ungranted key never reaches kill (uniform 404).
+        let ungranted = apik("k-hk-none", None);
+        crate::sandbox_responses::record_owner("v1host-kill-dead2", "owner");
+        assert_eq!(
+            handle_v1_host_kill(&ungranted, "v1host-kill", "v1host-kill-dead2").status,
             "404 Not Found",
         );
     }

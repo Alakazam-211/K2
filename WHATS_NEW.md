@@ -5,6 +5,14 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.40.81 — K2 API Tokens settings + soft-disable
 
+### Host-session reaper: no short hard wall on busy work
+
+Working host-sessions / sandbox cells are **no longer killed** when
+`timeout_secs` elapses from spawn (the 180/300s “hard wall”). Continuous
+productive work can run past client poll budgets; completion reaps via Grace
+after `k2 respond --final`. Integrator **kill** + capability non-remint remain
+the spend levers. Scout mid-write 300s reaps (E-1) are fixed by this change.
+
 ### Settings: K2 API Tokens (global) + workspace API tab
 
 - New top-level **Settings → K2 API Tokens**: list all `k2sk_` keys, mint (one-time

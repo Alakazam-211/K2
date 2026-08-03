@@ -280,19 +280,17 @@ A cryptographically valid JWT is **not** enough. On every agent callback your ap
 
 | Number | Value | Role |
 |--------|-------|------|
-| `timeout_secs` | request, default **180**, Scout multi-turn **600** | **Hard wall** from register — kills Working too |
-| Grace after `--final` | **10s** (`FINAL_GRACE_SECS`) | Only path that reaps a finished cell without waiting for the wall |
+| `timeout_secs` | request, default **180** (clamp 30…86400) | Client budget / JWT lifetime clamp; **does not kill Working** |
+| Grace after `--final` | **10s** (`FINAL_GRACE_SECS`) | Reaps finished cells after final |
 | Reaper tick | **15s** (env `K2_SANDBOX_REAPER_TICK_SECS`) | Poll cadence |
 
 Behavior:
 
-- Inject / register / non-final `k2 respond` → **Working** — **never** reaped for silence.
-- There is **no classic idle-window** (no “N seconds since last activity → reap
-  while Working”). A silent-but-working cell and a silent idle cell that never
-  called `--final` both stay Working until the **hard wall**.
+- Inject / register / non-final `k2 respond` → **Working** — **never** reaped for
+  silence and **never** reaped solely because `timeout_secs` elapsed since spawn
+  (continuous productive work may run past 300s; spend control = **kill** + caps).
 - `k2 respond --final` → **Grace** → reap after **~10s** (unless a new inject
   re-enters Working).
-- **Hard wall** = `timeout_secs` from register (always wins).
 
 **Client verification of S9 differentiation:** spawn A with continuous work /
 no `--final`; spawn B that reaches `--final`; with `timeout_secs` large (e.g.
@@ -300,7 +298,7 @@ no `--final`; spawn B that reaches `--final`; with `timeout_secs` large (e.g.
 resume/inject **re-stamps Working** and cannot observe pure idle.
 
 K2-side unit evidence: `sandbox_reaper::tests::{working_survives_idle_window,
-grace_reaps_after_deadline, hard_wall_reaps_working}`.
+working_survives_past_timeout_secs_wall, grace_reaps_after_deadline}`.
 
 ### 4.3 Inject / auto-retry (no model cancel)
 

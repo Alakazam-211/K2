@@ -1,14 +1,14 @@
 //! Work-completion-aware reaper for API host-sessions / sandbox cells.
 //!
-//! ## States (S9)
+//! ## States (S9 + Rosson 2026-08-03: no short hard wall on busy work)
 //! - **Working** — inject / register / non-final `k2 respond` → **never**
-//!   reaped for silence. There is **no classic idle-window** that kills a
-//!   Working cell (client cannot prove "idle dies / working lives" by waiting
-//!   on silence alone — only Grace vs Working + hard wall).
+//!   reaped for silence **and never** reaped by `timeout_secs` wall-clock.
+//!   Continuous productive work may run as long as the process lives.
+//!   Spend / runaway control = integrator **kill** + caps, not mid-write wall.
 //! - **Grace** — after `k2 respond --final`, short window
-//!   ([`FINAL_GRACE_SECS`] = 10s) then may reap.
-//! - **Hard wall** — `timeout_secs` from first register always bounds
-//!   never-final hangs; **Working still dies at the wall**.
+//!   ([`FINAL_GRACE_SECS`] = 10s) then may reap (work completed).
+//! - **`timeout_secs`** — still accepted on spawn (JWT lifetime clamp, client
+//!   budgets); it does **not** kill a Working cell.
 //!
 //! Activity stamped by spawn / message-live / resume inject (re-enters Working).
 
@@ -32,14 +32,17 @@ pub const FINAL_GRACE_SECS: u64 = 10;
 enum Phase {
     /// Agent is generating / mid-turn. Idle clock does not reap.
     Working,
-    /// After final respond; reap once grace elapses (or hard wall).
+    /// After final respond; reap once grace elapses.
     Grace,
 }
 
 struct Entry {
     last_activity: Instant,
-    /// Wall-clock start for the hard max (never-final safety).
+    /// Spawn/register instant (retained; not used to kill Working).
+    #[allow(dead_code)]
     registered_at: Instant,
+    /// Requested `timeout_secs` (JWT/client budget; not a Working kill).
+    #[allow(dead_code)]
     timeout: Duration,
     phase: Phase,
     /// When phase == Grace, reap after this instant (unless re-Working).
@@ -141,10 +144,7 @@ fn tick() -> Duration {
 }
 
 fn should_reap(e: &Entry, now: Instant) -> bool {
-    // Hard wall always wins (hung agent / never-final).
-    if now.duration_since(e.registered_at) > e.timeout {
-        return true;
-    }
+    // Working is never auto-reaped (no short hard wall mid-write). Grace only.
     match e.phase {
         Phase::Working => false,
         Phase::Grace => e.grace_until.map(|u| now >= u).unwrap_or(false),
@@ -218,16 +218,34 @@ mod tests {
     }
 
     #[test]
-    fn hard_wall_reaps_working() {
+    fn working_survives_past_timeout_secs_wall() {
+        // Scout E-1 class: continuous work at timeout_secs=300 must not die
+        // solely because registered_at + wall elapsed.
         let now = Instant::now();
         let entry = Entry {
             last_activity: now,
-            registered_at: now - Duration::from_secs(200),
-            timeout: Duration::from_secs(180),
+            registered_at: now - Duration::from_secs(400),
+            timeout: Duration::from_secs(300),
             phase: Phase::Working,
             grace_until: None,
         };
-        assert!(should_reap(&entry, now), "hard wall kills Working");
+        assert!(
+            !should_reap(&entry, now),
+            "Working must not be reaped by timeout_secs hard wall"
+        );
+    }
+
+    #[test]
+    fn grace_reaps_even_if_wall_not_reached() {
+        let now = Instant::now();
+        let entry = Entry {
+            last_activity: now,
+            registered_at: now,
+            timeout: Duration::from_secs(86_400),
+            phase: Phase::Grace,
+            grace_until: Some(now - Duration::from_secs(1)),
+        };
+        assert!(should_reap(&entry, now), "Grace after --final still reaps");
     }
 
     #[test]

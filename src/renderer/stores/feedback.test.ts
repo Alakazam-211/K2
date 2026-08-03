@@ -77,6 +77,10 @@ describe('feedback store event wiring', () => {
     // no-op. Unfocused so reason 'created' WOULD notify.
     useWindowFocusStore.setState({ isFocused: false })
     initFeedbackEvents(true)
+    // Double-flush: notifyDesktop uses a dynamic import; a prior test's
+    // 'created' notify can settle AFTER the next test's mockClear and
+    // falsely fail the answered/status-changed "not called" assertion.
+    await flush()
     await flush()
     notification.send.mockClear()
     api.fetchWaitingCount.mockClear()

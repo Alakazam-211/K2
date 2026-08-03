@@ -89,6 +89,46 @@ function currentActiveProjectId(): string | null {
   return _activeProjectIdRef ? _activeProjectIdRef() : null
 }
 
+/** Project path → id (+ primary workspace) for host-session tab routing.
+ *  Scout sales pilot: api- SessionAdded must park under the event's
+ *  workspace, not the focused strip. Lazy ref avoids projects↔tabs cycle. */
+export type ProjectPathEntry = {
+  id: string
+  path: string
+  /** First workspace id by tabOrder (layout key `${projectId}:${workspaceId}`). */
+  primaryWorkspaceId: string | null
+}
+let _projectsPathIndexRef: (() => ProjectPathEntry[]) | null = null
+export function registerProjectsPathIndex(getter: () => ProjectPathEntry[]): void {
+  _projectsPathIndexRef = getter
+}
+function projectsPathIndex(): ProjectPathEntry[] {
+  return _projectsPathIndexRef ? _projectsPathIndexRef() : []
+}
+function normalizeFsPath(p: string): string {
+  if (!p) return ''
+  const t = p.replace(/\/+$/, '')
+  return t.length === 0 ? '/' : t
+}
+/** Resolve a registered project whose path equals (or is a parent of) `cwd`. */
+function findProjectForSessionPath(cwd: string): ProjectPathEntry | null {
+  const n = normalizeFsPath(cwd)
+  if (!n || n === '/') return null
+  const list = projectsPathIndex()
+  // Prefer exact path match; then longest registered path that is a parent
+  // of cwd (host-session cwd is the workspace root for F1 host cells).
+  let best: ProjectPathEntry | null = null
+  for (const p of list) {
+    const pp = normalizeFsPath(p.path)
+    if (!pp) continue
+    if (pp === n) return p
+    if (n.startsWith(pp + '/')) {
+      if (!best || normalizeFsPath(best.path).length < pp.length) best = p
+    }
+  }
+  return best
+}
+
 // #672 — lazy reference to projects.ts's `activateProject` (the canonical
 // open/attach⇒activate gesture, PRD §4.3.1). Same lazy-registration
 // pattern as the activeProjectId getter to avoid the projects → tabs →
@@ -5138,27 +5178,155 @@ function tearDownActiveWorkspaceSubscription(): void {
  *  the AgentChatPane remount-guard's identity check (session_id) + the
  *  `isPaneGroupSurfaced` "already represented" check, matched on the attach
  *  agent_name since the API cell has no `tab-`-shaped paneGroupId. */
+function tabMatchesApiSession(tab: Tab, agentName: string, sessionId: string): boolean {
+  for (const pg of tab.paneGroups.values()) {
+    for (const item of pg.items) {
+      if (item.type !== 'terminal') continue
+      const d = item.data as TerminalItemData
+      if (d.attachAgentName === agentName) return true
+      if (sessionId && d.sessionId === sessionId) return true
+    }
+  }
+  return false
+}
+
 function isApiSandboxSessionSurfaced(
-  state: { tabs: Tab[]; extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }> },
+  state: {
+    tabs: Tab[]
+    extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }>
+    backgroundWorkspaces?: Record<string, WorkspaceTabSnapshot>
+  },
   agentName: string,
   sessionId: string,
 ): boolean {
-  const matches = (tab: Tab): boolean => {
-    for (const pg of tab.paneGroups.values()) {
-      for (const item of pg.items) {
-        if (item.type !== 'terminal') continue
-        const d = item.data as TerminalItemData
-        if (d.attachAgentName === agentName) return true
-        if (sessionId && d.sessionId === sessionId) return true
+  for (const tab of state.tabs) {
+    if (tabMatchesApiSession(tab, agentName, sessionId)) return true
+  }
+  for (const group of state.extraGroups) {
+    for (const tab of group.tabs) {
+      if (tabMatchesApiSession(tab, agentName, sessionId)) return true
+    }
+  }
+  // Also de-dupe against parked (non-active workspace) strips — host-session
+  // adopt may place cells there so the focused workspace is not polluted.
+  if (state.backgroundWorkspaces) {
+    for (const snap of Object.values(state.backgroundWorkspaces)) {
+      for (const tab of snap.tabs) {
+        if (tabMatchesApiSession(tab, agentName, sessionId)) return true
+      }
+      for (const group of snap.extraGroups) {
+        for (const tab of group.tabs) {
+          if (tabMatchesApiSession(tab, agentName, sessionId)) return true
+        }
       }
     }
-    return false
-  }
-  for (const tab of state.tabs) if (matches(tab)) return true
-  for (const group of state.extraGroups) {
-    for (const tab of group.tabs) if (matches(tab)) return true
   }
   return false
+}
+
+/**
+ * Place an API-adopted tab on the correct workspace strip.
+ * - Active project (path match) → append to in-view `tabs` (no active-tab steal).
+ * - Background snapshot for that layout key → append there.
+ * - Else merge into `workspaceLayouts` + persist so next open of that
+ *   workspace restores the audit tab (Scout sales pilot: never Julie strip).
+ */
+function placeApiAdoptedTab(tab: Tab, eventPath: string): void {
+  const project = findProjectForSessionPath(eventPath)
+  const state = useTabsStore.getState()
+
+  // Sandbox cells use ephemeral cwds outside any project — keep prior
+  // behavior: surface on the focused strip so the operator still sees them.
+  if (!project || !project.primaryWorkspaceId) {
+    console.warn(
+      `[tabs] api-session adoption — no registered project for path=${eventPath || '(empty)'}; surfacing on active strip`,
+    )
+    useTabsStore.setState((s) => ({ tabs: [...s.tabs, tab] }))
+    return
+  }
+
+  const layoutKey = `${project.id}:${project.primaryWorkspaceId}`
+  const activeKey = state.activeWorkspaceKey
+  const onActiveProject =
+    state.activeProjectId === project.id ||
+    (activeKey != null && activeKey.startsWith(`${project.id}:`))
+
+  if (onActiveProject) {
+    console.warn(
+      `[tabs] api-session adoption — path=${eventPath} → active project ${project.id}; appending to focused strip`,
+    )
+    useTabsStore.setState((s) => ({ tabs: [...s.tabs, tab] }))
+    return
+  }
+
+  // Non-active: park without yanking focus.
+  const bg = state.backgroundWorkspaces[layoutKey]
+  if (bg) {
+    console.warn(
+      `[tabs] api-session adoption — path=${eventPath} → background key=${layoutKey}`,
+    )
+    useTabsStore.setState((s) => {
+      const cur = s.backgroundWorkspaces[layoutKey]
+      if (!cur) return s
+      const nextSnap: WorkspaceTabSnapshot = {
+        ...cur,
+        tabs: [...cur.tabs, tab],
+      }
+      return {
+        backgroundWorkspaces: {
+          ...s.backgroundWorkspaces,
+          [layoutKey]: nextSnap,
+        },
+        workspaceLayouts: {
+          ...s.workspaceLayouts,
+          [layoutKey]: serializeSnapshot(nextSnap),
+        },
+      }
+    })
+    const layout = useTabsStore.getState().workspaceLayouts[layoutKey]
+    if (layout) {
+      daemonCliPost('workspace-layouts/save', {
+        projectId: project.id,
+        workspaceId: project.primaryWorkspaceId,
+        layoutJson: JSON.stringify(layout),
+      }).catch((err) =>
+        console.warn('[tabs] api-session park save (background) failed:', err),
+      )
+    }
+    return
+  }
+
+  // Never opened this session: merge into cached/DB layout only.
+  console.warn(
+    `[tabs] api-session adoption — path=${eventPath} → layout key=${layoutKey} (not active)`,
+  )
+  const existing = state.workspaceLayouts[layoutKey]
+  const alone = serializeSnapshot({
+    tabs: [tab],
+    extraGroups: [],
+    splitCount: 1,
+    activeGroupIndex: 0,
+    activeTabId: null,
+  })
+  const nextLayout: SerializedLayout = existing?.tabs?.length
+    ? {
+        ...existing,
+        tabs: [...existing.tabs, ...(alone.tabs ?? [])],
+      }
+    : alone
+  useTabsStore.setState((s) => ({
+    workspaceLayouts: {
+      ...s.workspaceLayouts,
+      [layoutKey]: nextLayout,
+    },
+  }))
+  daemonCliPost('workspace-layouts/save', {
+    projectId: project.id,
+    workspaceId: project.primaryWorkspaceId,
+    layoutJson: JSON.stringify(nextLayout),
+  }).catch((err) =>
+    console.warn('[tabs] api-session park save (layout) failed:', err),
+  )
 }
 
 /** True when removing the tab is safe under the API-session reaper path.
@@ -5234,9 +5402,12 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
     (firstItem.data as TerminalItemData).renderer = 'kessel'
   }
   console.warn(
-    `[tabs] api-session adoption — surfacing agent=${agentName} backend=${backend} as a new tab`,
+    `[tabs] api-session adoption — agent=${agentName} backend=${backend} path=${event.workspace_path || ''}`,
   )
-  useTabsStore.setState((s) => ({ tabs: [...s.tabs, tab] }))
+  // Scout sales pilot: park under the project for event.workspace_path —
+  // never append into an unrelated focused workspace (e.g. Julie while
+  // sales host-session spawns).
+  placeApiAdoptedTab(tab, event.workspace_path || '')
   return true
 }
 
@@ -5268,7 +5439,39 @@ export function dropApiSpawnedSession(event: SessionRemovedEvent): boolean {
     (n, g, i) => n + (g.tabs.length - newExtraGroups[i].tabs.length),
     0,
   )
-  if (mainDelta === 0 && extraDelta === 0) return false
+
+  // Also drop from background (parked) strips for non-active workspaces.
+  let bgDelta = 0
+  const nextBg: Record<string, WorkspaceTabSnapshot> = {}
+  for (const [key, snap] of Object.entries(state.backgroundWorkspaces)) {
+    const tabs = snap.tabs.filter(
+      (t) => !tabIsDropCandidateForApiSessionRemoval(t, agentName),
+    )
+    const extraGroups = snap.extraGroups.map((g) => ({
+      tabs: g.tabs.filter((t) => !tabIsDropCandidateForApiSessionRemoval(t, agentName)),
+      activeTabId: g.activeTabId,
+    }))
+    const d =
+      snap.tabs.length -
+      tabs.length +
+      snap.extraGroups.reduce(
+        (n, g, i) => n + (g.tabs.length - extraGroups[i].tabs.length),
+        0,
+      )
+    bgDelta += d
+    nextBg[key] = {
+      ...snap,
+      tabs,
+      extraGroups: extraGroups.map((g) => ({
+        tabs: g.tabs,
+        activeTabId: g.tabs.find((t) => t.id === g.activeTabId)
+          ? g.activeTabId
+          : g.tabs[0]?.id ?? null,
+      })),
+    }
+  }
+
+  if (mainDelta === 0 && extraDelta === 0 && bgDelta === 0) return false
 
   let newActiveId = state.activeTabId
   if (newActiveId && !droppedFromMain.find((t) => t.id === newActiveId)) {
@@ -5280,7 +5483,7 @@ export function dropApiSpawnedSession(event: SessionRemovedEvent): boolean {
     }
   }
   console.warn(
-    `[tabs] api-session removed — closed ${mainDelta + extraDelta} audit tab(s) for agent=${agentName}`,
+    `[tabs] api-session removed — closed ${mainDelta + extraDelta + bgDelta} audit tab(s) for agent=${agentName}`,
   )
   useTabsStore.setState({
     tabs: droppedFromMain,
@@ -5291,6 +5494,7 @@ export function dropApiSpawnedSession(event: SessionRemovedEvent): boolean {
         ? g.activeTabId
         : g.tabs[0]?.id ?? null,
     })),
+    backgroundWorkspaces: nextBg,
   })
   return true
 }

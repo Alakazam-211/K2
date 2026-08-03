@@ -23,7 +23,7 @@ import { onActiveHostChange, activeHostKey, useConnectHostStore } from '@/stores
 import { onProjectsChanged } from '@/stores/session-events'
 import { useGitInitDialogStore } from './git-init-dialog'
 import { useToastStore } from './toast'
-import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, registerActivateProject, registerProjectDefaultAgentGetter, runLeaveGuard } from './tabs'
+import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, registerActivateProject, registerProjectDefaultAgentGetter, registerProjectsPathIndex, runLeaveGuard } from './tabs'
 import { useFocusGroupsStore } from './focus-groups'
 import { useSettingsStore } from './settings'
 // [ws-switch] — dev-only t0 mark for the pinned-chat retention
@@ -49,6 +49,20 @@ registerActivateProject((projectId: string) => activateProject(projectId))
 registerProjectDefaultAgentGetter(
   (projectId: string) =>
     useProjectsStore.getState().projects.find((p) => p.id === projectId)?.defaultAgent ?? undefined,
+)
+
+// Host-session tab routing (Scout sales pilot): adoptApiSandboxSession parks
+// api- cells under the project matching SessionAdded.workspace_path, not the
+// focused strip. Same cycle-avoidance pattern as activeProjectId.
+registerProjectsPathIndex(() =>
+  useProjectsStore.getState().projects.map((p) => {
+    const sorted = [...(p.workspaces ?? [])].sort((a, b) => a.tabOrder - b.tabOrder)
+    return {
+      id: p.id,
+      path: p.path,
+      primaryWorkspaceId: sorted[0]?.id ?? null,
+    }
+  }),
 )
 
 // Debounce touchInteraction to avoid excessive DB writes (5 min per project)

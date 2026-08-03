@@ -28,6 +28,7 @@ use crate::{sandbox_quota, stream_token, v2_spawn};
 
 use policy::{resolve_spawn, resolve_workspace_session, ApiSandboxRequest};
 
+use k2_core::log_debug;
 use k2_core::session::SessionId;
 
 /// Phase 0 — sandbox capability gate. Missing cap → uniform 404 (same as
@@ -334,41 +335,84 @@ pub(crate) fn decode_and_validate_segment(raw: &str) -> Option<String> {
 /// root, and (unlike `workspace_msg::resolve_workspace`) has NO absolute-path or
 /// UUID branch — a leading `/` can't even reach here (the segment validator
 /// rejects separators). So the worst a hostile slug can do is match nothing → 404.
+///
+/// **Ambiguity is fail-closed (Scout sales pilot / 0.40.80):** `projects.path`
+/// is UNIQUE but `projects.name` is not. A silent `LIMIT 1` / first-basename
+/// pick could route `/v1/w/sales/host-sessions` to the wrong path
+/// deterministically from table state (intermittent across re-registers).
+/// Multiple exact, NOCASE, or basename hits → `None` (uniform 404), never a
+/// guessed row. Operators must disambiguate names or use a unique basename.
 pub fn resolve_workspace_slug(slug: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
 
     // Exact display-name match (the common case; slug == workspace name).
-    if let Ok(path) = conn.query_row(
-        "SELECT path FROM projects WHERE name = ?1 ORDER BY rowid LIMIT 1",
-        rusqlite::params![slug],
-        |r| r.get::<_, String>(0),
-    ) {
-        return Some(path);
+    let exact: Vec<String> = conn
+        .prepare("SELECT path FROM projects WHERE name = ?1")
+        .ok()
+        .and_then(|mut stmt| {
+            stmt.query_map(rusqlite::params![slug], |r| r.get::<_, String>(0))
+                .ok()
+                .map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default();
+    if exact.len() == 1 {
+        return Some(exact.into_iter().next().unwrap());
     }
+    if exact.len() > 1 {
+        log_debug!(
+            "[v1] ambiguous workspace slug={slug:?}: {} exact name matches — refusing (no LIMIT 1 guess)",
+            exact.len()
+        );
+        return None;
+    }
+
     // Case-insensitive name fallback (mirrors resolve_workspace #33 — LLM/human
     // callers infer plausible casing). Exact-case still wins above.
-    if let Ok(path) = conn.query_row(
-        "SELECT path FROM projects WHERE name = ?1 COLLATE NOCASE ORDER BY rowid LIMIT 1",
-        rusqlite::params![slug],
-        |r| r.get::<_, String>(0),
-    ) {
-        return Some(path);
+    let nocase: Vec<String> = conn
+        .prepare("SELECT path FROM projects WHERE name = ?1 COLLATE NOCASE")
+        .ok()
+        .and_then(|mut stmt| {
+            stmt.query_map(rusqlite::params![slug], |r| r.get::<_, String>(0))
+                .ok()
+                .map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default();
+    if nocase.len() == 1 {
+        return Some(nocase.into_iter().next().unwrap());
     }
+    if nocase.len() > 1 {
+        log_debug!(
+            "[v1] ambiguous workspace slug={slug:?}: {} NOCASE name matches — refusing",
+            nocase.len()
+        );
+        return None;
+    }
+
     // Basename match: the slug equals a registered project's FOLDER basename
     // (for workspaces whose display name was customized away from the folder).
-    // We compare the basename of each stored path — still only ever returning a
-    // registered path.
+    // Collect ALL matches — never pick the first unordered row.
     let mut stmt = conn.prepare("SELECT path FROM projects").ok()?;
     let rows = stmt.query_map([], |r| r.get::<_, String>(0)).ok()?;
+    let mut base_matches: Vec<String> = Vec::new();
     for p in rows.flatten() {
         let matches_base = std::path::Path::new(&p)
             .file_name()
             .map(|b| b.to_string_lossy().eq_ignore_ascii_case(slug))
             .unwrap_or(false);
         if matches_base {
-            return Some(p);
+            base_matches.push(p);
         }
+    }
+    if base_matches.len() == 1 {
+        return Some(base_matches.into_iter().next().unwrap());
+    }
+    if base_matches.len() > 1 {
+        log_debug!(
+            "[v1] ambiguous workspace slug={slug:?}: {} basename matches — refusing",
+            base_matches.len()
+        );
+        return None;
     }
     None
 }

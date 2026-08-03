@@ -102,6 +102,7 @@ import {
   dropApiSpawnedSession,
   hydrateApiSandboxSessions,
   initApiSandboxTabAdoption,
+  registerProjectsPathIndex,
   type Tab,
   type TerminalItemData,
 } from './tabs'
@@ -174,9 +175,111 @@ function resetStore(): void {
   ev.hello = []
   cli.listSessionsImpl = async () => []
   mem.clear()
+  // Default: no projects index → ephemeral/unknown paths still land on active strip.
+  registerProjectsPathIndex(() => [])
 }
 
 beforeEach(resetStore)
+
+describe('adoptApiSandboxSession — workspace routing (Scout sales pilot)', () => {
+  it('does NOT append a sales host-session into the Julie-focused strip', () => {
+    registerProjectsPathIndex(() => [
+      {
+        id: 'proj-julie',
+        path: '/home/k2/AI Projects/Julie',
+        primaryWorkspaceId: 'ws-julie',
+      },
+      {
+        id: 'proj-sales',
+        path: '/home/k2/AI Projects/sales',
+        primaryWorkspaceId: 'ws-sales',
+      },
+    ])
+    // Operator is looking at Julie.
+    useTabsStore.setState({
+      activeProjectId: 'proj-julie',
+      activeWorkspaceId: 'ws-julie',
+      activeWorkspaceKey: 'proj-julie:ws-julie',
+      tabs: [],
+    })
+
+    const e = apiHostEvent({
+      workspace_path: '/home/k2/AI Projects/sales',
+      agent_name: 'api-owner-sales-sess',
+      session_id: 'd02beecf-938a-42e1-a78b-bdc3cf3bbdd5',
+    })
+    expect(adoptApiSandboxSession(e)).toBe(true)
+
+    // Focused Julie strip stays empty.
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
+    // Cell is parked on sales layout (not active this session).
+    const salesLayout = useTabsStore.getState().workspaceLayouts['proj-sales:ws-sales']
+    expect(salesLayout).toBeTruthy()
+    expect(salesLayout!.tabs?.length).toBe(1)
+    const attach = (salesLayout!.tabs![0] as { paneGroups?: Record<string, { items?: Array<{ attachAgentName?: string }> }> })
+      .paneGroups
+    // Serialized shape uses attachAgentName on terminal v2 items.
+    const json = JSON.stringify(salesLayout)
+    expect(json).toContain('api-owner-sales-sess')
+    void attach
+  })
+
+  it('appends onto the focused strip when that workspace owns the path', () => {
+    registerProjectsPathIndex(() => [
+      {
+        id: 'proj-sales',
+        path: '/home/k2/AI Projects/sales',
+        primaryWorkspaceId: 'ws-sales',
+      },
+    ])
+    useTabsStore.setState({
+      activeProjectId: 'proj-sales',
+      activeWorkspaceId: 'ws-sales',
+      activeWorkspaceKey: 'proj-sales:ws-sales',
+      tabs: [],
+    })
+    const e = apiHostEvent({
+      workspace_path: '/home/k2/AI Projects/sales',
+      agent_name: 'api-owner-sales-on-focus',
+    })
+    expect(adoptApiSandboxSession(e)).toBe(true)
+    expect(useTabsStore.getState().tabs).toHaveLength(1)
+    const found = onlyTerminalItem()
+    expect(found?.data.attachAgentName).toBe('api-owner-sales-on-focus')
+  })
+
+  it('parks onto a background snapshot when that workspace is stashed', () => {
+    registerProjectsPathIndex(() => [
+      {
+        id: 'proj-sales',
+        path: '/home/k2/AI Projects/sales',
+        primaryWorkspaceId: 'ws-sales',
+      },
+    ])
+    useTabsStore.setState({
+      activeProjectId: 'proj-julie',
+      activeWorkspaceKey: 'proj-julie:ws-julie',
+      tabs: [],
+      backgroundWorkspaces: {
+        'proj-sales:ws-sales': {
+          tabs: [],
+          extraGroups: [],
+          splitCount: 1,
+          activeGroupIndex: 0,
+          activeTabId: null,
+        },
+      },
+    })
+    const e = apiHostEvent({
+      workspace_path: '/home/k2/AI Projects/sales',
+      agent_name: 'api-owner-sales-bg',
+    })
+    expect(adoptApiSandboxSession(e)).toBe(true)
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
+    const bg = useTabsStore.getState().backgroundWorkspaces['proj-sales:ws-sales']
+    expect(bg.tabs).toHaveLength(1)
+  })
+})
 
 describe('adoptApiSandboxSession', () => {
   it('adopts a real-sandbox cell into a new v2 terminal tab carrying the orange backend + attach name', () => {

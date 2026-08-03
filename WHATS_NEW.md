@@ -3,6 +3,25 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.80 — Host-session tab lands on the right workspace
+
+### API host-session tabs no longer hijack the focused workspace
+
+Scout pilot: `POST /v1/w/sales/host-sessions` could surface an orange audit tab
+under whatever workspace the desktop had focused (e.g. **Julie**), even when the
+PTY cwd was correctly **sales**. Root cause was renderer
+`adoptApiSandboxSession` always appending into the active strip.
+
+- Host/sandbox `SessionAdded` adoption now routes by `event.workspace_path` →
+  registered project: active project gets the tab; otherwise park on that
+  workspace’s layout/background (no focus steal).
+- Ephemeral sandbox cwds (no matching project) still surface on the focused
+  strip (audit visibility).
+- Daemon: `resolve_workspace_slug` **fails closed** on ambiguous name/basename
+  (no silent `LIMIT 1` / first-row guess when duplicate `projects.name` rows).
+
+---
+
 ## 0.40.79 — Host-session list + kill API
 
 ### List liveness matches real PTY processes

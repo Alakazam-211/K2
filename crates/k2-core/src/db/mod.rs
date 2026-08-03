@@ -751,6 +751,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0093_api_skip_permissions_default_on",
             include_str!("../../drizzle_sql/0093_api_skip_permissions_default_on.sql"),
         ),
+        // 0094 (Settings API keys UI): soft-disable for emergency off/on
+        // without reminting the secret. resolve_api_key rejects when set.
+        (
+            "0094_api_key_disabled_at",
+            include_str!("../../drizzle_sql/0094_api_key_disabled_at.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

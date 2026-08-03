@@ -45,6 +45,8 @@ import { RoleSkillEditor } from './RoleSkillEditor'
 import { CanonicalAgentModal } from './CanonicalAgentModal'
 import { type HarnessProbe } from './canonicalState'
 import { RoleSkillButton, CanonicalAgentButton } from './CanonicalAgentButtons'
+import { WorkspaceApiKeysPanel } from './ApiTokensSection'
+import { workspaceGrantSlug } from './api-keys-api'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -960,7 +962,14 @@ function WorktreeFoldersOnDisk({
 }
 
 // Per-workspace detail tabs (replaces the long two-column stack).
-type WorkspaceSettingsTab = 'agent' | 'context' | 'skills' | 'schedule' | 'worktrees' | 'import'
+type WorkspaceSettingsTab =
+  | 'agent'
+  | 'context'
+  | 'skills'
+  | 'schedule'
+  | 'worktrees'
+  | 'import'
+  | 'api'
 
 // ── Workspace Detail (right panel content) ─────────────────────────────
 function ProjectDetail({
@@ -1260,6 +1269,7 @@ function ProjectDetail({
     { id: 'schedule', label: 'Heartbeats' },
     { id: 'worktrees', label: 'Worktrees' },
     { id: 'import', label: 'Import' },
+    { id: 'api', label: 'API' },
   ]
   const visibleTabs = workspaceTabs
   // Header + tab strip always span the full settings column.
@@ -1567,6 +1577,9 @@ function ProjectDetail({
           <SettingsGroup title="Chat Migrations">
             <CursorMigrationPanel projectPath={project.path} />
           </SettingsGroup>
+        )}
+        {settingsTab === 'api' && (
+          <WorkspaceApiKeysPanel workspaceSlug={workspaceGrantSlug(project)} />
         )}
       </div>
     </div>

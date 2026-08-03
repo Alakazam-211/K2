@@ -18,6 +18,7 @@ import { CompanionSection, COMPANION_MANIFEST } from './sections/CompanionSectio
 import { CONNECTIONS_MANIFEST } from './sections/ConnectionsSection'
 import { K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
 import { K2ConnectSettingsShell } from './sections/K2ConnectSettingsShell'
+import { ApiTokensSection, API_TOKENS_MANIFEST } from './sections/ApiTokensSection'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
@@ -46,6 +47,7 @@ const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: 'projects', label: 'Workspaces / Agents' },
   { id: 'project-groups', label: 'Projects' },
   { id: 'k2-connect', label: 'K2 Connect' },
+  { id: 'api-tokens', label: 'K2 API Tokens' },
   { id: 'companion', label: 'K2 Companion' },
   { id: 'email-hosting', label: 'Email Hosting' },
   { id: 'email-link', label: 'Email Link' },
@@ -101,6 +103,7 @@ export default function Settings(): React.JSX.Element {
       ...COMPANION_MANIFEST,
       ...CONNECTIONS_MANIFEST,
       ...K2_CONNECT_MANIFEST,
+      ...API_TOKENS_MANIFEST,
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
       ...WAKE_SCHEDULER_MANIFEST,
@@ -305,6 +308,11 @@ export default function Settings(): React.JSX.Element {
             {/* Host | Servers primary tabs (full width). Deep-link
                 `connections` opens Servers; `k2-connect` opens Host. */}
             <K2ConnectSettingsShell />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'api-tokens' && (
+          <SectionErrorBoundary>
+            <ApiTokensSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'projects' && (

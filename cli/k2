@@ -4404,7 +4404,12 @@ try:
     if not keys:
         print("No API keys."); sys.exit(0)
     for k in keys:
-        state="revoked" if k.get("revokedAt") else "active"
+        if k.get("revokedAt"):
+            state="revoked"
+        elif k.get("disabledAt"):
+            state="disabled"
+        else:
+            state="active"
         prov=k.get("provider") or "anthropic"
         cred=("%s-key" % prov) if k.get("anthropicKeySet") else "no-llm-key"
         line="%s  [%s]  %s  %s  scope=%s" % (k.get("id",""), state, (k.get("label") or "-"), cred, k.get("scope",""))
@@ -4433,8 +4438,38 @@ try:
 except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
             ;;
+        disable)
+            local id="${1:-}"
+            [[ -z "$id" ]] && { echo "Usage: k2 api-key disable <id>" >&2; exit 1; }
+            local body
+            body=$(K2_AK_ID="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["K2_AK_ID"]}))')
+            cli_post_json "/cli/api-keys/disable" "$body" \
+                | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("API key disabled (soft — re-enable with k2 api-key enable <id>)." if d.get("success") else "No matching key (unknown, revoked, or already disabled).")
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+            ;;
+        enable)
+            local id="${1:-}"
+            [[ -z "$id" ]] && { echo "Usage: k2 api-key enable <id>" >&2; exit 1; }
+            local body
+            body=$(K2_AK_ID="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["K2_AK_ID"]}))')
+            cli_post_json "/cli/api-keys/enable" "$body" \
+                | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("API key enabled." if d.get("success") else "No matching key (unknown, revoked, or already enabled).")
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+            ;;
         *)
-            echo "Usage: k2 api-key <create|list|revoke>" >&2
+            echo "Usage: k2 api-key <create|list|revoke|disable|enable>" >&2
             echo "" >&2
             echo "  create  [--label L] [--anthropic-key K | --llm-key K]" >&2
             echo "          [--provider anthropic|openai|google|xai] [--base-url U]" >&2
@@ -4442,7 +4477,9 @@ except Exception as e:
             echo "          [--allow host-sessions,canonical-message,sandboxes]" >&2
             echo "          [--deny  host-sessions,canonical-message,sandboxes]" >&2
             echo "  list" >&2
-            echo "  revoke  <id>" >&2
+            echo "  disable <id>   Soft emergency kill (re-enableable)" >&2
+            echo "  enable  <id>   Clear soft-disable" >&2
+            echo "  revoke  <id>   Permanent (cannot re-enable same secret)" >&2
             echo "" >&2
             echo "Capabilities (Phase 0) gate which /v1 doors a key may open:" >&2
             echo "  host-sessions      → /v1/w/<ws>/host-sessions*   (default ON for new keys)" >&2

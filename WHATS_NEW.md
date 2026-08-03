@@ -3,6 +3,26 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.81 — K2 API Tokens settings + soft-disable
+
+### Settings: K2 API Tokens (global) + workspace API tab
+
+- New top-level **Settings → K2 API Tokens**: list all `k2sk_` keys, mint (one-time
+  secret reveal), **disable / enable** (emergency soft kill), and **revoke**
+  (permanent).
+- Workspace settings (**Workspaces / Agents** → select workspace → **API** tab):
+  keys that grant that workspace (or `*`), with the same disable/enable/revoke
+  actions and a link to the global page.
+- Daemon: `api_keys.disabled_at` + `POST /cli/api-keys/disable|enable`; resolve
+  rejects disabled keys. CLI: `k2 api-key disable|enable <id>`.
+
+### Projects dashboard: parallel session attach
+
+Multi-pane Project dashboards batch `lookup-by-agent` with `Promise.all` so
+live terminals mount and attach together instead of one-by-one.
+
+---
+
 ## 0.40.80 — Host-session tab lands on the right workspace
 
 ### API host-session tabs no longer hijack the focused workspace

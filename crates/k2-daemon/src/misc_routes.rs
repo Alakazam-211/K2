@@ -1567,6 +1567,48 @@ pub fn handle_api_key_revoke(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+/// OWNER-TIER: soft-disable (emergency kill, re-enableable). Body: `{"id":…}`.
+pub fn handle_api_key_disable(body: &[u8], actor: &str) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    if id.is_empty() {
+        return CliResponse::bad_request("missing 'id'");
+    }
+    match k2_core::api_keys::disable_api_key(&id) {
+        Ok(success) => {
+            if success {
+                k2_core::log_debug!("[api-keys] disabled key {id} by {actor}");
+            }
+            CliResponse::ok_json(serde_json::json!({ "success": success }).to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// OWNER-TIER: clear soft-disable. Body: `{"id":…}`.
+pub fn handle_api_key_enable(body: &[u8], actor: &str) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    if id.is_empty() {
+        return CliResponse::bad_request("missing 'id'");
+    }
+    match k2_core::api_keys::enable_api_key(&id) {
+        Ok(success) => {
+            if success {
+                k2_core::log_debug!("[api-keys] enabled key {id} by {actor}");
+            }
+            CliResponse::ok_json(serde_json::json!({ "success": success }).to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 /// OWNER-TIER (owner token OR Owner-role session — F4): list API keys as
 /// redacted metadata. NEVER returns the raw key (unrecoverable) or the
 /// anthropic key (only `anthropicKeySet`).
@@ -1582,6 +1624,7 @@ pub fn handle_api_key_list() -> CliResponse {
                         "scope": m.scope,
                         "createdAt": m.created_at,
                         "revokedAt": m.revoked_at,
+                        "disabledAt": m.disabled_at,
                         "keySet": m.key_set,
                         "anthropicKeySet": m.anthropic_key_set,
                         // Non-secret (slugs) — surface the raw workspace grant

@@ -52,6 +52,7 @@ export type SettingsSection =
   | 'dictation-lab'
   | 'connections'
   | 'k2-connect'
+  | 'api-tokens'
   | 'email-hosting'
   | 'email-link'
 

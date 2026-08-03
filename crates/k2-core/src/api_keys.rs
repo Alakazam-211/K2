@@ -391,6 +391,10 @@ pub struct ApiKeyMeta {
     pub created_at: i64,
     /// `Some(ts)` once revoked; the key no longer authorizes.
     pub revoked_at: Option<i64>,
+    /// Soft-disable (Settings emergency kill). `Some(ts)` when disabled;
+    /// re-enable clears. Independent of revoke — a revoked key cannot be
+    /// re-enabled via enable.
+    pub disabled_at: Option<i64>,
     /// Whether a (hashed) key is on file. Always true for a real row — present
     /// so the shape is explicit and future-proof.
     pub key_set: bool,
@@ -569,6 +573,37 @@ pub fn revoke_api_key(id: &str) -> Result<bool, String> {
     Ok(rows > 0)
 }
 
+/// Soft-disable a non-revoked key (emergency kill without remint). Returns
+/// `Ok(true)` if a live key was just disabled, `Ok(false)` if unknown /
+/// revoked / already disabled.
+pub fn disable_api_key(id: &str) -> Result<bool, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let rows = conn
+        .execute(
+            "UPDATE api_keys SET disabled_at = ?1 \
+             WHERE id = ?2 AND revoked_at IS NULL AND disabled_at IS NULL",
+            rusqlite::params![now_secs(), id],
+        )
+        .map_err(|e| format!("DB update failed: {e}"))?;
+    Ok(rows > 0)
+}
+
+/// Clear soft-disable. Returns `Ok(true)` if a disabled non-revoked key was
+/// re-enabled, `Ok(false)` otherwise (unknown / revoked / already enabled).
+pub fn enable_api_key(id: &str) -> Result<bool, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let rows = conn
+        .execute(
+            "UPDATE api_keys SET disabled_at = NULL \
+             WHERE id = ?1 AND revoked_at IS NULL AND disabled_at IS NOT NULL",
+            rusqlite::params![id],
+        )
+        .map_err(|e| format!("DB update failed: {e}"))?;
+    Ok(rows > 0)
+}
+
 /// List all API keys as redacted metadata (newest first). NEVER includes the
 /// raw key (only its hash is stored, and not even that is returned) or the
 /// anthropic key (only `anthropic_key_set`).
@@ -577,7 +612,7 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
     let conn = db.lock();
     let mut stmt = conn
         .prepare(
-            "SELECT id, label, scope, created_at, revoked_at, \
+            "SELECT id, label, scope, created_at, revoked_at, disabled_at, \
                     (anthropic_api_key IS NOT NULL AND TRIM(anthropic_api_key) <> ''), \
                     allowed_workspaces, provider, base_url, \
                     cap_host_sessions, cap_canonical_message, cap_sandboxes \
@@ -592,18 +627,19 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
                 scope: row.get(2)?,
                 created_at: row.get(3)?,
                 revoked_at: row.get::<_, Option<i64>>(4)?,
+                disabled_at: row.get::<_, Option<i64>>(5)?,
                 // Every persisted row has a key hash on file.
                 key_set: true,
-                anthropic_key_set: row.get::<_, i64>(5)? != 0,
+                anthropic_key_set: row.get::<_, i64>(6)? != 0,
                 // Non-secret (slugs) — surface the raw grant for owner audit.
-                allowed_workspaces: row.get::<_, Option<String>>(6)?,
+                allowed_workspaces: row.get::<_, Option<String>>(7)?,
                 // W5 (0071) — non-secret provider metadata for owner audit.
-                provider: row.get::<_, Option<String>>(7)?,
-                base_url: row.get::<_, Option<String>>(8)?,
+                provider: row.get::<_, Option<String>>(8)?,
+                base_url: row.get::<_, Option<String>>(9)?,
                 capabilities: ApiCapabilities {
-                    host_sessions: row.get::<_, i64>(9)? != 0,
-                    canonical_message: row.get::<_, i64>(10)? != 0,
-                    sandboxes: row.get::<_, i64>(11)? != 0,
+                    host_sessions: row.get::<_, i64>(10)? != 0,
+                    canonical_message: row.get::<_, i64>(11)? != 0,
+                    sandboxes: row.get::<_, i64>(12)? != 0,
                 },
             })
         })
@@ -616,8 +652,8 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
 }
 
 /// Resolve a PRESENTED raw key to an [`ApiPrincipal`], or `None` if it doesn't
-/// match a non-revoked stored key. SHA-256-hashes the presented value and looks
-/// up the digest (a non-revoked row only).
+/// match a non-revoked, non-disabled stored key. SHA-256-hashes the presented
+/// value and looks up the digest (active rows only).
 ///
 /// **Why a direct hash-equality lookup is safe** (vs the constant-time digest
 /// scan `connect_users` uses): an attacker cannot mount a timing side-channel
@@ -638,7 +674,7 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
         "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url, \
                 cap_host_sessions, cap_canonical_message, cap_sandboxes \
          FROM api_keys \
-         WHERE key_hash = ?1 AND revoked_at IS NULL",
+         WHERE key_hash = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
         rusqlite::params![key_hash],
         |row| {
             let id: String = row.get(0)?;
@@ -746,6 +782,34 @@ mod tests {
         assert!(!revoke_api_key(&id).expect("revoke again"), "second revoke is a no-op");
         // Revoking an unknown id is also a clean no-op.
         assert!(!revoke_api_key("no-such-id").expect("revoke unknown"), "unknown id no-op");
+    }
+
+    /// Soft-disable rejects resolve; enable restores without remint.
+    #[test]
+    fn disable_then_enable_round_trips() {
+        let (id, raw) =
+            create_api_key("ci-disable", None, Some("*"), None, None, None).expect("create");
+        assert!(resolve_api_key(&raw).is_some(), "valid before disable");
+
+        assert!(disable_api_key(&id).expect("disable"), "first disable flips");
+        assert_eq!(resolve_api_key(&raw), None, "disabled key must not resolve");
+        assert!(!disable_api_key(&id).expect("disable again"), "idempotent");
+
+        let meta = list_api_keys()
+            .expect("list")
+            .into_iter()
+            .find(|m| m.id == id)
+            .expect("row");
+        assert!(meta.disabled_at.is_some(), "list surfaces disabled_at");
+        assert!(meta.revoked_at.is_none(), "disable is not revoke");
+
+        assert!(enable_api_key(&id).expect("enable"), "re-enable");
+        assert!(resolve_api_key(&raw).is_some(), "enabled key resolves again");
+        assert!(!enable_api_key(&id).expect("enable again"), "idempotent");
+
+        assert!(revoke_api_key(&id).expect("revoke"));
+        assert!(!enable_api_key(&id).expect("enable revoked"), "cannot enable revoked");
+        assert!(!disable_api_key(&id).expect("disable revoked"), "cannot disable revoked");
     }
 
     /// A garbage / unknown / empty presented key never resolves.

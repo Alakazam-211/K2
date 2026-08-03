@@ -767,6 +767,8 @@ async fn handle_one_request(
             // Method- + owner-gated per-handler below. `list` is a GET.
             | "/cli/api-keys/create"
             | "/cli/api-keys/revoke"
+            | "/cli/api-keys/disable"
+            | "/cli/api-keys/enable"
             // F2 host read-back (prd-v1-api-completion §4) — the in-session
             // agent's RESPONSE egress over loopback TCP (`k2 respond` from a
             // HOST session, which has no per-cell UDS worth of jail). Auth is
@@ -4275,6 +4277,44 @@ async fn handle_one_request(
                     tokio::task::spawn_blocking(move || crate::misc_routes::handle_api_key_revoke(&body, &actor))
                         .await
                         .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/api-keys/disable" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::api_key_manager_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::misc_routes::handle_api_key_disable(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/api-keys/enable" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::api_key_manager_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::misc_routes::handle_api_key_enable(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
                 "/cli/api-keys/list" => {
                     // GET, owner-tier. Drain the peeked head then gate.

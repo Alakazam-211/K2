@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { beginFileDrag } from '@/lib/file-drag'
 import { showContextMenu } from '@/lib/context-menu'
@@ -964,6 +964,10 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   //   1. paints drop-target highlights on drag-over
   //   2. refreshes the destination folder after the router finishes
   //
+  // Multi-window: drag chrome must use Window-scoped listen (same as App
+  // focus + external-drop-router), not process-global event.listen Any —
+  // otherwise every open window paints highlights for every drag.
+  //
   // R1: do NOT re-subscribe when `loadDir` / `cache` identity changes —
   // rootPath + loadDir are read via refs. Async listen() uses a teardown
   // guard so Strict Mode remounts never leave a live duplicate.
@@ -980,12 +984,14 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       else unlisteners.push(fn)
     }
 
-    listen('tauri://drag-enter', () => {
+    const win = getCurrentWindow()
+
+    win.listen('tauri://drag-enter', () => {
       // Don't set isDragOver here — let drag-over handle it based on position,
       // so drops on the terminal don't get treated as file tree drops.
     }).then(track)
 
-    listen<{ position: { x: number; y: number } }>('tauri://drag-over', (event) => {
+    win.listen<{ position: { x: number; y: number } }>('tauri://drag-over', (event) => {
       const { position } = event.payload
       // Only show drop targets when hovering over the file tree panel
       if (!treeRef.current) {
@@ -1014,7 +1020,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       setDropTarget(rootPathRef.current)
     }).then(track)
 
-    listen('tauri://drag-leave', () => {
+    win.listen('tauri://drag-leave', () => {
       setIsDragOver(false)
       setDropTarget(null)
     }).then(track)
@@ -1022,7 +1028,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     // Router clears highlight on drop itself isn't wired; clear on leave
     // is enough, but also clear when the global drop lands (router fires
     // the refresh event only after handling — paint reset here is cheap).
-    listen('tauri://drag-drop', () => {
+    win.listen('tauri://drag-drop', () => {
       setIsDragOver(false)
       setDropTarget(null)
     }).then(track)

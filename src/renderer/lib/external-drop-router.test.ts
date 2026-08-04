@@ -1,8 +1,27 @@
 // Pure hit-test / classify helpers for the single external-drop router.
 // DOM-dependent route execution is covered by handle-remote-drop tests +
 // planLocalExternalDrop; this file pins the routing priority table.
+//
+// mountExternalDropRouter is tested with a window-scoped listen mock so
+// multi-window never regresses to process-global event.listen Any.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+const windowListenMock = vi.fn()
+const windowUnlistenMock = vi.fn()
+const isWebClientMock = vi.fn(() => false)
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({
+    // Return value of the spy is the listen Promise (so tests can delay resolve).
+    listen: (...args: unknown[]) => windowListenMock(...args),
+  }),
+}))
+
+vi.mock('./is-web', () => ({
+  isWebClient: () => isWebClientMock(),
+}))
+
 import {
   parentDir,
   resolveFileTreeFolder,
@@ -13,6 +32,7 @@ import {
   findFileTreePanelAt,
   notifyFileTreeRefresh,
   filesFromDataTransfer,
+  mountExternalDropRouter,
   FILE_TREE_EXTERNAL_DROP_EVENT,
 } from './external-drop-router'
 import { BRACKETED_PASTE_START, BRACKETED_PASTE_END } from './file-drag'
@@ -252,5 +272,84 @@ describe('filesFromDataTransfer', () => {
     }
     const dt = { files: list } as unknown as DataTransfer
     expect(filesFromDataTransfer(dt).map((f) => f.name)).toEqual(['a.txt', 'b.txt'])
+  })
+})
+
+// ── Window-scoped Tauri drag-drop subscription ─────────────────────────
+
+describe('mountExternalDropRouter (desktop)', () => {
+  beforeEach(() => {
+    isWebClientMock.mockReturnValue(false)
+    windowListenMock.mockReset()
+    windowUnlistenMock.mockReset()
+    windowListenMock.mockResolvedValue(windowUnlistenMock)
+  })
+
+  afterEach(() => {
+    isWebClientMock.mockReturnValue(false)
+  })
+
+  it('subscribes via getCurrentWindow().listen, not process-global event.listen', async () => {
+    const unmount = mountExternalDropRouter()
+    // Dynamic import of @tauri-apps/api/window resolves on next microtask.
+    await vi.waitFor(() => {
+      expect(windowListenMock).toHaveBeenCalled()
+    })
+    expect(windowListenMock).toHaveBeenCalledWith(
+      'tauri://drag-drop',
+      expect.any(Function),
+    )
+    unmount()
+    expect(windowUnlistenMock).toHaveBeenCalled()
+  })
+
+  it('teardown before listen resolves does not leave a live handler', async () => {
+    let resolveListen: (fn: () => void) => void = () => {}
+    const delayedUnlisten = vi.fn()
+    windowListenMock.mockImplementationOnce(
+      () =>
+        new Promise<() => void>((resolve) => {
+          resolveListen = resolve
+        }),
+    )
+
+    const unmount = mountExternalDropRouter()
+    await vi.waitFor(() => {
+      expect(windowListenMock).toHaveBeenCalled()
+    })
+    // Unmount while listen() is still pending.
+    unmount()
+    resolveListen(delayedUnlisten)
+    // track() runs on the next microtask after listen resolves.
+    await vi.waitFor(() => {
+      expect(delayedUnlisten).toHaveBeenCalled()
+    })
+  })
+
+  it('web client path does not touch window-scoped Tauri listen', () => {
+    isWebClientMock.mockReturnValue(true)
+    // Minimal window stub for the HTML5 drag/drop branch (vitest env is node).
+    const addEventListener = vi.fn()
+    const removeEventListener = vi.fn()
+    const prev = (globalThis as { window?: unknown }).window
+    ;(globalThis as { window: unknown }).window = {
+      addEventListener,
+      removeEventListener,
+    }
+    try {
+      const unmount = mountExternalDropRouter()
+      expect(windowListenMock).not.toHaveBeenCalled()
+      expect(addEventListener).toHaveBeenCalledWith('dragover', expect.any(Function))
+      expect(addEventListener).toHaveBeenCalledWith('drop', expect.any(Function))
+      unmount()
+      expect(removeEventListener).toHaveBeenCalledWith('dragover', expect.any(Function))
+      expect(removeEventListener).toHaveBeenCalledWith('drop', expect.any(Function))
+    } finally {
+      if (prev === undefined) {
+        delete (globalThis as { window?: unknown }).window
+      } else {
+        ;(globalThis as { window: unknown }).window = prev
+      }
+    }
   })
 })

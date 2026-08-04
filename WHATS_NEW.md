@@ -3,6 +3,42 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.82 — Multi-window, soft-resync, daemon singleton, Linux Gmail OAuth bake-in
+
+### Multi-window: browser, drops, and titles
+
+- **Browser / OAuth webviews** parent to the **invoking window** (not hard-coded
+  `main`) so Gmail connect and browser tabs no longer paint on the wrong
+  window; create races use reap / wait / adopt.
+- **External file drops** are window-scoped — only the window under the cursor
+  receives inject/copy (no fan-out across every open K2 window).
+- Product chrome uses **K2** (not K2SO) for window titles, app menu, and tray.
+
+### Remote terminals: soft-resync after Connect blips
+
+After a tunnel blip, terminal paint could freeze on a half-open grid for ~30s
+while control plane and health poll lagged.
+
+- On **recovery → connected** and **session-events reopen**, force a **grid-only**
+  re-attach (PTY stays; fresh snapshot).
+- Session-events drops surface reconnecting within ~2s and **immediately**
+  re-probe health (no wait for the next 25s tick). Hosted 25s poll budget kept.
+
+### Daemon: one process, no rogue `--version` boot
+
+`k2-daemon --version` / `--help` exit without booting. Exclusive flock on
+`~/.k2/daemon.lock` refuses a second concurrent boot (stops dual-resume /
+shared-tree chaos).
+
+### Linux fleet: pre-packaged Gmail OAuth at compile time
+
+Linux daemon release builds now bake `K2_GMAIL_CLIENT_ID` /
+`K2_GMAIL_CLIENT_SECRET` (same as macOS `.env`) so email-link no longer ships
+the `REPLACE_ME` placeholder → Google `invalid_client`. Requires matching
+GitHub Actions secrets on the `daemon-binaries` workflow.
+
+---
+
 ## 0.40.81 — K2 API Tokens settings + host-session reaper reshape
 
 ### Host-session reaper: Working never dies on the wall

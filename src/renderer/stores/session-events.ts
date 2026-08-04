@@ -27,6 +27,10 @@ import { useActiveStore } from '@/stores/active'
 import { serverSupports } from '@/lib/server-capabilities'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { jittered } from '@/lib/backoff'
+import {
+  noteRemoteEventsClosed,
+  noteRemoteEventsOpened,
+} from '@/lib/remote-ws-drop'
 
 // ── Wire types ───────────────────────────────────────────────────────────
 
@@ -501,6 +505,9 @@ export function subscribeToWorkspaceSessionEvents(
    */
   const triggerReconnect = (): void => {
     if (stopped) return
+    // R1: non-deliberate drop (not stop/unsub) — arm module-level debounce
+    // across all three event factories. Deliberate stop returns above.
+    noteRemoteEventsClosed()
     // Idempotent: a pending timer OR a pending recovery-hold means a
     // reconnect is already on its way (the onerror→onclose double-fire).
     if (reconnectTimer !== null || recoveryWait !== null) return
@@ -518,6 +525,8 @@ export function subscribeToWorkspaceSessionEvents(
       // attempt.
       invalidateDaemonWs()
       console.warn('[session-events] daemon credentials unavailable, retrying:', err)
+      // Hard open failure — same surface as a mid-flight drop for R1.
+      noteRemoteEventsClosed()
       scheduleReconnect()
       return
     }
@@ -551,6 +560,7 @@ export function subscribeToWorkspaceSessionEvents(
       ws = new WebSocket(url)
     } catch (err) {
       console.warn('[session-events] WS construction failed:', err)
+      noteRemoteEventsClosed()
       scheduleReconnect()
       return
     }
@@ -560,6 +570,9 @@ export function subscribeToWorkspaceSessionEvents(
       // Reset backoff so a long-lived stable connection doesn't pay
       // the previous failure's penalty on its next disconnect.
       backoffMs = INITIAL_BACKOFF_MS
+      // R1/D4b: cancel WS-drop debounce; soft-resync grids if recovery
+      // stayed connected through the blip.
+      noteRemoteEventsOpened()
     }
 
     ws.onmessage = (ev) => {
@@ -1019,6 +1032,8 @@ export function subscribeToActiveState(): UnsubscribeFn {
 
   const triggerReconnect = (): void => {
     if (stopped) return
+    // R1: non-deliberate drop — shared debounce across event factories.
+    noteRemoteEventsClosed()
     // Idempotent: a pending timer OR a pending recovery-hold means a
     // reconnect is already on its way (the onerror→onclose double-fire).
     if (reconnectTimer !== null || recoveryWait !== null) return
@@ -1033,6 +1048,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
     } catch (err) {
       invalidateDaemonWs()
       console.warn('[active-state] daemon credentials unavailable, retrying:', err)
+      noteRemoteEventsClosed()
       scheduleReconnect()
       return
     }
@@ -1061,6 +1077,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
       ws = new WebSocket(url)
     } catch (err) {
       console.warn('[active-state] WS construction failed:', err)
+      noteRemoteEventsClosed()
       scheduleReconnect()
       return
     }
@@ -1068,6 +1085,7 @@ export function subscribeToActiveState(): UnsubscribeFn {
 
     ws.onopen = () => {
       backoffMs = INITIAL_BACKOFF_MS
+      noteRemoteEventsOpened()
     }
 
     ws.onmessage = (ev) => {
@@ -1248,6 +1266,8 @@ export function subscribeToWorkspaceTabEvents(
 
   const triggerReconnect = (): void => {
     if (stopped) return
+    // R1: non-deliberate drop — shared debounce across event factories.
+    noteRemoteEventsClosed()
     // Idempotent: a pending timer OR a pending recovery-hold means a
     // reconnect is already on its way (the onerror→onclose double-fire).
     if (reconnectTimer !== null || recoveryWait !== null) return
@@ -1262,6 +1282,7 @@ export function subscribeToWorkspaceTabEvents(
     } catch (err) {
       invalidateDaemonWs()
       console.warn('[tab-events] daemon credentials unavailable, retrying:', err)
+      noteRemoteEventsClosed()
       scheduleReconnect()
       return
     }
@@ -1289,6 +1310,7 @@ export function subscribeToWorkspaceTabEvents(
       ws = new WebSocket(url)
     } catch (err) {
       console.warn('[tab-events] WS construction failed:', err)
+      noteRemoteEventsClosed()
       scheduleReconnect()
       return
     }
@@ -1296,6 +1318,7 @@ export function subscribeToWorkspaceTabEvents(
 
     ws.onopen = () => {
       backoffMs = INITIAL_BACKOFF_MS
+      noteRemoteEventsOpened()
     }
 
     ws.onmessage = (ev) => {

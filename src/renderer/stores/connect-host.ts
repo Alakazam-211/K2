@@ -38,6 +38,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import { isWebClient } from '@/lib/is-web'
+import { emitSoftResync, shouldEmitSoftResync } from '@/lib/soft-resync'
 import {
   CONNECT_HOSTS_STORAGE_KEY,
   clearConnectHostsStorage,
@@ -736,6 +737,11 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
       // host's recovery state must never bleed onto the new one.
       recovery: { kind: 'connected' },
     })
+    // Soft-resync / R1: drop any in-flight WS-drop debounce so the new
+    // host does not inherit the previous host's episode. Dynamic import
+    // avoids a connect-host ↔ remote-ws-drop cycle (drop module reads this
+    // store).
+    void import('@/lib/remote-ws-drop').then((m) => m.resetRemoteEventsDropState())
   },
 
   requestSignIn: (host) => {
@@ -856,6 +862,16 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
       return
     }
     set({ recovery })
+    // Soft-resync (D4a): remote recovery edge into `connected` → force
+    // held panes to grid-only re-attach. soft-resync is store-free so this
+    // cannot cycle. connected→connected is already filtered above.
+    if (
+      shouldEmitSoftResync(prev, recovery, {
+        isRemote: get().activeHost !== 'local',
+      })
+    ) {
+      emitSoftResync('recovery-connected')
+    }
   },
 
   setServerInfo: ({ version, protocol }) => {

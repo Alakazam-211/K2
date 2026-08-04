@@ -42,6 +42,7 @@ import {
   shouldSendClaim,
   type ClaimReason,
 } from './activeViewer'
+import { subscribeSoftResync } from '@/lib/soft-resync'
 import {
   keyEventToSequence,
   naturalTextEditingSequence,
@@ -531,6 +532,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // pane really unmounts.
   const [reconnectAttempt, setReconnectAttempt] = useState(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Soft-resync (R5): concurrent recovery-connected + events-reopen can
+  // land within ms; generation latch so only the latest emit dials.
+  const softResyncGenRef = useRef(0)
   // 0.39.13 — spawn ⊥ stream decoupling.
   //
   // v1 (the regression we're fixing) put `isTabVisible` in the boot
@@ -2119,6 +2123,89 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     openGridWsRef.current = openGridWs
   }, [openGridWs])
+
+  // ── Soft-resync consumer (remote paint recovery) ──────────────
+  // Recovery heal + session-events reopen fan out here. Grid-only:
+  // 0.40.68 teardown (null handlers → null wsRef → close) then
+  // openGridWs — never bump reconnectAttempt / spawn re-POST as primary.
+  // Generation latch + microtask open so recovery-connected + events-reopen
+  // in the same bus flush only dial once (R5).
+  useEffect(() => {
+    return subscribeSoftResync((reason) => {
+      if (
+        !shouldHoldGridWs({
+          visible: tabVisibleRef.current,
+          exited: phaseRef.current.kind === 'exited',
+          retainWhileHidden: retainWhileHiddenRef.current,
+        })
+      ) {
+        return
+      }
+      if (!sessionIdRef.current) return
+
+      const gen = ++softResyncGenRef.current
+
+      // 1. Cancel pending reconnect timer so we don't dual-schedule.
+      if (reconnectTimerRef.current !== null) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+
+      // 2–4. Prior-socket teardown (defeat OPEN early-return + dual-dial).
+      const ws = wsRef.current
+      if (ws) {
+        try {
+          ws.onopen = null
+          ws.onmessage = null
+          ws.onerror = null
+          ws.onclose = null
+        } catch {
+          // ignore
+        }
+        // Null BEFORE close so a late onclose (if any) cannot schedule
+        // reconnectAttempt (`wsRef.current !== ws` guard).
+        wsRef.current = null
+        if (ws.readyState !== WebSocket.CLOSED) {
+          try {
+            ws.close()
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `[soft-resync] reason=${reason} pane=${terminalId.slice(0, 8)}`,
+        )
+      }
+
+      // Defer open: if another reason lands in the same turn, only the
+      // latest generation proceeds (single dial).
+      queueMicrotask(() => {
+        if (softResyncGenRef.current !== gen) return
+        if (
+          !shouldHoldGridWs({
+            visible: tabVisibleRef.current,
+            exited: phaseRef.current.kind === 'exited',
+            retainWhileHidden: retainWhileHiddenRef.current,
+          })
+        ) {
+          return
+        }
+        const sid = sessionIdRef.current
+        if (!sid) return
+        // Phase → connecting if was ready (not exited).
+        setPhase((prev) =>
+          prev.kind === 'exited' ? prev : { kind: 'connecting', sessionId: sid },
+        )
+        // Grid-only reopen (openGridWs no-ops only when OPEN/CONNECTING;
+        // we nulled the prior socket so this dials).
+        void openGridWsRef.current()
+      })
+    })
+  }, [terminalId])
 
   // ── Grid-WS lifecycle effect (0.39.13) ────────────────────────
   // The ONLY place the grid-WS opens or closes. Keyed on

@@ -53,6 +53,11 @@ import {
   type RemoteRecoveryState,
 } from '@/lib/remote-recovery'
 import { jittered } from '@/lib/backoff'
+import {
+  clearR1FlapEpisode,
+  registerRemoteHealthControls,
+  wasR1FlapStampedThisEpisode,
+} from '@/lib/connection-gate-probe'
 import { RemoteSignIn } from './RemoteSignIn'
 import { AppErrorBoundary } from './AppErrorBoundary'
 
@@ -961,7 +966,10 @@ export function ConnectionGate(): React.ReactElement {
         if (softPoll) {
           setDecision(next)
           useConnectHostStore.getState().setConnectionStatus('connected')
+          // 0.40.78 soft accept — must keep setRecovery(connected) (R3).
           useConnectHostStore.getState().setRecovery({ kind: 'connected' })
+          // R1 episode ends on soft accept — allow a future flap stamp.
+          clearR1FlapEpisode()
         }
         // #638: cache the accepted host's version + protocol so
         // lib/server-capabilities can gate newer client features against an
@@ -981,6 +989,8 @@ export function ConnectionGate(): React.ReactElement {
         // A clean poll clears the debounce: any in-flight blip count is
         // forgotten and the reconnect banner (if shown) comes down.
         consecutiveFails = 0
+        // Soft accept / healthy tick ends any R1 flap episode (D9).
+        if (isRemote) clearR1FlapEpisode()
         if (isRemote) {
           // Remote: keep a slow health-poll alive so a tunnel drop is
           // detected and surfaced as the soft-reconnect overlay (the App
@@ -1021,8 +1031,12 @@ export function ConnectionGate(): React.ReactElement {
           if (!wedgeConfirmed) {
             // 0.40.68 / GH#57: record each banner surface for the flap
             // detector (thrash between connected and reconnecting).
-            const t = Date.now()
-            reconnectSurfacedAt = pruneFlapTimestamps([...reconnectSurfacedAt, t], t)
+            // D9: if R1 already stamped this episode, skip a second stamp
+            // so we neither under-count nor double-count the same blip.
+            if (!wasR1FlapStampedThisEpisode()) {
+              const t = Date.now()
+              reconnectSurfacedAt = pruneFlapTimestamps([...reconnectSurfacedAt, t], t)
+            }
             useConnectHostStore.getState().setRecovery(
               deriveRecovery({
                 bootStatus: bootingAuthoritative
@@ -1075,6 +1089,28 @@ export function ConnectionGate(): React.ReactElement {
       document.addEventListener('visibilitychange', onVisibilityChange)
     }
 
+    // R1 / D2b: register force-probe + flap-stamp for session-events WS-drop
+    // recovery. forceProbe is the visibility handler twin (cancel timer +
+    // tick now). stampFlap mutates the effect-local reconnectSurfacedAt so
+    // R1 surfaces arm GH#57 flap detection without lifting the poll machine.
+    if (isRemote) {
+      registerRemoteHealthControls({
+        forceProbe: () => {
+          if (cancelled) return
+          if (timeoutId !== null) {
+            clearTimeout(timeoutId)
+            timeoutId = null
+          }
+          void tick()
+        },
+        stampFlap: () => {
+          if (cancelled) return
+          const t = Date.now()
+          reconnectSurfacedAt = pruneFlapTimestamps([...reconnectSurfacedAt, t], t)
+        },
+      })
+    }
+
     void tick()
 
     return () => {
@@ -1083,6 +1119,9 @@ export function ConnectionGate(): React.ReactElement {
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisibilityChange)
       }
+      // Clear force-probe registration so a host-switch / unmount can't
+      // call into a dead effect closure.
+      registerRemoteHealthControls(null)
     }
     // isRemote is fully determined by hostKey (local key === 'local').
     // `remoteNeedsAuth` is added so that OBTAINING a session token (same

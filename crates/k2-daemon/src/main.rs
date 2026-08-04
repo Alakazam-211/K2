@@ -194,16 +194,77 @@ pub(crate) struct DaemonState {
     pub shutdown_tx: Option<broadcast::Sender<()>>,
 }
 
+#[cfg(test)]
+mod early_cli_tests {
+    use super::early_cli_dispatch;
+
+    fn argv(args: &[&str]) -> Vec<String> {
+        std::iter::once("k2-daemon".to_string())
+            .chain(args.iter().map(|s| (*s).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn version_long_exits_zero_without_booting() {
+        assert_eq!(early_cli_dispatch(&argv(&["--version"])), Some(0));
+    }
+
+    #[test]
+    fn version_short_exits_zero() {
+        assert_eq!(early_cli_dispatch(&argv(&["-V"])), Some(0));
+    }
+
+    #[test]
+    fn help_exits_zero() {
+        assert_eq!(early_cli_dispatch(&argv(&["--help"])), Some(0));
+        assert_eq!(early_cli_dispatch(&argv(&["-h"])), Some(0));
+    }
+
+    #[test]
+    fn version_with_trailing_garbage_still_short_circuits() {
+        // The historical trap was `k2-daemon --version` booting; trailing
+        // junk must not re-enable a full boot either.
+        assert_eq!(early_cli_dispatch(&argv(&["--version", "extra"])), Some(0));
+    }
+
+    #[test]
+    fn bare_argv_continues_to_boot() {
+        assert_eq!(early_cli_dispatch(&argv(&[])), None);
+    }
+
+    #[test]
+    fn llm_worker_args_are_not_version_dispatch() {
+        // Worker path is handled separately after early_cli_dispatch.
+        assert_eq!(
+            early_cli_dispatch(&argv(&["--llm-worker", "/tmp/payload"])),
+            None
+        );
+    }
+}
+
 fn main() {
+    // ── Early CLI short-circuit (MUST be absolute first) ────────────
+    //
+    // Live-fire footgun (scout 2026-08, luzz before that): any probe of
+    // `k2-daemon --version` used to fall through into a FULL daemon boot
+    // — second process, second port claim (ephemeral fallback), second
+    // frpc, and worst of all DUPLICATE claude --resume peers on the same
+    // workspace trees (Mode-1 MIXED reset / Mode-2 foreign commits).
+    // Tribal knowledge was "do not run --version"; the code must make it
+    // safe. See wiki Ops - Tunnel Port-Desync and Resilience.
+    //
+    // Also short-circuit --help. Real boot never sees these args.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = early_cli_dispatch(&args) {
+        std::process::exit(code);
+    }
+
     // Phase 2 Unit 2 — LLM worker subprocess fork. Daemon spawns
     // itself as `k2so-daemon --llm-worker <payload_path>` to run one
     // inference pass in an isolated child process. Worker exits via
-    // `libc::_exit(0)` so it never returns from here. Must be the
-    // very first thing we do — before tokio runtime init, before
-    // rustls provider install, before anything that allocates GPU
-    // resources we'd rather the parent daemon own. See
+    // `libc::_exit(0)` so it never returns from here. Must run
+    // before tokio runtime init / rustls / GPU alloc. See
     // `llm_host::worker_main` for the protocol contract.
-    let args: Vec<String> = std::env::args().collect();
     if args.len() == 3 && args[1] == "--llm-worker" {
         llm_host::worker_main(&args[2]);
         // unreachable — worker_main calls libc::_exit. The `!`
@@ -217,6 +278,123 @@ fn main() {
         .build()
         .expect("failed to build tokio runtime");
     rt.block_on(async_main());
+}
+
+/// Pure early-arg dispatch. Returns `Some(exit_code)` when the process
+/// should exit without booting; `None` to continue into the daemon.
+///
+/// Accepts both GNU long form and short form so shell scripts and
+/// `binary --version` (the historical trap) are safe.
+fn early_cli_dispatch(args: &[String]) -> Option<i32> {
+    // Skip argv[0]. Any remaining token that is a version/help flag
+    // short-circuits — we don't require it to be the only arg (so
+    // `k2-daemon --version --garbage` still prints version, never boots).
+    for a in args.iter().skip(1) {
+        match a.as_str() {
+            "--version" | "-V" => {
+                // Same string systemctl / release notes use.
+                println!("k2-daemon {}", env!("CARGO_PKG_VERSION"));
+                return Some(0);
+            }
+            "--help" | "-h" => {
+                print_daemon_help();
+                return Some(0);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn print_daemon_help() {
+    println!(
+        "k2-daemon {} — K2 persistent-agent daemon\n\n\
+         Usage:\n\
+           k2-daemon                 Boot the daemon (normally via systemd/launchd)\n\
+           k2-daemon --version | -V  Print version and exit (does NOT boot)\n\
+           k2-daemon --help | -h     Show this help and exit\n\
+           k2-daemon --llm-worker <payload_path>\n\
+                                     Internal: one-shot LLM worker child\n\n\
+         Do not run a second bare `k2-daemon` next to the supervised service —\n\
+         a singleton lock refuses a concurrent boot (see ~/.k2/daemon.lock).",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+/// Process-held exclusive flock on `~/.k2/daemon.lock`. Dropped only
+/// when the process exits — that is the singleton guarantee.
+static DAEMON_SINGLETON_LOCK: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
+
+/// Acquire an exclusive non-blocking flock so a second daemon instance
+/// cannot boot (and therefore cannot mint a second port/token, spawn a
+/// second frpc, or double-resume agent sessions on the same trees).
+///
+/// Escape hatch: `K2_ALLOW_MULTI_DAEMON=1` (dev/tests only).
+///
+/// On non-unix we skip the flock (no portable equivalent without an
+/// extra crate) — macOS/Linux are the production targets.
+fn acquire_daemon_singleton(k2_dir: &std::path::Path) -> Result<(), String> {
+    if std::env::var_os("K2_ALLOW_MULTI_DAEMON").is_some() {
+        eprintln!(
+            "[daemon] WARN: K2_ALLOW_MULTI_DAEMON set — singleton lock skipped \
+             (second instance can corrupt workspace trees)"
+        );
+        return Ok(());
+    }
+
+    let lock_path = k2_dir.join("daemon.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| format!("open {}: {e}", lock_path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        use std::os::unix::io::AsRawFd;
+
+        let fd = file.as_raw_fd();
+        // LOCK_EX | LOCK_NB — fail immediately if another live daemon holds it.
+        let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
+            // Best-effort: report the PID written by the holder.
+            let mut holder = String::new();
+            {
+                let mut f = &file;
+                let _ = f.seek(SeekFrom::Start(0));
+                let _ = f.read_to_string(&mut holder);
+            }
+            let holder = holder.trim();
+            let who = if holder.is_empty() {
+                "unknown pid".to_string()
+            } else {
+                format!("pid {holder}")
+            };
+            return Err(format!(
+                "another k2-daemon is already running ({who}; lock {}). \
+                 Refusing to boot a second instance — dual daemons double-resume \
+                 agent sessions and corrupt git trees. \
+                 Use `systemctl status k2-daemon` / `launchctl print gui/$UID/dev.k2.daemon`. \
+                 Override only with K2_ALLOW_MULTI_DAEMON=1 (unsafe).",
+                lock_path.display()
+            ));
+        }
+
+        // Record our PID for the next contender's error message.
+        // Truncate then write; flock is still held on this fd.
+        let mut f = &file;
+        let _ = f.seek(SeekFrom::Start(0));
+        let _ = f.set_len(0);
+        let _ = writeln!(f, "{}", std::process::id());
+        let _ = f.flush();
+    }
+
+    // Keep the File (and thus the flock) alive for process lifetime.
+    let _ = DAEMON_SINGLETON_LOCK.set(file);
+    Ok(())
 }
 
 async fn async_main() {
@@ -325,6 +503,15 @@ async fn async_main() {
     if let Err(e) = fs::create_dir_all(&k2so_dir) {
         log_debug!("[daemon] FATAL: create ~/.k2: {e}");
         std::process::exit(2);
+    }
+
+    // Singleton: refuse a second live daemon on this home (the
+    // `--version`-boots-daemon class of accident). Must run BEFORE
+    // port claim / token write / session spawn so a rogue never
+    // overwrites daemon.port or double-resumes agent PTYs.
+    if let Err(e) = acquire_daemon_singleton(&k2so_dir) {
+        eprintln!("[daemon] FATAL: {e}");
+        std::process::exit(1);
     }
 
     // K2 Cloud S2: consume-once ~/.k2/seed-users.json — golden-image /

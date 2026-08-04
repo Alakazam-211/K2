@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { beginFileDrag } from '@/lib/file-drag'
@@ -927,6 +928,11 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     // per debounce window instead of one-emit-per-path. We accept either
     // shape so older backend builds still work — single objects are
     // wrapped into a one-element array.
+    //
+    // Process-global `listen` from @tauri-apps/api/event is intentional
+    // here (local Tauri fs watcher is process-scoped). Do not drop this
+    // import when switching drag chrome to getCurrentWindow().listen —
+    // that was the 0.40.81 multi-window drop regression (ReferenceError).
     let unlisten: (() => void) | null = null
     listen<Array<{ path: string; kind: string }> | { path: string; kind: string }>('fs://change', (event) => {
       const batch = Array.isArray(event.payload) ? event.payload : [event.payload]

@@ -55,13 +55,18 @@ echo "  K2 Local Build: v${VERSION}"
 echo "  (no GitHub upload, no updater manifest)"
 echo "═══════════════════════════════════════════════════"
 
-# Load .env file if present (contains TAURI_SIGNING_PRIVATE_KEY_PASSWORD)
+# Load .env file if present (contains TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# + K2_GMAIL_CLIENT_* for option_env! into k2-daemon).
 if [ -f "$PROJECT_DIR/.env" ]; then
     set -a
+    # shellcheck disable=SC1091
     source "$PROJECT_DIR/.env"
     set +a
     echo "Loaded .env"
 fi
+# shellcheck source=scripts/require-mail-oauth-build-env.sh
+source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
+require_mail_oauth_build_env
 
 # Load signing key from file if env var not set. SAME key under either
 # name — k2-updater.key is the post-rebrand name, k2so-updater.key the
@@ -148,6 +153,7 @@ if [ ! -x "$DAEMON_SRC" ]; then
     echo "  FATAL: k2-daemon not at $DAEMON_SRC after cargo build" >&2
     exit 1
 fi
+assert_daemon_oauth_not_placeholder "$DAEMON_SRC"
 cp "$DAEMON_SRC" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
 echo "  k2-daemon copied into K2.app/Contents/MacOS/"

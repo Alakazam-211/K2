@@ -107,13 +107,19 @@ echo "════════════════════════�
 echo "  K2 Release: ${TAG}  →  ${RELEASE_REPO}"
 echo "═══════════════════════════════════════════════════"
 
-# Load .env file if present (contains TAURI_SIGNING_PRIVATE_KEY_PASSWORD)
+# Load .env file if present (contains TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# and K2_GMAIL_CLIENT_ID / K2_GMAIL_CLIENT_SECRET for option_env! into
+# k2-daemon mail OAuth defaults — required so Linux CI secrets match).
 if [ -f "$PROJECT_DIR/.env" ]; then
     set -a
+    # shellcheck disable=SC1091
     source "$PROJECT_DIR/.env"
     set +a
     echo "Loaded .env"
 fi
+# shellcheck source=scripts/require-mail-oauth-build-env.sh
+source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
+require_mail_oauth_build_env
 
 # Load signing key from file if env var not set. SAME key under either
 # name — k2-updater.key is the post-rebrand name, k2so-updater.key the
@@ -235,12 +241,14 @@ echo "Step 2.5: Bundling k2-daemon sidecar..."
 # `k2-daemon` build into `target/release/`. Tauri's bundler writes
 # only its own primary bin into the .app, so we copy k2-daemon in
 # explicitly.
+# OAuth client id/secret already required + exported (require_mail_oauth_build_env).
 cargo build --release -p k2-daemon
 DAEMON_SRC="target/release/k2-daemon"
 if [ ! -x "$DAEMON_SRC" ]; then
     echo "  FATAL: k2-daemon not at $DAEMON_SRC after cargo build" >&2
     exit 1
 fi
+assert_daemon_oauth_not_placeholder "$DAEMON_SRC"
 cp "$DAEMON_SRC" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-daemon"
 echo "  k2-daemon copied into K2.app/Contents/MacOS/"

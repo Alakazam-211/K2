@@ -16,6 +16,18 @@ cd "$PROJECT_DIR"
 # rustup installs cargo at ~/.cargo/bin; non-interactive shells don't source it.
 export PATH="$HOME/.cargo/bin:$PATH"
 
+# Same OAuth bake-in as release.sh — signed local apps should exercise
+# real Gmail email-link, not REPLACE_ME.
+if [ -f "$PROJECT_DIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$PROJECT_DIR/.env"
+    set +a
+fi
+# shellcheck source=scripts/require-mail-oauth-build-env.sh
+source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
+require_mail_oauth_build_env
+
 SIGNING_IDENTITY="Developer ID Application: LZTEK, LLC (36B8R93HXV)"
 ENTITLEMENTS="${PROJECT_DIR}/src-tauri/entitlements.plist"
 APP="target/release/bundle/macos/K2.app"
@@ -46,6 +58,7 @@ echo "  Build complete."
 echo ""; echo "Step 2: bundling k2-daemon sidecar..."
 cargo build --release -p k2-daemon || { echo "FATAL: k2-daemon build failed" >&2; exit 1; }
 [ -x "target/release/k2-daemon" ] || { echo "FATAL: k2-daemon missing after build" >&2; exit 1; }
+assert_daemon_oauth_not_placeholder "target/release/k2-daemon"
 cp "target/release/k2-daemon" "$APP/Contents/MacOS/k2-daemon"
 echo "  k2-daemon copied into the bundle."
 

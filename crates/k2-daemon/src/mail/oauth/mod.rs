@@ -172,9 +172,14 @@ impl std::fmt::Debug for ProviderConfig {
 // (`K2_GMAIL_CLIENT_ID` / `K2_GMAIL_CLIENT_SECRET` / `K2_MICROSOFT_CLIENT_ID`)
 // so the PUBLIC source only ever carries the `REPLACE_ME` fallback — no
 // secret is committed. A dev/CI build without the env vars falls back to
-// the placeholder (which the resolver treats as unconfigured). The secret
-// is still handled like a token everywhere downstream (vault/config only,
-// never a DB column, never logged, redacted in `Debug`).
+// the placeholder (which Google rejects as invalid_client — whole Linux
+// fleet outage if release builds forget these). Shipping builds MUST set
+// them: release.sh / build-app.sh source .env + scripts/require-mail-
+// oauth-build-env.sh; daemon-binaries.yml (Linux GHA) injects the same
+// names from repo Actions secrets and strings-checks the binary for
+// REPLACE_ME. The secret is still handled like a token everywhere
+// downstream (vault/config only, never a DB column, never logged,
+// redacted in `Debug`).
 const GMAIL_CLIENT_ID: &str = match option_env!("K2_GMAIL_CLIENT_ID") {
     Some(v) => v,
     None => "REPLACE_ME.apps.googleusercontent.com",

@@ -52,10 +52,24 @@ case "$VERSION" in
         ;;
 esac
 
+# Pre-packaged Gmail OAuth must be baked at compile time (option_env!).
+# shellcheck source=scripts/require-mail-oauth-build-env.sh
+. "$(cd "$(dirname "$0")" && pwd)/require-mail-oauth-build-env.sh"
+# Source repo .env if present (same keys as release.sh).
+_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -f "$_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$_ROOT/.env"
+    set +a
+fi
+require_mail_oauth_build_env
+
 echo "package-daemon-deb: building k2-daemon v$VERSION ($ARCH, release)"
 cargo build --release -p k2-daemon --bin k2-daemon
 BIN="${CARGO_TARGET_DIR:-target}/release/k2-daemon"
 [ -x "$BIN" ] || { echo "package-daemon-deb: FATAL — $BIN missing after build" >&2; exit 1; }
+assert_daemon_oauth_not_placeholder "$BIN"
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

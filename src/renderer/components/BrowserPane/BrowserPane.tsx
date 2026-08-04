@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
+import { useWindowFocusStore } from '@/stores/window-focus'
 import { webFeatures } from '@/web/features'
 
 /**
@@ -11,8 +13,9 @@ import { webFeatures } from '@/web/features'
  *
  * The browsed page does NOT render in this component — it lives in a
  * NATIVE child webview owned by src-tauri (commands/browser_webviews.rs,
- * label `browser-<itemId>`), which floats over the DOM unconditionally.
- * This component is the DOM-side "docking frame":
+ * label `browser-{parent}-{itemId}`), which floats over the DOM
+ * unconditionally, docked in the *invoking* Tauri window (main or
+ * window-{uuid}). This component is the DOM-side "docking frame":
  *
  *  - bounds bridge: a ResizeObserver on the content area + a window
  *    resize listener feed a rAF-throttled `browser_set_bounds`, plus a
@@ -22,7 +25,9 @@ import { webFeatures } from '@/web/features'
  *    active in its pane group) plus Settings / full-page overlays drive
  *    `browser_set_visible` — native child webviews float OVER the DOM, so
  *    hiding the workspace with `display:none` is not enough (Settings
- *    was showing Google sign-in still painted on Companion).
+ *    was showing Google sign-in still painted on Companion). Non-standalone
+ *    panes also hide when this window loses OS focus so a blurred
+ *    window's children do not paint over the focused window.
  *  - lifecycle: the webview is created lazily on FIRST visibility (so a
  *    restored background layout doesn't load pages invisibly) and
  *    `browser_close`d on unmount (item/tab close).
@@ -65,6 +70,15 @@ function normalizeUrl(raw: string): string {
   return `https://${trimmed}`
 }
 
+/** Stable parent window label for this renderer instance. */
+function currentParentWindow(): string {
+  try {
+    return getCurrentWindow().label || 'main'
+  } catch {
+    return 'main'
+  }
+}
+
 export function BrowserPane({
   itemId,
   tabId,
@@ -80,14 +94,28 @@ export function BrowserPane({
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
   const appPage = usePageViewStore((s) => s.page)
   const workspaceCovered = settingsOpen || appPage !== 'agents'
-  const visible = standalone ? true : tabVisible && !workspaceCovered
+  // Blurred windows: hide non-standalone children so they don't float over
+  // the focused window (multi-window parenting). Standalone OAuth embeds
+  // stay visible while their host window is frontmost enough to complete
+  // the flow; they still hide when the host itself is covered.
+  const windowFocused = useWindowFocusStore((s) => s.isFocused)
+  const visible = standalone
+    ? true
+    : tabVisible && !workspaceCovered && windowFocused
   const setBrowserItemState = useTabsStore((s) => s.setBrowserItemState)
+
+  // Parent window for all browser_* invokes (main / window-{uuid}).
+  const parentWindow = useMemo(() => currentParentWindow(), [])
 
   // Content area the native view docks onto (below the chrome bar).
   const contentRef = useRef<HTMLDivElement | null>(null)
 
   const [created, setCreated] = useState(false)
   const createdRef = useRef(false)
+  /** Prevent concurrent `browser_create` (visibility effect + ResizeObserver
+   *  both fire before the first await resolves → "webview with label …
+   *  already exists" on Email Link Gmail OAuth). */
+  const createInFlightRef = useRef(false)
   /** Feature-off stub build / hosted web → render the graceful-degradation message. */
   const [unavailable, setUnavailable] = useState(!webFeatures.browserPane)
   const [error, setError] = useState<string | null>(null)
@@ -115,7 +143,7 @@ export function BrowserPane({
     const el = contentRef.current
     if (!el) return null
     // getBoundingClientRect is CSS px relative to the viewport; the main
-    // webview fills the window at origin, so this IS the main-window
+    // webview fills the window at origin, so this IS the parent-window
     // logical coordinate space browser_set_bounds expects.
     const r = el.getBoundingClientRect()
     if (r.width <= 0 || r.height <= 0) return null // display:none / collapsed
@@ -131,6 +159,7 @@ export function BrowserPane({
     const normalized = normalizeUrl(targetUrl)
     if (!normalized) return
     pendingUrlRef.current = normalized
+    if (createdRef.current || createInFlightRef.current) return
     const rect = measureRect()
     if (!rect) {
       // Dock not laid out yet (common in Settings full-pane embeds). ResizeObserver
@@ -138,8 +167,9 @@ export function BrowserPane({
       return
     }
     setError(null)
+    createInFlightRef.current = true
     try {
-      await invoke('browser_create', { itemId, url: normalized, rect })
+      await invoke('browser_create', { itemId, url: normalized, rect, parentWindow })
       createdRef.current = true
       setCreated(true)
       setUnavailable(false)
@@ -152,8 +182,10 @@ export function BrowserPane({
       } else {
         setError(msg)
       }
+    } finally {
+      createInFlightRef.current = false
     }
-  }, [itemId, measureRect])
+  }, [itemId, measureRect, parentWindow])
 
   const scheduleBoundsPush = useCallback(() => {
     if (rafRef.current !== null) return
@@ -168,12 +200,12 @@ export function BrowserPane({
       if (!createdRef.current) return
       const rect = measureRect()
       if (!rect) return
-      void invoke('browser_set_bounds', { itemId, rect }).catch(() => {
+      void invoke('browser_set_bounds', { itemId, rect, parentWindow }).catch(() => {
         // View may have been closed in a race; the visibility/lifecycle
         // effects own recovery.
       })
     })
-  }, [itemId, measureRect, createView])
+  }, [itemId, measureRect, createView, parentWindow])
 
   useEffect(() => {
     const el = contentRef.current
@@ -204,12 +236,12 @@ export function BrowserPane({
   const navigateView = useCallback(async (targetUrl: string): Promise<void> => {
     setError(null)
     try {
-      await invoke('browser_navigate', { itemId, url: targetUrl })
+      await invoke('browser_navigate', { itemId, url: targetUrl, parentWindow })
       lastKnownUrlRef.current = targetUrl
     } catch (e) {
       setError(String(e))
     }
-  }, [itemId])
+  }, [itemId, parentWindow])
 
   // ── Visibility bridge + lazy creation ───────────────────────────────
   useEffect(() => {
@@ -218,15 +250,15 @@ export function BrowserPane({
         const target = normalizeUrl(url)
         if (target) void createView(target)
       } else {
-        void invoke('browser_set_visible', { itemId, visible: true }).catch(() => {})
+        void invoke('browser_set_visible', { itemId, visible: true, parentWindow }).catch(() => {})
         // Bounds may have gone stale while hidden (mosaic resizes under
         // display:none don't reach the native view) — re-assert on show.
         scheduleBoundsPush()
       }
     } else if (createdRef.current) {
-      void invoke('browser_set_visible', { itemId, visible: false }).catch(() => {})
+      void invoke('browser_set_visible', { itemId, visible: false, parentWindow }).catch(() => {})
     }
-  }, [visible, url, itemId, createView, scheduleBoundsPush])
+  }, [visible, url, itemId, createView, scheduleBoundsPush, parentWindow])
 
   // ── Store url changes (openUrlInPane navigate-in-place reuse) ───────
   useEffect(() => {
@@ -242,14 +274,18 @@ export function BrowserPane({
   }, [url, navigateView, createView])
 
   // ── Close on unmount ────────────────────────────────────────────────
+  // Always attempt close for this itemId (not only when createdRef is
+  // true): a create may have completed on the native side while the
+  // await was aborted by unmount (Email Link Cancel / success), leaving
+  // the label orphaned and the next `browser_create` for the same id
+  // (or a remount) hard-colliding.
   useEffect(() => {
     return () => {
-      if (createdRef.current) {
-        createdRef.current = false
-        void invoke('browser_close', { itemId }).catch(() => {})
-      }
+      createdRef.current = false
+      createInFlightRef.current = false
+      void invoke('browser_close', { itemId, parentWindow }).catch(() => {})
     }
-  }, [itemId])
+  }, [itemId, parentWindow])
 
   // ── Address-bar sync: poll current URL only while visible ──────────
   useEffect(() => {
@@ -257,7 +293,7 @@ export function BrowserPane({
     const timer = setInterval(() => {
       void (async () => {
         try {
-          const current = await invoke<string>('browser_current_url', { itemId })
+          const current = await invoke<string>('browser_current_url', { itemId, parentWindow })
           if (!current || current === lastKnownUrlRef.current) return
           lastKnownUrlRef.current = current
           if (!addressFocusedRef.current) setAddress(current)
@@ -272,7 +308,7 @@ export function BrowserPane({
       })()
     }, 1500)
     return () => clearInterval(timer)
-  }, [visible, created, itemId, tabId, paneGroupId, setBrowserItemState, standalone])
+  }, [visible, created, itemId, tabId, paneGroupId, setBrowserItemState, standalone, parentWindow])
 
   // ── Handlers ────────────────────────────────────────────────────────
   const handleSubmit = useCallback(() => {
@@ -364,7 +400,9 @@ export function BrowserPane({
         {import.meta.env.DEV && (
           <button
             className={chromeButtonClass}
-            onClick={() => void invoke('browser_devtools', { itemId }).catch(() => {})}
+            onClick={() =>
+              void invoke('browser_devtools', { itemId, parentWindow }).catch(() => {})
+            }
             title="Open devtools (dev builds)"
           >
             ⚙

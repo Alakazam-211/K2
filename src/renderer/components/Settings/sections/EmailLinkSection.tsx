@@ -24,6 +24,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { BrowserPane } from '@/components/BrowserPane/BrowserPane'
 import { useProjectsStore } from '@/stores/projects'
@@ -185,6 +186,9 @@ function OauthConnect({
   const [result, setResult] = useState<OauthResult | null>(null)
   // Cancel in-flight client-capture wait when the user resets or unmounts.
   const captureCancelRef = useRef<string | null>(null)
+  // Latest embedded consent webview id (for unmount reap without depending
+  // on `flow` in a cleanup that would re-fire on every flow transition).
+  const oauthBrowserItemIdRef = useRef<string | null>(null)
 
   const canStart = canMutate && busy === null && project.trim().length > 0 && address.trim().length > 0
   const gmailSession =
@@ -197,10 +201,27 @@ function OauthConnect({
     return () => onSessionActiveChange?.(false)
   }, [gmailSession, onSessionActiveChange])
 
+  /** Reap the embedded Gmail consent webview before dropping flow state.
+   *  Relying on BrowserPane unmount alone races Cancel → Start again and
+   *  leaves Tauri with `browser-{parent}-oauth-gmail-<linkId>` still registered. */
+  const closeOauthBrowser = useCallback((itemId: string | null | undefined): void => {
+    if (!itemId || !webFeatures.browserPane) return
+    let parentWindow = 'main'
+    try {
+      parentWindow = getCurrentWindow().label || 'main'
+    } catch {
+      // web shim / non-tauri
+    }
+    void invoke('browser_close', { itemId, parentWindow }).catch(() => undefined)
+  }, [])
+
   const start = useCallback(
     async (provider: OauthProvider): Promise<void> => {
       if (!canStart) return
       setBusy(provider)
+      // New start: drop any previous consent webview first.
+      closeOauthBrowser(oauthBrowserItemIdRef.current)
+      oauthBrowserItemIdRef.current = null
       setFlow(null)
       setResult(null)
       try {
@@ -230,6 +251,7 @@ function OauthConnect({
             const authorizationUrl = res.authorizationUrl
             const linkId = res.linkId
             const browserItemId = `oauth-gmail-${linkId}`
+            oauthBrowserItemIdRef.current = browserItemId
             setFlow({
               kind: 'loopback',
               provider: 'gmail',
@@ -263,6 +285,8 @@ function OauthConnect({
               } catch (e) {
                 if (captureCancelRef.current !== bind.captureId) return
                 setResult({ kind: 'error', message: mailErrorMessage(e) })
+                closeOauthBrowser(oauthBrowserItemIdRef.current)
+                oauthBrowserItemIdRef.current = null
                 setFlow(null)
               } finally {
                 if (captureCancelRef.current === bind.captureId) {
@@ -274,6 +298,8 @@ function OauthConnect({
           } catch (e) {
             await invoke('oauth_loopback_cancel', { captureId: bind.captureId }).catch(() => undefined)
             captureCancelRef.current = null
+            closeOauthBrowser(oauthBrowserItemIdRef.current)
+            oauthBrowserItemIdRef.current = null
             throw e
           }
         }
@@ -315,7 +341,7 @@ function OauthConnect({
         setBusy(null)
       }
     },
-    [canStart, address, project],
+    [canStart, address, project, closeOauthBrowser],
   )
 
   const onConnectedRef = useRef(onConnected)
@@ -327,6 +353,8 @@ function OauthConnect({
       if (cancelled) return
       if (Date.now() > flow.deadlineMs) {
         setResult({ kind: 'failed', state: 'expired' })
+        closeOauthBrowser(oauthBrowserItemIdRef.current)
+        oauthBrowserItemIdRef.current = null
         setFlow(null)
         return
       }
@@ -335,15 +363,21 @@ function OauthConnect({
         if (cancelled) return
         if (s.state === 'connected') {
           setResult({ kind: 'connected', address: s.address })
+          closeOauthBrowser(oauthBrowserItemIdRef.current ?? undefined)
+          oauthBrowserItemIdRef.current = null
           setFlow(null)
           onConnectedRef.current(s.address ?? address.trim())
         } else if (s.state === 'denied' || s.state === 'expired' || s.state === 'error') {
           setResult({ kind: 'failed', state: s.state, hint: s.hint })
+          closeOauthBrowser(oauthBrowserItemIdRef.current ?? undefined)
+          oauthBrowserItemIdRef.current = null
           setFlow(null)
         }
       } catch (e) {
         if (cancelled) return
         setResult({ kind: 'error', message: mailErrorMessage(e) })
+        closeOauthBrowser(oauthBrowserItemIdRef.current ?? undefined)
+        oauthBrowserItemIdRef.current = null
         setFlow(null)
       }
     }
@@ -353,7 +387,7 @@ function OauthConnect({
       cancelled = true
       window.clearInterval(id)
     }
-  }, [flow, address])
+  }, [flow, address, closeOauthBrowser])
 
   const reset = useCallback((): void => {
     const cap = captureCancelRef.current
@@ -361,10 +395,14 @@ function OauthConnect({
     if (cap) {
       void invoke('oauth_loopback_cancel', { captureId: cap }).catch(() => undefined)
     }
+    closeOauthBrowser(oauthBrowserItemIdRef.current)
+    oauthBrowserItemIdRef.current = null
     setFlow(null)
     setResult(null)
-  }, [])
+  }, [closeOauthBrowser])
 
+  // Unmount-only: cancel capture + reap consent webview if Settings closes
+  // mid-flow. Must NOT re-run on flow transitions (would cancel a live start).
   useEffect(() => {
     return () => {
       const cap = captureCancelRef.current
@@ -372,8 +410,10 @@ function OauthConnect({
       if (cap) {
         void invoke('oauth_loopback_cancel', { captureId: cap }).catch(() => undefined)
       }
+      closeOauthBrowser(oauthBrowserItemIdRef.current)
+      oauthBrowserItemIdRef.current = null
     }
-  }, [])
+  }, [closeOauthBrowser])
 
   const inputCls =
     'px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'

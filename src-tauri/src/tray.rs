@@ -16,7 +16,7 @@
 //!     · iPhone 15 Pro  2 min ago
 //!     · iPad Pro       47 sec ago
 //!   ─────────────────────────────────────
-//!   Quit K2SO                          (honors keep-daemon-on-quit)
+//!   Quit K2                            (honors keep-daemon-on-quit)
 //! ```
 //!
 //! Updates every 10s via `MenuItem::set_text` on the status + URL
@@ -136,7 +136,7 @@ pub fn install(app: &AppHandle<Wry>) -> Result<(), String> {
     let _tray = TrayIconBuilder::with_id("k2so-main")
         .icon(icon)
         .icon_as_template(true)
-        .tooltip("K2SO")
+        .tooltip("K2")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| handle_menu_event(app, event.id().as_ref()))
@@ -296,7 +296,7 @@ fn build_menu(app: &AppHandle<Wry>) -> Result<Menu<Wry>, String> {
     // already routes through our `RunEvent::ExitRequested` handler,
     // so a menu-item accelerator would create a duplicate binding and
     // on some Tauri v2 builds hides the item. Keeping the label only.
-    let quit = MenuItem::with_id(app, ids::QUIT, "Quit K2SO", true, None::<&str>)
+    let quit = MenuItem::with_id(app, ids::QUIT, "Quit K2", true, None::<&str>)
         .map_err(|e| format!("quit: {e}"))?;
     menu.append(&quit).map_err(|e| format!("quit: {e}"))?;
 

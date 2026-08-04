@@ -10,7 +10,7 @@ export const TERMINAL_FONT_SIZE_MAX = 24
 export const TERMINAL_FONT_SIZE_DEFAULT = 13
 
 // ── App constants ─────────────────────────────────────────────────────
-export const APP_NAME = 'K2SO'
+export const APP_NAME = 'K2'
 
 // ── File size limits ──────────────────────────────────────────────────
 export const MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB

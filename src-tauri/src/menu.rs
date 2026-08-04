@@ -7,10 +7,10 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
     // App submenu (macOS)
     let app_menu = Submenu::with_items(
         handle,
-        "K2SO",
+        "K2",
         true,
         &[
-            &PredefinedMenuItem::about(handle, Some("About K2SO"), None)?,
+            &PredefinedMenuItem::about(handle, Some("About K2"), None)?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "settings", "Settings...", true, Some("CmdOrCtrl+,"))?,
             &MenuItem::with_id(handle, "check-for-updates", "Check for Updates...", true, None::<&str>)?,
@@ -159,7 +159,7 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
                 let js = format!(
                     "document.documentElement.style.zoom='{}';document.title='{}'",
                     scale,
-                    if next == 100 { "K2SO".to_string() } else { format!("K2SO — {}%", next) }
+                    if next == 100 { "K2".to_string() } else { format!("K2 — {}%", next) }
                 );
                 let _ = win.eval(&js);
             }
@@ -217,7 +217,7 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             };
 
             let builder = WebviewWindowBuilder::new(app, &label, webview_url)
-                .title("K2SO")
+                .title("K2")
                 .inner_size(1400.0, 900.0)
                 .min_inner_size(800.0, 600.0);
             // hidden_title / TitleBarStyle::Overlay are macOS-only builder methods.

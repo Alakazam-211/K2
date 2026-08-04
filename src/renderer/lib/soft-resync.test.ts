@@ -185,7 +185,8 @@ describe('R1 remote events drop debounce', () => {
     secure: true,
     username: 'u',
     token: 't',
-    rememberToken: true,
+    remember: true,
+    lastConnectedAt: null,
   }
 
   beforeEach(() => {

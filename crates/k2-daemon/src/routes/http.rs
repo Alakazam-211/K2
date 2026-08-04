@@ -580,17 +580,25 @@ pub(crate) fn session_password_gate(
     path: &str,
     query: &str,
     owner_token: &str,
+    is_post: bool,
 ) -> Option<crate::cli_response::CliResponse> {
     // Routes a restricted session may still reach. `/cli/auth/login` is
     // listed too: it's public (credential-authed, not session-authed), so
     // a stray `?token=` on it must not turn a login attempt into a 403.
+    //
+    // GET `/cli/users/policy` is allowlisted so the daemon-hosted account
+    // portal (`/` / `/account`) can render the active password requirements
+    // after login while `must_change_password` is still set. Without it,
+    // forced-rotation users on Linux/cloud hosts (seed-users with the flag)
+    // get 403 on the policy fetch. POST policy stays blocked (owner write).
     if matches!(
         path,
         "/cli/auth/whoami"
             | "/cli/auth/change-password"
             | "/cli/auth/logout"
             | "/cli/auth/login"
-    ) {
+    ) || (path == "/cli/users/policy" && !is_post)
+    {
         return None;
     }
     let tok = extract_token(query)?;

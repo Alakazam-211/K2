@@ -931,7 +931,9 @@ async fn handle_one_request(
     // through to the normal per-route gates. ONE chokepoint here covers
     // the entire route match below (HTTP + WS upgrades) — see
     // `super::http::session_password_gate`.
-    if let Some(r) = super::http::session_password_gate(&path, &query, state.token.as_str()) {
+    if let Some(r) =
+        super::http::session_password_gate(&path, &query, state.token.as_str(), is_post)
+    {
         let _ = stream.read(&mut buf).await;
         super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         return DispatchOutcome::Done;
@@ -2245,8 +2247,28 @@ async fn handle_one_request(
         }
         "/cli/users/set-password" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
-            // OWNER-ONLY for now (#629 keeps password resets at owner level).
-            if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+            // OWNERSHIP tier (#629 + Linux/cloud reality): on-box owner
+            // token OR Owner-ROLE connect session (`can_change_roles`).
+            // Pre-fix this used `require_owner` (daemon token only). On
+            // Linux hosted boxes the desktop is almost always connected
+            // with a connect-user Owner session (seed-users / first owner),
+            // never the raw daemon token — so Settings → reset password
+            // always 403'd with "invalid or missing token" while local
+            // macOS (real owner token) worked. Match set-role's gate.
+            // Admin still barred (password reset stays Owner-level).
+            let actor_role = super::http::actor_role(&query, state.token.as_str());
+            if !actor_role
+                .map(k2_core::connect_users::can_change_roles)
+                .unwrap_or(false)
+            {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;

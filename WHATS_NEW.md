@@ -3,6 +3,26 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.83 — Connect password reset on Linux / hosted hosts
+
+### Owner-role can reset user passwords over Connect
+
+Settings → Users → reset password used to require the raw **daemon owner
+token**. On Linux and K2 Connect hosts the desktop is almost always signed
+in as a connect-user **Owner** (seed-users / first owner), so reset always
+returned **403** while local macOS (real owner token) worked.
+
+`POST /cli/users/set-password` now accepts the same ownership tier as
+`set-role`: on-box owner token **or** Owner-role session. Admins stay barred.
+
+### Forced password-change portal can load policy
+
+While `must_change_password` is set, `GET /cli/users/policy` is allowed so
+`https://<sub>.k2.dev/` can show real password requirements during forced
+rotation (seed-users on cloud Linux). POST policy remains owner-only.
+
+---
+
 ## 0.40.82 — Multi-window, soft-resync, daemon singleton, Linux Gmail OAuth bake-in
 
 ### Multi-window: browser, drops, and titles

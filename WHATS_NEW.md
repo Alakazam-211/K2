@@ -3,7 +3,15 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.84 — OOTB Gmail OAuth on every platform (no REPLACE_ME)
+## 0.40.84 — Terminal drop fix + OOTB Gmail OAuth
+
+### Drag-drop into terminals works again
+
+The multi-window drop fix used `getCurrentWindow().listen`, but Tauri emits
+`tauri://drag-*` on the **Webview**. Window-target listeners never fired →
+OS file/image drops into terminals did nothing. Now uses
+`getCurrentWebview().listen` so only the window under the drop handles
+inject/copy (no multi-window fan-out).
 
 ### Pre-packaged Gmail client baked into all release daemons
 
@@ -23,8 +31,7 @@ baked Gmail via `.env`; Microsoft is a separate optional path.)
 - **macOS** `release.sh` / `build-app.sh`: same require + strings check.
 - Repo secrets required: `K2_GMAIL_CLIENT_ID`, `K2_GMAIL_CLIENT_SECRET`.
 
-After this cut, the Gmail auth URL uses the real client id (not `REPLACE_ME`),
-and `oauth-config` reports `source: default` with that id.
+After this cut, the Gmail auth URL uses the real client id (not `REPLACE_ME`).
 
 ---
 

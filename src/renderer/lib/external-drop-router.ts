@@ -6,13 +6,14 @@
 // effect deps (FileTree's loadDir) leaked handlers → N uploads of the same
 // file (collision_free_path → report.pdf, report (1).pdf, …).
 //
-// Multi-window: subscribe via getCurrentWindow().listen (Window/WebviewWindow-
-// scoped), NOT process-global listen() from @tauri-apps/api/event which defaults
-// to target { kind: 'Any' } and delivers EVERY drop to EVERY open K2 window
-// (combined with hit-test → multi-window inject / copy). Same pattern as App
-// focus listeners (getCurrentTauriWindow().listen).
+// Multi-window: subscribe via getCurrentWebview().listen (Webview-scoped),
+// NOT process-global listen() from @tauri-apps/api/event (target { kind: 'Any' }
+// delivers every drop to every open K2 window → multi-window inject/copy).
+// Also NOT getCurrentWindow().listen — that targets { kind: 'Window' }, but
+// Tauri emits tauri://drag-* on the Webview, so Window-scoped listeners never
+// fire (0.40.82 regression: drops into terminals did nothing).
 //
-// This module owns the ONE subscriber per window. Hit-test order matches product rules:
+// This module owns the ONE subscriber per webview. Hit-test order matches product rules:
 //   1. Terminal  → remote upload + inject path; local path paste
 //   2. Files     → remote folder upload; local fs/copy plan
 //   3. Remote miss → "Save to…" picker
@@ -416,7 +417,8 @@ export async function routeBrowserFileDrop(
  * Mount the ONE window-level drop listener for external OS drops.
  *
  * - **Desktop (Tauri):** `tauri://drag-drop` with local filesystem paths,
- *   scoped to this webview/window (not process-global Any).
+ *   scoped to this webview (not process-global Any, not Window-target —
+ *   drag events are Webview-emitted).
  * - **Hosted web:** HTML5 `dragover` + `drop` with browser `File` objects
  *   (upload via File API — same product idea as Drive in a tab).
  *
@@ -466,13 +468,13 @@ export function mountExternalDropRouter(): () => void {
     }
   }
 
-  // Multi-window requires Window/WebviewWindow-scoped listen, not process-global
-  // listen() from @tauri-apps/api/event (default target { kind: 'Any' } delivers
-  // every drop to every open K2 window). Matches App.tsx focus listeners.
-  import('@tauri-apps/api/window')
-    .then(({ getCurrentWindow }) => {
+  // Multi-window: Webview-scoped listen only. Process-global event.listen
+  // (target Any) fan-outs every drop to every open K2 window. Window-scoped
+  // getCurrentWindow().listen never receives drag-* (emitted as Webview).
+  import('@tauri-apps/api/webview')
+    .then(({ getCurrentWebview }) => {
       if (torndown) return
-      return getCurrentWindow()
+      return getCurrentWebview()
         .listen<{ paths: string[]; position: { x: number; y: number } }>(
           'tauri://drag-drop',
           (event) => {

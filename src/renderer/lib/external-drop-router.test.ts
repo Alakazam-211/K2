@@ -2,19 +2,20 @@
 // DOM-dependent route execution is covered by handle-remote-drop tests +
 // planLocalExternalDrop; this file pins the routing priority table.
 //
-// mountExternalDropRouter is tested with a window-scoped listen mock so
-// multi-window never regresses to process-global event.listen Any.
+// mountExternalDropRouter is tested with a webview-scoped listen mock so
+// multi-window never regresses to process-global event.listen Any, and so
+// we never use getCurrentWindow().listen (Window target misses drag-*).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-const windowListenMock = vi.fn()
-const windowUnlistenMock = vi.fn()
+const webviewListenMock = vi.fn()
+const webviewUnlistenMock = vi.fn()
 const isWebClientMock = vi.fn(() => false)
 
-vi.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: () => ({
+vi.mock('@tauri-apps/api/webview', () => ({
+  getCurrentWebview: () => ({
     // Return value of the spy is the listen Promise (so tests can delay resolve).
-    listen: (...args: unknown[]) => windowListenMock(...args),
+    listen: (...args: unknown[]) => webviewListenMock(...args),
   }),
 }))
 
@@ -275,38 +276,38 @@ describe('filesFromDataTransfer', () => {
   })
 })
 
-// ── Window-scoped Tauri drag-drop subscription ─────────────────────────
+// ── Webview-scoped Tauri drag-drop subscription ───────────────────────
 
 describe('mountExternalDropRouter (desktop)', () => {
   beforeEach(() => {
     isWebClientMock.mockReturnValue(false)
-    windowListenMock.mockReset()
-    windowUnlistenMock.mockReset()
-    windowListenMock.mockResolvedValue(windowUnlistenMock)
+    webviewListenMock.mockReset()
+    webviewUnlistenMock.mockReset()
+    webviewListenMock.mockResolvedValue(webviewUnlistenMock)
   })
 
   afterEach(() => {
     isWebClientMock.mockReturnValue(false)
   })
 
-  it('subscribes via getCurrentWindow().listen, not process-global event.listen', async () => {
+  it('subscribes via getCurrentWebview().listen, not process-global or Window', async () => {
     const unmount = mountExternalDropRouter()
-    // Dynamic import of @tauri-apps/api/window resolves on next microtask.
+    // Dynamic import of @tauri-apps/api/webview resolves on next microtask.
     await vi.waitFor(() => {
-      expect(windowListenMock).toHaveBeenCalled()
+      expect(webviewListenMock).toHaveBeenCalled()
     })
-    expect(windowListenMock).toHaveBeenCalledWith(
+    expect(webviewListenMock).toHaveBeenCalledWith(
       'tauri://drag-drop',
       expect.any(Function),
     )
     unmount()
-    expect(windowUnlistenMock).toHaveBeenCalled()
+    expect(webviewUnlistenMock).toHaveBeenCalled()
   })
 
   it('teardown before listen resolves does not leave a live handler', async () => {
     let resolveListen: (fn: () => void) => void = () => {}
     const delayedUnlisten = vi.fn()
-    windowListenMock.mockImplementationOnce(
+    webviewListenMock.mockImplementationOnce(
       () =>
         new Promise<() => void>((resolve) => {
           resolveListen = resolve
@@ -315,7 +316,7 @@ describe('mountExternalDropRouter (desktop)', () => {
 
     const unmount = mountExternalDropRouter()
     await vi.waitFor(() => {
-      expect(windowListenMock).toHaveBeenCalled()
+      expect(webviewListenMock).toHaveBeenCalled()
     })
     // Unmount while listen() is still pending.
     unmount()
@@ -326,7 +327,7 @@ describe('mountExternalDropRouter (desktop)', () => {
     })
   })
 
-  it('web client path does not touch window-scoped Tauri listen', () => {
+  it('web client path does not touch webview-scoped Tauri listen', () => {
     isWebClientMock.mockReturnValue(true)
     // Minimal window stub for the HTML5 drag/drop branch (vitest env is node).
     const addEventListener = vi.fn()
@@ -338,7 +339,7 @@ describe('mountExternalDropRouter (desktop)', () => {
     }
     try {
       const unmount = mountExternalDropRouter()
-      expect(windowListenMock).not.toHaveBeenCalled()
+      expect(webviewListenMock).not.toHaveBeenCalled()
       expect(addEventListener).toHaveBeenCalledWith('dragover', expect.any(Function))
       expect(addEventListener).toHaveBeenCalledWith('drop', expect.any(Function))
       unmount()

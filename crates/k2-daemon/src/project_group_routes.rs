@@ -233,10 +233,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 /// Exact-match paths; unknown paths 404 (mirrors
 /// `feedback_routes::dispatch_post`).
 ///
-/// `session_author` is the daemon-resolved authed actor (`"owner"` or a
-/// connect-user username) — resolved by the dispatcher from the session
-/// token, never from the body. Used only by `msg` for human author
-/// attribution when the body omits `author`.
+/// `session_author` is the daemon-resolved authed actor — owner token →
+/// `owner_display_name` / `"owner"`, connect-user → username — resolved by
+/// the dispatcher via `resolve_acting_author`, never from the body. Used
+/// only by `msg` for human author attribution when the body omits `author`.
 pub fn dispatch_post(path: &str, body: &[u8], session_author: &str) -> CliResponse {
     match path {
         "/cli/project-group/create" => handle_create(body),
@@ -1095,15 +1095,11 @@ pub fn handle_msg(body: &[u8], session_author: &str) -> CliResponse {
                 None => (false, Some("workspace_not_found".to_string()), None),
                 Some(path) => {
                     let payload = project_payload(&group.name, &msg.body);
-                    // An owner post is framed with the owner's display
-                    // name (the composer's server-side resolution, cf.
-                    // feedback D3); agents and connect-users are framed
-                    // as themselves.
-                    let from = if author == "owner" {
-                        crate::workspace_msg::resolve_owner_from()
-                    } else {
-                        author.to_string()
-                    };
+                    // Inject `from` is always the stored author string.
+                    // Owner-token posts already store resolve_owner_from()
+                    // at attribution time (session_author); connect-users
+                    // store their username; agents store workspace name.
+                    let from = author.to_string();
                     let resp = crate::workspace_msg::deliver_live(
                         &path,
                         &payload,
@@ -1934,23 +1930,37 @@ mod tests {
         );
     }
 
-    /// Human author attribution from the session token (D3): when the
-    /// body omits `author`, the stored author is the daemon-resolved
-    /// session actor — owner token → `"owner"`, connect-user → that
-    /// user's username. Connect-user humans do NOT require project-group
-    /// workspace membership (they are not agent authors).
+    /// Human author attribution from the session token: when the body
+    /// omits `author`, the stored author is the daemon-resolved session
+    /// actor (dispatcher passes `resolve_acting_author` — owner token →
+    /// display name / `"owner"`, connect-user → username). Connect-user
+    /// humans do NOT require project-group workspace membership.
+    /// Inject `from` equals the stored author (no remapping at inject).
     #[test]
     fn project_group_msg_session_author_attribution() {
         let g = create_group_via_route(&gname("session-author"));
         let gid = g["id"].as_str().expect("id").to_string();
 
-        // Owner session + omitted author → stored as "owner".
+        // Owner session (display name unset → "owner") + omitted author.
         let posted = ok_json(post_json_as(
             "/cli/project-group/msg",
             serde_json::json!({ "group": gid, "body": "from the host" }),
             "owner",
         ));
         assert_eq!(posted["author"], "owner");
+
+        // Owner with a display-name string as session_author (what the
+        // dispatcher passes after resolve_acting_author when
+        // owner_display_name is set) — stored as-is; inject uses it.
+        let posted = ok_json(post_json_as(
+            "/cli/project-group/msg",
+            serde_json::json!({ "group": gid, "body": "from Rosson" }),
+            "Rosson",
+        ));
+        assert_eq!(
+            posted["author"], "Rosson",
+            "owner-token display name must be stored as the author string"
+        );
 
         // Connect-user session + omitted author → stored as their username.
         // No workspace membership required (human post, not agent CLI).
@@ -1982,7 +1992,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(v["error"]["code"], "not_a_member");
 
-        // Stored messages: owner + alice only (refused agent never stored).
+        // Stored messages: owner + Rosson + alice (refused agent never stored).
         let page = ok_json(messages(&gid, &[]));
         let authors: Vec<&str> = page["messages"]
             .as_array()
@@ -1990,7 +2000,7 @@ mod tests {
             .iter()
             .map(|m| m["author"].as_str().expect("author"))
             .collect();
-        assert_eq!(authors, vec!["owner", "alice"]);
+        assert_eq!(authors, vec!["owner", "Rosson", "alice"]);
     }
 
     /// Messages route paging params: after (strictly greater) + limit

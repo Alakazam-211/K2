@@ -3623,7 +3623,9 @@ async fn handle_one_request(
         // answer / resolve). JSON-bodied POSTs; token_ok (owner OR
         // connect-user session — connect users see + answer feedback,
         // PRD §4.3) + require_post per feedback_post_only_route_guards.
-        // Handlers run in spawn_blocking (SQLite writes).
+        // Session actor is resolved here for human comment/answer
+        // attribution (same helper as project-group msg). Handlers run
+        // in spawn_blocking (SQLite writes).
         p if is_post && post_allowed && p.starts_with("/cli/feedback/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -3639,10 +3641,12 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            let session_author =
+                super::http::resolve_acting_author(&query, state.token.as_str());
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::feedback_routes::dispatch_post(&p_owned, &body_bytes)
+                crate::feedback_routes::dispatch_post(&p_owned, &body_bytes, &session_author)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -3808,16 +3812,12 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            // Resolve acting identity for chat author attribution (D3).
-            // Same shape as `/cli/push/*`: owner token → "owner", else
-            // the connect-user session's username.
-            let session_author = if super::http::token_is_owner(&query, state.token.as_str()) {
-                "owner".to_string()
-            } else {
-                super::http::extract_token(&query)
-                    .and_then(k2_core::connect_users::validate_session)
-                    .unwrap_or_else(|| "owner".to_string())
-            };
+            // Resolve acting identity for chat author attribution.
+            // Owner token → owner_display_name/"owner"; connect-user →
+            // username; never remaps connect users through the host
+            // display name (prd-message-from-attribution-actor-v1).
+            let session_author =
+                super::http::resolve_acting_author(&query, state.token.as_str());
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {

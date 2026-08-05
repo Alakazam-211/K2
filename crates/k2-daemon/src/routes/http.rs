@@ -407,6 +407,28 @@ pub(crate) fn token_is_owner(query: &str, owner_token: &str) -> bool {
     extract_token(query).is_some_and(|tok| ct_eq_token(tok, owner_token))
 }
 
+/// Resolve the acting human author string for store + terminal inject
+/// attribution (project chat + feedback).
+///
+/// - Owner token → [`crate::workspace_msg::resolve_owner_from`]
+///   (`owner_display_name` if set, else `"owner"`).
+/// - Live connect-user session → that user's username (never remapped
+///   through the host-global display name).
+/// - Else → `"owner"` (fail-soft, same empty-session fallback as today).
+///
+/// Identity always comes from the session/owner token — never from a
+/// free-form body field on the human path.
+pub fn resolve_acting_author(query: &str, owner_token: &str) -> String {
+    if token_is_owner(query, owner_token) {
+        return crate::workspace_msg::resolve_owner_from();
+    }
+    if let Some(username) = extract_token(query).and_then(k2_core::connect_users::validate_session)
+    {
+        return username;
+    }
+    "owner".to_string()
+}
+
 /// Owner-OR-Admin gate in the SYNC boolean shape (mirrors `token_is_owner`),
 /// for routes that already drained the request stream and return a
 /// `CliResponse` themselves. Accepts the on-box owner token OR a live
@@ -1895,6 +1917,50 @@ mod tests {
             assert!(!token_is_at_least_member("token=not-a-session", owner));
             assert!(!token_is_at_least_member("token=", owner));
             assert!(!token_is_at_least_member("project=/tmp/x", owner));
+        });
+    }
+
+    // ── resolve_acting_author: human store/inject identity ──────────────
+    //
+    // Owner token → resolve_owner_from() (display name or "owner");
+    // connect-user session → username; unknown/empty → "owner" fail-soft.
+
+    #[test]
+    fn resolve_acting_author_owner_token_uses_owner_from() {
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            // Unset display name → "owner".
+            assert_eq!(
+                resolve_acting_author(&format!("token={owner}"), owner),
+                "owner",
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_acting_author_connect_user_uses_username() {
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("alice_act", "password123").expect("add_user");
+            let session = k2_core::connect_users::create_session("alice_act");
+            assert_eq!(
+                resolve_acting_author(&format!("token={session}"), owner),
+                "alice_act",
+                "connect-user must attribute as username, not owner_display_name",
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_acting_author_unknown_token_fails_soft_to_owner() {
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            assert_eq!(
+                resolve_acting_author("token=not-a-session", owner),
+                "owner",
+            );
+            assert_eq!(resolve_acting_author("token=", owner), "owner");
+            assert_eq!(resolve_acting_author("", owner), "owner");
         });
     }
 

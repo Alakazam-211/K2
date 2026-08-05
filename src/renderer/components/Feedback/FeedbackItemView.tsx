@@ -358,12 +358,15 @@ function ThreadTab({
 
           <div className="flex flex-col gap-2">
             {item.comments.map((c, i) => {
-              const isOwner = c.author === 'owner'
+              // Legacy rows store "owner"; newer human posts store the
+              // session actor (display name / connect username). Label
+              // legacy host rows as "You"; otherwise show author as-is.
+              const isYou = c.author === 'owner'
               return (
                 <div key={`${c.at}-${i}`} className="flex flex-col">
                   <div className="flex items-baseline gap-2">
-                    <span className={`text-[10px] font-semibold ${isOwner ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-secondary)]'}`}>
-                      {isOwner ? 'You' : c.author}
+                    <span className={`text-[10px] font-semibold ${isYou ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-secondary)]'}`}>
+                      {isYou ? 'You' : c.author}
                     </span>
                     <span className="text-[9px] text-[var(--color-text-muted)] tabular-nums">
                       {formatRelativeTime(c.at, nowSec)}

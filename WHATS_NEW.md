@@ -7,11 +7,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Remote terminal stuck at ready (no paint / no input)
 
-When the grid WebSocket dies or goes half-open, phase could stay **ready**
-while `sendInput` silently no-ops. Recovery now force-reattaches the grid
-on dead `readyState`, on input against a dead socket (buffered until the
-next snapshot), and if no frame arrives within ~2.5s after input on a
-zombie OPEN socket. Look for `[grid-resync] reason=…` in the console.
+When the grid WebSocket dies, phase could stay **ready** while `sendInput`
+silently no-ops. Recovery force-reattaches on dead `readyState` (input path
++ 2s poll) and buffers keystrokes until the next snapshot. Do **not**
+reattach merely because no frame arrived after typing — that false-fired
+reconnect thrash on healthy shells/TUIs that don't repaint every key.
 
 ---
 

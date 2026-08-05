@@ -2770,20 +2770,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       return
     }
     try {
-      const frameBefore = lastGridFrameAtRef.current
       ws.send(JSON.stringify({ action: 'input', text }))
-      // Half-open remote grids can stay readyState=OPEN with no frames and
-      // no onclose. If nothing arrives after input, force grid reattach.
-      // (May rare-false-positive on no-echo password prompts — better than
-      // a permanently frozen remote pane.)
-      window.setTimeout(() => {
-        if (lastGridFrameAtRef.current > frameBefore) return
-        const live = wsRef.current
-        if (!live || live.readyState !== WebSocket.OPEN) return
-        if (phaseRef.current.kind === 'exited') return
-        pendingInputRef.current += text
-        forceGridResyncRef.current('input-no-frame')
-      }, 2500)
+      // Do NOT reattach solely because no frame arrived after input.
+      // Shells/TUIs often produce zero grid deltas for seconds (line edit,
+      // no-echo password, idle apps) — that false-fired reconnect thrash
+      // (input-no-frame every ~2.5s). Dead sockets are handled above
+      // (readyState !== OPEN) + the ready-ws-not-open poll; soft-resync
+      // still covers recovery/events-reopen half-open cases.
     } catch {
       pendingInputRef.current += text
       forceGridResyncRef.current('input-send-failed')

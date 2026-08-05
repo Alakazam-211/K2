@@ -119,6 +119,7 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 # shellcheck source=scripts/require-mail-oauth-build-env.sh
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
+# Gmail is required OOTB (DTL invalid_client). MS is optional unless set above.
 require_mail_oauth_build_env
 
 # Load signing key from file if env var not set. SAME key under either

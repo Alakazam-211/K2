@@ -20,6 +20,15 @@
 #   TAURI_SIGNING_PRIVATE_KEY           — the minisign private key STRING
 #                                         (same key as ~/.tauri/k2-updater.key)
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  — its password
+#   K2_GMAIL_CLIENT_ID                  — pre-packaged Gmail OAuth client id
+#                                         (option_env! into mail/oauth/mod.rs)
+#   K2_GMAIL_CLIENT_SECRET              — matching desktop client secret
+#   K2_MICROSOFT_CLIENT_ID              — optional MS client id (not the DTL bug)
+#
+# Without K2_GMAIL_CLIENT_* the Linux binary ships
+# client_id=REPLACE_ME.apps.googleusercontent.com and email-link fails with
+# Google invalid_client (DTL proof). macOS release.sh sources .env; this
+# workflow MUST inject Gmail at compile time and strings-check the binary.
 
 name: daemon-binaries
 
@@ -102,13 +111,23 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build k2-daemon (release, standalone bin)
+        env:
+          # Priority: Gmail (customer-facing invalid_client on DTL). MS optional.
+          K2_GMAIL_CLIENT_ID: ${{ secrets.K2_GMAIL_CLIENT_ID }}
+          K2_GMAIL_CLIENT_SECRET: ${{ secrets.K2_GMAIL_CLIENT_SECRET }}
+          K2_MICROSOFT_CLIENT_ID: ${{ secrets.K2_MICROSOFT_CLIENT_ID }}
         run: |
+          set -euo pipefail
+          # shellcheck source=scripts/require-mail-oauth-build-env.sh
+          source scripts/require-mail-oauth-build-env.sh
+          require_mail_oauth_build_env
           cargo build --release \
             --target ${{ matrix.target }} \
             --bin k2-daemon
           cp "target/${{ matrix.target }}/release/k2-daemon" \
              "${{ matrix.asset }}"
           file "${{ matrix.asset }}"
+          assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
 
       # Sign with the Tauri updater key via the tauri CLI signer (produces a
       # base64-wrapped minisign signature identical in format to the macOS

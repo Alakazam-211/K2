@@ -3,6 +3,31 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.84 — OOTB Gmail OAuth on every platform (no REPLACE_ME)
+
+### Pre-packaged Gmail client baked into all release daemons
+
+**Customer proof (DTL):** email-link opened Google with
+`client_id=REPLACE_ME.apps.googleusercontent.com` → `invalid_client` 401.
+Redirect/PKCE were fine — only the compile-time Gmail client was missing.
+
+Daemon defaults are `option_env!("K2_GMAIL_CLIENT_ID")` /
+`K2_GMAIL_CLIENT_SECRET`. Linux GHA never injected those secrets through
+0.40.83, so fleet daemons shipped the placeholder. (macOS release already
+baked Gmail via `.env`; Microsoft is a separate optional path.)
+
+- **Linux** `daemon-binaries`: inject `K2_GMAIL_CLIENT_ID` + `SECRET` from
+  GHA secrets at `cargo build`, then **fail the build** if the binary still
+  contains `REPLACE_ME.apps.googleusercontent.com` or
+  `REPLACE_ME-google-client-secret`.
+- **macOS** `release.sh` / `build-app.sh`: same require + strings check.
+- Repo secrets required: `K2_GMAIL_CLIENT_ID`, `K2_GMAIL_CLIENT_SECRET`.
+
+After this cut, the Gmail auth URL uses the real client id (not `REPLACE_ME`),
+and `oauth-config` reports `source: default` with that id.
+
+---
+
 ## 0.40.83 — Connect password reset on Linux / hosted hosts
 
 ### Owner-role can reset user passwords over Connect
@@ -52,10 +77,10 @@ shared-tree chaos).
 
 ### Linux fleet: pre-packaged Gmail OAuth at compile time
 
-Linux daemon release builds now bake `K2_GMAIL_CLIENT_ID` /
-`K2_GMAIL_CLIENT_SECRET` (same as macOS `.env`) so email-link no longer ships
-the `REPLACE_ME` placeholder → Google `invalid_client`. Requires matching
-GitHub Actions secrets on the `daemon-binaries` workflow.
+**Partial / incomplete in this cut.** macOS `release.sh` began requiring
+`.env` Gmail keys; the Linux **GHA workflow did not inject secrets** until
+0.40.84, so Linux release binaries through 0.40.83 still shipped `REPLACE_ME`.
+See **0.40.84**.
 
 ---
 

@@ -66,6 +66,8 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 # shellcheck source=scripts/require-mail-oauth-build-env.sh
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
+# Local/dev may lack Microsoft client id; release/GHA require it (default 1).
+export K2_REQUIRE_MICROSOFT_OAUTH="${K2_REQUIRE_MICROSOFT_OAUTH:-0}"
 require_mail_oauth_build_env
 
 # Load signing key from file if env var not set. SAME key under either

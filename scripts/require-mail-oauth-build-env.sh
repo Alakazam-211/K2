@@ -28,13 +28,14 @@ _k2_oauth_is_placeholder() {
 }
 
 # Require Gmail client id + secret for any shipping daemon build.
-# Microsoft client id is required when K2_REQUIRE_MICROSOFT_OAUTH=1
-# (default: warn-only if missing — MS device-code may lag Gmail).
+# This is the customer-facing path (Google invalid_client when REPLACE_ME ships).
+# Microsoft is optional unless K2_REQUIRE_MICROSOFT_OAUTH=1 (separate product track).
 require_mail_oauth_build_env() {
     local missing=0
     if _k2_oauth_is_placeholder "${K2_GMAIL_CLIENT_ID:-}"; then
-        echo "FATAL: K2_GMAIL_CLIENT_ID unset or REPLACE_ME — Linux/mac daemon will ship unusable Gmail OAuth." >&2
-        echo "  Set it in .env (macOS release) or as a GitHub Actions secret (daemon-binaries.yml)." >&2
+        echo "FATAL: K2_GMAIL_CLIENT_ID unset or REPLACE_ME — daemon will ship unusable Gmail OAuth." >&2
+        echo "  Auth URL would use client_id=REPLACE_ME.apps.googleusercontent.com → Google invalid_client." >&2
+        echo "  Set it in .env (macOS release) or as GitHub Actions secret K2_GMAIL_CLIENT_ID (daemon-binaries.yml)." >&2
         missing=1
     fi
     if _k2_oauth_is_placeholder "${K2_GMAIL_CLIENT_SECRET:-}"; then
@@ -46,7 +47,7 @@ require_mail_oauth_build_env() {
             echo "FATAL: K2_MICROSOFT_CLIENT_ID unset or REPLACE_ME (K2_REQUIRE_MICROSOFT_OAUTH=1)." >&2
             missing=1
         else
-            echo "WARN: K2_MICROSOFT_CLIENT_ID unset or REPLACE_ME — Microsoft email-link will need BYO config." >&2
+            echo "WARN: K2_MICROSOFT_CLIENT_ID unset or REPLACE_ME — Microsoft email-link will need BYO (Gmail is the required OOTB path)." >&2
         fi
     fi
     if [ "$missing" -ne 0 ]; then
@@ -68,27 +69,29 @@ assert_daemon_oauth_not_placeholder() {
         echo "FATAL: assert_daemon_oauth_not_placeholder: binary missing: $bin" >&2
         exit 1
     fi
-    # strings may be missing on minimal runners; fall back to grep -a.
-    if command -v strings >/dev/null 2>&1; then
-        if strings "$bin" | grep -F -q 'REPLACE_ME.apps.googleusercontent.com'; then
-            echo "FATAL: $bin still contains REPLACE_ME.apps.googleusercontent.com" >&2
-            echo "  K2_GMAIL_CLIENT_ID was not baked at compile time." >&2
-            exit 1
-        fi
-        if strings "$bin" | grep -F -q 'REPLACE_ME-google-client-secret'; then
-            echo "FATAL: $bin still contains REPLACE_ME-google-client-secret" >&2
-            echo "  K2_GMAIL_CLIENT_SECRET was not baked at compile time." >&2
-            exit 1
-        fi
-    else
-        if grep -aF -q 'REPLACE_ME.apps.googleusercontent.com' "$bin"; then
-            echo "FATAL: $bin still contains REPLACE_ME.apps.googleusercontent.com" >&2
-            exit 1
-        fi
-        if grep -aF -q 'REPLACE_ME-google-client-secret' "$bin"; then
-            echo "FATAL: $bin still contains REPLACE_ME-google-client-secret" >&2
-            exit 1
-        fi
+    # Prefer grep -aF on the binary (reliable). Avoid `strings | grep -q`:
+    # under `set -o pipefail`, SIGPIPE from early-close grep yields 141 and
+    # can false-negative a real hit (missed REPLACE_ME on Linux fleet bins).
+    _k2_bin_has() {
+        local needle="$1"
+        grep -aF -q "$needle" "$bin" 2>/dev/null
+    }
+    # Priority: Gmail — this string is what Google sees as client_id= in the auth URL.
+    if _k2_bin_has 'REPLACE_ME.apps.googleusercontent.com'; then
+        echo "FATAL: $bin still contains REPLACE_ME.apps.googleusercontent.com" >&2
+        echo "  K2_GMAIL_CLIENT_ID was not baked at compile time (email-link → Google invalid_client)." >&2
+        exit 1
+    fi
+    if _k2_bin_has 'REPLACE_ME-google-client-secret'; then
+        echo "FATAL: $bin still contains REPLACE_ME-google-client-secret" >&2
+        echo "  K2_GMAIL_CLIENT_SECRET was not baked at compile time." >&2
+        exit 1
+    fi
+    # Microsoft is secondary; only fail-closed when explicitly required.
+    if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-0}" = "1" ] && _k2_bin_has 'REPLACE_ME-microsoft-client-id'; then
+        echo "FATAL: $bin still contains REPLACE_ME-microsoft-client-id" >&2
+        echo "  K2_MICROSOFT_CLIENT_ID was not baked at compile time." >&2
+        exit 1
     fi
     echo "  OAuth placeholder check: $bin is clean (no REPLACE_ME Gmail defaults)."
 }

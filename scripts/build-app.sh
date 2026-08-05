@@ -26,6 +26,7 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 # shellcheck source=scripts/require-mail-oauth-build-env.sh
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
+# Gmail required OOTB; MS optional (K2_REQUIRE_MICROSOFT_OAUTH=1 to enforce).
 require_mail_oauth_build_env
 
 SIGNING_IDENTITY="Developer ID Application: LZTEK, LLC (36B8R93HXV)"

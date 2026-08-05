@@ -3,6 +3,18 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## Unreleased
+
+### Remote terminal stuck at ready (no paint / no input)
+
+When the grid WebSocket dies or goes half-open, phase could stay **ready**
+while `sendInput` silently no-ops. Recovery now force-reattaches the grid
+on dead `readyState`, on input against a dead socket (buffered until the
+next snapshot), and if no frame arrives within ~2.5s after input on a
+zombie OPEN socket. Look for `[grid-resync] reason=…` in the console.
+
+---
+
 ## 0.40.84 — Terminal drop fix + web download + OOTB Gmail OAuth
 
 ### Drag-drop into terminals works again

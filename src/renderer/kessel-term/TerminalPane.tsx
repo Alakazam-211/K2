@@ -535,6 +535,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // Soft-resync (R5): concurrent recovery-connected + events-reopen can
   // land within ms; generation latch so only the latest emit dials.
   const softResyncGenRef = useRef(0)
+  // Last grid frame (snapshot/delta/title/…) received on the live WS.
+  // Used with sendInput to detect dead streams that still look `ready`.
+  const lastGridFrameAtRef = useRef(0)
+  // Keystrokes buffered while we force-reattach a dead grid WS.
+  const pendingInputRef = useRef('')
+  // Shared grid-only reattach (soft-resync + dead-WS input recovery).
+  const forceGridResyncRef = useRef<(reason: string) => void>(() => {})
   // 0.39.13 — spawn ⊥ stream decoupling.
   //
   // v1 (the regression we're fixing) put `isTabVisible` in the boot
@@ -1750,6 +1757,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }
 
       ws.onmessage = (evt) => {
+        // Any successful parse marks the stream live (stall recovery).
+        lastGridFrameAtRef.current = performance.now()
         if (evt.data instanceof ArrayBuffer) {
           // k1 binary wire — snapshot/delta only; every other event
           // still arrives as JSON text below.
@@ -1766,6 +1775,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           k1WireActiveRef.current = true
           if (frame.kind === 'snapshot') {
             applySnapshotFrame(frame.payload)
+            // Flush keystrokes buffered while we reattached a dead WS.
+            const pending = pendingInputRef.current
+            if (pending) {
+              pendingInputRef.current = ''
+              try {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ action: 'input', text: pending }))
+                }
+              } catch {
+                // ignore
+              }
+            }
           } else {
             enqueueFrame({ kind: 'delta', payload: frame.payload })
           }
@@ -1781,6 +1802,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         switch (parsed.event) {
           case 'snapshot':
             applySnapshotFrame(parsed.payload)
+            {
+              const pending = pendingInputRef.current
+              if (pending) {
+                pendingInputRef.current = ''
+                try {
+                  if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ action: 'input', text: pending }))
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            }
             break
           case 'delta':
             enqueueFrame({ kind: 'delta', payload: parsed.payload })
@@ -2124,14 +2158,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     openGridWsRef.current = openGridWs
   }, [openGridWs])
 
-  // ── Soft-resync consumer (remote paint recovery) ──────────────
-  // Recovery heal + session-events reopen fan out here. Grid-only:
-  // 0.40.68 teardown (null handlers → null wsRef → close) then
-  // openGridWs — never bump reconnectAttempt / spawn re-POST as primary.
-  // Generation latch + microtask open so recovery-connected + events-reopen
-  // in the same bus flush only dial once (R5).
+  // ── Grid-only reattach (soft-resync + dead-WS recovery) ────────
+  // Recovery heal / session-events reopen / input on a dead socket /
+  // readyState poll. Grid-only: teardown then openGridWs — never
+  // bump reconnectAttempt / spawn re-POST as primary. Generation latch
+  // + microtask open so concurrent reasons only dial once (R5).
   useEffect(() => {
-    return subscribeSoftResync((reason) => {
+    const forceGridResync = (reason: string) => {
       if (
         !shouldHoldGridWs({
           visible: tabVisibleRef.current,
@@ -2152,6 +2185,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }
 
       // 2–4. Prior-socket teardown (defeat OPEN early-return + dual-dial).
+      // Even half-open OPEN sockets must be closed — openGridWs no-ops
+      // while readyState is OPEN/CONNECTING, which is the stuck-ready hole.
       const ws = wsRef.current
       if (ws) {
         try {
@@ -2176,8 +2211,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.debug(
-          `[soft-resync] reason=${reason} pane=${terminalId.slice(0, 8)}`,
+        console.warn(
+          `[grid-resync] reason=${reason} pane=${terminalId.slice(0, 8)}`,
         )
       }
 
@@ -2196,16 +2231,43 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         }
         const sid = sessionIdRef.current
         if (!sid) return
-        // Phase → connecting if was ready (not exited).
+        // Phase → connecting if was ready (not exited). Clear the false
+        // "ready" mask so the UI matches the dead stream.
         setPhase((prev) =>
           prev.kind === 'exited' ? prev : { kind: 'connecting', sessionId: sid },
         )
-        // Grid-only reopen (openGridWs no-ops only when OPEN/CONNECTING;
-        // we nulled the prior socket so this dials).
         void openGridWsRef.current()
       })
-    })
+    }
+
+    forceGridResyncRef.current = forceGridResync
+    return subscribeSoftResync((reason) => forceGridResync(reason))
   }, [terminalId])
+
+  // Visible + phase ready but grid WS not OPEN → reattach. Catches the
+  // remote-only hole where onclose was missed / phase stuck at ready and
+  // input silently no-ops. Interval is cheap (readyState check only).
+  useEffect(() => {
+    if (!isTabVisible) return
+    const id = setInterval(() => {
+      if (phaseRef.current.kind !== 'ready') return
+      if (
+        !shouldHoldGridWs({
+          visible: tabVisibleRef.current,
+          exited: false,
+          retainWhileHidden: retainWhileHiddenRef.current,
+        })
+      ) {
+        return
+      }
+      const ws = wsRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) return
+      // CONNECTING is mid-dial — don't thrash. Only recover dead/missing.
+      if (ws && ws.readyState === WebSocket.CONNECTING) return
+      forceGridResyncRef.current('ready-ws-not-open')
+    }, 2000)
+    return () => clearInterval(id)
+  }, [isTabVisible, terminalId])
 
   // ── Grid-WS lifecycle effect (0.39.13) ────────────────────────
   // The ONLY place the grid-WS opens or closes. Keyed on
@@ -2692,8 +2754,40 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       recomputeAndSendActiveRef.current('interaction')
     }
     const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify({ action: 'input', text }))
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // Remote stuck-ready hole: phase can stay `ready` after the grid
+      // WS dies (or never reopens) while sendInput silently no-ops.
+      // Buffer the keystroke and force a grid-only reattach so the next
+      // snapshot flushes pending input.
+      if (
+        phaseRef.current.kind === 'ready' ||
+        phaseRef.current.kind === 'connecting' ||
+        phaseRef.current.kind === 'parked'
+      ) {
+        pendingInputRef.current += text
+        forceGridResyncRef.current('input-dead-ws')
+      }
+      return
+    }
+    try {
+      const frameBefore = lastGridFrameAtRef.current
+      ws.send(JSON.stringify({ action: 'input', text }))
+      // Half-open remote grids can stay readyState=OPEN with no frames and
+      // no onclose. If nothing arrives after input, force grid reattach.
+      // (May rare-false-positive on no-echo password prompts — better than
+      // a permanently frozen remote pane.)
+      window.setTimeout(() => {
+        if (lastGridFrameAtRef.current > frameBefore) return
+        const live = wsRef.current
+        if (!live || live.readyState !== WebSocket.OPEN) return
+        if (phaseRef.current.kind === 'exited') return
+        pendingInputRef.current += text
+        forceGridResyncRef.current('input-no-frame')
+      }, 2500)
+    } catch {
+      pendingInputRef.current += text
+      forceGridResyncRef.current('input-send-failed')
+    }
   }, [])
 
   // 0.37.11 — active-viewer resize protocol.

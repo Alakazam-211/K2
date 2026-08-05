@@ -3,15 +3,24 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## Unreleased
+## 0.40.85 — Remote terminal stuck-ready recovery
 
-### Remote terminal stuck at ready (no paint / no input)
+### Remote terminals stay usable after grid WebSocket drops
 
-When the grid WebSocket dies, phase could stay **ready** while `sendInput`
-silently no-ops. Recovery force-reattaches on dead `readyState` (input path
-+ 2s poll) and buffers keystrokes until the next snapshot. Do **not**
-reattach merely because no frame arrived after typing — that false-fired
-reconnect thrash on healthy shells/TUIs that don't repaint every key.
+On Connect hosts, a terminal could show **phase ready** but stop painting
+and ignore input: `ready` only meant “we once got a snapshot,” while the
+grid WebSocket was dead and `sendInput` silently no-oped. Resize sometimes
+forced a reattach and “snapped” the pane live.
+
+- Force **grid-only reattach** when the socket is not OPEN (on input, and
+  every 2s while visible + ready).
+- **Buffer keystrokes** across reattach; flush after the next snapshot.
+- Soft-resync (recovery / session-events reopen) still uses the same path.
+- **Do not** reattach just because no frame arrived after a key — that
+  false-fired reconnect thrash on healthy shells (no-echo, line-edit, idle
+  TUI). Console: `[grid-resync] reason=input-dead-ws|ready-ws-not-open`.
+
+Wiki: `.k2/wiki/Bug - Remote Terminal Stuck Ready Dead Grid.md` (local).
 
 ---
 

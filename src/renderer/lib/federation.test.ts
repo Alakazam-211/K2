@@ -231,6 +231,15 @@ describe('autoPairWithHost', () => {
     installFetch({})
     await expect(autoPairWithHost('rpm.k2.dev')).rejects.toThrow(/not a saved server/i)
   })
+
+  it('fails with a clear message when this server has no tunnel (no purchased subdomain)', async () => {
+    // This Mac / no tunnel: pubkey.subdomain empty and host is loopback.
+    // Remote must still be a signed-in address-book host (rpm.k2.dev).
+    installFetch({ localPeers: [], remotePeers: [], localSubdomain: '' })
+    await expect(autoPairWithHost('rpm.k2.dev')).rejects.toThrow(
+      /no K2 Connect tunnel|purchased <subdomain>\.k2\.dev/i,
+    )
+  })
 })
 
 describe('addRemoteConnection', () => {
@@ -303,15 +312,14 @@ describe('addRemoteConnection reverse row', () => {
     expect(ru.searchParams.get('target')).toBe('cortana::mybox.k2.dev')
   })
 
-  it('skips the reverse (with a warning) when this server has no tunnel subdomain', async () => {
-    const rec = installFetch({ localPeers: [], remotePeers: [], localSubdomain: '' })
-    const res = await addRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev')
-    expect(res.reverseWarning).toMatch(/no tunnel subdomain/i)
-    expect(reverseConns(rec)).toHaveLength(0)
-    // Forward still recorded.
-    expect(
-      rec.some((r) => r.url.startsWith(LOCAL_BASE) && r.url.includes('/cli/connections')),
-    ).toBe(true)
+  it('refuses to pair (loud) when this server has no tunnel subdomain', async () => {
+    // Real daemons fail-closed on empty subdomain; mock pair/request used to
+    // succeed, but product is: no purchased tunnel → cannot federate at all
+    // (not "pair forward, skip reverse").
+    installFetch({ localPeers: [], remotePeers: [], localSubdomain: '' })
+    await expect(addRemoteConnection('/Users/me/cortana', 'ai@rpm.k2.dev')).rejects.toThrow(
+      /no K2 Connect tunnel|purchased <subdomain>\.k2\.dev/i,
+    )
   })
 
   it('skips the reverse (with a warning) when the agent is ambiguous on the peer', async () => {

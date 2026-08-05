@@ -366,6 +366,18 @@ export async function autoPairWithHost(host: string): Promise<void> {
     throw new Error(`${lead} (${inner})`)
   })
 
+  // Mutual federation dials https://<subdomain>.k2.dev. Without a bound
+  // tunnel the daemon refuses the pin ("missing the peer subdomain").
+  // Fail early with operator copy: no purchased tunnel → cannot pair.
+  if (!(localPub.subdomain || '').trim()) {
+    throw new Error(
+      `Can't pair as a federated peer with "${host}": this server has no K2 Connect tunnel.\n\n` +
+        `Each federated server needs its own purchased <subdomain>.k2.dev so peers can reach it. ` +
+        `Buy a subdomain at k2.dev, bind it under Settings → K2 Connect (tunnel Connected), ` +
+        `then try Pair again.`,
+    )
+  }
+
   // 2. Idempotency: skip whichever direction is already Trusted.
   const [remotePeers, localPeers] = await Promise.all([peersFor(remoteC), peersFor(localC)])
   const remoteTrustsLocal = remotePeers.some(

@@ -116,8 +116,10 @@ pub fn apply_pair_request(
     let subdomain = req.subdomain.trim();
     if subdomain.is_empty() {
         return Err(
-            "pair request is missing the peer subdomain — refusing to pin an \
-             unroutable peer (fail-closed); supply the peer's <subdomain>.k2.dev"
+            "can't federate: peer has no K2 Connect tunnel subdomain \
+             (fail-closed — unroutable without <subdomain>.k2.dev). \
+             Each side needs a purchased/bound tunnel under Settings → K2 Connect \
+             (or k2.dev/dashboard) before Pair"
                 .to_string(),
         );
     }
@@ -136,8 +138,10 @@ pub fn apply_pair_request(
     };
     if subdomain.is_empty() {
         return Err(
-            "pair request is missing the peer subdomain — refusing to pin an \
-             unroutable peer (fail-closed); supply the peer's <subdomain>.k2.dev"
+            "can't federate: peer has no K2 Connect tunnel subdomain \
+             (fail-closed — unroutable without <subdomain>.k2.dev). \
+             Each side needs a purchased/bound tunnel under Settings → K2 Connect \
+             (or k2.dev/dashboard) before Pair"
                 .to_string(),
         );
     }

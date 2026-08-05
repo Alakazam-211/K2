@@ -869,8 +869,9 @@ pub fn apply_scoped_passport(
 /// 1. Mint + apply scoped passport when the flag is ON (default).
 /// 2. Always strip any residual owner-token values from hook keys.
 ///
-/// Returns `true` when a scoped passport was minted (caller should bind
-/// the per-cell UDS after the PTY is open).
+/// Returns `true` when a scoped passport was minted (caller should
+/// [`activate_cell_uds`] **before** the child is exec'd so `K2_HOOK_SOCK`
+/// points at a live socket).
 pub fn prepare_agent_spawn_env(
     env: &mut std::collections::HashMap<String, String>,
     session_id: &SessionId,
@@ -895,17 +896,40 @@ pub fn prepare_agent_spawn_env(
     minted
 }
 
+/// Strip `K2_HOOK_SOCK` / `K2SO_HOOK_SOCK` from a child env map.
+///
+/// Used when the per-cell UDS failed to bind **before** exec so the child does
+/// not inherit a path that will never accept connects (connect-before-bind race
+/// / hanging startup under load). Token keys are left alone — TCP dual-accept
+/// fallback still works when the scoped flag is ON.
+pub fn strip_hook_sock_env(env: &mut std::collections::HashMap<String, String>) {
+    env.remove("K2_HOOK_SOCK");
+    env.remove("K2SO_HOOK_SOCK");
+}
+
 /// Bind the per-cell UDS and start the cell server when scoped hooks are ON.
-/// Call AFTER the PTY is open (the socket path was already injected into the
-/// child env at mint time). Bind failure is non-fatal — the cell degrades to
-/// the TCP dual-accept / disk-owner CLI fallback (non-stranding).
+///
+/// **Must run BEFORE the child is exec'd** when `K2_HOOK_SOCK` was already
+/// staged into the child env by [`prepare_agent_spawn_env`]. The historical
+/// order was mint-path → exec → bind, which left a window where the child
+/// could `connect()` a path that did not exist yet (latent hang under load).
+///
+/// Bind failure is non-fatal for the spawn itself — the cell degrades to
+/// TCP dual-accept / disk-owner CLI fallback — but the sock keys are
+/// **stripped from `env`** so the child never waits on a dead path.
 ///
 /// `per_session_uid` is `Some` only for microVM cells (socket chown + peer-cred
 /// belt); bare-PTY agent sessions pass `None`.
+///
+/// Returns `true` when the UDS is bound and serving.
 #[cfg(unix)]
-pub fn activate_cell_uds(session_id: SessionId, per_session_uid: Option<u32>) {
+pub fn activate_cell_uds(
+    session_id: SessionId,
+    per_session_uid: Option<u32>,
+    env: Option<&mut std::collections::HashMap<String, String>>,
+) -> bool {
     if !scoped_hooks_enabled() {
-        return;
+        return false;
     }
     match crate::cell_uds::bind_cell_socket(&session_id) {
         Ok(listener) => {
@@ -920,22 +944,49 @@ pub fn activate_cell_uds(session_id: SessionId, per_session_uid: Option<u32>) {
             }
             crate::cell_server::serve_cell(session_id, listener, per_session_uid);
             log_debug!(
-                "[hook-scoped] bound + serving per-cell UDS for session={session_id}"
+                "[hook-scoped] bound + serving per-cell UDS for session={session_id} (pre-exec)"
             );
+            true
         }
         Err(e) => {
             log_debug!(
-                "[hook-scoped] WARN bind cell sock failed for session={session_id}: {e}; degrading to TCP dual-accept"
+                "[hook-scoped] WARN bind cell sock failed for session={session_id}: {e}; stripping K2_HOOK_SOCK from child env, degrading to TCP dual-accept"
             );
+            if let Some(env) = env {
+                strip_hook_sock_env(env);
+            }
+            false
         }
     }
 }
 
+/// Revoke scoped token + remove per-cell socket (spawn-failed cleanup when
+/// UDS was activated pre-exec but the child never started).
+#[cfg(unix)]
+pub fn teardown_cell_uds(session_id: &SessionId) {
+    if !scoped_hooks_enabled() {
+        return;
+    }
+    revoke_session(session_id);
+    let _ = std::fs::remove_file(crate::cell_uds::cell_socket_path(session_id));
+    log_debug!(
+        "[hook-scoped] teardown_cell_uds: revoked + removed UDS for session={session_id}"
+    );
+}
+
 #[cfg(not(unix))]
-pub fn activate_cell_uds(_session_id: SessionId, _per_session_uid: Option<u32>) {
+pub fn activate_cell_uds(
+    _session_id: SessionId,
+    _per_session_uid: Option<u32>,
+    _env: Option<&mut std::collections::HashMap<String, String>>,
+) -> bool {
     // UDS is unix-only; scoped tokens still mint into env for TCP dual-accept
     // of /hook/complete when the flag is ON.
+    false
 }
+
+#[cfg(not(unix))]
+pub fn teardown_cell_uds(_session_id: &SessionId) {}
 
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
@@ -1454,6 +1505,21 @@ mod tests {
                 None => std::env::remove_var("K2_HOOK_SCOPED"),
             }
         });
+    }
+
+    #[test]
+    #[test]
+    fn strip_hook_sock_env_removes_only_sock_keys() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("K2_HOOK_SOCK".into(), "/tmp/x.sock".into());
+        env.insert("K2SO_HOOK_SOCK".into(), "/tmp/x.sock".into());
+        env.insert("K2_HOOK_TOKEN".into(), "keep-me".into());
+        env.insert("OTHER".into(), "y".into());
+        strip_hook_sock_env(&mut env);
+        assert!(!env.contains_key("K2_HOOK_SOCK"));
+        assert!(!env.contains_key("K2SO_HOOK_SOCK"));
+        assert_eq!(env.get("K2_HOOK_TOKEN").map(String::as_str), Some("keep-me"));
+        assert_eq!(env.get("OTHER").map(String::as_str), Some("y"));
     }
 
     #[test]

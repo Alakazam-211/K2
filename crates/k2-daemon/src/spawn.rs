@@ -259,6 +259,11 @@ pub fn spawn_agent_session_v2_blocking(
         }
     }
 
+    // COMPAT-58 — bind+serve per-cell UDS BEFORE exec (connect-before-bind race).
+    // On bind fail, strip K2_HOOK_SOCK from env so the child does not hang on it.
+    let uds_live =
+        crate::session_token::activate_cell_uds(session_id, None, Some(&mut env));
+
     let cfg = DaemonPtyConfig {
         session_id,
         cols: req.cols,
@@ -280,8 +285,15 @@ pub fn spawn_agent_session_v2_blocking(
     };
     let session_id = cfg.session_id;
 
-    let session = DaemonPtySession::spawn(cfg)
-        .map_err(|e| format!("v2 spawn failed: {e}"))?;
+    let session = match DaemonPtySession::spawn(cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            if uds_live {
+                crate::session_token::teardown_cell_uds(&session_id);
+            }
+            return Err(format!("v2 spawn failed: {e}"));
+        }
+    };
     // Seed last-claimer dims at create (attach-size PR2) so a grid
     // pre-snap has the body fit before the first SetActive.
     {
@@ -293,9 +305,6 @@ pub fn spawn_agent_session_v2_blocking(
             .active_rows
             .store(req.rows.max(1), Ordering::Relaxed);
     }
-
-    // COMPAT-58 — bind per-cell UDS after PTY open (bare-PTY → no chown).
-    crate::session_token::activate_cell_uds(session_id, None);
 
     v2_session_map::register(canonical_key.clone(), session.clone());
 

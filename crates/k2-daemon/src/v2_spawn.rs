@@ -710,7 +710,8 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     // ALWAYS strips any residual owner token from hook env keys — agent
     // children never receive the daemon owner credential in env. Owner is
     // still accepted over TCP for host/app (dual-accept); Phase 2 (owner
-    // REJECTION) ships separately. Socket bound + served AFTER spawn below.
+    // REJECTION) ships separately. Socket is bound + served BEFORE exec
+    // (see activate_cell_uds just above DaemonPtySession::spawn).
     {
         let pane_id = session_id_for_response.to_string();
         // Chat attribution (`[from …]`) reads agent_address via stamp.
@@ -908,10 +909,26 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         per_session_uid = Some(cell_uid);
     }
 
+    // COMPAT-58 — bind+serve per-cell UDS **BEFORE** exec. The child env
+    // already has K2_HOOK_SOCK=path from prepare_agent_spawn_env; binding
+    // after spawn left a connect-before-bind race under load. Bind failure
+    // strips the sock keys from cfg.env (TCP dual-accept fallback).
+    // MicroVM: per_session_uid is known here → chown before child starts.
+    let uds_live = crate::session_token::activate_cell_uds(
+        session_id_for_response,
+        per_session_uid,
+        Some(&mut cfg.env),
+    );
+
     let __t_spawn = std::time::Instant::now();
     let session = match DaemonPtySession::spawn(cfg) {
         Ok(s) => s,
         Err(e) => {
+            // Pre-exec UDS was bound but child never started — tear it down
+            // so the accept loop + sock file do not leak (no ChildExit path).
+            if uds_live {
+                crate::session_token::teardown_cell_uds(&session_id_for_response);
+            }
             // P4-H6: the cell never booted → free the per-session uid + tear down
             // its egress table HERE (no child-exit observer will fire). `None`
             // for every non-microVM spawn → no-op. Best-effort egress remove.
@@ -945,62 +962,6 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             .store(req.rows.max(1), Ordering::Relaxed);
     }
     let dpty_spawn_ms = __t_spawn.elapsed().as_secs_f64() * 1000.0;
-
-    // COMPAT-58 (#58 Phase 1 / PR-A) — per-cell UDS after PTY open.
-    // Default ON; bind failure degrades to TCP dual-accept (non-fatal).
-    // MicroVM cells chown the socket to their per-session uid (see
-    // `activate_cell_uds`); bare-PTY stays daemon-only 0600.
-    #[cfg(unix)]
-    if crate::session_token::scoped_hooks_enabled() {
-        // Keep the richer microVM chown logging inline; activate_cell_uds
-        // covers the bare-PTY + common path used by spawn.rs.
-        match crate::cell_uds::bind_cell_socket(&session_id_for_response) {
-            Ok(listener) => {
-                // Sandbox B2 / P4-H6: per-session tier gating. A microVM-backed
-                // cell additionally allows EXACTLY its per-session peer uid (the
-                // VMM is the host-socket peer after priv-drop to that uid); a
-                // bare-PTY cell does not → the allowed peer-uid set stays
-                // `{daemon uid}`. `per_session_uid` is `Some` iff this is a
-                // microVM cell the door allocated for.
-                //
-                // BLOCKER 2: the in-jail libkrun unix-proxy does the host-side
-                // connect() AS the VMM's per-session uid (no guest→host idmap),
-                // so a daemon-owned 0600 socket is EACCES → bytes silently
-                // dropped. For a microVM cell, chown the socket inode to EXACTLY
-                // that per-session uid (mode left 0600 → reachable by that uid +
-                // root, never world). Fail-closed: if the uid is absent (no
-                // allocation), leave it daemon-only + log. A bare-PTY cell never
-                // enters this branch → socket stays 0600 daemon-only.
-                if let Some(cell_uid) = per_session_uid {
-                    if let Err(e) = crate::cell_uds::set_cell_socket_owner(
-                        &session_id_for_response,
-                        cell_uid,
-                    ) {
-                        log_debug!(
-                            "[hook-scoped] WARN chown cell sock to per-session uid {cell_uid} failed for session={}: {e}; socket stays daemon-only",
-                            session_id_for_response
-                        );
-                    } else {
-                        log_debug!(
-                            "[hook-scoped] chowned cell sock to per-session uid {cell_uid} for microVM session={}",
-                            session_id_for_response
-                        );
-                    }
-                }
-                // The peer-cred belt allows EXACTLY this cell's per-session uid
-                // (None for a bare-PTY cell → `{daemon uid}` only).
-                crate::cell_server::serve_cell(session_id_for_response, listener, per_session_uid);
-                log_debug!(
-                    "[hook-scoped] bound + serving per-cell UDS for session={}",
-                    session_id_for_response
-                );
-            }
-            Err(e) => log_debug!(
-                "[hook-scoped] WARN per-cell UDS bind failed for session={}: {e}",
-                session_id_for_response
-            ),
-        }
-    }
 
     v2_session_map::register(req.agent_name.clone(), session.clone());
 

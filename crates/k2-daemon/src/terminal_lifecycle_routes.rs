@@ -106,7 +106,8 @@ struct SetFocusBody {
 /// COMPAT-58 (#58 Phase 1 / PR-A): when scoped hooks are ON (default),
 /// mint a per-terminal passport and inject it via `create_with_env` so
 /// the child NEVER receives the daemon owner token. Bind the per-cell
-/// UDS after create. Teardown revoke runs best-effort on kill.
+/// UDS **before** create (connect-before-bind race). Teardown on create
+/// failure / kill runs best-effort.
 pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
     let body: CreateBody = match serde_json::from_slice(body_bytes) {
         Ok(b) => b,
@@ -150,6 +151,9 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
             owner,
         );
         if minted {
+            // Bind+serve BEFORE create so the child never sees a dead sock path.
+            // On bind fail, sock keys are stripped from env (TCP dual-accept).
+            let _ = crate::session_token::activate_cell_uds(sid, None, Some(&mut env));
             passport_sid = Some(sid);
             passport_env = Some(env);
         }
@@ -168,18 +172,13 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
         passport_env,
     );
     match create_result {
-        Ok(()) => {
-            if let Some(sid) = passport_sid {
-                crate::session_token::activate_cell_uds(sid, None);
-            }
-            CliResponse::ok_json(
-                serde_json::json!({ "id": body.id }).to_string(),
-            )
-        }
+        Ok(()) => CliResponse::ok_json(
+            serde_json::json!({ "id": body.id }).to_string(),
+        ),
         Err(e) => {
-            // Minted but spawn failed → revoke so the token doesn't linger.
+            // Minted (and possibly UDS-bound) but spawn failed → full teardown.
             if let Some(sid) = passport_sid {
-                crate::session_token::revoke_session(&sid);
+                crate::session_token::teardown_cell_uds(&sid);
             }
             CliResponse::bad_request(e)
         }

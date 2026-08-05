@@ -13,6 +13,12 @@
 fn main() {
     // Re-run only when the gating inputs change.
     println!("cargo:rerun-if-changed=build.rs");
+    // Mail OAuth defaults are option_env! in mail/oauth/mod.rs — without
+    // these, cargo will not rebuild when CI/.env injects the real clients
+    // and a prior compile with REPLACE_ME can stick in the incremental cache.
+    println!("cargo:rerun-if-env-changed=K2_GMAIL_CLIENT_ID");
+    println!("cargo:rerun-if-env-changed=K2_GMAIL_CLIENT_SECRET");
+    println!("cargo:rerun-if-env-changed=K2_MICROSOFT_CLIENT_ID");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let feature_on = std::env::var("CARGO_FEATURE_SANDBOX_MICROVM").is_ok();

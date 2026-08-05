@@ -61,37 +61,54 @@ require_mail_oauth_build_env() {
     echo "  Mail OAuth build env: Gmail client id set (len=${#K2_GMAIL_CLIENT_ID}), secret set (len=${#K2_GMAIL_CLIENT_SECRET})${K2_MICROSOFT_CLIENT_ID:+, Microsoft client id set}."
 }
 
-# Fail if a built k2-daemon binary still contains the public placeholder
-# client id string (catches CI secret misconfig + env not reaching rustc).
+# Fail if a built k2-daemon did NOT bake the real Gmail client (option_env!).
+#
+# IMPORTANT: rustc may still embed the `None => "REPLACE_ME…"` string literal
+# in the binary even when option_env! took the Some branch (dead arm not
+# always stripped). So "REPLACE_ME present" is NOT a reliable failure signal.
+# Require the real env values appear as contiguous bytes instead.
 assert_daemon_oauth_not_placeholder() {
     local bin="${1:-}"
     if [ -z "$bin" ] || [ ! -f "$bin" ]; then
         echo "FATAL: assert_daemon_oauth_not_placeholder: binary missing: $bin" >&2
         exit 1
     fi
-    # Prefer grep -aF on the binary (reliable). Avoid `strings | grep -q`:
-    # under `set -o pipefail`, SIGPIPE from early-close grep yields 141 and
-    # can false-negative a real hit (missed REPLACE_ME on Linux fleet bins).
     _k2_bin_has() {
         local needle="$1"
-        grep -aF -q "$needle" "$bin" 2>/dev/null
+        [ -n "$needle" ] && grep -aF -q "$needle" "$bin" 2>/dev/null
     }
-    # Priority: Gmail — this string is what Google sees as client_id= in the auth URL.
+    # Env must already be non-placeholder (require_mail_oauth_build_env).
+    if _k2_oauth_is_placeholder "${K2_GMAIL_CLIENT_ID:-}"; then
+        echo "FATAL: assert_daemon_oauth_not_placeholder: K2_GMAIL_CLIENT_ID unset/placeholder" >&2
+        exit 1
+    fi
+    if _k2_oauth_is_placeholder "${K2_GMAIL_CLIENT_SECRET:-}"; then
+        echo "FATAL: assert_daemon_oauth_not_placeholder: K2_GMAIL_CLIENT_SECRET unset/placeholder" >&2
+        exit 1
+    fi
+    if ! _k2_bin_has "$K2_GMAIL_CLIENT_ID"; then
+        echo "FATAL: $bin does not contain the real K2_GMAIL_CLIENT_ID" >&2
+        echo "  option_env! did not bake the Gmail client — email-link would send REPLACE_ME to Google." >&2
+        exit 1
+    fi
+    if ! _k2_bin_has "$K2_GMAIL_CLIENT_SECRET"; then
+        echo "FATAL: $bin does not contain the real K2_GMAIL_CLIENT_SECRET" >&2
+        echo "  option_env! did not bake the Gmail secret — token exchange would fail." >&2
+        exit 1
+    fi
+    if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-0}" = "1" ]; then
+        if _k2_oauth_is_placeholder "${K2_MICROSOFT_CLIENT_ID:-}"; then
+            echo "FATAL: K2_MICROSOFT_CLIENT_ID required but unset/placeholder" >&2
+            exit 1
+        fi
+        if ! _k2_bin_has "$K2_MICROSOFT_CLIENT_ID"; then
+            echo "FATAL: $bin does not contain the real K2_MICROSOFT_CLIENT_ID" >&2
+            exit 1
+        fi
+    fi
+    # Optional note: REPLACE_ME may still appear as a dead match-arm string.
     if _k2_bin_has 'REPLACE_ME.apps.googleusercontent.com'; then
-        echo "FATAL: $bin still contains REPLACE_ME.apps.googleusercontent.com" >&2
-        echo "  K2_GMAIL_CLIENT_ID was not baked at compile time (email-link → Google invalid_client)." >&2
-        exit 1
+        echo "  note: binary still contains REPLACE_ME string literal (rustc dead arm); real Gmail client id is present — OK."
     fi
-    if _k2_bin_has 'REPLACE_ME-google-client-secret'; then
-        echo "FATAL: $bin still contains REPLACE_ME-google-client-secret" >&2
-        echo "  K2_GMAIL_CLIENT_SECRET was not baked at compile time." >&2
-        exit 1
-    fi
-    # Microsoft is secondary; only fail-closed when explicitly required.
-    if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-0}" = "1" ] && _k2_bin_has 'REPLACE_ME-microsoft-client-id'; then
-        echo "FATAL: $bin still contains REPLACE_ME-microsoft-client-id" >&2
-        echo "  K2_MICROSOFT_CLIENT_ID was not baked at compile time." >&2
-        exit 1
-    fi
-    echo "  OAuth placeholder check: $bin is clean (no REPLACE_ME Gmail defaults)."
+    echo "  OAuth bake check: $bin contains real Gmail client id + secret (len ${#K2_GMAIL_CLIENT_ID}/${#K2_GMAIL_CLIENT_SECRET})."
 }

@@ -32,10 +32,11 @@ Daemon defaults are `option_env!("K2_GMAIL_CLIENT_ID")` /
 baked Gmail via `.env`; Microsoft is a separate optional path.)
 
 - **Linux** `daemon-binaries`: inject `K2_GMAIL_CLIENT_ID` + `SECRET` from
-  GHA secrets at `cargo build`, then **fail the build** if the binary still
-  contains `REPLACE_ME.apps.googleusercontent.com` or
-  `REPLACE_ME-google-client-secret`.
-- **macOS** `release.sh` / `build-app.sh`: same require + strings check.
+  GHA secrets at `cargo build`, then **fail the build** unless the binary
+  contains the real client id/secret bytes (not merely “no REPLACE_ME” —
+  rustc may leave the dead `None` arm string in the binary).
+- **macOS** `release.sh` / `build-app.sh`: same require + bake check;
+  `build.rs` reruns when OAuth env changes.
 - Repo secrets required: `K2_GMAIL_CLIENT_ID`, `K2_GMAIL_CLIENT_SECRET`.
 
 After this cut, the Gmail auth URL uses the real client id (not `REPLACE_ME`).

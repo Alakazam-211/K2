@@ -119,7 +119,7 @@ The web client is remote-only and deliberately thinner than Tauri:
 |---|---|
 | **Browser tab** | Native embedded browser pane is not available (Tauri webview-only). |
 | **Updater** | App self-update / install-update is stubbed; no desktop updater. |
-| **Local filesystem** | No local FS / native drag paths; work happens on the daemon box. |
+| **Local filesystem** | No local FS / native drag paths; work happens on the daemon box. **Upload** (HTML5 drop) and **Download** (Files tree → browser save) use the same daemon `fs/*` routes as desktop remote. |
 | **Keychain** | OS keychain is stubbed; token storage uses `sessionStorage` / `localStorage` shims for Phase 1. |
 | **Multi-host switcher** | Locked to the single same-origin host — no Local, no “Add a server…”. |
 

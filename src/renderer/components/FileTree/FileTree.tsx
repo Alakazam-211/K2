@@ -16,6 +16,7 @@ import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
 import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
+import { isWebClient } from '@/lib/is-web'
 import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { onFsChanged } from '@/stores/session-events'
@@ -1462,9 +1463,12 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     const isSingle = paths.length <= 1
     const isDir = entry.isDirectory
     const hasClipboard = useFileClipboardStore.getState().hasPaths()
-    // Download only makes sense when the tree shows a REMOTE host's files
-    // (on local the file is already on this machine).
-    const isRemote = useConnectHostStore.getState().activeHost !== 'local'
+    // Download: pull from ACTIVE daemon onto this machine. Desktop Tauri
+    // lands in ~/Downloads; hosted web triggers a browser download.
+    // Skip only when desktop is on Local (file already on this Mac).
+    // Hosted web is always same-origin remote — always offer Download.
+    const isRemote =
+      isWebClient() || useConnectHostStore.getState().activeHost !== 'local'
 
     const items = [
       ...(isDir && isSingle

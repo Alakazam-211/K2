@@ -3,7 +3,7 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.84 — Terminal drop fix + OOTB Gmail OAuth
+## 0.40.84 — Terminal drop fix + web download + OOTB Gmail OAuth
 
 ### Drag-drop into terminals works again
 
@@ -12,6 +12,13 @@ The multi-window drop fix used `getCurrentWindow().listen`, but Tauri emits
 OS file/image drops into terminals did nothing. Now uses
 `getCurrentWebview().listen` so only the window under the drop handles
 inject/copy (no multi-window fan-out).
+
+### Hosted web: Download files from the Files tree
+
+FileTree **Download** on the hosted SPA streams `fs/read-range` from the
+daemon into a browser Blob (or Chromium save picker) — same wire as desktop,
+without Tauri `local_download_chunk`. Upload was already web-capable; download
+is now OOTB too.
 
 ### Pre-packaged Gmail client baked into all release daemons
 

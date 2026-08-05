@@ -91,7 +91,7 @@ describe('downloadFile (hosted web)', () => {
         eof: true,
       })
 
-    const write = vi.fn(async () => {})
+    const write = vi.fn(async (_data: Blob) => {})
     const close = vi.fn(async () => {})
     const showSaveFilePicker = vi.fn(async () => ({
       createWritable: async () => ({ write, close }),
@@ -114,9 +114,9 @@ describe('downloadFile (hosted web)', () => {
     })
     expect(showSaveFilePicker).toHaveBeenCalledWith({ suggestedName: 'notes.txt' })
     expect(write).toHaveBeenCalledTimes(1)
-    const blob = write.mock.calls[0][0] as Blob
-    expect(blob).toBeInstanceOf(Blob)
-    expect(blob.size).toBe(3)
+    const written = write.mock.calls[0]![0]
+    expect(written).toBeInstanceOf(Blob)
+    expect(written.size).toBe(3)
     expect(addToastMock).toHaveBeenCalledWith(
       expect.stringMatching(/Downloaded.*notes\.txt/),
       'success',

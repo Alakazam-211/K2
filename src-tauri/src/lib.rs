@@ -1443,6 +1443,7 @@ pub fn run() {
             // arbiter (poisoned-pool tiebreaker) + user-initiated restart.
             commands::connection::remote_boot_probe,
             commands::connection::restart_app,
+            commands::connection::open_app_devtools,
             // Style System — traffic lights follow the style's window inset.
             commands::traffic_lights::set_traffic_light_inset,
             // Embedded Browser Tab (S1 spike) — child-webview lifecycle.

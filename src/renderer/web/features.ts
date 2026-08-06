@@ -18,6 +18,11 @@ export const webFeatures = {
   browserPane: desktop,
   /** Tauri app auto-updater (check / download / install & relaunch). */
   appUpdater: desktop,
+  /**
+   * Settings → General → Developer tools (open Chromium DevTools via Tauri).
+   * Desktop only — hosted web has no `open_app_devtools` invoke target.
+   */
+  appDevTools: desktop,
   /** macOS FDA / Accessibility / Mic permissions Settings section. */
   permissions: desktop,
   /** Multi-host ServerSwitcher + Add server (hosted web is single same-origin). */

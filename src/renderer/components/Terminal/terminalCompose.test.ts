@@ -10,6 +10,7 @@ import {
   composerPermitted,
   mapMsgResponseToStatus,
   shouldSendOnKey,
+  shouldShowTerminalComposeBar,
 } from './terminalCompose'
 
 // ── Enter = send, Shift+Enter = newline ──────────────────────────────
@@ -109,5 +110,38 @@ describe('composerPermitted', () => {
     expect(
       composerPermitted({ isLocalHost: false, allowRemoteInstruct: false, perWorkspaceAllow: true })
     ).toBe(true)
+  })
+})
+
+// ── Soft-resync: keep compose bar mounted while sessionId is known ───
+// Soft-resync flips phase ready → connecting briefly. Unmounting the bar
+// would drop focus even though the draft is localStorage-backed.
+
+describe('shouldShowTerminalComposeBar', () => {
+  it('shows on ready with sessionId', () => {
+    expect(
+      shouldShowTerminalComposeBar({ kind: 'ready', sessionId: 'sess-abc' }),
+    ).toBe(true)
+  })
+
+  it('shows on connecting with sessionId (soft-resync reconnect)', () => {
+    expect(
+      shouldShowTerminalComposeBar({ kind: 'connecting', sessionId: 'sess-abc' }),
+    ).toBe(true)
+  })
+
+  it('hides on exited even when sessionId is present', () => {
+    expect(
+      shouldShowTerminalComposeBar({ kind: 'exited', sessionId: 'sess-abc' }),
+    ).toBe(false)
+  })
+
+  it('hides on idle / error / connecting without sessionId', () => {
+    expect(shouldShowTerminalComposeBar({ kind: 'idle' })).toBe(false)
+    expect(shouldShowTerminalComposeBar({ kind: 'error' })).toBe(false)
+    expect(shouldShowTerminalComposeBar({ kind: 'connecting' })).toBe(false)
+    expect(
+      shouldShowTerminalComposeBar({ kind: 'ready', sessionId: '' }),
+    ).toBe(false)
   })
 })

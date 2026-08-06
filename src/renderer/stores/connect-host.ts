@@ -861,15 +861,17 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     ) {
       return
     }
+    const isRemote = get().activeHost !== 'local'
+    // Always-on prod breadcrumb for remote hosts only (after dedupe).
+    if (isRemote) {
+      // eslint-disable-next-line no-console
+      console.warn('[recovery]', prev.kind, '→', recovery.kind)
+    }
     set({ recovery })
     // Soft-resync (D4a): remote recovery edge into `connected` → force
     // held panes to grid-only re-attach. soft-resync is store-free so this
     // cannot cycle. connected→connected is already filtered above.
-    if (
-      shouldEmitSoftResync(prev, recovery, {
-        isRemote: get().activeHost !== 'local',
-      })
-    ) {
+    if (shouldEmitSoftResync(prev, recovery, { isRemote })) {
       emitSoftResync('recovery-connected')
     }
   },

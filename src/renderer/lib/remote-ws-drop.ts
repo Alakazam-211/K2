@@ -38,10 +38,9 @@ function onDebounceFire(): void {
   // not be clobbered; already-reconnecting already owns the banner.
   if (s.recovery.kind !== 'connected') return
 
-  if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console
-    console.debug('[recovery] ws-drop debounce fire')
-  }
+  // Always-on prod breadcrumb (main debounce-fire path).
+  // eslint-disable-next-line no-console
+  console.warn('[remote-ws-drop] events debounce fire → recovery reconnecting')
 
   // D9: one flap stamp per R1 episode (soft-poll fail skips if already set).
   stampRemoteReconnectFlap()
@@ -84,15 +83,16 @@ export function noteRemoteEventsOpened(): void {
   if (debounceTimer !== null) {
     clearTimeout(debounceTimer)
     debounceTimer = null
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.debug('[recovery] ws-drop debounce cancel')
-    }
+    // Cancel path stays quiet — fires on every healthy reopen mid-debounce
+    // and is spammy under flap. The emit path below is the loud breadcrumb.
   }
   if (!hadPriorClose) return
   hadPriorClose = false
   if (!isRemoteActive()) return
   if (useConnectHostStore.getState().recovery.kind !== 'connected') return
+  // Always-on prod breadcrumb (main events-reopen path).
+  // eslint-disable-next-line no-console
+  console.warn('[remote-ws-drop] events-reopen soft-resync')
   emitSoftResync('events-reopen')
 }
 

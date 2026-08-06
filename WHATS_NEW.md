@@ -3,6 +3,33 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.86 — DevTools, soft-resync compose bar, louder prod breadcrumbs
+
+### Settings → General: Enable DevTools (desktop)
+
+Settings → **General** → **General** tab now has a **Developer tools**
+toggle (local preference only — not daemon `settings.json`). When on, an
+**Open DevTools** button opens Chromium DevTools for the focused window
+(works in release builds). Useful when diagnosing remote terminal freezes
+from console / network.
+
+### Agent compose bar stays during soft-resync
+
+The agent message bar no longer unmounts when a soft-resync briefly flips
+the pane `ready` → `connecting` while the daemon session id is still
+known. Drafts and focus are less interrupted mid-reconnect.
+
+### Louder prod console breadcrumbs
+
+Always-on (dev + release) console warnings for remote paint recovery:
+
+- `[grid-resync]` — why a grid-only reattach fired
+- `[grid-stall]` — ready pane with no frames / dead WS (log only; no auto-reattach)
+- `[soft-resync]` — recovery-connected / events-reopen fan-out
+- `[recovery]` — remote recovery kind transitions
+
+---
+
 ## 0.40.85 — Remote terminal stuck-ready recovery
 
 ### Remote terminals stay usable after grid WebSocket drops

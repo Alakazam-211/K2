@@ -522,9 +522,10 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     // consumes the request).
     let spawn_command = spawn_req.command.clone().unwrap_or_default();
 
-    // Idle-reap timeout — the caller's knob, identical semantics to the
-    // sandbox family (clamped 30..86400, default 180).
+    // Idle-reap / JWT budget — the caller's knob (clamped 30..86400, default 180).
+    // Post-completion grace is separate (`grace_secs`, default 10, clamp 0..86400).
     let timeout_secs = crate::sandbox_reaper::normalize_timeout(req.timeout_secs);
+    let grace_secs = req.grace_secs;
 
     // S1–S3: mint capability JWTs into host-curated env BEFORE spawn so the
     // agent process sees K2_CAPABILITY_TOKEN at start (never in free-form prompt).
@@ -606,7 +607,9 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     crate::sandbox_responses::record_owner(session_id_str, &principal_key);
 
     // Arm the idle reaper (idempotent; a resume re-arms the clock).
-    crate::sandbox_reaper::register(sid, timeout_secs);
+    // `grace_secs` from spawn/dead-resume body is stored on the entry and
+    // used by `mark_complete` / `on_respond_final` (default 10).
+    crate::sandbox_reaper::register(sid, timeout_secs, grace_secs);
 
     // Slice W3 — SELF-MINTING providers (adapter present, no premint:
     // codex/gemini/pi/cursor/hermes) spawn with NO session identity in argv
@@ -1204,6 +1207,7 @@ mod tests {
             &req.cols,
             &req.rows,
             &req.timeout_secs,
+            &req.grace_secs,
             &req.session,
         );
 
@@ -1221,6 +1225,28 @@ mod tests {
         assert!(follow.contains("OWNER-CONFIGURED-GUEST-POLICY"));
         assert!(!follow.contains("ATTACKER-POLICY"));
         assert!(!follow.contains(API_SPAWN_PREAMBLE));
+    }
+
+    /// Spawn/dead-resume body accepts `grace_secs` (completion lifecycle).
+    #[test]
+    fn parse_body_accepts_grace_secs() {
+        let req = match parse_body(br#"{"prompt":"hi","timeout_secs":600,"grace_secs":300}"#) {
+            Ok(r) => r,
+            Err(e) => panic!("body must parse; status={}", e.status),
+        };
+        assert_eq!(req.prompt.as_deref(), Some("hi"));
+        assert_eq!(req.timeout_secs, Some(600));
+        assert_eq!(req.grace_secs, Some(300));
+        let empty = match parse_body(br#"{"prompt":"x"}"#) {
+            Ok(r) => r,
+            Err(e) => panic!("status={}", e.status),
+        };
+        assert_eq!(empty.grace_secs, None);
+        let zero = match parse_body(br#"{"grace_secs":0}"#) {
+            Ok(r) => r,
+            Err(e) => panic!("status={}", e.status),
+        };
+        assert_eq!(zero.grace_secs, Some(0));
     }
 
     /// Empty/NULL workspace setting falls through to the platform default.

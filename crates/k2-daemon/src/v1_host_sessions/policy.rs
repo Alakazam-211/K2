@@ -70,10 +70,17 @@ pub struct ApiHostSessionRequest {
     /// Optional terminal height hint (clamped host-side).
     #[serde(default)]
     pub rows: Option<u16>,
-    /// Idle-reap timeout in seconds — clamped 30..86400, default 180
-    /// (identical semantics to the sandbox family; `sandbox_reaper`).
+    /// JWT / client poll budget in seconds — clamped 30..86400, default 180
+    /// (identical semantics to the sandbox family; `sandbox_reaper`). Not a
+    /// Working hard wall.
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// Post-completion grace window in seconds after `k2 respond --final` or
+    /// `k2 done` (host-session completion lifecycle). Clamped 0..86400,
+    /// default 10. Zero = reap ASAP on the next reaper tick. Stored on the
+    /// reaper entry at spawn / dead-resume; live inject does not change it.
+    #[serde(default)]
+    pub grace_secs: Option<u64>,
     /// Resume an EXISTING host session by id (PRD §3: "or resume with
     /// {\"session\": id}"). Validated + canonical-guarded + checked against
     /// this workspace's own api-spawned session index at the route door.

@@ -1,6 +1,7 @@
 //! Work-completion-aware reaper for API host-sessions / sandbox cells.
 //!
-//! ## Model (product lock 2026-08-03 — Scout / Julie / Rosson)
+//! ## Model (product lock 2026-08-03 — Scout / Julie / Rosson;
+//! completion lifecycle 2026-08 — grace_secs + `k2 done`)
 //!
 //! Persistent-interview cells must survive user think-time and long mid-write
 //! turns. A spawn-time spend-cap (`timeout_secs` as hard wall) is incompatible
@@ -9,12 +10,15 @@
 //! - **Working** — inject / register / non-final `k2 respond` → **never**
 //!   auto-reaped (no silence reap, no `timeout_secs` wall from spawn).
 //!   Continuous productive work may run past 300s+.
-//! - **Grace** — after `k2 respond --final`, short window
-//!   ([`FINAL_GRACE_SECS`] = 10s) then reap (work completed).
+//! - **Grace** — after `k2 respond --final` or `k2 done` ([`mark_complete`]),
+//!   window of [`Entry::grace_secs`] (default [`FINAL_GRACE_SECS`] = 10s,
+//!   set at register from spawn/dead-resume `grace_secs`) then reap.
 //! - **New activity** (inject / live-resume / non-final respond) cancels Grace
 //!   and re-enters Working (resets the completion path).
 //! - **`timeout_secs`** — still accepted on spawn (JWT lifetime clamp, client
 //!   poll budgets); it does **not** kill a Working cell.
+//! - **`grace_secs`** — post-completion idle window (0 = ASAP on next reaper
+//!   tick, default 10, max 86400). Separate from `timeout_secs`.
 //! - **Spend control** — integrator **kill** + capability non-remint / caps,
 //!   not mid-write wall.
 //!
@@ -34,14 +38,18 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 180;
 const MIN_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 86_400;
 const TICK_SECS: u64 = 15;
-/// Grace after `--final` before the cell may be reaped as idle-complete.
+/// Default grace after `--final` / `done` before the cell may be reaped.
+/// Overridden per-entry via spawn/dead-resume `grace_secs` (see
+/// [`normalize_grace_secs`]).
 pub const FINAL_GRACE_SECS: u64 = 10;
+/// Clamp ceiling for `grace_secs` (same upper bound as timeout).
+const MAX_GRACE_SECS: u64 = 86_400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     /// Agent is generating / mid-turn. Never auto-reaped.
     Working,
-    /// After final respond; reap once grace elapses.
+    /// After final respond / done; reap once grace elapses.
     Grace,
 }
 
@@ -53,6 +61,8 @@ struct Entry {
     /// Requested `timeout_secs` (JWT/client budget; not a Working kill).
     #[allow(dead_code)]
     timeout: Duration,
+    /// Post-completion grace window (seconds). Used when arming Grace.
+    grace_secs: u64,
     phase: Phase,
     /// When phase == Grace, reap after this instant (unless re-Working).
     grace_until: Option<Instant>,
@@ -68,9 +78,21 @@ pub fn normalize_timeout(requested: Option<u64>) -> u64 {
         .clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS)
 }
 
+/// Clamp spawn/dead-resume `grace_secs`: default [`FINAL_GRACE_SECS`], range
+/// **0..=86400**. Zero means reap ASAP after Grace is armed (next reaper tick,
+/// default 15s — not synchronous on the `done` request).
+pub fn normalize_grace_secs(requested: Option<u64>) -> u64 {
+    requested.unwrap_or(FINAL_GRACE_SECS).clamp(0, MAX_GRACE_SECS)
+}
+
 /// Register or re-arm. Spawn / dead-resume start **Working** (agent about to run).
-pub fn register(id: SessionId, timeout_secs: u64) {
+///
+/// `grace_secs`: optional post-completion window; [`None`] → default 10s
+/// (see [`normalize_grace_secs`]). Stored on the entry and used by
+/// [`mark_complete`] / [`on_respond_final`].
+pub fn register(id: SessionId, timeout_secs: u64, grace_secs: Option<u64>) {
     let secs = timeout_secs.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS);
+    let grace = normalize_grace_secs(grace_secs);
     let now = Instant::now();
     if let Ok(mut m) = REG.lock() {
         m.insert(
@@ -79,6 +101,7 @@ pub fn register(id: SessionId, timeout_secs: u64) {
                 last_activity: now,
                 registered_at: now,
                 timeout: Duration::from_secs(secs),
+                grace_secs: grace,
                 phase: Phase::Working,
                 grace_until: None,
             },
@@ -111,14 +134,23 @@ pub fn on_respond(id: &SessionId, final_: bool) {
     }
 }
 
-/// `k2 respond --final` → enter Grace; may reap after FINAL_GRACE_SECS.
+/// `k2 respond --final` → enter Grace using the entry's `grace_secs`.
 pub fn on_respond_final(id: &SessionId) {
+    mark_complete(id);
+}
+
+/// Arm Grace for `id` using the entry's stored `grace_secs` (default 10 when
+/// registered without an override). Used by `k2 respond --final` and
+/// `k2 done` / `POST /cli/session/complete`. Idempotent re-arm.
+///
+/// `grace_secs == 0` → `grace_until = now` (reap on next reaper tick ≤15s).
+pub fn mark_complete(id: &SessionId) {
     if let Ok(mut m) = REG.lock() {
         if let Some(e) = m.get_mut(id) {
             let now = Instant::now();
             e.last_activity = now;
             e.phase = Phase::Grace;
-            e.grace_until = Some(now + Duration::from_secs(FINAL_GRACE_SECS));
+            e.grace_until = Some(now + Duration::from_secs(e.grace_secs));
         }
     }
 }
@@ -134,6 +166,32 @@ pub fn is_working(id: &SessionId) -> bool {
     REG.lock()
         .ok()
         .and_then(|m| m.get(id).map(|e| e.phase == Phase::Working))
+        .unwrap_or(false)
+}
+
+/// Test helper: stored `grace_secs` for a registered entry.
+#[cfg(test)]
+fn entry_grace_secs(id: &SessionId) -> Option<u64> {
+    REG.lock()
+        .ok()
+        .and_then(|m| m.get(id).map(|e| e.grace_secs))
+}
+
+/// Test helper: would the reaper reap this entry at `now`?
+#[cfg(test)]
+fn would_reap_at(id: &SessionId, now: Instant) -> bool {
+    REG.lock()
+        .ok()
+        .and_then(|m| m.get(id).map(|e| should_reap(e, now)))
+        .unwrap_or(false)
+}
+
+/// Test helper: is the cell in Grace phase?
+#[cfg(test)]
+fn is_grace(id: &SessionId) -> bool {
+    REG.lock()
+        .ok()
+        .and_then(|m| m.get(id).map(|e| e.phase == Phase::Grace))
         .unwrap_or(false)
 }
 
@@ -316,15 +374,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normalize_grace_secs_default_clamp() {
+        assert_eq!(normalize_grace_secs(None), FINAL_GRACE_SECS);
+        assert_eq!(normalize_grace_secs(Some(0)), 0);
+        assert_eq!(normalize_grace_secs(Some(10)), 10);
+        assert_eq!(normalize_grace_secs(Some(86_400)), 86_400);
+        assert_eq!(normalize_grace_secs(Some(86_401)), 86_400);
+        assert_eq!(normalize_grace_secs(Some(1_000_000)), 86_400);
+    }
+
+    #[test]
     fn working_survives_idle_window() {
         let id = SessionId::new();
-        register(id, 30);
+        register(id, 30, None);
         assert!(is_working(&id));
         let now = Instant::now();
         let entry = Entry {
             last_activity: now - Duration::from_secs(120),
             registered_at: now,
             timeout: Duration::from_secs(180),
+            grace_secs: FINAL_GRACE_SECS,
             phase: Phase::Working,
             grace_until: None,
         };
@@ -339,6 +408,7 @@ mod tests {
             last_activity: now,
             registered_at: now,
             timeout: Duration::from_secs(180),
+            grace_secs: FINAL_GRACE_SECS,
             phase: Phase::Grace,
             grace_until: Some(now - Duration::from_secs(1)),
         };
@@ -354,6 +424,7 @@ mod tests {
             last_activity: now,
             registered_at: now - Duration::from_secs(400),
             timeout: Duration::from_secs(300),
+            grace_secs: FINAL_GRACE_SECS,
             phase: Phase::Working,
             grace_until: None,
         };
@@ -372,6 +443,7 @@ mod tests {
             last_activity: now - Duration::from_secs(400),
             registered_at: now - Duration::from_secs(400),
             timeout: Duration::from_secs(300),
+            grace_secs: FINAL_GRACE_SECS,
             phase: Phase::Working,
             grace_until: None,
         };
@@ -388,6 +460,7 @@ mod tests {
             last_activity: now,
             registered_at: now,
             timeout: Duration::from_secs(86_400),
+            grace_secs: FINAL_GRACE_SECS,
             phase: Phase::Grace,
             grace_until: Some(now - Duration::from_secs(1)),
         };
@@ -397,12 +470,13 @@ mod tests {
     #[test]
     fn final_enters_grace() {
         let id = SessionId::new();
-        register(id, 180);
+        register(id, 180, None);
         on_respond_final(&id);
         let e = REG.lock().unwrap();
         let ent = e.get(&id).unwrap();
         assert_eq!(ent.phase, Phase::Grace);
         assert!(ent.grace_until.is_some());
+        assert_eq!(ent.grace_secs, FINAL_GRACE_SECS);
         drop(e);
         unregister(&id);
     }
@@ -410,7 +484,7 @@ mod tests {
     #[test]
     fn inject_cancels_grace() {
         let id = SessionId::new();
-        register(id, 180);
+        register(id, 180, None);
         on_respond_final(&id);
         stamp(&id);
         assert!(is_working(&id));
@@ -420,7 +494,7 @@ mod tests {
     #[test]
     fn non_final_respond_stays_working() {
         let id = SessionId::new();
-        register(id, 180);
+        register(id, 180, None);
         on_respond_final(&id);
         on_respond(&id, false);
         assert!(is_working(&id));
@@ -434,6 +508,7 @@ mod tests {
             last_activity: now,
             registered_at: now,
             timeout: Duration::from_secs(180),
+            grace_secs: FINAL_GRACE_SECS,
             phase: Phase::Grace,
             grace_until: Some(now + Duration::from_secs(30)),
         };
@@ -448,19 +523,17 @@ mod tests {
     #[test]
     fn force_teardown_idempotent_when_dead() {
         let id = SessionId::new();
-        // No register, no map entry.
         force_teardown_host_session(&id);
         force_teardown_host_session(&id);
         assert!(!registered(&id));
         assert!(crate::v2_session_map::lookup_by_session_id(&id).is_none());
     }
 
-    /// force_teardown drops the reaper REG even when the map has no live entry
-    /// (already-killed PTY, REG lag) so Grace expiry always clears its key.
+    /// force_teardown drops the reaper REG even when the map has no live entry.
     #[test]
     fn force_teardown_clears_reaper_reg_without_map_entry() {
         let id = SessionId::new();
-        register(id, 180);
+        register(id, 180, None);
         on_respond_final(&id);
         assert!(registered(&id));
         force_teardown_host_session(&id);
@@ -470,12 +543,7 @@ mod tests {
         );
     }
 
-    /// When a live map entry exists under agent_name, force_teardown must
-    /// unregister (not bare kill-only) so the map is empty afterward —
-    /// the Grace-path contract that fixed sess.kill()-only lag.
-    ///
-    /// `v2_session_map::unregister` emits session events that need a Tokio
-    /// runtime (same constraint as other map-teardown tests).
+    /// When a live map entry exists, force_teardown must unregister (not kill-only).
     #[test]
     fn force_teardown_unregisters_map_entry() {
         use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession};
@@ -495,7 +563,7 @@ mod tests {
             let sid = session.session_id;
             let agent = format!("api-force-teardown-{}", sid);
             crate::v2_session_map::register(agent.clone(), session);
-            register(sid, 180);
+            register(sid, 180, None);
             on_respond_final(&sid);
 
             assert!(crate::v2_session_map::lookup_by_agent_name(&agent).is_some());
@@ -509,25 +577,108 @@ mod tests {
             );
             assert!(crate::v2_session_map::lookup_by_session_id(&sid).is_none());
             assert!(!registered(&sid));
-            // Second call must stay idempotent.
             force_teardown_host_session(&sid);
         });
     }
 
-    /// Dual-id: caller-facing adopted id ≠ daemon SessionId — both reaper
-    /// keys must clear (kill path / completion PRD A7).
+    /// Dual-id: caller-facing adopted id ≠ daemon SessionId — both reaper keys clear.
     #[test]
     fn force_teardown_ctx_clears_dual_reaper_keys() {
         let daemon = SessionId::new();
         let adopted = SessionId::new();
         assert_ne!(daemon, adopted);
-        register(daemon, 180);
-        register(adopted, 180);
+        register(daemon, 180, None);
+        register(adopted, 180, None);
         force_teardown_host_session_ctx(&daemon, "/tmp/k2-force-teardown-dual", &adopted.to_string());
         assert!(!registered(&daemon));
         assert!(
             !registered(&adopted),
             "caller-facing reaper key must clear when distinct from daemon id"
         );
+    }
+
+    #[test]
+    fn register_honors_grace_secs() {
+        let id = SessionId::new();
+        register(id, 180, Some(60));
+        assert_eq!(entry_grace_secs(&id), Some(60));
+        unregister(&id);
+
+        let id2 = SessionId::new();
+        register(id2, 180, Some(0));
+        assert_eq!(entry_grace_secs(&id2), Some(0));
+        unregister(&id2);
+
+        let id3 = SessionId::new();
+        register(id3, 180, Some(999_999));
+        assert_eq!(entry_grace_secs(&id3), Some(MAX_GRACE_SECS));
+        unregister(&id3);
+    }
+
+    #[test]
+    fn mark_complete_arms_grace_with_entry_grace_secs() {
+        let id = SessionId::new();
+        register(id, 180, Some(300));
+        mark_complete(&id);
+        assert!(is_grace(&id));
+        assert!(!would_reap_at(&id, Instant::now()));
+        assert!(would_reap_at(
+            &id,
+            Instant::now() + Duration::from_secs(301)
+        ));
+        unregister(&id);
+    }
+
+    #[test]
+    fn mark_complete_grace_secs_zero_reaps_asap() {
+        let id = SessionId::new();
+        register(id, 180, Some(0));
+        mark_complete(&id);
+        assert!(is_grace(&id));
+        assert!(
+            would_reap_at(&id, Instant::now()),
+            "grace_secs=0 must arm grace_until=now (reap on next tick)"
+        );
+        unregister(&id);
+    }
+
+    #[test]
+    fn inject_cancels_grace_after_mark_complete() {
+        let id = SessionId::new();
+        register(id, 180, Some(60));
+        mark_complete(&id);
+        assert!(is_grace(&id));
+        stamp(&id);
+        assert!(is_working(&id));
+        assert!(!would_reap_at(
+            &id,
+            Instant::now() + Duration::from_secs(120)
+        ));
+        unregister(&id);
+    }
+
+    #[test]
+    fn mark_complete_idempotent_rearms_grace() {
+        let id = SessionId::new();
+        register(id, 180, Some(30));
+        mark_complete(&id);
+        mark_complete(&id);
+        assert!(is_grace(&id));
+        assert!(!would_reap_at(&id, Instant::now()));
+        unregister(&id);
+    }
+
+    #[test]
+    fn on_respond_final_uses_custom_grace_secs() {
+        let id = SessionId::new();
+        register(id, 180, Some(120));
+        on_respond(&id, true);
+        assert!(is_grace(&id));
+        assert!(!would_reap_at(&id, Instant::now() + Duration::from_secs(60)));
+        assert!(would_reap_at(
+            &id,
+            Instant::now() + Duration::from_secs(121)
+        ));
+        unregister(&id);
     }
 }

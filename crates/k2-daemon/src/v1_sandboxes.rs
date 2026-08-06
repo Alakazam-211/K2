@@ -850,7 +850,8 @@ fn spawn_for_workspace_slice1(
     crate::sandbox_responses::record_owner(session_id_str, &principal_key);
 
     // Arm the idle-reaper for this cell (idempotent; a resume re-arms the clock).
-    crate::sandbox_reaper::register(sid, timeout_secs);
+    // Sandbox spawn has no `grace_secs` body field in v1 — default 10s.
+    crate::sandbox_reaper::register(sid, timeout_secs, None);
 
     // (§5 index) Record the host BRIDGE row so the per-workspace LIST surfaces
     // this session (audit) and the resume path can re-mount its sandbox home +

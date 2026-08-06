@@ -508,6 +508,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         // daemon/sessions/terminal). The cell server pins it to THIS session id
         // (the body never names the session), so a cell can only write its own log.
         "/cli/respond",
+        // Host-session completion lifecycle: `k2 done` → mark_complete only
+        // (arms Grace). Does NOT append a product message to the respond drain.
+        // Exact match; same scoped-hook auth as `/cli/respond`.
+        "/cli/session/complete",
         // 0.40.34 browser-open: the staged k2-open shim's egress from a
         // SCOPED session (K2_HOOK_SOCK + K2_HOOK_TOKEN) — xdg-open/$BROWSER
         // inside the cell forwards the URL so the CONNECTED app opens it.
@@ -1337,6 +1341,11 @@ mod tests {
     fn is_agent_verb_allows_respond_but_not_the_deny_surface() {
         // F2 (sandbox API): the in-cell agent's response egress is allowlisted.
         assert!(is_agent_verb("/cli/respond"), "/cli/respond is the agent response verb");
+        // Host-session completion lifecycle (`k2 done`).
+        assert!(
+            is_agent_verb("/cli/session/complete"),
+            "/cli/session/complete is the agent done verb"
+        );
         // And the +1 must NOT have widened the escalation surface — the deny
         // prefixes still default-deny (belt-and-braces against an allowlist edit
         // accidentally crossing a DENY_PREFIX).
@@ -1354,6 +1363,12 @@ mod tests {
         // Near-miss: a `respond`-prefixed sub-path is NOT auto-allowed (exact match
         // only — `/cli/respond` is in ALLOW_EXACT, not ALLOW_PREFIXES).
         assert!(!is_agent_verb("/cli/respond/anything"), "respond is exact-match only");
+        assert!(
+            !is_agent_verb("/cli/session/complete/extra"),
+            "session/complete is exact-match only"
+        );
+        // Do not open a broad /cli/session/ prefix.
+        assert!(!is_agent_verb("/cli/session/anything-else"));
     }
 
     #[test]
@@ -1507,7 +1522,6 @@ mod tests {
         });
     }
 
-    #[test]
     #[test]
     fn strip_hook_sock_env_removes_only_sock_keys() {
         let mut env = std::collections::HashMap::new();

@@ -567,10 +567,34 @@ mod unix_impl {
                     })
                     .unwrap_or(false);
                 let seq = crate::sandbox_responses::append(this_session_id, text, final_);
+                // Work-completion reaper (parity with TCP `/cli/respond`):
+                // non-final keeps Working; --final arms Grace.
+                if let Some(sid) = k2_core::session::SessionId::parse(this_session_id) {
+                    crate::sandbox_reaper::on_respond(&sid, final_);
+                }
                 (
                     "200 OK".to_string(),
                     "application/json",
                     serde_json::json!({ "ok": true, "seq": seq }).to_string(),
+                )
+            }
+            // Host-session / sandbox completion lifecycle — `k2 done`.
+            // mark_complete only; NEVER appends to the respond drain.
+            "/cli/session/complete" if is_post => {
+                if let Some(sid) = k2_core::session::SessionId::parse(this_session_id) {
+                    crate::sandbox_reaper::mark_complete(&sid);
+                }
+                if let Some(reason) = params.get("reason").filter(|s| !s.is_empty()) {
+                    k2_core::log_debug!(
+                        "[session-complete] session={} reason={}",
+                        this_session_id,
+                        reason
+                    );
+                }
+                (
+                    "200 OK".to_string(),
+                    "application/json",
+                    serde_json::json!({ "ok": true, "complete": true }).to_string(),
                 )
             }
             // 0.40.34 browser-open: the staged k2-open shim's scoped-session

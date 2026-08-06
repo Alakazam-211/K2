@@ -437,6 +437,7 @@ cmd_respond() {
                 echo "Usage: k2 respond [--final] <message>"
                 echo "  Send a response line from inside an API-launched session to the API caller."
                 echo "  Call it as many times as you like as you work; --final marks the last."
+                echo "  Lifecycle-only (no product message): use  k2 done  instead of empty --final."
                 return 0 ;;
             --) shift; break ;;
             *) break ;;
@@ -464,6 +465,71 @@ cmd_respond() {
         return $?
     fi
     echo "Error: 'k2 respond' needs an API-launched session (per-cell socket or scoped session token)." >&2
+    return 1
+}
+
+# ── Host-session / sandbox completion — k2 done (API context) ─────────
+# Lifecycle-only complete: arms reaper Grace without appending a product
+# message to the respond drain ring. Same transport as `k2 respond`
+# (UDS then scoped Bearer). Outside an API session, the top-level `done`
+# verb keeps its legacy meaning (checkin --done / k2so daily tier).
+_is_api_session_context() {
+    local sock; sock="$(_hook_sock)"
+    if [ -n "$sock" ] && [ -S "$sock" ]; then
+        return 0
+    fi
+    if [[ "${SCOPED_TOKEN:-}" == *.* ]] && [ -n "${PORT:-}" ]; then
+        return 0
+    fi
+    return 1
+}
+
+cmd_session_complete() {
+    local reason=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --reason) reason="$2"; shift 2 ;;
+            --help|-h)
+                echo "Usage: k2 done [--reason <text>]"
+                echo "  Mark this API-launched session complete (enter grace for reap)."
+                echo "  Does NOT post a product message to the respond drain."
+                echo "  Prefer this over empty 'k2 respond --final \"\"' when you have no answer text."
+                echo "  Optional --reason is logged only (not shown to the API caller)."
+                return 0 ;;
+            --) shift; break ;;
+            *) break ;;
+        esac
+    done
+    local form=""
+    if [ -n "$reason" ]; then
+        form="reason=$(urlencode "$reason")"
+    fi
+    local sock; sock="$(_hook_sock)"
+    if [ -n "$sock" ] && [ -S "$sock" ]; then
+        if [ -n "$form" ]; then
+            cli_post_form_uds "/cli/session/complete" "$form"
+        else
+            cli_post_form_uds "/cli/session/complete"
+        fi
+        return $?
+    fi
+    if [[ "$SCOPED_TOKEN" == *.* ]] && [ -n "$PORT" ]; then
+        if [ -n "$form" ]; then
+            curl -s -X POST "${BASE_URL}/cli/session/complete" \
+                --connect-timeout 5 --max-time 30 \
+                -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                --data-raw "$form" 2>/dev/null
+        else
+            curl -s -X POST "${BASE_URL}/cli/session/complete" \
+                --connect-timeout 5 --max-time 30 \
+                -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                --data-raw "" 2>/dev/null
+        fi
+        return $?
+    fi
+    echo "Error: 'k2 done' (session complete) needs an API-launched session (per-cell socket or scoped session token)." >&2
     return 1
 }
 
@@ -14788,7 +14854,7 @@ CHECKIN
   checkin                               Heartbeat ping ("I'm alive")
   checkin --status "message"            Report status update
   checkin --done [--blocked "reason"]   Task complete (or blocked)
-  done                                  Shortcut for `checkin --done`
+  done                                  API session: complete (grace); else checkin --done
 
 AGENTS
   agent                                 Hire, configure, list, retire this server's agents;
@@ -22362,9 +22428,14 @@ EOF
         fail_deprecated "status" "k2 checkin --status \"msg\""
         ;;
     done)
-        # Phase 2.1: `done` survives as a daily-tier shortcut for
-        # `checkin --done` per A2.2 / mock daily tier.
-        shift; cmd_done "$@"
+        # API host-session / sandbox: lifecycle complete (mark Grace, no
+        # drain message). Outside that context: legacy daily-tier shortcut
+        # for `checkin --done` (k2so / A2.2).
+        if _is_api_session_context; then
+            shift; cmd_session_complete "$@"
+        else
+            shift; cmd_done "$@"
+        fi
         ;;
     msg)
         # Phase 2.1: msg now has --inbox and --signal flag forms.

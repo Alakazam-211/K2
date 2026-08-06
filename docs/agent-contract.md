@@ -146,6 +146,21 @@ k2 respond --final "done: fix landed on main"  # mark the turn's last line
   knowledge of K2 to comply — but a bare model REPL (no tool use) cannot, see
   §8.
 
+### Lifecycle completion without a product reply: `k2 done`
+
+When your work is finished but you have **no** message for the API drain
+(e.g. you wrote results elsewhere), mark the host-session complete with:
+
+```bash
+k2 done
+```
+
+This arms the same post-completion **Grace** window as `--final` (default 10s,
+overridable via spawn `grace_secs`) and then fully tears down the session map
++ tab path — **without** appending a drain message. Prefer `--final` when the
+caller needs a final answer on `GET …/messages`. Agents that never call
+either may remain running until the integrator kills them.
+
 ## 6. Permissions: declare your danger flags
 
 Many agent CLIs have an "auto-approve everything" flag

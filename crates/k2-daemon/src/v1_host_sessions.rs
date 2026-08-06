@@ -913,26 +913,6 @@ pub(crate) fn handle_v1_host_messages(
     crate::v1_sandboxes::handle_messages(principal, &sid, since)
 }
 
-/// Resolve the `api-…` agent_name for a host session from the durable tab
-/// index (same query shape as [`lookup_live_host_session`]'s adopted path).
-/// Fail-closed: DB error / no row → `None`.
-fn agent_name_from_tab_index(ws_path: &str, session_id: &str) -> Option<String> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let mut stmt = conn
-        .prepare(
-            "SELECT wts.agent_name FROM workspace_tab_sessions wts \
-             JOIN projects p ON p.id = wts.project_id \
-             WHERE p.path = ?1 AND wts.session_id = ?2 \
-               AND wts.agent_name LIKE 'api-%' \
-             ORDER BY wts.last_seen_at DESC \
-             LIMIT 1",
-        )
-        .ok()?;
-    stmt.query_row(rusqlite::params![ws_path, session_id], |r| r.get::<_, String>(0))
-        .ok()
-}
-
 /// Kill-path ownership tombstones (sessionId → principal.display_id).
 ///
 /// ChildExit runs `sandbox_responses::evict` after every PTY death, which
@@ -990,10 +970,12 @@ fn principal_owns_host_session(session_id: &str, requester: &str) -> bool {
 ///
 /// Idempotent for an owned session that is no longer live → 200
 /// `{"sessionId","killed":false,"reason":"not_live"}`. Live teardown uses
-/// force unregister ([`crate::v2_session_map::unregister`] + kill) and
-/// [`crate::sandbox_reaper::unregister`]. Quota is released by the
-/// child-exit observer when `session.kill()` fires — this handler does
-/// NOT double-release. Cap file / JWTs are left in place (K8).
+/// [`crate::sandbox_reaper::force_teardown_host_session_ctx`] (shared with
+/// Grace expiry: force [`crate::v2_session_map::unregister`] + dual reaper
+/// key clear). Quota is released by the child-exit observer when
+/// `session.kill()` fires — this handler does NOT double-release. Cap file /
+/// JWTs are left in place (K8). Kill tombstone is stamped here only (auto
+/// Grace must not tombstone).
 pub(crate) fn handle_v1_host_kill(
     principal: &V1Principal,
     ws_raw: &str,
@@ -1046,27 +1028,16 @@ pub(crate) fn handle_v1_host_kill(
         return uniform_ws_404();
     }
 
-    // Resolve agent_name for force map unregister (preferred path — kills
-    // the child and drops the map entry in one chokepoint).
-    let agent_name = crate::v2_session_map::agent_name_for_session_id(&live.session_id)
-        .or_else(|| agent_name_from_tab_index(&ws_path, &sid_seg));
-
-    if let Some(ref name) = agent_name {
-        // Force unregister: no subscriber guard. Integrator kill is
-        // deliberate (like force:true on /cli/sessions/v2/close).
-        let _ = crate::v2_session_map::unregister(name);
-    } else {
-        // Live somehow without a map key — still kill the PTY so spend stops.
-        live.kill();
-    }
-    // Reaper keys on the daemon SessionId (may differ from the caller-facing
-    // adopted id for self-minting providers).
-    crate::sandbox_reaper::unregister(&live.session_id);
-    if let Some(parsed) = SessionId::parse(&sid_seg) {
-        if parsed != live.session_id {
-            crate::sandbox_reaper::unregister(&parsed);
-        }
-    }
+    // Full teardown via the shared chokepoint (same path as Grace reaper —
+    // force unregister / kill + dual reaper-key clear). Auth already proven;
+    // tombstone is kill-only and stamped below (auto Grace must not tombstone).
+    // Quota is still released by the child-exit observer — force_teardown
+    // must not double-release.
+    crate::sandbox_reaper::force_teardown_host_session_ctx(
+        &live.session_id,
+        &ws_path,
+        &sid_seg,
+    );
     // Stamp tombstone BEFORE returning so a racing second kill sees ownership
     // even if ChildExit already ran `sandbox_responses::evict`.
     record_kill_tombstone(&sid_seg, &requester);

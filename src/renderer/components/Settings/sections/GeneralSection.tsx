@@ -52,6 +52,7 @@ import type { GeneralSubTab } from '@/stores/settings'
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater', keywords: ['update', 'version', 'check', 'release'] },
   { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
+  { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
   { id: 'general.owner-display-name', section: 'general', group: 'General', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
   { id: 'general.config-location', section: 'general', group: 'General', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
@@ -281,6 +282,10 @@ export function GeneralSection(): React.JSX.Element {
 
         {/* CLI Version — right under App Version so it feels like part of the app */}
         <CLIVersionRow />
+
+        {/* Desktop only: open Chromium DevTools (prod + debug) for diagnosing
+            remote freezes / network. Pref is thin-client localStorage. */}
+        {webFeatures.appDevTools && <DevToolsRow />}
 
         {/* Re-open the "What's new" popup for the current version. Pairs
             with the auto-show on first launch after an update (0.38.7). */}
@@ -653,6 +658,95 @@ function CLIVersionRow(): React.JSX.Element {
             </button>
           </>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── Developer tools (desktop) ──────────────────────────────────────────
+// Thin-client only: preference lives in localStorage (`k2:enable-devtools`),
+// NOT daemon settings.json. Toggle remembers intent; "Open DevTools" invokes
+// the Tauri `open_app_devtools` command (works in release via tauri devtools
+// feature). Hidden on hosted web (`webFeatures.appDevTools`).
+const DEVTOOLS_PREF_KEY = 'k2:enable-devtools'
+
+function readDevToolsPref(): boolean {
+  try {
+    return localStorage.getItem(DEVTOOLS_PREF_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeDevToolsPref(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(DEVTOOLS_PREF_KEY, '1')
+    else localStorage.removeItem(DEVTOOLS_PREF_KEY)
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+function DevToolsRow(): React.JSX.Element {
+  const [enabled, setEnabled] = useState(readDevToolsPref)
+  const [opening, setOpening] = useState(false)
+
+  const openDevTools = useCallback(async () => {
+    setOpening(true)
+    try {
+      await invoke('open_app_devtools')
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[devtools] open_app_devtools failed:', e)
+      useToastStore
+        .getState()
+        .addToast(e instanceof Error ? e.message : String(e), 'error')
+    } finally {
+      setOpening(false)
+    }
+  }, [])
+
+  const toggle = useCallback(
+    (next: boolean) => {
+      setEnabled(next)
+      writeDevToolsPref(next)
+      // Optionally open immediately when enabled so the toggle is useful
+      // without a second click.
+      if (next) void openDevTools()
+    },
+    [openDevTools],
+  )
+
+  return (
+    <div
+      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
+      data-settings-id="general.devtools"
+    >
+      <div className="flex-1 min-w-0 mr-3">
+        <span className="text-xs text-[var(--color-text-secondary)]">
+          Developer tools
+        </span>
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          Open the Chromium DevTools console for this window (inspect console
+          logs, network). Useful when diagnosing remote terminal freezes.
+        </p>
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        {enabled && (
+          <button
+            type="button"
+            onClick={() => void openDevTools()}
+            disabled={opening}
+            className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer disabled:opacity-50"
+          >
+            {opening ? 'Opening…' : 'Open DevTools'}
+          </button>
+        )}
+        <Toggle
+          checked={enabled}
+          onChange={toggle}
+          aria-label="Enable Developer tools"
+        />
       </div>
     </div>
   )

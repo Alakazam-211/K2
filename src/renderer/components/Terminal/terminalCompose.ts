@@ -94,3 +94,21 @@ export function composerPermitted(_input: {
   // machines.) Input kept for call-site stability + the unit-test contract.
   return true
 }
+
+/**
+ * Whether TerminalPane should mount the agent compose bar for the current
+ * phase. Show while we still have a resolved daemon `sessionId` on ready
+ * OR connecting (soft-resync flips ready → connecting briefly; unmounting
+ * the bar drops focus / feels like a draft interruption even though draft
+ * text itself is localStorage-backed per sessionId).
+ *
+ * Do NOT show on idle / error without a session, or on exited (session is
+ * gone for compose purposes).
+ */
+export function shouldShowTerminalComposeBar(phase: {
+  kind: string
+  sessionId?: string
+}): boolean {
+  if (phase.kind !== 'ready' && phase.kind !== 'connecting') return false
+  return typeof phase.sessionId === 'string' && phase.sessionId.length > 0
+}

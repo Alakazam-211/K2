@@ -20,6 +20,7 @@ const KNOWN_NOOPS = new Set([
   'plugin:app|version',
   'relaunch_via_open',
   'restart_app',
+  'open_app_devtools',
 ])
 
 function storageGet(key: string): string | null {

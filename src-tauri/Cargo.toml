@@ -21,7 +21,9 @@ k2-core = { path = "../crates/k2-core" }
 
 # NOTE: tauri's `unstable` (multiwebview, for the Browser Tab) is pulled in
 # ONLY via the opt-in `browser-pane` cargo feature below — never here.
-tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "tray-icon", "image-png"] }
+# `devtools` so Settings → General → Open DevTools works in release builds
+# (open_devtools is cfg'd on debug_assertions | feature = "devtools").
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "tray-icon", "image-png", "devtools"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"

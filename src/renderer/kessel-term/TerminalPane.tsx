@@ -72,6 +72,7 @@ import {
   type DetectedLink,
 } from '@/components/Terminal/terminalLinkDetector'
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
+import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
 import {
   bracketPaste,
   isImagePath,
@@ -536,8 +537,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // land within ms; generation latch so only the latest emit dials.
   const softResyncGenRef = useRef(0)
   // Last grid frame (snapshot/delta/title/…) received on the live WS.
-  // Used with sendInput to detect dead streams that still look `ready`.
+  // Used with sendInput to detect dead streams that still look `ready`,
+  // and with the grid-stall detector (prod console breadcrumb).
   const lastGridFrameAtRef = useRef(0)
+  // Throttle for `[grid-stall]` warnings (once per 10s per pane).
+  const lastGridStallWarnAtRef = useRef(0)
   // Keystrokes buffered while we force-reattach a dead grid WS.
   const pendingInputRef = useRef('')
   // Shared grid-only reattach (soft-resync + dead-WS input recovery).
@@ -2209,12 +2213,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         }
       }
 
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[grid-resync] reason=${reason} pane=${terminalId.slice(0, 8)}`,
-        )
-      }
+      // Always-on prod breadcrumb — remote freezes are diagnosed from release
+      // builds; DEV-gating hid the reason that forced a reattach.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[grid-resync] reason=${reason} pane=${terminalId.slice(0, 8)}`,
+      )
 
       // Defer open: if another reason lands in the same turn, only the
       // latest generation proceeds (single dial).
@@ -2266,6 +2270,66 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (ws && ws.readyState === WebSocket.CONNECTING) return
       forceGridResyncRef.current('ready-ws-not-open')
     }, 2000)
+    return () => clearInterval(id)
+  }, [isTabVisible, terminalId])
+
+  // Grid-stall detector (log only — do NOT auto forceGridResync).
+  // lastGridFrameAtRef is written on every WS message but was never read.
+  // Surface a throttled `[grid-stall]` breadcrumb when phase is ready,
+  // we should hold the grid WS, and either frames have gone silent for
+  // >15s or the socket is missing / not OPEN for a few seconds.
+  useEffect(() => {
+    if (!isTabVisible) return
+    const STALL_FRAME_MS = 15_000
+    const STALL_WS_MS = 5_000
+    const WARN_THROTTLE_MS = 10_000
+    const id = setInterval(() => {
+      const phaseNow = phaseRef.current
+      if (phaseNow.kind !== 'ready') return
+      if (
+        !shouldHoldGridWs({
+          visible: tabVisibleRef.current,
+          exited: false,
+          retainWhileHidden: retainWhileHiddenRef.current,
+        })
+      ) {
+        return
+      }
+      const now = performance.now()
+      if (now - lastGridStallWarnAtRef.current < WARN_THROTTLE_MS) return
+
+      const ws = wsRef.current
+      const readyState = ws?.readyState
+      const lastFrame = lastGridFrameAtRef.current
+      const ageMs = lastFrame > 0 ? Math.round(now - lastFrame) : null
+      const sessionId8 =
+        'sessionId' in phaseNow && phaseNow.sessionId
+          ? phaseNow.sessionId.slice(0, 8)
+          : sessionIdRef.current?.slice(0, 8) ?? '?'
+
+      let reason: string | null = null
+      if (lastFrame > 0 && ageMs !== null && ageMs > STALL_FRAME_MS) {
+        reason = 'no-frame'
+      } else if (!ws || readyState !== WebSocket.OPEN) {
+        // Only warn after a short grace so mid-dial CONNECTING is quiet.
+        // Use last frame age if known; else treat missing OPEN while ready
+        // as a stall once we've been ready long enough to have had frames.
+        if (lastFrame === 0 || (ageMs !== null && ageMs > STALL_WS_MS)) {
+          reason = !ws ? 'ws-missing' : `ws-not-open:${readyState}`
+        }
+      }
+      if (!reason) return
+
+      lastGridStallWarnAtRef.current = now
+      // eslint-disable-next-line no-console
+      console.warn('[grid-stall]', {
+        reason,
+        pane: terminalId.slice(0, 8),
+        sessionId8,
+        readyState: readyState ?? null,
+        ageMs,
+      })
+    }, 5_000)
     return () => clearInterval(id)
   }, [isTabVisible, terminalId])
 
@@ -5336,14 +5400,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       )}
     </div>
 
-      {/* Composer 1b — message bar docked beneath the live pane. Gated on
-       *  phase 'ready' so it only renders with a RESOLVED daemon
-       *  sessionId (`phase.sessionId`, the id the daemon minted at
-       *  /cli/sessions/v2/spawn and that the grid-WS streams), NEVER the
-       *  renderer's `terminalId` and never a null/stale id. The composer
-       *  route resolves via `lookup_by_session_id`, so it must get the
-       *  real daemon session id. */}
-      {phase.kind === 'ready' && (
+      {/* Composer 1b — message bar docked beneath the live pane.
+       *  Keep mounted during soft-resync (`ready` → `connecting` with the
+       *  same daemon sessionId) so focus/draft UX is not interrupted.
+       *  Still requires a resolved daemon sessionId (never terminalId). */}
+      {shouldShowTerminalComposeBar(phase) && 'sessionId' in phase && phase.sessionId && (
         <TerminalComposeBar sessionId={phase.sessionId} />
       )}
     </div>

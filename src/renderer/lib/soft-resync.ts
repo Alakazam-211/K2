@@ -52,6 +52,9 @@ function flushPending(): void {
   const reasons = pendingReasons
   pendingReasons = new Set()
   for (const reason of reasons) {
+    // Always-on prod breadcrumb — one warn per coalesced flush reason.
+    // eslint-disable-next-line no-console
+    console.warn('[soft-resync]', reason)
     for (const cb of subscribers) {
       try {
         cb(reason)

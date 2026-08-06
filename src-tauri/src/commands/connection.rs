@@ -96,3 +96,30 @@ pub fn restart_app(app: AppHandle) {
         app.restart();
     }
 }
+
+/// Open Chromium DevTools on the focused webview window (fallback: `"main"`).
+///
+/// Available in release builds too (tauri `devtools` feature) so remote
+/// freezes can be diagnosed without a debug binary. Renderer: Settings →
+/// General → Developer tools (`open_app_devtools`).
+#[tauri::command]
+pub fn open_app_devtools(app: AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    // Prefer the focused WebviewWindow; multi-window users inspect the
+    // window they are looking at. Fall back to the primary "main" label.
+    let win = app
+        .webview_windows()
+        .into_values()
+        .find(|w| w.is_focused().unwrap_or(false))
+        .or_else(|| app.get_webview_window("main"));
+
+    if let Some(win) = win {
+        // `open_devtools` is gated on debug_assertions | feature=devtools;
+        // Cargo.toml enables `devtools` so release builds work too.
+        win.open_devtools();
+        Ok(())
+    } else {
+        Err("no webview window".into())
+    }
+}

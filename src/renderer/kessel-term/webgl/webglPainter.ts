@@ -214,9 +214,15 @@ export function createWebglPainter(
   })
   const onContextLost = (e: Event): void => {
     e.preventDefault()
+    // Always-on prod breadcrumb — WKWebView reclaims GL under memory
+    // pressure; fatal path already warns if restore times out.
+    // eslint-disable-next-line no-console
+    console.warn('[kessel-term/webgl] context lost — awaiting restore')
     lossTracker.handleLost()
   }
   const onContextRestored = (): void => {
+    // eslint-disable-next-line no-console
+    console.warn('[kessel-term/webgl] context restored')
     lossTracker.handleRestored()
   }
 

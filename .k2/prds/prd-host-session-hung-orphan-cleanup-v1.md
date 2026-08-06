@@ -11,12 +11,14 @@
 
 Provide a **daemon-safe** way to clean up host-session cells that are:
 
-- **Alive as processes** but **never completed** (`k2 respond --final` never seen), and  
+- **Alive as processes** but **never completed** (`k2 respond --final` / `k2 done` never seen), and  
 - **Not** legitimately mid-long-generation (Working productively),
 
 …without reintroducing a **hard wall on healthy Working** agents (0.40.81 product lock).
 
-Integrator path **`POST …/kill` already exists**. This PRD adds **optional automatic** cleanup and clear **phase semantics** so Scout’s headless reconciler and the daemon agree.
+Integrator path **`POST …/kill` already exists**. Happy-path completion teardown (full `v2_session_map::unregister`, configurable grace, `k2 done`) is specified in **`prd-host-session-completion-lifecycle-v1.md`** — this PRD is the **stuck / never-signaled** path only.
+
+**Product note (Rosson 2026-08-06):** agents that never call respond/done may keep existing for now; auto-reap of that class is this PRD + hang PRD, not forced into completion lifecycle v1.
 
 ---
 
@@ -61,7 +63,7 @@ Integrator path **`POST …/kill` already exists**. This PRD adds **optional aut
 | O4 | **Daemon auto-cleanup** (optional, default **on for host-sessions only** after canary):  
     - **Startup-hung** after T_startup (align hang PRD).  
     - **Stalled-hung** after T_stall with **no progress signals** (strict; false positives worse than orphans). |
-| O5 | Auto-cleanup uses the **same teardown as kill** (force unregister + reaper unregister). |
+| O5 | Auto-cleanup uses the **same teardown as kill** — **`v2_session_map::unregister(agent_name)`**, not bare `sess.kill()`. (Code gap: Grace reaper today only kills; completion lifecycle PRD fixes happy path; this PRD uses the same shared `force_teardown` helper.) |
 | O6 | Emit loud log + optional activity event: `host_session_auto_killed` with reason `startup_hung` \| `stalled_hung`. |
 | O7 | Env knobs: `K2_HOST_SESSION_STARTUP_HUNG_SECS`, `K2_HOST_SESSION_STALL_SECS`, `K2_HOST_SESSION_AUTO_KILL=0\|1`. Defaults ship conservative. |
 | O8 | **Progress signals** (any keeps stalled timer reset): non-final respond; inject; scrollback growth above threshold; bracketed_paste first-seen. **Absence of all** for T_stall → candidate. |

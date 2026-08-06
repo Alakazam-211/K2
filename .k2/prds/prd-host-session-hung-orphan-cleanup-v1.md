@@ -60,12 +60,12 @@ Integrator path **`POST …/kill` already exists**. Happy-path completion teardo
 | O1 | **Keep** Working immortal for **healthy** work (no `timeout_secs` wall). |
 | O2 | **`--final` → Grace (~10 s) → reap** remains the happy path (already shipped). |
 | O3 | **Integrator kill** remains SSOT for deliberate stop (`POST …/kill`). |
-| O4 | **Daemon auto-cleanup** (optional, default **on for host-sessions only** after canary):  
+| O4 | **Daemon auto-cleanup** (optional):  
     - **Startup-hung** after T_startup (align hang PRD).  
     - **Stalled-hung** after T_stall with **no progress signals** (strict; false positives worse than orphans). |
-| O5 | Auto-cleanup uses the **same teardown as kill** — **`v2_session_map::unregister(agent_name)`**, not bare `sess.kill()`. (Code gap: Grace reaper today only kills; completion lifecycle PRD fixes happy path; this PRD uses the same shared `force_teardown` helper.) |
+| O5 | Auto-cleanup uses shared **`force_teardown_host_session`** (kill-parity unregister; see completion lifecycle PRD D3). |
 | O6 | Emit loud log + optional activity event: `host_session_auto_killed` with reason `startup_hung` \| `stalled_hung`. |
-| O7 | Env knobs: `K2_HOST_SESSION_STARTUP_HUNG_SECS`, `K2_HOST_SESSION_STALL_SECS`, `K2_HOST_SESSION_AUTO_KILL=0\|1`. Defaults ship conservative. |
+| O7 | Env knobs: `K2_HOST_SESSION_STARTUP_HUNG_SECS`, `K2_HOST_SESSION_STALL_SECS`, `K2_HOST_SESSION_AUTO_KILL=0\|1`. **Default auto-kill OFF until canary**, then flip on (same matrix as hang PRD H4). |
 | O8 | **Progress signals** (any keeps stalled timer reset): non-final respond; inject; scrollback growth above threshold; bracketed_paste first-seen. **Absence of all** for T_stall → candidate. |
 | O9 | Silent long gen (no mid respond, no scrollback) is a **known hard case** — do **not** auto-kill on silence alone without progress definition agreed with Scout (prefer Scout reconciler + done-marker for v1 of *their* async; daemon stall auto-kill starts **startup-hung only** if silent-gen false positive risk is high). |
 

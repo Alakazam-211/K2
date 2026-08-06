@@ -71,23 +71,29 @@ Make host-session **completion** explicit, flexible, and fully cleaned up:
 | Default | **10** (current behavior) |
 | Clamp | **0 … 86400** (0 = reap ASAP after grace arm; large = keep warm) |
 | Semantics | After `--final` or `k2 done`, `grace_until = now + grace_secs` |
+| ASAP resolution | `grace_secs=0` means reap on next reaper tick (default tick **15s**, `K2_SANDBOX_REAPER_TICK_SECS`) — **not** synchronous in the `done` HTTP/CLI request |
 | Cancel | Inject / message-live / non-final `respond` → **Working**, grace cleared |
+| Where set | Spawn body **and dead-resume** body (same field). Live inject does **not** change stored grace in v1 (v1.1 optional) |
 | Separate from | `timeout_secs` (client/JWT budget; **not** Working hard wall, 0.40.81+) |
+| Scope | Applies to all cells on `sandbox_reaper` (host-sessions + sandboxes Grace expiry) |
 
 **Intent:** long-lived chat can set e.g. `grace_secs: 1800` so a turn’s `--final`/`done` leaves the session warm for follow-ups; one-shot jobs keep `10` or `0`.
 
 ### D3 — Full reap on grace expiry (same as kill)
 
-When Grace expires, the daemon **MUST**:
+**Code gap (today):** Grace expiry does `v2_session_map::lookup` → **`sess.kill()` only** + reaper REG drop. Full map/tab cleanup only happens if **ChildExit** later runs `v2_session_map::unregister`, or `reconcile_dead_children` notices a dead child — so UI/map can lag or stick. Explicit `/kill` already uses full unregister.
 
-1. Resolve `agent_name` for the daemon `SessionId` (same helper as host-session kill).  
-2. Call **`v2_session_map::unregister(agent_name)`** (force; no subscriber guard).  
-3. `sandbox_reaper::unregister` for all known id aliases.  
-4. Emit the same events kill/unregister already emit (`SessionRemoved`, activity idle, active recompute).  
+When Grace expires, call shared **`force_teardown_host_session(session_id)`** (kill-parity **minus** auth + kill tombstone):
 
-**MUST NOT** rely only on `sess.kill()` + hoping ChildExit runs unregister (current gap).
+1. Resolve `agent_name` via `agent_name_for_session_id` **and** host tab-index fallback (same as `handle_v1_host_kill`).  
+2. If name found → **`v2_session_map::unregister(agent_name)`** (force; no subscriber guard) — kills PTY, drops map, emits `SessionRemoved` + activity idle, clears active_terminal DB, active recompute.  
+3. If live without map key → bare `sess.kill()` only (same fallback as kill).  
+4. `sandbox_reaper::unregister` for **daemon SessionId and caller-facing/adopted id** when they differ.  
+5. **Do not** write integrator kill tombstone on auto Grace reap (tombstone is for deliberate `/kill` ownership).  
 
-Idempotent if already unregistered / dead (mirror kill `not_live` semantics internally).
+**MUST NOT** rely only on `sess.kill()` + hoping ChildExit runs unregister.
+
+Idempotent if already unregistered / dead.
 
 ### D4 — Cost / spend unchanged
 
@@ -118,12 +124,21 @@ Agent authors targeting Scout async should do **both** product marker and K2 don
 
 ```bash
 k2 done
-k2 done --reason complete   # optional, logged only
+k2 done --reason complete   # optional, logged only (v1 ok to omit)
 ```
 
-Implementation: host-session cells already have `K2_HOOK_*`; `k2 done` → `POST /cli/respond` with `final=true` and empty/minimal text **or** dedicated `POST /cli/session/complete` that only calls `on_respond_final`. Prefer **one reaper entrypoint** `mark_complete(session_id)` shared by respond-final and done.
+**`k2 done` wire (locked — no product drain pollution):**
 
-**Store `grace_secs` on reaper Entry** at `register` / update on stamp if body carries override.
+- Prefer dedicated **`POST /cli/session/complete`** (or `/cli/respond/complete`) that calls **`mark_complete(session_id)` only** — **does not** append a user-visible product message to the host-session message ring.  
+- Do **not** implement `done` as empty `k2 respond --final ""` unless docs force integrators to ignore empty finals (rejected for v1 — confuses drain consumers).  
+- `k2 respond --final "…"` still appends the final message **then** `mark_complete` (today’s order: append then reaper).
+
+**Shared entrypoints:**
+
+- `mark_complete(session_id)` — arms Grace with `Entry.grace_secs`  
+- `force_teardown_host_session(session_id)` — D3 checklist (shared with kill minus auth/tombstone)
+
+**Store `grace_secs` on reaper Entry** at `register` (spawn + dead-resume).
 
 ---
 
@@ -153,6 +168,9 @@ Implementation: host-session cells already have `K2_HOOK_*`; `k2 done` → `POST
 | A4 | Inject during grace cancels reap and accepts another turn. |
 | A5 | Agent that never calls done/final is **not** auto-reaped by this PRD (by design v1). |
 | A6 | Headless: no webview required. |
+| A7 | Dual-id (adopted ≠ daemon SessionId): both reaper keys cleared; map empty after grace. |
+| A8 | Second `done`/`--final` re-arms grace (idempotent); kill during grace is idempotent. |
+| A9 | `k2 done` does **not** create a product final message on the drain ring. |
 
 ---
 

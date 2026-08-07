@@ -378,6 +378,12 @@ pub(crate) fn resolve_host_spawn(
     // context, but agents often still set the name explicitly.
     env.insert("K2SO_AGENT_NAME".to_string(), agent_name.clone());
     env.insert("K2_AGENT_NAME".to_string(), agent_name.clone());
+    // D6: API-cell lifecycle discriminator for `k2 done` → mark_complete.
+    // Set ONLY on /v1 host-session spawn (not wake/heartbeat/canonical).
+    // Workspace agents under COMPAT-58 may have K2_HOOK_SOCK + scoped token
+    // but must keep legacy checkin --done; they never receive this env.
+    env.insert("K2_API_CELL".to_string(), "1".to_string());
+    env.insert("K2SO_API_CELL".to_string(), "1".to_string());
 
     let cols = clamp_dim(req.cols, 80, 16, 500);
     let rows = clamp_dim(req.rows, 24, 4, 300);
@@ -491,10 +497,18 @@ mod tests {
                 && args.iter().any(|a| a == &sid.to_string()),
             "claude premint convention with the FORCED id; args={args:?}"
         );
-        // Principal key staged; nothing else in the curated env.
+        // Principal key + agent-name markers + D6 API-cell lifecycle markers.
         let env = spawn.env.as_ref().expect("env present");
         assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("sk-ant-host-key"));
-        assert_eq!(env.len(), 1, "host-curated env is EXACTLY the principal key");
+        assert!(env.get("K2SO_AGENT_NAME").is_some());
+        assert!(env.get("K2_AGENT_NAME").is_some());
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(env.get("K2SO_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.len(),
+            5,
+            "principal key + agent name pair + K2_API_CELL pair"
+        );
         // Identity + spawn wiring.
         assert!(spawn.agent_name.starts_with("api-key-1-"), "{}", spawn.agent_name);
         assert_eq!(spawn.forced_session_id, Some(sid));
@@ -531,8 +545,15 @@ mod tests {
             !args.iter().any(|a| a == "--dangerously-skip-permissions"),
             "opt-out strips the preset's flag; args={args:?}"
         );
-        // Owner principal stages no key.
-        assert_eq!(spawn.env.as_ref().map(|e| e.len()), Some(0));
+        // Owner principal stages no credential key; agent-name + D6 markers only.
+        let env = spawn.env.as_ref().expect("env present");
+        assert!(env.get("ANTHROPIC_API_KEY").is_none());
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.len(),
+            4,
+            "agent name pair + K2_API_CELL pair (no credentials for owner)"
+        );
     }
 
     /// Resume splices the provider's RESUME grammar (`--resume <sid>` for
@@ -608,7 +629,12 @@ mod tests {
             Some("sk-ant-principal-wins"),
             "K2-staged principal key must OVERRIDE the preset's entry"
         );
-        assert_eq!(env.len(), 2, "no other entries invented");
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.len(),
+            6,
+            "preset var + principal key + agent name pair + K2_API_CELL pair"
+        );
     }
 
     /// Slice W3: on resume, the id spliced into the provider grammar is the
@@ -681,7 +707,12 @@ mod tests {
             env.get("ANTHROPIC_API_KEY").is_none(),
             "an openai key must NOT masquerade as an Anthropic credential"
         );
-        assert_eq!(env.len(), 2, "exactly the openai pair — nothing else invented");
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.len(),
+            6,
+            "openai pair + agent name pair + K2_API_CELL pair"
+        );
     }
 
     /// W5 — a google-provider principal stages the credential under BOTH
@@ -703,7 +734,12 @@ mod tests {
         assert_eq!(env.get("GEMINI_API_KEY").map(String::as_str), Some("goog-key-1"));
         assert_eq!(env.get("GOOGLE_API_KEY").map(String::as_str), Some("goog-key-1"));
         assert!(env.get("ANTHROPIC_API_KEY").is_none());
-        assert_eq!(env.len(), 2);
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.len(),
+            6,
+            "google pair + agent name pair + K2_API_CELL pair"
+        );
     }
 
     /// W5 — FAIL-CLOSED: an unknown provider stages NOTHING (no guessed
@@ -721,14 +757,22 @@ mod tests {
             false,
             &ApiHostSessionRequest::default(),
         );
+        let env = spawn.env.as_ref().expect("env present");
+        assert!(
+            !env.keys().any(|k| k.contains("API_KEY") || k.contains("BASE_URL")),
+            "unknown provider must stage NO credential var; env keys: {:?}",
+            env.keys().collect::<Vec<_>>(),
+        );
+        // Agent-name + D6 lifecycle markers still stage (not credentials).
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
         assert_eq!(
-            spawn.env.as_ref().map(|e| e.len()),
-            Some(0),
-            "unknown provider must stage NOTHING (fail-closed)"
+            env.len(),
+            4,
+            "agent name pair + K2_API_CELL pair only (fail-closed on credentials)"
         );
     }
 
-    /// A blank principal key stages nothing (never an empty assignment).
+    /// A blank principal key stages no credential (never an empty assignment).
     #[test]
     fn blank_principal_key_is_dropped() {
         k2_core::db::init_for_tests();
@@ -741,7 +785,17 @@ mod tests {
             false,
             &ApiHostSessionRequest::default(),
         );
-        assert_eq!(spawn.env.as_ref().map(|e| e.len()), Some(0));
+        let env = spawn.env.as_ref().expect("env present");
+        assert!(
+            env.get("ANTHROPIC_API_KEY").is_none(),
+            "blank principal key must not produce ANTHROPIC_API_KEY"
+        );
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.len(),
+            4,
+            "agent name pair + K2_API_CELL pair only"
+        );
     }
 
     /// Wire a workspace's default agent to a CUSTOM preset row with raw

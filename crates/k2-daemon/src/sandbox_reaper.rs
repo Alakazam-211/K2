@@ -1,6 +1,7 @@
 //! Work-completion-aware reaper for API host-sessions / sandbox cells.
 //!
-//! ## Model (product lock 2026-08-03 — Scout / Julie / Rosson)
+//! ## Model (product lock 2026-08-03 — Scout / Julie / Rosson;
+//! completion lifecycle 2026-08 — `k2 done` / `mark_complete`)
 //!
 //! Persistent-interview cells must survive user think-time and long mid-write
 //! turns. A spawn-time spend-cap (`timeout_secs` as hard wall) is incompatible
@@ -9,8 +10,8 @@
 //! - **Working** — inject / register / non-final `k2 respond` → **never**
 //!   auto-reaped (no silence reap, no `timeout_secs` wall from spawn).
 //!   Continuous productive work may run past 300s+.
-//! - **Grace** — after `k2 respond --final`, short window
-//!   ([`FINAL_GRACE_SECS`] = 10s) then reap (work completed).
+//! - **Grace** — after `k2 respond --final` or `k2 done` ([`mark_complete`]),
+//!   short window ([`FINAL_GRACE_SECS`] = 10s) then reap (work completed).
 //! - **New activity** (inject / live-resume / non-final respond) cancels Grace
 //!   and re-enters Working (resets the completion path).
 //! - **`timeout_secs`** — still accepted on spawn (JWT lifetime clamp, client
@@ -41,7 +42,7 @@ pub const FINAL_GRACE_SECS: u64 = 10;
 enum Phase {
     /// Agent is generating / mid-turn. Never auto-reaped.
     Working,
-    /// After final respond; reap once grace elapses.
+    /// After final respond / done; reap once grace elapses.
     Grace,
 }
 
@@ -113,6 +114,13 @@ pub fn on_respond(id: &SessionId, final_: bool) {
 
 /// `k2 respond --final` → enter Grace; may reap after FINAL_GRACE_SECS.
 pub fn on_respond_final(id: &SessionId) {
+    mark_complete(id);
+}
+
+/// Arm Grace for `id` with [`FINAL_GRACE_SECS`] (fixed 10s in Unit A).
+/// Used by `k2 respond --final` and `k2 done` / `POST /cli/session/complete`.
+/// Idempotent re-arm. Does **not** touch the respond drain.
+pub fn mark_complete(id: &SessionId) {
     if let Ok(mut m) = REG.lock() {
         if let Some(e) = m.get_mut(id) {
             let now = Instant::now();
@@ -134,6 +142,24 @@ pub fn is_working(id: &SessionId) -> bool {
     REG.lock()
         .ok()
         .and_then(|m| m.get(id).map(|e| e.phase == Phase::Working))
+        .unwrap_or(false)
+}
+
+/// Test helper: is the cell in Grace phase?
+#[cfg(test)]
+fn is_grace(id: &SessionId) -> bool {
+    REG.lock()
+        .ok()
+        .and_then(|m| m.get(id).map(|e| e.phase == Phase::Grace))
+        .unwrap_or(false)
+}
+
+/// Test helper: would the reaper reap this entry at `now`?
+#[cfg(test)]
+fn would_reap_at(id: &SessionId, now: Instant) -> bool {
+    REG.lock()
+        .ok()
+        .and_then(|m| m.get(id).map(|e| should_reap(e, now)))
         .unwrap_or(false)
 }
 
@@ -575,5 +601,47 @@ mod tests {
             !registered(&adopted),
             "caller-facing reaper key must clear when distinct from daemon id"
         );
+    }
+
+    /// Unit A: `k2 done` / `POST /cli/session/complete` arms Grace with
+    /// fixed FINAL_GRACE_SECS (same as `--final`).
+    #[test]
+    fn mark_complete_arms_grace() {
+        let id = SessionId::new();
+        register(id, 180);
+        mark_complete(&id);
+        assert!(is_grace(&id));
+        assert!(!would_reap_at(&id, Instant::now()));
+        assert!(would_reap_at(
+            &id,
+            Instant::now() + Duration::from_secs(FINAL_GRACE_SECS + 1)
+        ));
+        unregister(&id);
+    }
+
+    /// Inject after mark_complete re-enters Working (cancels Grace).
+    #[test]
+    fn inject_cancels_grace_after_mark_complete() {
+        let id = SessionId::new();
+        register(id, 180);
+        mark_complete(&id);
+        assert!(is_grace(&id));
+        stamp(&id);
+        assert!(is_working(&id));
+        assert!(!would_reap_at(
+            &id,
+            Instant::now() + Duration::from_secs(FINAL_GRACE_SECS + 1)
+        ));
+        unregister(&id);
+    }
+
+    /// on_respond_final and mark_complete share the same Grace arming path.
+    #[test]
+    fn on_respond_final_delegates_to_mark_complete() {
+        let id = SessionId::new();
+        register(id, 180);
+        on_respond_final(&id);
+        assert!(is_grace(&id));
+        unregister(&id);
     }
 }

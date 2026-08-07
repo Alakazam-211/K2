@@ -580,6 +580,25 @@ mod unix_impl {
                     serde_json::json!({ "ok": true, "seq": seq }).to_string(),
                 )
             }
+            // Host-session / sandbox completion lifecycle — `k2 done`.
+            // mark_complete only; NEVER appends to the respond drain.
+            "/cli/session/complete" if is_post => {
+                if let Some(sid) = k2_core::session::SessionId::parse(this_session_id) {
+                    crate::sandbox_reaper::mark_complete(&sid);
+                }
+                if let Some(reason) = params.get("reason").filter(|s| !s.is_empty()) {
+                    k2_core::log_debug!(
+                        "[session-complete] session={} reason={}",
+                        this_session_id,
+                        reason
+                    );
+                }
+                (
+                    "200 OK".to_string(),
+                    "application/json",
+                    serde_json::json!({ "ok": true, "complete": true }).to_string(),
+                )
+            }
             // 0.40.34 browser-open: the staged k2-open shim's scoped-session
             // egress (curl --unix-socket + Bearer over K2_HOOK_SOCK). The
             // handler validates http/https-only + length cap and broadcasts

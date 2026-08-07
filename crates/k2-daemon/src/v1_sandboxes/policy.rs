@@ -343,6 +343,11 @@ fn build_cell_env(principal: &V1Principal, req: &ApiSandboxRequest) -> HashMap<S
         "K2_SANDBOX_SETTINGS_JSON".to_string(),
         continuity_settings_json(),
     );
+    // D6: API-cell lifecycle discriminator for `k2 done` → mark_complete.
+    // Set ONLY on /v1 sandbox doors (shared by ephemeral + workspace-scoped
+    // `build_cell_env`). Not set on wake/heartbeat/canonical/agents launch.
+    env.insert("K2_API_CELL".to_string(), "1".to_string());
+    env.insert("K2SO_API_CELL".to_string(), "1".to_string());
     env
 }
 
@@ -861,12 +866,15 @@ mod tests {
             "non-empty prompt is staged verbatim into K2_REQUEST_PROMPT",
         );
         // Exactly the host-curated set: principal key + 6 recipe vars + prompt +
-        // the continuity settings.json (§5 — always staged, mirrors the workspace).
+        // the continuity settings.json (§5 — always staged, mirrors the workspace)
+        // + D6 API-cell lifecycle markers (K2_API_CELL / K2SO_API_CELL).
         assert!(
             env.get("K2_SANDBOX_SETTINGS_JSON").is_some(),
             "continuity settings.json is always staged into the cell env",
         );
-        assert_eq!(env.len(), 9, "env must be host-curated ONLY (no caller env)");
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(env.get("K2SO_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(env.len(), 11, "env must be host-curated ONLY (no caller env)");
         // cwd is a fresh ephemeral dir, NEVER $HOME.
         assert_ne!(
             Some(PathBuf::from(&spawn.cwd)),
@@ -913,12 +921,18 @@ mod tests {
         // F2: no key, but the cell-recipe defaults are still staged (6 vars).
         assert_eq!(env.get("IS_SANDBOX").map(String::as_str), Some("1"));
         assert_eq!(env.get("CLAUDE_CODE_TMPDIR").map(String::as_str), Some("/dev/shm/cc"));
-        // 6 recipe vars + the continuity settings.json (always staged, §5).
+        // 6 recipe vars + continuity settings + D6 API-cell markers.
         assert!(
             env.get("K2_SANDBOX_SETTINGS_JSON").is_some(),
             "continuity settings.json is always staged into the cell env",
         );
-        assert_eq!(env.len(), 7, "keyless → 6 recipe vars + continuity settings");
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(env.get("K2SO_API_CELL").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.len(),
+            9,
+            "keyless → 6 recipe vars + continuity settings + K2_API_CELL pair"
+        );
         // Default request (no prompt) stages NO K2_REQUEST_PROMPT.
         assert!(
             env.get("K2_REQUEST_PROMPT").is_none(),
@@ -1003,7 +1017,8 @@ mod tests {
             "unknown provider must stage NO credential var; env keys: {:?}",
             env.keys().collect::<Vec<_>>(),
         );
-        assert_eq!(env.len(), 7, "unknown-provider env census = keyless census");
+        assert_eq!(env.len(), 9, "unknown-provider env census = keyless census");
+        assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
     }
 
     /// Two resolves yield DISTINCT ephemeral dirs + distinct host-minted names.

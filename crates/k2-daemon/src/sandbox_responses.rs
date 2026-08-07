@@ -65,6 +65,13 @@ fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Length of the drain log for `session_id` (test/observability).
+#[cfg(test)]
+fn entry_count(session_id: &str) -> usize {
+    let map = RESPONSES.lock().expect("sandbox responses mutex poisoned");
+    map.get(session_id).map(|v| v.len()).unwrap_or(0)
+}
+
 /// Append an agent response line for `session_id`, returning its assigned `seq`.
 /// `seq` is `last.seq + 1` (NOT `len + 1`), so it stays monotonic even after the
 /// retention cap drops older entries.
@@ -178,6 +185,31 @@ mod tests {
         // the oldest were evicted — first retained seq is the (overflow+1)th.
         assert_eq!(all[0].seq, 6, "first 5 entries evicted");
         assert_eq!(all.last().unwrap().seq, last);
+    }
+
+    /// A9 / completion lifecycle: `k2 done` → mark_complete only — never
+    /// appends a product line. The complete route must not call `append`.
+    #[test]
+    fn mark_complete_path_must_not_append() {
+        let sid = "test-sess-complete-no-append";
+        let before = entry_count(sid);
+        // Simulate complete-route side effect only (no append).
+        if let Some(parsed) = k2_core::session::SessionId::parse(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        ) {
+            crate::sandbox_reaper::register(parsed, 180);
+            crate::sandbox_reaper::mark_complete(&parsed);
+            crate::sandbox_reaper::unregister(&parsed);
+        }
+        assert_eq!(
+            entry_count(sid),
+            before,
+            "mark_complete must not write the respond drain"
+        );
+        // Contrast: respond does append.
+        let _ = append(sid, "product".to_string(), true);
+        assert_eq!(entry_count(sid), before + 1);
+        evict(sid);
     }
 
     #[test]

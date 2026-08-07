@@ -779,6 +779,10 @@ async fn handle_one_request(
             // token ever validates, so the arm is inert. POST so the message
             // text rides the body, never a URL-logged query.
             | "/cli/respond"
+            // Host-session completion lifecycle (`k2 done`): mark_complete
+            // only — no product message on the respond drain. Same scoped
+            // hook auth as `/cli/respond`.
+            | "/cli/session/complete"
             // P3b (sandbox / K2-as-a-server) — the external spawn route. POST
             // so the (untrusted) request body never rides a URL-logged query;
             // the `/v1/*` arm below is itself gated by K2_SANDBOX_API + auth.
@@ -4108,7 +4112,7 @@ async fn handle_one_request(
                         final_,
                     );
                     // S9: work-completion reaper — non-final keeps Working;
-                    // --final enters grace window.
+                    // --final enters grace window (mark_complete).
                     if let Some(sid) =
                         k2_core::session::SessionId::parse(&validated.session_id)
                     {
@@ -4116,6 +4120,55 @@ async fn handle_one_request(
                     }
                     crate::cli_response::CliResponse::ok_json(
                         serde_json::json!({ "ok": true, "seq": seq }).to_string(),
+                    )
+                }
+                None => crate::cli_response::CliResponse {
+                    status: "403 Forbidden",
+                    content_type: "application/json",
+                    body: r#"{"error":"Invalid or missing auth token"}"#.to_string(),
+                },
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // Host-session completion lifecycle — `k2 done`. Arms Grace via
+        // mark_complete ONLY; does NOT append to the respond drain ring
+        // (A9: no product final message). Same scoped-hook auth as
+        // `/cli/respond` (session identity from the token).
+        "/cli/session/complete" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut params = super::http::parse_params(&path, &query);
+            for (k, v) in super::http::parse_form_body(&body_bytes) {
+                params.insert(k, v);
+            }
+            let presented = bearer_token
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| params.get("token").cloned())
+                .unwrap_or_default();
+            let r = match crate::session_token::require_hook(
+                &presented,
+                "/cli/session/complete",
+            ) {
+                Some(validated) => {
+                    if let Some(sid) =
+                        k2_core::session::SessionId::parse(&validated.session_id)
+                    {
+                        crate::sandbox_reaper::mark_complete(&sid);
+                    }
+                    // Optional reason is logged only (v1); never a drain payload.
+                    if let Some(reason) = params.get("reason").filter(|s| !s.is_empty()) {
+                        k2_core::log_debug!(
+                            "[session-complete] session={} reason={}",
+                            validated.session_id,
+                            reason
+                        );
+                    }
+                    crate::cli_response::CliResponse::ok_json(
+                        serde_json::json!({ "ok": true, "complete": true }).to_string(),
                     )
                 }
                 None => crate::cli_response::CliResponse {

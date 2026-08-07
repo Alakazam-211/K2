@@ -757,6 +757,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0094_api_key_disabled_at",
             include_str!("../../drizzle_sql/0094_api_key_disabled_at.sql"),
         ),
+        // 0095 — per-workspace concurrent host-session cell cap.
+        // NULL = inherit daemon default (env K2_SANDBOX_WORKSPACE_CELL_CAP
+        // or 15). See get_host_session_cell_cap + CLI host-session-cell-cap.
+        (
+            "0095_project_host_session_cell_cap",
+            include_str!("../../drizzle_sql/0095_project_host_session_cell_cap.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

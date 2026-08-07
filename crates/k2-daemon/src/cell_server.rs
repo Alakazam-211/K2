@@ -567,6 +567,13 @@ mod unix_impl {
                     })
                     .unwrap_or(false);
                 let seq = crate::sandbox_responses::append(this_session_id, text, final_);
+                // S9 / Scout: arm work-completion reaper — same as the TCP
+                // `/cli/respond` path in dispatcher.rs. Host sessions use this
+                // UDS cell (K2_HOOK_SOCK); without on_respond, `--final` only
+                // drains the message ring and never enters Grace → cells leak.
+                if let Some(sid) = k2_core::session::SessionId::parse(this_session_id) {
+                    crate::sandbox_reaper::on_respond(&sid, final_);
+                }
                 (
                     "200 OK".to_string(),
                     "application/json",

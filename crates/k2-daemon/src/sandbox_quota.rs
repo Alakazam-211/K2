@@ -209,7 +209,8 @@ const DEFAULT_OWNER_CELL_CAP: usize = 256;
 const DEFAULT_GLOBAL_CELL_CAP: usize = 512;
 
 /// Max live API cells in one workspace (env `K2_SANDBOX_WORKSPACE_CELL_CAP`).
-const DEFAULT_WORKSPACE_CELL_CAP: usize = 15;
+/// Must stay aligned with `k2_core::workspace::settings::DEFAULT_HOST_SESSION_CELL_CAP`.
+pub const DEFAULT_WORKSPACE_CELL_CAP: usize = 15;
 
 /// Max seconds a spawn waits in the K2 queue when at cap
 /// (env `K2_SANDBOX_QUEUE_WAIT_SECS`). 0 = no wait (immediate 429).
@@ -266,6 +267,10 @@ pub fn try_acquire(principal_key: &str) -> Result<(), QuotaError> {
 }
 
 /// Acquire with optional per-workspace ceiling (host-sessions pass `Some(ws_path)`).
+/// Uses the daemon-wide default [`workspace_cap`] (env or 15). Prefer
+/// [`try_acquire_in_workspace_with_cap`] when the caller has resolved a
+/// per-workspace override (DB `host_session_cell_cap`).
+///
 /// When at capacity, **waits** up to `K2_SANDBOX_QUEUE_WAIT_SECS` (default 30s)
 /// polling for a free slot (S8 K2 spawn queue).
 ///
@@ -283,9 +288,23 @@ pub fn try_acquire_in_workspace(
     principal_key: &str,
     workspace: Option<&str>,
 ) -> Result<(), QuotaError> {
+    try_acquire_in_workspace_with_cap(principal_key, workspace, workspace_cap())
+}
+
+/// Like [`try_acquire_in_workspace`], but with an explicit per-workspace
+/// concurrent-cell ceiling. Host-session spawn resolves
+/// `get_host_session_cell_cap(ws)` and passes it here so each workspace
+/// can raise its runway without changing the daemon-wide env default.
+pub fn try_acquire_in_workspace_with_cap(
+    principal_key: &str,
+    workspace: Option<&str>,
+    ws_cap: usize,
+) -> Result<(), QuotaError> {
     let per_principal = per_principal_cap_for(principal_key);
     let global = global_cap();
-    let ws_cap = workspace_cap();
+    // Floor at 1 so a buggy zero override cannot brick acquires silently
+    // (settings write path already rejects 0; this is defense in depth).
+    let ws_cap = ws_cap.max(1);
     let max_wait = queue_wait();
     let deadline = Instant::now() + max_wait;
     loop {
@@ -552,6 +571,49 @@ mod tests {
             "workspace reported before global when both would bind"
         );
         assert_eq!(err.code(), "workspace-cell-cap");
+    }
+
+    /// Per-workspace higher cap allows more concurrent acquires for that
+    /// workspace key than a lower-capped sibling (explicit `ws_cap` arg).
+    #[test]
+    fn higher_per_workspace_cap_allows_more_acquires() {
+        let mut s = QuotaState::new();
+        let per_principal = 1000;
+        let global = 1000;
+        let low_ws = "/tmp/ws-low-cap";
+        let high_ws = "/tmp/ws-high-cap";
+        let low_cap = 2;
+        let high_cap = 5;
+
+        for i in 0..low_cap {
+            assert!(
+                s.try_acquire_ws("P", Some(low_ws), per_principal, low_cap, global)
+                    .is_ok(),
+                "low-cap acquire {i} must succeed",
+            );
+        }
+        assert_eq!(
+            s.try_acquire_ws("P", Some(low_ws), per_principal, low_cap, global)
+                .unwrap_err(),
+            QuotaError::WorkspaceCap,
+            "low-cap workspace must refuse at N+1",
+        );
+
+        // Same principal, higher per-ws cap: N=5 succeeds independently.
+        for i in 0..high_cap {
+            assert!(
+                s.try_acquire_ws("P", Some(high_ws), per_principal, high_cap, global)
+                    .is_ok(),
+                "high-cap acquire {i} must succeed",
+            );
+        }
+        assert_eq!(s.workspace_count(low_ws), low_cap);
+        assert_eq!(s.workspace_count(high_ws), high_cap);
+        assert_eq!(
+            s.try_acquire_ws("P", Some(high_ws), per_principal, high_cap, global)
+                .unwrap_err(),
+            QuotaError::WorkspaceCap,
+        );
     }
 
     /// Frozen 429 `code` strings for the integrator envelope (0.40.76).

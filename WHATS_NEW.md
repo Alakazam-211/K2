@@ -3,22 +3,55 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.87 — Host-session kill survives daemon restart
+## 0.40.87 — Host-session finalize, kill, and per-workspace cap (Scout)
 
-### Kill uses durable ownership (Scout orphan fix)
+### UDS `k2 respond --final` actually arms Grace
+
+Host-session agents post over `K2_HOOK_SOCK` (per-cell UDS). That path used to
+return `{"ok":true}` without calling `sandbox_reaper::on_respond`, so cells
+never entered Grace and accumulated forever. UDS `/cli/respond` now matches
+the TCP path: `--final` arms Grace.
+
+### Grace expiry does full teardown
+
+Grace no longer only `sess.kill()` + drop the reaper entry. Expiry uses the
+same full teardown chokepoint as `/kill` (map unregister + reaper keys).
+
+### `/kill` works after daemon restart
 
 `POST /v1/w/<ws>/host-sessions/<id>/kill` no longer depends only on the
-in-memory owner map (wiped on daemon restart). After the workspace is
-authorized, ownership is:
+in-memory owner map (wiped on restart). After workspace auth:
 
-1. Live owner map or kill tombstone (same process)
-2. Durable `workspace_tab_sessions` evidence: host-minted `api-{principal}-…`
+1. Live owner map or kill tombstone
+2. Durable `api-{principal}-…` tab row
 3. Daemon **Owner** may sweep any durable `api-*` host session in that workspace
 
-Not-live kills clear the durable index (`indexCleared`), evict respond/owner
-maps, stamp a kill tombstone, and best-effort release quota when ChildExit
-never ran — so Scout can reap list orphans after restart instead of 404ing
-every kill with `{"error":"no such workspace"}`.
+Not-live kills clear the durable index (`indexCleared`) so Scout can reap
+list orphans. Note: the 404 body is still often `{"error":"no such workspace"}`
+for unknown/unowned (uniform, no existence oracle) — not always a bad slug.
+
+### Per-workspace host-session concurrent cap
+
+Each workspace can set its own concurrent live host-session cap
+(`host_session_cell_cap`) instead of only the process-wide env default.
+
+- **Default still 15** (global env: `K2_SANDBOX_WORKSPACE_CELL_CAP`)
+- **Max 512** (daemon ceiling)
+- Settings → workspace **API** tab, plus CLI:
+
+```
+k2 workspace api-host-session-cap get <ws>
+k2 workspace api-host-session-cap set <ws> 64
+k2 workspace api-host-session-cap set <ws> default
+```
+
+Also: `POST /cli/workspace/set` with `fields.host_session_cell_cap`.
+
+Raising the cap is runway; agents still need successful `--final` (now
+working on UDS) so cells actually reaper.
+
+---
+
 
 ---
 

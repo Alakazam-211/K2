@@ -488,9 +488,17 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
 
     // CONCURRENT-SESSION CAP — principal + workspace + global (S7) with
     // K2 spawn queue wait (S8). Live resume above never acquires.
-    // Released by the child-exit observer on success, or explicitly on early failure.
+    // Per-workspace ceiling from projects.host_session_cell_cap (NULL →
+    // env K2_SANDBOX_WORKSPACE_CELL_CAP or 15). Released by the
+    // child-exit observer on success, or explicitly on early failure.
     let principal_key = principal.display_id();
-    if let Err(qe) = sandbox_quota::try_acquire_in_workspace(&principal_key, Some(&ws_path)) {
+    let ws_cell_cap =
+        k2_core::workspace::settings::get_host_session_cell_cap(&ws_path);
+    if let Err(qe) = sandbox_quota::try_acquire_in_workspace_with_cap(
+        &principal_key,
+        Some(&ws_path),
+        ws_cell_cap,
+    ) {
         return CliResponse {
             status: "429 Too Many Requests",
             content_type: "application/json",

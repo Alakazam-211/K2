@@ -111,8 +111,23 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // public wiki chat opt-in. Values: '1' | '0' (default 0/OFF).
         // Serve alone never enables chat (D6). See `get_wiki_public_chat`.
         "wiki_public_chat",
+        // Per-workspace concurrent host-session (live cell) cap.
+        // Positive integer 1..=MAX_HOST_SESSION_CELL_CAP (512); empty /
+        // "default" / "null" → store NULL (inherit daemon default via
+        // env K2_SANDBOX_WORKSPACE_CELL_CAP or 15). See
+        // `get_host_session_cell_cap`.
+        "host_session_cell_cap",
     ]
 }
+
+/// Daemon ceiling for a per-workspace host-session concurrent cell cap.
+/// Agents can raise the cap via CLI / workspace set, but not past this.
+pub const MAX_HOST_SESSION_CELL_CAP: usize = 512;
+
+/// Product default concurrent host-session cells per workspace when the
+/// column is NULL and env `K2_SANDBOX_WORKSPACE_CELL_CAP` is unset.
+/// Must stay aligned with `sandbox_quota::DEFAULT_WORKSPACE_CELL_CAP`.
+pub const DEFAULT_HOST_SESSION_CELL_CAP: usize = 15;
 
 /// Platform default when `projects.api_guest_policy` is NULL or blank.
 /// Byte-stable — host-session inject + tests pin it. Soft framing only;
@@ -220,11 +235,64 @@ pub fn update_project_setting(
             "mail_address_cap must be a non-negative integer (0 = unlimited), got {value:?}"
         ));
     }
+    // Per-workspace host-session cell cap: empty / "default" / "null"
+    // clears to NULL (inherit daemon default). Otherwise require a
+    // positive integer in 1..=MAX_HOST_SESSION_CELL_CAP — reject 0 and
+    // non-numeric loudly; reject values above the daemon ceiling.
+    if field == "host_session_cell_cap" {
+        let trimmed = value.trim();
+        let clear = trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("default")
+            || trimmed.eq_ignore_ascii_case("null");
+        if !clear {
+            match trimmed.parse::<usize>() {
+                Ok(0) => {
+                    return Err(
+                        "host_session_cell_cap must be >= 1 (use 'default' to inherit daemon default)"
+                            .into(),
+                    );
+                }
+                Ok(n) if n > MAX_HOST_SESSION_CELL_CAP => {
+                    return Err(format!(
+                        "host_session_cell_cap max is {MAX_HOST_SESSION_CELL_CAP} (daemon ceiling), got {n}"
+                    ));
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    return Err(format!(
+                        "host_session_cell_cap must be a positive integer 1..={MAX_HOST_SESSION_CELL_CAP}, or 'default' to inherit, got {value:?}"
+                    ));
+                }
+            }
+        }
+    }
 
-    let sql = format!("UPDATE projects SET {} = ?1 WHERE path = ?2", field);
-    let rows = conn
-        .execute(&sql, rusqlite::params![value, project_path])
-        .map_err(|e| format!("DB update failed: {}", e))?;
+    // host_session_cell_cap clear path stores SQL NULL (Option::None).
+    let rows = if field == "host_session_cell_cap" {
+        let trimmed = value.trim();
+        let clear = trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("default")
+            || trimmed.eq_ignore_ascii_case("null");
+        if clear {
+            conn.execute(
+                "UPDATE projects SET host_session_cell_cap = NULL WHERE path = ?1",
+                rusqlite::params![project_path],
+            )
+            .map_err(|e| format!("DB update failed: {}", e))?
+        } else {
+            // Validated positive integer above; store as integer.
+            let n: i64 = trimmed.parse().expect("validated positive integer");
+            conn.execute(
+                "UPDATE projects SET host_session_cell_cap = ?1 WHERE path = ?2",
+                rusqlite::params![n, project_path],
+            )
+            .map_err(|e| format!("DB update failed: {}", e))?
+        }
+    } else {
+        let sql = format!("UPDATE projects SET {} = ?1 WHERE path = ?2", field);
+        conn.execute(&sql, rusqlite::params![value, project_path])
+            .map_err(|e| format!("DB update failed: {}", e))?
+    };
 
     if rows == 0 {
         return Err(format!("Project not found in DB: {}", project_path));
@@ -270,7 +338,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 agent_enabled, \
                 pinned, name, use_session_stream, allow_remote_instruct, \
                 dns_manage_enabled, agents_can_create_connections, \
-                api_guest_policy, wiki_public_chat, api_skip_permissions \
+                api_guest_policy, wiki_public_chat, api_skip_permissions, \
+                host_session_cell_cap \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -296,6 +365,16 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 None => true,
                 Some(v) => v != 0,
             };
+            // Per-workspace host-session cell cap: NULL = inherit daemon
+            // default (expose as JSON null). Positive stored value is
+            // clamped to the daemon ceiling for display.
+            let host_cap_json = match row.get::<_, Option<i64>>(13).unwrap_or(None) {
+                Some(v) if v >= 1 => {
+                    let n = (v as usize).min(MAX_HOST_SESSION_CELL_CAP);
+                    serde_json::json!(n)
+                }
+                _ => serde_json::Value::Null,
+            };
             Ok(serde_json::json!({
                 "mode": row.get::<_, String>(0).unwrap_or_else(|_| "off".to_string()),
                 "worktreeMode": row.get::<_, i64>(1).unwrap_or(0) == 1,
@@ -317,6 +396,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "wikiPublicChat": row.get::<_, i64>(11).unwrap_or(0) == 1,
                 // Host-sessions F1 — keep auto-approve on /v1 spawns (default ON).
                 "apiSkipPermissions": api_skip,
+                // Concurrent host-session cells for this workspace (null = inherit).
+                "hostSessionCellCap": host_cap_json,
             }))
         },
     )
@@ -626,6 +707,60 @@ pub fn mail_agent_send_for_path(project_path: &str) -> String {
     } else {
         "off".to_string()
     }
+}
+
+/// Daemon default concurrent host-session cells per workspace.
+///
+/// Reads env `K2_SANDBOX_WORKSPACE_CELL_CAP`; falls back to
+/// [`DEFAULT_HOST_SESSION_CELL_CAP`] (15) when absent, empty, zero, or
+/// unparsable. Aligned with `k2_daemon::sandbox_quota::workspace_cap()`.
+pub fn daemon_default_host_session_cell_cap() -> usize {
+    match std::env::var("K2_SANDBOX_WORKSPACE_CELL_CAP") {
+        Ok(v) => v
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n > 0)
+            .map(|n| n.min(MAX_HOST_SESSION_CELL_CAP))
+            .unwrap_or(DEFAULT_HOST_SESSION_CELL_CAP),
+        Err(_) => DEFAULT_HOST_SESSION_CELL_CAP,
+    }
+}
+
+/// Raw stored `host_session_cell_cap` for `project_path`, if set and
+/// positive. `None` means inherit the daemon default (column NULL,
+/// invalid, or project unknown). Used by CLI `get` so operators can
+/// tell override vs inherit.
+pub fn get_host_session_cell_cap_raw(project_path: &str) -> Option<usize> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let raw: Option<i64> = conn
+        .query_row(
+            "SELECT host_session_cell_cap FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten();
+    match raw {
+        Some(v) if v >= 1 => Some((v as usize).min(MAX_HOST_SESSION_CELL_CAP)),
+        _ => None,
+    }
+}
+
+/// EFFECTIVE concurrent host-session cell cap for `project_path`.
+///
+/// - Column set to a positive integer → that value, clamped to
+///   [`MAX_HOST_SESSION_CELL_CAP`].
+/// - Column NULL / invalid / unknown project →
+///   [`daemon_default_host_session_cell_cap`] (env or 15).
+///
+/// Host-session spawn passes this into the sandbox quota acquire path
+/// so each workspace can raise its live-cell runway without raising the
+/// global env default for every workspace.
+pub fn get_host_session_cell_cap(project_path: &str) -> usize {
+    get_host_session_cell_cap_raw(project_path)
+        .unwrap_or_else(daemon_default_host_session_cell_cap)
 }
 
 /// The EFFECTIVE address cap for `project_path` (D6): number of
@@ -1278,6 +1413,129 @@ mod tests {
                 .expect_err("bad cap must be rejected");
             assert!(err.contains("mail_address_cap"), "'{bad}' → {err:?}");
         }
+    }
+
+    // ── Per-workspace host-session concurrent cell cap ──────────────
+
+    /// Fresh row inherits daemon default (15); set 64 round-trips;
+    /// clear via "default" returns to inherit; settings JSON exposes
+    /// null when inheriting and the number when set.
+    #[test]
+    fn host_session_cell_cap_defaults_and_round_trips() {
+        let path = unique_path("hs-cell-cap");
+        let _pid = insert_project(&path);
+
+        // Fresh / unknown → daemon default (env unset in tests → 15).
+        assert_eq!(get_host_session_cell_cap_raw(&path), None);
+        assert_eq!(
+            get_host_session_cell_cap(&path),
+            DEFAULT_HOST_SESSION_CELL_CAP
+        );
+        assert_eq!(
+            get_host_session_cell_cap("/tmp/never-registered-hs-cap"),
+            DEFAULT_HOST_SESSION_CELL_CAP
+        );
+        let settings = get_project_settings(&path).expect("read default");
+        assert!(
+            settings["hostSessionCellCap"].is_null(),
+            "inherit must surface as JSON null, got {:?}",
+            settings["hostSessionCellCap"]
+        );
+
+        update_project_setting(&path, "host_session_cell_cap", "64").expect("set 64");
+        assert_eq!(get_host_session_cell_cap_raw(&path), Some(64));
+        assert_eq!(get_host_session_cell_cap(&path), 64);
+        let settings = get_project_settings(&path).expect("read set");
+        assert_eq!(settings["hostSessionCellCap"], 64);
+
+        // Clear via "default" → inherit again.
+        update_project_setting(&path, "host_session_cell_cap", "default").expect("clear");
+        assert_eq!(get_host_session_cell_cap_raw(&path), None);
+        assert_eq!(
+            get_host_session_cell_cap(&path),
+            DEFAULT_HOST_SESSION_CELL_CAP
+        );
+        let settings = get_project_settings(&path).expect("read cleared");
+        assert!(settings["hostSessionCellCap"].is_null());
+
+        // Empty and "null" also clear.
+        update_project_setting(&path, "host_session_cell_cap", "32").expect("set 32");
+        update_project_setting(&path, "host_session_cell_cap", "").expect("clear empty");
+        assert_eq!(get_host_session_cell_cap_raw(&path), None);
+        update_project_setting(&path, "host_session_cell_cap", "16").expect("set 16");
+        update_project_setting(&path, "host_session_cell_cap", "null").expect("clear null");
+        assert_eq!(get_host_session_cell_cap_raw(&path), None);
+    }
+
+    /// Reject 0, non-numeric, and values above the daemon ceiling (512).
+    #[test]
+    fn host_session_cell_cap_write_validation() {
+        let path = unique_path("hs-cell-cap-val");
+        let _pid = insert_project(&path);
+
+        for bad in ["0", "-1", "five", "1.5", "1000000", "513"] {
+            let err = update_project_setting(&path, "host_session_cell_cap", bad)
+                .expect_err("bad cap must be rejected");
+            assert!(
+                err.contains("host_session_cell_cap"),
+                "'{bad}' → {err:?}"
+            );
+        }
+
+        // Boundary: 1 and MAX accepted.
+        update_project_setting(&path, "host_session_cell_cap", "1").expect("min 1");
+        assert_eq!(get_host_session_cell_cap(&path), 1);
+        update_project_setting(
+            &path,
+            "host_session_cell_cap",
+            &MAX_HOST_SESSION_CELL_CAP.to_string(),
+        )
+        .expect("max 512");
+        assert_eq!(
+            get_host_session_cell_cap(&path),
+            MAX_HOST_SESSION_CELL_CAP
+        );
+        // 64 is the product runway example.
+        update_project_setting(&path, "host_session_cell_cap", "64").expect("accept 64");
+        assert_eq!(get_host_session_cell_cap(&path), 64);
+    }
+
+    /// A smuggled over-ceiling value is clamped on read; zero/negative
+    /// falls through to the daemon default.
+    #[test]
+    fn host_session_cell_cap_read_clamps_corrupt() {
+        let path = unique_path("hs-cell-cap-clamp");
+        let _pid = insert_project(&path);
+
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET host_session_cell_cap = 9999 WHERE path = ?1",
+                rusqlite::params![path],
+            )
+            .expect("smuggle high");
+        }
+        assert_eq!(
+            get_host_session_cell_cap(&path),
+            MAX_HOST_SESSION_CELL_CAP,
+            "over-ceiling stored value must clamp"
+        );
+
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET host_session_cell_cap = 0 WHERE path = ?1",
+                rusqlite::params![path],
+            )
+            .expect("smuggle zero");
+        }
+        assert_eq!(
+            get_host_session_cell_cap(&path),
+            DEFAULT_HOST_SESSION_CELL_CAP,
+            "zero stored value must inherit default"
+        );
     }
 
     /// `mail_address_cap`: default 5 (global), per-workspace override

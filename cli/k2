@@ -4181,6 +4181,173 @@ EOF
     esac
 }
 
+# Per-workspace concurrent host-session (live cell) cap.
+# Default 15 (env K2_SANDBOX_WORKSPACE_CELL_CAP); max 512 (daemon ceiling).
+#
+#   k2 workspace host-session-cell-cap get <ws>
+#   k2 workspace host-session-cell-cap set <ws> <n>
+#   k2 workspace host-session-cell-cap set <ws> default   # clear → inherit
+#
+# Storage: projects.host_session_cell_cap via POST /cli/workspace/set.
+cmd_workspace_host_session_cell_cap() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        get)
+            local target="${1:-}"
+            [[ -z "$target" ]] && {
+                echo "Usage: k2 workspace host-session-cell-cap get <workspace>" >&2
+                exit 2
+            }
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            cli_request "/cli/settings" "project=$(urlencode "$resolved_path")" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if isinstance(d, dict) and d.get("error"):
+    err = d["error"]
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % err, file=sys.stderr)
+    sys.exit(1)
+if "hostSessionCellCap" in d:
+    v = d.get("hostSessionCellCap")
+elif "host_session_cell_cap" in d:
+    v = d.get("host_session_cell_cap")
+else:
+    print("15 (default; settings response did not include host_session_cell_cap)")
+    sys.exit(0)
+if v is None:
+    # Inherit daemon default. Settings surface null for inherit; effective
+    # value is env K2_SANDBOX_WORKSPACE_CELL_CAP or 15.
+    print("15 (default)")
+elif isinstance(v, (int, float)) and not isinstance(v, bool):
+    print(str(int(v)))
+elif isinstance(v, str) and v.strip().isdigit():
+    print(v.strip())
+else:
+    print("15 (default)")
+'
+            ;;
+        set)
+            local target="${1:-}"
+            local mode="${2:-}"
+            [[ -z "$target" || -z "$mode" ]] && {
+                echo "Usage: k2 workspace host-session-cell-cap set <workspace> <n|default>" >&2
+                exit 2
+            }
+            local val=""
+            local mode_lc
+            mode_lc=$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')
+            case "$mode_lc" in
+                default|null|"")
+                    val="default"
+                    ;;
+                *)
+                    if ! printf '%s' "$mode" | grep -Eq '^[1-9][0-9]*$'; then
+                        echo "Error: expected positive integer 1..512 or 'default', got: $mode" >&2
+                        exit 2
+                    fi
+                    if [ "$mode" -gt 512 ]; then
+                        echo "Error: host_session_cell_cap max is 512 (daemon ceiling), got: $mode" >&2
+                        exit 2
+                    fi
+                    val="$mode"
+                    ;;
+            esac
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            local body
+            body=$(python3 -c 'import json,sys
+print(json.dumps({
+    "project": sys.argv[1],
+    "fields": {"host_session_cell_cap": sys.argv[2]},
+}))' "$resolved_path" "$val")
+            cli_post_json "/cli/workspace/set" "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if d.get("error") or d.get("ok") is False:
+    err = d.get("error")
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % (err or raw[:200]), file=sys.stderr)
+    sys.exit(1)
+val = None
+status = None
+for a in d.get("actions") or []:
+    if a.get("field") == "host_session_cell_cap":
+        val = a.get("value")
+        status = a.get("status")
+        break
+if status == "skipped":
+    if val in (None, "", "default", "null") or (isinstance(val, str) and val.lower() in ("default", "null")):
+        print("host_session_cell_cap already default (inherit; unchanged).")
+    else:
+        print("host_session_cell_cap already %s (unchanged)." % val)
+    sys.exit(0)
+if val is None:
+    print("host_session_cell_cap updated.")
+    sys.exit(0)
+if str(val).lower() in ("default", "null", ""):
+    print("host_session_cell_cap cleared → inherit daemon default (15 or env).")
+else:
+    print("host_session_cell_cap set to %s." % val)
+'
+            ;;
+        ""|-h|--help|help)
+            cat <<'EOF' >&2
+Usage: k2 workspace host-session-cell-cap get|set <workspace> [n|default]
+
+Per-workspace concurrent host-session (live cell) cap. Default is 15
+(overridable via env K2_SANDBOX_WORKSPACE_CELL_CAP). Max 512 (daemon
+ceiling so agents cannot set unbounded). Raising the cap is runway —
+agents still need `k2 done` to avoid accretion.
+
+  get <ws>              Print N, or "15 (default)" when inheriting
+  set <ws> <n>          Set concurrent live host-session cap (1..512)
+  set <ws> default      Clear override → inherit daemon default
+
+Also: POST /cli/workspace/set {"project":"…","fields":{"host_session_cell_cap":"64"|"default"}}
+EOF
+            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
+            exit 2
+            ;;
+        *)
+            echo "Unknown host-session-cell-cap subcommand: $sub" >&2
+            echo "Usage: k2 workspace host-session-cell-cap get|set <workspace> …" >&2
+            exit 2
+            ;;
+    esac
+}
+
 # B3a (sandbox) — set/clear the PER-WORKSPACE Anthropic API key (BYO key).
 # Owner-only daemon route (`/cli/workspace/api-key`, POST). The key rides the
 # JSON BODY (never the URL/query) so it isn't logged by intermediaries. An
@@ -11465,6 +11632,8 @@ API / HOST-SESSIONS
   api-guest-policy set <ws> --default   Clear → platform default
   api-skip-permissions get <ws>     Show if /v1 host spawns keep auto-approve (default on)
   api-skip-permissions set <ws> on|off   Opt in/out of auto-approve on API host spawns
+  host-session-cell-cap get <ws>    Show concurrent host-session cap (15 default)
+  host-session-cell-cap set <ws> <n|default>  Set/clear per-ws live cell cap (max 512)
 
 `<path>` defaults to K2_PROJECT_PATH or PWD.
 
@@ -11478,6 +11647,9 @@ EXAMPLES
   k2 workspace api-guest-policy set my-wiki "Read-only; use k2 respond --final"
   k2 workspace api-skip-permissions get my-api-ws
   k2 workspace api-skip-permissions set my-api-ws off
+  k2 workspace host-session-cell-cap get sales-interview
+  k2 workspace host-session-cell-cap set sales-interview 64
+  k2 workspace host-session-cell-cap set sales-interview default
 EOF
 }
 
@@ -22186,7 +22358,9 @@ EOF
             api-guest-policy)  shift 2; cmd_workspace_api_guest_policy "$@" ;;
             # Host-sessions: keep/strip auto-approve flags on /v1 spawns (default ON).
             api-skip-permissions) shift 2; cmd_workspace_api_skip_permissions "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|api-guest-policy|api-skip-permissions|...> [args]" >&2; exit 1 ;;
+            # Per-workspace concurrent host-session live cell cap (default 15, max 512).
+            host-session-cell-cap) shift 2; cmd_workspace_host_session_cell_cap "$@" ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|api-guest-policy|api-skip-permissions|host-session-cell-cap|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

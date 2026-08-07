@@ -131,7 +131,8 @@ The response channel is:
 
 ```bash
 k2 respond "progress: found the root cause"    # emit as often as you like
-k2 respond --final "done: fix landed on main"  # mark the turn's last line
+k2 respond --final "done: fix landed on main"  # last product line + arm Grace
+k2 done                                        # arm Grace with no drain line
 ```
 
 - Auth is the env-provided **scoped** `K2_HOOK_TOKEN` (shape `<sid>.<secret>`,
@@ -145,6 +146,69 @@ k2 respond --final "done: fix landed on main"  # mark the turn's last line
   agent that can read its prompt and run shell commands needs no prior
   knowledge of K2 to comply — but a bare model REPL (no tool use) cannot, see
   §8.
+
+### Lifecycle completion: Grace after `--final` or `k2 done`
+
+API host-sessions and sandbox cells are reaped by the work-completion reaper
+(`sandbox_reaper`). Two CLI paths arm the same post-completion **Grace**
+window (~10s `FINAL_GRACE_SECS`), then full teardown (map unregister + reaper
+keys — same chokepoint as `POST …/kill`):
+
+| Call | Drain message | Grace / teardown |
+|---|---|---|
+| `k2 respond --final "…"` | Yes (last product line) | Arms Grace |
+| `k2 done` | **No** | Arms Grace (lifecycle only) |
+
+Prefer `--final` when the API caller needs a final answer on
+`GET …/messages`. Prefer `k2 done` when work is finished but you have **no**
+message for the drain (results written elsewhere, empty final would be noise).
+
+**Teardown is not gated on drain consumption.** Grace expiry reaps the cell
+whether or not the integrator polled messages. Non-final `k2 respond`, a new
+inject, or live-resume re-enters **Working** and cancels Grace.
+
+Agents that never call either may remain **Working** until the integrator
+kills them (`POST …/kill`) or a concurrent-cap / spend policy intervenes.
+
+### D6: when `k2 done` reaps (vs legacy checkin)
+
+`k2 done` takes the lifecycle-reap path **only** when `K2_API_CELL=1` (also
+accepts `K2SO_API_CELL`). That env is set exclusively by the `/v1` host-session
+and sandbox **spawn doors** — not by wake, heartbeat, or canonical workspace
+spawns.
+
+| Context | `k2 done` meaning |
+|---|---|
+| `/v1` host-session or sandbox cell (`K2_API_CELL=1`) | `POST /cli/session/complete` → arm Grace → reap |
+| Persistent workspace agent (manager, chat, skills) | Legacy checkin / “task complete, stay alive” — **no** teardown |
+
+**Do not** key off `K2_HOOK_SOCK` or a scoped `K2_HOOK_TOKEN`. Workspace agents
+under COMPAT-58 also get a hook sock + scoped token and **must** keep the
+legacy checkin meaning.
+
+**0.40.86 trap:** before 0.40.87, bare `k2 done` was **always** checkin-only —
+even inside API cells. Agents that finished without `--final` never entered
+Grace and cells accumulated forever. On 0.40.87+, API cells with
+`K2_API_CELL=1` get the reap path; workspace agents are unchanged.
+
+### Concurrent host-session cap
+
+Each workspace can set its own concurrent live host-session cap
+(`host_session_cell_cap`) instead of only the process-wide env default:
+
+```bash
+k2 workspace api-host-session-cap get <ws>
+k2 workspace api-host-session-cap set <ws> 64
+k2 workspace api-host-session-cap set <ws> default   # inherit daemon default
+```
+
+- **Default still 15** when unset — global env `K2_SANDBOX_WORKSPACE_CELL_CAP`
+- **Max 512** (daemon ceiling)
+- Also: Settings → workspace **API** tab, or `POST /cli/workspace/set` with
+  `fields.host_session_cell_cap`
+
+Raising the cap is runway; agents still need successful `--final` or (in API
+cells) `k2 done` so cells actually reaper.
 
 ## 6. Permissions: declare your danger flags
 

@@ -3,7 +3,7 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.87 — Host-session finalize, kill, and per-workspace cap (Scout)
+## 0.40.87 — Host-session finalize, kill, cap, done lifecycle, grid-stall (Scout)
 
 ### UDS `k2 respond --final` actually arms Grace
 
@@ -16,6 +16,7 @@ the TCP path: `--final` arms Grace.
 
 Grace no longer only `sess.kill()` + drop the reaper entry. Expiry uses the
 same full teardown chokepoint as `/kill` (map unregister + reaper keys).
+Teardown is **not** gated on the API caller consuming the respond drain.
 
 ### `/kill` works after daemon restart
 
@@ -47,29 +48,42 @@ k2 workspace api-host-session-cap set <ws> default
 
 Also: `POST /cli/workspace/set` with `fields.host_session_cell_cap`.
 
-Raising the cap is runway; agents still need successful `--final` (now
-working on UDS) so cells actually reaper.
+Raising the cap is runway; agents still need successful `--final` or (in API
+cells) `k2 done` so cells actually reaper.
 
----
+### `k2 done` lifecycle for `/v1` cells (D6 / `K2_API_CELL`)
 
-
----
-
-
-### `k2 done` meaning (read this if you have agent charters)
-
-**In `/v1` host-session and sandbox cells** (spawn sets `K2_API_CELL=1`):  
-`k2 done` arms Grace and **reaps that session** (no product drain line required).  
-Same lifecycle as `k2 respond --final`, without a message for the API caller.
+**In `/v1` host-session and sandbox cells** (spawn sets `K2_API_CELL=1`):
+`k2 done` arms Grace and **reaps that session** (no product drain line
+required). Same lifecycle as `k2 respond --final`, without a message for the
+API caller.
 
 **In persistent workspace agents** (manager, chat, skills — even if they have
-`K2_HOOK_SOCK` + a scoped token under COMPAT-58):  
-`k2 done` is **unchanged** — legacy checkin / “task complete, stay alive.”  
+`K2_HOOK_SOCK` + a scoped token under COMPAT-58):
+`k2 done` is **unchanged** — legacy checkin / “task complete, stay alive.”
 It does **not** tear down the agent session.
 
 Do **not** use sock/token presence to infer which meaning applies; only
 `K2_API_CELL` (set by the `/v1` spawn doors) selects the reap path.
 
+**0.40.86 trap:** bare `k2 done` was checkin-only even inside API cells —
+cells that never called `--final` never entered Grace. 0.40.87 fixes the API
+path via `K2_API_CELL`.
+
+### Grid-stall: rich logs + careful OPEN-zombie heal
+
+Remote terminal paint recovery for “ready pane, no frames” episodes:
+
+- **Rich `[grid-stall]` DevTools payload** once per episode (reason, pane,
+  sessionId8, readyState, ageMs, lastAckVersion, ackAgeMs, k1, visible,
+  phase, reconnectAttempt, documentHidden) plus `[grid-stall] recovered` when
+  frames resume.
+- **OPEN + no-frame ≥20s** (had a prior frame) → one
+  `forceGridResync('grid-stall-no-frame')` per episode — heals half-open OPEN
+  zombies without thrashing short idle. Non-OPEN still uses the faster
+  ready-ws-not-open path. Latch clears on any frame; 15s k1 ack re-probe kept.
+- **Daemon breadcrumbs:** `[grid-pause]` enter/exit once per episode;
+  `[grid-liveness]` close on missed pongs (half-open tunnels).
 
 ---
 

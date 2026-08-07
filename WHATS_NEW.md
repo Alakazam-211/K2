@@ -3,6 +3,25 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.87 — Host-session kill survives daemon restart
+
+### Kill uses durable ownership (Scout orphan fix)
+
+`POST /v1/w/<ws>/host-sessions/<id>/kill` no longer depends only on the
+in-memory owner map (wiped on daemon restart). After the workspace is
+authorized, ownership is:
+
+1. Live owner map or kill tombstone (same process)
+2. Durable `workspace_tab_sessions` evidence: host-minted `api-{principal}-…`
+3. Daemon **Owner** may sweep any durable `api-*` host session in that workspace
+
+Not-live kills clear the durable index (`indexCleared`), evict respond/owner
+maps, stamp a kill tombstone, and best-effort release quota when ChildExit
+never ran — so Scout can reap list orphans after restart instead of 404ing
+every kill with `{"error":"no such workspace"}`.
+
+---
+
 ## 0.40.86 — DevTools, soft-resync compose bar, louder prod breadcrumbs
 
 ### Settings → General: Enable DevTools (desktop)

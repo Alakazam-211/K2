@@ -974,6 +974,9 @@ fn kill_tombstone_owner(session_id: &str) -> Option<String> {
 
 /// True when `requester` owns `session_id` via the live owner map OR a
 /// prior kill tombstone (K6 second-kill path after ChildExit eviction).
+///
+/// **Ephemeral only** — wiped on daemon restart. Kill path uses
+/// [`principal_may_kill_host_session`] (durable fallback + Owner floor).
 fn principal_owns_host_session(session_id: &str, requester: &str) -> bool {
     match crate::sandbox_responses::owner_of(session_id) {
         Some(owner) if owner == requester => true,
@@ -981,19 +984,89 @@ fn principal_owns_host_session(session_id: &str, requester: &str) -> bool {
     }
 }
 
+/// Durable `agent_name` for an `api-*` tab row of this session in this
+/// workspace. Survives daemon restart (unlike the in-memory owner map).
+fn durable_api_agent_name(ws_path: &str, session_id: &str) -> Option<String> {
+    agent_name_from_tab_index(ws_path, session_id)
+}
+
+/// Drop durable `api-%` tab rows for this session in this workspace.
+/// Returns rows deleted (orphan list cleanup after not_live kill).
+fn clear_durable_api_host_rows(ws_path: &str, session_id: &str) -> usize {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "DELETE FROM workspace_tab_sessions \
+         WHERE project_id = (SELECT id FROM projects WHERE path = ?1 LIMIT 1) \
+           AND session_id = ?2 \
+           AND agent_name LIKE 'api-%'",
+        rusqlite::params![ws_path, session_id],
+    )
+    .unwrap_or(0)
+}
+
+/// Infer principal key from host-minted `api-{principal}-{uuid}` agent_name.
+fn principal_key_from_api_agent_name(agent_name: &str) -> Option<String> {
+    let rest = agent_name.strip_prefix("api-")?;
+    // Mint: format!("api-{}-{}", principal, Uuid) — UUID is 36 chars.
+    if rest.len() > 37 && rest.as_bytes().get(rest.len() - 37) == Some(&b'-') {
+        return Some(rest[..rest.len() - 37].to_string());
+    }
+    rest.split_once('-').map(|(p, _)| p.to_string())
+}
+
+/// Best-effort quota release for a not_live orphan when ChildExit never ran.
+fn best_effort_quota_release_from_agent(ws_path: &str, agent_name: &str) {
+    if let Some(pk) = principal_key_from_api_agent_name(agent_name) {
+        crate::sandbox_quota::release_in_workspace(&pk, Some(ws_path));
+    }
+}
+
+/// Kill-path auth contract (Scout orphan cleanup / 0.40.87):
+///
+/// After workspace grant is proven:
+/// 1. **Exact spawning principal** — live owner map, kill tombstone, OR durable
+///    agent_name prefix `api-{display_id}-` (survives restart).
+/// 2. **Owner floor** — `V1Principal::Owner` may kill **any** durable `api-%`
+///    host-session in that authorized workspace (reconciler / spend-cap sweep).
+///
+/// API keys cannot kill another key's sessions. No durable row + no live owner
+/// → uniform 404 (not an existence oracle for random ids).
+fn principal_may_kill_host_session(
+    principal: &V1Principal,
+    ws_path: &str,
+    session_id: &str,
+) -> bool {
+    let requester = principal.display_id();
+    if principal_owns_host_session(session_id, &requester) {
+        return true;
+    }
+    let Some(agent) = durable_api_agent_name(ws_path, session_id) else {
+        return false;
+    };
+    // Host-minted `api-{principal}-{uuid}` (principal may contain hyphens).
+    let prefix = format!("api-{}-", requester);
+    if agent.starts_with(&prefix) {
+        return true;
+    }
+    // Daemon owner may clear any durable api-* host session in an authorized
+    // workspace (spend-cap / orphan reconciler — Scout needs this after restart).
+    matches!(principal, V1Principal::Owner)
+}
+
 /// `POST /v1/w/<ws>/host-sessions/<id>/kill` — force-stop a live host-session
 /// PTY for integrator spend-cap / deliberate teardown.
 ///
-/// Authz mirrors message-live (host_sessions cap + ws grant + session owner
-/// via [`crate::sandbox_responses::owner_of`] == principal.display_id();
-/// canonical / unknown / unowned / wrong-ws → uniform 404). Empty body OK.
+/// Authz: workspace grant + [`principal_may_kill_host_session`] (exact spawner
+/// via live map / tombstone / durable `api-{principal}-*`, **or** daemon Owner
+/// floor for any durable `api-%` in that workspace). Canonical / unknown /
+/// unowned / wrong-ws → uniform 404. Empty body OK.
 ///
-/// Idempotent for an owned session that is no longer live → 200
-/// `{"sessionId","killed":false,"reason":"not_live"}`. Live teardown uses
-/// force unregister ([`crate::v2_session_map::unregister`] + kill) and
-/// [`crate::sandbox_reaper::unregister`]. Quota is released by the
-/// child-exit observer when `session.kill()` fires — this handler does
-/// NOT double-release. Cap file / JWTs are left in place (K8).
+/// Idempotent for an authorized session that is no longer live → 200
+/// `{"sessionId","killed":false,"reason":"not_live","indexCleared":bool}` plus
+/// best-effort durable index / map cleanup (Scout restart orphans). Live
+/// teardown force-unregisters the map entry. Cap file / JWTs left in place (K8).
+/// Kill tombstone is stamped here only (auto Grace must not tombstone).
 pub(crate) fn handle_v1_host_kill(
     principal: &V1Principal,
     ws_raw: &str,
@@ -1016,22 +1089,39 @@ pub(crate) fn handle_v1_host_kill(
     if session_is_canonical(&sid_seg) {
         return uniform_ws_404();
     }
-    // OWNERSHIP (default-deny): only the principal that spawned (or previously
-    // killed) this session may kill it — unknown and unowned are the SAME
-    // uniform 404. Tombstone covers post-ChildExit eviction (K6).
+    // Kill auth: exact spawner (map/tombstone/durable prefix) OR Owner floor
+    // on durable api-* rows. Unknown/unowned → same uniform 404 as bad ws.
     let requester = principal.display_id();
-    if !principal_owns_host_session(&sid_seg, &requester) {
+    if !principal_may_kill_host_session(principal, &ws_path, &sid_seg) {
         return uniform_ws_404();
     }
-    // Owned but not live → idempotent success (K6). Ownership is already
-    // proven; never 404 this case (that would reintroduce an existence oracle
-    // vs. "owned dead" vs. "never heard of").
+    // Authorized but not live → K6 idempotent success + clear durable orphans
+    // so list does not retain ghosts after restart (Scout 68-orphan case).
     let Some(live) = lookup_live_host_session(&ws_path, &sid_seg) else {
+        let agent = durable_api_agent_name(&ws_path, &sid_seg);
+        if let Some(ref name) = agent {
+            let _ = crate::v2_session_map::unregister(name);
+        }
+        if let Some(parsed) = SessionId::parse(&sid_seg) {
+            crate::sandbox_reaper::unregister(&parsed);
+            if let Some(sess) = crate::v2_session_map::lookup_by_session_id(&parsed) {
+                sess.kill();
+            }
+        }
+        let cleared = clear_durable_api_host_rows(&ws_path, &sid_seg);
+        // Quota: ChildExit may never have run after a restart. Release once
+        // for not_live only — live path still leaves release to child-exit.
+        if let Some(ref name) = agent {
+            best_effort_quota_release_from_agent(&ws_path, name);
+        }
+        crate::sandbox_responses::evict(&sid_seg);
+        record_kill_tombstone(&sid_seg, &requester);
         return CliResponse::ok_json(
             serde_json::json!({
                 "sessionId": sid_seg,
                 "killed": false,
                 "reason": "not_live",
+                "indexCleared": cleared > 0,
             })
             .to_string(),
         );
@@ -1067,6 +1157,8 @@ pub(crate) fn handle_v1_host_kill(
             crate::sandbox_reaper::unregister(&parsed);
         }
     }
+    // Drop durable index so list does not keep a live:false ghost.
+    let _ = clear_durable_api_host_rows(&ws_path, &sid_seg);
     // Stamp tombstone BEFORE returning so a racing second kill sees ownership
     // even if ChildExit already ran `sandbox_responses::evict`.
     record_kill_tombstone(&sid_seg, &requester);
@@ -1450,12 +1542,13 @@ mod tests {
             handle_v1_host_kill(&V1Principal::Owner, "v1host-kill", "v1host-kill-canon").status,
             "404 Not Found",
         );
-        // Unknown session (no owner record) → 404.
+        // Unknown session (no owner record, no durable row) → 404.
         assert_eq!(
             handle_v1_host_kill(&V1Principal::Owner, "v1host-kill", "v1host-kill-nope").status,
             "404 Not Found",
         );
-        // Owned by a DIFFERENT principal → identical 404 (no oracle).
+        // Live-map owned by a DIFFERENT principal, no durable row → 404 for
+        // Owner floor too (no existence oracle for map-only ghosts).
         crate::sandbox_responses::record_owner("v1host-kill-owned", "key-somebody-else");
         assert_eq!(
             handle_v1_host_kill(&V1Principal::Owner, "v1host-kill", "v1host-kill-owned").status,
@@ -1476,6 +1569,57 @@ mod tests {
             handle_v1_host_kill(&ungranted, "v1host-kill", "v1host-kill-dead2").status,
             "404 Not Found",
         );
+    }
+
+    /// Scout restart case: no in-memory owner map, durable api-* tab row only.
+    /// Owner floor clears; exact-key prefix clears; wrong key 404s.
+    #[test]
+    fn kill_durable_row_without_live_owner_map() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-kill-durable";
+        let pid = insert_project("v1host-kill-dur", ws);
+        let sid_owner = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let sid_key = "ffffffff-1111-2222-3333-444444444444";
+        let sid_other = "55555555-6666-7777-8888-999999999999";
+        // Host-minted names: api-{principal}-{uuid}
+        insert_host_tab_session(
+            &pid,
+            sid_owner,
+            "api-owner-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        );
+        insert_host_tab_session(
+            &pid,
+            sid_key,
+            "api-ec8ba43a-ffffffff-1111-2222-3333-444444444444",
+        );
+        insert_host_tab_session(
+            &pid,
+            sid_other,
+            "api-otherkey-55555555-6666-7777-8888-999999999999",
+        );
+
+        // No record_owner — simulates post-restart empty OWNERS map.
+        let r = handle_v1_host_kill(&V1Principal::Owner, "v1host-kill-dur", sid_owner);
+        assert_eq!(r.status, "200 OK", "owner floor body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["killed"], false);
+        assert_eq!(v["reason"], "not_live");
+        assert_eq!(v["indexCleared"], true);
+
+        // Exact API key via durable prefix (workspace grant *).
+        let key = apik("ec8ba43a", Some("*"));
+        let r = handle_v1_host_kill(&key, "v1host-kill-dur", sid_key);
+        assert_eq!(r.status, "200 OK", "key prefix body={}", r.body);
+
+        // Wrong key cannot kill another key's durable row.
+        let wrong = apik("wrongkey", Some("*"));
+        assert_eq!(
+            handle_v1_host_kill(&wrong, "v1host-kill-dur", sid_other).status,
+            "404 Not Found",
+        );
+        // Owner floor can still sweep the other key's durable row.
+        let r = handle_v1_host_kill(&V1Principal::Owner, "v1host-kill-dur", sid_other);
+        assert_eq!(r.status, "200 OK", "owner sweeps other key body={}", r.body);
     }
 
     /// messages read: canonical → 404; unowned → 404 via the reused F2 authz;

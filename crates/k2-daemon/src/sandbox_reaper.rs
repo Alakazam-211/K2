@@ -136,22 +136,27 @@ pub fn registered(id: &SessionId) -> bool {
     REG.lock().map(|m| m.contains_key(id)).unwrap_or(false)
 }
 
+/// Reaper phase label for status/observability: `"working"` | `"grace"`, or
+/// `None` when the session is not registered (caller maps to `"none"`).
+pub fn phase_label(id: &SessionId) -> Option<&'static str> {
+    REG.lock().ok().and_then(|m| {
+        m.get(id).map(|e| match e.phase {
+            Phase::Working => "working",
+            Phase::Grace => "grace",
+        })
+    })
+}
+
 /// Test/observability: is the cell in Working phase?
 #[cfg(test)]
 pub fn is_working(id: &SessionId) -> bool {
-    REG.lock()
-        .ok()
-        .and_then(|m| m.get(id).map(|e| e.phase == Phase::Working))
-        .unwrap_or(false)
+    phase_label(id) == Some("working")
 }
 
 /// Test helper: is the cell in Grace phase?
 #[cfg(test)]
 fn is_grace(id: &SessionId) -> bool {
-    REG.lock()
-        .ok()
-        .and_then(|m| m.get(id).map(|e| e.phase == Phase::Grace))
-        .unwrap_or(false)
+    phase_label(id) == Some("grace")
 }
 
 /// Test helper: would the reaper reap this entry at `now`?

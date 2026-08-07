@@ -4638,6 +4638,12 @@ async fn handle_one_request(
                             .await
                             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                         }
+                        // GET /v1/w/<ws>/host-sessions/<id> — status (started/live/phase).
+                        // Distinct from …/messages and …/kill (four-segment arms).
+                        ([ws, "host-sessions", sid], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::v1_host_sessions::handle_v1_host_status(&principal, ws, sid)
+                        }
                         // GET /v1/w/<ws>/host-sessions/<id>/messages?since=<n>.
                         ([ws, "host-sessions", sid, "messages"], false) => {
                             let _ = stream.read(&mut buf).await;

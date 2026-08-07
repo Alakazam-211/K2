@@ -975,7 +975,20 @@ fn principal_owns_host_session(session_id: &str, requester: &str) -> bool {
 /// Durable `agent_name` for an `api-*` tab row of this session in this
 /// workspace. Survives daemon restart (unlike the in-memory owner map).
 fn durable_api_agent_name(ws_path: &str, session_id: &str) -> Option<String> {
-    agent_name_from_tab_index(ws_path, session_id)
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT wts.agent_name FROM workspace_tab_sessions wts \
+             JOIN projects p ON p.id = wts.project_id \
+             WHERE p.path = ?1 AND wts.session_id = ?2 \
+               AND wts.agent_name LIKE 'api-%' \
+             ORDER BY wts.last_seen_at DESC \
+             LIMIT 1",
+        )
+        .ok()?;
+    stmt.query_row(rusqlite::params![ws_path, session_id], |r| r.get::<_, String>(0))
+        .ok()
 }
 
 /// Drop durable `api-%` tab rows for this session in this workspace.
@@ -1088,7 +1101,9 @@ pub(crate) fn handle_v1_host_kill(
     // so list does not retain ghosts after restart (Scout 68-orphan case).
     let Some(live) = lookup_live_host_session(&ws_path, &sid_seg) else {
         let agent = durable_api_agent_name(&ws_path, &sid_seg);
-        // Prefer shared chokepoint when we have a parseable daemon SessionId.
+        let had_durable = agent.is_some();
+        // Prefer shared chokepoint when we have a parseable daemon SessionId
+        // (also clears durable api-* tab rows inside force_teardown).
         if let Some(parsed) = SessionId::parse(&sid_seg) {
             crate::sandbox_reaper::force_teardown_host_session_ctx(
                 &parsed,
@@ -1111,7 +1126,7 @@ pub(crate) fn handle_v1_host_kill(
                 "sessionId": sid_seg,
                 "killed": false,
                 "reason": "not_live",
-                "indexCleared": cleared > 0,
+                "indexCleared": had_durable || cleared > 0,
             })
             .to_string(),
         );

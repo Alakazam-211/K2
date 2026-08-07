@@ -1579,11 +1579,125 @@ function ProjectDetail({
           </SettingsGroup>
         )}
         {settingsTab === 'api' && (
-          <WorkspaceApiKeysPanel workspaceSlug={workspaceGrantSlug(project)} />
+          <div className="space-y-6">
+            <WorkspaceHostSessionCapPanel projectPath={project.path} />
+            <WorkspaceApiKeysPanel workspaceSlug={workspaceGrantSlug(project)} />
+          </div>
         )}
       </div>
     </div>
     </>
+  )
+}
+
+// ── Host-session concurrent cap (workspace API tab) ─────────────────
+//
+// Per-workspace ceiling for concurrent live /v1 host-sessions (Scout etc.).
+// Default 15 (daemon env K2_SANDBOX_WORKSPACE_CELL_CAP); max 512.
+// CLI: `k2 workspace api-host-session-cap get|set <ws>`.
+
+function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }): React.JSX.Element {
+  const [raw, setRaw] = useState<number | null | undefined>(undefined) // undefined=loading, null=inherit
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setError(null)
+    try {
+      const s = await daemonCliGet<Record<string, unknown>>('settings', { project: projectPath })
+      const v = s.hostSessionCellCap ?? s.host_session_cell_cap
+      if (v === null || v === undefined) {
+        setRaw(null)
+        setDraft('')
+      } else {
+        const n = typeof v === 'number' ? v : parseInt(String(v), 10)
+        setRaw(Number.isFinite(n) ? n : null)
+        setDraft(Number.isFinite(n) ? String(n) : '')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setRaw(null)
+    }
+  }, [projectPath])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const save = async (value: string): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    setHint(null)
+    try {
+      await daemonCliPost('workspace/set', {
+        project: projectPath,
+        fields: { host_session_cell_cap: value },
+      })
+      setHint(value === 'default' ? 'Cleared → inherit daemon default (15 or env).' : `Set to ${value}.`)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3 max-w-3xl" data-settings-id="projects.host-session-cell-cap">
+      <div>
+        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
+          Concurrent host sessions
+        </h3>
+        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+          Max simultaneous live <code className="text-[10px]">/v1</code> host-session cells for this
+          workspace (not total historical list rows). Default{' '}
+          <strong className="font-medium text-[var(--color-text-secondary)]">15</strong> (or{' '}
+          <code className="text-[10px]">K2_SANDBOX_WORKSPACE_CELL_CAP</code>). Max 512.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="number"
+          min={1}
+          max={512}
+          placeholder="default (15)"
+          value={draft}
+          disabled={busy || raw === undefined}
+          onChange={(e) => setDraft(e.target.value)}
+          className="w-28 px-2 py-1 text-[12px] border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)]"
+        />
+        <button
+          type="button"
+          disabled={busy || raw === undefined || !draft.trim()}
+          onClick={() => void save(draft.trim())}
+          className="px-2 py-1 text-[11px] border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          disabled={busy || raw === undefined || raw === null}
+          onClick={() => void save('default')}
+          className="px-2 py-1 text-[11px] border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
+        >
+          Use default
+        </button>
+      </div>
+      <p className="text-[10px] text-[var(--color-text-muted)]">
+        Current:{' '}
+        {raw === undefined
+          ? '…'
+          : raw === null
+            ? 'inherit daemon default (15 or env)'
+            : `${raw} concurrent`}
+        {' · '}
+        CLI: <code className="text-[10px]">k2 workspace api-host-session-cap get|set</code>
+      </p>
+      {error && <p className="text-[11px] text-[var(--color-status-error-soft)]">{error}</p>}
+      {hint && !error && <p className="text-[11px] text-[var(--color-status-ok-soft)]">{hint}</p>}
+    </div>
   )
 }
 

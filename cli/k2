@@ -4184,9 +4184,9 @@ EOF
 # Per-workspace concurrent host-session (live cell) cap.
 # Default 15 (env K2_SANDBOX_WORKSPACE_CELL_CAP); max 512 (daemon ceiling).
 #
-#   k2 workspace host-session-cell-cap get <ws>
-#   k2 workspace host-session-cell-cap set <ws> <n>
-#   k2 workspace host-session-cell-cap set <ws> default   # clear → inherit
+#   k2 workspace api-host-session-cap get <ws>     (preferred; api-* family)
+#   k2 workspace host-session-cell-cap get <ws>  (alias)
+#   k2 workspace api-host-session-cap set <ws> <n|default>
 #
 # Storage: projects.host_session_cell_cap via POST /cli/workspace/set.
 cmd_workspace_host_session_cell_cap() {
@@ -4324,7 +4324,8 @@ else:
             ;;
         ""|-h|--help|help)
             cat <<'EOF' >&2
-Usage: k2 workspace host-session-cell-cap get|set <workspace> [n|default]
+Usage: k2 workspace api-host-session-cap get|set <workspace> [n|default]
+       (alias: host-session-cell-cap)
 
 Per-workspace concurrent host-session (live cell) cap. Default is 15
 (overridable via env K2_SANDBOX_WORKSPACE_CELL_CAP). Max 512 (daemon
@@ -22359,8 +22360,8 @@ EOF
             # Host-sessions: keep/strip auto-approve flags on /v1 spawns (default ON).
             api-skip-permissions) shift 2; cmd_workspace_api_skip_permissions "$@" ;;
             # Per-workspace concurrent host-session live cell cap (default 15, max 512).
-            host-session-cell-cap) shift 2; cmd_workspace_host_session_cell_cap "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|api-guest-policy|api-skip-permissions|host-session-cell-cap|...> [args]" >&2; exit 1 ;;
+            host-session-cell-cap|api-host-session-cap) shift 2; cmd_workspace_host_session_cell_cap "$@" ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

@@ -372,6 +372,12 @@ pub(crate) fn resolve_host_spawn(
             }
         }
     }
+    // Stage the host-minted agent name so in-cell tools that still require
+    // `--agent` / K2SO_AGENT_NAME (legacy k2 done checkin, roster verbs) work
+    // without a silent no-op. Lifecycle complete on 0.40.87+ uses session
+    // context, but agents often still set the name explicitly.
+    env.insert("K2SO_AGENT_NAME".to_string(), agent_name.clone());
+    env.insert("K2_AGENT_NAME".to_string(), agent_name.clone());
 
     let cols = clamp_dim(req.cols, 80, 16, 500);
     let rows = clamp_dim(req.rows, 24, 4, 300);

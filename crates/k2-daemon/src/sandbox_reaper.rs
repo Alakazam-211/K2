@@ -254,6 +254,52 @@ fn force_teardown_host_session_inner(
             }
         }
     }
+
+    // Drop durable api-* tab index rows so GET host-sessions does not keep
+    // ended-but-not-reaped ghosts (Scout list accretion). Prefer caller-facing
+    // id (adopted) when present; always try daemon SessionId too.
+    clear_durable_api_tab_rows(ws_path, session_id, caller_facing_sid);
+}
+
+/// Best-effort delete of `workspace_tab_sessions` api-* rows for this session.
+fn clear_durable_api_tab_rows(
+    ws_path: Option<&str>,
+    session_id: &SessionId,
+    caller_facing_sid: Option<&str>,
+) {
+    let daemon_s = session_id.to_string();
+    let mut ids: Vec<String> = vec![daemon_s.clone()];
+    if let Some(cf) = caller_facing_sid {
+        if cf != daemon_s {
+            ids.push(cf.to_string());
+        }
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    for sid in ids {
+        let r = if let Some(ws) = ws_path {
+            conn.execute(
+                "DELETE FROM workspace_tab_sessions \
+                 WHERE project_id = (SELECT id FROM projects WHERE path = ?1 LIMIT 1) \
+                   AND session_id = ?2 \
+                   AND agent_name LIKE 'api-%'",
+                rusqlite::params![ws, sid],
+            )
+        } else {
+            conn.execute(
+                "DELETE FROM workspace_tab_sessions \
+                 WHERE session_id = ?1 AND agent_name LIKE 'api-%'",
+                rusqlite::params![sid],
+            )
+        };
+        if let Ok(n) = r {
+            if n > 0 {
+                log_debug!(
+                    "[sandbox-reaper] cleared {n} durable api-* tab row(s) for session={sid}"
+                );
+            }
+        }
+    }
 }
 
 fn tick() -> Duration {

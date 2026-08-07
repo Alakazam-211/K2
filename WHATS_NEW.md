@@ -55,6 +55,24 @@ working on UDS) so cells actually reaper.
 
 ---
 
+
+### `k2 done` meaning (read this if you have agent charters)
+
+**In `/v1` host-session and sandbox cells** (spawn sets `K2_API_CELL=1`):  
+`k2 done` arms Grace and **reaps that session** (no product drain line required).  
+Same lifecycle as `k2 respond --final`, without a message for the API caller.
+
+**In persistent workspace agents** (manager, chat, skills — even if they have
+`K2_HOOK_SOCK` + a scoped token under COMPAT-58):  
+`k2 done` is **unchanged** — legacy checkin / “task complete, stay alive.”  
+It does **not** tear down the agent session.
+
+Do **not** use sock/token presence to infer which meaning applies; only
+`K2_API_CELL` (set by the `/v1` spawn doors) selects the reap path.
+
+
+---
+
 ## 0.40.86 — DevTools, soft-resync compose bar, louder prod breadcrumbs
 
 ### Settings → General: Enable DevTools (desktop)

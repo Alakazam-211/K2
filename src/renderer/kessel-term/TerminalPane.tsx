@@ -540,12 +540,27 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // Used with sendInput to detect dead streams that still look `ready`,
   // and with the grid-stall detector (prod console breadcrumb).
   const lastGridFrameAtRef = useRef(0)
-  // Throttle for `[grid-stall]` warnings (once per 10s per pane).
-  const lastGridStallWarnAtRef = useRef(0)
+  // Highest k1 frame version we have acked (rAF flush). Re-sent when the
+  // stream is silent so a daemon-side ack-pause can unstick without a full
+  // reattach; harmless when not paused.
+  const lastAckVersionRef = useRef(0)
+  const lastAckAtRef = useRef(0)
+  // Stall-episode latch: log `[grid-stall]` once on enter, heal OPEN
+  // no-frame once, clear on any frame + log recovered. Avoids flooding
+  // idle agent chats every 10s (Rosson 0.40.86) and input-no-frame thrash.
+  const gridStallActiveRef = useRef(false)
+  const gridStallHealedRef = useRef(false)
+  const lastAckProbeAtRef = useRef(0)
+  // True while the current grid URL opted into proto=k1 (always today).
+  const gridProtoK1Ref = useRef(false)
   // Keystrokes buffered while we force-reattach a dead grid WS.
   const pendingInputRef = useRef('')
   // Shared grid-only reattach (soft-resync + dead-WS input recovery).
   const forceGridResyncRef = useRef<(reason: string) => void>(() => {})
+  // Mirror of reconnectAttempt for the stall-interval payload (avoids
+  // rebinding the interval every attempt bump).
+  const reconnectAttemptRef = useRef(0)
+  reconnectAttemptRef.current = reconnectAttempt
   // 0.39.13 — spawn ⊥ stream decoupling.
   //
   // v1 (the regression we're fixing) put `isTabVisible` in the boot
@@ -815,6 +830,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }
       const ws = wsRef.current
       if (maxVersion > 0 && ws && ws.readyState === WebSocket.OPEN) {
+        lastAckVersionRef.current = maxVersion
+        lastAckAtRef.current = performance.now()
         ws.send(JSON.stringify({ action: 'ack', version: maxVersion }))
       }
     }
@@ -1596,6 +1613,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // WS: keep in-memory ?token= for both desktop and web (pragmatic —
         // login response token; cookie also rides same-origin upgrade).
         // HTTP data plane on web never puts the credential in the URL.
+        // proto=k1 opt-in — track for stall breadcrumbs even before the
+        // daemon's first binary frame flips k1WireActiveRef.
+        gridProtoK1Ref.current = true
         const candidate = new WebSocket(
           `${daemonWsBase(creds)}/cli/sessions/grid?session=${sessionId}&token=${creds.token}&proto=k1`,
         )
@@ -1761,8 +1781,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }
 
       ws.onmessage = (evt) => {
-        // Any successful parse marks the stream live (stall recovery).
+        // Any message marks the stream live (stall recovery).
         lastGridFrameAtRef.current = performance.now()
+        if (gridStallActiveRef.current || gridStallHealedRef.current) {
+          const wasActive = gridStallActiveRef.current
+          gridStallActiveRef.current = false
+          gridStallHealedRef.current = false
+          if (wasActive) {
+            // eslint-disable-next-line no-console
+            console.warn('[grid-stall] recovered', {
+              pane: terminalId.slice(0, 8),
+              sessionId8: sessionId.slice(0, 8),
+            })
+          }
+        }
         if (evt.data instanceof ArrayBuffer) {
           // k1 binary wire — snapshot/delta only; every other event
           // still arrives as JSON text below.
@@ -2273,16 +2305,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     return () => clearInterval(id)
   }, [isTabVisible, terminalId])
 
-  // Grid-stall detector (log only — do NOT auto forceGridResync).
-  // lastGridFrameAtRef is written on every WS message but was never read.
-  // Surface a throttled `[grid-stall]` breadcrumb when phase is ready,
-  // we should hold the grid WS, and either frames have gone silent for
-  // >15s or the socket is missing / not OPEN for a few seconds.
+  // Grid health while phase is ready (Unit E / P1-6..7):
+  //
+  // 1. Dead / missing WS → one `[grid-stall]` log per episode; the
+  //    ready-ws-not-open poll already force-reattaches.
+  // 2. OPEN + silence:
+  //    - ≥15s: re-send last k1 ack (daemon pause unblock; keep forever).
+  //    - ≥20s + had a frame + not healed this episode: rich enter log
+  //      once + one forceGridResync('grid-stall-no-frame'). Catches
+  //      half-open OPEN zombies without thrashing short idle.
+  // 3. Any frame clears stall+healed and logs `[grid-stall] recovered`.
+  //
+  // Do NOT log/heal on short idle. Do NOT reintroduce input-no-frame thrash.
   useEffect(() => {
     if (!isTabVisible) return
-    const STALL_FRAME_MS = 15_000
     const STALL_WS_MS = 5_000
-    const WARN_THROTTLE_MS = 10_000
+    const ACK_PROBE_MS = 15_000
+    const OPEN_NO_FRAME_MS = 20_000
     const id = setInterval(() => {
       const phaseNow = phaseRef.current
       if (phaseNow.kind !== 'ready') return
@@ -2296,8 +2335,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         return
       }
       const now = performance.now()
-      if (now - lastGridStallWarnAtRef.current < WARN_THROTTLE_MS) return
-
       const ws = wsRef.current
       const readyState = ws?.readyState
       const lastFrame = lastGridFrameAtRef.current
@@ -2306,29 +2343,83 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         'sessionId' in phaseNow && phaseNow.sessionId
           ? phaseNow.sessionId.slice(0, 8)
           : sessionIdRef.current?.slice(0, 8) ?? '?'
+      const lastAckVersion = lastAckVersionRef.current
+      const ackAgeMs =
+        lastAckAtRef.current > 0
+          ? Math.round(now - lastAckAtRef.current)
+          : null
 
-      let reason: string | null = null
-      if (lastFrame > 0 && ageMs !== null && ageMs > STALL_FRAME_MS) {
-        reason = 'no-frame'
-      } else if (!ws || readyState !== WebSocket.OPEN) {
-        // Only warn after a short grace so mid-dial CONNECTING is quiet.
-        // Use last frame age if known; else treat missing OPEN while ready
-        // as a stall once we've been ready long enough to have had frames.
-        if (lastFrame === 0 || (ageMs !== null && ageMs > STALL_WS_MS)) {
-          reason = !ws ? 'ws-missing' : `ws-not-open:${readyState}`
-        }
-      }
-      if (!reason) return
-
-      lastGridStallWarnAtRef.current = now
-      // eslint-disable-next-line no-console
-      console.warn('[grid-stall]', {
+      const stallPayload = (reason: string) => ({
         reason,
         pane: terminalId.slice(0, 8),
         sessionId8,
         readyState: readyState ?? null,
         ageMs,
+        lastAckVersion: lastAckVersion || null,
+        ackAgeMs,
+        k1: gridProtoK1Ref.current || k1WireActiveRef.current,
+        visible: tabVisibleRef.current,
+        phase: phaseNow.kind,
+        reconnectAttempt: reconnectAttemptRef.current,
+        documentHidden:
+          typeof document !== 'undefined' ? document.hidden : null,
       })
+
+      // ── OPEN path: ack re-probe + optional one-shot 20s heal ──
+      if (ws && readyState === WebSocket.OPEN) {
+        // Keep 15s ack probe (k1 pause unblock). Not a stall by itself.
+        if (
+          ageMs !== null &&
+          ageMs >= ACK_PROBE_MS &&
+          lastAckVersion > 0 &&
+          now - lastAckProbeAtRef.current >= ACK_PROBE_MS
+        ) {
+          lastAckProbeAtRef.current = now
+          try {
+            ws.send(
+              JSON.stringify({
+                action: 'ack',
+                version: lastAckVersion,
+              }),
+            )
+            lastAckAtRef.current = now
+          } catch {
+            // Fall through to dead-ws recovery via sendInput / poll.
+          }
+        }
+
+        // OPEN no-frame ≥20s (had a frame) → enter stall once + heal once.
+        if (
+          lastFrame > 0 &&
+          ageMs !== null &&
+          ageMs >= OPEN_NO_FRAME_MS
+        ) {
+          if (!gridStallActiveRef.current) {
+            gridStallActiveRef.current = true
+            // eslint-disable-next-line no-console
+            console.warn('[grid-stall]', stallPayload('no-frame'))
+          }
+          if (!gridStallHealedRef.current) {
+            gridStallHealedRef.current = true
+            forceGridResyncRef.current('grid-stall-no-frame')
+          }
+        }
+        return
+      }
+
+      // ── not-OPEN path: faster detection + ready-ws-not-open poll ──
+      if (readyState === WebSocket.CONNECTING) return
+      if (lastFrame === 0 && ageMs === null) return
+      if (ageMs !== null && ageMs < STALL_WS_MS && lastFrame > 0) return
+
+      if (!gridStallActiveRef.current) {
+        gridStallActiveRef.current = true
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[grid-stall]',
+          stallPayload(!ws ? 'ws-missing' : `ws-not-open:${readyState}`),
+        )
+      }
     }, 5_000)
     return () => clearInterval(id)
   }, [isTabVisible, terminalId])

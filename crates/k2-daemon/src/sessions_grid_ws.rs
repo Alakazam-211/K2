@@ -1009,6 +1009,20 @@ pub async fn serve_session_grid_connection(
     // after the dispatcher already authorized us.
     auth_recheck.tick().await;
 
+    // Grid liveness ping — same contract as session_events_ws (S1):
+    // server-originated WS Ping every 10s; if TWO consecutive pings go
+    // unanswered (no Pong for >25s) close the socket. Browsers and
+    // tungstenite auto-Pong at the protocol level; this is invisible to
+    // the JS app layer. Catches half-open tunnels (readyState stays OPEN
+    // in the client, no frames, no onclose) within ~30s. Unit E P1-8
+    // breadcrumbs the close as `[grid-liveness]`.
+    const LIVENESS_PING_SECS: u64 = 10;
+    const LIVENESS_DEADLINE_SECS: u64 = 25;
+    let mut liveness_ping =
+        tokio::time::interval(std::time::Duration::from_secs(LIVENESS_PING_SECS));
+    liveness_ping.tick().await; // burn immediate first tick
+    let mut last_pong = std::time::Instant::now();
+
     // k1 ack-gated pacing state. Only ever mutated when `proto_k1`;
     // a JSON connection never touches it (today's behavior, no acks
     // expected). `unacked` holds (version, payload-bytes) of frames
@@ -1020,6 +1034,9 @@ pub async fn serve_session_grid_connection(
     let mut unacked: VecDeque<(u64, usize)> = VecDeque::new();
     let mut unacked_bytes: usize = 0;
     let mut paused = false;
+    // Unit E P1-8: once-per-episode enter breadcrumb for k1 pause.
+    // Cleared on every pause exit path so the next enter logs again.
+    let mut grid_pause_logged = false;
 
     // PR3 attach settle fence — armed for the first few hundred ms
     // after connect (and rearmed on applied claimer resize). See
@@ -1066,7 +1083,16 @@ pub async fn serve_session_grid_connection(
                     };
                     unacked.clear();
                     unacked_bytes = 0;
-                    paused = false;
+                    if paused {
+                        paused = false;
+                        grid_pause_logged = false;
+                        log_debug!(
+                            "[grid-pause] exit session={} acked_version={} \
+                             (settle-fence-coalesce)",
+                            session.session_id,
+                            frame_floor,
+                        );
+                    }
                     log_debug!(
                         "[daemon/sessions_grid_ws] settle fence end — coalesce \
                          snapshot at floor {} for session {} sub {}",
@@ -1095,6 +1121,27 @@ pub async fn serve_session_grid_connection(
                         session.session_id
                     );
                     let _ = write.send(Message::Close(None)).await;
+                    break;
+                }
+            }
+            // Half-open / yanked-network detector (see LIVENESS_* above).
+            _ = liveness_ping.tick() => {
+                if last_pong.elapsed()
+                    > std::time::Duration::from_secs(LIVENESS_DEADLINE_SECS)
+                {
+                    // Greppable Unit E breadcrumb — session id prefix matches
+                    // client `sessionId8` (first 8 chars).
+                    log_debug!(
+                        "[grid-liveness] close session={} reason=missed-pongs \
+                         sub={} last_pong_ms={}",
+                        session.session_id,
+                        subscriber_id,
+                        last_pong.elapsed().as_millis(),
+                    );
+                    let _ = write.send(Message::Close(None)).await;
+                    break;
+                }
+                if write.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
                 }
             }
@@ -1140,6 +1187,22 @@ pub async fn serve_session_grid_connection(
                                             subscriber_id,
                                         );
                                         paused = true;
+                                        if !grid_pause_logged {
+                                            grid_pause_logged = true;
+                                            let version = unacked
+                                                .back()
+                                                .map(|(v, _)| *v)
+                                                .unwrap_or(frame_floor);
+                                            log_debug!(
+                                                "[grid-pause] enter session={} \
+                                                 unacked_frames={} unacked_bytes={} \
+                                                 version={}",
+                                                session.session_id,
+                                                unacked.len(),
+                                                unacked_bytes,
+                                                version,
+                                            );
+                                        }
                                     }
                                 }
                                 FrameFwd::DropFence => {
@@ -1187,6 +1250,22 @@ pub async fn serve_session_grid_connection(
                                                     session.session_id,
                                                     subscriber_id,
                                                 );
+                                                if !grid_pause_logged {
+                                                    grid_pause_logged = true;
+                                                    let version = unacked
+                                                        .back()
+                                                        .map(|(v, _)| *v)
+                                                        .unwrap_or(frame_floor);
+                                                    log_debug!(
+                                                        "[grid-pause] enter session={} \
+                                                         unacked_frames={} unacked_bytes={} \
+                                                         version={}",
+                                                        session.session_id,
+                                                        unacked.len(),
+                                                        unacked_bytes,
+                                                        version,
+                                                    );
+                                                }
                                             }
                                             paused = true;
                                         } else if fence_active
@@ -1224,7 +1303,16 @@ pub async fn serve_session_grid_connection(
                         // acks for them pop nothing).
                         unacked.clear();
                         unacked_bytes = 0;
-                        paused = false;
+                        if paused {
+                            paused = false;
+                            grid_pause_logged = false;
+                            log_debug!(
+                                "[grid-pause] exit session={} acked_version={} \
+                                 (lagged-resync)",
+                                session.session_id,
+                                frame_floor,
+                            );
+                        }
                         // Lagged recovery already restamped — clear any
                         // pending fence coalesce so we don't double-snap.
                         settle_fence.clear_dropped();
@@ -1542,6 +1630,13 @@ pub async fn serve_session_grid_connection(
                                         let now = std::time::Instant::now();
                                         if paused {
                                             paused = false;
+                                            grid_pause_logged = false;
+                                            log_debug!(
+                                                "[grid-pause] exit session={} \
+                                                 acked_version={} (input-claim-rearm)",
+                                                session.session_id,
+                                                frame_floor,
+                                            );
                                             settle_fence.rearm_clearing_pause(now);
                                         } else {
                                             settle_fence.rearm(now);
@@ -1615,6 +1710,13 @@ pub async fn serve_session_grid_connection(
                                     let now = std::time::Instant::now();
                                     if paused {
                                         paused = false;
+                                        grid_pause_logged = false;
+                                        log_debug!(
+                                            "[grid-pause] exit session={} \
+                                             acked_version={} (resize-rearm)",
+                                            session.session_id,
+                                            frame_floor,
+                                        );
                                         settle_fence.rearm_clearing_pause(now);
                                     } else {
                                         settle_fence.rearm(now);
@@ -1688,6 +1790,13 @@ pub async fn serve_session_grid_connection(
                                     let now = std::time::Instant::now();
                                     if paused {
                                         paused = false;
+                                        grid_pause_logged = false;
+                                        log_debug!(
+                                            "[grid-pause] exit session={} \
+                                             acked_version={} (set-active-rearm)",
+                                            session.session_id,
+                                            frame_floor,
+                                        );
                                         settle_fence.rearm_clearing_pause(now);
                                     } else {
                                         settle_fence.rearm(now);
@@ -1812,7 +1921,13 @@ pub async fn serve_session_grid_connection(
                                     unacked.clear();
                                     unacked_bytes = 0;
                                     paused = false;
+                                    grid_pause_logged = false;
                                     settle_fence.clear_dropped();
+                                    log_debug!(
+                                        "[grid-pause] exit session={} acked_version={}",
+                                        session.session_id,
+                                        version,
+                                    );
                                     log_debug!(
                                         "[daemon/sessions_grid_ws] k1 ack (v{version}) after \
                                          backlog pause — resync snapshot at floor {} for \
@@ -1845,7 +1960,10 @@ pub async fn serve_session_grid_connection(
                             break;
                         }
                     }
-                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Pong(_))) => {
+                        // Answer to our liveness Ping — reset the deadline.
+                        last_pong = std::time::Instant::now();
+                    }
                     Some(Ok(Message::Close(frame))) => {
                         // Echo a Close frame so the client sees a clean
                         // graceful-close handshake. Without this, WebKit

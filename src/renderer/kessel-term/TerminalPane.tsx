@@ -132,6 +132,39 @@ import {
 } from './measurePaneFit'
 import { usePinnedSizeStore, type PinnedSize } from '@/stores/pinned-size'
 
+/**
+ * Focus the terminal shadow input only when safe — never steal from the
+ * agent compose bar, Settings fields, or other interactive UI.
+ *
+ * 0.40.87 regression: `forceGridResync` flipped phase ready→connecting→ready
+ * (grid-stall-no-frame after 20s idle), re-running the shadow keyboard
+ * effect which always called `el.focus()` and yanked keystrokes out of the
+ * compose textarea mid-type.
+ */
+function focusTerminalShadowIfSafe(
+  el: HTMLElement | null | undefined,
+  container?: HTMLElement | null,
+): void {
+  if (!el) return
+  const active = document.activeElement as HTMLElement | null
+  if (active && active !== document.body && active !== el) {
+    if (container && (active === container || container.contains(active))) {
+      // Focus already inside this pane (shadow/container) — ok to re-pin.
+    } else if (
+      active.tagName === 'INPUT' ||
+      active.tagName === 'TEXTAREA' ||
+      active.tagName === 'SELECT' ||
+      active.isContentEditable ||
+      active.closest(
+        'input, textarea, select, button, [contenteditable="true"], [role="textbox"]',
+      )
+    ) {
+      return
+    }
+  }
+  el.focus({ preventScroll: true })
+}
+
 // ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
 
 interface CellRun {
@@ -545,9 +578,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // reattach; harmless when not paused.
   const lastAckVersionRef = useRef(0)
   const lastAckAtRef = useRef(0)
-  // Stall-episode latch: log `[grid-stall]` once on enter, heal OPEN
-  // no-frame once, clear on any frame + log recovered. Avoids flooding
-  // idle agent chats every 10s (Rosson 0.40.86) and input-no-frame thrash.
+  // Stall-episode latch: log `[grid-stall]` once on enter; OPEN no-frame
+  // heal once per episode; clear on any frame + log recovered.
   const gridStallActiveRef = useRef(false)
   const gridStallHealedRef = useRef(false)
   const lastAckProbeAtRef = useRef(0)
@@ -2305,18 +2337,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     return () => clearInterval(id)
   }, [isTabVisible, terminalId])
 
-  // Grid health while phase is ready (Unit E / P1-6..7):
+  // Grid health while phase is ready (Unit E / P1-6..7 + 0.40.88 focus):
   //
   // 1. Dead / missing WS → one `[grid-stall]` log per episode; the
   //    ready-ws-not-open poll already force-reattaches.
   // 2. OPEN + silence:
   //    - ≥15s: re-send last k1 ack (daemon pause unblock; keep forever).
   //    - ≥20s + had a frame + not healed this episode: rich enter log
-  //      once + one forceGridResync('grid-stall-no-frame'). Catches
-  //      half-open OPEN zombies without thrashing short idle.
+  //      once + one forceGridResync('grid-stall-no-frame') — OPEN-zombie
+  //      heal. Phase may flip ready→connecting→ready; focus must NOT
+  //      steal (focusTerminalShadowIfSafe). 0.40.87 bug was unconditional
+  //      el.focus() after that heal, not the heal itself.
   // 3. Any frame clears stall+healed and logs `[grid-stall] recovered`.
   //
-  // Do NOT log/heal on short idle. Do NOT reintroduce input-no-frame thrash.
+  // Do NOT reintroduce input-no-frame thrash.
   useEffect(() => {
     if (!isTabVisible) return
     const STALL_WS_MS = 5_000
@@ -2365,7 +2399,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           typeof document !== 'undefined' ? document.hidden : null,
       })
 
-      // ── OPEN path: ack re-probe + optional one-shot 20s heal ──
+      // ── OPEN path: ack re-probe + one-shot 20s heal ──
       if (ws && readyState === WebSocket.OPEN) {
         // Keep 15s ack probe (k1 pause unblock). Not a stall by itself.
         if (
@@ -2389,6 +2423,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         }
 
         // OPEN no-frame ≥20s (had a frame) → enter stall once + heal once.
+        // Focus is NOT taken here — shadow effect uses focusTerminalShadowIfSafe.
         if (
           lastFrame > 0 &&
           ageMs !== null &&
@@ -2592,11 +2627,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   // Auto-focus when tab becomes visible — focus the shadow input
   // so dictation/typed input both work without an extra click.
+  // Never steal from compose bar / other interactive fields.
   useEffect(() => {
     if (!isTabVisible) return
     const el = shadowInputRef.current
     if (!el) return
-    const raf = requestAnimationFrame(() => el.focus())
+    const raf = requestAnimationFrame(() =>
+      focusTerminalShadowIfSafe(el, containerRef.current),
+    )
     return () => cancelAnimationFrame(raf)
   }, [isTabVisible])
 
@@ -2618,7 +2656,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     }
     const onFocus = () => {
       if (!wasFocused) return
-      requestAnimationFrame(() => shadow.focus())
+      requestAnimationFrame(() =>
+        focusTerminalShadowIfSafe(shadow, container),
+      )
     }
     window.addEventListener('blur', onBlur)
     window.addEventListener('focus', onFocus)
@@ -3555,7 +3595,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     el.addEventListener('compositionstart', onComposeStart)
     el.addEventListener('compositionupdate', onComposeUpdate)
     el.addEventListener('compositionend', onComposeEnd)
-    el.focus()
+    // phase.kind flips ready↔connecting on soft-resync / grid reattach —
+    // re-binding handlers is fine; unconditional focus is not (compose bar).
+    focusTerminalShadowIfSafe(el, containerRef.current)
     return () => {
       el.removeEventListener('keydown', onKey)
       el.removeEventListener('paste', onPaste)

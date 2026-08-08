@@ -3,6 +3,24 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.88 — Compose bar focus no longer stolen by grid heal
+
+### Typing in the agent message bar stays put
+
+On **0.40.87**, the OPEN no-frame heal (≥20s silent paint →
+`forceGridResync('grid-stall-no-frame')`) still does the right recovery
+work, but the shadow-input keyboard effect re-ran on the phase flip and
+**unconditionally** called `el.focus()`, yanking the cursor out of the
+agent compose bar mid-type.
+
+- **Heal kept:** one `grid-stall-no-frame` reattach per stall episode
+  (plus k1 ack re-probe, dead-WS poll, daemon liveness pings).
+- **Focus fixed:** terminal shadow focus is gated — never steals from
+  compose / inputs / textareas / contenteditable on reattach or tab
+  visibility churn.
+
+---
+
 ## 0.40.87 — Host-session finalize, kill, cap, done lifecycle, grid-stall (Scout)
 
 ### UDS `k2 respond --final` actually arms Grace

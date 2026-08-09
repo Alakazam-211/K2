@@ -416,16 +416,16 @@ pub struct InjectionProfile {
     /// injection (the floor for polling providers; the whole wait for
     /// non-polling ones). Study-derived: hermes needs ~7s before its
     /// first message lands (prompt ~3.6s + ~3s agent init); codex/
-    /// gemini get 2s headroom past their dialog storms; claude keeps
-    /// the shipping 400ms floor exactly; grok uses ~1.5s (≥ ~1.1s
-    /// ?2004h mount + first-frame headroom).
+    /// gemini get 2s headroom past their dialog storms; **claude uses
+    /// ~1.5s** (matches wake_headless: TUI needs ~1s before clean input;
+    /// 400ms host-spawn floor caused Scout never-born typed-not-sent);
+    /// grok uses ~1.5s (≥ ~1.1s ?2004h mount + first-frame headroom).
     pub post_spawn_settle: Duration,
 }
 
-/// Unknown-provider default = the claude-shaped behavior every provider
-/// got before slice 5 (poll bracketed paste with the 400ms floor,
-/// bounded by the caller's wake timeout) — safe degradation, no new
-/// assumptions about agents we never studied.
+/// Unknown-provider default: poll bracketed paste with a short settle.
+/// Pre-fix this matched claude's 400ms; **claude itself is now 1500ms**
+/// (see match arm). Unknown agents keep the short floor.
 pub const DEFAULT_INJECTION_PROFILE: InjectionProfile = InjectionProfile {
     ready_via_bracketed_paste: true,
     post_spawn_settle: Duration::from_millis(400),
@@ -436,12 +436,16 @@ pub const DEFAULT_INJECTION_PROFILE: InjectionProfile = InjectionProfile {
 /// Unknown providers get [`DEFAULT_INJECTION_PROFILE`].
 pub fn injection_profile_for_provider(provider: &str) -> InjectionProfile {
     match provider {
-        // Poll-trustworthy providers (see field doc for evidence).
-        "claude" => DEFAULT_INJECTION_PROFILE,
-        // Grok: ?2004h is trustworthy (~1.1s study) but NOT at Claude's
-        // 400ms floor — under-settling lands host-session / wake injects
-        // in a still-painting first frame. Keep paste poll; raise settle
-        // past mount + a little headroom, then shared quiescence finishes.
+        // Poll-trustworthy, but settle must match wake_headless (~1s+).
+        // 400ms allowed ?2004h + 360ms quiescence during cold-start pause
+        // → inject lands typed-not-sent; repaint wipes → never-born
+        // (Julie/Scout 2026-08, five concurrent claude host-sessions).
+        "claude" => InjectionProfile {
+            ready_via_bracketed_paste: true,
+            post_spawn_settle: Duration::from_millis(1500),
+        },
+        // Grok: ?2004h trustworthy (~1.1s study). Keep paste poll; settle
+        // past mount + headroom, then shared quiescence finishes.
         "grok" => InjectionProfile {
             ready_via_bracketed_paste: true,
             post_spawn_settle: Duration::from_millis(1500),
@@ -1154,13 +1158,17 @@ mod tests {
     // ── Slice 5 — injection profiles (per-provider readiness) ────────
 
     #[test]
-    fn injection_profile_claude_is_exactly_the_shipping_behavior() {
-        // DO NOT regress claude: poll bracketed paste with the 400ms
-        // settle floor — byte-identical to the pre-slice-5 wake path.
+    fn injection_profile_claude_matches_wake_headless_settle() {
+        // Claude: poll ?2004h, settle ≥ ~1.5s (wake_headless + Scout never-born).
+        // Intentionally NOT equal to DEFAULT_INJECTION_PROFILE (unknown=400ms).
         let p = injection_profile_for_provider("claude");
         assert!(p.ready_via_bracketed_paste);
-        assert_eq!(p.post_spawn_settle, Duration::from_millis(400));
-        assert_eq!(p, DEFAULT_INJECTION_PROFILE);
+        assert_eq!(p.post_spawn_settle, Duration::from_millis(1500));
+        assert_ne!(
+            p.post_spawn_settle,
+            DEFAULT_INJECTION_PROFILE.post_spawn_settle,
+            "claude settle must exceed the unknown-provider default"
+        );
     }
 
     #[test]

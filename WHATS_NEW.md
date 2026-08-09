@@ -3,6 +3,21 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.89 — Host-session Claude cold-start settle (never-born)
+
+### Concurrent claude host-sessions: less typed-not-sent prompt loss
+
+Under several concurrent Claude host-session spawns, the initial prompt could
+log `delivered=true` while no turn started (no transcript, PID idle): inject
+landed before the TUI accepted input, then a repaint wiped it.
+
+- Raise Claude **post-spawn settle** from **400ms → 1500ms** so host-spawn
+  matches the wake path (`wake_headless`: TUI needs ~1s before clean input).
+- Root-cause write-up: `.k2/prds/prd-host-session-initial-prompt-loss-v1.md`
+  (Primary: turn-start poll + re-inject still open).
+
+---
+
 ## 0.40.88 — Compose bar focus no longer stolen by grid heal
 
 ### Typing in the agent message bar stays put

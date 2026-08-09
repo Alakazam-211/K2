@@ -287,12 +287,35 @@ pub fn resolve_workspace(token: &str) -> Option<String> {
     // for a workspace registered as `Appa` — and used to bounce with
     // workspace_not_found on wiring that was actually fine. Exact-case
     // still wins above when two projects differ only by case.
-    conn.query_row(
+    if let Ok(path) = conn.query_row(
         "SELECT path FROM projects WHERE name = ?1 COLLATE NOCASE ORDER BY rowid LIMIT 1",
         rusqlite::params![token],
         |r| r.get::<_, String>(0),
-    )
-    .ok()
+    ) {
+        return Some(path);
+    }
+
+    // Basename match — parity with `resolve_workspace_slug` (/v1 host-sessions).
+    // Display `name` can differ from the folder (e.g. name "Sales Interview",
+    // path .../sales-interview). CLI `host-session-cell-cap get sales-interview`
+    // used only this resolve → 404 while POST /v1/w/sales-interview/host-sessions
+    // worked (Julie/Scout 2026-08). Ambiguous basenames → None (fail-closed).
+    let mut stmt = conn.prepare("SELECT path FROM projects").ok()?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).ok()?;
+    let mut base_matches: Vec<String> = Vec::new();
+    for path in rows.flatten() {
+        let matches_base = std::path::Path::new(&path)
+            .file_name()
+            .map(|b| b.to_string_lossy().eq_ignore_ascii_case(token))
+            .unwrap_or(false);
+        if matches_base {
+            base_matches.push(path);
+        }
+    }
+    if base_matches.len() == 1 {
+        return Some(base_matches.into_iter().next().unwrap());
+    }
+    None
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2349,6 +2372,38 @@ mod tests {
         let r = deliver_live("", "hi", "sender", "", false, DEFAULT_WAKE_TIMEOUT);
         assert_eq!(r.reason.as_deref(), Some("workspace_not_found"));
         assert_eq!(r.attempts, 1);
+    }
+
+    /// CLI /v1 slug parity: folder basename resolves when display name differs.
+    #[test]
+    fn resolve_workspace_matches_folder_basename_when_name_differs() {
+        k2_core::db::init_for_tests();
+        use std::fs;
+        let uniq = format!("{}-{}", std::process::id(), uuid::Uuid::new_v4());
+        let base = std::env::temp_dir().join(format!("k2-slug-base-{uniq}"));
+        let folder = base.join("sales-interview");
+        fs::create_dir_all(&folder).unwrap();
+        let project_path = folder.to_string_lossy().into_owned();
+        let project_id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, agent_enabled, agent_mode) \
+                 VALUES (?1, ?2, ?3, 1, 'custom')",
+                rusqlite::params![
+                    project_id,
+                    format!("Sales Interview {uniq}"), // display name ≠ folder
+                    project_path,
+                ],
+            )
+            .unwrap();
+        }
+        let got = resolve_workspace("sales-interview").expect("basename must resolve");
+        assert_eq!(got, project_path);
+        // Case-insensitive basename
+        let got2 = resolve_workspace("Sales-Interview").expect("basename NOCASE");
+        assert_eq!(got2, project_path);
     }
 
     // ── Issue #9 — wake gating + three-state disambiguation ──────────

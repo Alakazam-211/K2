@@ -3,6 +3,22 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.90 — CLI workspace resolve matches /v1 slugs (cell-cap)
+
+### `k2 workspace host-session-cell-cap` sees the same workspaces as spawn
+
+`k2 workspace host-session-cell-cap get sales-interview` failed with
+"Project not found" while `POST /v1/w/sales-interview/host-sessions` worked.
+CLI resolve only matched `projects.name`; the v1 path also matches **folder
+basename** when the display name differs.
+
+- `resolve_workspace` now matches unique folder basename (NOCASE), same idea
+  as `resolve_workspace_slug` (Scout / Julie 2026-08).
+- Cap GET/SET and other CLI verbs using `/cli/workspace/resolve` gain the same
+  addressing.
+
+---
+
 ## 0.40.89 — Host-session Claude cold-start settle (never-born)
 
 ### Concurrent claude host-sessions: less typed-not-sent prompt loss

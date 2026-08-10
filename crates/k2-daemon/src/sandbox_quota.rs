@@ -387,6 +387,7 @@ pub fn release_in_workspace(principal_key: &str, workspace: Option<&str>) {
 /// Test-only: force-fill principal+workspace+global counters so the next
 /// nowait acquire fails with the given axes without waiting on S8.
 #[cfg(test)]
+#[allow(dead_code)] // available for spawn-queue / admit tests; keep as harness
 pub fn test_force_fill(principal_key: &str, workspace: &str, n: usize) {
     let mut state = QUOTA.lock().expect("sandbox quota mutex poisoned");
     for _ in 0..n {
@@ -398,6 +399,7 @@ pub fn test_force_fill(principal_key: &str, workspace: &str, n: usize) {
 
 /// Test-only: drop all process-global quota counters (isolate unit tests).
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn test_reset_all() {
     let mut state = QUOTA.lock().expect("sandbox quota mutex poisoned");
     *state = QuotaState::new();

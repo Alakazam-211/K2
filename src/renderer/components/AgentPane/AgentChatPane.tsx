@@ -609,6 +609,13 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         void ensure(false)
         return
       }
+      // Match the legacy path: stamp layout so offline restore matches the
+      // dropdown pick across refresh / relaunch (not only after ensure).
+      try {
+        useTabsStore.getState().stampAgentSessionId(agentName, projectPath, newSessionId, projectId)
+      } catch (err) {
+        console.warn('[AgentChatPane] stampAgentSessionId failed:', err)
+      }
       // Issue B — explicitSelection:true so the daemon honors the picked
       // session and never silently reverts to the newest on-disk session.
       // ensure() sets phase=error if the chosen session is gone on disk
@@ -616,7 +623,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       await ensure(true, true)
       setRefreshing(false)
     },
-    [canonicalSessionId, projectPath, ensure],
+    [canonicalSessionId, projectPath, ensure, agentName, projectId],
   )
 
   // The shared header (agent name + session dropdown + refresh) is rendered

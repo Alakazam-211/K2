@@ -557,8 +557,21 @@ const ADOPTION_PROBE_DELAY: Duration = Duration::from_secs(5);
 /// Synchronous core: discover the session id the freshly-spawned
 /// `provider` agent adopted on disk for `project_path`, and stamp it —
 /// `workspace_sessions.session_id` + `harness` — via the identity
-/// upsert. Returns the adopted id, or `None` when the provider is
-/// unknown, nothing is on disk yet, or the workspace is unregistered.
+/// upsert. Returns the adopted / kept id, or `None` when the provider
+/// is unknown, nothing is on disk yet, or the workspace is unregistered.
+///
+/// **Preserves intentional SSOT picks.** If `workspace_sessions.session_id`
+/// already holds a non-empty id whose conversation **exists on disk**
+/// for this adapter, that id is kept (returned as `Some(saved)`) and
+/// newest-on-disk is NOT stamped over it. This protects every call site
+/// (pinned_chat ensure, v2_spawn, agents_routes, etc.) from clobbering a
+/// live intentional pick — e.g. an older session chosen from the pinned
+/// tab history dropdown while a newer conversation also exists on disk.
+///
+/// Newest-on-disk is only stamped when discovery is still needed:
+/// - no saved id (NULL), OR
+/// - saved id is empty, OR
+/// - saved id's file is missing (stale / never-born premint)
 ///
 /// Uses the adapter's `newest_on_disk` (NOT `detect_active_session`):
 /// for claude the history.jsonl-keyed detect has no entry for a
@@ -568,14 +581,32 @@ const ADOPTION_PROBE_DELAY: Duration = Duration::from_secs(5);
 /// IS their detect machinery.
 pub fn adopt_discovered_session(provider: &str, project_path: &str) -> Option<String> {
     let adapter = provider_resume_for_provider(provider)?;
-    let session_id = adapter.newest_on_disk(project_path)?;
-    if session_id.is_empty() {
-        return None;
-    }
     let db = crate::db::shared();
     let conn = db.lock();
     let project_id =
         crate::workspace::agent_identity::resolve_project_id(&conn, project_path)?;
+
+    // Belt-and-suspenders: if SSOT already points at a live conversation
+    // on disk, keep it. Do not stamp newest_on_disk over an intentional
+    // older pick (dropdown switch / prior SSOT).
+    if let Ok(Some(row)) = crate::db::schema::WorkspaceSession::get(&conn, &project_id) {
+        if let Some(ref saved) = row.session_id {
+            if !saved.is_empty() && adapter.session_file_exists(saved, project_path) {
+                crate::log_debug!(
+                    "[core/provider-resume] adopt skip: SSOT {} still on disk for {} ({})",
+                    saved,
+                    adapter.provider,
+                    project_path
+                );
+                return Some(saved.clone());
+            }
+        }
+    }
+
+    let session_id = adapter.newest_on_disk(project_path)?;
+    if session_id.is_empty() {
+        return None;
+    }
     match crate::db::schema::WorkspaceSession::update_session_id_and_harness(
         &conn,
         &project_id,
@@ -1121,7 +1152,7 @@ mod tests {
 
         // Registered project + a pre-existing row with the legacy
         // 'claude' harness (what a bare-spawn row looks like before the
-        // provider truth lands).
+        // provider truth lands). NULL session_id → discovery still needed.
         let project_id = {
             let db = crate::db::shared();
             let conn = db.lock();
@@ -1153,6 +1184,117 @@ mod tests {
             .expect("row exists");
         assert_eq!(row.session_id.as_deref(), Some(sid), "session_id stamped");
         assert_eq!(row.harness, "grok", "harness stamped truthfully alongside the id");
+    }
+
+    #[test]
+    fn adopt_discovered_session_keeps_live_ssot_over_newer_on_disk() {
+        // Rosson: SSOT is older session B; newer A is also on disk.
+        // adopt must NOT replace B with A.
+        let guard = HomeGuard::new("adopt-keep-ssot");
+        crate::db::init_for_tests();
+        let project_path = format!("/fixture/adopt-keep-{}", uuid::Uuid::new_v4());
+        let older_b = "01920000-bbbb-7000-8000-00000000000b";
+        let newer_a = "01920000-aaaa-7000-8000-00000000000a";
+        write_grok_fixture(
+            &guard.home,
+            older_b,
+            &project_path,
+            "2026-07-03T08:00:00Z",
+            None,
+        );
+        write_grok_fixture(
+            &guard.home,
+            newer_a,
+            &project_path,
+            "2026-07-03T10:00:00Z",
+            None,
+        );
+
+        let project_id = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let pid = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, 'adopt-keep', ?2)",
+                rusqlite::params![pid, project_path],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+                 VALUES (?1, ?2, ?3, 'grok', 'user', 'running', unixepoch())",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), pid, older_b],
+            )
+            .unwrap();
+            pid
+        };
+
+        assert_eq!(
+            adopt_discovered_session("grok", &project_path).as_deref(),
+            Some(older_b),
+            "must keep live SSOT B, not stamp newer A"
+        );
+
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let row = crate::db::schema::WorkspaceSession::get(&conn, &project_id)
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(
+            row.session_id.as_deref(),
+            Some(older_b),
+            "SSOT must remain B after adopt"
+        );
+        assert_eq!(row.harness, "grok");
+    }
+
+    #[test]
+    fn adopt_discovered_session_stamps_newest_when_saved_missing_on_disk() {
+        // Stale / never-born SSOT → discovery still needed; stamp newest.
+        let guard = HomeGuard::new("adopt-stale-ssot");
+        crate::db::init_for_tests();
+        let project_path = format!("/fixture/adopt-stale-{}", uuid::Uuid::new_v4());
+        let stale_b = "01920000-bbbb-7000-8000-0000000000st";
+        let real_a = "01920000-aaaa-7000-8000-0000000000rl";
+        write_grok_fixture(
+            &guard.home,
+            real_a,
+            &project_path,
+            "2026-07-03T10:00:00Z",
+            None,
+        );
+        // stale_b deliberately NOT written to disk.
+
+        let project_id = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let pid = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, 'adopt-stale', ?2)",
+                rusqlite::params![pid, project_path],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+                 VALUES (?1, ?2, ?3, 'claude', 'user', 'running', unixepoch())",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), pid, stale_b],
+            )
+            .unwrap();
+            pid
+        };
+
+        assert_eq!(
+            adopt_discovered_session("grok", &project_path).as_deref(),
+            Some(real_a),
+            "stale SSOT → must stamp newest on disk"
+        );
+
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let row = crate::db::schema::WorkspaceSession::get(&conn, &project_id)
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(row.session_id.as_deref(), Some(real_a));
+        assert_eq!(row.harness, "grok");
     }
 
     // ── Slice 5 — injection profiles (per-provider readiness) ────────

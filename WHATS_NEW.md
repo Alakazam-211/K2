@@ -3,6 +3,23 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.91 — Pinned chat history pick survives refresh
+
+### Pinned chat: history dropdown session sticks across refresh / relaunch
+
+Choosing an older conversation from the pinned-chat history dropdown switched
+the UI correctly, then ~5s later deferred session adoption stamped the newest
+on-disk session over the pick — so refresh or relaunch reloaded the wrong chat.
+
+- Deferred `newest_on_disk` adoption after ensure no longer runs when a known
+  session was successfully resumed (dropdown pick or prior SSOT).
+- Adoption itself refuses to overwrite a saved `session_id` that still exists
+  on disk (belt-and-suspenders for every spawn site).
+- Daemon-owned dropdown switch also stamps the layout offline hint so restore
+  matches the pick without waiting on ensure.
+
+---
+
 ## 0.40.90 — Host-session first prompt at launch (never-born) + CLI slug parity
 
 ### Host-sessions: initial prompt rides the CLI (no post-spawn paste race)

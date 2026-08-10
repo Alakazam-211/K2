@@ -732,6 +732,95 @@ async fn explicit_selection_of_on_disk_session_resumes_it_no_converge() {
     v2_session_map::clear_for_tests();
 }
 
+// Rosson: dropdown pick of older B must survive deferred adopt (~5s) AND
+// a subsequent refresh ensure (force, not explicit). Simulate the deferred
+// adopt thread synchronously — no sleep.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_dropdown_pick_survives_adopt_and_refresh() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("explicit-adopt-refresh");
+    let _shim = install_claude_shim();
+
+    let workspace_id = "pinned-explicit-adopt-refresh-ws";
+    let project = setup_project(workspace_id, "explicit-adopt-refresh");
+    let project_path = project.to_string_lossy().into_owned();
+
+    // Two real on-disk sessions: B (older pick) and A (newest).
+    let session_b = "bbbbbbbb-0000-0000-0000-00000000000b";
+    let session_a = "aaaaaaaa-1111-1111-1111-11111111111a";
+    write_on_disk_session(&project_path, session_b);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write_on_disk_session(&project_path, session_a);
+
+    // Dropdown path: was A, user picks B via set-chat-session.
+    set_saved_session_id(workspace_id, session_a);
+    set_saved_session_id(workspace_id, session_b);
+
+    // Explicit ensure (force_respawn + explicit_selection) — like the
+    // renderer after setChatSession.
+    let out = ensure_pinned_chat(&project_path, true, true).expect("explicit ensure");
+    assert_eq!(
+        out.claude_session_id, session_b,
+        "explicit pick of B must resume B"
+    );
+    assert!(out.resumed_existing);
+    assert_eq!(
+        saved_session_id(workspace_id).as_deref(),
+        Some(session_b),
+        "SSOT must be B after explicit ensure"
+    );
+
+    // Simulate what the 5s deferred adopt thread would do (synchronously).
+    // Pre-fix this stamped A over B; post-fix it must keep B.
+    let adopted = k2_core::workspace::provider_resume::adopt_discovered_session(
+        "claude",
+        &project_path,
+    );
+    assert_eq!(
+        adopted.as_deref(),
+        Some(session_b),
+        "adopt must keep live SSOT B, not stamp newest A"
+    );
+    assert_eq!(
+        saved_session_id(workspace_id).as_deref(),
+        Some(session_b),
+        "SSOT must still be B after deferred adopt"
+    );
+
+    // Refresh / relaunch path: force_respawn, NOT explicit_selection.
+    // Must still resume B (SSOT survives).
+    v2_session_map::clear_for_tests();
+    let refresh = ensure_pinned_chat(&project_path, true, false).expect("refresh ensure");
+    assert_eq!(
+        refresh.claude_session_id, session_b,
+        "refresh must resume B (the saved pick), not newest A"
+    );
+    assert!(
+        refresh.resumed_existing,
+        "B is on disk → resume path"
+    );
+    assert!(
+        refresh.args.iter().any(|a| a == "--resume")
+            && refresh.args.iter().any(|a| a == session_b),
+        "refresh argv must carry --resume <B>, got: {:?}",
+        refresh.args
+    );
+    assert!(
+        !refresh.args.iter().any(|a| a == session_a),
+        "refresh argv must NOT carry A, got: {:?}",
+        refresh.args
+    );
+    assert_eq!(
+        saved_session_id(workspace_id).as_deref(),
+        Some(session_b),
+        "SSOT must remain B after refresh ensure"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
 // AUTO path keeps the GH#24 converge fallback: a stale saved id whose
 // JSONL is gone, NO explicit gesture → resume the newest on-disk session.
 // This is the regression lock that explicit-selection must not break.

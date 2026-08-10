@@ -283,25 +283,34 @@ pub fn ensure_pinned_chat(
         );
     }
 
-    // 6. Eager post-spawn read-back (pinned-chat-identity-ssot PRD §4.1a;
-    //    GH#24). On a FRESH spawn (`!reused`), the agent will write its
-    //    session file a beat from now under the id it actually adopts.
-    //    Defer ~5s, probe the PROVIDER's on-disk store, and stamp
-    //    `workspace_sessions.session_id` + `harness` (the SSOT) with the
-    //    adopted id. This writes truth at the source so the resolver's
-    //    adapter exists-check happy-path hits on the next ensure — no
-    //    re-mint loop. Slice 3 generalized this from the claude-only
-    //    `wake_headless::defer_stamp_adopted_session` to the core
-    //    `provider_resume::defer_adopt_discovered_session` — for premint
-    //    providers (claude/grok) it confirms the pinned id; for
-    //    self-minting providers (pi/codex/gemini/cursor,
-    //    `pending_session_discovery=true`) it's the ONLY way the id
-    //    lands; for unknown providers it no-ops. On a reused PTY we
-    //    skip: identity is already correct (the resolver/earlier
-    //    read-back set it) and no new session file is being created.
-    //    The 0.39.40 resolver converge fallback remains the lazy safety
-    //    net if this eager stamp ever misses.
-    if !spawn_outcome.reused {
+    // 6. Eager post-spawn identity discovery (pinned-chat-identity-ssot
+    //    PRD §4.1a; GH#24). Defer ~5s, probe the PROVIDER's on-disk
+    //    store, and stamp `workspace_sessions.session_id` + `harness`
+    //    (the SSOT) when discovery is still needed.
+    //
+    //    ONLY for fresh / self-minting / premint spawns where identity
+    //    is not yet settled:
+    //      - self-minting providers (pi/codex/gemini/cursor,
+    //        `pending_session_discovery=true`) — the ONLY way the id
+    //        lands after a bare spawn
+    //      - premint providers (claude/grok) on a never-born / fresh
+    //        spawn — confirms the pinned id once the agent writes its
+    //        session file
+    //
+    //    NEVER after `resumed_existing`: a successful resume already
+    //    has `workspace_sessions.session_id` correct (dropdown pick or
+    //    prior SSOT). Running newest_on_disk adoption here clobbers
+    //    intentional older picks ~5s later so refresh reloads the
+    //    previous newest session (Rosson bug).
+    //
+    //    On a reused PTY we also skip: identity is already correct and
+    //    no new session file is being created. Unknown providers no-op
+    //    inside defer_adopt. The 0.39.40 resolver converge fallback
+    //    remains the lazy safety net if this eager stamp ever misses.
+    // Only for fresh / self-minting spawns. A successful resume already has
+    // workspace_sessions.session_id correct (dropdown pick or prior SSOT).
+    // Running newest_on_disk adoption here clobbers intentional older picks.
+    if !spawn_outcome.reused && !resolved.resumed_existing {
         k2_core::workspace::provider_resume::defer_adopt_discovered_session(
             resolved.provider.clone(),
             project_path.to_string(),

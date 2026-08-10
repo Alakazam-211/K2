@@ -347,8 +347,33 @@ the wait (pilot F6 — workspace-15 never appeared under sustained load).
 | `workspace-cell-cap` | This workspace full |
 | `cell-capacity` | Daemon global full |
 | `spawn-queue-timeout` | Legacy / reserved (post-0.40.78 acquire path surfaces concrete cap codes after wait) |
+| `spawn-queue-full` | Durable spawn queue depth exceeded (feature `K2_HOST_SESSION_SPAWN_QUEUE`; default **OFF**) |
 
-Map all four to an **honest retry** UX — never an infinite spinner.
+Map all five to an **honest retry** UX — never an infinite spinner.
+
+### 5.0 Durable spawn queue (optional, default OFF)
+
+Env `K2_HOST_SESSION_SPAWN_QUEUE=1` enables a **path-keyed FIFO** of cold /
+dead-resume host-session spawns when at cap (prd-host-session-spawn-queue-v1).
+Default is **OFF** until integrators poll jobs (202 + no `sessionId` is **not**
+spawn success).
+
+When the feature is **ON**:
+
+- Admit uses **nowait** acquire (no long S8 open-HTTP wait — fairness vs FIFO).
+- Cap refuse + `queue` allowed (default `true`) → **202 Accepted**
+  `{ "queued": true, "jobId", "position", "workspace" }` (no `sessionId` for cold).
+- Cap refuse + `"queue": false` → **immediate 429** with the blocking cap code.
+- Queue depth exceeded → **429** `spawn-queue-full`.
+- Every quota **release** (ChildExit, early fail, not_live orphan) wakes the
+  workspace FIFO head; capability JWTs mint only at drain/spawn time.
+- Status / cancel:
+  - `GET /v1/w/<ws>/host-sessions/queue`
+  - `GET /v1/w/<ws>/host-sessions/queue/<jobId>`
+  - `POST /v1/w/<ws>/host-sessions/queue/<jobId>/cancel`
+
+When the feature is **OFF**: legacy S8 wait then 429 only (byte-compatible).
+Live inject / live-resume never enqueue.
 
 ---
 

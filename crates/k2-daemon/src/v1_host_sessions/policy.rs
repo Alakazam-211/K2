@@ -98,6 +98,17 @@ pub struct ApiHostSessionRequest {
     /// but invalid — see `v1_capabilities::parse_capabilities`).
     #[serde(default)]
     pub capabilities: Option<serde_json::Value>,
+    /// Durable spawn-queue admit hint (prd-host-session-spawn-queue-v1).
+    /// When the feature flag is ON (`K2_HOST_SESSION_SPAWN_QUEUE`):
+    /// - absent / `true` → enqueue on cap refuse (nowait acquire)
+    /// - `false` → immediate 429 (no S8 wait, no enqueue)
+    /// When the feature is OFF this field is ignored (legacy S8 then 429).
+    #[serde(default)]
+    pub queue: Option<bool>,
+    /// Optional client idempotency key. Double-submit with the same id under
+    /// the same principal+workspace returns the same `jobId` while open.
+    #[serde(default, alias = "clientRequestId")]
+    pub client_request_id: Option<String>,
 }
 
 /// The legacy hardcoded FLOOR of known auto-approve flags. Since W2

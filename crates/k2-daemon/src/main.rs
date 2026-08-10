@@ -113,6 +113,8 @@ mod comms;
 mod stream_token;
 // P4-H4: per-principal + global concurrent-cell cap (429); /v1/sandboxes only.
 mod sandbox_quota;
+// Durable host-session spawn queue (prd-host-session-spawn-queue-v1).
+mod spawn_queue;
 mod v1_sandboxes;
 // F1: NON-SANDBOXED host sessions on /v1 (K2_API-gated; "sandbox":"none").
 mod v1_host_sessions;

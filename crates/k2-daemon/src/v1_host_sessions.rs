@@ -5,6 +5,9 @@
 //! ```text
 //! POST /v1/w/<ws>/host-sessions              → spawn (or resume with {"session": id})
 //! GET  /v1/w/<ws>/host-sessions              → list this ws's api-spawned host sessions
+//! GET  /v1/w/<ws>/host-sessions/queue        → list open spawn-queue jobs (feature)
+//! GET  /v1/w/<ws>/host-sessions/queue/<id>   → job status
+//! POST /v1/w/<ws>/host-sessions/queue/<id>/cancel → cancel a queued job
 //! POST /v1/w/<ws>/host-sessions/<id>         → message-live (inject into the PTY)
 //! GET  /v1/w/<ws>/host-sessions/<id>/messages?since=<seq>
 //! POST /v1/w/<ws>/host-sessions/<id>/kill    → force-stop the live PTY (integrator spend-cap)
@@ -441,6 +444,12 @@ fn require_host_sessions(principal: &V1Principal) -> Result<(), CliResponse> {
 /// `POST /v1/w/<ws>/host-sessions` — spawn a fresh NON-SANDBOXED host session
 /// in the granted workspace (or RESUME one of this family's own prior
 /// sessions when the body carries `{"session": <id>}`).
+///
+/// Cap admit (prd-host-session-spawn-queue-v1):
+/// - **Live hit** → inject (no queue, no acquire).
+/// - **Feature OFF** → full S8 wait then 429 (byte-compatible pre-PRD).
+/// - **Feature ON** → always nowait acquire; refuse → enqueue (or immediate
+///   429 when `queue:false` / depth full). Never long S8 while feature ON.
 pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[u8]) -> CliResponse {
     if let Err(resp) = require_host_sessions(principal) {
         return resp;
@@ -482,9 +491,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
 
     // Resume of a session that is STILL LIVE = deliver into it (never boot a
     // duplicate PTY on the same conversation) — the F3 liveness-router shape.
-    // `lookup_live_host_session` covers both id shapes: the daemon SessionId
-    // (premint providers) and an ADOPTED provider-minted id (self-minting
-    // providers, routed via the api- row's agent_name).
+    // Live inject never queues (A7 / product lock 10).
     if let Some(target) = resume_target.as_deref() {
         if let Some(live) = lookup_live_host_session(&ws_path, target) {
             let prompt = req.prompt.as_deref().unwrap_or("").trim().to_string();
@@ -501,25 +508,124 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
         }
     }
 
-    // CONCURRENT-SESSION CAP — principal + workspace + global (S7) with
-    // K2 spawn queue wait (S8). Live resume above never acquires.
-    // Per-workspace ceiling from projects.host_session_cell_cap (NULL →
-    // env K2_SANDBOX_WORKSPACE_CELL_CAP or 15). Released by the
-    // child-exit observer on success, or explicitly on early failure.
     let principal_key = principal.display_id();
     let ws_cell_cap =
         k2_core::workspace::settings::get_host_session_cell_cap(&ws_path);
-    if let Err(qe) = sandbox_quota::try_acquire_in_workspace_with_cap(
-        &principal_key,
-        Some(&ws_path),
-        ws_cell_cap,
-    ) {
-        return CliResponse {
-            status: "429 Too Many Requests",
-            content_type: "application/json",
-            body: serde_json::json!({ "error": qe.message(), "code": qe.code() }).to_string(),
-        };
+    let is_resume = resume_target.is_some();
+    let queue_feature = crate::spawn_queue::feature_enabled();
+
+    // Cap admit.
+    if queue_feature {
+        // Feature ON: always nowait (Q1 / A12 fairness).
+        if let Err(qe) = sandbox_quota::try_acquire_in_workspace_with_cap_nowait(
+            &principal_key,
+            Some(&ws_path),
+            ws_cell_cap,
+        ) {
+            // Explicit queue:false → immediate 429 (no S8, no enqueue).
+            let queue_allowed = req.queue.unwrap_or(true);
+            if !queue_allowed {
+                return CliResponse {
+                    status: "429 Too Many Requests",
+                    content_type: "application/json",
+                    body: serde_json::json!({ "error": qe.message(), "code": qe.code() })
+                        .to_string(),
+                };
+            }
+            // Enqueue cold or dead_resume.
+            let kind = if is_resume {
+                crate::spawn_queue::JobKind::DeadResume
+            } else {
+                crate::spawn_queue::JobKind::Cold
+            };
+            let enq = crate::spawn_queue::EnqueueRequest {
+                workspace_path: ws_path.clone(),
+                workspace_slug: slug.clone(),
+                principal_id: principal_key.clone(),
+                kind,
+                session_id: resume_target.clone(),
+                // Sole durable prompt copy — never logged.
+                prompt: req.prompt.clone(),
+                timeout_secs: req.timeout_secs,
+                // Specs only — JWTs minted at drain.
+                capabilities: req.capabilities.clone(),
+                cols: req.cols,
+                rows: req.rows,
+                client_request_id: req
+                    .client_request_id
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            };
+            return match crate::spawn_queue::enqueue(enq) {
+                Ok((job_id, position)) => crate::spawn_queue::queued_response(
+                    &job_id,
+                    position,
+                    &slug,
+                    resume_target.as_deref(),
+                ),
+                Err(crate::spawn_queue::EnqueueError::DepthFull) => {
+                    crate::spawn_queue::queue_full_response()
+                }
+                Err(crate::spawn_queue::EnqueueError::DeadResumeDuplicate {
+                    job_id,
+                    position,
+                }) => {
+                    // Second POST for same (ws, session) → existing job (or 409).
+                    // Return 202 with the existing jobId (idempotent shape).
+                    crate::spawn_queue::queued_response(
+                        &job_id,
+                        position,
+                        &slug,
+                        resume_target.as_deref(),
+                    )
+                }
+            };
+        }
+    } else {
+        // Feature OFF: legacy full S8 wait then 429 only.
+        if let Err(qe) = sandbox_quota::try_acquire_in_workspace_with_cap(
+            &principal_key,
+            Some(&ws_path),
+            ws_cell_cap,
+        ) {
+            return CliResponse {
+                status: "429 Too Many Requests",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": qe.message(), "code": qe.code() }).to_string(),
+            };
+        }
     }
+
+    // Slot held → shared post-acquire spawn (also used by queue drain).
+    spawn_host_session_after_acquire(
+        principal,
+        &ws_path,
+        &slug,
+        &req,
+        is_resume,
+        resume_target.as_deref(),
+    )
+}
+
+/// Post-quota-acquire spawn path shared by admit and the durable queue drain.
+///
+/// **Must not** re-acquire quota. Caller already holds principal + workspace +
+/// global slots. On early failure this function releases; on successful spawn
+/// the child-exit observer owns the release.
+///
+/// Mint capability JWTs here (drain-time for queued jobs) — never at enqueue.
+/// `status: completed` for queue jobs means this returned 200 + sessionId
+/// (cell started), not agent `--final`.
+pub(crate) fn spawn_host_session_after_acquire(
+    principal: &V1Principal,
+    ws_path: &str,
+    slug: &str,
+    req: &ApiHostSessionRequest,
+    is_resume: bool,
+    resume_target: Option<&str>,
+) -> CliResponse {
+    let principal_key = principal.display_id();
 
     // The forced daemon SessionId: a UUID-shaped resume target rides it
     // (premint continuity — returned id == conversation id); a non-UUID
@@ -527,9 +633,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     // daemon id while the RESUME GRAMMAR below still carries the target
     // (policy splices `req.session`, and registration re-stamps the new
     // `api-…` row with it via the table-driven argv scan).
-    let is_resume = resume_target.is_some();
     let session_id = resume_target
-        .as_deref()
         .and_then(SessionId::parse)
         .unwrap_or_else(SessionId::new);
 
@@ -538,9 +642,9 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     // caller env/args dropped, principal key staged, danger flags stripped
     // unless the owner opted in.
     let (mut spawn_req, launch_plan) =
-        policy::resolve_host_spawn(principal, &ws_path, &session_id, is_resume, &req);
+        policy::resolve_host_spawn(principal, ws_path, &session_id, is_resume, req);
     spawn_req.principal_key = Some(principal_key.clone());
-    spawn_req.quota_workspace = Some(ws_path.clone());
+    spawn_req.quota_workspace = Some(ws_path.to_string());
     // Captured for the post-spawn adoption decision below (spawn_session
     // consumes the request).
     let spawn_command = spawn_req.command.clone().unwrap_or_default();
@@ -551,6 +655,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
 
     // S1–S3: mint capability JWTs into host-curated env BEFORE spawn so the
     // agent process sees K2_CAPABILITY_TOKEN at start (never in free-form prompt).
+    // Drain path mints HERE — enqueue stored specs only (Q5 / A13).
     let mut caps_meta: Option<serde_json::Value> = None;
     if let Some(caps_val) = req.capabilities.as_ref() {
         let sid_str = session_id.to_string();
@@ -558,11 +663,11 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
         match crate::v1_capabilities::parse_capabilities(caps_val).and_then(|caps| {
             crate::v1_capabilities::mint_and_stage(
                 &sid_str,
-                std::path::Path::new(&ws_path),
+                std::path::Path::new(ws_path),
                 &caps,
                 exp_secs,
                 Some(principal_key.as_str()),
-                Some(slug.as_str()),
+                Some(slug),
             )
         }) {
             Ok(out) => {
@@ -584,7 +689,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
                 caps_meta = Some(out.metadata);
             }
             Err(e) => {
-                sandbox_quota::release_in_workspace(&principal_key, Some(&ws_path));
+                sandbox_quota::release_in_workspace(&principal_key, Some(ws_path));
                 return CliResponse {
                     status: "400 Bad Request",
                     content_type: "application/json",
@@ -600,7 +705,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     let result = v2_spawn::spawn_session(spawn_req);
     if result.status != "200 OK" {
         // No session ⇒ no child-exit observer ⇒ release the slot ourselves.
-        sandbox_quota::release_in_workspace(&principal_key, Some(&ws_path));
+        sandbox_quota::release_in_workspace(&principal_key, Some(ws_path));
         return CliResponse {
             status: result.status,
             content_type: "application/json",
@@ -646,7 +751,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
             if adapter.premint_flag().is_none() {
                 defer_adopt_api_host_session(
                     adapter.provider,
-                    ws_path.clone(),
+                    ws_path.to_string(),
                     agent_name.to_string(),
                     principal_key.clone(),
                 );
@@ -667,7 +772,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     // Value never logged.
     let prompt = req.prompt.as_deref().unwrap_or("").trim().to_string();
     if !prompt.is_empty() && !launch_plan.attached {
-        let guest = k2_core::workspace::settings::get_api_guest_policy(&ws_path);
+        let guest = k2_core::workspace::settings::get_api_guest_policy(ws_path);
         let payload = compose_spawn_inject(&guest, &prompt);
         let sid_for_inject = sid;
         let ready_timeout = spawn_prompt_ready_timeout();
@@ -677,7 +782,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
         // pi/hermes — polling bracketed paste would inject into their
         // startup dialogs (which EAT text); those profiles wait their
         // settle floor instead, still capped by the ceiling above.
-        let inject_profile = policy::resolve_host_injection_profile(&ws_path);
+        let inject_profile = policy::resolve_host_injection_profile(ws_path);
         std::thread::spawn(move || {
             let ok = crate::workspace_msg::inject_raw_into_session_with_profile(
                 &sid_for_inject,
@@ -719,6 +824,103 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
         body["capabilities"] = meta;
     }
     CliResponse::ok_json(body.to_string())
+}
+
+/// `GET /v1/w/<ws>/host-sessions/queue` — list open spawn-queue jobs for the
+/// calling principal in this workspace.
+pub(crate) fn handle_v1_host_queue_list(principal: &V1Principal, ws_raw: &str) -> CliResponse {
+    if let Err(resp) = require_host_sessions(principal) {
+        return resp;
+    }
+    let Some(slug) = decode_and_validate_segment(ws_raw) else {
+        return uniform_ws_404();
+    };
+    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let jobs = crate::spawn_queue::list_jobs(&ws_path, &principal.display_id());
+    let items: Vec<serde_json::Value> = jobs.iter().map(|j| j.to_json()).collect();
+    CliResponse::ok_json(
+        serde_json::json!({
+            "workspace": slug,
+            "jobs": items,
+            "featureEnabled": crate::spawn_queue::feature_enabled(),
+        })
+        .to_string(),
+    )
+}
+
+/// `GET /v1/w/<ws>/host-sessions/queue/<jobId>` — job status (owning principal).
+pub(crate) fn handle_v1_host_queue_get(
+    principal: &V1Principal,
+    ws_raw: &str,
+    job_raw: &str,
+) -> CliResponse {
+    if let Err(resp) = require_host_sessions(principal) {
+        return resp;
+    }
+    let Some(slug) = decode_and_validate_segment(ws_raw) else {
+        return uniform_ws_404();
+    };
+    let Some(job_id) = decode_and_validate_segment(job_raw) else {
+        return uniform_ws_404();
+    };
+    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let Some(view) = crate::spawn_queue::get_job(&ws_path, &job_id) else {
+        return uniform_ws_404();
+    };
+    // Owning principal only — unknown / unowned same uniform 404.
+    if view.principal_id != principal.display_id() {
+        return uniform_ws_404();
+    }
+    CliResponse::ok_json(view.to_json().to_string())
+}
+
+/// `POST /v1/w/<ws>/host-sessions/queue/<jobId>/cancel` — cancel a queued job.
+/// Empty body OK (same shape as kill). Daemon is GET/POST only — not DELETE.
+pub(crate) fn handle_v1_host_queue_cancel(
+    principal: &V1Principal,
+    ws_raw: &str,
+    job_raw: &str,
+) -> CliResponse {
+    if let Err(resp) = require_host_sessions(principal) {
+        return resp;
+    }
+    let Some(slug) = decode_and_validate_segment(ws_raw) else {
+        return uniform_ws_404();
+    };
+    let Some(job_id) = decode_and_validate_segment(job_raw) else {
+        return uniform_ws_404();
+    };
+    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match crate::spawn_queue::cancel_job(&ws_path, &job_id, &principal.display_id()) {
+        Ok(view) => CliResponse::ok_json(
+            serde_json::json!({
+                "jobId": view.job_id,
+                "status": "cancelled",
+                "workspace": slug,
+            })
+            .to_string(),
+        ),
+        Err(crate::spawn_queue::CancelError::NotFound) => uniform_ws_404(),
+        Err(crate::spawn_queue::CancelError::NotCancellable { status }) => CliResponse {
+            status: "409 Conflict",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": "job is not cancellable",
+                "code": "queue-job-not-cancellable",
+                "status": status.as_str(),
+            })
+            .to_string(),
+        },
+    }
 }
 
 /// `GET /v1/w/<ws>/host-sessions` — list this workspace's api-spawned host

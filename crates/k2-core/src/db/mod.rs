@@ -764,6 +764,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0095_project_host_session_cell_cap",
             include_str!("../../drizzle_sql/0095_project_host_session_cell_cap.sql"),
         ),
+        // 0096 — durable host-session spawn queue (FIFO per workspace).
+        // Feature default OFF (K2_HOST_SESSION_SPAWN_QUEUE). Prompt purged
+        // on terminal states; capability JWTs never stored.
+        (
+            "0096_host_session_spawn_queue",
+            include_str!("../../drizzle_sql/0096_host_session_spawn_queue.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

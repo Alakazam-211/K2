@@ -114,6 +114,8 @@ pub mod stream_token;
 // P4-H4 (sandbox hardening): per-principal + global concurrent-cell cap (429).
 // Reached ONLY via /v1/sandboxes (K2_SANDBOX_API, default OFF).
 pub mod sandbox_quota;
+// Durable host-session spawn queue (prd-host-session-spawn-queue-v1).
+pub mod spawn_queue;
 pub mod v1_sandboxes;
 // F1 (prd-v1-api-completion §3): NON-SANDBOXED host sessions on /v1 —
 // spawn/list/message/read a real session in a granted workspace, no microVM.

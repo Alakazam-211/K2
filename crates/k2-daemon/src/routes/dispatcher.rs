@@ -4625,6 +4625,65 @@ async fn handle_one_request(
                             let _ = stream.read(&mut buf).await;
                             crate::v1_host_sessions::handle_v1_host_list(&principal, ws)
                         }
+                        // ── Spawn-queue routes (prd-host-session-spawn-queue-v1).
+                        // MUST register before generic `host-sessions/<sid>` so
+                        // sid ≠ "queue" (product lock 9).
+                        // GET …/host-sessions/queue — list open jobs.
+                        ([ws, "host-sessions", "queue"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            let ws = ws.to_string();
+                            let principal = principal.clone();
+                            tokio::task::spawn_blocking(move || {
+                                crate::v1_host_sessions::handle_v1_host_queue_list(
+                                    &principal, &ws,
+                                )
+                            })
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                        }
+                        // POST …/queue is not a spawn surface → 405 (GET list only).
+                        ([_ws, "host-sessions", "queue"], true) => {
+                            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::cli_response::CliResponse::method_not_allowed()
+                        }
+                        // GET …/host-sessions/queue/<jobId>.
+                        ([ws, "host-sessions", "queue", job_id], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            let (ws, job_id) = (ws.to_string(), job_id.to_string());
+                            let principal = principal.clone();
+                            tokio::task::spawn_blocking(move || {
+                                crate::v1_host_sessions::handle_v1_host_queue_get(
+                                    &principal, &ws, &job_id,
+                                )
+                            })
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                        }
+                        // POST …/host-sessions/queue/<jobId>/cancel (NOT DELETE).
+                        ([ws, "host-sessions", "queue", job_id, "cancel"], true) => {
+                            let _body =
+                                super::http::read_post_body(&mut *stream, &mut buf).await;
+                            let (ws, job_id) = (ws.to_string(), job_id.to_string());
+                            let principal = principal.clone();
+                            tokio::task::spawn_blocking(move || {
+                                crate::v1_host_sessions::handle_v1_host_queue_cancel(
+                                    &principal, &ws, &job_id,
+                                )
+                            })
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                        }
+                        // GET on cancel path → 405 POST required.
+                        ([_ws, "host-sessions", "queue", _job_id, "cancel"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::cli_response::CliResponse::method_not_allowed()
+                        }
                         // POST /v1/w/<ws>/host-sessions/<id> — message-live.
                         ([ws, "host-sessions", sid], true) => {
                             let body = super::http::read_post_body(&mut *stream, &mut buf).await;

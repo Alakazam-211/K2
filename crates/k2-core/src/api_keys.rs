@@ -709,9 +709,80 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
     .ok()
 }
 
+/// Reload a principal by durable `api_keys.id` (drain-time principal reload
+/// for the host-session spawn queue). Returns `None` when the key is missing,
+/// revoked, or soft-disabled — callers treat that as `principal-gone`.
+///
+/// Does **not** accept a raw secret; id is the non-secret stable handle
+/// ([`ApiPrincipal::id`]).
+pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
+    let id = id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url, \
+                cap_host_sessions, cap_canonical_message, cap_sandboxes \
+         FROM api_keys \
+         WHERE id = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
+        rusqlite::params![id],
+        |row| {
+            let id: String = row.get(0)?;
+            let anthropic: Option<String> = row.get(1)?;
+            let scope: String = row.get(2)?;
+            let allowed_workspaces: Option<String> = row.get(3)?;
+            let provider: Option<String> = row.get(4)?;
+            let base_url: Option<String> = row.get(5)?;
+            let cap_host: i64 = row.get(6)?;
+            let cap_canon: i64 = row.get(7)?;
+            let cap_sbx: i64 = row.get(8)?;
+            Ok(ApiPrincipal {
+                id,
+                anthropic_key: anthropic.filter(|k| !k.trim().is_empty()),
+                provider,
+                base_url,
+                scope,
+                allowed_workspaces,
+                capabilities: ApiCapabilities {
+                    host_sessions: cap_host != 0,
+                    canonical_message: cap_canon != 0,
+                    sandboxes: cap_sbx != 0,
+                },
+            })
+        },
+    )
+    .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Drain-time principal reload: resolve by durable id (not raw secret).
+    #[test]
+    fn resolve_api_key_by_id_round_trips_and_revokes() {
+        let (id, _raw) = create_api_key(
+            "by-id-reload",
+            Some("sk-ant-by-id"),
+            Some("[\"ws\"]"),
+            None,
+            None,
+            None,
+        )
+        .expect("create");
+        let p = resolve_api_key_by_id(&id).expect("resolve by id");
+        assert_eq!(p.id, id);
+        assert_eq!(p.anthropic_key.as_deref(), Some("sk-ant-by-id"));
+        assert!(resolve_api_key_by_id("no-such-id").is_none());
+        assert!(resolve_api_key_by_id("").is_none());
+        revoke_api_key(&id).expect("revoke");
+        assert!(
+            resolve_api_key_by_id(&id).is_none(),
+            "revoked key must be principal-gone at drain"
+        );
+    }
 
     /// A freshly minted key round-trips: it resolves to a principal whose id
     /// matches the create return, and (a) the raw key has the right shape,

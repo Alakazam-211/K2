@@ -295,17 +295,53 @@ pub fn try_acquire_in_workspace(
 /// concurrent-cell ceiling. Host-session spawn resolves
 /// `get_host_session_cell_cap(ws)` and passes it here so each workspace
 /// can raise its runway without changing the daemon-wide env default.
+///
+/// When at capacity, **waits** up to `K2_SANDBOX_QUEUE_WAIT_SECS` (S8). Prefer
+/// [`try_acquire_in_workspace_with_cap_nowait`] when the durable spawn queue
+/// feature is ON (no long open-HTTP wait steals slots from the FIFO head).
 pub fn try_acquire_in_workspace_with_cap(
     principal_key: &str,
     workspace: Option<&str>,
     ws_cap: usize,
+) -> Result<(), QuotaError> {
+    try_acquire_in_workspace_with_cap_max_wait(
+        principal_key,
+        workspace,
+        ws_cap,
+        queue_wait(),
+    )
+}
+
+/// Non-blocking acquire: one attempt, no S8 poll-wait. Does **not** flip the
+/// global `K2_SANDBOX_QUEUE_WAIT_SECS` env — wait path stays byte-compatible
+/// for feature-OFF callers.
+///
+/// Used by host-session admit when `K2_HOST_SESSION_SPAWN_QUEUE` is ON, and
+/// by the spawn-queue drain loop (strict FIFO head).
+pub fn try_acquire_in_workspace_with_cap_nowait(
+    principal_key: &str,
+    workspace: Option<&str>,
+    ws_cap: usize,
+) -> Result<(), QuotaError> {
+    try_acquire_in_workspace_with_cap_max_wait(
+        principal_key,
+        workspace,
+        ws_cap,
+        Duration::ZERO,
+    )
+}
+
+fn try_acquire_in_workspace_with_cap_max_wait(
+    principal_key: &str,
+    workspace: Option<&str>,
+    ws_cap: usize,
+    max_wait: Duration,
 ) -> Result<(), QuotaError> {
     let per_principal = per_principal_cap_for(principal_key);
     let global = global_cap();
     // Floor at 1 so a buggy zero override cannot brick acquires silently
     // (settings write path already rejects 0; this is defense in depth).
     let ws_cap = ws_cap.max(1);
-    let max_wait = queue_wait();
     let deadline = Instant::now() + max_wait;
     loop {
         match {
@@ -335,9 +371,36 @@ pub fn release(principal_key: &str) {
     release_in_workspace(principal_key, None);
 }
 
+/// Return one held slot. **Always** wakes the durable host-session spawn
+/// queue after a successful release so FIFO head can drain on every free
+/// (ChildExit, early spawn fail, not_live orphan) — not ChildExit-only.
 pub fn release_in_workspace(principal_key: &str, workspace: Option<&str>) {
+    {
+        let mut state = QUOTA.lock().expect("sandbox quota mutex poisoned");
+        state.release_ws(principal_key, workspace);
+    }
+    // Wake outside the quota lock (drain may re-acquire). Re-entrancy is
+    // suppressed inside `spawn_queue::on_slot_freed` while a drain is active.
+    crate::spawn_queue::on_slot_freed(Some(principal_key), workspace);
+}
+
+/// Test-only: force-fill principal+workspace+global counters so the next
+/// nowait acquire fails with the given axes without waiting on S8.
+#[cfg(test)]
+pub fn test_force_fill(principal_key: &str, workspace: &str, n: usize) {
     let mut state = QUOTA.lock().expect("sandbox quota mutex poisoned");
-    state.release_ws(principal_key, workspace);
+    for _ in 0..n {
+        state
+            .try_acquire_ws(principal_key, Some(workspace), n, n, n.max(1) * 10)
+            .expect("test_force_fill acquire");
+    }
+}
+
+/// Test-only: drop all process-global quota counters (isolate unit tests).
+#[cfg(test)]
+pub fn test_reset_all() {
+    let mut state = QUOTA.lock().expect("sandbox quota mutex poisoned");
+    *state = QuotaState::new();
 }
 
 #[cfg(test)]
@@ -640,6 +703,36 @@ mod tests {
                 e.message()
             );
         }
+    }
+
+    /// nowait acquire: under cap succeeds immediately; at cap refuses without
+    /// sleeping the S8 wait window. Does not flip global wait env.
+    #[test]
+    fn nowait_acquire_ok_then_refuse_at_cap() {
+        test_reset_all();
+        let ws = "/tmp/k2-quota-nowait-ws";
+        let p = "nowait-principal";
+        // Cap via env is process-global; drive pure state through force_fill
+        // then nowait with explicit small ws_cap.
+        // First: empty → ok.
+        assert!(
+            try_acquire_in_workspace_with_cap_nowait(p, Some(ws), 1).is_ok(),
+            "first nowait must succeed"
+        );
+        // Second at ws_cap=1 → refuse immediately.
+        let t0 = Instant::now();
+        let err = try_acquire_in_workspace_with_cap_nowait(p, Some(ws), 1)
+            .expect_err("at cap must refuse");
+        assert!(
+            t0.elapsed() < Duration::from_millis(200),
+            "nowait must not poll-wait S8; elapsed={:?}",
+            t0.elapsed()
+        );
+        assert_eq!(err, QuotaError::WorkspaceCap);
+        assert_eq!(err.code(), "workspace-cell-cap");
+        // Cleanup so other tests see a clean process counter.
+        release_in_workspace(p, Some(ws));
+        test_reset_all();
     }
 
 }

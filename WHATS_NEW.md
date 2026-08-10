@@ -3,6 +3,19 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.93 — Host-sessions stage `K2_SESSION_ID` (sandbox parity)
+
+### Host-sessions: `K2_SESSION_ID` in host-curated env
+
+Cold spawn and dead-resume host-sessions now set **`K2_SESSION_ID`** to the
+same string as the API `sessionId` and capability JWT `sub` — matching the
+sandbox route so seats can derive paths without decoding a token.
+
+- Live inject does **not** rewrite process env (same as other env staging).
+- Envelope note updated: `docs/host-session-capability-envelope.md`.
+
+---
+
 ## 0.40.92 — Host-session status + open capability resource namespaces
 
 Integrator-facing train for Scout-class recovery and write-auth. Unit + live

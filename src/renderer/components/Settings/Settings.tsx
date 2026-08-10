@@ -7,7 +7,9 @@ import type { SettingEntry } from './searchManifest'
 import { GeneralSection, GeneralRemoteHostPanel, GENERAL_MANIFEST } from './sections/GeneralSection'
 import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
 import { useConnectHostStore } from '@/stores/connect-host'
-import TrafficLightSpacer from '@/components/TopBar/TrafficLightSpacer'
+import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
+import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
 import { CodeEditorSettingsSection, CODE_EDITOR_MANIFEST } from './sections/CodeEditorSettingsSection'
 import { EditorsSection, EDITORS_MANIFEST } from './sections/EditorsSection'
@@ -182,12 +184,16 @@ export default function Settings(): React.JSX.Element {
           settings sidebar) so the connected-host context is always visible
           and switchable while editing that host's settings. */}
       <div
-        className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"
+        className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"
         data-tauri-drag-region
+        onMouseDown={(e) => {
+          if ((e.target as HTMLElement).closest('button, input, select, .no-drag')) return
+          void getCurrentWindow().startDragging()
+        }}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2">
-          <TrafficLightSpacer />
+          <DesktopChromeLeft />
           {/* App name (in-app wordmark) */}
           <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
             K2
@@ -195,6 +201,7 @@ export default function Settings(): React.JSX.Element {
           {/* K2 server switcher (Local / saved servers / add) */}
           <ServerSwitcher />
         </div>
+        <DesktopChromeRight />
       </div>
 
       <div className="flex flex-1 w-full min-h-0">

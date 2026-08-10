@@ -178,6 +178,8 @@ pub async fn projects_open_focus_window(
     let builder = builder
         .hidden_title(true)
         .title_bar_style(tauri::TitleBarStyle::Overlay);
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let builder = builder.decorations(false);
     let _window = builder
         .build()
         .map_err(|e| e.to_string())?;

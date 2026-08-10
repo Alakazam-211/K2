@@ -24,7 +24,8 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
-import TrafficLightSpacer from '@/components/TopBar/TrafficLightSpacer'
+import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
+import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import { Surface } from '@/components/ui'
 import {
   countByStatus,
@@ -516,7 +517,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">
-          <TrafficLightSpacer />
+          <DesktopChromeLeft />
           <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
             K2
           </span>
@@ -532,19 +533,21 @@ export default function FeedbackPage(): React.JSX.Element | null {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 no-drag">
-          <button
-            type="button"
-            onClick={close}
-            className="flex items-center justify-center w-7 h-7 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer"
-            title="Close (Esc)"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <line x1="2" y1="2" x2="10" y2="10" />
-              <line x1="10" y1="2" x2="2" y2="10" />
-            </svg>
-          </button>
-        </div>
+        <DesktopChromeRight>
+          <div className="flex items-center gap-2 no-drag">
+            <button
+              type="button"
+              onClick={close}
+              className="flex items-center justify-center w-7 h-7 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer"
+              title="Close (Esc)"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <line x1="2" y1="2" x2="10" y2="10" />
+                <line x1="10" y1="2" x2="2" y2="10" />
+              </svg>
+            </button>
+          </div>
+        </DesktopChromeRight>
       </Surface>
 
       {/* Master-detail: list left, resizable ticket panel right. */}

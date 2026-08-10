@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicolo-ribaudo/tauri-v2-schema/main/schemas/desktop-schema.json",
+  "app": {
+    "windows": [
+      {
+        "decorations": false
+      }
+    ]
+  }
+}

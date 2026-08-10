@@ -10,8 +10,13 @@
  */
 
 import { isWebClient } from '@/lib/is-web'
+import {
+  getDesktopChrome,
+  TRAFFIC_LIGHT_SPACER_PX as DESKTOP_TRAFFIC_LIGHT_SPACER_PX,
+} from '@/lib/desktop-chrome'
 
 const desktop = !isWebClient()
+const chrome = getDesktopChrome()
 
 export const webFeatures = {
   /** Native embedded Browser pane (WKWebView child). */
@@ -28,13 +33,13 @@ export const webFeatures = {
   /** Multi-host ServerSwitcher + Add server (hosted web is single same-origin). */
   multiHost: desktop,
   /**
-   * macOS traffic-light (close/min/max) left inset. Desktop reserves ~70px;
-   * browser chrome has no window controls — reclaim that space.
+   * macOS traffic-light (close/min/max) left inset. Owned by desktop-chrome:
+   * only true on macOS desktop (0 on Win/Linux + hosted web).
    */
-  trafficLightSpacer: desktop,
+  trafficLightSpacer: chrome.trafficLightSpacer,
 } as const
 
-/** Width (px) reserved for traffic lights; 0 on hosted web. */
-export const TRAFFIC_LIGHT_SPACER_PX = webFeatures.trafficLightSpacer ? 70 : 0
+/** Width (px) reserved for traffic lights; 0 on web / Win / Linux. */
+export const TRAFFIC_LIGHT_SPACER_PX = DESKTOP_TRAFFIC_LIGHT_SPACER_PX
 
 export type WebFeatures = typeof webFeatures

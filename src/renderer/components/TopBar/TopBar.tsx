@@ -12,9 +12,14 @@ import ModeToggle from '@/components/Presence/ModeToggle'
 import ServerSwitcher from './ServerSwitcher'
 import PageTabs from './PageTabs'
 import SettingsGearButton from './SettingsGearButton'
-import TrafficLightSpacer from './TrafficLightSpacer'
+import DesktopChromeLeft from './DesktopChromeLeft'
+import DesktopChromeRight from './DesktopChromeRight'
 import { Surface } from '@/components/ui'
-import { isWebClient } from '@/lib/is-web'
+import {
+  APP_MENU_BUTTON_MIN_WIDTH_PX,
+  getDesktopChrome,
+  TRAFFIC_LIGHT_SPACER_BASE_PX,
+} from '@/lib/desktop-chrome'
 
 interface TopBarProps {
   projectName?: string
@@ -72,6 +77,13 @@ export default function TopBar({
       // No run command configured
     }
   }
+  const chrome = getDesktopChrome()
+  const leftMinWidth = chrome.trafficLightSpacer
+    ? TRAFFIC_LIGHT_SPACER_BASE_PX + 60
+    : chrome.appMenuButton
+      ? APP_MENU_BUTTON_MIN_WIDTH_PX + 60
+      : undefined
+
   return (
     <Surface
       role2="surface"
@@ -88,12 +100,12 @@ export default function TopBar({
         minHeight: TOPBAR_HEIGHT
       }}
     >
-      {/* Left: traffic lights spacer (desktop only) + K2 branding + sidebar toggle. */}
+      {/* Left: chrome spacer/Menu + K2 branding + sidebar toggle. */}
       <div
         className="flex items-center gap-2"
-        style={{ minWidth: isWebClient() ? undefined : 130 }}
+        style={{ minWidth: leftMinWidth }}
       >
-        <TrafficLightSpacer />
+        <DesktopChromeLeft />
         {/* App name (in-app wordmark) */}
         <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">K2</span>
         {/* K2 Connect server switcher (This Mac / saved servers / add) */}
@@ -162,114 +174,116 @@ export default function TopBar({
         )}
       </div>
 
-      {/* Right: run button + panel toggles */}
-      <div className="flex items-center gap-1">
-        {/* Run command button — only visible when project has a run command */}
-        {hasRun && (
+      {/* Right: run button + panel toggles + window controls */}
+      <DesktopChromeRight>
+        <div className="flex items-center gap-1">
+          {/* Run command button — only visible when project has a run command */}
+          {hasRun && (
+            <button
+              onClick={handleRun}
+              className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[#4ec9b0] transition-colors"
+              style={{
+                // @ts-expect-error -- Electron-specific CSS property
+                WebkitAppRegion: 'no-drag'
+              }}
+              title="Run workspace command"
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 12 12"
+                fill="currentColor"
+                stroke="none"
+              >
+                <polygon points="2,0 2,12 11,6" />
+              </svg>
+            </button>
+          )}
+
+          {/* Presence roster — who's connected to this daemon (hidden when
+              alone or when the host predates the presence routes) */}
+          <PresenceRoster />
+
+          {/* Timer */}
+          <TimerButton />
+
+          {/* Per-window viewer/claimer mode toggle */}
+          <ModeToggle />
+
+          {/* Separator between timer and panel toggles */}
+          <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
+
+          {/* Left panel toggle (opens panel to the left of terminal) */}
           <button
-            onClick={handleRun}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[#4ec9b0] transition-colors"
+            onClick={onToggleLeftPanel}
+            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
             style={{
               // @ts-expect-error -- Electron-specific CSS property
               WebkitAppRegion: 'no-drag'
             }}
-            title="Run workspace command"
+            title="Toggle left panel"
           >
             <svg
-              width="12"
-              height="12"
-              viewBox="0 0 12 12"
-              fill="currentColor"
-              stroke="none"
+              width="14"
+              height="14"
+              viewBox="0 0 14 14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              <polygon points="2,0 2,12 11,6" />
+              {leftPanelVisible ? (
+                <>
+                  <rect x="1" y="2" width="12" height="10" rx="0" />
+                  <line x1="5.5" y1="2" x2="5.5" y2="12" />
+                  <line x1="3" y1="5" x2="3" y2="9" strokeWidth="1.5" />
+                </>
+              ) : (
+                <>
+                  <rect x="1" y="2" width="12" height="10" rx="0" />
+                  <line x1="5.5" y1="2" x2="5.5" y2="12" strokeDasharray="1.5 1.5" />
+                </>
+              )}
             </svg>
           </button>
-        )}
 
-        {/* Presence roster — who's connected to this daemon (hidden when
-            alone or when the host predates the presence routes) */}
-        <PresenceRoster />
-
-        {/* Timer */}
-        <TimerButton />
-
-        {/* Per-window viewer/claimer mode toggle */}
-        <ModeToggle />
-
-        {/* Separator between timer and panel toggles */}
-        <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
-
-        {/* Left panel toggle (opens panel to the left of terminal) */}
-        <button
-          onClick={onToggleLeftPanel}
-          className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-          style={{
-            // @ts-expect-error -- Electron-specific CSS property
-            WebkitAppRegion: 'no-drag'
-          }}
-          title="Toggle left panel"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+          {/* Right panel toggle (opens panel to the right of terminal) */}
+          <button
+            onClick={onToggleRightPanel}
+            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+            style={{
+              // @ts-expect-error -- Electron-specific CSS property
+              WebkitAppRegion: 'no-drag'
+            }}
+            title="Toggle right panel"
           >
-            {leftPanelVisible ? (
-              <>
-                <rect x="1" y="2" width="12" height="10" rx="0" />
-                <line x1="5.5" y1="2" x2="5.5" y2="12" />
-                <line x1="3" y1="5" x2="3" y2="9" strokeWidth="1.5" />
-              </>
-            ) : (
-              <>
-                <rect x="1" y="2" width="12" height="10" rx="0" />
-                <line x1="5.5" y1="2" x2="5.5" y2="12" strokeDasharray="1.5 1.5" />
-              </>
-            )}
-          </svg>
-        </button>
-
-        {/* Right panel toggle (opens panel to the right of terminal) */}
-        <button
-          onClick={onToggleRightPanel}
-          className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-          style={{
-            // @ts-expect-error -- Electron-specific CSS property
-            WebkitAppRegion: 'no-drag'
-          }}
-          title="Toggle right panel"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            {rightPanelVisible ? (
-              <>
-                <rect x="1" y="2" width="12" height="10" rx="0" />
-                <line x1="8.5" y1="2" x2="8.5" y2="12" />
-                <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
-              </>
-            ) : (
-              <>
-                <rect x="1" y="2" width="12" height="10" rx="0" />
-                <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
-              </>
-            )}
-          </svg>
-        </button>
-      </div>
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 14 14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              {rightPanelVisible ? (
+                <>
+                  <rect x="1" y="2" width="12" height="10" rx="0" />
+                  <line x1="8.5" y1="2" x2="8.5" y2="12" />
+                  <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
+                </>
+              ) : (
+                <>
+                  <rect x="1" y="2" width="12" height="10" rx="0" />
+                  <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
+                </>
+              )}
+            </svg>
+          </button>
+        </div>
+      </DesktopChromeRight>
     </Surface>
   )
 }

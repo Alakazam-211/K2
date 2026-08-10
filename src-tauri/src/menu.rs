@@ -204,31 +204,41 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             emit_to_focused(app, "menu:focus-window");
         }
         "new-window" => {
-            use tauri::WebviewWindowBuilder;
-
-            // Generate a unique label for the new window
-            let label = format!("window-{}", uuid::Uuid::new_v4());
-            let webview_url = if cfg!(debug_assertions) {
-                tauri::WebviewUrl::External(
-                    url::Url::parse("http://localhost:5173").unwrap(),
-                )
-            } else {
-                tauri::WebviewUrl::App("index.html".into())
-            };
-
-            let builder = WebviewWindowBuilder::new(app, &label, webview_url)
-                .title("K2")
-                .inner_size(1400.0, 900.0)
-                .min_inner_size(800.0, 600.0);
-            // hidden_title / TitleBarStyle::Overlay are macOS-only builder methods.
-            #[cfg(target_os = "macos")]
-            let builder = builder
-                .hidden_title(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay);
-            let _ = builder.build();
+            let _ = open_new_window(app);
         }
         _ => {}
     }
+}
+
+/// Open a secondary main-layout window (shared by menu + Win/Linux App Menu).
+#[tauri::command]
+pub fn window_new(app: AppHandle) -> Result<(), String> {
+    open_new_window(&app).map_err(|e| e.to_string())
+}
+
+pub fn open_new_window(app: &AppHandle) -> Result<(), tauri::Error> {
+    use tauri::WebviewWindowBuilder;
+
+    let label = format!("window-{}", uuid::Uuid::new_v4());
+    let webview_url = if cfg!(debug_assertions) {
+        tauri::WebviewUrl::External(url::Url::parse("http://localhost:5173").unwrap())
+    } else {
+        tauri::WebviewUrl::App("index.html".into())
+    };
+
+    let builder = WebviewWindowBuilder::new(app, &label, webview_url)
+        .title("K2")
+        .inner_size(1400.0, 900.0)
+        .min_inner_size(800.0, 600.0);
+    // hidden_title / TitleBarStyle::Overlay are macOS-only builder methods.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .hidden_title(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay);
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let builder = builder.decorations(false);
+    builder.build()?;
+    Ok(())
 }
 
 fn emit_to_focused(app: &AppHandle, event: &str) {

@@ -31,7 +31,8 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
 import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
-import TrafficLightSpacer from '@/components/TopBar/TrafficLightSpacer'
+import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
+import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import { Surface } from '@/components/ui'
 import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
@@ -311,7 +312,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">
-          <TrafficLightSpacer />
+          <DesktopChromeLeft />
           <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">
             K2
           </span>
@@ -357,45 +358,47 @@ export default function ProjectsPage(): React.JSX.Element | null {
 
         {/* Right: the chat-panel toggle (§6.7.3 — the TopBar right-panel
             idiom at the bar's right end); the unread dot rides it while
-            the panel is closed. */}
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => useProjectGroupsStore.getState().setChatCollapsed(!chatCollapsed)}
-            className="no-drag relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-            title="Toggle project chat"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+            the panel is closed. Window controls sit after page affordances. */}
+        <DesktopChromeRight>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => useProjectGroupsStore.getState().setChatCollapsed(!chatCollapsed)}
+              className="no-drag relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+              title="Toggle project chat"
             >
-              {!chatCollapsed ? (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="8.5" y1="2" x2="8.5" y2="12" />
-                  <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
-                </>
-              ) : (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
-                </>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                {!chatCollapsed ? (
+                  <>
+                    <rect x="1" y="2" width="12" height="10" rx="0" />
+                    <line x1="8.5" y1="2" x2="8.5" y2="12" />
+                    <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
+                  </>
+                ) : (
+                  <>
+                    <rect x="1" y="2" width="12" height="10" rx="0" />
+                    <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
+                  </>
+                )}
+              </svg>
+              {chatCollapsed && selectedUnread && (
+                <span
+                  className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
+                  title="New project messages"
+                />
               )}
-            </svg>
-            {chatCollapsed && selectedUnread && (
-              <span
-                className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
-                title="New project messages"
-              />
-            )}
-          </button>
-        </div>
+            </button>
+          </div>
+        </DesktopChromeRight>
       </Surface>
 
       {/* Body: left nav (expanded or icon rail, §6.7.1) + main area. */}

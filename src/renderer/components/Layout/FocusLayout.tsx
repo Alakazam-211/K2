@@ -5,7 +5,8 @@ import { usePanelsStore } from '../../stores/panels'
 import TimerButton from '@/components/Timer/TimerButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
-import TrafficLightSpacer from '@/components/TopBar/TrafficLightSpacer'
+import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
+import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 
 interface FocusLayoutProps {
   children: ReactNode
@@ -42,7 +43,7 @@ export default function FocusLayout({
           minHeight: TOPBAR_HEIGHT
         }}
       >
-        <TrafficLightSpacer />
+        <DesktopChromeLeft />
 
         {/* Center: workspace name + branch */}
         <div className="flex items-center gap-1.5 text-xs">
@@ -67,67 +68,69 @@ export default function FocusLayout({
           )}
         </div>
 
-        {/* Right: presence roster + timer + left/right panel toggles */}
-        <div className="flex items-center gap-1">
-          <PresenceRoster />
-          <TimerButton />
+        {/* Right: presence roster + timer + left/right panel toggles + window controls */}
+        <DesktopChromeRight>
+          <div className="flex items-center gap-1">
+            <PresenceRoster />
+            <TimerButton />
 
-          {/* Per-window viewer/claimer mode toggle */}
-          <ModeToggle />
+            {/* Per-window viewer/claimer mode toggle */}
+            <ModeToggle />
 
-          {/* Separator between timer and panel toggles */}
-          <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
+            {/* Separator between timer and panel toggles */}
+            <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
 
-          <button
-            onClick={toggleLeftPanel}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-            style={{
-              // @ts-expect-error -- Electron-specific CSS property
-              WebkitAppRegion: 'no-drag'
-            }}
-            title="Toggle left panel"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-              {leftPanelOpen ? (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="5.5" y1="2" x2="5.5" y2="12" />
-                  <line x1="3" y1="5" x2="3" y2="9" strokeWidth="1.5" />
-                </>
-              ) : (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="5.5" y1="2" x2="5.5" y2="12" strokeDasharray="1.5 1.5" />
-                </>
-              )}
-            </svg>
-          </button>
+            <button
+              onClick={toggleLeftPanel}
+              className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+              style={{
+                // @ts-expect-error -- Electron-specific CSS property
+                WebkitAppRegion: 'no-drag'
+              }}
+              title="Toggle left panel"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                {leftPanelOpen ? (
+                  <>
+                    <rect x="1" y="2" width="12" height="10" rx="0" />
+                    <line x1="5.5" y1="2" x2="5.5" y2="12" />
+                    <line x1="3" y1="5" x2="3" y2="9" strokeWidth="1.5" />
+                  </>
+                ) : (
+                  <>
+                    <rect x="1" y="2" width="12" height="10" rx="0" />
+                    <line x1="5.5" y1="2" x2="5.5" y2="12" strokeDasharray="1.5 1.5" />
+                  </>
+                )}
+              </svg>
+            </button>
 
-          <button
-            onClick={toggleRightPanel}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-            style={{
-              // @ts-expect-error -- Electron-specific CSS property
-              WebkitAppRegion: 'no-drag'
-            }}
-            title="Toggle right panel"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-              {rightPanelOpen ? (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="8.5" y1="2" x2="8.5" y2="12" />
-                  <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
-                </>
-              ) : (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
-                </>
-              )}
-            </svg>
-          </button>
-        </div>
+            <button
+              onClick={toggleRightPanel}
+              className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+              style={{
+                // @ts-expect-error -- Electron-specific CSS property
+                WebkitAppRegion: 'no-drag'
+              }}
+              title="Toggle right panel"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                {rightPanelOpen ? (
+                  <>
+                    <rect x="1" y="2" width="12" height="10" rx="0" />
+                    <line x1="8.5" y1="2" x2="8.5" y2="12" />
+                    <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
+                  </>
+                ) : (
+                  <>
+                    <rect x="1" y="2" width="12" height="10" rx="0" />
+                    <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
+                  </>
+                )}
+              </svg>
+            </button>
+          </div>
+        </DesktopChromeRight>
       </div>
 
       {/* Content area with optional left/right panels */}

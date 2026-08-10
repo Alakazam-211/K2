@@ -744,7 +744,7 @@ pub fn run() {
     // No `.manage()` registration needed; the filesystem watcher
     // commands read the static directly.
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -754,9 +754,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+
+    // App menu bar is macOS-only. Win/Linux use the in-app "Menu" button
+    // (frameless chrome). Tray menu is installed separately and stays.
+    #[cfg(target_os = "macos")]
+    let builder = builder
         .menu(|handle| menu::create_menu(handle))
-        .on_menu_event(menu::handle_menu_event)
+        .on_menu_event(menu::handle_menu_event);
+
+    builder
         .setup(|app| {
             // 0.40.1 — CLI symlink heal. Re-link `/usr/local/bin/k2`
             // (+ the k2so shim) when the symlink is missing, broken, or points
@@ -1437,6 +1444,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Win/Linux App Menu — open secondary window (macOS uses native menu).
+            menu::window_new,
             // 0.39.x (Issue #6): webview liveness watchdog heartbeat.
             renderer_heartbeat,
             // 0.40.48 connection resilience — out-of-webview boot-status

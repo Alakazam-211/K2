@@ -36,6 +36,7 @@ export default defineConfig({
       '@tauri-apps/plugin-clipboard-manager': shim('plugin-clipboard-manager.ts'),
       '@tauri-apps/plugin-notification': shim('plugin-notification.ts'),
       '@tauri-apps/plugin-updater': shim('plugin-updater.ts'),
+      '@tauri-apps/plugin-process': shim('plugin-process.ts'),
       '@crabnebula/tauri-plugin-drag': shim('plugin-drag.ts'),
     },
   },

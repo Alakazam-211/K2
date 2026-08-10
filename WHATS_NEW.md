@@ -3,6 +3,58 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.92 — Host-session status + open capability resource namespaces
+
+Integrator-facing train for Scout-class recovery and write-auth. Unit + live
+e2e on the build Mac (unbake, status, kill→same-id dead-resume) green before
+cut.
+
+### Host-sessions: `GET …/host-sessions/<sessionId>` status
+
+Read-only reconciler status for an owned host-session (kill-floor authz;
+uniform 404 for unowned):
+
+| Field | Meaning |
+|-------|---------|
+| `live` | PTY child process alive |
+| `started` | `live` **or** `latest_seq > 0` **or** provider session file exists |
+| `phase` | `working` / `grace` / `finished` / `never_started` (+ optional `gone`) |
+| `latest_seq` | Drain high-water (**snake_case**, same as messages) |
+| `reaper` | `none` / `working` / `grace` |
+| `durable` | Durable `api-%` index row present |
+
+**Product lock:** live + no transcript + `latest_seq == 0` → `phase=working`,
+`started=true` — **not** `never_started` (avoids false never-born kills).
+No side effects (no kill, remint, or reaper stamp).
+
+PRD: `.k2/prds/prd-v1-host-session-status-v1.md` · addendum
+`.k2/prds/prd-caps-recovery-consensus-addendum-v1.md`.
+
+### Capabilities: open `namespace:id` resources (unbake `interview:`)
+
+Capability `resource` is no longer restricted to the `interview:` prefix.
+
+- Grammar: `namespace:id` with lowercase namespace; id is one or two path
+  segments (`space:plan/space` OK; multi-slash / `..` / uppercase ns rejected).
+- `{resource_id}` in audience templates = **id after the first `:`**
+  (e.g. `space:plan1/space2` → `plan1/space2`).
+- **`interview:<id>` still works** — no forced Scout v1 migration.
+- Open namespaces (no server allowlist); app Layer B still binds `resource`
+  to the URL / registry.
+
+Docs: `docs/host-session-capability-envelope.md` (Layer B: `sub` required,
+`ws` when present; valid JWT ≠ authorized write).
+
+### Kill → dead-resume recovery runbook (Scout-facing)
+
+Operational SSOT for safe-to-kill gates, same-`sessionId` dead-resume,
+ownership re-register, backoff, and deliberate donts:
+
+`docs/host-session-kill-resume-recovery.md`  
+(linked from the capability envelope note).
+
+---
+
 ## 0.40.91 — Pinned chat pick persists + durable host-session spawn queue
 
 ### Pinned chat: history dropdown session sticks across refresh / relaunch

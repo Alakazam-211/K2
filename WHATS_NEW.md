@@ -33,6 +33,19 @@ waiting briefly then 429.
   + 429.
 - PRD: `.k2/prds/prd-host-session-spawn-queue-v1.md`.
 
+### Host-sessions: reap cleans durable api-% index (no residual tab ghosts)
+
+After `k2 respond --final` / Grace (and null-`session_id` orphans on
+ChildExit), durable `workspace_tab_sessions` rows for host-minted `api-%`
+cells are cleared by **agent_name** as well as session id. Previously
+clear-by-session_id alone left NULL-sid rows forever so GUIs could pile
+audit Terminal tabs after the TUI was reaped (Scout residual / smoke on
+TestingK2SO). Live-kill still **preserves** a stamped session id for
+dead-resume.
+
+Optional smoke/dev: `K2_HOST_SESSION_FINAL_GRACE_SECS` (default 10;
+`0` = next reaper tick) and `K2_SANDBOX_REAPER_TICK_SECS`.
+
 ### Host-sessions: launch-param security note (0.40.90 follow-up)
 
 Interactive first-turn launch-param puts the **prompt string on process

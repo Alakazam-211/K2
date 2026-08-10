@@ -36,7 +36,17 @@ const MIN_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 86_400;
 const TICK_SECS: u64 = 15;
 /// Grace after `--final` before the cell may be reaped as idle-complete.
+/// Override with `K2_HOST_SESSION_FINAL_GRACE_SECS` (including `0` for
+/// immediate-next-tick reap — useful for smoke/dev; production default 10).
 pub const FINAL_GRACE_SECS: u64 = 10;
+
+/// Effective grace seconds (env override, else [`FINAL_GRACE_SECS`]).
+pub fn final_grace_secs() -> u64 {
+    std::env::var("K2_HOST_SESSION_FINAL_GRACE_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(FINAL_GRACE_SECS)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -117,7 +127,7 @@ pub fn on_respond_final(id: &SessionId) {
     mark_complete(id);
 }
 
-/// Arm Grace for `id` with [`FINAL_GRACE_SECS`] (fixed 10s in Unit A).
+/// Arm Grace for `id` with [`final_grace_secs`] (default 10s; env override).
 /// Used by `k2 respond --final` and `k2 done` / `POST /cli/session/complete`.
 /// Idempotent re-arm. Does **not** touch the respond drain.
 pub fn mark_complete(id: &SessionId) {
@@ -126,7 +136,7 @@ pub fn mark_complete(id: &SessionId) {
             let now = Instant::now();
             e.last_activity = now;
             e.phase = Phase::Grace;
-            e.grace_until = Some(now + Duration::from_secs(FINAL_GRACE_SECS));
+            e.grace_until = Some(now + Duration::from_secs(final_grace_secs()));
         }
     }
 }

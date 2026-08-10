@@ -3,7 +3,24 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.90 — CLI workspace resolve matches /v1 slugs (cell-cap)
+## 0.40.90 — Host-session first prompt at launch (never-born) + CLI slug parity
+
+### Host-sessions: initial prompt rides the CLI (no post-spawn paste race)
+
+Cold spawn and dead-resume for API / wiki host-sessions now attach the
+first-turn prompt as an **interactive CLI launch parameter** for Claude,
+Codex, Grok, Gemini, Cursor Agent, and Pi — so the agent process starts
+with the turn instead of a detached paste after settle.
+
+- Same F3 router: live cells still inject; unknown ids still 404; same
+  `sessionId` on dead-resume.
+- **Fire-once:** prompt is ephemeral exec-only (not stored in
+  `args_json` / restart recovery).
+- Hermes / unknown agents keep the old post-spawn inject path.
+- Live lookup requires a living child (phantom map rows fall through to
+  dead-resume).
+- PRD: `.k2/prds/prd-host-session-launch-param-prompt-v1.md` (Julie / Scout
+  never-born residual after 0.40.89 settle).
 
 ### `k2 workspace host-session-cell-cap` sees the same workspaces as spawn
 

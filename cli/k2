@@ -16479,8 +16479,13 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
 
 # Session auto-detection (feedback F1): the asking session's id + kind
 # from the environment, first match wins:
-#   1. K2_SESSION_ID — the daemon stages this into SANDBOX cells
-#      (v1_sandboxes/policy.rs: guest runs `claude --session-id $K2_SESSION_ID`).
+#   1. K2_SESSION_ID — daemon host-curated session id for BOTH:
+#        • sandbox cells (v1_sandboxes/policy.rs — guest may splice
+#          `claude --session-id $K2_SESSION_ID`)
+#        • host-sessions (v1_host_sessions/policy.rs — same string as
+#          API sessionId / capability JWT sub; 0.40.93+)
+#      Presence alone does NOT mean "sandbox": check K2_API_CELL=1 for
+#      API cells; sandbox vs host is which spawn path ran, not this var.
 #   2. CLAUDE_SESSION_ID — reserved hook-context spelling (PRD §4.2).
 #   3. CLAUDE_CODE_SESSION_ID — what Claude Code actually exports into
 #      Bash-tool subshells; in a K2 canonical (pinned-chat) session it
@@ -16490,7 +16495,15 @@ _feedback_detect_session() {
     FB_SESSION_ID=""
     FB_SESSION_KIND=""
     if [ -n "${K2_SESSION_ID:-}" ]; then
-        FB_SESSION_ID="$K2_SESSION_ID"; FB_SESSION_KIND="sandbox"
+        # Kind is best-effort for feedback attribution, not spawn-path truth.
+        # Prefer "api" when K2_API_CELL marks a host/sandbox API cell; else
+        # legacy label "sandbox" for older docs that grepped this helper.
+        FB_SESSION_ID="$K2_SESSION_ID"
+        if [ "${K2_API_CELL:-}" = "1" ] || [ "${K2SO_API_CELL:-}" = "1" ]; then
+            FB_SESSION_KIND="api"
+        else
+            FB_SESSION_KIND="sandbox"
+        fi
     elif [ -n "${CLAUDE_SESSION_ID:-}" ]; then
         FB_SESSION_ID="$CLAUDE_SESSION_ID"; FB_SESSION_KIND="canonical"
     elif [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then

@@ -394,6 +394,19 @@ fn acquire_daemon_singleton(k2_dir: &std::path::Path) -> Result<(), String> {
         let _ = f.flush();
     }
 
+    #[cfg(windows)]
+    {
+        // First-cut singleton: write our PID; exclusive file lock can use
+        // Win32 LockFileEx later. Open succeeds; dual-daemon is rare on
+        // desktop bring-up.
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = &file;
+        let _ = f.seek(SeekFrom::Start(0));
+        let _ = f.set_len(0);
+        let _ = writeln!(f, "{}", std::process::id());
+        let _ = f.flush();
+    }
+
     // Keep the File (and thus the flock) alive for process lifetime.
     let _ = DAEMON_SINGLETON_LOCK.set(file);
     Ok(())
@@ -2177,14 +2190,23 @@ fn migrate_orphaned_agent_heartbeats() {
 /// Write `contents` to `path` with permissions 0600 so other users on the
 /// same machine can't read the auth token or port.
 fn write_restricted(path: &PathBuf, contents: &[u8]) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    f.write_all(contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(contents)?;
+    }
+    #[cfg(windows)]
+    {
+        // Windows ACLs are process-owner based by default for user-profile
+        // files; 0600 is a POSIX concept. Plain write is the first cut.
+        fs::write(path, contents)?;
+    }
     Ok(())
 }
 

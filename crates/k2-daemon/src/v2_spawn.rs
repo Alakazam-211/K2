@@ -197,6 +197,7 @@ fn default_rows() -> u16 {
 /// per-session gid so a future per-cell group bit can't leak access to another
 /// cell). Only ever called on a daemon-MINTED ephemeral path, never a caller one.
 #[cfg(unix)]
+#[cfg(unix)]
 fn chown_path_to_uid(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
     let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
@@ -209,6 +210,12 @@ fn chown_path_to_uid(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
+    Ok(())
+}
+
+/// Windows has no cell-uid sandbox chown model — no-op.
+#[cfg(windows)]
+fn chown_path_to_uid(_path: &std::path::Path, _uid: u32) -> std::io::Result<()> {
     Ok(())
 }
 

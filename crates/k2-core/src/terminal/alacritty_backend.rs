@@ -1,6 +1,7 @@
 use parking_lot::Mutex;
 use std::borrow::Cow;
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -244,6 +245,9 @@ struct AlacrittyTerminalInstance {
     #[allow(dead_code)]
     event_sink: Arc<dyn TerminalEventSink>,
     cwd: String,
+    /// Unix PTY master fd for `tcgetpgrp` / foreground kill. Unused on Windows
+    /// (ConPTY has no equivalent fd model) — stored as `-1`.
+    #[cfg_attr(windows, allow(dead_code))]
     pty_raw_fd: i32,
     child_pid: Option<u32>,
     palette: [Option<Rgb>; 269],
@@ -481,8 +485,19 @@ impl TerminalManager {
         let pty = tty::new(&pty_options, window_size, 0)
             .map_err(|e| format!("Failed to create PTY: {}", e))?;
 
-        let raw_fd = pty.file().as_raw_fd();
-        let child_pid = pty.child().id();
+        // Unix: master fd + child PID from Pty::file/child.
+        // Windows ConPTY: no master fd; PID from ChildExitWatcher.
+        #[cfg(unix)]
+        let (raw_fd, child_pid) = {
+            let raw_fd = pty.file().as_raw_fd();
+            let child_pid = pty.child().id();
+            (raw_fd, Some(child_pid))
+        };
+        #[cfg(windows)]
+        let (raw_fd, child_pid) = {
+            let child_pid = pty.child_watcher().pid().map(|p| p.get());
+            (-1_i32, child_pid)
+        };
 
         // Create event loop
         let event_loop = EventLoop::new(
@@ -545,7 +560,7 @@ impl TerminalManager {
             event_sink,
             cwd: safe_cwd,
             pty_raw_fd: raw_fd,
-            child_pid: Some(child_pid),
+            child_pid,
             palette,
             glyph_state,
             force_full_render,
@@ -555,7 +570,13 @@ impl TerminalManager {
         };
 
         self.terminals.insert(id.clone(), instance);
-        log_debug!("[terminal/alacritty] Terminal {} created ({}x{}, pid={})", id, c, r, child_pid);
+        log_debug!(
+            "[terminal/alacritty] Terminal {} created ({}x{}, pid={:?})",
+            id,
+            c,
+            r,
+            child_pid
+        );
 
         Ok(())
     }
@@ -626,7 +647,7 @@ impl TerminalManager {
             // Drop the wakeup channel to unblock the grid emission thread
             instance.wakeup_tx.take();
 
-            // Kill child process (Zed pattern: two-phase kill with proper reaping)
+            // Kill child process (Zed pattern on Unix; ConPTY uses taskkill on Windows).
             if let Some(pid) = instance.child_pid {
                 #[cfg(unix)]
                 unsafe {
@@ -668,6 +689,16 @@ impl TerminalManager {
                         libc::waitpid(pid as i32, &mut status, libc::WNOHANG);
                     }
                 }
+
+                #[cfg(windows)]
+                {
+                    // Force-kill process tree; ConPTY teardown also runs on drop.
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/PID", &pid.to_string(), "/T", "/F"])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
             }
 
             // Join the grid thread with a timeout to prevent thread leaks.
@@ -707,6 +738,16 @@ impl TerminalManager {
         } else {
             Err("Could not determine foreground process group".to_string())
         }
+    }
+
+    /// Windows ConPTY has no `tcgetpgrp` equivalent — Ctrl+C goes via
+    /// the input channel / process kill elsewhere.
+    #[cfg(windows)]
+    pub fn kill_foreground(&self, id: &str) -> Result<(), String> {
+        if !self.terminals.contains_key(id) {
+            return Err(format!("Terminal {id} not found"));
+        }
+        Err("kill_foreground is not supported on Windows ConPTY yet".into())
     }
 
     #[cfg(unix)]
@@ -757,6 +798,14 @@ impl TerminalManager {
             }
         }
 
+        Ok(None)
+    }
+
+    #[cfg(windows)]
+    pub fn get_foreground_command(&self, id: &str) -> Result<Option<String>, String> {
+        if !self.terminals.contains_key(id) {
+            return Ok(None);
+        }
         Ok(None)
     }
 

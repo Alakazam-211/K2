@@ -19,6 +19,9 @@ with the turn instead of a detached paste after settle.
 - Hermes / unknown agents keep the old post-spawn inject path.
 - Live lookup requires a living child (phantom map rows fall through to
   dead-resume).
+- **Kill → dead-resume:** live kill keeps the durable session index
+  (`resumable: true`) so `POST …/host-sessions` with `{"session": id}` can
+  re-launch under the same id; Grace after `--final` still clears the row.
 - PRD: `.k2/prds/prd-host-session-launch-param-prompt-v1.md` (Julie / Scout
   never-born residual after 0.40.89 settle).
 

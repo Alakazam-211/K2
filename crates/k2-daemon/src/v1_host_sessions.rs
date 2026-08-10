@@ -9,6 +9,7 @@
 //! GET  /v1/w/<ws>/host-sessions/queue/<id>   → job status
 //! POST /v1/w/<ws>/host-sessions/queue/<id>/cancel → cancel a queued job
 //! POST /v1/w/<ws>/host-sessions/<id>         → message-live (inject into the PTY)
+//! GET  /v1/w/<ws>/host-sessions/<id>         → status (started/live/phase — Scout reconciler)
 //! GET  /v1/w/<ws>/host-sessions/<id>/messages?since=<seq>
 //! POST /v1/w/<ws>/host-sessions/<id>/kill    → force-stop the live PTY (integrator spend-cap)
 //! ```
@@ -1244,17 +1245,28 @@ fn best_effort_quota_release_from_agent(ws_path: &str, agent_name: &str) {
     }
 }
 
-/// Kill-path auth contract (Scout orphan cleanup / 0.40.87):
+/// Kill / status auth contract (Scout orphan cleanup / 0.40.87 + status PRD):
 ///
 /// After workspace grant is proven:
 /// 1. **Exact spawning principal** — live owner map, kill tombstone, OR durable
 ///    agent_name prefix `api-{display_id}-` (survives restart).
-/// 2. **Owner floor** — `V1Principal::Owner` may kill **any** durable `api-%`
-///    host-session in that authorized workspace (reconciler / spend-cap sweep).
+/// 2. **Owner floor** — `V1Principal::Owner` may kill/observe **any** durable
+///    `api-%` host-session in that authorized workspace (reconciler / spend-cap).
 ///
-/// API keys cannot kill another key's sessions. No durable row + no live owner
-/// → uniform 404 (not an existence oracle for random ids).
+/// API keys cannot observe another key's sessions. No durable row + no live
+/// owner/tombstone → uniform 404 (not an existence oracle for random ids).
 fn principal_may_kill_host_session(
+    principal: &V1Principal,
+    ws_path: &str,
+    session_id: &str,
+) -> bool {
+    principal_may_observe_host_session(principal, ws_path, session_id)
+}
+
+/// Read-only twin of [`principal_may_kill_host_session`] — same rules (exact
+/// spawner via map/tombstone/durable prefix, or Owner floor on durable
+/// `api-%`). Status uses this name so call sites read as observe, not kill.
+fn principal_may_observe_host_session(
     principal: &V1Principal,
     ws_path: &str,
     session_id: &str,
@@ -1271,8 +1283,8 @@ fn principal_may_kill_host_session(
     if agent.starts_with(&prefix) {
         return true;
     }
-    // Daemon owner may clear any durable api-* host session in an authorized
-    // workspace (spend-cap / orphan reconciler — Scout needs this after restart).
+    // Daemon owner may observe any durable api-* host session in an authorized
+    // workspace (Scout reconciler needs this after restart / cross-key sweep).
     matches!(principal, V1Principal::Owner)
 }
 
@@ -1386,6 +1398,219 @@ pub(crate) fn handle_v1_host_kill(
             // Index retained for dead-resume (not a list ghost — live:false
             // is honest until resume re-spawns).
             "resumable": true,
+        })
+        .to_string(),
+    )
+}
+
+/// Durable `command` for an `api-%` tab row of this session (harness hint for
+/// provider transcript probes). `None` when no row / no command stored.
+fn durable_api_command(ws_path: &str, session_id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT wts.command FROM workspace_tab_sessions wts \
+             JOIN projects p ON p.id = wts.project_id \
+             WHERE p.path = ?1 AND wts.session_id = ?2 \
+               AND wts.agent_name LIKE 'api-%' \
+             ORDER BY wts.last_seen_at DESC \
+             LIMIT 1",
+        )
+        .ok()?;
+    stmt.query_row(rusqlite::params![ws_path, session_id], |r| {
+        r.get::<_, Option<String>>(0)
+    })
+    .ok()
+    .flatten()
+    .filter(|c| !c.trim().is_empty())
+}
+
+/// Host-side evidence that a provider wrote a session/transcript file for
+/// `session_id` under `ws_path`. Prefer the durable row's command when known;
+/// otherwise probe common providers (claude, grok, cursor) until one hits.
+fn provider_session_file_exists(
+    ws_path: &str,
+    session_id: &str,
+    command_hint: Option<&str>,
+) -> bool {
+    use k2_core::workspace::provider_resume::{
+        provider_resume_for_command, provider_resume_for_provider,
+    };
+    if let Some(cmd) = command_hint {
+        if let Some(adapter) = provider_resume_for_command(cmd) {
+            if adapter.session_file_exists(session_id, ws_path) {
+                return true;
+            }
+        }
+        // Stored harness may be the provider key rather than the binary.
+        if let Some(adapter) = provider_resume_for_provider(cmd) {
+            if adapter.session_file_exists(session_id, ws_path) {
+                return true;
+            }
+        }
+    }
+    for p in ["claude", "grok", "cursor"] {
+        if let Some(adapter) = provider_resume_for_provider(p) {
+            if adapter.session_file_exists(session_id, ws_path) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Reaper phase string for status: `"none"` | `"working"` | `"grace"`.
+/// Tries the caller-facing session id, then the live PTY's daemon SessionId
+/// (adopted self-mint ids may reaper-register under the daemon id).
+fn reaper_phase_for(ws_path: &str, session_id: &str) -> &'static str {
+    if let Some(parsed) = SessionId::parse(session_id) {
+        if let Some(label) = crate::sandbox_reaper::phase_label(&parsed) {
+            return label;
+        }
+    }
+    if let Some(live) = lookup_live_host_session(ws_path, session_id) {
+        if let Some(label) = crate::sandbox_reaper::phase_label(&live.session_id) {
+            return label;
+        }
+    }
+    "none"
+}
+
+/// Pure phase resolver for host-session status (priority order from PRD).
+///
+/// Returns `None` only when the session is not "known" to the principal in
+/// any form the handler already authorized — call sites should 404.
+///
+/// Priority:
+/// 1. `live` → `working`
+/// 2. reaper grace → `grace`
+/// 3. `started && !live` → `finished`
+/// 4. known (durable / live-owner map / Owner durable) && !started → `never_started`
+/// 5. kill tombstone only → `gone`
+fn compute_host_status_phase(
+    live: bool,
+    reaper_grace: bool,
+    started: bool,
+    known_durable_or_owned: bool,
+    tombstone_only: bool,
+) -> Option<&'static str> {
+    if live {
+        return Some("working");
+    }
+    if reaper_grace {
+        return Some("grace");
+    }
+    if started {
+        return Some("finished");
+    }
+    if known_durable_or_owned {
+        return Some("never_started");
+    }
+    if tombstone_only {
+        return Some("gone");
+    }
+    None
+}
+
+/// `GET /v1/w/<ws>/host-sessions/<id>` — read-only status for Scout reconciler:
+/// `started` / `live` / `phase` / `latest_seq` / `reaper` / `durable`.
+///
+/// Authz mirrors kill ([`principal_may_observe_host_session`]): exact spawner
+/// (live owner map, kill tombstone, durable `api-{principal}-*`) or Owner floor
+/// on durable `api-%`. Canonical / unowned / unknown → uniform 404.
+///
+/// **No side effects** — does not kill, stamp reaper, inject, remint, or
+/// write kill tombstones / durable rows.
+///
+/// Field naming (caps-recovery addendum §3): **`latest_seq`** snake_case only
+/// (matches drain `GET …/messages`); do not dual-emit `latestSeq`.
+pub(crate) fn handle_v1_host_status(
+    principal: &V1Principal,
+    ws_raw: &str,
+    sid_raw: &str,
+) -> CliResponse {
+    if let Err(resp) = require_host_sessions(principal) {
+        return resp;
+    }
+    let Some(slug) = decode_and_validate_segment(ws_raw) else {
+        return uniform_ws_404();
+    };
+    let Some(sid_seg) = decode_and_validate_segment(sid_raw) else {
+        return uniform_ws_404();
+    };
+    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    if session_is_canonical(&sid_seg) {
+        return uniform_ws_404();
+    }
+    if !principal_may_observe_host_session(principal, &ws_path, &sid_seg) {
+        return uniform_ws_404();
+    }
+
+    let requester = principal.display_id();
+    let agent = durable_api_agent_name(&ws_path, &sid_seg);
+    let durable = agent.is_some();
+    let command_hint = durable_api_command(&ws_path, &sid_seg);
+    let live_owner = matches!(
+        crate::sandbox_responses::owner_of(&sid_seg),
+        Some(ref o) if o == &requester
+    );
+    let has_tombstone = matches!(
+        kill_tombstone_owner(&sid_seg),
+        Some(ref o) if o == &requester
+    );
+
+    // Liveness: prefer agent-name-aware check when durable row exists; else
+    // try live map by session id / adopted agent lookup.
+    let live = if let Some(ref a) = agent {
+        host_session_row_is_live(&sid_seg, a)
+    } else {
+        lookup_live_host_session(&ws_path, &sid_seg)
+            .map(|s| s.is_child_alive())
+            .unwrap_or(false)
+    };
+
+    let latest_seq = crate::sandbox_responses::latest_seq(&sid_seg);
+    let file_exists =
+        provider_session_file_exists(&ws_path, &sid_seg, command_hint.as_deref());
+    // PRD §5 / addendum §3.2: live OR latest_seq > 0 OR provider session file.
+    let started = live || latest_seq > 0 || file_exists;
+
+    let reaper = reaper_phase_for(&ws_path, &sid_seg);
+    let reaper_grace = reaper == "grace";
+
+    // "known" for never_started: durable row, live owner map, or Owner floor
+    // already required durable for observe when not exact-owner.
+    let known_durable_or_owned = durable || live_owner;
+    // Tombstone-only: authorized via kill tombstone, no durable, no live owner.
+    let tombstone_only = has_tombstone && !durable && !live_owner;
+
+    let Some(phase) = compute_host_status_phase(
+        live,
+        reaper_grace,
+        started,
+        known_durable_or_owned,
+        tombstone_only,
+    ) else {
+        // Authorized via Owner+durable or prefix should always be known; if
+        // we somehow pass observe without a phase, fail closed (no oracle).
+        return uniform_ws_404();
+    };
+
+    CliResponse::ok_json(
+        serde_json::json!({
+            "sessionId": sid_seg,
+            "workspace": slug,
+            "agentName": agent,
+            "live": live,
+            "started": started,
+            "phase": phase,
+            "latest_seq": latest_seq,
+            "reaper": reaper,
+            "durable": durable,
         })
         .to_string(),
     )
@@ -1627,6 +1852,7 @@ mod tests {
             handle_v1_host_new(&no_host, "v1host-cap-deny", b"{}"),
             handle_v1_host_list(&no_host, "v1host-cap-deny"),
             handle_v1_host_message(&no_host, "v1host-cap-deny", "any-sid", b"{}"),
+            handle_v1_host_status(&no_host, "v1host-cap-deny", "any-sid"),
             handle_v1_host_messages(&no_host, "v1host-cap-deny", "any-sid", 0),
             handle_v1_host_kill(&no_host, "v1host-cap-deny", "any-sid"),
         ] {
@@ -1973,5 +2199,266 @@ mod tests {
         insert_host_tab_session(&pid, "20260706_090000_abcdef", "api-owner-hermes");
         assert!(host_session_resumable(ws, "20260706_090000_abcdef"));
         assert!(!host_session_resumable(ws, "20990101_000000_zzzzzz"));
+    }
+
+    /// Pure phase priority: working > grace > finished > never_started > gone.
+    #[test]
+    fn status_phase_priority_order() {
+        assert_eq!(
+            compute_host_status_phase(true, true, true, true, false),
+            Some("working"),
+            "live always wins"
+        );
+        assert_eq!(
+            compute_host_status_phase(false, true, true, true, false),
+            Some("grace"),
+            "reaper grace before finished"
+        );
+        assert_eq!(
+            compute_host_status_phase(false, false, true, true, false),
+            Some("finished"),
+            "started + not live + not grace"
+        );
+        assert_eq!(
+            compute_host_status_phase(false, false, false, true, false),
+            Some("never_started"),
+            "known durable/owned, no start evidence"
+        );
+        assert_eq!(
+            compute_host_status_phase(false, false, false, false, true),
+            Some("gone"),
+            "tombstone only"
+        );
+        assert_eq!(
+            compute_host_status_phase(false, false, false, false, false),
+            None,
+            "unknown → 404"
+        );
+    }
+
+    /// Julie case: durable row, not live, no transcript file, seq 0 →
+    /// `phase=never_started`, `started=false`. Field is `latest_seq` (snake).
+    #[test]
+    fn status_never_started_durable_dead_no_file_seq0() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-status-ns";
+        let pid = insert_project("v1host-status-ns", ws);
+        // Julie's session shape (unique id for this test process).
+        let sid = "1c21112b-90e0-48eb-bbc9-007f8e588f12";
+        insert_host_tab_session(
+            &pid,
+            sid,
+            "api-owner-1c21112b-90e0-48eb-bbc9-007f8e588f12",
+        );
+        // No record_owner, no respond lines, no live PTY, no provider file.
+
+        let r = handle_v1_host_status(&V1Principal::Owner, "v1host-status-ns", sid);
+        assert_eq!(r.status, "200 OK", "body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["sessionId"], sid);
+        assert_eq!(v["workspace"], "v1host-status-ns");
+        assert_eq!(
+            v["agentName"],
+            "api-owner-1c21112b-90e0-48eb-bbc9-007f8e588f12"
+        );
+        assert_eq!(v["live"], false);
+        assert_eq!(v["started"], false, "no live/seq/file → started=false");
+        assert_eq!(v["phase"], "never_started");
+        assert_eq!(v["latest_seq"], 0, "snake_case field only");
+        assert!(
+            !r.body.contains("latestSeq"),
+            "must not dual-emit camelCase latestSeq; body={}",
+            r.body
+        );
+        assert_eq!(v["reaper"], "none");
+        assert_eq!(v["durable"], true);
+    }
+
+    /// Unowned / wrong key → uniform 404 (no existence oracle).
+    #[test]
+    fn status_unowned_uniform_404() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-status-unown";
+        let pid = insert_project("v1host-status-unown", ws);
+        let sid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+        insert_host_tab_session(
+            &pid,
+            sid,
+            "api-otherkey-bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+        );
+
+        // Wrong API key (granted on this ws) cannot observe another key's row.
+        let wrong = apik("wrongkey", Some("*"));
+        assert_eq!(
+            handle_v1_host_status(&wrong, "v1host-status-unown", sid).status,
+            "404 Not Found",
+        );
+        // Completely unknown id → same 404.
+        assert_eq!(
+            handle_v1_host_status(
+                &V1Principal::Owner,
+                "v1host-status-unown",
+                "00000000-0000-4000-8000-000000000099"
+            )
+            .status,
+            "404 Not Found",
+        );
+        // Canonical → 404.
+        insert_canonical_session(&pid, "cccccccc-dddd-eeee-ffff-000000000001");
+        assert_eq!(
+            handle_v1_host_status(
+                &V1Principal::Owner,
+                "v1host-status-unown",
+                "cccccccc-dddd-eeee-ffff-000000000001"
+            )
+            .status,
+            "404 Not Found",
+        );
+    }
+
+    /// Owner floor can observe any durable `api-*` row (Scout reconciler).
+    #[test]
+    fn status_owner_floor_observes_durable_api_row() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-status-owner";
+        let pid = insert_project("v1host-status-owner", ws);
+        let sid = "dddddddd-eeee-ffff-aaaa-111111111111";
+        insert_host_tab_session(
+            &pid,
+            sid,
+            "api-ec8ba43a-dddddddd-eeee-ffff-aaaa-111111111111",
+        );
+
+        let r = handle_v1_host_status(&V1Principal::Owner, "v1host-status-owner", sid);
+        assert_eq!(r.status, "200 OK", "owner floor body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["phase"], "never_started");
+        assert_eq!(v["durable"], true);
+        assert_eq!(v["started"], false);
+        assert_eq!(v["live"], false);
+
+        // Exact key also observes via durable prefix.
+        let key = apik("ec8ba43a", Some("*"));
+        let r = handle_v1_host_status(&key, "v1host-status-owner", sid);
+        assert_eq!(r.status, "200 OK", "key prefix body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["phase"], "never_started");
+    }
+
+    /// `started` true when latest_seq > 0 even if not live → `finished`.
+    #[test]
+    fn status_finished_when_seq_positive_not_live() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-status-fin";
+        let pid = insert_project("v1host-status-fin", ws);
+        let sid = "eeeeeeee-ffff-aaaa-bbbb-222222222222";
+        insert_host_tab_session(
+            &pid,
+            sid,
+            "api-owner-eeeeeeee-ffff-aaaa-bbbb-222222222222",
+        );
+        crate::sandbox_responses::record_owner(sid, "owner");
+        let seq = crate::sandbox_responses::append(sid, "done".to_string(), true);
+        assert!(seq >= 1, "append must assign seq");
+
+        let r = handle_v1_host_status(&V1Principal::Owner, "v1host-status-fin", sid);
+        assert_eq!(r.status, "200 OK", "body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["live"], false);
+        assert_eq!(v["started"], true, "seq>0 implies started");
+        assert_eq!(v["phase"], "finished");
+        assert_eq!(v["latest_seq"], seq);
+        assert_eq!(
+            crate::sandbox_responses::latest_seq(sid),
+            seq,
+            "public latest_seq helper must match status field"
+        );
+        assert!(
+            !r.body.contains("latestSeq"),
+            "snake_case only; body={}",
+            r.body
+        );
+    }
+
+    /// Live-but-no-seq (pure phase path): `live` forces `working` + `started`.
+    /// Product lock: live + seq 0 + no transcript ⇒ NEVER never_started.
+    #[test]
+    fn status_phase_live_is_working_and_started() {
+        // Pure function — no PTY construction required.
+        let phase = compute_host_status_phase(
+            /*live*/ true,
+            /*reaper_grace*/ false,
+            /*started*/ true, // live ⇒ started by PRD §5
+            /*known*/ true,
+            /*tombstone_only*/ false,
+        );
+        assert_eq!(phase, Some("working"));
+        // Even if a caller forgot to set started from live, phase still
+        // prioritizes live → working (started flag independent for field).
+        assert_eq!(
+            compute_host_status_phase(true, false, false, true, false),
+            Some("working"),
+        );
+        // started formula: live || latest_seq > 0 || file_exists
+        let live = true;
+        let latest_seq: u64 = 0;
+        let file_exists = false;
+        let started = live || latest_seq > 0 || file_exists;
+        assert!(started, "live alone is started evidence");
+        assert_ne!(
+            compute_host_status_phase(live, false, started, true, false),
+            Some("never_started"),
+            "live+seq0+no-file must never be never_started"
+        );
+    }
+
+    /// Status is read-only: no kill tombstone, no reaper registration, no
+    /// durable row mutation, no respond append.
+    #[test]
+    fn status_has_no_side_effects() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-status-se";
+        let pid = insert_project("v1host-status-se", ws);
+        let sid = "ffffffff-aaaa-bbbb-cccc-333333333333";
+        let agent = "api-owner-ffffffff-aaaa-bbbb-cccc-333333333333";
+        insert_host_tab_session(&pid, sid, agent);
+
+        let before_seq = crate::sandbox_responses::latest_seq(sid);
+        assert_eq!(before_seq, 0);
+        assert!(kill_tombstone_owner(sid).is_none());
+        assert!(host_session_resumable(ws, sid));
+
+        let r = handle_v1_host_status(&V1Principal::Owner, "v1host-status-se", sid);
+        assert_eq!(r.status, "200 OK", "body={}", r.body);
+        assert_eq!(
+            handle_v1_host_status(&V1Principal::Owner, "v1host-status-se", sid).status,
+            "200 OK",
+            "idempotent re-read"
+        );
+
+        // No tombstone stamped.
+        assert!(
+            kill_tombstone_owner(sid).is_none(),
+            "status must not write kill tombstone"
+        );
+        // No respond drain growth.
+        assert_eq!(
+            crate::sandbox_responses::latest_seq(sid),
+            0,
+            "status must not append respond lines"
+        );
+        // Durable row still present (not cleared).
+        assert!(
+            host_session_resumable(ws, sid),
+            "status must not clear durable api-% rows"
+        );
+        // Reaper not registered just by observing.
+        if let Some(parsed) = SessionId::parse(sid) {
+            assert!(
+                !crate::sandbox_reaper::registered(&parsed),
+                "status must not register reaper"
+            );
+            assert_eq!(crate::sandbox_reaper::phase_label(&parsed), None);
+        }
     }
 }

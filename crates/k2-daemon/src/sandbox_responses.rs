@@ -72,6 +72,19 @@ fn entry_count(session_id: &str) -> usize {
     map.get(session_id).map(|v| v.len()).unwrap_or(0)
 }
 
+/// High-water `seq` for `session_id`'s respond drain (0 if empty / unknown).
+///
+/// Monotonic even after retention cap drops old entries (`last.seq`, not
+/// `len`). Used by host-session status (`GET …/host-sessions/<id>`) as the
+/// `latest_seq` field — no message bodies, just the cursor high-water.
+/// Matches the drain JSON field name on `GET …/messages`.
+pub fn latest_seq(session_id: &str) -> u64 {
+    let map = RESPONSES.lock().expect("sandbox responses mutex poisoned");
+    map.get(session_id)
+        .and_then(|v| v.last().map(|e| e.seq))
+        .unwrap_or(0)
+}
+
 /// Append an agent response line for `session_id`, returning its assigned `seq`.
 /// `seq` is `last.seq + 1` (NOT `len + 1`), so it stays monotonic even after the
 /// retention cap drops older entries.

@@ -3,7 +3,7 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.91 — Pinned chat history pick survives refresh
+## 0.40.91 — Pinned chat pick persists + durable host-session spawn queue
 
 ### Pinned chat: history dropdown session sticks across refresh / relaunch
 
@@ -17,6 +17,33 @@ on-disk session over the pick — so refresh or relaunch reloaded the wrong chat
   on disk (belt-and-suspenders for every spawn site).
 - Daemon-owned dropdown switch also stamps the layout offline hint so restore
   matches the pick without waiting on ensure.
+
+### Host-sessions: optional durable spawn queue (default OFF)
+
+When a workspace (or principal / daemon) is at its concurrent host-session
+ceiling, excess cold/dead-resume spawns can **enqueue** instead of only
+waiting briefly then 429.
+
+- Gate: `K2_HOST_SESSION_SPAWN_QUEUE=1` / `host_session_spawn_queue` (OFF
+  until integrators poll `queued` + `jobId`).
+- Feature ON: nowait acquire → **202** `{queued, jobId, position}` at cap;
+  FIFO per workspace; SQLite durable (migration 0096); drain on every
+  quota release.
+- Cancel: `POST …/queue/<jobId>/cancel`. Feature OFF keeps legacy S8 wait
+  + 429.
+- PRD: `.k2/prds/prd-host-session-spawn-queue-v1.md`.
+
+### Host-sessions: launch-param security note (0.40.90 follow-up)
+
+Interactive first-turn launch-param puts the **prompt string on process
+argv** (`/proc/PID/cmdline` is world-readable for the cell lifetime). That
+is the reliability trade for Claude/Codex/Grok-style positionals — true
+“never on argv” is not available for those CLIs without reintroducing the
+never-born race.
+
+**Integrator rule (unchanged D8):** secrets (write JWTs, API keys) must
+**not** ride `prompt`. Use `capabilities[]` → staged **0600 cap file** +
+`K2_CAPABILITY_TOKEN` env (envelope `docs/host-session-capability-envelope.md`).
 
 ---
 

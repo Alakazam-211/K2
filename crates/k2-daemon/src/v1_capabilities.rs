@@ -1,10 +1,12 @@
 //! Host-session capability envelope (PRD `prd-v1-host-session-capabilities-v1`
-//! S1–S3 core): ES256 capability JWTs, JWKS publish, request validation,
+//! S1–S3 core; resource grammar: caps-recovery consensus addendum §2):
+//! ES256 capability JWTs, JWKS publish, request validation,
 //! `K2_CAPABILITY_TOKEN` packaging, and mode-0600 stage files.
 //!
 //! ## Surface
 //!
-//! - [`handle_v1_jwks`] — `GET /v1/jwks` public JWKS (no private material).
+//! - [`handle_v1_jwks`] — `GET /v1/jwks` **public / unauthenticated** JWKS
+//!   (no private material; no API key required).
 //! - [`parse_capabilities`] — validate spawn/resume `capabilities[]` entries.
 //! - [`mint_and_stage`] / [`mint_and_stage_for_session`] — mint one JWT per
 //!   capability, package the env payload, stage under
@@ -13,7 +15,8 @@
 //! Private key lives only on the daemon host at
 //! `~/.k2/capability-signing.pem` (mode 0600), generated on first use.
 //! **Pilot (0.40.76):** that key is STATIC (no rotation yet). Apps fetch
-//! public material from `GET /v1/jwks` (API surface must be enabled + auth).
+//! public material from `GET /v1/jwks` (public, unauthenticated — same tier
+//! as `/boot-status`; no API key / Bearer).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,8 +47,11 @@ const KEY_FILE_NAME: &str = "capability-signing.pem";
 /// v1 kind allowlist (PRD §5.1).
 const KIND_HTTP_CALLBACK: &str = "http_callback";
 
-/// Resource max length (charset-constrained `interview:` + id).
+/// Resource max length (`namespace:id`, open namespaces).
 const RESOURCE_MAX_LEN: usize = 128;
+
+/// Namespace max length: `[a-z][a-z0-9_]{0,31}` → 32 chars total.
+const NAMESPACE_MAX_LEN: usize = 32;
 
 /// Allowed HTTP methods for `actions` (PRD §5.1).
 const ALLOWED_ACTIONS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -291,12 +297,12 @@ pub fn public_jwks() -> Result<serde_json::Value, String> {
 
 /// Validate a JSON `capabilities` array (spawn/resume body field).
 ///
-/// Rules (PRD §5.1):
+/// Rules (PRD §5.1 + caps-recovery addendum §2):
 /// - must be a JSON array
 /// - each entry: `kind` = `http_callback`
 /// - `audience`: absolute `https://…` URL **or** URL template containing only
 ///   `{resource_id}` as a placeholder
-/// - `resource`: non-empty, max length, charset `interview:` + alnum/`_`/`-`
+/// - `resource`: `namespace:id` (open namespaces; see [`validate_resource`])
 /// - `actions`: non-empty subset of GET, POST, PUT, PATCH, DELETE
 pub fn parse_capabilities(value: &serde_json::Value) -> Result<Vec<CapRequest>, String> {
     let arr = value
@@ -495,6 +501,20 @@ pub fn mint_and_stage_for_session(
 
 // ── Validation helpers ────────────────────────────────────────────────
 
+/// Validate capability `resource` as open `namespace:id` (addendum §2).
+///
+/// Grammar:
+/// ```text
+/// resource   := namespace ":" id
+/// namespace  := [a-z][a-z0-9_]{0,31}
+/// id         := id_segment ( "/" id_segment )?
+/// id_segment := [A-Za-z0-9_-]+
+/// ```
+///
+/// Rejects: missing `:`, empty ns/id, uppercase namespace, `..`, leading/
+/// trailing `/`, `//`, more than one `/`, length > [`RESOURCE_MAX_LEN`].
+/// Namespaces are open (no allowlist) — Scout still uses `interview:` by
+/// convention; `space:` and other prefixes are accepted when well-formed.
 fn validate_resource(resource: &str) -> Result<(), String> {
     if resource.is_empty() {
         return Err("must be non-empty".into());
@@ -502,19 +522,69 @@ fn validate_resource(resource: &str) -> Result<(), String> {
     if resource.len() > RESOURCE_MAX_LEN {
         return Err(format!("exceeds max length {RESOURCE_MAX_LEN}"));
     }
-    // charset: interview: + alnum / _ / -
-    let Some(id) = resource.strip_prefix("interview:") else {
-        return Err("must start with \"interview:\"".into());
+
+    let Some((namespace, id)) = resource.split_once(':') else {
+        return Err("must be namespace:id (missing ':')".into());
     };
+    if namespace.is_empty() {
+        return Err("namespace must be non-empty".into());
+    }
     if id.is_empty() {
-        return Err("interview id after prefix must be non-empty".into());
+        return Err("id after ':' must be non-empty".into());
     }
-    if !id
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err("interview id may only contain alnum, '_', '-'".into());
+
+    // namespace := [a-z][a-z0-9_]{0,31}
+    if namespace.len() > NAMESPACE_MAX_LEN {
+        return Err(format!(
+            "namespace exceeds max length {NAMESPACE_MAX_LEN}"
+        ));
     }
+    let mut ns_chars = namespace.chars();
+    let first = ns_chars.next().expect("non-empty namespace");
+    if !first.is_ascii_lowercase() {
+        return Err(
+            "namespace must start with a lowercase letter [a-z] (uppercase rejected)"
+                .into(),
+        );
+    }
+    for c in ns_chars {
+        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            return Err(
+                "namespace may only contain [a-z0-9_] after the first letter".into(),
+            );
+        }
+    }
+
+    // Path-safety on id before segment parse.
+    if id.contains("..") {
+        return Err("id must not contain '..'".into());
+    }
+    if id.starts_with('/') || id.ends_with('/') {
+        return Err("id must not have leading or trailing '/'".into());
+    }
+    if id.contains("//") {
+        return Err("id must not contain '//'".into());
+    }
+    let slash_count = id.bytes().filter(|&b| b == b'/').count();
+    if slash_count > 1 {
+        return Err("id may contain at most one '/' (at most two segments)".into());
+    }
+
+    // id := id_segment ( "/" id_segment )?; id_segment := [A-Za-z0-9_-]+
+    for segment in id.split('/') {
+        if segment.is_empty() {
+            return Err("id segment must be non-empty".into());
+        }
+        if !segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(
+                "id segment may only contain [A-Za-z0-9_-]".into(),
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -595,9 +665,17 @@ fn parse_actions(value: &serde_json::Value) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Resolve `{resource_id}` from `resource` (`interview:<id>` → `<id>`).
+/// Resolve `{resource_id}` in `audience` from `resource`.
+///
+/// `{resource_id}` is the **id part after the first `:`** (not the whole
+/// string, not interview-only strip). E.g. `space:plan1/space2` →
+/// `plan1/space2`. Callers that put a slashful id into a URL path should
+/// URL-encode or use a fixed path + Layer B resource bind.
 fn resolve_audience(audience: &str, resource: &str) -> Result<String, String> {
-    let resource_id = resource.strip_prefix("interview:").unwrap_or(resource);
+    let resource_id = match resource.split_once(':') {
+        Some((_, id)) => id,
+        None => resource,
+    };
     let resolved = audience.replace(RESOURCE_ID_PLACEHOLDER, resource_id);
     validate_absolute_https(&resolved)?;
     Ok(resolved)
@@ -684,11 +762,72 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_bad_resource_charset() {
+    fn parse_rejects_bad_resource_path_traversal() {
         let mut c = sample_cap(&["GET"]);
         c["resource"] = serde_json::json!("interview:ivw/../x");
         let err = parse_capabilities(&serde_json::json!([c])).unwrap_err();
-        assert!(err.contains("alnum") || err.contains("interview"), "{err}");
+        assert!(
+            err.contains("..") || err.contains("segment") || err.contains("id"),
+            "must reject path traversal, got: {err}"
+        );
+    }
+
+    /// Open `namespace:id` grammar (caps-recovery addendum §2).
+    #[test]
+    fn resource_accepts_namespace_id_forms() {
+        for good in [
+            "interview:ivw_abc",
+            "space:plan1/space2",
+            "space:plan1",
+        ] {
+            validate_resource(good).unwrap_or_else(|e| {
+                panic!("expected accept {good:?}, got err: {e}");
+            });
+        }
+
+        // Via parse_capabilities (fail loud — no swallow).
+        for good in [
+            "interview:ivw_abc",
+            "space:plan1/space2",
+            "space:plan1",
+        ] {
+            let mut c = sample_cap(&["GET"]);
+            c["resource"] = serde_json::json!(good);
+            parse_capabilities(&serde_json::json!([c])).unwrap_or_else(|e| {
+                panic!("parse must accept resource {good:?}, got: {e}");
+            });
+        }
+    }
+
+    #[test]
+    fn resource_rejects_invalid_namespace_id_forms() {
+        // (input, substring that must appear in the error — fail loud)
+        let cases: &[(&str, &str)] = &[
+            ("space:a/b/c", "/"),           // more than one /
+            ("space:../x", ".."),           // path traversal
+            ("SPACE:x", "namespace"),       // uppercase namespace
+            ("interview:", "non-empty"),    // empty id
+            ("nospace", ":"),               // missing :
+        ];
+        for &(bad, needle) in cases {
+            let err = validate_resource(bad).expect_err(&format!(
+                "expected reject {bad:?}, but validate_resource accepted"
+            ));
+            assert!(
+                err.contains(needle),
+                "reject {bad:?}: error {err:?} must contain {needle:?}"
+            );
+
+            let mut c = sample_cap(&["GET"]);
+            c["resource"] = serde_json::json!(bad);
+            let perr = parse_capabilities(&serde_json::json!([c])).expect_err(&format!(
+                "expected parse reject resource {bad:?}"
+            ));
+            assert!(
+                perr.contains("resource") || perr.contains(needle),
+                "parse reject {bad:?}: {perr}"
+            );
+        }
     }
 
     #[test]
@@ -846,10 +985,25 @@ mod tests {
     }
 
     #[test]
-    fn resolve_audience_strips_interview_prefix() {
+    fn resolve_audience_uses_id_after_first_colon() {
         let resolved =
             resolve_audience("https://x.example/r/{resource_id}/z", "interview:ivw_99").unwrap();
         assert_eq!(resolved, "https://x.example/r/ivw_99/z");
+
+        // Not interview-only: id is everything after first `:`.
+        let resolved = resolve_audience(
+            "https://x.example/r/{resource_id}/z",
+            "space:plan1/space2",
+        )
+        .unwrap_or_else(|e| panic!("resolve space:plan1/space2: {e}"));
+        assert_eq!(
+            resolved, "https://x.example/r/plan1/space2/z",
+            "resource_id must be post-first-colon id, not whole resource"
+        );
+        assert!(
+            !resolved.contains("space:"),
+            "namespace must not appear in resolved aud: {resolved}"
+        );
     }
 
     /// Atomic remint: second mint for the same session_id replaces stage-file

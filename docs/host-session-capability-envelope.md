@@ -73,10 +73,29 @@ Content-Type: application/json
 same value on cold-spawn, live-resume (`resumed: true`), and dead-resume
 (`resumed: false`). Integrators may key plan→session registries on it.
 
-**Resource namespace:** each capability `resource` **must** be `interview:<id>`
-(e.g. `interview:ivw_abc`). Other prefixes (e.g. `space:…`) are rejected with
-**400** `capabilities-invalid` (`must start with "interview:"`). Do not send
-Scout plan/space ids without the `interview:` prefix.
+**Resource grammar (open `namespace:id`):** each capability `resource` must
+match:
+
+```text
+resource   := namespace ":" id
+namespace  := [a-z][a-z0-9_]{0,31}
+id         := id_segment ( "/" id_segment )?
+id_segment := [A-Za-z0-9_-]+
+```
+
+Max length **128**. Missing `:`, empty ns/id, uppercase namespace, `..`,
+leading/trailing `/`, `//`, or more than one `/` → **400**
+`capabilities-invalid`. Namespaces are **open** (no allowlist): `interview:…`,
+`space:…`, and other well-formed prefixes are accepted. **Scout v1** still uses
+`interview:<id>` by convention (e.g. `interview:ivw_abc`); examples in this
+note keep that form.
+
+**`{resource_id}` resolution:** at mint, `{resource_id}` in `audience` is
+replaced by the **id part after the first `:`** (not the whole `resource`
+string). Example: `resource: "space:plan1/space2"` → `{resource_id}` =
+`plan1/space2`. If that slashful id lands in a URL path segment, the
+integrator must **URL-encode** it **or** use a fixed path and bind via Layer B
+`resource` (see §3.3).
 
 **Response shape (one envelope for all paths):** session/status fields are
 always **top-level**. `capabilities` is **only** the non-secret mint metadata
@@ -266,13 +285,22 @@ Response:
 
 ### 3.3 Layer B — App AUTHZ (valid JWT ≠ authorized write)
 
-A cryptographically valid JWT is **not** enough. On every agent callback your app **must** also:
+A cryptographically valid JWT is **not** an authorized write. Crypto + claims
+(Layer A) only prove the token was minted by K2 for some audience; your app
+still decides whether **this** session may touch **this** resource with
+**this** method. On every agent callback your app **must** also:
 
-| Check | Purpose |
-|--------|---------|
-| **`resource` equals the plan/interview id implied by the URL** | **Cross-plan guard** — token for plan A must not write plan B. If `aud` already encodes the interview endpoint uniquely, still bind `resource` to the URL plan id. |
-| **HTTP method ∈ JWT `actions`** | Verb grant (e.g. POST requires `"POST"` in `actions`) |
-| **`jti` not in your local revocation set** | Completion / remint single-valid / abuse (PRD decision 7) |
+| Check | Required? | Purpose |
+|--------|-----------|---------|
+| **`sub` equals the recorded host-session `sessionId`** | **Required** when you track session binding | Token for session A must not drive session B’s write path |
+| **`ws` matches workspace slug** | **When claim present** | JWT may carry optional `ws` (workspace slug from mint); if present, match the route’s workspace slug |
+| **`principal` (optional)** | Optional bind | When present, may bind to your API-key / tenant principal |
+| **`resource` equals the plan/interview (or space) id implied by the URL / request** | **Required** | **Cross-resource guard** — token for plan A must not write plan B. Bind full `namespace:id` (or the id part your routes use) to the URL/body resource. If `aud` already encodes the endpoint uniquely, still bind `resource`. |
+| **HTTP method ∈ JWT `actions`** | **Required** | Verb grant (e.g. POST requires `"POST"` in `actions`) |
+| **`jti` not in your local revocation set** | **Required** for single-valid / abuse | Completion / remint single-valid (PRD decision 7) |
+
+**Restate:** Layer A pass (signature, `exp`, `iss`, `aud`) ≠ Layer B pass.
+Never treat “JWT verified” alone as write authorization.
 
 ### 3.4 Signing key (pilot)
 

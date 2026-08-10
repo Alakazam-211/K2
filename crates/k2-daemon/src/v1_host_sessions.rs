@@ -1085,9 +1085,11 @@ fn principal_may_kill_host_session(
 /// Idempotent for an authorized session that is no longer live → 200
 /// `{"sessionId","killed":false,"reason":"not_live","indexCleared":bool}` plus
 /// best-effort durable index / map cleanup (Scout restart orphans). Live
-/// teardown uses [`crate::sandbox_reaper::force_teardown_host_session_ctx`]
-/// (shared with Grace expiry). Cap file / JWTs left in place (K8). Kill
-/// tombstone is stamped here only (auto Grace must not tombstone).
+/// teardown uses
+/// [`crate::sandbox_reaper::force_teardown_host_session_preserve_index`]
+/// (keeps durable row for dead-resume). Grace expiry still clears index.
+/// Cap file / JWTs left in place (K8). Kill tombstone is stamped here only
+/// (auto Grace must not tombstone).
 pub(crate) fn handle_v1_host_kill(
     principal: &V1Principal,
     ws_raw: &str,
@@ -1160,18 +1162,17 @@ pub(crate) fn handle_v1_host_kill(
         return uniform_ws_404();
     }
 
-    // Full teardown via the shared chokepoint (same path as Grace reaper —
-    // force unregister / kill + dual reaper-key clear). Auth already proven;
-    // tombstone is kill-only and stamped below (auto Grace must not tombstone).
+    // Live kill: stop the PTY / map / reaper keys, but **keep** the durable
+    // api-% tab row so `POST …/host-sessions {"session": id}` can dead-resume
+    // under the same conversation handle (kill PRD §6 acceptance + launch-param
+    // resume arm). Grace expiry still clears the index (work completed).
     // Quota is still released by the child-exit observer — force_teardown
     // must not double-release.
-    crate::sandbox_reaper::force_teardown_host_session_ctx(
+    crate::sandbox_reaper::force_teardown_host_session_preserve_index(
         &live.session_id,
         &ws_path,
         &sid_seg,
     );
-    // Drop durable index so list does not keep a live:false ghost.
-    let _ = clear_durable_api_host_rows(&ws_path, &sid_seg);
     // Stamp tombstone BEFORE returning so a racing second kill sees ownership
     // even if ChildExit already ran `sandbox_responses::evict`.
     record_kill_tombstone(&sid_seg, &requester);
@@ -1180,6 +1181,9 @@ pub(crate) fn handle_v1_host_kill(
         serde_json::json!({
             "sessionId": sid_seg,
             "killed": true,
+            // Index retained for dead-resume (not a list ghost — live:false
+            // is honest until resume re-spawns).
+            "resumable": true,
         })
         .to_string(),
     )
@@ -1581,6 +1585,37 @@ mod tests {
         assert_eq!(
             handle_v1_host_kill(&ungranted, "v1host-kill", "v1host-kill-dead2").status,
             "404 Not Found",
+        );
+    }
+
+    /// Live kill must keep the durable api-% row so dead-resume can find the
+    /// conversation id (preserve_index path). not_live orphan sweeps still clear.
+    #[test]
+    fn live_kill_preserve_index_leaves_durable_row() {
+        k2_core::db::init_for_tests();
+        let ws = "/tmp/k2-v1host-kill-preserve";
+        let pid = insert_project("v1host-kill-preserve", ws);
+        let sid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+        insert_host_tab_session(
+            &pid,
+            sid,
+            "api-owner-bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+        );
+        assert!(host_session_resumable(ws, sid), "precondition: row present");
+
+        // Simulate live-kill teardown without a live PTY: preserve_index only.
+        let parsed = SessionId::parse(sid).expect("uuid");
+        crate::sandbox_reaper::force_teardown_host_session_preserve_index(&parsed, ws, sid);
+        assert!(
+            host_session_resumable(ws, sid),
+            "live-kill preserve must leave durable row for dead-resume"
+        );
+
+        // Grace-class clear still drops the row.
+        crate::sandbox_reaper::force_teardown_host_session_ctx(&parsed, ws, sid);
+        assert!(
+            !host_session_resumable(ws, sid),
+            "grace/clear path must drop durable row"
         );
     }
 

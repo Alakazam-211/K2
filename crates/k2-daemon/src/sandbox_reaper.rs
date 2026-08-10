@@ -216,29 +216,62 @@ fn agent_name_from_tab_index(ws_path: Option<&str>, session_id_str: &str) -> Opt
 /// 3. Else if live → bare `sess.kill()`.  
 /// 4. Drop reaper REG for the daemon SessionId and, when distinct, the
 ///    caller-facing/adopted id.  
-/// 5. Idempotent when already dead / unregistered.
+/// 5. Optionally clear durable `api-%` tab index (see `clear_durable_index`).  
+/// 6. Idempotent when already dead / unregistered.
 ///
 /// Quota release stays on the child-exit observer path — this must not
 /// double-release (same contract as `/kill`).
+///
+/// ## Durable index (`clear_durable_index`)
+///
+/// - **`true` (Grace / work-complete reaper):** delete `api-%` tab rows so
+///   GET host-sessions does not retain ended ghosts (Scout list accretion).
+/// - **`false` (integrator live kill):** **keep** the durable row so
+///   `{"session": id}` dead-resume still finds the conversation handle
+///   (prd-v1-host-session-kill-v1 §6 acceptance: dead-resume after kill).
+///   Orphan sweeps that deliberately drop the index use the kill handler's
+///   not_live path + explicit `clear_durable_api_host_rows`.
 pub fn force_teardown_host_session(session_id: &SessionId) {
-    force_teardown_host_session_inner(session_id, None, None);
+    // Grace-class default: clear durable index (work completed / auto reap).
+    force_teardown_host_session_inner(session_id, None, None, true);
 }
 
 /// Like [`force_teardown_host_session`] with workspace + caller-facing id for
 /// tab-index name resolution and dual reaper-key clear (adopted ≠ daemon).
-/// Used by the host-session kill handler after auth.
+/// Clears durable index (Grace / not_live cleanup callers).
 pub(crate) fn force_teardown_host_session_ctx(
     session_id: &SessionId,
     ws_path: &str,
     caller_facing_sid: &str,
 ) {
-    force_teardown_host_session_inner(session_id, Some(ws_path), Some(caller_facing_sid));
+    force_teardown_host_session_inner(
+        session_id,
+        Some(ws_path),
+        Some(caller_facing_sid),
+        true,
+    );
+}
+
+/// Integrator **live kill**: stop spend (PTY + map + reaper keys) but **keep**
+/// the durable `api-%` tab row so the same `sessionId` remains resumable.
+pub(crate) fn force_teardown_host_session_preserve_index(
+    session_id: &SessionId,
+    ws_path: &str,
+    caller_facing_sid: &str,
+) {
+    force_teardown_host_session_inner(
+        session_id,
+        Some(ws_path),
+        Some(caller_facing_sid),
+        false,
+    );
 }
 
 fn force_teardown_host_session_inner(
     session_id: &SessionId,
     ws_path: Option<&str>,
     caller_facing_sid: Option<&str>,
+    clear_durable_index: bool,
 ) {
     let sid_for_tab = caller_facing_sid
         .map(|s| s.to_string())
@@ -281,10 +314,11 @@ fn force_teardown_host_session_inner(
         }
     }
 
-    // Drop durable api-* tab index rows so GET host-sessions does not keep
-    // ended-but-not-reaped ghosts (Scout list accretion). Prefer caller-facing
-    // id (adopted) when present; always try daemon SessionId too.
-    clear_durable_api_tab_rows(ws_path, session_id, caller_facing_sid);
+    // Durable index: Grace clears (no resume after work-complete). Live kill
+    // preserves so dead-resume can re-exec under the same conversation id.
+    if clear_durable_index {
+        clear_durable_api_tab_rows(ws_path, session_id, caller_facing_sid);
+    }
 }
 
 /// Best-effort delete of `workspace_tab_sessions` api-* rows for this session.

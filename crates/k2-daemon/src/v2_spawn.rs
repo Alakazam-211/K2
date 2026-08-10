@@ -1505,6 +1505,11 @@ pub fn spawn_child_exit_observer(
                     if let Some(s) = weak.upgrade() {
                         s.mark_child_exited();
                     }
+                    // Host-session durable index: clear null-sid orphans always;
+                    // clear full api-% row when Grace (--final / done) is armed
+                    // so GUI residual tabs / workspace_tab_sessions ghosts do
+                    // not survive TUI exit (ChildExit often races Grace tick).
+                    crate::sandbox_reaper::on_api_host_child_exit(&session_id, &agent_name);
                     v2_session_map::unregister(&agent_name);
 
                     // P3b — drop any per-session STREAM token for this session so

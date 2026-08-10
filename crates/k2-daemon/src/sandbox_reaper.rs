@@ -155,15 +155,6 @@ pub fn is_working(id: &SessionId) -> bool {
         .unwrap_or(false)
 }
 
-/// Test helper: is the cell in Grace phase?
-#[cfg(test)]
-fn is_grace(id: &SessionId) -> bool {
-    REG.lock()
-        .ok()
-        .and_then(|m| m.get(id).map(|e| e.phase == Phase::Grace))
-        .unwrap_or(false)
-}
-
 /// Test helper: would the reaper reap this entry at `now`?
 #[cfg(test)]
 fn would_reap_at(id: &SessionId, now: Instant) -> bool {
@@ -326,16 +317,26 @@ fn force_teardown_host_session_inner(
 
     // Durable index: Grace clears (no resume after work-complete). Live kill
     // preserves so dead-resume can re-exec under the same conversation id.
+    // Prefer agent_name — many host-session rows stamp NULL session_id until
+    // post-hoc adoption, so DELETE-by-session_id alone left ghosts forever
+    // (Scout residual tabs / GUI audit panes after TUI reaped).
     if clear_durable_index {
-        clear_durable_api_tab_rows(ws_path, session_id, caller_facing_sid);
+        clear_durable_api_tab_rows(
+            ws_path,
+            session_id,
+            caller_facing_sid,
+            agent_name.as_deref(),
+        );
     }
 }
 
-/// Best-effort delete of `workspace_tab_sessions` api-* rows for this session.
+/// Best-effort delete of `workspace_tab_sessions` api-* rows for this session
+/// and/or agent key.
 fn clear_durable_api_tab_rows(
     ws_path: Option<&str>,
     session_id: &SessionId,
     caller_facing_sid: Option<&str>,
+    agent_name: Option<&str>,
 ) {
     let daemon_s = session_id.to_string();
     let mut ids: Vec<String> = vec![daemon_s.clone()];
@@ -369,6 +370,66 @@ fn clear_durable_api_tab_rows(
                 );
             }
         }
+    }
+    // Load-bearing: stamp can leave session_id NULL (self-mint / race). Clear
+    // by agent_name so work-complete never leaves a ghost row.
+    if let Some(name) = agent_name {
+        if name.starts_with("api-") {
+            clear_durable_by_agent_name(&conn, name);
+        }
+    }
+}
+
+/// Delete durable `api-%` tab row(s) keyed by agent map name.
+pub fn clear_durable_by_agent_name(conn: &rusqlite::Connection, agent_name: &str) {
+    match conn.execute(
+        "DELETE FROM workspace_tab_sessions \
+         WHERE agent_name = ?1 AND agent_name LIKE 'api-%'",
+        rusqlite::params![agent_name],
+    ) {
+        Ok(n) if n > 0 => {
+            log_debug!(
+                "[sandbox-reaper] cleared {n} durable api-* tab row(s) for agent={agent_name}"
+            );
+        }
+        _ => {}
+    }
+}
+
+/// True when this session is in Grace (post `--final` / `k2 done`).
+pub fn is_grace(id: &SessionId) -> bool {
+    REG.lock()
+        .ok()
+        .and_then(|m| m.get(id).map(|e| e.phase == Phase::Grace))
+        .unwrap_or(false)
+}
+
+/// ChildExit chokepoint for host-minted `api-%` cells.
+///
+/// - Always drops **non-resumable** rows (`session_id` NULL/empty) for this
+///   agent — they cannot dead-resume and were the smoke residual pile.
+/// - When Grace is armed (work complete), drops **all** durable rows for
+///   this agent (ChildExit often races the Grace tick; map is already
+///   empty so tick-only clear-by-session_id missed).
+/// - Live-kill preserve path: Grace is not armed and session_id is set →
+///   durable row stays for dead-resume.
+pub fn on_api_host_child_exit(session_id: &SessionId, agent_name: &str) {
+    if !agent_name.starts_with("api-") {
+        return;
+    }
+    let grace = is_grace(session_id);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    // Null-sid orphans: never resumable.
+    let _ = conn.execute(
+        "DELETE FROM workspace_tab_sessions \
+         WHERE agent_name = ?1 \
+           AND agent_name LIKE 'api-%' \
+           AND (session_id IS NULL OR session_id = '')",
+        rusqlite::params![agent_name],
+    );
+    if grace {
+        clear_durable_by_agent_name(&conn, agent_name);
     }
 }
 
@@ -424,6 +485,28 @@ async fn run() {
                 id
             );
         }
+        // Sweep non-resumable host-session ghosts (NULL session_id). These
+        // cannot dead-resume and accumulate when ChildExit races Grace clear.
+        gc_null_session_api_tab_rows();
+    }
+}
+
+/// Drop `api-%` durable rows with no session_id (not dead-resume capable).
+fn gc_null_session_api_tab_rows() {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match conn.execute(
+        "DELETE FROM workspace_tab_sessions \
+         WHERE agent_name LIKE 'api-%' \
+           AND (session_id IS NULL OR session_id = '')",
+        [],
+    ) {
+        Ok(n) if n > 0 => {
+            log_debug!(
+                "[sandbox-reaper] GC cleared {n} null-session_id api-* tab ghost(s)"
+            );
+        }
+        _ => {}
     }
 }
 

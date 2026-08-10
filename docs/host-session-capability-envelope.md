@@ -6,6 +6,9 @@
 
 This note is normative for final-test. OPS UI, rich queue, sandbox-family envelope, and full key-rotation runbooks are **out of scope** here.
 
+**Related (Scout recovery):** kill → dead-resume operational runbook — ordering, safe-to-kill decision tree, ownership re-register, backoff, deliberate donts —  
+[`host-session-kill-resume-recovery.md`](./host-session-kill-resume-recovery.md).
+
 ---
 
 ## 1. Two tokens (do not conflate)

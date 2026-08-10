@@ -407,6 +407,10 @@ pub(crate) fn resolve_host_spawn(
     // context, but agents often still set the name explicitly.
     env.insert("K2SO_AGENT_NAME".to_string(), agent_name.clone());
     env.insert("K2_AGENT_NAME".to_string(), agent_name.clone());
+    // Host-session id for in-cell path derivation (parity with sandbox
+    // policy `K2_SESSION_ID`). Same string as API `sessionId` / cap JWT
+    // `sub`. Cold + dead-resume rebuild env; live inject keeps the process.
+    env.insert("K2_SESSION_ID".to_string(), sid.clone());
     // D6: API-cell lifecycle discriminator for `k2 done` → mark_complete.
     // Set ONLY on /v1 host-session spawn (not wake/heartbeat/canonical).
     // Workspace agents under COMPAT-58 may have K2_HOOK_SOCK + scoped token
@@ -575,9 +579,13 @@ mod tests {
         assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
         assert_eq!(env.get("K2SO_API_CELL").map(String::as_str), Some("1"));
         assert_eq!(
+            env.get("K2_SESSION_ID").map(String::as_str),
+            Some(sid.to_string().as_str())
+        );
+        assert_eq!(
             env.len(),
-            5,
-            "principal key + agent name pair + K2_API_CELL pair"
+            6,
+            "principal key + agent name pair + K2_SESSION_ID + K2_API_CELL pair"
         );
         // Identity + spawn wiring.
         assert!(spawn.agent_name.starts_with("api-key-1-"), "{}", spawn.agent_name);
@@ -620,9 +628,13 @@ mod tests {
         assert!(env.get("ANTHROPIC_API_KEY").is_none());
         assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
         assert_eq!(
+            env.get("K2_SESSION_ID").map(String::as_str),
+            Some(sid.to_string().as_str())
+        );
+        assert_eq!(
             env.len(),
-            4,
-            "agent name pair + K2_API_CELL pair (no credentials for owner)"
+            5,
+            "agent name pair + K2_SESSION_ID + K2_API_CELL pair (no credentials for owner)"
         );
     }
 
@@ -700,10 +712,11 @@ mod tests {
             "K2-staged principal key must OVERRIDE the preset's entry"
         );
         assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert!(env.get("K2_SESSION_ID").is_some());
         assert_eq!(
             env.len(),
-            6,
-            "preset var + principal key + agent name pair + K2_API_CELL pair"
+            7,
+            "preset var + principal key + agent name pair + K2_SESSION_ID + K2_API_CELL pair"
         );
     }
 
@@ -743,6 +756,12 @@ mod tests {
             Some(forced),
             "the daemon session id stays the forced one"
         );
+        let env = spawn.env.as_ref().expect("env present");
+        assert_eq!(
+            env.get("K2_SESSION_ID").map(String::as_str),
+            Some(forced.to_string().as_str()),
+            "K2_SESSION_ID is the host-session id (API sessionId / cap sub), not the provider resume target"
+        );
     }
 
     /// W5 — an openai-provider principal stages OPENAI_API_KEY (+ the
@@ -778,10 +797,11 @@ mod tests {
             "an openai key must NOT masquerade as an Anthropic credential"
         );
         assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert!(env.get("K2_SESSION_ID").is_some());
         assert_eq!(
             env.len(),
-            6,
-            "openai pair + agent name pair + K2_API_CELL pair"
+            7,
+            "openai pair + agent name pair + K2_SESSION_ID + K2_API_CELL pair"
         );
     }
 
@@ -805,10 +825,11 @@ mod tests {
         assert_eq!(env.get("GOOGLE_API_KEY").map(String::as_str), Some("goog-key-1"));
         assert!(env.get("ANTHROPIC_API_KEY").is_none());
         assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert!(env.get("K2_SESSION_ID").is_some());
         assert_eq!(
             env.len(),
-            6,
-            "google pair + agent name pair + K2_API_CELL pair"
+            7,
+            "google pair + agent name pair + K2_SESSION_ID + K2_API_CELL pair"
         );
     }
 
@@ -833,12 +854,13 @@ mod tests {
             "unknown provider must stage NO credential var; env keys: {:?}",
             env.keys().collect::<Vec<_>>(),
         );
-        // Agent-name + D6 lifecycle markers still stage (not credentials).
+        // Agent-name + D6 lifecycle markers + session id still stage (not credentials).
         assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert!(env.get("K2_SESSION_ID").is_some());
         assert_eq!(
             env.len(),
-            4,
-            "agent name pair + K2_API_CELL pair only (fail-closed on credentials)"
+            5,
+            "agent name pair + K2_SESSION_ID + K2_API_CELL pair only (fail-closed on credentials)"
         );
     }
 
@@ -861,10 +883,11 @@ mod tests {
             "blank principal key must not produce ANTHROPIC_API_KEY"
         );
         assert_eq!(env.get("K2_API_CELL").map(String::as_str), Some("1"));
+        assert!(env.get("K2_SESSION_ID").is_some());
         assert_eq!(
             env.len(),
-            4,
-            "agent name pair + K2_API_CELL pair only"
+            5,
+            "agent name pair + K2_SESSION_ID + K2_API_CELL pair only"
         );
     }
 

@@ -115,6 +115,7 @@ Fresh spawn **omits** `resumed`.
 |---------|------|--------|
 | **File** `{workspace}/.k2/caps/<sessionId>.json` | Every mint / remint | Multi-turn **SSOT**. Mode **0600**. Atomic write: temp + `rename()`. |
 | **Env** `K2_CAPABILITY_TOKEN` | Cold spawn only | Same JSON string as the file. **Live resume cannot update env.** |
+| **Env** `K2_SESSION_ID` | Cold spawn + dead-resume (host-curated) | Host-session id string — same as API `sessionId` and capability JWT `sub`. Non-token source for path derivation (sandbox parity). **Live inject does not re-write process env.** |
 
 **Re-send-caps-on-resume (required for multi-turn envelope):**  
 On every multi-turn resume / continue, **ALWAYS re-send `capabilities[]`** so K2 remints and overwrites the cap file.  

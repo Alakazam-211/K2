@@ -151,10 +151,6 @@ image = { version = "0.25", default-features = false, features = ["ico", "png", 
 # Low-level primitives used by the alacritty PTY event loop.
 libc = "0.2"
 polling = "3"
-rustix = { version = "1", features = ["termios", "process"] }
-mio = { version = "1", features = ["os-poll", "os-ext"] }
-signal-hook = "0.3"
-signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
 
 # Companion WS + auth + HTTP proxy — pulled over from src-tauri along
 # with crates/k2so-core/src/companion/. argon2 + subtle cover the
@@ -198,6 +194,14 @@ x509-parser = { version = "0.18", default-features = false }
 # Lock-free hot-swap of the rustls ServerConfig: the cert-renewal loop
 # swaps in a freshly-issued chain WITHOUT dropping the live TLS listener.
 arc-swap = "1"
+
+# Unix-only: alacritty PTY event-loop helpers (signal-hook-mio needs UnixStream).
+# Not used on Windows MSVC — leave out so `cargo check -p k2-core` can start there.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["termios", "process"] }
+mio = { version = "1", features = ["os-poll", "os-ext"] }
+signal-hook = "0.3"
+signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
 
 # macOS-only deps.
 #

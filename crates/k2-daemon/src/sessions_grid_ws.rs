@@ -2341,6 +2341,7 @@ mod tests {
             cwd: Some(std::path::PathBuf::from("/tmp")),
             program: Some("cat".to_string()),
             args: vec![],
+            durable_args: None,
             env: Default::default(),
             drain_on_exit: true,
             label: String::new(),

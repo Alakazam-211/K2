@@ -266,6 +266,7 @@ pub fn spawn_agent_session_v2_blocking(
         cwd: Some(PathBuf::from(&req.cwd)),
         program: req.command.clone(),
         args: req.args.clone().unwrap_or_default(),
+        durable_args: None,
         env,
         drain_on_exit: true,
         label: label_seed,

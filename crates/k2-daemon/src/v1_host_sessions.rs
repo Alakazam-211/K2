@@ -242,6 +242,12 @@ fn adopt_api_host_session(
 ///   differs from the live PTY's forced daemon SessionId, so map through the
 ///   `api-…` tab row's `agent_name` (the v2 map key) instead.
 ///
+/// **Liveness honesty (launch-param PRD D2 / A11):** a map hit is LIVE only
+/// when [`DaemonPtySession::is_child_alive`] is true. Phantom rows (dead
+/// child still mapped) are treated as DEAD so the resume door falls through
+/// to dead-resume + launch-param. Prefers [`reconcile_dead_children`] so
+/// zombies do not steal LIVE.
+///
 /// Scoped to THIS workspace's `api-…` rows on the adopted path (same index
 /// as [`host_session_resumable`]); the direct path's workspace pin is
 /// enforced by the callers' existing cwd checks / resume-door index check.
@@ -249,9 +255,17 @@ fn lookup_live_host_session(
     ws_path: &str,
     session_id: &str,
 ) -> Option<std::sync::Arc<k2_core::terminal::DaemonPtySession>> {
+    // Drop map entries whose child already exited but never unregistered
+    // so phantom rows don't steal the LIVE arm (list already does this).
+    crate::v2_session_map::reconcile_dead_children();
+
     if let Some(sid) = SessionId::parse(session_id) {
         if let Some(live) = crate::v2_session_map::lookup_by_session_id(&sid) {
-            return Some(live);
+            if live.is_child_alive() {
+                return Some(live);
+            }
+            // Phantom: map present, child dead → treat as DEAD.
+            return None;
         }
     }
     let agents: Vec<String> = {
@@ -273,9 +287,10 @@ fn lookup_live_host_session(
             .ok()?;
         mapped.flatten().collect()
     };
-    agents
-        .iter()
-        .find_map(|a| crate::v2_session_map::lookup_by_agent_name(a))
+    agents.iter().find_map(|a| {
+        let live = crate::v2_session_map::lookup_by_agent_name(a)?;
+        live.is_child_alive().then_some(live)
+    })
 }
 
 /// Parse the UNTRUSTED body into hints. Empty/whitespace → all defaults;
@@ -522,7 +537,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     // cwd pinned, command host-minted from the workspace's configured agent,
     // caller env/args dropped, principal key staged, danger flags stripped
     // unless the owner opted in.
-    let mut spawn_req =
+    let (mut spawn_req, launch_plan) =
         policy::resolve_host_spawn(principal, &ws_path, &session_id, is_resume, &req);
     spawn_req.principal_key = Some(principal_key.clone());
     spawn_req.quota_workspace = Some(ws_path.clone());
@@ -639,20 +654,19 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
         }
     }
 
-    // Initial prompt: host sessions have no guest-init to read a staged env
-    // var, so deliver it into the PTY once the TUI is ready — on a DETACHED
-    // thread (readiness polling + the locked injector sleep ~½s+; the API
-    // response must not wait). Best-effort by design: the caller confirms
-    // via `GET .../messages` / the grid stream. Value never logged.
+    // Initial prompt transport (prd-host-session-launch-param-prompt-v1):
+    // - launch_plan.attached → already on ephemeral exec argv (fire-once);
+    //   do NOT start the detached inject thread (A5 — no double-submit).
+    // - !attached + non-empty prompt → legacy post-spawn paste inject (D10
+    //   fallback for Hermes / unknown / assembly fail).
+    // - empty prompt → neither.
     //
-    // Injection stack (Phase 0b): frozen [`API_SPAWN_PREAMBLE`] (spawn-only
-    // respond contract) + owner `api_guest_policy` (every turn) + caller
-    // prompt. Guest policy is host-resolved from workspace settings — never
-    // from the request body. Both fresh-process paths (plain spawn and
-    // resume-of-a-DEAD-session) carry the full stack; follow-ups via
-    // [`deliver_into_live`] re-assert guest policy without the preamble.
+    // Injection stack (Phase 0b, paste path only): frozen [`API_SPAWN_PREAMBLE`]
+    // + owner `api_guest_policy` + caller prompt. Same logical payload is
+    // what launch-param attaches as a single trailing interactive arg.
+    // Value never logged.
     let prompt = req.prompt.as_deref().unwrap_or("").trim().to_string();
-    if !prompt.is_empty() {
+    if !prompt.is_empty() && !launch_plan.attached {
         let guest = k2_core::workspace::settings::get_api_guest_policy(&ws_path);
         let payload = compose_spawn_inject(&guest, &prompt);
         let sid_for_inject = sid;
@@ -677,6 +691,11 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
                 ok
             );
         });
+    } else if launch_plan.attached {
+        log_debug!(
+            "[v1-host] launch-param attached for session={}; skipping post-spawn inject",
+            sid
+        );
     }
 
     // Per-session STREAM token (grid WS) — the caller streams with this,

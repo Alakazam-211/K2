@@ -50,6 +50,18 @@ use k2_core::session::SessionId;
 use crate::routes::http::V1Principal;
 use crate::v2_spawn::SpawnRequest;
 
+/// Named plan for how the cold / dead-resume arms deliver the first-turn
+/// prompt (prd-host-session-launch-param-prompt-v1 §4.2).
+///
+/// - `attached == true` → prompt rides the **ephemeral** exec argv; the
+///   route must **not** start the detached post-spawn inject thread.
+/// - `attached == false` + non-empty prompt → existing post-spawn inject.
+/// - empty prompt → `attached == false`, no inject.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LaunchPromptPlan {
+    pub attached: bool,
+}
+
 /// The UNTRUSTED public request body for `POST /v1/w/<ws>/host-sessions`.
 /// Every field is a HINT, never a trust input. Absent/empty body → defaults.
 ///
@@ -59,9 +71,11 @@ use crate::v2_spawn::SpawnRequest;
 /// ignored by serde.
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct ApiHostSessionRequest {
-    /// Optional initial prompt. Delivered into the spawned agent's PTY once
-    /// the TUI is ready (host sessions have no guest-init to read an env
-    /// staging var) — never argv, value never logged.
+    /// Optional initial / next prompt. On cold spawn + dead resume, when the
+    /// provider supports interactive launch-param, attached to the
+    /// **ephemeral** exec argv only (never durable `args_json` / recovery).
+    /// Unsupported providers fall back to post-spawn paste inject. Live
+    /// follow-ups always inject. Value never logged in full.
     #[serde(default)]
     pub prompt: Option<String>,
     /// Optional terminal width hint (clamped host-side).
@@ -210,21 +224,25 @@ pub fn resolve_host_injection_profile(
 
 /// Resolve the untrusted body + authenticated principal + AUTHORIZED
 /// workspace path into a host-trusted [`SpawnRequest`] for a NON-SANDBOXED
-/// host session. `session_id` is the HOST-DECIDED id (fresh mint or the
-/// validated resume target) — it is FORCED into the spawn AND spliced into
-/// the agent command's session grammar, so the returned/addressable
-/// `sessionId` equals the provider's conversation id.
+/// host session, plus a [`LaunchPromptPlan`] describing whether the
+/// spawn-time prompt stack was attached as an ephemeral launch-param.
+///
+/// `session_id` is the HOST-DECIDED id (fresh mint or the validated resume
+/// target) — it is FORCED into the spawn AND spliced into the agent
+/// command's session grammar, so the returned/addressable `sessionId`
+/// equals the provider's conversation id.
 ///
 /// Infallible by design: there is nothing to provision (no ephemeral dir, no
 /// overlay); the agent-command resolver itself falls back to literal claude
-/// rather than erroring (a stale preset must never brick a spawn).
+/// rather than erroring (a stale preset must never brick a spawn). Launch-
+/// param assembly failure falls back to inject (`plan.attached = false`).
 pub(crate) fn resolve_host_spawn(
     principal: &V1Principal,
     ws_path: &str,
     session_id: &SessionId,
     resume: bool,
     req: &ApiHostSessionRequest,
-) -> SpawnRequest {
+) -> (SpawnRequest, LaunchPromptPlan) {
     let sid = session_id.to_string();
 
     // (1) The workspace's configured agent command — the de-generalization
@@ -388,23 +406,63 @@ pub(crate) fn resolve_host_spawn(
     let cols = clamp_dim(req.cols, 80, 16, 500);
     let rows = clamp_dim(req.rows, 24, 4, 300);
 
+    // (6) Launch-param (cold + dead resume only — this resolver is only
+    // used on those arms). Compose the frozen spawn stack as ONE trailing
+    // interactive user message when the provider supports it. Identity
+    // args stay on `args` (durable); full exec argv with prompt goes on
+    // `exec_args` (ephemeral, fire-once S1).
+    let caller_prompt = req.prompt.as_deref().unwrap_or("").trim();
+    let mut plan = LaunchPromptPlan { attached: false };
+    let mut exec_args: Option<Vec<String>> = None;
+    let mut launch_string_for_log: Option<String> = None;
+    if !caller_prompt.is_empty() {
+        let guest = k2_core::workspace::settings::get_api_guest_policy(ws_path);
+        let launch_string =
+            crate::v1_host_sessions::compose_spawn_inject(&guest, caller_prompt);
+        if let Some(with_prompt) =
+            k2_core::workspace::provider_launch_prompt::append_interactive_prompt(
+                &command,
+                &args,
+                &launch_string,
+            )
+        {
+            plan.attached = true;
+            launch_string_for_log = Some(launch_string);
+            exec_args = Some(with_prompt);
+        }
+    }
+
+    // Log identity args, or redacted exec shape when attached (never the
+    // full launch-prompt payload — S3 / A12).
+    let log_args = if let (true, Some(ls)) = (plan.attached, launch_string_for_log.as_deref()) {
+        k2_core::workspace::provider_launch_prompt::redact_launch_prompt_args(
+            exec_args.as_deref().unwrap_or(&args),
+            ls,
+        )
+    } else {
+        args.clone()
+    };
     log_debug!(
-        "[v1-host] resolved host session id={} ws={} command={} args={:?} resume={} skip_permissions_opt_in={}",
+        "[v1-host] resolved host session id={} ws={} command={} args={:?} resume={} skip_permissions_opt_in={} launch_prompt_attached={}",
         sid,
         ws_path,
         command,
-        args,
+        log_args,
         resume,
         skip_permissions_opt_in,
+        plan.attached,
     );
 
-    SpawnRequest {
+    let spawn = SpawnRequest {
         agent_name,
         // PINNED to the granted workspace's registered path — never $HOME,
         // never a caller path.
         cwd: ws_path.to_string(),
         command: Some(command),
+        // Identity-only — what register / args_json / recovery see.
         args: Some(args),
+        // Ephemeral exec with trailing launch prompt when attached.
+        exec_args,
         cols,
         rows,
         env: Some(env),
@@ -422,7 +480,8 @@ pub(crate) fn resolve_host_spawn(
         // FORCE the host-decided id so the returned/addressable sessionId
         // equals the conversation id spliced into the agent argv above.
         forced_session_id: Some(*session_id),
-    }
+    };
+    (spawn, plan)
 }
 
 #[cfg(test)]
@@ -475,7 +534,7 @@ mod tests {
         insert_project("v1host-policy-default", ws_path);
         let sid = SessionId::new();
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &api("key-1", Some("sk-ant-host-key")),
             ws_path,
             &sid,
@@ -533,7 +592,7 @@ mod tests {
         .expect("set opt-out");
         let sid = SessionId::new();
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &sid,
@@ -565,7 +624,7 @@ mod tests {
         insert_project("v1host-policy-resume", ws_path);
         let sid = SessionId::new();
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &sid,
@@ -611,7 +670,7 @@ mod tests {
             .expect("set default_agent");
         }
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &api("key-env", Some("sk-ant-principal-wins")),
             ws_path,
             &SessionId::new(),
@@ -648,7 +707,7 @@ mod tests {
         insert_project("v1host-policy-target", ws_path);
         let forced = SessionId::new();
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &forced,
@@ -684,7 +743,7 @@ mod tests {
         let ws_path = "/tmp/k2-v1host-policy-openai";
         insert_project("v1host-policy-openai", ws_path);
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &api_with_provider(
                 "key-oai",
                 Some("sk-oai-host-key"),
@@ -723,7 +782,7 @@ mod tests {
         let ws_path = "/tmp/k2-v1host-policy-google";
         insert_project("v1host-policy-google", ws_path);
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &api_with_provider("key-goo", Some("goog-key-1"), Some("google"), None),
             ws_path,
             &SessionId::new(),
@@ -750,7 +809,7 @@ mod tests {
         let ws_path = "/tmp/k2-v1host-policy-unkprov";
         insert_project("v1host-policy-unkprov", ws_path);
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &api_with_provider("key-unk", Some("sk-mystery"), Some("mystery-llm"), None),
             ws_path,
             &SessionId::new(),
@@ -778,7 +837,7 @@ mod tests {
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-blankkey";
         insert_project("v1host-policy-blankkey", ws_path);
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &api("key-b", Some("   ")),
             ws_path,
             &SessionId::new(),
@@ -872,7 +931,7 @@ mod tests {
             Some(r#"["--auto-yes"]"#),
         );
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &SessionId::new(),
@@ -911,7 +970,7 @@ mod tests {
             None,
         );
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &SessionId::new(),
@@ -949,7 +1008,7 @@ mod tests {
         )
         .expect("set opt-in");
 
-        let spawn = resolve_host_spawn(
+        let (spawn, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &SessionId::new(),
@@ -1040,5 +1099,244 @@ mod tests {
             resolve_host_injection_profile(ws_path),
             k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE
         );
+    }
+
+    // ── Launch-param prompt (prd-host-session-launch-param-prompt-v1) ─
+
+    /// A1: Claude cold spawn attaches interactive initial message; no
+    /// `--print`. Identity args stay durable; exec_args carries prompt.
+    #[test]
+    fn launch_param_claude_cold_attaches_no_print() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-lp-claude-cold";
+        insert_project("v1host-lp-claude-cold", ws_path);
+        let sid = SessionId::new();
+        let marker = "CALLER-COLD-PROMPT-MARKER-A1";
+
+        let (spawn, plan) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &sid,
+            false,
+            &ApiHostSessionRequest {
+                prompt: Some(marker.to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(plan.attached, "claude must attach launch-param");
+        let identity = spawn.args.as_deref().expect("identity args");
+        let exec = spawn.exec_args.as_deref().expect("exec args");
+        // Durable identity has NO caller prompt (A8 / fire-once).
+        assert!(
+            !identity.iter().any(|a| a.contains(marker)),
+            "identity args must not hold prompt; got {identity:?}"
+        );
+        let guest = k2_core::workspace::settings::get_api_guest_policy(ws_path);
+        let expected =
+            crate::v1_host_sessions::compose_spawn_inject(&guest, marker);
+        assert_eq!(
+            exec.last().map(String::as_str),
+            Some(expected.as_str()),
+            "exec trailing arg is the full spawn stack; exec={exec:?}"
+        );
+        assert!(
+            expected.contains(crate::v1_host_sessions::API_SPAWN_PREAMBLE),
+            "spawn stack must include respond preamble (A9)"
+        );
+        assert!(!exec.iter().any(|a| a == "--print" || a == "-p"));
+        assert!(
+            identity
+                .windows(2)
+                .any(|w| w[0] == "--session-id" && w[1] == sid.to_string()),
+            "premint identity present; identity={identity:?}"
+        );
+    }
+
+    /// A2: Claude dead resume uses `--resume` SSOT + next prompt.
+    #[test]
+    fn launch_param_claude_resume_ssot_plus_prompt() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-lp-claude-resume";
+        insert_project("v1host-lp-claude-resume", ws_path);
+        let sid = SessionId::new();
+        let marker = "CALLER-RESUME-PROMPT-MARKER-A2";
+
+        let (spawn, plan) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &sid,
+            true,
+            &ApiHostSessionRequest {
+                session: Some(sid.to_string()),
+                prompt: Some(marker.to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(plan.attached);
+        let identity = spawn.args.as_deref().expect("identity");
+        let exec = spawn.exec_args.as_deref().expect("exec");
+        assert!(
+            identity
+                .windows(2)
+                .any(|w| w[0] == "--resume" && w[1] == sid.to_string()),
+            "resume grammar; identity={identity:?}"
+        );
+        assert!(
+            !identity.iter().any(|a| a.contains(marker)),
+            "fire-once: identity has no prompt"
+        );
+        assert!(
+            exec.last().map(|s| s.contains(marker)).unwrap_or(false),
+            "exec has prompt; exec={exec:?}"
+        );
+        assert!(!exec.iter().any(|a| a == "--print"));
+    }
+
+    /// A6 / Codex: `resume <id> <prompt>` subcommand shape.
+    #[test]
+    fn launch_param_codex_resume_subcommand_plus_prompt() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-lp-codex";
+        insert_project("v1host-lp-codex", ws_path);
+        configure_custom_agent(ws_path, "codex", None);
+        let sid = SessionId::new();
+        let marker = "CODEX-RESUME-PROMPT";
+
+        let (spawn, plan) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &sid,
+            true,
+            &ApiHostSessionRequest {
+                session: Some(sid.to_string()),
+                prompt: Some(marker.to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(plan.attached, "codex supports launch-param");
+        let identity = spawn.args.as_deref().expect("identity");
+        let exec = spawn.exec_args.as_deref().expect("exec");
+        assert_eq!(
+            identity.get(0).map(String::as_str),
+            Some("resume"),
+            "codex identity={identity:?}"
+        );
+        assert_eq!(identity.get(1).map(String::as_str), Some(sid.to_string().as_str()));
+        assert!(
+            !identity.iter().any(|a| a.contains(marker)),
+            "identity fire-once"
+        );
+        assert!(exec.last().map(|s| s.contains(marker)).unwrap_or(false));
+        assert!(!exec.iter().any(|a| a == "exec"));
+    }
+
+    /// A6 / Pi: dead resume uses `--session`, never `--continue`.
+    #[test]
+    fn launch_param_pi_session_not_continue() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-lp-pi";
+        insert_project("v1host-lp-pi", ws_path);
+        configure_custom_agent(ws_path, "pi", None);
+        let sid = SessionId::new();
+        let marker = "PI-PROMPT";
+
+        let (spawn, plan) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &sid,
+            true,
+            &ApiHostSessionRequest {
+                session: Some(sid.to_string()),
+                prompt: Some(marker.to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(plan.attached);
+        let identity = spawn.args.as_deref().expect("identity");
+        let exec = spawn.exec_args.as_deref().expect("exec");
+        assert!(
+            identity
+                .windows(2)
+                .any(|w| w[0] == "--session" && w[1] == sid.to_string()),
+            "pi --session; identity={identity:?}"
+        );
+        assert!(!identity.iter().any(|a| a == "--continue"));
+        assert!(!exec.iter().any(|a| a == "--continue"));
+        assert!(exec.last().map(|s| s.contains(marker)).unwrap_or(false));
+    }
+
+    /// Hermes / unknown → attached=false (inject fallback D10).
+    #[test]
+    fn launch_param_hermes_falls_back_to_inject() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-lp-hermes";
+        insert_project("v1host-lp-hermes", ws_path);
+        configure_custom_agent(ws_path, "hermes", None);
+        let sid = SessionId::new();
+
+        let (spawn, plan) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &sid,
+            false,
+            &ApiHostSessionRequest {
+                prompt: Some("hermes cannot take argv prompt".into()),
+                ..Default::default()
+            },
+        );
+        assert!(!plan.attached, "hermes must inject-fallback");
+        assert!(spawn.exec_args.is_none());
+        let identity = spawn.args.as_deref().unwrap_or(&[]);
+        assert!(!identity.iter().any(|a| a.contains("hermes cannot")));
+    }
+
+    /// Empty prompt → no launch-param, no exec_args.
+    #[test]
+    fn launch_param_empty_prompt_not_attached() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-lp-empty";
+        insert_project("v1host-lp-empty", ws_path);
+        let (spawn, plan) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest {
+                prompt: Some("   ".into()),
+                ..Default::default()
+            },
+        );
+        assert!(!plan.attached);
+        assert!(spawn.exec_args.is_none());
+    }
+
+    /// Fire-once: durable args never hold the launch string even when
+    /// attached (register / recovery replay safety — A8 / A10).
+    #[test]
+    fn launch_param_fire_once_identity_excludes_prompt() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-lp-fireonce";
+        insert_project("v1host-lp-fireonce", ws_path);
+        let secret = "NEVER-IN-ARGS-JSON-OR-RECOVERY";
+        let (spawn, plan) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest {
+                prompt: Some(secret.into()),
+                ..Default::default()
+            },
+        );
+        assert!(plan.attached);
+        let identity_json = serde_json::to_string(spawn.args.as_ref().unwrap()).unwrap();
+        assert!(
+            !identity_json.contains(secret),
+            "args_json snapshot must not contain prompt: {identity_json}"
+        );
+        // Simulated recovery input is identity only.
+        let recovered: Vec<String> =
+            serde_json::from_str(&identity_json).expect("round-trip identity");
+        assert!(!recovered.iter().any(|a| a.contains(secret)));
     }
 }

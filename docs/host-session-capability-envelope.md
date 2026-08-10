@@ -98,6 +98,20 @@ Fresh spawn **omits** `resumed`.
 On every multi-turn resume / continue, **ALWAYS re-send `capabilities[]`** so K2 remints and overwrites the cap file.  
 **Omit `capabilities[]` ⇒ no remint ⇒ file may be stale.** Do not write with a stale file after a long gap or after `resumed: false` without remint.
 
+### 2.2b First-turn prompt transport (launch-param)
+
+On **cold spawn** and **dead resume** (not live inject), host-sessions deliver the
+caller `prompt` (plus frozen respond preamble + owner guest policy) as an
+**interactive CLI launch parameter** when the workspace agent supports it
+(Claude, Codex, Grok, Gemini, Cursor Agent, Pi). Hermes and unknown agents keep
+post-spawn paste inject.
+
+- Launch-param is **fire-once / request-scoped**: it is **not** stored in
+  `args_json` or recovery replay.
+- Live follow-ups (`message-live` / live resume) still inject only.
+- Secrets still must not ride `prompt` — use this envelope’s cap file / env.
+- See `.k2/prds/prd-host-session-launch-param-prompt-v1.md`.
+
 ### 2.3 Cap-file schema (what the agent parses each turn)
 
 Path: `{workspace}/.k2/caps/<sessionId>.json`

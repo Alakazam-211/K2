@@ -205,7 +205,15 @@ pub struct DaemonPtyConfig {
     /// (user's login shell).
     pub program: Option<String>,
     /// Arguments passed to `program`. Ignored if `program` is None.
+    /// This is the **ephemeral exec** argv (may include a fire-once
+    /// host-session launch prompt). What is stored on the session /
+    /// `args_json` is [`Self::durable_args`] when set, else this vec.
     pub args: Vec<String>,
+    /// Identity-only args persisted on [`DaemonPtySession::args`] and
+    /// `workspace_tab_sessions.args_json`. When `Some`, overrides
+    /// [`Self::args`] for durable storage so a request-scoped launch
+    /// prompt is never replayed by recovery / re-exec (fire-once S1).
+    pub durable_args: Option<Vec<String>>,
     pub env: HashMap<String, String>,
     /// If true, drain the child's pending output before tearing
     /// down the PTY on child exit. Matches Zed's default.
@@ -251,6 +259,7 @@ impl Default for DaemonPtyConfig {
             cwd: None,
             program: None,
             args: Vec::new(),
+            durable_args: None,
             env: HashMap::new(),
             drain_on_exit: true,
             label: String::new(),
@@ -600,17 +609,21 @@ impl DaemonPtySession {
         // Build alacritty's `tty::Options`. None-shell gets the
         // user's login shell, same as opening a terminal.app window
         // with no command override.
-        // We clone args here because we also persist them on the
-        // session below — used by smart-launch's "is there a live
-        // PTY for this --resume <session_id>?" check.
+        // Exec argv (may include a fire-once launch prompt). Durable
+        // identity-only args are stored on the session separately when
+        // `durable_args` is set so recovery never re-fires the prompt.
         let spawn_args = cfg.args.clone();
+        let store_args = cfg
+            .durable_args
+            .clone()
+            .unwrap_or_else(|| spawn_args.clone());
         // Sandbox P2a: carry program+args as a readable `ShellSpec` (the seam's
         // `build_worker_invocation` needs to read them back; alacritty's `Shell`
         // fields are pub(crate)). `Passthrough::spawn` maps this back into
         // `tty::Shell::new` at the PTY open, so behavior is byte-identical.
         let shell = cfg.program.as_ref().map(|prog| ShellSpec {
             program: prog.clone(),
-            args: spawn_args.clone(),
+            args: spawn_args,
         });
 
         // Build the env we hand to alacritty's tty::new. Without an
@@ -831,7 +844,7 @@ impl DaemonPtySession {
             sandbox: cfg.sandbox,
             pid: child_pid,
             killed: std::sync::atomic::AtomicBool::new(false),
-            args: spawn_args,
+            args: store_args,
             term,
             pty_notifier: Mutex::new(Notifier(pty_sender)),
             events_tx,
@@ -1996,6 +2009,7 @@ mod tests {
             overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
+            durable_args: None,
             env: Default::default(),
             drain_on_exit: true,
             label: "scout".to_string(),
@@ -2020,6 +2034,7 @@ mod tests {
             overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
+            durable_args: None,
             env: Default::default(),
             drain_on_exit: true,
             label: "scout".to_string(),
@@ -2046,6 +2061,7 @@ mod tests {
             overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
+            durable_args: None,
             env: Default::default(),
             drain_on_exit: true,
             label: String::new(),
@@ -2074,6 +2090,7 @@ mod tests {
             overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
+            durable_args: None,
             env: Default::default(),
             drain_on_exit: true,
             ..Default::default()
@@ -2103,6 +2120,7 @@ mod tests {
             overlay: None,
             program: Some("cat".to_string()),
             args: vec![],
+            durable_args: None,
             env: Default::default(),
             drain_on_exit: true,
             label: "seed".to_string(),
@@ -2141,6 +2159,7 @@ mod tests {
             // the PID is gone afterwards it's because kill() killed it.
             program: Some("sleep".to_string()),
             args: vec!["600".to_string()],
+            durable_args: None,
             env: Default::default(),
             drain_on_exit: true,
             label: String::new(),
@@ -3167,6 +3186,7 @@ mod tests {
             overlay: None,
             program: Some("sleep".to_string()),
             args: vec!["600".to_string()],
+            durable_args: None,
             env: Default::default(),
             drain_on_exit: true,
             label: String::new(),

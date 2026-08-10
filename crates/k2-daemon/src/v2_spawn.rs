@@ -103,6 +103,14 @@ pub struct SpawnRequest {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Option<Vec<String>>,
+    /// Fire-once launch prompt (host-sessions): when `Some`, these are the
+    /// **ephemeral exec** argv (identity + trailing interactive prompt).
+    /// [`Self::args`] stays identity-only and is what lands on
+    /// `DaemonPtySession.args` / `args_json` / recovery. `#[serde(skip)]` —
+    /// never off the wire. `None` ⇒ exec uses `args` (every non-host-session
+    /// caller).
+    #[serde(skip)]
+    pub exec_args: Option<Vec<String>>,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]
@@ -594,6 +602,8 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     // command takes precedence on first spawn; only the empty case
     // consults the table. See `0045_workspace_tab_sessions.sql`.
     let mut command = req.command.clone();
+    // Identity-only args (durable). Exec may use a fire-once superset
+    // via `req.exec_args` (host-session launch-param prompt).
     let mut args = req.args.clone().unwrap_or_default();
     if command.is_none() {
         if let Some((saved_cmd, saved_args)) = recovered_launch(&req.agent_name, &req.cwd) {
@@ -606,6 +616,20 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     // PREMINT-capable provider (claude + grok). See
     // `autoinject_premint_session_id`.
     autoinject_premint_session_id(command.as_deref(), &mut args, &req.agent_name, &req.cwd);
+
+    // Ephemeral exec argv: launch-param path attaches the request-scoped
+    // prompt here only. Recovery above rewrites identity `args` when
+    // command was empty — never re-introduces a prior launch prompt
+    // (args_json is identity-only by construction).
+    let exec_args = req.exec_args.clone().unwrap_or_else(|| args.clone());
+    // When exec_args was set before recovery rewrote identity args, keep
+    // them only if the caller supplied a command (host-sessions always do).
+    // If recovery ran (command was None), force exec = recovered identity.
+    let exec_args = if req.command.is_none() {
+        args.clone()
+    } else {
+        exec_args
+    };
 
     // 2026-07-02 PTY-leak breaker — refuse to HOLD unbounded abandoned
     // bare shells for one workspace. The split-pane restore re-mint loop
@@ -686,7 +710,10 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         rows: req.rows,
         cwd: Some(PathBuf::from(&req.cwd)),
         program: command,
-        args,
+        // Ephemeral exec (may carry fire-once launch prompt).
+        args: exec_args,
+        // Identity-only for session.args / args_json / recovery.
+        durable_args: Some(args),
         env: req.env.unwrap_or_default(),
         drain_on_exit: true,
         label: seed_label,

@@ -170,6 +170,7 @@ pub(crate) fn resolve_spawn(
         // literal claude default stays (see STANDARD_CLAUDE_ARGS).
         command: Some("claude".to_string()),
         args: Some(STANDARD_CLAUDE_ARGS.iter().map(|s| s.to_string()).collect()),
+        exec_args: None,
         cols,
         rows,
         env: Some(env),
@@ -789,6 +790,7 @@ pub(crate) fn resolve_workspace_session(
         // jail; NEVER a caller command.
         command: Some(command),
         args: Some(args),
+        exec_args: None,
         cols,
         rows,
         env: Some(env),

@@ -120,6 +120,7 @@ fn apple_locale_lang() -> Option<String> {
 /// Whether `name` is a locale this system can actually construct.
 /// Uses `newlocale(3)` (thread-safe, no process-locale mutation);
 /// NULL ⇒ unknown locale.
+#[cfg(unix)]
 fn locale_exists(name: &str) -> bool {
     let Ok(cname) = std::ffi::CString::new(name) else {
         return false;
@@ -135,6 +136,17 @@ fn locale_exists(name: &str) -> bool {
             true
         }
     }
+}
+
+/// Windows has no portable `newlocale` probe in our libc bindings — accept
+/// common UTF-8 locale names so spawn env defaulting still works.
+#[cfg(windows)]
+fn locale_exists(name: &str) -> bool {
+    matches!(
+        name,
+        "C.UTF-8" | "C.utf8" | "en_US.UTF-8" | "en_US.utf8" | "UTF-8"
+    ) || name.ends_with(".UTF-8")
+        || name.ends_with(".utf8")
 }
 
 #[cfg(test)]

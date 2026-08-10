@@ -263,7 +263,12 @@ fn repoint_one(link: &Path, old_dir: &Path, new_dir: &Path) -> bool {
     if fs::remove_file(link).is_err() {
         return false;
     }
-    match std::os::unix::fs::symlink(&new_target, link) {
+    #[cfg(unix)]
+    let result = std::os::unix::fs::symlink(&new_target, link);
+    #[cfg(windows)]
+    let result = std::os::windows::fs::symlink_file(&new_target, link)
+        .or_else(|_| std::os::windows::fs::symlink_dir(&new_target, link));
+    match result {
         Ok(()) => true,
         Err(e) => {
             crate::log_debug!(

@@ -34,8 +34,8 @@ fi
 
 echo "Linux build gate on ${GATE_HOST} (${GATE_DIR})..."
 rsync -az --delete \
-    --exclude target --exclude node_modules --exclude .git \
-    --exclude out --exclude dist \
+    --exclude target --exclude 'target-*' --exclude node_modules --exclude .git \
+    --exclude out --exclude dist --exclude dist-windows --exclude .bmr-wt \
     "$PROJECT_DIR/" "${GATE_HOST}:${GATE_DIR}/"
 # fetch-frpc.sh auto-detects the Linux triple; the k2 crate's build script
 # hard-requires the staged sidecar even for `cargo check`.

@@ -771,6 +771,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0096_host_session_spawn_queue",
             include_str!("../../drizzle_sql/0096_host_session_spawn_queue.sql"),
         ),
+        // 0097 — user chat session archive/restore (Claude physical MOVE).
+        // Soft-archive when source file missing; dual-query list keeps all
+        // archived rows visible beyond the top-100 active cap.
+        (
+            "0097_chat_session_archived",
+            include_str!("../../drizzle_sql/0097_chat_session_archived.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

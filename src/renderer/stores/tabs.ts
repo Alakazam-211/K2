@@ -583,11 +583,11 @@ async function resolveSessionResumeLaunch(
   let listed = false
   if (sessionId) {
     try {
-      const rows = await daemonCliGet<Array<{ sessionId: string; provider?: string }>>(
-        'chat/list',
-        { project_path: projectPath },
-      )
-      const row = rows.find((r) => r.sessionId === sessionId)
+      const rows = await daemonCliGet<
+        Array<{ sessionId: string; provider?: string; archived?: boolean }>
+      >('chat/list', { project_path: projectPath })
+      // Archived sessions are not resume-eligible until restored.
+      const row = rows.find((r) => r.sessionId === sessionId && !r.archived)
       if (row) {
         provider = row.provider || 'claude'
         listed = true

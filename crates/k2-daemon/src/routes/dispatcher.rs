@@ -475,6 +475,8 @@ async fn handle_one_request(
             | "/cli/fs/open-external"
             | "/cli/chat/rename"
             | "/cli/chat/toggle-pin"
+            | "/cli/chat/archive"
+            | "/cli/chat/restore"
             | "/cli/chat/migrate-ide"
             | "/cli/sandbox/reopen"
             | "/cli/themes/create-template"
@@ -5672,6 +5674,8 @@ fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
         // Chat history (state-mutating)
         "/cli/chat/rename" => crate::chat_routes::handle_rename(body),
         "/cli/chat/toggle-pin" => crate::chat_routes::handle_toggle_pin(body),
+        "/cli/chat/archive" => crate::chat_routes::handle_archive(body),
+        "/cli/chat/restore" => crate::chat_routes::handle_restore(body),
         "/cli/sandbox/reopen" => crate::sandbox_chat_routes::handle_sandbox_reopen(body),
         "/cli/chat/migrate-ide" => crate::chat_routes::handle_migrate_ide(body),
         // Themes

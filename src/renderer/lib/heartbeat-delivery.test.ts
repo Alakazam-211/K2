@@ -51,6 +51,14 @@ describe('selectableSessions — pinned-chat exclusion', () => {
     ]
     expect(selectableSessions(rows, null).map((r) => r.sessionId)).toEqual(['new', 'old'])
   })
+
+  it('filters user-archived sessions from resume pickers', () => {
+    const rows = [
+      candidate({ sessionId: 'live', timestamp: 3 }),
+      candidate({ sessionId: 'archived', timestamp: 9, archived: true }),
+    ]
+    expect(selectableSessions(rows, null).map((r) => r.sessionId)).toEqual(['live'])
+  })
 })
 
 describe('deriveDeliveryTarget', () => {

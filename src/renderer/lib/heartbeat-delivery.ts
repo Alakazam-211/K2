@@ -52,6 +52,8 @@ export interface HeartbeatSessionCandidate {
   timestamp: number
   messageCount: number
   provider: string
+  /** User-archived sessions are never offered as resume targets. */
+  archived?: boolean
 }
 
 /** Derive the drop-down's current value from a heartbeat row.
@@ -98,6 +100,7 @@ export function selectableSessions(
   pinnedSessionId: string | null,
 ): HeartbeatSessionCandidate[] {
   return rows
+    .filter((r) => !r.archived)
     .filter((r) => pinnedSessionId === null || r.sessionId !== pinnedSessionId)
     .sort((a, b) => b.timestamp - a.timestamp)
 }

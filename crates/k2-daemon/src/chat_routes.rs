@@ -186,3 +186,134 @@ pub fn handle_migrate_ide(body: &[u8]) -> CliResponse {
         Err(e) => CliResponse::bad_request(e),
     }
 }
+
+// ── User archive / restore (Claude physical MOVE; P0) ─────────────────
+
+#[derive(Deserialize)]
+struct ArchiveBody {
+    project_path: String,
+    provider: String,
+    session_id: String,
+}
+
+/// POST chat/archive — move Claude session into
+/// `<project>/.k2/session-archive/user/claude/` (or soft-archive when the
+/// live file is already gone). Rejects with 409 if a live PTY still
+/// references the session.
+pub fn handle_archive(body: &[u8]) -> CliResponse {
+    let parsed: ArchiveBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    if parsed.provider != "claude" {
+        return CliResponse::bad_request("only claude archive supported in v1");
+    }
+    if parsed.session_id.is_empty() || parsed.project_path.is_empty() {
+        return CliResponse::bad_request("project_path and session_id required");
+    }
+
+    // Live check: refuse to move a transcript a running child still owns.
+    for (_name, live) in crate::session_lookup::snapshot_all() {
+        if live.is_child_alive()
+            && k2_core::workspace::provider_resume::argv_references_session(
+                &live.args(),
+                &parsed.session_id,
+            )
+        {
+            return CliResponse {
+                status: "409 Conflict",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "error": "session is live; stop the agent before archiving"
+                })
+                .to_string(),
+            };
+        }
+    }
+
+    // Snapshot title/timestamp from the current list when possible.
+    let (title, timestamp) = match ch::list_all_sessions(Some(&parsed.project_path)) {
+        Ok(sessions) => {
+            let hit = sessions.iter().find(|s| {
+                s.session_id == parsed.session_id && s.provider == parsed.provider
+            });
+            match hit {
+                Some(s) => (s.title.clone(), s.timestamp),
+                None => {
+                    let short = if parsed.session_id.len() >= 8 {
+                        &parsed.session_id[..8]
+                    } else {
+                        &parsed.session_id
+                    };
+                    (
+                        format!("Session {short}…"),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0),
+                    )
+                }
+            }
+        }
+        Err(_) => {
+            let short = if parsed.session_id.len() >= 8 {
+                &parsed.session_id[..8]
+            } else {
+                &parsed.session_id
+            };
+            (
+                format!("Session {short}…"),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0),
+            )
+        }
+    };
+
+    match k2_core::chat_user_archive::archive_user_session(
+        &parsed.project_path,
+        &parsed.provider,
+        &parsed.session_id,
+        &title,
+        timestamp,
+    ) {
+        Ok(()) => {
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::SyncChatHistory,
+                serde_json::Value::Null,
+            );
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// POST chat/restore — move Claude session back from the user archive.
+pub fn handle_restore(body: &[u8]) -> CliResponse {
+    let parsed: ArchiveBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    if parsed.provider != "claude" {
+        return CliResponse::bad_request("only claude archive supported in v1");
+    }
+    if parsed.session_id.is_empty() || parsed.project_path.is_empty() {
+        return CliResponse::bad_request("project_path and session_id required");
+    }
+
+    match k2_core::chat_user_archive::restore_user_session(
+        &parsed.project_path,
+        &parsed.provider,
+        &parsed.session_id,
+    ) {
+        Ok(()) => {
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::SyncChatHistory,
+                serde_json::Value::Null,
+            );
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}

@@ -82,12 +82,17 @@ export function HeartbeatSessionPicker({
       timestamp: number
       messageCount: number
       provider?: string
+      archived?: boolean
     }>>('chat/list', { project_path: projectPath })
       .then((rows) => {
         if (cancelled) return
         // Rows missing a provider (older daemons) degrade to "claude",
-        // matching ChatHeader's normalization.
-        setSessions(rows.map((r) => ({ ...r, provider: r.provider || 'claude' })))
+        // matching ChatHeader's normalization. Drop archived (restore first).
+        setSessions(
+          rows
+            .filter((r) => !r.archived)
+            .map((r) => ({ ...r, provider: r.provider || 'claude', archived: r.archived })),
+        )
       })
       .catch((err) => {
         console.warn('[HeartbeatSessionPicker] chat/list failed:', err)

@@ -21,9 +21,11 @@ interface ChatSession {
   provider: string
   messageCount: number
   originBranch: string | null
+  archived?: boolean
+  archivedAt?: number
 }
 
-type DateGroup = 'Pinned' | 'Today' | 'Yesterday' | 'This Week' | 'This Month' | 'Older'
+type DateGroup = 'Pinned' | 'Today' | 'Yesterday' | 'This Week' | 'This Month' | 'Older' | 'Archive'
 
 // A sandbox chat = an API-triggered session that ran INSIDE a hardened cell in
 // this workspace. Listed from the daemon's sandbox index; clicking re-launches
@@ -115,7 +117,9 @@ function formatTime(timestamp: number): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-const GROUP_ORDER: DateGroup[] = ['Pinned', 'Today', 'Yesterday', 'This Week', 'This Month', 'Older']
+const GROUP_ORDER: DateGroup[] = ['Pinned', 'Today', 'Yesterday', 'This Week', 'This Month', 'Older', 'Archive']
+
+const AGE_ORANGE_MS = 20 * 86400000
 
 /** Get the right-most leaf node ID in a mosaic tree */
 function getRightmostLeaf(tree: unknown): string | null {
@@ -211,6 +215,8 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const [showNormal, setShowNormal] = useState(true)
   const [showSandbox, setShowSandbox] = useState(true)
   const [reopening, setReopening] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const selectedRowRef = useRef<HTMLButtonElement>(null)
@@ -346,7 +352,12 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
     for (const session of sorted) {
       const key = `${session.provider}:${session.sessionId}`
-      const group = pinnedKeys.has(key) ? 'Pinned' as DateGroup : classifyDate(session.timestamp)
+      // Archived never lands in Pinned — even if the pin bit is still set.
+      const group: DateGroup = session.archived
+        ? 'Archive'
+        : pinnedKeys.has(key)
+          ? 'Pinned'
+          : classifyDate(session.timestamp)
       const existing = groups.get(group)
       if (existing) {
         existing.push(session)
@@ -426,6 +437,40 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     })
   }, [projectPath, searchQuery])
 
+  const showToast = useCallback((msg: string) => {
+    setToast(msg)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => setToast(null), 2200)
+  }, [])
+
+  const handleArchive = useCallback(async (session: ChatSession) => {
+    try {
+      await daemonCliPost('chat/archive', {
+        project_path: session.project || projectPath,
+        provider: session.provider,
+        session_id: session.sessionId,
+      })
+      await fetchSessions(false)
+    } catch (err) {
+      console.error('[chat-history] archive failed:', err)
+      showToast(String(err))
+    }
+  }, [projectPath, fetchSessions, showToast])
+
+  const handleRestore = useCallback(async (session: ChatSession) => {
+    try {
+      await daemonCliPost('chat/restore', {
+        project_path: session.project || projectPath,
+        provider: session.provider,
+        session_id: session.sessionId,
+      })
+      await fetchSessions(false)
+    } catch (err) {
+      console.error('[chat-history] restore failed:', err)
+      showToast(String(err))
+    }
+  }, [projectPath, fetchSessions, showToast])
+
   const handleTogglePin = useCallback(async (session: ChatSession) => {
     const key = `${session.provider}:${session.sessionId}`
     const isPinned = pinnedKeys.has(key)
@@ -452,35 +497,60 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     const key = `${session.provider}:${session.sessionId}`
     const isPinned = pinnedKeys.has(key)
 
-    // Show a simple context menu with pin + rename
+    // Context menu: archived → Copy resume + Restore; Claude live → + Archive;
+    // other providers: pin/rename/copy only (no Archive in P0).
     const menuDiv = document.createElement('div')
     menuDiv.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;background:var(--color-bg-elevated);border:1px solid var(--color-control-track-off);padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);`
     const config = PROVIDER_CONFIG[session.provider]
     const resumeCmd = config
-      ? `${config.command} ${config.resumeFlag} ${session.sessionId}`
+      ? (config.resumeSubcommand
+          ? `${config.command} ${config.resumeSubcommand} ${session.sessionId}`
+          : `${config.command} ${config.resumeFlag} ${session.sessionId}`)
       : `# unknown provider: ${session.provider}`
 
-    const items = [
-      { label: isPinned ? 'Unpin' : 'Pin', action: () => handleTogglePin(session) },
-      { label: 'Rename', action: () => {
-        setRenamingSession(session)
-        setRenameValue(customNames[key] ?? session.title)
-        setTimeout(() => renameInputRef.current?.focus(), 0)
-      }},
-      { label: 'Copy resume command', action: async () => {
-        try {
-          await navigator.clipboard.writeText(resumeCmd)
-        } catch {
-          // Fallback
-          const ta = document.createElement('textarea')
-          ta.value = resumeCmd
-          document.body.appendChild(ta)
-          ta.select()
-          document.execCommand('copy')
-          document.body.removeChild(ta)
-        }
-      }},
-    ]
+    const copyText = async (text: string) => {
+      try {
+        await navigator.clipboard.writeText(text)
+      } catch {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
+    }
+
+    type MenuItem = { label: string; action: () => void | Promise<void> }
+    let items: MenuItem[]
+    if (session.archived) {
+      items = [
+        { label: 'Copy Path', action: async () => {
+          const base = session.project || projectPath || ''
+          // User-archive dest for Claude (P0 only); other providers soft-archive later.
+          const path = session.provider === 'claude' && base
+            ? `${base.replace(/\/g, '/')}/.k2/session-archive/user/claude/${session.sessionId}.jsonl`
+            : base
+          if (path) await copyText(path)
+        }},
+        { label: 'Copy resume command', action: async () => { await copyText(resumeCmd) } },
+        { label: 'Restore', action: () => handleRestore(session) },
+      ]
+    } else {
+      items = [
+        { label: isPinned ? 'Unpin' : 'Pin', action: () => handleTogglePin(session) },
+        { label: 'Rename', action: () => {
+          setRenamingSession(session)
+          setRenameValue(customNames[key] ?? session.title)
+          setTimeout(() => renameInputRef.current?.focus(), 0)
+        }},
+        { label: 'Copy resume command', action: async () => { await copyText(resumeCmd) } },
+      ]
+      // P0: physical archive is Claude-only.
+      if (session.provider === 'claude') {
+        items.push({ label: 'Archive', action: () => handleArchive(session) })
+      }
+    }
     const closeMenu = () => {
       if (menuDiv.parentNode) menuDiv.remove()
       document.removeEventListener('mousedown', dismiss)
@@ -499,7 +569,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       if (!menuDiv.contains(ev.target as Node)) closeMenu()
     }
     setTimeout(() => document.addEventListener('mousedown', dismiss), 0)
-  }, [pinnedKeys, customNames, handleTogglePin])
+  }, [pinnedKeys, customNames, handleTogglePin, handleArchive, handleRestore, projectPath])
 
   const handleRenameStart = useCallback((_session: ChatSession, _e: React.MouseEvent) => {
     // Now handled via context menu above
@@ -532,6 +602,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const handleSessionClick = useCallback(
     (session: ChatSession) => {
       if (!projectPath) return
+      if (session.archived) {
+        showToast('Restore first.')
+        return
+      }
 
       const config = PROVIDER_CONFIG[session.provider]
       if (!config) return
@@ -625,7 +699,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         args,
       })
     },
-    [projectPath, customNames, activeWorkspace]
+    [projectPath, customNames, activeWorkspace, showToast]
   )
 
   const handleSearchKeyDown = useCallback(
@@ -665,7 +739,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="h-full flex flex-col overflow-hidden relative">
       {/* Header */}
       <div className="px-3 py-2 border-b border-[var(--color-border)] flex items-center justify-between flex-shrink-0">
         <span className="text-xs font-medium text-[var(--color-text-secondary)] font-mono">
@@ -815,7 +889,15 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                               />
                             ) : (
                               <>
-                                <span className="text-[11px] text-[var(--color-text-secondary)] font-mono truncate leading-tight">
+                                <span
+                                  className="text-[11px] font-mono truncate leading-tight"
+                                  style={{
+                                    color:
+                                      Date.now() - session.timestamp >= AGE_ORANGE_MS
+                                        ? 'var(--color-status-working)'
+                                        : 'var(--color-text-secondary)',
+                                  }}
+                                >
                                   {customNames[`${session.provider}:${session.sessionId}`] ?? session.title}
                                 </span>
                                 <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-tight flex items-center gap-1.5 truncate">
@@ -874,6 +956,12 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           </>
         )}
       </div>
+
+      {toast && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[11px] font-mono text-[var(--color-text-primary)] shadow-lg pointer-events-none">
+          {toast}
+        </div>
+      )}
     </div>
   )
 }

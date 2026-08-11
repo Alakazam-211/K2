@@ -201,10 +201,13 @@ function ChatHeader({
       timestamp: number
       messageCount: number
       provider?: string
+      archived?: boolean
     }>>('chat/list', { project_path: projectPath })
       .then((rows) => {
         if (cancelled) return
+        // Resume picker: hide user-archived sessions (restore first).
         const sorted = rows
+          .filter((r) => !r.archived)
           .map((r) => ({ ...r, provider: r.provider || 'claude' }))
           .sort((a, b) => b.timestamp - a.timestamp)
         setHistorySessions(sorted)

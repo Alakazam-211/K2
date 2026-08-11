@@ -318,27 +318,61 @@ pub fn detect_claude_session_near(
 /// the DB holds a stale session_id (workspace remove+readd,
 /// Claude-side pruning, migrations, etc.).
 pub fn claude_session_file_exists(session_id: &str, project_path: &str) -> bool {
-    let Some(home) = dirs::home_dir() else {
-        return false;
-    };
+    resolve_claude_session_file(session_id, project_path).is_some()
+}
+
+/// On-disk path of a Claude session `.jsonl` for this id + project family,
+/// if present under `~/.claude/projects/<hash>` (or worktree sibling dirs).
+pub fn resolve_claude_session_file(session_id: &str, project_path: &str) -> Option<PathBuf> {
+    if session_id.is_empty() {
+        return None;
+    }
+    let home = dirs::home_dir()?;
     let project_hash = claude_project_hash(resolve_root_project_path(project_path));
     let projects_dir = home.join(".claude").join("projects");
-    let Ok(entries) = fs::read_dir(&projects_dir) else {
-        return false;
-    };
+    let entries = fs::read_dir(&projects_dir).ok()?;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name == project_hash || name.starts_with(&format!("{}-", project_hash)) {
-            if entry
-                .path()
-                .join(format!("{}.jsonl", session_id))
-                .exists()
-            {
-                return true;
+            let candidate = entry.path().join(format!("{session_id}.jsonl"));
+            if candidate.exists() {
+                return Some(candidate);
             }
         }
     }
-    false
+    None
+}
+
+/// Best-effort on-disk path for a chat session. For Claude, falls back to
+/// the user archive path under `<project>/.k2/session-archive/user/claude/`
+/// when the live file is missing (so Copy Path / restore tooling can still
+/// locate an archived transcript).
+pub fn resolve_session_storage_path(
+    provider: &str,
+    session_id: &str,
+    project_path: &str,
+) -> Option<String> {
+    if session_id.is_empty() || project_path.is_empty() {
+        return None;
+    }
+    match provider {
+        "claude" => {
+            if let Some(live) = resolve_claude_session_file(session_id, project_path) {
+                return Some(live.to_string_lossy().into_owned());
+            }
+            let arch = PathBuf::from(project_path)
+                .join(".k2")
+                .join("session-archive")
+                .join("user")
+                .join("claude")
+                .join(format!("{session_id}.jsonl"));
+            if arch.exists() {
+                return Some(arch.to_string_lossy().into_owned());
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// The most-recently-modified Claude session `.jsonl` on disk for this
@@ -1144,6 +1178,12 @@ pub struct ChatSession {
     pub message_count: usize,
     /// Worktree branch name if this session was created in a worktree.
     pub origin_branch: Option<String>,
+    /// User-archived (physical MOVE for Claude; soft-archive for ghosts).
+    #[serde(default)]
+    pub archived: bool,
+    /// When the user archived this session (unix ms), if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<i64>,
 }
 
 struct SessionAccumulator {
@@ -1335,6 +1375,8 @@ fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, proje
                     provider: "claude".to_string(),
                     message_count,
                     origin_branch: origin_branch.clone(),
+                    archived: false,
+                    archived_at: None,
                 },
             );
         }
@@ -1431,6 +1473,8 @@ pub fn parse_claude_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
                     timestamp: acc.last_timestamp,
                     provider: "claude".to_string(),
                     message_count: acc.count,
+                    archived: false,
+                    archived_at: None,
                 },
             )
         })
@@ -1559,6 +1603,8 @@ pub fn parse_cursor_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
                 provider: "cursor".to_string(),
                 message_count: 0,
                 origin_branch: None,
+                archived: false,
+                archived_at: None,
             };
             match best_by_id.get(&chat_id) {
                 Some(existing) => {
@@ -1685,6 +1731,8 @@ pub fn parse_cursor_ide_sessions(project_filter: Option<&str>) -> Result<Vec<Cha
                 timestamp,
                 provider: "cursor".to_string(),
                 message_count: 0,
+                archived: false,
+                archived_at: None,
             });
         }
     }
@@ -1880,6 +1928,8 @@ pub fn parse_gemini_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
                 timestamp,
                 provider: "gemini".to_string(),
                 message_count,
+                archived: false,
+                archived_at: None,
             });
         }
     }
@@ -2040,6 +2090,8 @@ pub fn parse_pi_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession
                 timestamp,
                 provider: "pi".to_string(),
                 message_count,
+                archived: false,
+                archived_at: None,
             });
         }
     }
@@ -2220,6 +2272,8 @@ pub fn parse_codex_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSess
                         timestamp,
                         provider: "codex".to_string(),
                         message_count: 0,
+                        archived: false,
+                        archived_at: None,
                     });
                 }
             }
@@ -2415,6 +2469,8 @@ fn parse_grok_sessions_in_root(
                 timestamp,
                 provider: "grok".to_string(),
                 message_count: grok_message_count(&session_dir),
+                archived: false,
+                archived_at: None,
             });
         }
     }
@@ -2506,6 +2562,8 @@ fn parse_hermes_sessions_in_db(
             timestamp: (ts_secs * 1000.0).round() as i64,
             provider: "hermes".to_string(),
             message_count: msg_count.max(0) as usize,
+            archived: false,
+            archived_at: None,
         })
     };
     let collected = match &family {
@@ -2530,9 +2588,81 @@ pub fn list_all_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession
     all.extend(parse_codex_sessions(project_filter)?);
     all.extend(parse_grok_sessions(project_filter)?);
     all.extend(parse_hermes_sessions(project_filter)?);
-    all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    all.truncate(100);
-    Ok(all)
+
+    // Dual-query: merge DB archived rows so archived chats remain visible
+    // even when the top-100 active cap would drop them, and so soft-archived
+    // ghosts (no on-disk file) still appear in the Archive group.
+    let archived_rows = crate::chat_user_archive::list_archived_rows(project_filter)
+        .unwrap_or_default();
+    let mut archived_keys: HashMap<(String, String), crate::chat_user_archive::ArchivedSessionMeta> =
+        HashMap::new();
+    for row in archived_rows {
+        archived_keys.insert((row.provider.clone(), row.session_id.clone()), row);
+    }
+
+    // Mark live rows that are archived.
+    for s in all.iter_mut() {
+        if let Some(meta) = archived_keys.get(&(s.provider.clone(), s.session_id.clone())) {
+            s.archived = true;
+            s.archived_at = meta.archived_at;
+        }
+    }
+
+    // Synthesize missing archived rows (file was moved off disk).
+    let live_keys: std::collections::HashSet<(String, String)> = all
+        .iter()
+        .map(|s| (s.provider.clone(), s.session_id.clone()))
+        .collect();
+    for ((provider, session_id), meta) in &archived_keys {
+        if live_keys.contains(&(provider.clone(), session_id.clone())) {
+            continue;
+        }
+        let title = meta
+            .archive_title
+            .clone()
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| {
+                let short = if session_id.len() >= 8 {
+                    &session_id[..8]
+                } else {
+                    session_id.as_str()
+                };
+                format!("Session {short}…")
+            });
+        let timestamp = meta.archive_timestamp.unwrap_or(0);
+        let project = meta
+            .archive_project_path
+            .clone()
+            .unwrap_or_default();
+        all.push(ChatSession {
+            session_id: session_id.clone(),
+            project,
+            title,
+            timestamp,
+            provider: provider.clone(),
+            message_count: 0,
+            origin_branch: None,
+            archived: true,
+            archived_at: meta.archived_at,
+        });
+    }
+
+    // Split: top-100 non-archived by timestamp desc; then ALL archived
+    // (also newest-first). Archived always appended so they are never
+    // lost to the active cap.
+    let mut non_archived: Vec<ChatSession> = all
+        .iter()
+        .filter(|s| !s.archived)
+        .cloned()
+        .collect();
+    non_archived.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    non_archived.truncate(100);
+
+    let mut archived: Vec<ChatSession> = all.into_iter().filter(|s| s.archived).collect();
+    archived.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+    non_archived.extend(archived);
+    Ok(non_archived)
 }
 
 // ── Storage path discovery ─────────────────────────────────────────────

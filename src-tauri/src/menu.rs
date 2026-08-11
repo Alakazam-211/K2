@@ -1,6 +1,14 @@
+// Native app menu bar is macOS-only. Win/Linux use the in-app Menu button
+// (see renderer desktop-chrome) + `window_new` / `open_new_window` below.
+// Without these cfg gates, Linux CI (`-D warnings`) fails on dead_code.
+#[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+#[cfg(target_os = "macos")]
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(not(target_os = "macos"))]
+use tauri::{AppHandle, Manager};
 
+#[cfg(target_os = "macos")]
 pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error> {
     let menu = Menu::new(handle)?;
 
@@ -128,6 +136,7 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
     Ok(menu)
 }
 
+#[cfg(target_os = "macos")]
 pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref();
     match id {
@@ -241,6 +250,7 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn emit_to_focused(app: &AppHandle, event: &str) {
     // Emit to the FOCUSED window only. The old "emit to all windows"
     // loop meant every extra webview (Focus windows, project windows)

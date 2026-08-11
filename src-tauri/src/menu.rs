@@ -6,7 +6,7 @@ use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 #[cfg(target_os = "macos")]
 use tauri::{AppHandle, Emitter, Manager};
 #[cfg(not(target_os = "macos"))]
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 #[cfg(target_os = "macos")]
 pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error> {

@@ -343,36 +343,150 @@ pub fn resolve_claude_session_file(session_id: &str, project_path: &str) -> Opti
     None
 }
 
-/// Best-effort on-disk path for a chat session. For Claude, falls back to
-/// the user archive path under `<project>/.k2/session-archive/user/claude/`
-/// when the live file is missing (so Copy Path / restore tooling can still
-/// locate an archived transcript).
+/// Best-effort on-disk path for a chat session row (the file/dir the agent
+/// resumes from). Used by the Chats sidebar "Copy Path" action.
+/// For Claude, falls back to the user archive path under
+/// `<project>/.k2/session-archive/user/claude/` when the live file is missing.
+/// Falls back to `None` when the provider has no single path or the file is gone.
 pub fn resolve_session_storage_path(
     provider: &str,
     session_id: &str,
     project_path: &str,
 ) -> Option<String> {
-    if session_id.is_empty() || project_path.is_empty() {
+    if session_id.is_empty() {
         return None;
     }
-    match provider {
+    let home = dirs::home_dir()?;
+    let project = if project_path.is_empty() {
+        return None;
+    } else {
+        project_path
+    };
+    let root = resolve_root_project_path(project);
+
+    let path = match provider {
         "claude" => {
-            if let Some(live) = resolve_claude_session_file(session_id, project_path) {
-                return Some(live.to_string_lossy().into_owned());
+            if let Some(live) = resolve_claude_session_file(session_id, project) {
+                live
+            } else {
+                let arch = PathBuf::from(project)
+                    .join(".k2")
+                    .join("session-archive")
+                    .join("user")
+                    .join("claude")
+                    .join(format!("{session_id}.jsonl"));
+                if arch.exists() {
+                    arch
+                } else {
+                    return None;
+                }
             }
-            let arch = PathBuf::from(project_path)
-                .join(".k2")
-                .join("session-archive")
-                .join("user")
-                .join("claude")
-                .join(format!("{session_id}.jsonl"));
-            if arch.exists() {
-                return Some(arch.to_string_lossy().into_owned());
-            }
-            None
         }
-        _ => None,
+        "cursor" => {
+            // CLI chat dir: ~/.cursor/chats/<md5>/<id>/store.db
+            let p = home
+                .join(".cursor")
+                .join("chats")
+                .join(md5_hex(root.as_bytes()))
+                .join(session_id)
+                .join("store.db");
+            if p.exists() {
+                p
+            } else {
+                return None;
+            }
+        }
+        "gemini" => {
+            // ~/.gemini/tmp/<slug>/chats/session-*-{prefix}.jsonl — find by id prefix
+            let tmp = home.join(".gemini").join("tmp");
+            let Ok(slugs) = fs::read_dir(&tmp) else {
+                return None;
+            };
+            let short = if session_id.len() >= 8 {
+                &session_id[..8]
+            } else {
+                session_id
+            };
+            for slug_ent in slugs.flatten() {
+                let chats = slug_ent.path().join("chats");
+                let Ok(files) = fs::read_dir(&chats) else {
+                    continue;
+                };
+                for f in files.flatten() {
+                    let name = f.file_name().to_string_lossy().to_string();
+                    if name.contains(short) && name.ends_with(".jsonl") {
+                        return Some(f.path().to_string_lossy().to_string());
+                    }
+                }
+            }
+            return None;
+        }
+        "pi" => {
+            // ~/.pi/agent/sessions/**/<id>.jsonl (or header id in file)
+            let root_dir = home.join(".pi").join("agent").join("sessions");
+            find_named_jsonl_under(&root_dir, session_id)?
+        }
+        "codex" => {
+            let root_dir = home.join(".codex").join("sessions");
+            find_named_jsonl_under(&root_dir, session_id)?
+        }
+        "grok" => {
+            let sessions_root = grok_sessions_root()?;
+            // ~/.grok/.../cwd-dir/<session_id>/
+            let Ok(cwd_dirs) = fs::read_dir(&sessions_root) else {
+                return None;
+            };
+            for cwd_entry in cwd_dirs.flatten() {
+                if !cwd_entry.path().is_dir() {
+                    continue;
+                }
+                let session_dir = cwd_entry.path().join(session_id);
+                if session_dir.is_dir() {
+                    return Some(session_dir.to_string_lossy().to_string());
+                }
+            }
+            return None;
+        }
+        "hermes" => {
+            // Single shared DB — path is the DB, not per-session.
+            let db = home.join(".hermes").join("state.db");
+            if db.exists() {
+                db
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+    Some(path.to_string_lossy().to_string())
+}
+
+/// Walk `root` for a file named `{session_id}.jsonl` (any depth ≤ 4).
+fn find_named_jsonl_under(root: &Path, session_id: &str) -> Option<PathBuf> {
+    let target_name = format!("{session_id}.jsonl");
+    fn walk(dir: &Path, target_name: &str, depth: u8) -> Option<PathBuf> {
+        if depth > 4 {
+            return None;
+        }
+        let entries = fs::read_dir(dir).ok()?;
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n == target_name)
+            {
+                return Some(p);
+            }
+            if p.is_dir() {
+                if let Some(found) = walk(&p, target_name, depth + 1) {
+                    return Some(found);
+                }
+            }
+        }
+        None
     }
+    walk(root, &target_name, 0)
 }
 
 /// The most-recently-modified Claude session `.jsonl` on disk for this

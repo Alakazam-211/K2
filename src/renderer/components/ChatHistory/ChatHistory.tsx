@@ -491,14 +491,27 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     }
   }, [pinnedKeys])
 
+  const copyText = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+  }, [])
+
   const handleContextMenu = useCallback((session: ChatSession, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
     const key = `${session.provider}:${session.sessionId}`
     const isPinned = pinnedKeys.has(key)
 
-    // Context menu: archived → Copy resume + Restore; Claude live → + Archive;
-    // other providers: pin/rename/copy only (no Archive in P0).
+    // Context menu: archived → Copy Path + resume + Restore;
+    // Claude live → Pin/Rename/Copy Path/resume + Archive; others without Archive (P0).
     const menuDiv = document.createElement('div')
     menuDiv.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;background:var(--color-bg-elevated);border:1px solid var(--color-control-track-off);padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);`
     const config = PROVIDER_CONFIG[session.provider]
@@ -508,16 +521,23 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           : `${config.command} ${config.resumeFlag} ${session.sessionId}`)
       : `# unknown provider: ${session.provider}`
 
-    const copyText = async (text: string) => {
+    const copySessionPath = async () => {
+      // Daemon resolves live path or Claude user-archive path on the host.
+      const projectForResolve = session.project || projectPath || ''
       try {
-        await navigator.clipboard.writeText(text)
-      } catch {
-        const ta = document.createElement('textarea')
-        ta.value = text
-        document.body.appendChild(ta)
-        ta.select()
-        document.execCommand('copy')
-        document.body.removeChild(ta)
+        const res = await daemonCliGet<{ path: string | null; project: string | null }>(
+          'chat/session-path',
+          {
+            provider: session.provider,
+            session_id: session.sessionId,
+            project_path: projectForResolve,
+          },
+        )
+        const path = (res.path && res.path.trim()) || projectForResolve
+        if (path) await copyText(path)
+      } catch (err) {
+        console.warn('[chat-history] session-path failed, copying project path:', err)
+        if (projectForResolve) await copyText(projectForResolve)
       }
     }
 
@@ -525,14 +545,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     let items: MenuItem[]
     if (session.archived) {
       items = [
-        { label: 'Copy Path', action: async () => {
-          const base = session.project || projectPath || ''
-          // User-archive dest for Claude (P0 only); other providers soft-archive later.
-          const path = session.provider === 'claude' && base
-            ? `${base.replace(/\/g, '/')}/.k2/session-archive/user/claude/${session.sessionId}.jsonl`
-            : base
-          if (path) await copyText(path)
-        }},
+        { label: 'Copy Path', action: () => copySessionPath() },
         { label: 'Copy resume command', action: async () => { await copyText(resumeCmd) } },
         { label: 'Restore', action: () => handleRestore(session) },
       ]
@@ -544,6 +557,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           setRenameValue(customNames[key] ?? session.title)
           setTimeout(() => renameInputRef.current?.focus(), 0)
         }},
+        { label: 'Copy Path', action: () => copySessionPath() },
         { label: 'Copy resume command', action: async () => { await copyText(resumeCmd) } },
       ]
       // P0: physical archive is Claude-only.
@@ -569,7 +583,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       if (!menuDiv.contains(ev.target as Node)) closeMenu()
     }
     setTimeout(() => document.addEventListener('mousedown', dismiss), 0)
-  }, [pinnedKeys, customNames, handleTogglePin, handleArchive, handleRestore, projectPath])
+  }, [pinnedKeys, customNames, handleTogglePin, handleArchive, handleRestore, projectPath, copyText])
 
   const handleRenameStart = useCallback((_session: ChatSession, _e: React.MouseEvent) => {
     // Now handled via context menu above

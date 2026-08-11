@@ -3,28 +3,68 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.94 — Windows thin client + unified title bar
+## 0.40.94 — Native Windows app (client + local daemon)
 
-### Windows: installable thin client
+K2 is no longer macOS-only on the desktop. This release ships a real
+**Windows install** of the same product model you already know: a thin client
+that pairs with a **local K2 daemon** (and the tunnel sidecar), not a
+browser-only shell.
 
-K2 now ships a **native Windows** desktop app (NSIS installer) alongside macOS
-and Linux. The thin client talks to the local daemon the same way as other
-platforms — open the app, work as usual.
+### Windows: full install, not just a UI
 
-- Frameless window chrome with an in-app **Menu** and min / max / close controls
-- Hover states work correctly under WebView2
-- Local daemon is started automatically when needed (no launchd on Windows)
+Download **`K2_*_x64-setup.exe`** from the GitHub Release and install like a
+normal app (Start Menu / desktop shortcut).
 
-### macOS: unchanged chrome
+What lands next to each other in the install folder:
 
-macOS keeps the **system menu bar** and **traffic lights**. No Windows-style
-Menu button or custom window controls on Mac.
+| Binary | Role |
+|--------|------|
+| **`k2.exe`** | Desktop thin client (webview UI) |
+| **`k2-daemon.exe`** | Local daemon — projects, sessions, terminals, APIs |
+| **`frpc.exe`** | Tunnel client for K2 Connect–style remote access |
 
-### Release pipeline
+- Launch the app from **Programs / Start Menu** (or Desktop) — that is the
+  supported path, not a random build folder.
+- If the daemon is not already answering, the client **starts the bundled
+  daemon** for you (Windows has no launchd; we spawn it as a peer process).
+- Same mental model as Mac: **UI is a viewer; the daemon owns the truth.**
 
-Windows installers for this train are built on the sticky Windows build box
-and attached to the GitHub Release (`K2_*_x64-setup.exe`). Linux app/daemon
-artifacts still come from CI at tag time.
+### Windows window chrome (frameless)
+
+Windows builds use a **frameless** window with in-app chrome so the top bar
+feels like one piece of software:
+
+- **Menu** button (app actions that macOS puts in the system menu bar)
+- Custom **minimize / maximize / close** (dense 24px controls, flush to the
+  right edge)
+- Drag the empty title-bar region to move the window
+- Hover / press states work under **WebView2** (global hover fix so buttons
+  actually highlight)
+
+### macOS: deliberately unchanged
+
+macOS keeps the familiar experience:
+
+- System **menu bar** (no Windows-style Menu button)
+- Native **traffic lights** + spacer
+- Decorated window (not frameless)
+
+Linux desktop builds follow the **Windows-style** frameless chrome (Menu +
+window controls), not the macOS traffic-light layout.
+
+### Under the hood (still user-relevant)
+
+- Core + daemon **compile and run on MSVC** — this is a real Windows port of
+  the daemon stack, not a stub UI.
+- Release pipeline can attach the Windows NSIS installer to the same GitHub
+  Release as the Mac DMG and Linux packages (built on the sticky Windows
+  build host for now; swappable to cloud later).
+
+### What to try first on Windows
+
+1. Install from the NSIS setup → open from Start Menu.
+2. Confirm the app connects (local daemon should come up if needed).
+3. Use Menu + window controls; resize / maximize; hover on the top bar.
 
 ---
 

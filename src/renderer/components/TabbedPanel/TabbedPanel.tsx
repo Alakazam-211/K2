@@ -150,12 +150,13 @@ export default function TabbedPanel({
       {/* Optional header above tabs (e.g. workspace info in focus mode) */}
       {header}
 
-      {/* Tab strip */}
-      <div className="flex border-b border-[var(--color-border)] flex-shrink-0">
+      {/* Tab strip — h-8 (32px) matches the center PresetsBar launch strip so
+          the bottom border lines up across left / center / right. */}
+      <div className="flex h-8 items-center border-b border-[var(--color-border)] flex-shrink-0">
         {tabs.map((tab) => (
           <button
             key={tab}
-            className={`no-drag flex-1 px-3 py-1.5 text-[11px] font-medium tracking-wide uppercase transition-colors ${
+            className={`no-drag flex-1 h-full px-3 text-[11px] font-medium tracking-wide uppercase transition-colors flex items-center justify-center ${
               activeTab === tab
                 ? 'text-[var(--color-text-primary)] border-b border-[var(--color-accent)]'
                 : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'

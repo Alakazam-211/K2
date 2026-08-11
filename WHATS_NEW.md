@@ -3,6 +3,73 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.95 — Tickets polish + chat archive + host-session TTL clarity
+
+Follow-on to the Windows desktop ship: **Tickets** get a clearer status
+board and assignees, **Chats** get a real user archive, and host-session
+integrators get honest capability JWT lifetimes.
+
+### Tickets: “needs discussion” + colors + assignees
+
+The Tickets page (agent→human asks) grows one more open status and a
+people filter agents can target from the CLI.
+
+| Status | Color | Meaning |
+|--------|--------|---------|
+| **Waiting** | **Yellow** | Still needs a first human response |
+| **Needs discussion** | **Orange** (the old waiting color) | Open follow-up — talk it through |
+| Answered / Planned / Closed | unchanged | Same as before |
+
+- Set **Needs discussion** from the ticket card, thread actions, or resolve API.
+- **People filter** next to search: All people / Unassigned / each assignee.
+- Agents can **suggest who should handle it at create time**:
+
+```bash
+k2 tickets ask "Review the pricing sheet" --assign julie
+k2 tickets assign <id> --to owner,julie
+k2 tickets list --status needs_discussion
+```
+
+(`k2 feedback` remains a compatibility alias.)
+
+### Chats: archive, restore, and age highlight
+
+Long chat lists are easier to manage:
+
+- **Orange age highlight** when a chat is **≥ 20 days** old.
+- Context menu **Archive** (Claude) moves the session into a bottom
+  **Archive** section — storage under `.k2/session-archive/user/…`.
+- **Restore** brings it back to the live provider path so resume works again.
+- This is separate from the daily **protective backup copy** (settings
+  `session_archive_days`) — backup still does not hide chats.
+- **Copy Path** resolves correctly for archived sessions.
+
+### Projects rail + compose polish
+
+- Pin **members** and **resources** (A–Z pin order) in the Projects rail;
+  collapsed rail keeps context menu + drag.
+- Agent compose: **file drop** routes into the workspace (remote upload to
+  `.k2/downloads` when needed); textareas stop collapsing on grow.
+- Chat / ticket / compose fonts track **Code Editor Appearance** font size.
+- Active drawer scrolls; Files drawer errors sit at the bottom.
+
+### Host-sessions (integrators / Scout)
+
+- Capability JWT lifetime is **`min(timeout_secs, 3600)`** — not a fixed
+  300s window when you ask for longer.
+- Request body accepts **`timeoutSecs`** (camelCase) as well as
+  `timeout_secs`, so longer seats are not silently defaulted to 180.
+- Envelope doc updated: `docs/host-session-capability-envelope.md`.
+
+### What to try
+
+1. Tickets → set a card to **Needs discussion** (orange); filter by person.
+2. From an agent: `k2 tickets ask "…" --assign owner` and open Tickets.
+3. Chats → right-click a Claude chat → **Archive** / **Restore**; spot
+   orange dates on old threads.
+
+---
+
 ## 0.40.94 — Native Windows app (client + local daemon)
 
 K2 is no longer macOS-only on the desktop. This release ships a real

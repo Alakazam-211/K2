@@ -11,8 +11,9 @@
 //! `/cli/feedback/*` routes and the `k2 tickets` / `k2 feedback` CLI
 //! verbs are thin wrappers over this module (daemon-first).
 //!
-//! Status pipeline: `waiting → answered → resolved`, plus `dismissed`
-//! and `planned` (sorted out; fix scheduled for a release). `answer`
+//! Status pipeline: `waiting → answered → resolved`, plus `dismissed`,
+//! `planned` (sorted out; fix scheduled), and `needs_discussion` (open
+//! follow-up / discussion needed). `answer`
 //! is denormalized onto the item so `k2 tickets ask --wait` reads one
 //! row; the accepted answer ALSO lands in the thread as a comment.
 //!
@@ -30,7 +31,14 @@ use rusqlite::params;
 pub const KINDS: [&str; 3] = ["question", "approval", "fyi"];
 
 /// The valid `feedback.status` values.
-pub const STATUSES: [&str; 5] = ["waiting", "answered", "resolved", "dismissed", "planned"];
+pub const STATUSES: [&str; 6] = [
+    "waiting",
+    "answered",
+    "resolved",
+    "dismissed",
+    "planned",
+    "needs_discussion",
+];
 
 /// One `feedback` row + its thread size. Serializes camelCase — the
 /// wire shape the routes return (matches the CLI mockup's `--json`
@@ -187,9 +195,9 @@ pub fn create(new: NewFeedback) -> Result<FeedbackItem, String> {
 /// Which statuses a list read returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListFilter {
-    /// The default: open items (`waiting` + `answered`).
+    /// The default: open items (`waiting` + `answered` + `needs_discussion`).
     Open,
-    /// Everything, including `resolved` and `dismissed`.
+    /// Everything, including `resolved`, `dismissed`, and `planned`.
     All,
     /// Exactly one status (pre-validated against [`STATUSES`]).
     Status(String),
@@ -309,18 +317,18 @@ pub fn list_for_project(project_id: &str, filter: &ListFilter) -> Result<Vec<Fee
     if let ListFilter::Status(s) = filter {
         if !STATUSES.contains(&s.as_str()) {
             return Err(format!(
-                "invalid status '{s}' — valid: waiting, answered, resolved, dismissed, planned"
+                "invalid status '{s}' — valid: waiting, answered, resolved, dismissed, planned, needs_discussion"
             ));
         }
     }
     let db = crate::db::shared();
     let conn = db.lock();
     let (where_clause, status_param): (&str, Option<&str>) = match filter {
-        // Open: still waiting on a human, or answered and not closed.
-        // `planned` is closed-ish (scheduled) so it only shows with --all
-        // or an explicit status filter.
+        // Open: waiting on a human, needs discussion, or answered and not
+        // closed. `planned` is closed-ish (scheduled) so it only shows with
+        // --all or an explicit status filter.
         ListFilter::Open => (
-            " WHERE f.project_id = ?1 AND f.status IN ('waiting','answered')",
+            " WHERE f.project_id = ?1 AND f.status IN ('waiting','answered','needs_discussion')",
             None,
         ),
         ListFilter::All => (" WHERE f.project_id = ?1", None),
@@ -517,7 +525,7 @@ pub fn set_answer(
 pub fn set_status(id: &str, status: &str) -> Result<FeedbackItem, String> {
     if !STATUSES.contains(&status) {
         return Err(format!(
-            "invalid status '{status}' — valid: waiting, answered, resolved, dismissed, planned"
+            "invalid status '{status}' — valid: waiting, answered, resolved, dismissed, planned, needs_discussion"
         ));
     }
     let now = now_secs();

@@ -14,6 +14,7 @@
 // fire (0.40.82 regression: drops into terminals did nothing).
 //
 // This module owns the ONE subscriber per webview. Hit-test order matches product rules:
+//   0. Compose bar → remote upload + insert path into draft; local path insert
 //   1. Terminal  → remote upload + inject path; local path paste
 //   2. Files     → remote folder upload; local fs/copy plan
 //   3. Remote miss → "Save to…" picker
@@ -57,6 +58,13 @@ export type ExternalDropTarget =
       /** Container element that accepts inject (v2 CustomEvent target). */
       element: HTMLElement
     }
+  | {
+      /** Agent message compose bar under a terminal — insert path text, not PTY keys. */
+      kind: 'compose'
+      sessionId: string | undefined
+      workspacePath: string
+      element: HTMLElement
+    }
   | { kind: 'folder'; path: string }
   | { kind: 'miss' }
 
@@ -86,10 +94,17 @@ export function resolveFileTreeFolder(input: {
 }
 
 /**
- * Pure classify: terminal wins over files panel over miss.
+ * Pure classify: compose > terminal > files panel > miss.
  * DOM probing is done by the caller / `hitTestExternalDrop`.
+ * Compose is preferred over terminal so a drop on the message bar inserts
+ * into the draft instead of pasting into the PTY grid above it.
  */
 export function classifyExternalDrop(input: {
+  compose: {
+    sessionId: string | undefined
+    workspacePath: string
+    element: HTMLElement
+  } | null
   terminal: {
     terminalId: string | undefined
     terminalKind: string | undefined
@@ -98,6 +113,14 @@ export function classifyExternalDrop(input: {
   } | null
   fileTreeFolder: string | null
 }): ExternalDropTarget {
+  if (input.compose) {
+    return {
+      kind: 'compose',
+      sessionId: input.compose.sessionId,
+      workspacePath: input.compose.workspacePath,
+      element: input.compose.element,
+    }
+  }
   if (input.terminal) {
     return {
       kind: 'terminal',
@@ -177,12 +200,28 @@ export function hitTestExternalDrop(
 ): ExternalDropTarget {
   const el = doc.elementFromPoint(position.x, position.y) as HTMLElement | null
 
+  // 0. Agent compose bar — insert host path into the draft (remote: upload
+  //    first, same `.k2/downloads` as terminal drops).
+  const composeEl = el?.closest?.('[data-compose-bar]') as HTMLElement | null
+  if (composeEl) {
+    return classifyExternalDrop({
+      compose: {
+        sessionId: composeEl.dataset.sessionId,
+        workspacePath: composeEl.dataset.workspacePath ?? '',
+        element: composeEl,
+      },
+      terminal: null,
+      fileTreeFolder: null,
+    })
+  }
+
   // 1. Terminal — prefer the id-bearing container; fall back to the focus
   //    container so a pre-session pane still claims the drop over miss.
   const termEl = (el?.closest?.('[data-terminal-id]') ??
     el?.closest?.('[data-terminal-container]')) as HTMLElement | null
   if (termEl) {
     return classifyExternalDrop({
+      compose: null,
       terminal: {
         terminalId: termEl.dataset.terminalId,
         terminalKind: termEl.dataset.terminalKind,
@@ -213,7 +252,7 @@ export function hitTestExternalDrop(
     })
   }
 
-  return classifyExternalDrop({ terminal: null, fileTreeFolder })
+  return classifyExternalDrop({ compose: null, terminal: null, fileTreeFolder })
 }
 
 // ── Terminal payload builder (matches TerminalPane / Alacritty) ───────
@@ -235,6 +274,16 @@ export function buildTerminalDropPayload(paths: string[]): string {
   const formatted = paths.map(formatPathForTerminal).join(' ')
   const trailing = formatted + ' '
   return paths.some(isImagePath) ? bracketPaste(trailing) : trailing
+}
+
+/**
+ * Paths for the agent message compose draft — shell-escaped, space-joined,
+ * trailing space for continued typing. No bracketed paste (that's a TTY
+ * paste-event wrapper; the composer is a plain text field).
+ */
+export function buildComposeDropPayload(paths: string[]): string {
+  if (!paths || paths.length === 0) return ''
+  return paths.map(formatPathForTerminal).join(' ') + ' '
 }
 
 // ── Inject / refresh side-effects ─────────────────────────────────────
@@ -261,6 +310,16 @@ function injectIntoTerminal(
   // data-terminal-kind yet but has the write listener.
   target.element.dispatchEvent(
     new CustomEvent('k2so:terminal-write', { detail: { data: payload } }),
+  )
+}
+
+/** Insert path text into the compose draft (TerminalComposeBar listens). */
+function injectIntoCompose(
+  target: Extract<ExternalDropTarget, { kind: 'compose' }>,
+  payload: string,
+): void {
+  target.element.dispatchEvent(
+    new CustomEvent('k2so:compose-insert', { detail: { data: payload } }),
   )
 }
 
@@ -326,6 +385,22 @@ export async function routeExternalDrop(
         if (payload) injectIntoTerminal(target, payload)
       } else {
         injectIntoTerminal(target, buildTerminalDropPayload(paths))
+      }
+      return
+    }
+    case 'compose': {
+      // Same remote upload destination as terminal (workspace `.k2/downloads`),
+      // but insert the host path into the message draft, not the PTY.
+      if (isRemote) {
+        const payload = await executeRemoteDrop(
+          paths,
+          { kind: 'terminal' },
+          { workspacePath: target.workspacePath || undefined },
+          buildComposeDropPayload,
+        )
+        if (payload) injectIntoCompose(target, payload)
+      } else {
+        injectIntoCompose(target, buildComposeDropPayload(paths))
       }
       return
     }
@@ -397,6 +472,16 @@ export async function routeBrowserFileDrop(
         buildTerminalDropPayload,
       )
       if (payload) injectIntoTerminal(target, payload)
+      return
+    }
+    case 'compose': {
+      const payload = await executeBrowserFileDrop(
+        files,
+        { kind: 'terminal' },
+        { workspacePath: target.workspacePath || undefined },
+        buildComposeDropPayload,
+      )
+      if (payload) injectIntoCompose(target, payload)
       return
     }
     case 'folder': {

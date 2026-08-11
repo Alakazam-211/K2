@@ -982,10 +982,10 @@ export function AlacrittyTerminalView({
   }
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)]">
+    <div className="flex h-full w-full min-w-0 flex-col overflow-hidden bg-[var(--color-bg)]">
     <div
       ref={containerRef}
-      className="relative min-h-0 w-full flex-1 bg-[var(--color-bg)] focus:outline-none overflow-hidden"
+      className="relative min-h-0 w-full min-w-0 flex-1 bg-[var(--color-bg)] focus:outline-none overflow-hidden"
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
@@ -998,6 +998,8 @@ export function AlacrittyTerminalView({
       data-terminal-container=""
       data-terminal-visible="true"
       data-workspace-path={cwd}
+      // Grid only — compose bar below must reflow with app zoom width.
+      data-k2-exclude-app-zoom=""
       style={{ cursor: isDragging ? 'default' : hoveredLink ? 'pointer' : 'text', position: 'relative' }}
     >
       <div
@@ -1063,7 +1065,7 @@ export function AlacrittyTerminalView({
         <div style={{
           position: 'absolute', top: 2, right: 2, padding: '2px 6px',
           background: 'rgba(0,0,0,0.8)', color: '#0f0', fontSize: '10px',
-          fontFamily: 'monospace', zIndex: 999, pointerEvents: 'none',
+          fontFamily: 'monospace', zIndex: 2, pointerEvents: 'none',
           borderRadius: '3px',
         }}>
           <strong style={{ color: '#ff0' }}>Alacritty (Legacy)</strong> · frames:{debugInfo.frames} offset:{debugInfo.offset} wheel:{debugInfo.wheel} cells:{gridState.cols}x{gridState.rows} cursor:{gridState.cursorCol},{gridState.cursorRow} vis:{gridState.cursorVisible?'Y':'N'} cell:{cellW.toFixed(1)}x{cellH}
@@ -1074,7 +1076,7 @@ export function AlacrittyTerminalView({
       {/* Composer Phase 1b — message bar docked beneath the pane. The
        *  pane's `terminalId` IS the resolved PTY SessionId the
        *  send-message route needs. */}
-      <TerminalComposeBar sessionId={terminalId} />
+      <TerminalComposeBar sessionId={terminalId} workspacePath={cwd} />
     </div>
   )
 }

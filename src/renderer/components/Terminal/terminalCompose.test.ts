@@ -113,6 +113,22 @@ describe('composerPermitted', () => {
   })
 })
 
+import { insertIntoDraft } from './TerminalComposeBar'
+
+describe('insertIntoDraft', () => {
+  it('appends with a separating space', () => {
+    expect(insertIntoDraft('look at', '/tmp/a.txt ', null)).toBe('look at /tmp/a.txt ')
+  })
+
+  it('inserts at caret', () => {
+    expect(insertIntoDraft('ab', '/x ', 1)).toBe('a /x b')
+  })
+
+  it('replaces empty draft', () => {
+    expect(insertIntoDraft('', '/tmp/a.txt ', null)).toBe('/tmp/a.txt ')
+  })
+})
+
 // ── Soft-resync: keep compose bar mounted while sessionId is known ───
 // Soft-resync flips phase ready → connecting briefly. Unmounting the bar
 // would drop focus even though the draft is localStorage-backed.

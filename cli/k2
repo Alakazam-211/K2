@@ -10308,8 +10308,8 @@ cmd_schema() {
     },
     {
       "name": "feedback ask",
-      "usage": "k2 tickets ask <title> [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--wait [--timeout <s>]] [--json]",
-      "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
+      "usage": "k2 tickets ask <title> [--body <t>|--body-file <f>] [--kind <k>] [--options <a,b,c>] [--priority <1-5>] [--assign <users>] [--wait [--timeout <s>]] [--json]",
+      "description": "Ask a human for input as a DURABLE item on this server's Feedback page (not a dead terminal prompt). Workspace + session auto-detected. Prefer --assign <user> when you know who should handle it. --wait blocks and prints the BARE answer (exit 0); errors are always JSON on stderr. Exit codes: 0 ok, 1 error, 2 bad usage, 4 not found.",
       "args": [{"name": "title", "required": true}],
       "flags": [
         {"name": "--body", "arg": "text", "description": "Longer context/details (the ask's body)."},
@@ -10317,6 +10317,7 @@ cmd_schema() {
         {"name": "--kind", "arg": "kind", "description": "question | approval | fyi (default: question). fyi expects no answer."},
         {"name": "--options", "arg": "a,b,c", "description": "Specific choices the human taps instead of typing."},
         {"name": "--priority", "arg": "1-5", "description": "1 = urgent ... 5 = whenever (default: 3)."},
+        {"name": "--assign", "arg": "users", "description": "Comma-separated usernames to assign at create (owner and/or connect-user names). Alias: --to. Prefer this when you know who should handle the ticket."},
         {"name": "--wait", "arg": null, "description": "Block until answered; print the BARE answer to stdout (safe for \$(...) capture). Closed without an answer -> exit 1 + {\"error\":{\"code\":\"closed_unanswered\"}} on stderr."},
         {"name": "--timeout", "arg": "seconds", "description": "With --wait: give up after N seconds (exit 1, {\"error\":{\"code\":\"timeout\"}} on stderr; the item stays waiting)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -10325,11 +10326,11 @@ cmd_schema() {
     {
       "name": "feedback list",
       "usage": "k2 tickets list [--all] [--status <s>] [--json]",
-      "description": "List this workspace's feedback items, newest first. Default shows open items (waiting + answered).",
+      "description": "List this workspace's feedback items, newest first. Default shows open items (waiting + answered + needs_discussion).",
       "args": [],
       "flags": [
         {"name": "--all", "arg": null, "description": "Include resolved and dismissed items."},
-        {"name": "--status", "arg": "status", "description": "Filter to one status: waiting | answered | resolved | dismissed."},
+        {"name": "--status", "arg": "status", "description": "Filter to one status: waiting | needs_discussion | answered | planned | resolved | dismissed."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -10346,6 +10347,17 @@ cmd_schema() {
       "description": "Add a message to a feedback item's discussion thread. Bumps the message count only; does not change status (only NEW items fire notifications).",
       "args": [{"name": "id", "required": true}, {"name": "text", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "feedback assign",
+      "usage": "k2 tickets assign <id> <user> [user…] | --to u1,u2 | --clear [--json]",
+      "description": "Replace assignees on a ticket (owner / connect-user username snapshots). Prefer --assign on ask when you know the person at create time.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "users", "description": "Comma-separated usernames to assign."},
+        {"name": "--clear", "arg": null, "description": "Clear all assignees."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
     },
     {
       "name": "feedback resolve",
@@ -16513,7 +16525,7 @@ _feedback_detect_session() {
 
 cmd_feedback_ask() {
     if _wants_help "$@"; then cmd_help_feedback_ask; exit 0; fi
-    local title="" body="" body_file="" kind="" options="" priority=""
+    local title="" body="" body_file="" kind="" options="" priority="" assign=""
     local wait=false timeout="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -16532,13 +16544,16 @@ cmd_feedback_ask() {
             --priority)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--priority requires a value (1-5)"; exit 2; }
                 priority="$2"; shift 2 ;;
+            --assign|--to)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--assign requires a comma-separated username list (e.g. owner,julie)"; exit 2; }
+                assign="$2"; shift 2 ;;
             --wait) wait=true; shift ;;
             --timeout)
                 [ $# -ge 2 ] || { _feedback_err "usage" "--timeout requires a value in seconds"; exit 2; }
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--wait [--timeout s]] [--json]"
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets ask <title> [--body|--body-file f] [--kind k] [--options a,b,c] [--priority 1-5] [--assign user[,user…]] [--wait [--timeout s]] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$title" ]; then title="$1"; else
@@ -16593,7 +16608,7 @@ cmd_feedback_ask() {
     fi
     _feedback_detect_session
     FB_TITLE="$title" FB_BODY="$body" FB_KIND="$kind" FB_OPTIONS="$options" \
-    FB_PRIORITY="$priority" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
+    FB_PRIORITY="$priority" FB_ASSIGN="$assign" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
     FB_PROJECT="$PROJECT" FB_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \
     FB_SESSION_ID="$FB_SESSION_ID" FB_SESSION_KIND="$FB_SESSION_KIND" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
@@ -16649,6 +16664,10 @@ if os.environ.get("FB_OPTIONS"):
     opts = [o for o in (p.strip().replace("\\,", ",") for p in raw) if o]
     if opts:
         payload["options"] = opts
+if os.environ.get("FB_ASSIGN"):
+    assignees = [a for a in (p.strip() for p in os.environ["FB_ASSIGN"].split(",")) if a]
+    if assignees:
+        payload["assignees"] = assignees
 if os.environ.get("FB_AGENT"):
     payload["agentName"] = os.environ["FB_AGENT"]
 # Session auto-detection result (may be absent — must not fail the ask).
@@ -16672,9 +16691,11 @@ if not wait:
         print(json.dumps(d))
     else:
         short = fid[:8]
-        print('Filed feedback %s — "%s" (%s, priority %s, %s)'
+        assignees = d.get("assignees") or []
+        who = (" → " + ", ".join(assignees)) if assignees else ""
+        print('Filed feedback %s — "%s" (%s, priority %s, %s)%s'
               % (short, d.get("title", ""), d.get("kind", "?"),
-                 d.get("priority", "?"), d.get("status", "?")))
+                 d.get("priority", "?"), d.get("status", "?"), who))
         print("A human will be notified. Check back with: k2 tickets show %s" % short)
     sys.exit(0)
 
@@ -16717,7 +16738,7 @@ cmd_feedback_list() {
         case "$1" in
             --all) all=true; shift ;;
             --status)
-                [ $# -ge 2 ] || { _feedback_err "usage" "--status requires a value (waiting | answered | resolved | dismissed)"; exit 2; }
+                [ $# -ge 2 ] || { _feedback_err "usage" "--status requires a value (waiting | needs_discussion | answered | planned | resolved | dismissed)"; exit 2; }
                 status="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
@@ -16730,9 +16751,9 @@ cmd_feedback_list() {
     done
     if [ -n "$status" ]; then
         case "$status" in
-            waiting|answered|resolved|dismissed) ;;
+            waiting|needs_discussion|answered|planned|resolved|dismissed) ;;
             *)
-                _feedback_err "usage" "invalid --status '$status' — valid: waiting, answered, resolved, dismissed"
+                _feedback_err "usage" "invalid --status '$status' — valid: waiting, needs_discussion, answered, planned, resolved, dismissed"
                 exit 2 ;;
         esac
     fi
@@ -16769,9 +16790,9 @@ if err is not None:
 if os.environ.get("AS_JSON") == "true":
     print(json.dumps(d))
     sys.exit(0)
-print("ID        STATUS    PRI  KIND      TITLE")
+print("ID        STATUS             PRI  KIND      TITLE")
 for i in d.get("items", []):
-    print("%-10s%-10s%2s   %-10s%s" % (
+    print("%-10s%-18s%2s   %-10s%s" % (
         str(i.get("id", ""))[:8], i.get("status", "?"),
         i.get("priority", "?"), i.get("kind", "?"), i.get("title", "")))
 PYEOF
@@ -16839,6 +16860,8 @@ if d.get("sessionId"):
     asked += " · session %s" % str(d["sessionId"])[:8]
 asked += " · %s" % ago(d.get("createdAt", 0))
 print("asked by : %s" % asked)
+assignees = d.get("assignees") or []
+print("assigned : %s" % (", ".join(assignees) if assignees else "(none)"))
 if d.get("options"):
     print("options  : %s" % " | ".join(d["options"]))
 if d.get("answer"):
@@ -16953,6 +16976,77 @@ else:
 PYEOF
 }
 
+# Replace assignees on an existing ticket. Usernames are snapshots
+# (owner or connect-user names from `k2 users list`); empty --clear
+# fans push back out to all devices.
+cmd_feedback_assign() {
+    if _wants_help "$@"; then cmd_help_feedback_assign; exit 0; fi
+    local id="" as_json=false clear=false
+    local -a users=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --clear) clear=true; shift ;;
+            --to|--assign)
+                [ $# -ge 2 ] || { _feedback_err "usage" "--to requires a comma-separated username list"; exit 2; }
+                IFS=',' read -r -a _parts <<< "$2"
+                for u in "${_parts[@]}"; do
+                    u="${u#"${u%%[![:space:]]*}"}"
+                    u="${u%"${u##*[![:space:]]}"}"
+                    [ -n "$u" ] && users+=("$u")
+                done
+                shift 2 ;;
+            -*)
+                _feedback_err "usage" "unknown flag '$1' — usage: k2 tickets assign <id> <user> [user…] | --to u1,u2 | --clear [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"
+                else users+=("$1")
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$id" ]; then
+        _feedback_err "usage" "assign requires an <id> (from ask/list; a short unique prefix works)"
+        exit 2
+    fi
+    if $clear; then
+        users=()
+    elif [ ${#users[@]} -eq 0 ]; then
+        _feedback_err "usage" "assign requires at least one username (or --clear). Prefer: k2 tickets assign <id> owner  OR  --to owner,julie"
+        exit 2
+    fi
+    local body resp
+    body=$(FB_ID="$id" FB_USERS="$(printf '%s\n' "${users[@]}")" python3 -c 'import json,os
+users=[u for u in os.environ.get("FB_USERS","").splitlines() if u.strip()]
+print(json.dumps({"id": os.environ["FB_ID"], "usernames": users}))')
+    resp=$(cli_post_json "/cli/feedback/assign" "$body") || resp=""
+    if [ -z "$resp" ]; then
+        _feedback_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
+        exit 1
+    fi
+    RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'
+import json, os, sys
+d = json.loads(os.environ["RESP"])
+err = d.get("error")
+if err is not None:
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    sys.stderr.write(json.dumps({"error": err}) + "\n")
+    code = err.get("code")
+    sys.exit(4 if code in ("not_found", "ambiguous_id") else 2 if code == "usage" else 1)
+if os.environ.get("AS_JSON") == "true":
+    print(json.dumps(d))
+else:
+    assignees = d.get("assignees") or []
+    short = str(d.get("id", ""))[:8]
+    if assignees:
+        print("Assigned %s → %s." % (short, ", ".join(assignees)))
+    else:
+        print("Cleared assignees on %s." % short)
+PYEOF
+}
+
 cmd_help_feedback() {
     cat <<'EOF'
 k2 feedback — ask a human for input and get an answer back
@@ -16971,6 +17065,7 @@ COMMANDS
   show <id>              Show one item: the ask, its status, and the full thread
   comment <id> <text>    Add a message to an item's discussion thread (bumps the
                          card's message count; only NEW items fire notifications)
+  assign <id> …          Set who the ticket is for (owner / connect-user names)
   resolve <id>           Mark an item resolved (you got what you needed)
 
 ADDRESSING
@@ -17018,6 +17113,10 @@ FLAGS
                          (e.g. --options "Ship it,Hold,Needs changes")
                          Escape a literal comma inside an option with \,
   --priority <1-5>       1 = urgent … 5 = whenever   (default: 3)
+  --assign <users>       Suggest who should handle it: comma-separated
+                         usernames (owner and/or connect-user names from
+                         `k2 users list`). Narrows mobile push and shows
+                         on the Tickets board. Alias: --to.
   --wait                 Block until the item is answered, then print the BARE
                          answer to stdout (exit 0) — safe for $(...) capture.
                          If the item is resolved/dismissed WITHOUT an answer,
@@ -17033,22 +17132,53 @@ FLAGS
 
 EXAMPLES
   k2 tickets ask "Deploy to prod now?" --kind approval --options "Yes,No,Wait for me" --priority 1
-  k2 tickets ask "Which color for the CTA?" --body-file ./context.md
+  k2 tickets ask "Which color for the CTA?" --body-file ./context.md --assign owner
+  k2 tickets ask "Review the sales pricing" --assign julie --priority 2
   ANSWER=$(k2 tickets ask "Proceed with the migration?" --options "Go,Stop" --wait)
+EOF
+}
+
+cmd_help_feedback_assign() {
+    cat <<'EOF'
+Set who a ticket is assigned to. Usernames are snapshots (owner, or names from
+`k2 users list`) — they do not have to exist forever; removed users still show
+on the board and still match push targeting.
+
+Replaces the full assignee set (not additive). Prefer assigning at create time
+with `k2 tickets ask … --assign user` when you already know who should own it.
+
+USAGE
+  k2 tickets assign <id> <user> [user…] [--json]
+  k2 tickets assign <id> --to user1,user2 [--json]
+  k2 tickets assign <id> --clear [--json]
+
+ARGUMENTS
+  <id>                   Ticket id from ask/list (short unique prefix ok)
+  <user>…                One or more usernames to assign
+
+FLAGS
+  --to <users>           Comma-separated usernames (same as positional users)
+  --clear                Remove all assignees (push fans out to everyone again)
+  --json                 JSON output
+
+EXAMPLES
+  k2 tickets assign ab12cd34 owner
+  k2 tickets assign ab12cd34 --to julie,rosson
+  k2 tickets assign ab12cd34 --clear
 EOF
 }
 
 cmd_help_feedback_list() {
     cat <<'EOF'
 List this workspace's feedback items, newest first. Default shows open items
-(waiting + answered); pass --all to include resolved/dismissed.
+(waiting + answered + needs_discussion); pass --all to include resolved/dismissed/planned.
 
 USAGE
   k2 tickets list [flags]
 
 FLAGS
-  --all                  Include resolved and dismissed items
-  --status <status>      Filter to one status: waiting | answered | resolved | dismissed
+  --all                  Include resolved, dismissed, and planned items
+  --status <status>      Filter to one status: waiting | needs_discussion | answered | planned | resolved | dismissed
   --json                 JSON output
 EOF
 }
@@ -22196,6 +22326,7 @@ case "${1:-help}" in
             list)    shift 2; cmd_feedback_list "$@" ;;
             show)    shift 2; cmd_feedback_show "$@" ;;
             comment) shift 2; cmd_feedback_comment "$@" ;;
+            assign)  shift 2; cmd_feedback_assign "$@" ;;
             resolve) shift 2; cmd_feedback_resolve "$@" ;;
             --help|-h|'') cmd_help_feedback; exit 0 ;;
             *)

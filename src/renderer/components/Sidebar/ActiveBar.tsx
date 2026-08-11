@@ -511,9 +511,9 @@ export default function ActiveBar(): React.JSX.Element | null {
   if (items.length === 0) return null
 
   return (
-    <div className="border-t border-[var(--color-border)] flex flex-col">
+    <div className="border-t border-[var(--color-border)] flex flex-col flex-shrink-0 min-h-0 max-h-[min(320px,45%)]">
       <button
-        className="no-drag w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+        className="no-drag w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left cursor-pointer hover:bg-white/[0.02] transition-colors flex-shrink-0"
         onClick={() => setCollapsed((prev) => !prev)}
       >
         <span className="text-[10px] font-semibold tracking-wider text-[var(--color-text-muted)] uppercase">
@@ -535,12 +535,15 @@ export default function ActiveBar(): React.JSX.Element | null {
         </svg>
       </button>
       <div
+        className="min-h-0 flex-1"
         style={{
-          overflow: 'hidden',
-          // 0.37.13 — 320px fits all 10 shortcut-bound items (1-9 + 0)
-          // at ~28-30px per row. Anything beyond rolls off the end.
-          maxHeight: collapsed ? 0 : 320,
-          transition: 'max-height 0.2s ease',
+          // Expand: scroll when the list exceeds the available height.
+          // Collapse: clip to 0. Previously overflow:hidden + fixed 320px
+          // maxHeight clipped items beyond ~10 with no way to scroll.
+          overflowX: 'hidden',
+          overflowY: collapsed ? 'hidden' : 'auto',
+          maxHeight: collapsed ? 0 : undefined,
+          transition: collapsed ? 'max-height 0.2s ease' : undefined,
         }}
       >
         <div className="px-1 pb-1">

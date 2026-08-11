@@ -86,7 +86,10 @@ pub struct ApiHostSessionRequest {
     pub rows: Option<u16>,
     /// Idle-reap timeout in seconds — clamped 30..86400, default 180
     /// (identical semantics to the sandbox family; `sandbox_reaper`).
-    #[serde(default)]
+    /// Also drives capability JWT lifetime: `min(timeout_secs, 3600)`.
+    /// Accept snake_case and camelCase so integrators aren't surprised by
+    /// silent default when they send `timeoutSecs`.
+    #[serde(default, alias = "timeoutSecs")]
     pub timeout_secs: Option<u64>,
     /// Resume an EXISTING host session by id (PRD §3: "or resume with
     /// {\"session\": id}"). Validated + canonical-guarded + checked against

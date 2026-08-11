@@ -24,11 +24,22 @@ import { completeDashDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
   createProjectGroup,
   createErrorMessage,
+  fetchProjectGroupHtmlDocs,
   partitionPinned,
   pinProjectGroup,
   type ProjectGroup,
+  type ProjectGroupHtmlDoc,
   type ProjectGroupMemberInfo,
 } from './projects-api'
+import {
+  loadPinnedMemberIds,
+  loadPinnedResourceKeys,
+  resourceDocKey,
+  sortMembersPinnedFirst,
+  sortResourcesPinnedThenAlpha,
+  togglePinnedMember,
+  togglePinnedResource,
+} from './member-pins'
 
 export const PROJECT_NAV_WIDTH = 280
 /** Collapsed-rail width (IconRail's RAIL_WIDTH). */
@@ -173,9 +184,15 @@ function GroupRow({
 function MemberRow({
   member,
   isPoc,
+  isPinned,
+  groupId,
+  onTogglePin,
 }: {
   member: ProjectGroupMemberInfo
   isPoc: boolean
+  isPinned: boolean
+  groupId: string
+  onTogglePin: (workspaceId: string) => void
 }): React.JSX.Element {
   // Icon/color come from the workspace-registry store row (the member
   // enrichment carries name/path only).
@@ -247,10 +264,24 @@ function MemberRow({
     document.addEventListener('mouseup', handleMouseUp)
   }
 
+  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!groupId) return
+    const clickedId = await showContextMenu([
+      {
+        id: 'toggle-pin',
+        label: isPinned ? 'Unpin from Top' : 'Pin to Top',
+      },
+    ])
+    if (clickedId === 'toggle-pin') onTogglePin(member.workspaceId)
+  }
+
   return (
     <button
       onClick={handleClick}
       onMouseDown={handleMouseDown}
+      onContextMenu={(e) => void handleContextMenu(e)}
       className={`no-drag w-full flex items-center gap-2 px-2 py-1 text-left transition-colors select-none text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] ${
         readOnly ? 'cursor-default' : 'cursor-pointer'
       }`}
@@ -265,6 +296,14 @@ function MemberRow({
         size={18}
       />
       <span className="text-[11px] truncate flex-1">{displayName}</span>
+      {isPinned && (
+        <span
+          className="flex-shrink-0 text-[var(--color-text-muted)] opacity-70"
+          title="Pinned to top of Members"
+        >
+          <PinGlyph filled />
+        </span>
+      )}
       {isPoc && (
         <span
           className="flex-shrink-0 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
@@ -285,14 +324,264 @@ function MemberRow({
   )
 }
 
+// ── Resources drawer (pinned HTML docs from member workspaces — §6.5) ───
+
+/** Drop an htmlDoc onto the open dashboard (center of the panes surface).
+ *  Same bridge as a completed drag; no-op if no dashboard is mounted. */
+function dropHtmlDocOnDashboard(doc: ProjectGroupHtmlDoc): void {
+  const el = document.querySelector('[data-projects-dashboard-panes]') as HTMLElement | null
+  const rect = el?.getBoundingClientRect()
+  const x = rect ? rect.left + rect.width / 2 : window.innerWidth / 2
+  const y = rect ? rect.top + rect.height / 2 : window.innerHeight / 2
+  completeDashDrag(
+    { type: 'htmlDoc', workspaceId: doc.workspaceId, filePath: doc.filePath },
+    x,
+    y,
+  )
+}
+
+function ResourceRow({
+  doc,
+  isPinned,
+  groupId,
+  onTogglePin,
+}: {
+  doc: ProjectGroupHtmlDoc
+  isPinned: boolean
+  groupId: string
+  onTogglePin: (doc: ProjectGroupHtmlDoc) => void
+}): React.JSX.Element {
+  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
+  const suppressClickRef = useRef(false)
+  const owner = doc.agentName ?? doc.workspaceName ?? ''
+
+  const handleClick = (): void => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      return
+    }
+    if (readOnly) return
+    dropHtmlDocOnDashboard(doc)
+  }
+
+  const handleMouseDown = (e: React.MouseEvent): void => {
+    if (readOnly || e.button !== 0) return
+    const startX = e.clientX
+    const startY = e.clientY
+    let started = false
+    const payload = {
+      type: 'htmlDoc' as const,
+      workspaceId: doc.workspaceId,
+      filePath: doc.filePath,
+    }
+
+    const handleMouseMove = (ev: MouseEvent): void => {
+      if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
+        started = true
+        suppressClickRef.current = true
+        document.body.style.cursor = 'grabbing'
+        document.body.style.userSelect = 'none'
+      }
+      if (!started) return
+      useDashboardDndStore.getState().setDrag({ payload, x: ev.clientX, y: ev.clientY })
+    }
+
+    const handleMouseUp = (ev: MouseEvent): void => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      if (!started) return
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      completeDashDrag(payload, ev.clientX, ev.clientY)
+      useDashboardDndStore.getState().setDrag(null)
+      setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }
+
+  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
+    e.preventDefault()
+    e.stopPropagation()
+    const clickedId = await showContextMenu([
+      {
+        id: 'toggle-pin',
+        label: isPinned ? 'Unpin from Top' : 'Pin to Top',
+      },
+    ])
+    if (clickedId === 'toggle-pin') onTogglePin(doc)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      onMouseDown={handleMouseDown}
+      onContextMenu={(e) => void handleContextMenu(e)}
+      className={`no-drag w-full flex items-center gap-2 px-2 py-1 text-left transition-colors select-none text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] ${
+        readOnly ? 'cursor-default' : 'cursor-pointer'
+      }`}
+      title={doc.filePath}
+    >
+      <span
+        className="flex-shrink-0 w-[18px] h-[18px] flex items-center justify-center text-[10px] font-mono font-semibold text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/25"
+        aria-hidden
+        title="HTML resource"
+      >
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 2h6l3 3v9H4V2z" />
+          <path d="M10 2v3h3" />
+        </svg>
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[11px] truncate leading-tight">{doc.fileName}</div>
+        {owner ? (
+          <div className="text-[10px] text-[var(--color-text-muted)] truncate leading-tight">
+            {owner}
+          </div>
+        ) : null}
+      </div>
+      {isPinned && (
+        <span
+          className="flex-shrink-0 text-[var(--color-text-muted)] opacity-70"
+          title="Pinned to top of Resources"
+        >
+          <PinGlyph filled />
+        </span>
+      )}
+    </button>
+  )
+}
+
+function ResourcesDrawer({ groupId }: { groupId: string }): React.JSX.Element | null {
+  const [collapsed, setCollapsed] = useState(false)
+  const [docs, setDocs] = useState<ProjectGroupHtmlDoc[] | null>(null)
+  const [pinnedKeys, setPinnedKeys] = useState<string[]>(() => loadPinnedResourceKeys(groupId))
+  const revision = useProjectGroupsStore((s) => s.revision)
+
+  React.useEffect(() => {
+    setPinnedKeys(loadPinnedResourceKeys(groupId))
+  }, [groupId])
+
+  React.useEffect(() => {
+    let cancelled = false
+    setDocs(null)
+    fetchProjectGroupHtmlDocs(groupId)
+      .then((d) => {
+        if (!cancelled) setDocs(d)
+      })
+      .catch(() => {
+        if (!cancelled) setDocs([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [groupId, revision])
+
+  const { sorted, pinnedCount } = useMemo(
+    () => sortResourcesPinnedThenAlpha(docs ?? [], pinnedKeys),
+    [docs, pinnedKeys],
+  )
+
+  const onTogglePin = (doc: ProjectGroupHtmlDoc): void => {
+    setPinnedKeys(togglePinnedResource(groupId, doc))
+  }
+
+  // Hide entirely when empty (after load).
+  if (docs !== null && docs.length === 0) return null
+
+  const count = docs?.length ?? 0
+
+  return (
+    <div className="border-t border-[var(--color-border)] flex flex-col">
+      <button
+        type="button"
+        className="no-drag w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+        onClick={() => setCollapsed((prev) => !prev)}
+      >
+        <span className="text-[10px] font-semibold tracking-wider text-[var(--color-text-muted)] uppercase">
+          Resources
+        </span>
+        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
+          {docs === null ? '…' : count}
+        </span>
+        <span className="flex-1" />
+        <svg
+          className="w-2.5 h-2.5 text-[var(--color-text-muted)] flex-shrink-0"
+          style={{ transition: 'transform 0.2s ease', transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+      <div
+        className="min-h-0"
+        style={{
+          overflowX: 'hidden',
+          overflowY: collapsed ? 'hidden' : 'auto',
+          maxHeight: collapsed ? 0 : 320,
+          transition: 'max-height 0.2s ease',
+        }}
+      >
+        <div className="px-1 pb-1">
+          {docs === null ? (
+            <p className="px-2 py-1.5 text-[10px] text-[var(--color-text-muted)] font-mono">Loading…</p>
+          ) : (
+            sorted.map((doc, index) => (
+              <React.Fragment key={resourceDocKey(doc)}>
+                {index === pinnedCount && pinnedCount > 0 && (
+                  <div className="mx-2 my-1 border-t border-[var(--color-border)]" />
+                )}
+                <ResourceRow
+                  doc={doc}
+                  isPinned={pinnedKeys.includes(resourceDocKey(doc))}
+                  groupId={groupId}
+                  onTogglePin={onTogglePin}
+                />
+              </React.Fragment>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function MemberDrawer({
   members,
   pocWorkspaceId,
+  groupId,
 }: {
   members: ProjectGroupMemberInfo[]
   pocWorkspaceId: string | null
+  groupId: string | null
 }): React.JSX.Element | null {
   const [collapsed, setCollapsed] = useState(false)
+  const [pinnedIds, setPinnedIds] = useState<string[]>(() =>
+    groupId ? loadPinnedMemberIds(groupId) : [],
+  )
+
+  // Reload pins when the selected project changes.
+  React.useEffect(() => {
+    setPinnedIds(groupId ? loadPinnedMemberIds(groupId) : [])
+  }, [groupId])
+
+  const { sorted, pinnedCount } = useMemo(
+    () => sortMembersPinnedFirst(members, pinnedIds),
+    [members, pinnedIds],
+  )
+
+  const onTogglePin = (workspaceId: string): void => {
+    if (!groupId) return
+    setPinnedIds(togglePinnedMember(groupId, workspaceId))
+  }
+
   if (members.length === 0) return null
 
   return (
@@ -320,15 +609,28 @@ function MemberDrawer({
         </svg>
       </button>
       <div
+        className="min-h-0"
         style={{
-          overflow: 'hidden',
+          overflowX: 'hidden',
+          overflowY: collapsed ? 'hidden' : 'auto',
           maxHeight: collapsed ? 0 : 320,
           transition: 'max-height 0.2s ease',
         }}
       >
-        <div className="px-1 pb-1 overflow-y-auto" style={{ maxHeight: 320 }}>
-          {members.map((m) => (
-            <MemberRow key={m.workspaceId} member={m} isPoc={m.workspaceId === pocWorkspaceId} />
+        <div className="px-1 pb-1">
+          {sorted.map((m, index) => (
+            <React.Fragment key={m.workspaceId}>
+              {index === pinnedCount && pinnedCount > 0 && (
+                <div className="mx-2 my-1 border-t border-[var(--color-border)]" />
+              )}
+              <MemberRow
+                member={m}
+                isPoc={m.workspaceId === pocWorkspaceId}
+                isPinned={pinnedIds.includes(m.workspaceId)}
+                groupId={groupId ?? ''}
+                onTogglePin={onTogglePin}
+              />
+            </React.Fragment>
           ))}
         </div>
       </div>
@@ -446,6 +748,33 @@ function RailIcon({
   unread: boolean
   onSelect: () => void
 }): React.JSX.Element {
+  // Same menu as expanded GroupRow — collapsed rail had no onContextMenu,
+  // so right-click did nothing when the Projects nav was collapsed.
+  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
+    e.preventDefault()
+    e.stopPropagation()
+    const clickedId = await showContextMenu([
+      { id: 'group-settings', label: 'Project Settings' },
+      { id: 'separator-pin', label: '', type: 'separator' },
+      { id: 'toggle-pin', label: group.pinned ? 'Unpin' : 'Pin to Top' },
+    ])
+    if (clickedId === 'group-settings') {
+      useSettingsStore.getState().openSettings('project-groups', group.id)
+    } else if (clickedId === 'toggle-pin') {
+      try {
+        await pinProjectGroup(group.id, !group.pinned)
+        await useProjectGroupsStore.getState().fetchGroups()
+      } catch (err) {
+        useToastStore
+          .getState()
+          .addToast(
+            `${group.pinned ? 'Unpin' : 'Pin'} failed: ${err instanceof Error ? err.message : String(err)}`,
+            'error',
+          )
+      }
+    }
+  }
+
   return (
     <button
       type="button"
@@ -455,6 +784,7 @@ function RailIcon({
           : 'hover:bg-white/[0.06]'
       }`}
       onClick={onSelect}
+      onContextMenu={(e) => void handleContextMenu(e)}
       title={`${group.name} • ${group.memberCount} ${group.memberCount === 1 ? 'member' : 'members'}`}
     >
       <ProjectGroupAvatar name={group.name} groupId={group.id} size={20} color={group.color} />
@@ -477,20 +807,101 @@ function RailIcon({
 function RailMember({
   member,
   isPoc,
+  isPinned,
+  groupId,
+  onTogglePin,
 }: {
   member: ProjectGroupMemberInfo
   isPoc: boolean
+  isPinned: boolean
+  groupId: string
+  onTogglePin: (workspaceId: string) => void
 }): React.JSX.Element {
   const workspace = useProjectsStore((s) => s.projects.find((p) => p.id === member.workspaceId))
   const paneNum = useProjectGroupsStore((s) => s.dashPaneNumbers[member.workspaceId])
   const displayName = member.agentName ?? member.name ?? member.workspaceId.slice(0, 8)
+  // Same as expanded MemberRow: viewers can click-to-focus but not drag tiles.
+  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
+  const suppressClickRef = useRef(false)
+
+  const handleClick = (): void => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      return
+    }
+    useProjectGroupsStore.getState().requestMemberPane(member.workspaceId)
+  }
+
+  // P5 (§6.2) — collapsed-rail members must drag onto the dashboard the same
+  // way expanded MemberRow does (dashboard-dnd bridge). Previously only the
+  // expanded list had onMouseDown, so collapsed avatars could not become tiles.
+  const handleMouseDown = (e: React.MouseEvent): void => {
+    if (readOnly || e.button !== 0) return
+    const startX = e.clientX
+    const startY = e.clientY
+    let started = false
+
+    const handleMouseMove = (ev: MouseEvent): void => {
+      if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
+        started = true
+        suppressClickRef.current = true
+        document.body.style.cursor = 'grabbing'
+        document.body.style.userSelect = 'none'
+      }
+      if (!started) return
+      useDashboardDndStore.getState().setDrag({
+        payload: { type: 'member', workspaceId: member.workspaceId },
+        x: ev.clientX,
+        y: ev.clientY,
+      })
+    }
+
+    const handleMouseUp = (ev: MouseEvent): void => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      if (!started) return
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      completeDashDrag({ type: 'member', workspaceId: member.workspaceId }, ev.clientX, ev.clientY)
+      useDashboardDndStore.getState().setDrag(null)
+      setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }
+
+  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!groupId) return
+    const clickedId = await showContextMenu([
+      {
+        id: 'toggle-pin',
+        label: isPinned ? 'Unpin from Top' : 'Pin to Top',
+      },
+    ])
+    if (clickedId === 'toggle-pin') onTogglePin(member.workspaceId)
+  }
 
   return (
     <button
       type="button"
-      className="no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 hover:bg-white/[0.06] transition-colors cursor-pointer"
-      onClick={() => useProjectGroupsStore.getState().requestMemberPane(member.workspaceId)}
-      title={isPoc ? `${displayName} • PoC` : displayName}
+      className={`no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 hover:bg-white/[0.06] transition-colors select-none ${
+        readOnly ? 'cursor-default' : 'cursor-pointer'
+      }`}
+      onClick={handleClick}
+      onMouseDown={handleMouseDown}
+      onContextMenu={(e) => void handleContextMenu(e)}
+      title={
+        isPinned
+          ? `${isPoc ? `${displayName} • PoC` : displayName} (pinned)`
+          : isPoc
+            ? `${displayName} • PoC`
+            : displayName
+      }
     >
       <ProjectAvatar
         projectPath={member.path ?? ''}
@@ -500,6 +911,11 @@ function RailMember({
         iconUrl={workspace?.iconUrl ?? null}
         size={18}
       />
+      {isPinned && (
+        <span className="absolute top-0 left-0.5 text-[var(--color-text-muted)] opacity-80 pointer-events-none">
+          <PinGlyph filled />
+        </span>
+      )}
       {paneNum !== undefined && (
         <span className="absolute bottom-0 right-0.5 text-[8px] font-mono text-[var(--color-text-muted)] tabular-nums leading-none">
           {paneNum}
@@ -530,6 +946,61 @@ export function ProjectNavRail({
   const unreadGroupIds = useProjectGroupsStore((s) => s.unreadGroupIds)
 
   const { pinned, unpinned } = useMemo(() => partitionPinned(groups ?? []), [groups])
+
+  const [pinnedMemberIds, setPinnedMemberIds] = useState<string[]>(() =>
+    selectedGroupId ? loadPinnedMemberIds(selectedGroupId) : [],
+  )
+  React.useEffect(() => {
+    setPinnedMemberIds(selectedGroupId ? loadPinnedMemberIds(selectedGroupId) : [])
+  }, [selectedGroupId])
+
+  const sortedMembers = useMemo(() => {
+    if (!members) return []
+    return sortMembersPinnedFirst(members, pinnedMemberIds).sorted
+  }, [members, pinnedMemberIds])
+
+  const onToggleMemberPin = (workspaceId: string): void => {
+    if (!selectedGroupId) return
+    setPinnedMemberIds(togglePinnedMember(selectedGroupId, workspaceId))
+  }
+
+  // Pinned HTML resources (same GET as Settings → Pinned HTML pages).
+  const [resourceDocs, setResourceDocs] = useState<ProjectGroupHtmlDoc[] | null>(null)
+  const [pinnedResourceKeys, setPinnedResourceKeys] = useState<string[]>(() =>
+    selectedGroupId ? loadPinnedResourceKeys(selectedGroupId) : [],
+  )
+  const revision = useProjectGroupsStore((s) => s.revision)
+  React.useEffect(() => {
+    setPinnedResourceKeys(selectedGroupId ? loadPinnedResourceKeys(selectedGroupId) : [])
+  }, [selectedGroupId])
+  React.useEffect(() => {
+    if (!selectedGroupId) {
+      setResourceDocs(null)
+      return
+    }
+    let cancelled = false
+    setResourceDocs(null)
+    fetchProjectGroupHtmlDocs(selectedGroupId)
+      .then((d) => {
+        if (!cancelled) setResourceDocs(d)
+      })
+      .catch(() => {
+        if (!cancelled) setResourceDocs([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedGroupId, revision])
+
+  const sortedResourceDocs = useMemo(
+    () => sortResourcesPinnedThenAlpha(resourceDocs ?? [], pinnedResourceKeys).sorted,
+    [resourceDocs, pinnedResourceKeys],
+  )
+
+  const onToggleResourcePin = (doc: ProjectGroupHtmlDoc): void => {
+    if (!selectedGroupId) return
+    setPinnedResourceKeys(togglePinnedResource(selectedGroupId, doc))
+  }
 
   return (
     <div
@@ -563,10 +1034,27 @@ export function ProjectNavRail({
         ))}
       </div>
 
-      {/* Bottom zone (IconRail's Active-zone anatomy): the selected
-          project's members — the expanded nav's drawer in rail form,
-          same gating (a selected project with a resolved `show`). */}
-      {selectedGroupId && members && members.length > 0 && (
+      {/* Bottom zone: Resources (pinned HTML) then Members — rail form. */}
+      {selectedGroupId && sortedResourceDocs.length > 0 && (
+        <div className="flex flex-col items-center w-full flex-shrink-0 pt-1.5">
+          <div className="w-6 border-b border-[var(--color-border)] mb-1" />
+          <div
+            className="flex flex-col items-center gap-0.5 w-full overflow-y-auto overflow-x-hidden"
+            style={{ maxHeight: 160 }}
+          >
+            {sortedResourceDocs.map((doc) => (
+              <RailResource
+                key={resourceDocKey(doc)}
+                doc={doc}
+                isPinned={pinnedResourceKeys.includes(resourceDocKey(doc))}
+                groupId={selectedGroupId}
+                onTogglePin={onToggleResourcePin}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+      {selectedGroupId && sortedMembers.length > 0 && (
         <div className="flex flex-col items-center w-full flex-shrink-0 pt-1.5">
           <div className="w-6 border-b border-[var(--color-border)] mb-1" />
           {/* Same 320px scroll cap as the expanded drawer's list. */}
@@ -574,17 +1062,118 @@ export function ProjectNavRail({
             className="flex flex-col items-center gap-0.5 w-full overflow-y-auto overflow-x-hidden"
             style={{ maxHeight: 320 }}
           >
-            {members.map((m) => (
+            {sortedMembers.map((m) => (
               <RailMember
                 key={m.workspaceId}
                 member={m}
                 isPoc={m.workspaceId === pocWorkspaceId}
+                isPinned={pinnedMemberIds.includes(m.workspaceId)}
+                groupId={selectedGroupId}
+                onTogglePin={onToggleMemberPin}
               />
             ))}
           </div>
         </div>
       )}
     </div>
+  )
+}
+
+function RailResource({
+  doc,
+  isPinned,
+  groupId,
+  onTogglePin,
+}: {
+  doc: ProjectGroupHtmlDoc
+  isPinned: boolean
+  groupId: string
+  onTogglePin: (doc: ProjectGroupHtmlDoc) => void
+}): React.JSX.Element {
+  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
+  const suppressClickRef = useRef(false)
+  const label = doc.fileName || doc.filePath.split('/').pop() || 'html'
+
+  const handleClick = (): void => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      return
+    }
+    if (readOnly) return
+    dropHtmlDocOnDashboard(doc)
+  }
+
+  const handleMouseDown = (e: React.MouseEvent): void => {
+    if (readOnly || e.button !== 0) return
+    const startX = e.clientX
+    const startY = e.clientY
+    let started = false
+    const payload = {
+      type: 'htmlDoc' as const,
+      workspaceId: doc.workspaceId,
+      filePath: doc.filePath,
+    }
+
+    const handleMouseMove = (ev: MouseEvent): void => {
+      if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
+        started = true
+        suppressClickRef.current = true
+        document.body.style.cursor = 'grabbing'
+        document.body.style.userSelect = 'none'
+      }
+      if (!started) return
+      useDashboardDndStore.getState().setDrag({ payload, x: ev.clientX, y: ev.clientY })
+    }
+
+    const handleMouseUp = (ev: MouseEvent): void => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      if (!started) return
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      completeDashDrag(payload, ev.clientX, ev.clientY)
+      useDashboardDndStore.getState().setDrag(null)
+      setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }
+
+  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
+    e.preventDefault()
+    e.stopPropagation()
+    const clickedId = await showContextMenu([
+      {
+        id: 'toggle-pin',
+        label: isPinned ? 'Unpin from Top' : 'Pin to Top',
+      },
+    ])
+    if (clickedId === 'toggle-pin') onTogglePin(doc)
+  }
+
+  return (
+    <button
+      type="button"
+      className={`no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 hover:bg-white/[0.06] transition-colors select-none ${
+        readOnly ? 'cursor-default' : 'cursor-pointer'
+      }`}
+      onClick={handleClick}
+      onMouseDown={handleMouseDown}
+      onContextMenu={(e) => void handleContextMenu(e)}
+      title={`${label}${doc.agentName ? ` · ${doc.agentName}` : ''}${isPinned ? ' (pinned)' : ''}`}
+    >
+      {isPinned && (
+        <span className="absolute top-0 left-0.5 text-[var(--color-text-muted)] opacity-80 pointer-events-none">
+          <PinGlyph filled />
+        </span>
+      )}
+      <span className="text-[8px] font-mono font-semibold text-[var(--color-accent)] leading-none">
+        .html
+      </span>
+    </button>
   )
 }
 
@@ -711,10 +1300,15 @@ export default function ProjectNav({
         )}
       </div>
 
-      {/* Bottom-drawer slot (ActiveBar's position): the selected
-          project's members — ALL of them, never activity-gated. */}
+      {/* Bottom drawers (ActiveBar's position): Resources (pinned HTML)
+          stacked above Members — both for the selected project. */}
+      {selectedGroupId && <ResourcesDrawer groupId={selectedGroupId} />}
       {selectedGroupId && members && (
-        <MemberDrawer members={members} pocWorkspaceId={pocWorkspaceId} />
+        <MemberDrawer
+          members={members}
+          pocWorkspaceId={pocWorkspaceId}
+          groupId={selectedGroupId}
+        />
       )}
 
       <NewProjectAffordance />

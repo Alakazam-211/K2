@@ -1772,6 +1772,25 @@ mod tests {
             &req.session,
         );
 
+        // Julie/Scout: timeoutSecs camelCase must not silently drop to default.
+        let camel = br#"{"timeoutSecs":960,"prompt":"x"}"#;
+        let req_camel = match parse_body(camel) {
+            Ok(r) => r,
+            Err(e) => panic!("camel timeoutSecs must parse; status={}", e.status),
+        };
+        assert_eq!(req_camel.timeout_secs, Some(960));
+        let snake = br#"{"timeout_secs":960}"#;
+        let req_snake = match parse_body(snake) {
+            Ok(r) => r,
+            Err(e) => panic!("snake timeout_secs must parse; status={}", e.status),
+        };
+        assert_eq!(req_snake.timeout_secs, Some(960));
+        // JWT lifetime for spawn is min(normalize(timeout), 3600) — 960 stays 960.
+        let exp = crate::sandbox_reaper::normalize_timeout(req_camel.timeout_secs)
+            .min(3600)
+            .max(1);
+        assert_eq!(exp, 960, "cap JWT lifetime must track timeout_secs=960");
+
         // Host-resolved policy is still the owner's, never the body.
         let resolved = k2_core::workspace::settings::get_api_guest_policy(ws);
         assert_eq!(resolved, "OWNER-CONFIGURED-GUEST-POLICY");

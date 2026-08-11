@@ -52,9 +52,12 @@ function onSelectablePointerDown(e: React.PointerEvent | React.MouseEvent): void
 export function SelectableText({
   text,
   className = '',
+  style,
 }: {
   text: string
   className?: string
+  /** Merged after the selectable defaults (e.g. editor fontSize). */
+  style?: CSSProperties
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const setRef = useCallback((node: HTMLDivElement | null) => {
@@ -66,7 +69,7 @@ export function SelectableText({
     <div
       ref={setRef}
       className={`selectable-copy chat-thread-selectable ${className}`.trim()}
-      style={SELECTABLE_TEXT_STYLE}
+      style={{ ...SELECTABLE_TEXT_STYLE, ...style }}
       onPointerDown={onSelectablePointerDown}
       onMouseDown={onSelectablePointerDown}
     >

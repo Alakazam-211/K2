@@ -320,7 +320,15 @@ Never treat “JWT verified” alone as write authorization.
 
 - Clamp 30…86400; **default 180** if omitted.  
 - Integrator: `timeout_secs >= max_inter_shot_gap + turn_2_budget`.  
-- **Scout multi-turn: 600** (and client poll ≥ 600).
+- **Scout multi-turn: 600** (and client poll ≥ 600).  
+- **Capability JWT lifetime:** on spawn / remint with `capabilities[]`, each
+  JWT’s `exp − iat` is **`min(timeout_secs, 3600)`** (not a fixed 300s window).
+  Omit `timeout_secs` → lifetime **180s** (same as idle default). Field name is
+  snake_case `timeout_secs` (camelCase `timeoutSecs` also accepted).  
+- **Integrator note (Julie / Scout 2026-08-11):** if your agent exchanges the
+  token long after spawn (authoring delay), either present-while-fresh at spawn
+  time, or set `timeout_secs` high enough to cover authoring + exchange
+  (still hard-capped at **3600** for JWT `exp`). No separate `cap_ttl` in v1.
 
 ### 4.2 S9 work-completion reaper (product lock 2026-08-03)
 

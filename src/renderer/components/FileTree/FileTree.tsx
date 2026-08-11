@@ -515,14 +515,8 @@ function TreeItem(props: TreeItemProps): React.JSX.Element | null {
               Loading...
             </div>
           )}
-          {error && (
-            <div
-              className="py-1 text-[11px] text-[var(--color-status-error-soft)] italic"
-              style={{ paddingLeft: (depth + 1) * 16 + 8 }}
-            >
-              {error}
-            </div>
-          )}
+          {/* Per-dir load errors are surfaced in the panel-bottom floating
+              box (not inline) so the tree does not bounce when they appear. */}
           {showNewEntry && (
             <InlineNameEditor
               initialValue=""
@@ -1704,10 +1698,17 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     onNewEntryCancel: handleNewEntryCancel
   }
 
+  // Directory load errors — shown in a bottom floating box so they never
+  // insert rows into the tree and bounce the scroll/layout.
+  const loadErrors = useMemo(
+    () => Array.from(errorDirs.entries()),
+    [errorDirs],
+  )
+
   return (
     <div
       ref={treeRef}
-      className="flex flex-col h-full"
+      className="relative flex flex-col h-full"
       tabIndex={-1}
       data-file-tree-panel="true"
       data-root-path={rootPath}
@@ -1941,11 +1942,6 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
             Loading...
           </div>
         )}
-        {errorDirs.has(rootPath) && (
-          <div className="py-1 pl-4 text-[11px] text-[var(--color-status-error-soft)] italic">
-            {errorDirs.get(rootPath)}
-          </div>
-        )}
         {newEntryState && newEntryState.parentPath === rootPath && (
           <InlineNameEditor
             initialValue=""
@@ -1958,12 +1954,61 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         {filteredRootEntries?.map((entry) => (
           <TreeItem key={entry.path} entry={entry} depth={0} {...childProps} />
         ))}
-        {filteredRootEntries && filteredRootEntries.length === 0 && !newEntryState && !loadingDirs.has(rootPath) && (
+        {filteredRootEntries && filteredRootEntries.length === 0 && !newEntryState && !loadingDirs.has(rootPath) && !errorDirs.has(rootPath) && (
           <div className="py-1 pl-4 text-[11px] text-[var(--color-text-muted)] italic">
             {searchQuery ? 'No matches' : 'Empty'}
           </div>
         )}
       </div>
+
+      {/* Floating load-error box — does not reflow the tree when shown/hidden. */}
+      {loadErrors.length > 0 && (
+        <div
+          className="absolute bottom-2 left-2 right-2 z-20 flex flex-col gap-1.5 pointer-events-auto"
+          role="alert"
+        >
+          {loadErrors.map(([dirPath, message]) => {
+            const short =
+              dirPath === rootPath
+                ? 'workspace'
+                : dirPath.startsWith(rootPath + '/')
+                  ? dirPath.slice(rootPath.length + 1)
+                  : dirPath.split('/').pop() || dirPath
+            return (
+              <div
+                key={dirPath}
+                className="flex items-start gap-2 px-2.5 py-2 rounded border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,var(--color-border))] bg-[var(--color-bg-elevated)] shadow-lg text-[11px] font-mono"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-[var(--color-status-error-soft)] truncate" title={dirPath}>
+                    {short}
+                  </div>
+                  <div className="text-[var(--color-text-secondary)] break-words leading-snug mt-0.5">
+                    {message}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] px-0.5"
+                  title="Dismiss"
+                  onClick={() => {
+                    setErrorDirs((prev) => {
+                      const next = new Map(prev)
+                      next.delete(dirPath)
+                      return next
+                    })
+                  }}
+                >
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

@@ -54,7 +54,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
     let resp = match path {
         // ── Reads ───────────────────────────────────────────────────
         // GET /cli/feedback/list?project=<path>[&all=1][&status=<s>]
-        // Default shows open items (waiting + answered), newest first.
+        // Default shows open items (waiting + answered + needs_discussion), newest first.
         "/cli/feedback/list" => match need_project(params) {
             Ok(p) => {
                 let Some(project_id) = resolve_project_id(&p) else {
@@ -335,6 +335,10 @@ struct CreateBody {
     body: Option<String>,
     options: Option<Vec<String>>,
     priority: Option<i64>,
+    /// Optional username snapshots to assign at create time (`owner` or
+    /// connect-user names). Applied after insert so push targeting and
+    /// the create response both see them. Empty/omitted = unassigned.
+    assignees: Option<Vec<String>>,
 }
 
 /// Handler for `POST /cli/feedback/create`. Validates, inserts, and
@@ -388,7 +392,7 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
         _ => None,
     };
 
-    let item = match feedback::create(feedback::NewFeedback {
+    let mut item = match feedback::create(feedback::NewFeedback {
         project_id,
         session_id,
         session_kind,
@@ -402,6 +406,17 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
         Ok(item) => item,
         Err(e) => return usage_error(e),
     };
+
+    // Optional assignees at create — set before push so mobile targeting
+    // and the create response include them. Snapshots only (no FK).
+    if let Some(names) = b.assignees {
+        if !names.is_empty() {
+            match feedback::set_assignees(&item.id, &names) {
+                Ok(updated) => item = updated,
+                Err(e) => return usage_error(e),
+            }
+        }
+    }
 
     // FeedbackCreated on the existing /events broadcast (frozen
     // contract: {id, projectPath, title, kind, priority, agentName}).
@@ -419,7 +434,8 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
     // Companion C4 — mobile push, next to the emit. ONLY new items
     // push (the frozen only-created-notifies contract); the event is
     // content-free (agent name + id, NEVER the ask's title/body —
-    // §4.5) and dormant/fire-and-forget inside push_routes.
+    // §4.5) and dormant/fire-and-forget inside push_routes. Assignees
+    // narrow the fan-out when present.
     crate::push_routes::notify_feedback_created(
         &item.agent_name,
         &item.id,
@@ -680,10 +696,10 @@ pub fn handle_resolve(body: &[u8]) -> CliResponse {
     let status = b.status.unwrap_or_else(|| "resolved".to_string());
     if !matches!(
         status.as_str(),
-        "resolved" | "dismissed" | "waiting" | "planned"
+        "resolved" | "dismissed" | "waiting" | "planned" | "needs_discussion"
     ) {
         return usage_error(format!(
-            "invalid status '{status}' — resolve accepts: resolved, dismissed, planned, waiting (reopen)"
+            "invalid status '{status}' — resolve accepts: resolved, dismissed, planned, needs_discussion, waiting (reopen)"
         ));
     }
     let full_id = match feedback::resolve_id_prefix(&b.id) {
@@ -1021,6 +1037,31 @@ mod tests {
         }
     }
 
+    /// Create may stamp assignees so mobile push + the board people
+    /// filter see them immediately (agent `ask --assign`).
+    #[test]
+    fn feedback_create_with_assignees() {
+        let (name, path) = unique("create-assign");
+        insert_project(&name, &path);
+        let resp = handle_create(
+            serde_json::json!({
+                "project": path,
+                "title": "Need a human",
+                "assignees": ["owner", "julie", "owner", "  "],
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "create failed: {}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        let assignees = v["assignees"].as_array().expect("assignees array");
+        let names: Vec<&str> = assignees.iter().filter_map(|x| x.as_str()).collect();
+        assert_eq!(names, vec!["julie", "owner"], "deduped + sorted snapshots: {names:?}");
+        let id = v["id"].as_str().expect("id");
+        let item = k2_core::feedback::get_item(id).expect("item");
+        assert_eq!(item.assignees, vec!["julie".to_string(), "owner".to_string()]);
+    }
+
     /// Validation misses answer 400 with the stable `usage` code and
     /// the mockup's exact hints.
     #[test]
@@ -1296,9 +1337,10 @@ mod tests {
         assert_eq!(item.comment_count, 2);
     }
 
-    /// Resolve / dismiss / reopen never touch the delivery path, and
-    /// reopen (status `waiting`) is the ONLY extra status the route
-    /// accepts — a manual `answered` is a loud usage error.
+    /// Resolve / dismiss / reopen never touch the delivery path.
+    /// Manual statuses the route accepts: resolved, dismissed, planned,
+    /// needs_discussion, waiting (reopen). A manual `answered` is a
+    /// loud usage error (answers go through comment / set_answer).
     #[test]
     fn feedback_resolve_reopen_and_never_injects() {
         let (name, path) = unique("resolve-reopen");

@@ -852,6 +852,50 @@ mod tests {
         assert!(err.contains("array"), "{err}");
     }
 
+    /// Julie/Scout 2026-08-11: JWT lifetime must track requested lifetime
+    /// (host-session maps `timeout_secs` → here), not a fixed short window.
+    /// Ceiling is applied by callers via `min(timeout_secs, 3600)`.
+    #[test]
+    fn mint_exp_minus_iat_tracks_exp_secs_not_fixed_300() {
+        let _home = crate::test_support::TempHome::new();
+        let caps = parse_capabilities(&serde_json::json!([sample_cap(&["POST"])])).expect("parse");
+        let workspace = _home.path().join("ws");
+        fs::create_dir_all(&workspace).expect("ws");
+
+        for lifetime in [180u64, 300, 600, 960, 3600] {
+            let out = mint_and_stage(
+                &format!("sess-ttl-{lifetime}"),
+                &workspace,
+                &caps,
+                lifetime,
+                None,
+                None,
+            )
+            .expect("mint");
+            let package: Vec<serde_json::Value> =
+                serde_json::from_str(&out.env_value).expect("package");
+            let token = package[0]["token"].as_str().expect("token");
+            // Decode claims without verifying crypto — we only need exp/iat.
+            let parts: Vec<&str> = token.split('.').collect();
+            assert_eq!(parts.len(), 3, "jwt parts");
+            let payload = B64URL.decode(parts[1]).expect("b64 payload");
+            let claims: serde_json::Value =
+                serde_json::from_slice(&payload).expect("claims json");
+            let exp = claims["exp"].as_i64().expect("exp");
+            let iat = claims["iat"].as_i64().expect("iat");
+            let delta = exp - iat;
+            assert_eq!(
+                delta, lifetime as i64,
+                "exp-iat must equal requested lifetime={lifetime}, got {delta}"
+            );
+            // Explicitly reject the fixed-300 surprise Julie reported when
+            // callers ask for longer (e.g. timeout_secs=960).
+            if lifetime != 300 {
+                assert_ne!(delta, 300, "must not force 300s when lifetime={lifetime}");
+            }
+        }
+    }
+
     #[test]
     fn mint_verify_roundtrip_with_jwks() {
         // Isolate ~/.k2 so we never touch the developer's real key.

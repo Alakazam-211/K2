@@ -28,11 +28,15 @@ import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import { Surface } from '@/components/ui'
 import {
+  collectAssignees,
   countByStatus,
   fetchAllFeedback,
+  filterByAssignee,
   filterBySearch,
   groupByStatus,
   resolveFeedback,
+  statusLabel,
+  type AssigneeFilter,
   type FeedbackListRow,
   type FeedbackStatus,
 } from './feedback-api'
@@ -52,18 +56,26 @@ const TOPBAR_HEIGHT = 38
 // ── Per-card status dropdown ──────────────────────────────────────────────
 
 /** Manually selectable statuses. Answered is display-only (via a reply). */
-const SELECTABLE_STATUSES = ['waiting', 'planned', 'resolved', 'dismissed'] as const
+const SELECTABLE_STATUSES = [
+  'waiting',
+  'needs_discussion',
+  'planned',
+  'resolved',
+  'dismissed',
+] as const
 
 /** StatusBadge's palette, shared by the trigger so the dropdown reads
  *  as the card's status badge with a chevron. */
 function statusChipClass(status: FeedbackStatus): string {
   return status === 'waiting'
-    ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
-    : status === 'answered'
-      ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
-      : status === 'planned'
-        ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)]'
-        : 'bg-white/[0.06] text-[var(--color-text-muted)]'
+    ? 'bg-[color-mix(in_srgb,var(--color-status-warn-amber)_12%,transparent)] text-[var(--color-status-warn-amber)]'
+    : status === 'needs_discussion'
+      ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
+      : status === 'answered'
+        ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
+        : status === 'planned'
+          ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)]'
+          : 'bg-white/[0.06] text-[var(--color-text-muted)]'
 }
 
 function CardStatusDropdown({
@@ -128,7 +140,7 @@ function CardStatusDropdown({
         className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide cursor-pointer disabled:opacity-50 ${statusChipClass(row.status)}`}
         title="Change status"
       >
-        {row.status}
+        {statusLabel(row.status)}
         <svg
           className={`w-2 h-2 transition-transform ${open ? 'rotate-180' : ''}`}
           fill="none"
@@ -141,7 +153,7 @@ function CardStatusDropdown({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-0.5 z-20 min-w-[120px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-lg py-0.5">
+        <div className="absolute right-0 top-full mt-0.5 z-20 min-w-[140px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-lg py-0.5">
           {/* Answered shows as the current state but is not offered. */}
           {row.status === 'answered' && (
             <div
@@ -160,18 +172,128 @@ function CardStatusDropdown({
                 type="button"
                 disabled={busy}
                 onClick={() => void setStatus(s)}
-                className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left capitalize transition-colors cursor-pointer disabled:opacity-50 ${
+                className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left transition-colors cursor-pointer disabled:opacity-50 ${
                   current
                     ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
                     : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
                 }`}
                 title={s === 'waiting' ? 'Reopen — back to waiting' : undefined}
               >
-                <span className="flex-1">{s}</span>
+                <span className="flex-1">{statusLabel(s)}</span>
                 {current && <CheckGlyph />}
               </button>
             )
           })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Compact people filter sitting next to search: All / Unassigned / each
+ *  assignee username currently present on the board. */
+function AssigneeFilterDropdown({
+  value,
+  options,
+  onChange,
+}: {
+  value: AssigneeFilter
+  options: string[]
+  onChange: (v: AssigneeFilter) => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [open])
+
+  const label =
+    value === 'all' ? 'All people' : value === 'unassigned' ? 'Unassigned' : value
+
+  const pick = (v: AssigneeFilter): void => {
+    onChange(v)
+    setOpen(false)
+  }
+
+  return (
+    <div ref={rootRef} className="relative flex-shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] border transition-colors cursor-pointer max-w-[160px] ${
+          value === 'all'
+            ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)]'
+            : 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+        }`}
+        title="Filter by assignee"
+      >
+        <span className="truncate">{label}</span>
+        <svg
+          className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-0.5 z-20 min-w-[160px] max-h-56 overflow-y-auto bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-lg py-0.5">
+          {(
+            [
+              { v: 'all' as const, text: 'All people' },
+              { v: 'unassigned' as const, text: 'Unassigned' },
+            ] as const
+          ).map(({ v, text }) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => pick(v)}
+              className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left cursor-pointer ${
+                value === v
+                  ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
+                  : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
+              }`}
+            >
+              <span className="flex-1">{text}</span>
+              {value === v && <CheckGlyph />}
+            </button>
+          ))}
+          {options.length > 0 && (
+            <div className="border-t border-[var(--color-border)] my-0.5" />
+          )}
+          {options.map((name) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => pick(name)}
+              className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left cursor-pointer ${
+                value === name
+                  ? 'text-[var(--color-text-primary)] bg-white/[0.04]'
+                  : 'text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)]'
+              }`}
+            >
+              <span className="flex-1 truncate">{name}</span>
+              {value === name && <CheckGlyph />}
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -314,6 +436,8 @@ export default function FeedbackPage(): React.JSX.Element | null {
   const [projectMemberIds, setProjectMemberIds] = useState<Set<string> | null>(null)
   // Tokenized free-text search across title / agent / workspace / id.
   const [search, setSearch] = useState('')
+  // People filter — one assignee username, `unassigned`, or `all`.
+  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>('all')
   // Status filter — one status or 'all'; the chips show per-status
   // counts (AFSROW idiom), counted after workspace + search filtering.
   const [statusFilter, setStatusFilter] = useState<FeedbackStatus | 'all'>('all')
@@ -395,17 +519,35 @@ export default function FeedbackPage(): React.JSX.Element | null {
       setRows(null)
       setError(null)
       setSearch('')
+      setAssigneeFilter('all')
       setStatusFilter('all')
     }
   }, [isOpen])
 
-  // Workspace + search first; the status chips count THIS set (so each
-  // chip says exactly how many cards selecting it reveals), then the
-  // active status chip narrows it.
+  // Workspace → assignee → search; the status chips count THIS set (so
+  // each chip says exactly how many cards selecting it reveals), then
+  // the active status chip narrows it.
   const searched = useMemo(() => {
     if (!rows) return null
-    return filterBySearch(rowsForWorkspaceFilter(rows, workspaceFilter, projectMemberIds), search)
-  }, [rows, workspaceFilter, projectMemberIds, search])
+    const byWorkspace = rowsForWorkspaceFilter(rows, workspaceFilter, projectMemberIds)
+    const byAssignee = filterByAssignee(byWorkspace, assigneeFilter)
+    return filterBySearch(byAssignee, search)
+  }, [rows, workspaceFilter, projectMemberIds, assigneeFilter, search])
+
+  // People options from the workspace-filtered board (not search) so the
+  // dropdown still lists everyone visible under the current workspace.
+  const assigneeOptions = useMemo(() => {
+    if (!rows) return [] as string[]
+    return collectAssignees(rowsForWorkspaceFilter(rows, workspaceFilter, projectMemberIds))
+  }, [rows, workspaceFilter, projectMemberIds])
+
+  // If the selected person drops out of the option set (e.g. workspace
+  // filter change), fall back to All rather than showing a empty board
+  // with a stale label.
+  useEffect(() => {
+    if (assigneeFilter === 'all' || assigneeFilter === 'unassigned') return
+    if (!assigneeOptions.includes(assigneeFilter)) setAssigneeFilter('all')
+  }, [assigneeFilter, assigneeOptions])
 
   const statusCounts = useMemo(() => (searched ? countByStatus(searched) : null), [searched])
 
@@ -493,6 +635,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
   const sections = grouped
     ? ([
         { label: 'Waiting on you', rows: grouped.waiting },
+        { label: 'Needs discussion', rows: grouped.needs_discussion },
         { label: 'Answered', rows: grouped.answered },
         { label: 'Planned', rows: grouped.planned },
         { label: 'Closed', rows: grouped.closed },
@@ -572,6 +715,13 @@ export default function FeedbackPage(): React.JSX.Element | null {
                 </button>
               )}
             </div>
+            {/* People filter — All / Unassigned / each assignee seen on
+                the board under the current workspace filter. */}
+            <AssigneeFilterDropdown
+              value={assigneeFilter}
+              options={assigneeOptions}
+              onChange={setAssigneeFilter}
+            />
             {/* Workspace filter — custom dropdown mirroring the
                 Settings → Workspaces list (search, focus groups,
                 icons), plus the Projects section (§6.6): picking a
@@ -586,7 +736,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
             {/* Status filter — per-status counts always visible (the
                 AFSROW board idiom); one status, or All. */}
             <div className="flex items-center gap-1 flex-wrap">
-              {(['all', 'waiting', 'answered', 'planned', 'resolved', 'dismissed'] as const).map((s) => {
+              {(['all', 'waiting', 'needs_discussion', 'answered', 'planned', 'resolved', 'dismissed'] as const).map((s) => {
                 const active = statusFilter === s
                 return (
                   <button
@@ -599,7 +749,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
                         : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)]'
                     }`}
                   >
-                    <span className="capitalize">{s === 'all' ? 'All' : s}</span>
+                    <span>{statusLabel(s)}</span>
                     <span
                       className={`tabular-nums ${
                         active ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'

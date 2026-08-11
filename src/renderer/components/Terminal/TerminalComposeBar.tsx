@@ -9,12 +9,22 @@
 // terminal itself. Renderer-hide is gated by composerPermitted (1c); the
 // daemon enforces the same gate server-side.
 //
+// File drops: local paths are inserted into the draft; on a remote host the
+// same `.k2/downloads` upload path as terminal drops runs first, then the
+// host path is inserted. Window-level routing is external-drop-router
+// (`[data-compose-bar]`); HTML5 File drops also land here via onDrop.
+//
 // Condensed UI: just the input + its placeholder hint — no title, no send
 // button, no status lane, no collapse control. A successful send clears the
 // box; a failed send restores the text (the box reappearing IS the feedback).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
+import {
+  buildComposeDropPayload,
+  filesFromDataTransfer,
+} from '@/lib/external-drop-router'
+import { executeBrowserFileDrop, executeRemoteDrop } from '@/lib/handle-remote-drop'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
@@ -30,9 +40,33 @@ const MAX_TEXTAREA_HEIGHT = 160 // px — auto-grow cap before internal scroll
 interface TerminalComposeBarProps {
   /** Resolved PTY SessionId for this pane — the pane's `terminalId`. */
   sessionId: string
+  /**
+   * Workspace cwd for this terminal — remote drops upload into
+   * `<cwd>/.k2/downloads/` (same as terminal grid drops).
+   */
+  workspacePath?: string
 }
 
-export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): React.JSX.Element | null {
+/** Insert `chunk` into draft at caret (or append). Adds a separating space when needed. */
+export function insertIntoDraft(draft: string, chunk: string, caret: number | null): string {
+  const piece = chunk.trimEnd() + (chunk.endsWith(' ') ? ' ' : chunk.length > 0 ? ' ' : '')
+  if (!piece.trim()) return draft
+  if (caret === null || caret < 0 || caret > draft.length) {
+    if (!draft) return piece
+    const needSpace = !/\s$/.test(draft) && !/^\s/.test(piece)
+    return draft + (needSpace ? ' ' : '') + piece
+  }
+  const before = draft.slice(0, caret)
+  const after = draft.slice(caret)
+  const needBefore = before.length > 0 && !/\s$/.test(before) && !/^\s/.test(piece)
+  const mid = (needBefore ? ' ' : '') + piece
+  return before + mid + after
+}
+
+export function TerminalComposeBar({
+  sessionId,
+  workspacePath = '',
+}: TerminalComposeBarProps): React.JSX.Element | null {
   // 1c (D4) + #67 renderer-hide: shown iff the active host is LOCAL (owner)
   // OR the app-level master is on OR the ACTIVE WORKSPACE opted into remote
   // instruction (default OFF). The daemon enforces the same gate per-workspace
@@ -47,6 +81,8 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
     return (active?.allowRemoteInstruct ?? 0) === 1
   })
   const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
+  // Match Code Editor → Appearance → Font Size (default 12).
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
 
   // Draft persistence (thin client): key the draft by this pane's PTY session
   // and back it with localStorage so switching workspaces/tabs restores each
@@ -63,6 +99,7 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   })
   const [sending, setSending] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
 
   // Reload the saved draft when the pane's session changes — this component can
   // be reused with a new sessionId on a workspace/tab switch without remounting.
@@ -85,26 +122,105 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
     }
   }, [draft, draftKey])
 
-  // Auto-grow the textarea to fit its content, capped at MAX_TEXTAREA_HEIGHT.
-  // Empty: clear the inline height so `rows={1}` restores the original
-  // single-line resting size (a forced px floor was taller than stock).
-  // Non-empty: collapse to 0 first so scrollHeight reflects current value
-  // only — that is what makes shrink-on-delete work (the original bug).
-  // Long placeholders may clip at rest; they must not pin multi-line height.
+  // Auto-grow with content — same approach as ticket / project chat:
+  // measure from `height: auto` so the resting size does not collapse when
+  // the first character is typed (height: 0px was shrinking the field).
   const autoGrow = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
-    if (!el.value) {
-      el.style.height = ''
-      return
-    }
-    el.style.height = '0px'
+    el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`
   }, [])
 
   useEffect(() => {
     autoGrow()
   }, [draft, autoGrow])
+
+  const insertPathsText = useCallback((payload: string) => {
+    if (!payload) return
+    const el = textareaRef.current
+    const caret = el ? el.selectionStart : null
+    setDraft((cur) => {
+      const next = insertIntoDraft(cur, payload, caret)
+      // Restore caret after React re-render.
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        const pos = Math.min(
+          (caret ?? cur.length) + (next.length - cur.length),
+          next.length,
+        )
+        ta.focus()
+        ta.setSelectionRange(pos, pos)
+      })
+      return next
+    })
+  }, [])
+
+  // Window-level external-drop-router / internal file-drag → insert event.
+  useEffect(() => {
+    const el = barRef.current
+    if (!el) return
+    const onInsert = (e: Event) => {
+      const data = (e as CustomEvent<{ data: string }>).detail?.data
+      if (data) insertPathsText(data)
+    }
+    el.addEventListener('k2so:compose-insert', onInsert)
+    return () => el.removeEventListener('k2so:compose-insert', onInsert)
+  }, [insertPathsText])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const files = e.dataTransfer.files
+      if (files && files.length > 0) {
+        const paths: string[] = []
+        for (let i = 0; i < files.length; i++) {
+          const p = (files[i] as unknown as { path?: string }).path
+          if (p) paths.push(p)
+        }
+        if (paths.length > 0) {
+          if (useConnectHostStore.getState().activeHost !== 'local') {
+            void executeRemoteDrop(
+              paths,
+              { kind: 'terminal' },
+              { workspacePath: workspacePath || undefined },
+              buildComposeDropPayload,
+            ).then((payload) => {
+              if (payload) insertPathsText(payload)
+            })
+          } else {
+            insertPathsText(buildComposeDropPayload(paths))
+          }
+          return
+        }
+        // Hosted web / no File.path — upload File bytes then insert host path.
+        const browserFiles = filesFromDataTransfer(e.dataTransfer)
+        if (browserFiles.length > 0) {
+          void executeBrowserFileDrop(
+            browserFiles,
+            { kind: 'terminal' },
+            { workspacePath: workspacePath || undefined },
+            buildComposeDropPayload,
+          ).then((payload) => {
+            if (payload) insertPathsText(payload)
+          })
+          return
+        }
+      }
+      // Internal path list (text/plain from some drag sources)
+      const text = e.dataTransfer.getData('text/plain')
+      if (text?.trim()) insertPathsText(text.trim() + ' ')
+    },
+    [insertPathsText, workspacePath],
+  )
 
   const send = useCallback(async () => {
     const text = draft.trim()
@@ -147,31 +263,43 @@ export function TerminalComposeBar({ sessionId }: TerminalComposeBarProps): Reac
   if (!permitted) return null
 
   // One condensed row — just the textarea.
+  // min-w-0 on the flex row + field so app zoom (Cmd+=) reflows width
+  // instead of pinning content-min-width and growing a horizontal scrollbar.
   return (
     <div
-      className="flex flex-shrink-0 items-start gap-1 border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-2 pt-1.5 pb-2.5"
+      ref={barRef}
+      className="flex min-w-0 w-full flex-shrink-0 items-start gap-1 border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-2 pt-1.5 pb-2.5"
       data-compose-bar=""
       data-session-id={sessionId}
+      data-workspace-path={workspacePath || undefined}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
       <textarea
         ref={textareaRef}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={handleKeyDown}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
         rows={1}
         spellCheck={false}
-        placeholder="Message the agent — Enter to send, Shift+Enter for newline"
-        className="flex-1 resize-none bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+        placeholder="Message the agent — Enter to send, Shift+Enter for newline · drop files for paths"
+        className="min-w-0 w-full flex-1 resize-none overflow-x-hidden bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         style={{
           fontFamily:
             "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
-          fontSize: 12,
+          fontSize: editorFontSize,
           lineHeight: 1.4,
           border: '1px solid var(--color-border)',
           borderRadius: 0,
           padding: '4px 6px',
           maxHeight: MAX_TEXTAREA_HEIGHT,
           overflowY: 'auto',
+          overflowX: 'hidden',
+          // Break long tokens so zoom never forces a horizontal scrollbar.
+          overflowWrap: 'anywhere',
+          wordBreak: 'break-word',
         }}
       />
     </div>

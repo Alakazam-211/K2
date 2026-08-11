@@ -19,17 +19,22 @@ export function KindBadge({ kind }: { kind: FeedbackKind }): React.JSX.Element {
 }
 
 export function StatusBadge({ status }: { status: FeedbackStatus }): React.JSX.Element {
+  // waiting = yellow (warn-amber); needs_discussion = orange (working-soft,
+  // the previous waiting color); planned = accent; answered = green.
   const cls =
     status === 'waiting'
-      ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
-      : status === 'answered'
-        ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
-        : status === 'planned'
-          ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)]'
-          : 'bg-white/[0.06] text-[var(--color-text-muted)]'
+      ? 'bg-[color-mix(in_srgb,var(--color-status-warn-amber)_12%,transparent)] text-[var(--color-status-warn-amber)]'
+      : status === 'needs_discussion'
+        ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
+        : status === 'answered'
+          ? 'bg-[color-mix(in_srgb,var(--color-status-ok-soft)_10%,transparent)] text-[var(--color-status-ok-soft)]'
+          : status === 'planned'
+            ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)]'
+            : 'bg-white/[0.06] text-[var(--color-text-muted)]'
+  const label = status === 'needs_discussion' ? 'needs discussion' : status
   return (
     <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${cls}`}>
-      {status}
+      {label}
     </span>
   )
 }

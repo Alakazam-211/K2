@@ -36,6 +36,45 @@
   font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 }
 
+/*
+ * App chrome zoom (Cmd+= / Cmd+-) sets html { zoom } + --k2-app-zoom.
+ * Terminal GRID containers counter-scale so cell size is driven by
+ * terminal font size (Cmd+Shift+= / Cmd+Shift+-) only — not app zoom.
+ * Apply ONLY to the grid host, never a wrapper that also holds the
+ * compose bar: width: calc(100% * zoom) overflowed and forced
+ * horizontal scrollbars on "message the agent" and other fields.
+ */
+html {
+  --k2-app-zoom: 1;
+}
+[data-k2-exclude-app-zoom] {
+  zoom: calc(1 / var(--k2-app-zoom, 1));
+  width: calc(100% * var(--k2-app-zoom, 1));
+  height: calc(100% * var(--k2-app-zoom, 1));
+  max-width: none;
+  max-height: none;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  /* Don't let inverse-zoom layout spill into siblings (compose bar). */
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+/* Compose / chat fields under app zoom: shrink in flex, never grow a
+ * horizontal scrollbar that covers the caret/text. */
+[data-compose-bar],
+[data-compose-bar] textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+textarea.selectable-copy,
+[data-compose-bar] textarea {
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* All --color-* / --gap-* / --radius-* / --ring-* / --term-* custom
    properties are defined by styles.generated.css (imported above):
    :root carries the Square/Charcoal fallback, and [data-style]/[data-palette]

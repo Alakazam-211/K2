@@ -25,7 +25,8 @@ interface ChatSession {
   archivedAt?: number
 }
 
-type DateGroup = 'Pinned' | 'Today' | 'Yesterday' | 'This Week' | 'This Month' | 'Older' | 'Archive'
+/** Date buckets inside the General collapsible (not top-level sections). */
+type DateGroup = 'Today' | 'Yesterday' | 'This Week' | 'This Month' | 'Older'
 
 // A sandbox chat = an API-triggered session that ran INSIDE a hardened cell in
 // this workspace. Listed from the daemon's sandbox index; clicking re-launches
@@ -117,7 +118,7 @@ function formatTime(timestamp: number): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-const GROUP_ORDER: DateGroup[] = ['Pinned', 'Today', 'Yesterday', 'This Week', 'This Month', 'Older', 'Archive']
+const DATE_GROUP_ORDER: DateGroup[] = ['Today', 'Yesterday', 'This Week', 'This Month', 'Older']
 
 const AGE_ORANGE_MS = 20 * 86400000
 
@@ -212,7 +213,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const [renameValue, setRenameValue] = useState('')
   // Sandboxed chats (API-triggered sandbox sessions) — the audit-resume list.
   const [sandboxSessions, setSandboxSessions] = useState<SandboxChat[]>([])
-  const [showNormal, setShowNormal] = useState(true)
+  // Three top-level chat sections (replaces single "Chats" collapsible).
+  const [showPinned, setShowPinned] = useState(true)
+  const [showGeneral, setShowGeneral] = useState(true)
+  const [showArchived, setShowArchived] = useState(true)
   const [showSandbox, setShowSandbox] = useState(true)
   const [reopening, setReopening] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -338,46 +342,55 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     }
   }, [fetchSessions])
 
-  const grouped = useMemo(() => {
-    const groups = new Map<DateGroup, ChatSession[]>()
-
-    // Filter by search query if present
+  /** Split into top-level sections: Pinned | General (date buckets) | Archived. */
+  const { pinnedSessions, generalByDate, archivedSessions, generalCount } = useMemo(() => {
     const q = searchQuery.toLowerCase().trim()
     const filtered = q
       ? sessions.filter((s) => s.title.toLowerCase().includes(q))
       : sessions
-
-    // Sort newest first
     const sorted = [...filtered].sort((a, b) => b.timestamp - a.timestamp)
 
+    const pinned: ChatSession[] = []
+    const archived: ChatSession[] = []
+    const byDate = new Map<DateGroup, ChatSession[]>()
+
     for (const session of sorted) {
-      const key = `${session.provider}:${session.sessionId}`
-      // Archived never lands in Pinned — even if the pin bit is still set.
-      const group: DateGroup = session.archived
-        ? 'Archive'
-        : pinnedKeys.has(key)
-          ? 'Pinned'
-          : classifyDate(session.timestamp)
-      const existing = groups.get(group)
-      if (existing) {
-        existing.push(session)
-      } else {
-        groups.set(group, [session])
+      if (session.archived) {
+        archived.push(session)
+        continue
       }
+      const key = `${session.provider}:${session.sessionId}`
+      if (pinnedKeys.has(key)) {
+        pinned.push(session)
+        continue
+      }
+      const g = classifyDate(session.timestamp)
+      const existing = byDate.get(g)
+      if (existing) existing.push(session)
+      else byDate.set(g, [session])
     }
 
-    return groups
+    let gCount = 0
+    for (const items of byDate.values()) gCount += items.length
+
+    return {
+      pinnedSessions: pinned,
+      generalByDate: byDate,
+      archivedSessions: archived,
+      generalCount: gCount,
+    }
   }, [sessions, searchQuery, pinnedKeys])
 
-  // Flat ordered list of visible sessions for keyboard navigation
+  // Flat ordered list for keyboard nav: Pinned → General date groups → Archived
   const flatSessions = useMemo(() => {
-    const result: ChatSession[] = []
-    for (const group of GROUP_ORDER) {
-      const items = grouped.get(group)
+    const result: ChatSession[] = [...pinnedSessions]
+    for (const group of DATE_GROUP_ORDER) {
+      const items = generalByDate.get(group)
       if (items) result.push(...items)
     }
+    result.push(...archivedSessions)
     return result
-  }, [grouped])
+  }, [pinnedSessions, generalByDate, archivedSessions])
 
   // Reset selection when search query changes
   useEffect(() => {
@@ -512,8 +525,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
     // Context menu: archived → Copy Path + resume + Restore;
     // Claude live → Pin/Rename/Copy Path/resume + Archive; others without Archive (P0).
+    // Position after mount so menus near the bottom/right of the drawer flip
+    // into the viewport instead of opening off-page.
     const menuDiv = document.createElement('div')
-    menuDiv.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;background:var(--color-bg-elevated);border:1px solid var(--color-control-track-off);padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);`
+    menuDiv.style.cssText = `position:fixed;left:0;top:0;z-index:9999;visibility:hidden;background:var(--color-bg-elevated);border:1px solid var(--color-control-track-off);padding:2px 0;min-width:140px;font-size:11px;font-family:var(--font-mono,monospace);box-shadow:0 4px 12px rgba(0,0,0,0.35);`
     const config = PROVIDER_CONFIG[session.provider]
     const resumeCmd = config
       ? (config.resumeSubcommand
@@ -579,6 +594,24 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       menuDiv.appendChild(btn)
     }
     document.body.appendChild(menuDiv)
+    // Flip / clamp into the viewport after layout (bottom-of-list right-click
+    // previously opened downward and ran off the page).
+    const pad = 8
+    const rect = menuDiv.getBoundingClientRect()
+    let left = e.clientX
+    let top = e.clientY
+    if (left + rect.width > window.innerWidth - pad) {
+      left = Math.max(pad, window.innerWidth - rect.width - pad)
+    }
+    if (top + rect.height > window.innerHeight - pad) {
+      // Prefer opening upward from the cursor.
+      top = e.clientY - rect.height
+    }
+    if (top < pad) top = pad
+    if (left < pad) left = pad
+    menuDiv.style.left = `${left}px`
+    menuDiv.style.top = `${top}px`
+    menuDiv.style.visibility = 'visible'
     const dismiss = (ev: MouseEvent) => {
       if (!menuDiv.contains(ev.target as Node)) closeMenu()
     }
@@ -815,15 +848,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        {/* ── Section: Chats (normal, local sessions) ── */}
-        <button
-          className="no-drag w-full flex items-center gap-1.5 px-3 py-1.5 border-b border-white/[0.06] hover:bg-white/[0.03] transition-colors"
-          onClick={() => setShowNormal((v) => !v)}
-        >
-          <span className="text-[9px] text-[var(--color-text-muted)] w-2">{showNormal ? '▼' : '▶'}</span>
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] font-mono">Chats</span>
-        </button>
-        {showNormal && (loading ? (
+        {loading ? (
           <div className="px-3 py-6 text-center">
             <p className="text-[11px] text-[var(--color-text-muted)] font-mono">Loading...</p>
           </div>
@@ -831,110 +856,175 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           <div className="px-3 py-6 text-center">
             <p className="text-[11px] text-[var(--color-status-error-soft)] font-mono">Failed to load history</p>
           </div>
-        ) : sessions.length === 0 ? (
+        ) : sessions.length === 0 && sandboxSessions.length === 0 ? (
           <div className="px-3 py-6 text-center">
             <p className="text-[11px] text-[var(--color-text-muted)] font-mono">
               No conversations yet
             </p>
           </div>
-        ) : searchQuery.trim() && grouped.size === 0 ? (
+        ) : searchQuery.trim() && flatSessions.length === 0 ? (
           <div className="px-3 py-6 text-center">
             <p className="text-[11px] text-[var(--color-text-muted)] font-mono">
               No matching conversations
             </p>
           </div>
         ) : (
-          <div className="py-1">
+          <>
             {(() => {
+              // Shared row renderer + flat index for search keyboard nav.
               let flatIndex = 0
-              return GROUP_ORDER.map((group) => {
-                const items = grouped.get(group)
-                if (!items || items.length === 0) return null
-
+              const renderSessionRow = (session: ChatSession): React.JSX.Element => {
+                const idx = flatIndex++
+                const isSelected = searchVisible && idx === selectedIndex
                 return (
-                  <div key={group} className="mb-1">
-                    {/* Group header */}
-                    <div className="px-3 py-1.5 border-b border-white/[0.04]">
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] font-mono">
-                        {group}
-                      </span>
+                  <button
+                    key={`${session.provider}-${session.sessionId}`}
+                    ref={isSelected ? selectedRowRef : undefined}
+                    className={`no-drag w-full flex items-center gap-2 px-3 h-8 transition-colors text-left group ${
+                      isSelected
+                        ? 'bg-white/[0.08] text-[var(--color-text-primary)]'
+                        : 'hover:bg-white/[0.04] active:bg-white/[0.06]'
+                    }`}
+                    onClick={() => {
+                      if (renamingSession?.sessionId === session.sessionId && renamingSession?.provider === session.provider) return
+                      handleSessionClick(session)
+                    }}
+                    onContextMenu={(e) => handleContextMenu(session, e)}
+                  >
+                    <ProviderIcon provider={session.provider} />
+
+                    <div className="flex-1 min-w-0 flex flex-col justify-center">
+                      {renamingSession?.sessionId === session.sessionId && renamingSession?.provider === session.provider ? (
+                        <input
+                          ref={renameInputRef}
+                          type="text"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            e.stopPropagation()
+                            if (e.key === 'Enter') { e.preventDefault(); handleRenameSubmit() }
+                            if (e.key === 'Escape') { e.preventDefault(); setRenamingSession(null) }
+                          }}
+                          onKeyUp={(e) => e.stopPropagation()}
+                          onKeyPress={(e) => e.stopPropagation()}
+                          onBlur={handleRenameSubmit}
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          className="text-[11px] font-mono bg-white/[0.06] border border-[var(--color-accent)] text-[var(--color-text-primary)] px-1 py-0 outline-none w-full"
+                          maxLength={100}
+                        />
+                      ) : (
+                        <>
+                          <span className="text-[11px] text-[var(--color-text-secondary)] font-mono truncate leading-tight">
+                            {customNames[`${session.provider}:${session.sessionId}`] ?? session.title}
+                          </span>
+                          <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-tight flex items-center gap-1.5 truncate">
+                            {session.messageCount > 0 && (
+                              <span className="flex-shrink-0">{session.messageCount} msg{session.messageCount !== 1 ? 's' : ''}</span>
+                            )}
+                          </span>
+                        </>
+                      )}
                     </div>
 
-                    {/* Session rows */}
-                    {items.map((session) => {
-                      const idx = flatIndex++
-                      const isSelected = searchVisible && idx === selectedIndex
-                      return (
-                        <button
-                          key={`${session.provider}-${session.sessionId}`}
-                          ref={isSelected ? selectedRowRef : undefined}
-                          className={`no-drag w-full flex items-center gap-2 px-3 h-8 transition-colors text-left group ${
-                            isSelected
-                              ? 'bg-white/[0.08] text-[var(--color-text-primary)]'
-                              : 'hover:bg-white/[0.04] active:bg-white/[0.06]'
-                          }`}
-                          onClick={() => {
-                            if (renamingSession?.sessionId === session.sessionId && renamingSession?.provider === session.provider) return
-                            handleSessionClick(session)
-                          }}
-                          onContextMenu={(e) => handleContextMenu(session, e)}
-                        >
-                          <ProviderIcon provider={session.provider} />
-
-                          <div className="flex-1 min-w-0 flex flex-col justify-center">
-                            {renamingSession?.sessionId === session.sessionId && renamingSession?.provider === session.provider ? (
-                              <input
-                                ref={renameInputRef}
-                                type="text"
-                                value={renameValue}
-                                onChange={(e) => setRenameValue(e.target.value)}
-                                onKeyDown={(e) => {
-                                  e.stopPropagation()
-                                  if (e.key === 'Enter') { e.preventDefault(); handleRenameSubmit() }
-                                  if (e.key === 'Escape') { e.preventDefault(); setRenamingSession(null) }
-                                }}
-                                onKeyUp={(e) => e.stopPropagation()}
-                                onKeyPress={(e) => e.stopPropagation()}
-                                onBlur={handleRenameSubmit}
-                                onClick={(e) => e.stopPropagation()}
-                                onMouseDown={(e) => e.stopPropagation()}
-                                className="text-[11px] font-mono bg-white/[0.06] border border-[var(--color-accent)] text-[var(--color-text-primary)] px-1 py-0 outline-none w-full"
-                                maxLength={100}
-                              />
-                            ) : (
-                              <>
-                                <span
-                                  className="text-[11px] font-mono truncate leading-tight"
-                                  style={{
-                                    color:
-                                      Date.now() - session.timestamp >= AGE_ORANGE_MS
-                                        ? 'var(--color-status-working)'
-                                        : 'var(--color-text-secondary)',
-                                  }}
-                                >
-                                  {customNames[`${session.provider}:${session.sessionId}`] ?? session.title}
-                                </span>
-                                <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-tight flex items-center gap-1.5 truncate">
-                                  {session.messageCount > 0 && (
-                                    <span className="flex-shrink-0">{session.messageCount} msg{session.messageCount !== 1 ? 's' : ''}</span>
-                                  )}
-                                </span>
-                              </>
-                            )}
-                          </div>
-
-                          <span className="text-[10px] text-[var(--color-text-muted)] font-mono flex-shrink-0 tabular-nums">
-                            {formatTime(session.timestamp)}
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
+                    <span
+                      className="text-[10px] font-mono flex-shrink-0 tabular-nums"
+                      style={{
+                        color:
+                          Date.now() - session.timestamp >= AGE_ORANGE_MS
+                            ? 'var(--color-status-working)'
+                            : 'var(--color-text-muted)',
+                      }}
+                      title={
+                        Date.now() - session.timestamp >= AGE_ORANGE_MS
+                          ? 'Session is 20+ days old'
+                          : undefined
+                      }
+                    >
+                      {formatTime(session.timestamp)}
+                    </span>
+                  </button>
                 )
-              })
+              }
+
+              const sectionHeader = (
+                label: string,
+                open: boolean,
+                onToggle: () => void,
+                count: number,
+                /** Pinned sits under Chat History header which already has a bottom rule — skip top border. */
+                omitTopBorder?: boolean,
+              ): React.JSX.Element => (
+                <button
+                  type="button"
+                  className={`no-drag w-full flex items-center gap-1.5 px-3 py-1.5 border-b border-[var(--color-border)] hover:bg-white/[0.03] transition-colors ${
+                    omitTopBorder ? '' : 'border-t border-[var(--color-border)]'
+                  }`}
+                  onClick={onToggle}
+                >
+                  <span className="text-[9px] text-[var(--color-text-muted)] w-2">{open ? '▼' : '▶'}</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] font-mono">
+                    {label}
+                  </span>
+                  <span className="text-[9px] text-[var(--color-text-muted)] ml-auto tabular-nums">{count}</span>
+                </button>
+              )
+
+              return (
+                <>
+                  {/* ── Pinned (no top rule — Chat History header already has bottom border) ── */}
+                  {sectionHeader('Pinned', showPinned, () => setShowPinned((v) => !v), pinnedSessions.length, true)}
+                  {showPinned && (
+                    <div className="py-0.5">
+                      {pinnedSessions.length === 0 ? (
+                        <p className="px-3 py-2 text-[10px] text-[var(--color-text-muted)] font-mono">No pinned chats</p>
+                      ) : (
+                        pinnedSessions.map(renderSessionRow)
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── General (was Chats) — date subgroups only ── */}
+                  {sectionHeader('General', showGeneral, () => setShowGeneral((v) => !v), generalCount)}
+                  {showGeneral && (
+                    <div className="py-0.5">
+                      {generalCount === 0 ? (
+                        <p className="px-3 py-2 text-[10px] text-[var(--color-text-muted)] font-mono">No chats</p>
+                      ) : (
+                        DATE_GROUP_ORDER.map((group) => {
+                          const items = generalByDate.get(group)
+                          if (!items || items.length === 0) return null
+                          return (
+                            <div key={group} className="mb-0.5">
+                              <div className="px-3 py-1 border-b border-white/[0.04]">
+                                <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] font-mono">
+                                  {group}
+                                </span>
+                              </div>
+                              {items.map(renderSessionRow)}
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Archived ── */}
+                  {sectionHeader('Archived', showArchived, () => setShowArchived((v) => !v), archivedSessions.length)}
+                  {showArchived && (
+                    <div className="py-0.5">
+                      {archivedSessions.length === 0 ? (
+                        <p className="px-3 py-2 text-[10px] text-[var(--color-text-muted)] font-mono">No archived chats</p>
+                      ) : (
+                        archivedSessions.map(renderSessionRow)
+                      )}
+                    </div>
+                  )}
+                </>
+              )
             })()}
-          </div>
-        ))}
+          </>
+        )}
 
         {/* ── Section: Sandboxed (API-triggered cell sessions; re-launch in sandbox) ── */}
         {sandboxSessions.length > 0 && (

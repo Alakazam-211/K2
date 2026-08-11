@@ -4915,6 +4915,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // centered remainder (same treatment the right edge got in 0.40.25).
         padding: '4px 0 0 4px',
         position: 'relative',
+        // Own stacking context so HUD pills (viewing-at / pin / etc.)
+        // cannot paint above full-page overlays (Projects/Wiki/Feedback
+        // use z-50; unisolated z-index:999 competed at the root).
+        isolation: 'isolate',
         overflow: 'hidden',
         flex: 1,
         width: '100%',
@@ -5195,6 +5199,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         width: '100%',
         height: '100%',
         overflow: 'hidden',
+        minWidth: 0,
       }}
       data-terminal-pane-wrapper=""
     >
@@ -5202,6 +5207,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       ref={containerRef}
       className="kessel-pane"
       data-session-id={debugSessionId}
+      // Counter app chrome zoom (Cmd+=/-) for the GRID only — compose
+      // bar stays under app zoom so its width tracks the layout. See
+      // globals.css [data-k2-exclude-app-zoom] + applyK2SOZoom.
+      data-k2-exclude-app-zoom=""
       // App.tsx's global click + refocus-poll use these two data
       // attributes to find the active terminal and keep it focused
       // after (a) clicks on blank canvas, (b) Cmd+K / Cmd+L
@@ -5389,7 +5398,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             color: '#9a9a9a',
             fontSize: '10px',
             fontFamily: 'monospace',
-            zIndex: 999,
+            // Contained by pane isolation — keep low within the pane.
+            zIndex: 2,
             pointerEvents: 'none',
             borderRadius: '3px',
           }}
@@ -5417,7 +5427,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             color: '#9a9a9a',
             fontSize: '10px',
             fontFamily: 'monospace',
-            zIndex: 999,
+            zIndex: 2,
             borderRadius: '3px',
             cursor: 'default',
           }}
@@ -5441,7 +5451,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             color: '#9a9a9a',
             fontSize: '10px',
             fontFamily: 'monospace',
-            zIndex: 999,
+            zIndex: 2,
             pointerEvents: 'none',
             borderRadius: '3px',
           }}
@@ -5509,7 +5519,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             color: '#ff0',
             fontSize: '10px',
             fontFamily: 'monospace',
-            zIndex: 999,
+            zIndex: 2,
             pointerEvents: 'none',
             borderRadius: '3px',
           }}
@@ -5538,7 +5548,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
        *  same daemon sessionId) so focus/draft UX is not interrupted.
        *  Still requires a resolved daemon sessionId (never terminalId). */}
       {shouldShowTerminalComposeBar(phase) && 'sessionId' in phase && phase.sessionId && (
-        <TerminalComposeBar sessionId={phase.sessionId} />
+        <TerminalComposeBar sessionId={phase.sessionId} workspacePath={cwd} />
       )}
     </div>
   )

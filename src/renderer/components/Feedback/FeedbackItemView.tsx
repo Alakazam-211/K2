@@ -20,6 +20,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { useSettingsStore } from '@/stores/settings'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { KeyCombo } from '@/components/KeySymbol'
@@ -198,6 +199,8 @@ function ThreadTab({
   const [actionError, setActionError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Match Code Editor → Appearance → Font Size (default 12).
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
 
   // Focus the reply box ONCE per ticket id when the thread first becomes
   // ready — not on every live `item` refetch. Re-focus steals the caret
@@ -300,7 +303,10 @@ function ThreadTab({
 
   const canTapOptions = optionsActionable(item)
   const openItem =
-    item.status === 'waiting' || item.status === 'answered' || item.status === 'planned'
+    item.status === 'waiting' ||
+    item.status === 'answered' ||
+    item.status === 'planned' ||
+    item.status === 'needs_discussion'
 
   // Always a plain comment — the daemon lands human comments in the
   // asking session, and the first one on a waiting ask answers it.
@@ -371,7 +377,8 @@ function ThreadTab({
                   </div>
                   <SelectableText
                     text={c.body}
-                    className="text-xs text-[var(--color-text-primary)] mt-0.5"
+                    className="text-[var(--color-text-primary)] mt-0.5"
+                    style={{ fontSize: editorFontSize }}
                   />
                 </div>
               )
@@ -394,26 +401,23 @@ function ThreadTab({
           }}
           placeholder="Add a comment — it lands in the agent's session"
           rows={2}
-          className="w-full px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-y-auto placeholder:text-[var(--color-text-muted)] selectable-copy"
+          className="min-w-0 w-full max-w-full px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
+          style={{ fontSize: editorFontSize }}
         />
         <div className="flex items-center gap-2 mt-2">
-          <button
-            type="button"
-            disabled={busy || reply.trim().length === 0}
-            onClick={sendReply}
-            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center gap-1.5"
-          >
-            Comment
-            <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
-              <KeyCombo combo="⌘⏎" />
-            </span>
-          </button>
-          <div className="flex-1" />
           {openItem && (
             <>
               <button
                 type="button"
-                disabled={busy}
+                disabled={busy || item.status === 'needs_discussion'}
+                onClick={() => void submit(() => resolveFeedback(item.id, 'needs_discussion'))}
+                className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                Needs discussion
+              </button>
+              <button
+                type="button"
+                disabled={busy || item.status === 'planned'}
                 onClick={() => void submit(() => resolveFeedback(item.id, 'planned'))}
                 className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] disabled:opacity-50 transition-colors cursor-pointer"
               >
@@ -437,6 +441,18 @@ function ThreadTab({
               </button>
             </>
           )}
+          <div className="flex-1" />
+          <button
+            type="button"
+            disabled={busy || reply.trim().length === 0}
+            onClick={sendReply}
+            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center gap-1.5"
+          >
+            Comment
+            <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
+              <KeyCombo combo="⌘⏎" />
+            </span>
+          </button>
         </div>
       </div>
     </div>

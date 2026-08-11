@@ -238,8 +238,10 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
 }
 
 // ── App Zoom ─────────────────────────────────────────────────────────────
-// Uses CSS `zoom` on #root for crisp text at any zoom level.
+// Uses CSS `zoom` on <html> for crisp chrome at any zoom level.
 // Native WKWebView zoom is disabled via zoomHotkeysEnabled:false.
+// Terminals opt out via [data-k2-exclude-app-zoom] (inverse zoom) so
+// cell size stays under Cmd+Shift+=/- only — not Cmd+=/-.
 declare global {
   interface Window { __k2soZoom?: number }
 }
@@ -248,6 +250,7 @@ function applyK2SOZoom(): void {
   // Hosted web: `z3thon | K2` (subdomain from location); desktop: `K2`.
   // Zoom suffix shared: `… — 125%`.
   const z = window.__k2soZoom ?? 1
+  document.documentElement.style.setProperty('--k2-app-zoom', String(z))
   if (z === 1) {
     document.documentElement.style.zoom = ''
   } else {
@@ -390,31 +393,45 @@ function AppRoot(): React.JSX.Element {
         e.preventDefault()
         useTabsStore.getState().goForward()
       }
-      // Cmd+Shift++ to increase terminal font size
-      if (e.metaKey && e.shiftKey && e.key === '+') {
+      // Terminal font size ONLY (not app chrome) — Cmd+Shift+= / Cmd+Shift+-
+      // Shift+= often reports key "+" ; some platforms still report "=" with shiftKey.
+      if (
+        e.metaKey &&
+        e.shiftKey &&
+        (e.key === '+' || e.key === '=' || e.code === 'Equal' || e.key === '±')
+      ) {
         e.preventDefault()
         useTerminalSettingsStore.getState().incrementFontSize()
+        return
       }
-      // Cmd+Shift+- to decrease terminal font size
-      if (e.metaKey && e.shiftKey && e.key === '-') {
+      if (
+        e.metaKey &&
+        e.shiftKey &&
+        (e.key === '-' || e.key === '_' || e.code === 'Minus')
+      ) {
         e.preventDefault()
         useTerminalSettingsStore.getState().decrementFontSize()
+        return
       }
-      // App zoom — scales #root via transform and adjusts its dimensions to fill the window
-      if (e.metaKey && !e.shiftKey && (e.key === '=' || e.key === '+')) {
+      // App chrome zoom — does NOT change terminal font settings; terminals
+      // counter-scale via CSS so they stay under the Shift shortcuts above.
+      if (e.metaKey && !e.shiftKey && (e.key === '=' || e.key === '+' || e.code === 'Equal')) {
         e.preventDefault()
         window.__k2soZoom = Math.min(Math.round(((window.__k2soZoom ?? 1) + 0.1) * 10) / 10, 2.0)
         applyK2SOZoom()
+        return
       }
-      if (e.metaKey && !e.shiftKey && e.key === '-') {
+      if (e.metaKey && !e.shiftKey && (e.key === '-' || e.code === 'Minus')) {
         e.preventDefault()
         window.__k2soZoom = Math.max(Math.round(((window.__k2soZoom ?? 1) - 0.1) * 10) / 10, 0.5)
         applyK2SOZoom()
+        return
       }
       if (e.metaKey && !e.shiftKey && e.key === '0') {
         e.preventDefault()
         window.__k2soZoom = 1
         applyK2SOZoom()
+        return
       }
     }
     window.addEventListener('keydown', handler)
@@ -637,20 +654,20 @@ function AppRoot(): React.JSX.Element {
       // (Fn-Fn or Globe) fires `startDictation:` against the first
       // responder, which is the focused shadow textarea inside the
       // active terminal pane. See PRD: .k2so/prds/voice-dictation.md.
-      // Zoom events from menu — use native WKWebView zoom via Tauri API
+      // Menu zoom — same CSS path as Cmd+=/- (not native WKWebView zoom,
+      // which would also scale terminal cells and fight the terminal-font
+      // shortcuts).
       listen('app:zoom-in', () => {
-        import('@tauri-apps/api/webview').then(m => m.getCurrentWebview().setZoom(
-          (window as any).__k2soNativeZoom = Math.min(((window as any).__k2soNativeZoom ?? 1) + 0.2, 3)
-        ))
+        window.__k2soZoom = Math.min(Math.round(((window.__k2soZoom ?? 1) + 0.1) * 10) / 10, 2.0)
+        applyK2SOZoom()
       }).then(track)
       listen('app:zoom-out', () => {
-        import('@tauri-apps/api/webview').then(m => m.getCurrentWebview().setZoom(
-          (window as any).__k2soNativeZoom = Math.max(((window as any).__k2soNativeZoom ?? 1) - 0.2, 0.4)
-        ))
+        window.__k2soZoom = Math.max(Math.round(((window.__k2soZoom ?? 1) - 0.1) * 10) / 10, 0.5)
+        applyK2SOZoom()
       }).then(track)
       listen('app:zoom-reset', () => {
-        (window as any).__k2soNativeZoom = 1
-        import('@tauri-apps/api/webview').then(m => m.getCurrentWebview().setZoom(1))
+        window.__k2soZoom = 1
+        applyK2SOZoom()
       }).then(track)
     })
     return () => {

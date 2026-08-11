@@ -28,6 +28,7 @@ import {
   resolveFileTreeFolder,
   classifyExternalDrop,
   buildTerminalDropPayload,
+  buildComposeDropPayload,
   pointInRect,
   panelOwnsFolderPath,
   findFileTreePanelAt,
@@ -97,8 +98,31 @@ describe('resolveFileTreeFolder', () => {
 describe('classifyExternalDrop', () => {
   const fakeEl = { tagName: 'DIV' } as unknown as HTMLElement
 
+  it('prefers compose over terminal and file-tree', () => {
+    const target = classifyExternalDrop({
+      compose: {
+        sessionId: 'sess-1',
+        workspacePath: '/ws',
+        element: fakeEl,
+      },
+      terminal: {
+        terminalId: 't1',
+        terminalKind: 'v2',
+        workspacePath: '/ws',
+        element: fakeEl,
+      },
+      fileTreeFolder: '/ws/docs',
+    })
+    expect(target).toMatchObject({
+      kind: 'compose',
+      sessionId: 'sess-1',
+      workspacePath: '/ws',
+    })
+  })
+
   it('prefers terminal over file-tree folder', () => {
     const target = classifyExternalDrop({
+      compose: null,
       terminal: {
         terminalId: 't1',
         terminalKind: 'v2',
@@ -116,6 +140,7 @@ describe('classifyExternalDrop', () => {
 
   it('routes to folder when no terminal is hit', () => {
     const target = classifyExternalDrop({
+      compose: null,
       terminal: null,
       fileTreeFolder: '/ws/inbox',
     })
@@ -124,6 +149,7 @@ describe('classifyExternalDrop', () => {
 
   it('routes to miss when neither terminal nor files panel is hit', () => {
     const target = classifyExternalDrop({
+      compose: null,
       terminal: null,
       fileTreeFolder: null,
     })
@@ -143,6 +169,16 @@ describe('buildTerminalDropPayload', () => {
     expect(payload.startsWith(BRACKETED_PASTE_START)).toBe(true)
     expect(payload.endsWith(BRACKETED_PASTE_END)).toBe(true)
     expect(payload).toContain('/tmp/shot.png')
+  })
+})
+
+describe('buildComposeDropPayload', () => {
+  it('joins paths with a trailing space and no bracketed paste', () => {
+    const payload = buildComposeDropPayload(['/tmp/a.txt', '/tmp/shot.png'])
+    expect(payload.endsWith(' ')).toBe(true)
+    expect(payload).toContain('/tmp/a.txt')
+    expect(payload).toContain('/tmp/shot.png')
+    expect(payload.startsWith(BRACKETED_PASTE_START)).toBe(false)
   })
 })
 

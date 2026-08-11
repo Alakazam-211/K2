@@ -328,10 +328,11 @@ export default function IconRail(): React.JSX.Element {
         ))}
       </div>
 
-      {/* Zone 3: Active */}
+      {/* Zone 3: Active — capped + scrollable so a long active set does not
+          overflow the rail or steal space from the focus-group list above. */}
       {activeProjects.length > 0 && (
-        <div className="flex flex-col items-center gap-0.5 pt-1.5 w-full">
-          <div className="w-6 border-b border-[var(--color-border)] mb-1" />
+        <div className="flex flex-col items-center gap-0.5 pt-1.5 w-full flex-shrink min-h-0 max-h-[40%] overflow-y-auto overflow-x-hidden">
+          <div className="w-6 border-b border-[var(--color-border)] mb-1 flex-shrink-0" />
           {activeProjects.map((project, i) => (
             <ProjectIcon
               key={project.id}

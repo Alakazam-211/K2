@@ -4,7 +4,9 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  collectAssignees,
   countByStatus,
+  filterByAssignee,
   filterBySearch,
   groupByStatus,
   optionsActionable,
@@ -23,9 +25,10 @@ describe('sortNewestFirst', () => {
 })
 
 describe('groupByStatus', () => {
-  it('splits waiting / answered / planned / closed', () => {
+  it('splits waiting / needs_discussion / answered / planned / closed', () => {
     const rows = [
       { status: 'waiting' as FeedbackStatus, id: 'w' },
+      { status: 'needs_discussion' as FeedbackStatus, id: 'n' },
       { status: 'answered' as FeedbackStatus, id: 'a' },
       { status: 'planned' as FeedbackStatus, id: 'p' },
       { status: 'resolved' as FeedbackStatus, id: 'r' },
@@ -33,6 +36,7 @@ describe('groupByStatus', () => {
     ]
     const g = groupByStatus(rows)
     expect(g.waiting.map((r) => r.id)).toEqual(['w'])
+    expect(g.needs_discussion.map((r) => r.id)).toEqual(['n'])
     expect(g.answered.map((r) => r.id)).toEqual(['a'])
     expect(g.planned.map((r) => r.id)).toEqual(['p'])
     expect(g.closed.map((r) => r.id)).toEqual(['r', 'd'])
@@ -44,13 +48,15 @@ describe('countByStatus', () => {
     const rows = [
       { status: 'waiting' as FeedbackStatus },
       { status: 'waiting' as FeedbackStatus },
+      { status: 'needs_discussion' as FeedbackStatus },
       { status: 'answered' as FeedbackStatus },
       { status: 'dismissed' as FeedbackStatus },
       { status: 'planned' as FeedbackStatus },
     ]
     expect(countByStatus(rows)).toEqual({
-      all: 5,
+      all: 6,
       waiting: 2,
+      needs_discussion: 1,
       answered: 1,
       resolved: 0,
       dismissed: 1,
@@ -61,6 +67,7 @@ describe('countByStatus', () => {
     expect(countByStatus([])).toEqual({
       all: 0,
       waiting: 0,
+      needs_discussion: 0,
       answered: 0,
       resolved: 0,
       dismissed: 0,
@@ -102,5 +109,26 @@ describe('optionsActionable', () => {
     expect(optionsActionable({ status: 'waiting', options: null })).toBe(false)
     expect(optionsActionable({ status: 'answered', options: ['Yes'] })).toBe(false)
     expect(optionsActionable({ status: 'resolved', options: ['Yes'] })).toBe(false)
+  })
+})
+
+describe('collectAssignees / filterByAssignee', () => {
+  const rows = [
+    { id: '1', assignees: ['owner', 'julie'] },
+    { id: '2', assignees: ['julie'] },
+    { id: '3', assignees: [] as string[] },
+    { id: '4', assignees: null as unknown as string[] },
+  ]
+
+  it('collects unique usernames sorted A–Z', () => {
+    expect(collectAssignees(rows)).toEqual(['julie', 'owner'])
+  })
+
+  it('filters all / unassigned / named assignee', () => {
+    expect(filterByAssignee(rows, 'all').map((r) => r.id)).toEqual(['1', '2', '3', '4'])
+    expect(filterByAssignee(rows, 'unassigned').map((r) => r.id)).toEqual(['3', '4'])
+    expect(filterByAssignee(rows, 'julie').map((r) => r.id)).toEqual(['1', '2'])
+    expect(filterByAssignee(rows, 'owner').map((r) => r.id)).toEqual(['1'])
+    expect(filterByAssignee(rows, 'nobody')).toEqual([])
   })
 })

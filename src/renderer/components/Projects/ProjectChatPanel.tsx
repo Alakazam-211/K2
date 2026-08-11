@@ -29,6 +29,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
+import { useSettingsStore } from '@/stores/settings'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { KeyCombo } from '@/components/KeySymbol'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
@@ -88,6 +89,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     }
   }, [])
   const readOnly = !canPostProjectChat(connectRole)
+  // Match Code Editor → Appearance → Font Size (default 12).
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
 
   // null = never fetched (loading state on first expand).
   const [messages, setMessages] = useState<ProjectGroupMessage[] | null>(null)
@@ -111,18 +114,14 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     clearStuckBodyUserSelect()
   }, [show.id])
 
-  // Auto-grow the composer with content. Empty → clear inline height
-  // (natural rows=1 resting size). Non-empty → collapse then measure so
-  // shrink-on-delete works without a too-tall forced floor.
+  // Auto-grow the composer with content — same as ticket FeedbackItemView:
+  // always measure from `height: auto` so the rows={2} resting size is kept
+  // when empty / first character (not collapsed to a 1-line floor).
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
     const MAX = 240
-    if (!el.value) {
-      el.style.height = ''
-      return
-    }
-    el.style.height = '0px'
+    el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, MAX)}px`
   }, [draft])
   const [sendError, setSendError] = useState<string | null>(null)
@@ -388,7 +387,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                       </div>
                       <SelectableText
                         text={m.body}
-                        className="text-xs text-[var(--color-text-primary)] mt-0.5"
+                        className="text-[var(--color-text-primary)] mt-0.5"
+                        style={{ fontSize: editorFontSize }}
                       />
                       {delivery && (
                         <div className="mt-0.5 text-[9px] text-[var(--color-text-muted)] opacity-80 italic">
@@ -405,7 +405,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         </SelectableRegion>
 
         {/* Composer — gated on Connect role (≥ Member); hidden for Viewers. */}
-        <div className="border-t border-[var(--color-border)] px-3 py-2 flex-shrink-0">
+        <div className="border-t border-[var(--color-border)] px-3 py-2 flex-shrink-0 min-w-0 w-full">
           {readOnly ? (
             <div className="text-[10px] text-[var(--color-text-muted)] py-1">
               Viewers can read project chat but can&rsquo;t post.
@@ -428,7 +428,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                 }}
                 placeholder={composerPlaceholder(show.members, show.pocWorkspaceId)}
                 rows={2}
-                className="w-full px-2.5 py-2 text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-y-auto placeholder:text-[var(--color-text-muted)] selectable-copy"
+                className="min-w-0 w-full max-w-full box-border px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
+                style={{ fontSize: editorFontSize }}
               />
               <div className="flex justify-end mt-1.5">
                 <button

@@ -18,6 +18,7 @@ export type FeedbackStatus =
   | 'resolved'
   | 'dismissed'
   | 'planned'
+  | 'needs_discussion'
 
 export interface FeedbackItem {
   id: string
@@ -141,13 +142,21 @@ export async function commentFeedback(id: string, body: string): Promise<void> {
   await daemonCliPost('feedback/comment', { id, body })
 }
 
-/** POST /cli/feedback/resolve — `resolved`, `dismissed`, `planned`, or
- *  `waiting` (reopen). `answered` is NOT manually settable. */
+/** POST /cli/feedback/resolve — `resolved`, `dismissed`, `planned`,
+ *  `needs_discussion`, or `waiting` (reopen). `answered` is NOT manually
+ *  settable. */
 export async function resolveFeedback(
   id: string,
-  status: 'resolved' | 'dismissed' | 'waiting' | 'planned',
+  status: 'resolved' | 'dismissed' | 'waiting' | 'planned' | 'needs_discussion',
 ): Promise<void> {
   await daemonCliPost('feedback/resolve', { id, status })
+}
+
+/** Human-readable status label for chips / badges. */
+export function statusLabel(status: FeedbackStatus | 'all'): string {
+  if (status === 'all') return 'All'
+  if (status === 'needs_discussion') return 'Needs discussion'
+  return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
 /** POST /cli/feedback/assign — replace assignee set (username snapshots). */
@@ -167,10 +176,11 @@ export function sortNewestFirst<T extends { createdAt: number }>(rows: T[]): T[]
   return [...rows].sort((a, b) => b.createdAt - a.createdAt)
 }
 
-/** Page grouping: waiting items are the prominent section; answered and
- *  closed (resolved/dismissed) stay accessible below. */
+/** Page grouping: waiting / needs discussion are open sections; answered
+ *  and closed (resolved/dismissed) stay accessible below. */
 export interface GroupedFeedback<T> {
   waiting: T[]
+  needs_discussion: T[]
   answered: T[]
   planned: T[]
   closed: T[]
@@ -181,12 +191,14 @@ export function groupByStatus<T extends { status: FeedbackStatus }>(
 ): GroupedFeedback<T> {
   const grouped: GroupedFeedback<T> = {
     waiting: [],
+    needs_discussion: [],
     answered: [],
     planned: [],
     closed: [],
   }
   for (const row of rows) {
     if (row.status === 'waiting') grouped.waiting.push(row)
+    else if (row.status === 'needs_discussion') grouped.needs_discussion.push(row)
     else if (row.status === 'answered') grouped.answered.push(row)
     else if (row.status === 'planned') grouped.planned.push(row)
     else grouped.closed.push(row)
@@ -201,6 +213,7 @@ export function groupByStatus<T extends { status: FeedbackStatus }>(
 export interface StatusCounts {
   all: number
   waiting: number
+  needs_discussion: number
   answered: number
   resolved: number
   dismissed: number
@@ -211,6 +224,7 @@ export function countByStatus<T extends { status: FeedbackStatus }>(rows: T[]): 
   const counts: StatusCounts = {
     all: rows.length,
     waiting: 0,
+    needs_discussion: 0,
     answered: 0,
     resolved: 0,
     dismissed: 0,
@@ -244,4 +258,32 @@ export function filterBySearch<
       .toLowerCase()
     return terms.every((t) => haystack.includes(t))
   })
+}
+
+/** Assignee filter values for the board people dropdown. */
+export type AssigneeFilter = 'all' | 'unassigned' | string
+
+/** Unique assignee usernames across rows, sorted A–Z. */
+export function collectAssignees<T extends { assignees?: string[] | null }>(rows: T[]): string[] {
+  const set = new Set<string>()
+  for (const row of rows) {
+    for (const name of row.assignees ?? []) {
+      const t = name.trim()
+      if (t) set.add(t)
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b))
+}
+
+/** Filter rows by assignee. `all` = no filter; `unassigned` = empty
+ *  assignee set; otherwise the username must appear on the ticket. */
+export function filterByAssignee<T extends { assignees?: string[] | null }>(
+  rows: T[],
+  assignee: AssigneeFilter,
+): T[] {
+  if (assignee === 'all') return rows
+  if (assignee === 'unassigned') {
+    return rows.filter((r) => (r.assignees?.length ?? 0) === 0)
+  }
+  return rows.filter((r) => (r.assignees ?? []).includes(assignee))
 }

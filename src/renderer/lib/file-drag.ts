@@ -193,8 +193,23 @@ export function beginFileDrag(paths: string[], startX: number, startY: number, c
 
     const el = document.elementFromPoint(ev.clientX, ev.clientY)
 
-    // Hit-test: is the drop over a terminal container?
+    // Hit-test: agent compose bar first — insert host paths into the draft
+    // (FileTree paths are already on the active host; no re-upload).
     if (el) {
+      const composeBar = (el as HTMLElement).closest('[data-compose-bar]') as HTMLElement | null
+      if (composeBar) {
+        const formatted =
+          dragPaths.map((p) =>
+            isImagePath(p) ? quotePathForImageDrop(p) : shellEscape(p),
+          ).join(' ') + ' '
+        composeBar.dispatchEvent(
+          new CustomEvent('k2so:compose-insert', { detail: { data: formatted } }),
+        )
+        dragPaths = []
+        return
+      }
+
+      // Hit-test: is the drop over a terminal container?
       const termContainer = (el as HTMLElement).closest('[data-terminal-id]') as HTMLElement | null
       if (termContainer && termContainer.dataset.terminalId) {
         // Paste paths into the terminal. Images use minimal quoting so Claude

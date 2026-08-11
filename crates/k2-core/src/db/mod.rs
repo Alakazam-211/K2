@@ -778,6 +778,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0097_chat_session_archived",
             include_str!("../../drizzle_sql/0097_chat_session_archived.sql"),
         ),
+        // 0098 — tickets status `needs_discussion` (orange board state;
+        // waiting stays open but uses yellow in the UI).
+        (
+            "0098_feedback_needs_discussion",
+            include_str!("../../drizzle_sql/0098_feedback_needs_discussion.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

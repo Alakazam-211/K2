@@ -113,6 +113,36 @@ pub fn handle_session_exists(params: &HashMap<String, String>) -> CliResponse {
     CliResponse::ok_json(serde_json::json!({ "exists": exists }).to_string())
 }
 
+/// GET chat/session-path — resolve the on-disk storage path for a listed chat
+/// (transcript / store.db / session dir) for the Chats sidebar "Copy Path".
+pub fn handle_session_path(params: &HashMap<String, String>) -> CliResponse {
+    let provider = params.get("provider").cloned().unwrap_or_default();
+    let session_id = params
+        .get("session_id")
+        .or_else(|| params.get("sessionId"))
+        .cloned()
+        .unwrap_or_default();
+    let project_path = params
+        .get("project_path")
+        .or_else(|| params.get("project"))
+        .cloned()
+        .unwrap_or_default();
+    if provider.is_empty() || session_id.is_empty() {
+        return CliResponse::bad_request(
+            "Missing 'provider' or 'session_id' parameter",
+        );
+    }
+    // Prefer the session's own project field; fall back to list filter path.
+    let path = ch::resolve_session_storage_path(&provider, &session_id, &project_path);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "path": path,
+            "project": if project_path.is_empty() { serde_json::Value::Null } else { serde_json::json!(project_path) },
+        })
+        .to_string(),
+    )
+}
+
 // ── POST handlers ─────────────────────────────────────────────────────
 
 #[derive(Deserialize)]

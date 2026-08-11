@@ -1046,6 +1046,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/chat/detect-active" => crate::chat_routes::handle_detect_active(params),
         "/cli/chat/discover-ide" => crate::chat_routes::handle_discover_ide(params),
         "/cli/chat/session-exists" => crate::chat_routes::handle_session_exists(params),
+        "/cli/chat/session-path" => crate::chat_routes::handle_session_path(params),
 
         // ── Phase 2 Unit 6: themes (GET) ──────────────────────────
         "/cli/themes/list" => crate::themes_routes::handle_list(params),

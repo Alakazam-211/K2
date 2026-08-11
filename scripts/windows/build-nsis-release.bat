@@ -14,6 +14,14 @@ cd /d "%K2_WIN_TREE%" || exit /b 1
 echo CARGO_TARGET_DIR=%CARGO_TARGET_DIR%
 echo K2_WIN_TREE=%K2_WIN_TREE%
 
+REM Expected product version (from release.sh / windows-nsis-build.sh). Required so we
+REM never ALL_OK a stale K2_0.40.93 installer while GH wants 0.40.94.
+if not defined K2_WIN_VERSION (
+  echo FATAL: K2_WIN_VERSION is not set ^(e.g. 0.40.94^)
+  exit /b 1
+)
+echo K2_WIN_VERSION=%K2_WIN_VERSION%
+
 echo === bun install ===
 call bun install --frozen-lockfile
 if errorlevel 1 (
@@ -82,13 +90,15 @@ if not exist "%REL%\frpc.exe" (
 dir "%REL%\k2.exe" "%REL%\k2-daemon.exe" "%REL%\frpc.exe"
 
 set "NSIS_DIR=%REL%\bundle\nsis"
-dir /b "%NSIS_DIR%\K2_*_x64-setup.exe" >nul 2>&1
-if errorlevel 1 (
-  echo FATAL: NSIS installer missing under %NSIS_DIR%
+set "EXPECTED_SETUP=K2_%K2_WIN_VERSION%_x64-setup.exe"
+if not exist "%NSIS_DIR%\%EXPECTED_SETUP%" (
+  echo FATAL: expected installer missing: %NSIS_DIR%\%EXPECTED_SETUP%
+  echo Listing NSIS dir ^(stale other versions will NOT be accepted^):
   dir "%NSIS_DIR%"
   exit /b 1
 )
-dir "%NSIS_DIR%\*.exe"
+dir "%NSIS_DIR%\%EXPECTED_SETUP%"
+echo INSTALLER_NAME=%EXPECTED_SETUP%
 
 echo ALL_OK
 echo BUNDLE_PEERS=k2.exe+k2-daemon.exe+frpc.exe

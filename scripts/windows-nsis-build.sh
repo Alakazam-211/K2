@@ -56,6 +56,26 @@ REMOTE_INSTALLER="${TARGET_DIR}/release/bundle/nsis/${INSTALLER_NAME}"
 echo "Windows NSIS build on ${HOST} (tree ${REMOTE_DIR}, target ${TARGET_DIR})..."
 echo "  version=${VERSION}  installer=${INSTALLER_NAME}"
 
+# Fail early if the tree we're about to ship doesn't match the release tag
+# (this is what produced a K2_0.40.93_* setup while release expected 0.40.94).
+PKG_VER="$(
+    python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" \
+        "$PROJECT_DIR/package.json" 2>/dev/null \
+    || node -e "console.log(require(process.argv[1]).version)" \
+        "$PROJECT_DIR/package.json" 2>/dev/null \
+    || sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PROJECT_DIR/package.json" | head -1
+)"
+if [ -z "$PKG_VER" ]; then
+    echo "ERROR: could not read package.json version from $PROJECT_DIR" >&2
+    exit 1
+fi
+if [ "$PKG_VER" != "$VERSION" ]; then
+    echo "ERROR: package.json version is ${PKG_VER}, but build requested ${VERSION}." >&2
+    echo "  release.sh must bump versions before Step 9.5; do not build Windows from a stale tree." >&2
+    exit 1
+fi
+echo "  package.json version matches ${VERSION}."
+
 if ! ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" "echo ok" >/dev/null; then
     echo "ERROR: cannot ssh to ${HOST}. Is the sticky Windows box up?" >&2
     echo "  Host alias contract: only 'k2-win' (or K2_WINDOWS_SSH_HOST) — no LAN IPs in scripts." >&2
@@ -88,15 +108,21 @@ scp -o BatchMode=yes -o ConnectTimeout=60 \
 
 REMOTE_DIR_CMD="$(printf '%s' "$REMOTE_DIR" | tr '/' '\\')"
 TARGET_DIR_CMD="$(printf '%s' "$TARGET_DIR" | tr '/' '\\')"
+NSIS_DIR_CMD="${TARGET_DIR_CMD}\\release\\bundle\\nsis"
 
 echo "  Extracting on ${HOST}..."
 ssh -o BatchMode=yes -o ServerAliveInterval=30 "$HOST" \
     "cmd /c \"if not exist ${REMOTE_DIR_CMD} mkdir ${REMOTE_DIR_CMD} && tar -xzf C:\\k2\\tree.tgz -C ${REMOTE_DIR_CMD} && copy /Y C:\\k2\\build-nsis-release.bat C:\\k2\\build-nsis-release.bat\""
 
+# Drop stale NSIS names so a leftover K2_0.40.93_* can't satisfy a loose check.
+echo "  Clearing prior NSIS outputs under ${NSIS_DIR_CMD}..."
+ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
+    "cmd /c \"if exist ${NSIS_DIR_CMD}\\K2_*_x64-setup.exe del /F /Q ${NSIS_DIR_CMD}\\K2_*_x64-setup.exe\""
+
 echo "  Building NSIS on ${HOST} (several minutes; ServerAlive keeps SSH up)..."
 set +e
 ssh -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=240 "$HOST" \
-    "cmd /c \"set CARGO_TARGET_DIR=${TARGET_DIR_CMD}&& set K2_WIN_TREE=${REMOTE_DIR_CMD}&& C:\\k2\\build-nsis-release.bat\"" \
+    "cmd /c \"set CARGO_TARGET_DIR=${TARGET_DIR_CMD}&& set K2_WIN_TREE=${REMOTE_DIR_CMD}&& set K2_WIN_VERSION=${VERSION}&& C:\\k2\\build-nsis-release.bat\"" \
     2>&1 | tee "$STAGE/build.log"
 BUILD_RC=${PIPESTATUS[0]}
 set -e
@@ -108,10 +134,15 @@ if [ "$BUILD_RC" -ne 0 ] || ! grep -q "ALL_OK" "$STAGE/build.log"; then
 fi
 
 mkdir -p "$OUT_DIR"
-echo "  Fetching installer..."
-scp -o BatchMode=yes \
+echo "  Fetching installer ${INSTALLER_NAME}..."
+if ! scp -o BatchMode=yes \
     "${HOST}:${REMOTE_INSTALLER}" \
-    "${OUT_DIR}/${INSTALLER_NAME}"
+    "${OUT_DIR}/${INSTALLER_NAME}"; then
+    echo "ERROR: scp failed for exact name ${INSTALLER_NAME}. Remote NSIS dir:" >&2
+    ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
+        "cmd /c dir ${NSIS_DIR_CMD}" >&2 || true
+    exit 1
+fi
 
 if [ ! -f "${OUT_DIR}/${INSTALLER_NAME}" ]; then
     echo "ERROR: installer missing after scp: ${OUT_DIR}/${INSTALLER_NAME}" >&2

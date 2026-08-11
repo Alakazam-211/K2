@@ -7,8 +7,8 @@
 // Esc (or close) returns to Agents.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import remarkGfm from 'remark-gfm'
+import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
 import { usePageViewStore } from '@/stores/page-view'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
@@ -445,11 +445,7 @@ export default function WikiPage(): React.JSX.Element | null {
         role2="surface"
         bordered={false}
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
-        data-tauri-drag-region
-        onMouseDown={(e) => {
-          if ((e.target as HTMLElement).closest('button, input, select, .no-drag')) return
-          void getCurrentWindow().startDragging()
-        }}
+        onMouseDown={titleBarDragOnMouseDown}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">

@@ -58,7 +58,17 @@ pub const DAEMON_BINARY_NAME: &str = "k2-daemon";
 ///   pointing at this Tauri install, this is the binary path it would
 ///   reference" without actually performing the install.
 pub fn bundled_daemon_path(tauri_exe: &Path) -> Option<PathBuf> {
-    tauri_exe.parent().map(|d| d.join(DAEMON_BINARY_NAME))
+    tauri_exe.parent().map(|d| {
+        // Windows executables require the `.exe` suffix for exists()/spawn.
+        #[cfg(windows)]
+        {
+            d.join(format!("{DAEMON_BINARY_NAME}.exe"))
+        }
+        #[cfg(not(windows))]
+        {
+            d.join(DAEMON_BINARY_NAME)
+        }
+    })
 }
 
 /// Build the `launchctl kickstart -k <target>` argument vector that
@@ -282,13 +292,24 @@ mod tests {
 
     #[test]
     fn bundled_daemon_path_resolves_next_to_tauri_exe() {
-        let path = bundled_daemon_path(Path::new(
-            "/Applications/K2.app/Contents/MacOS/k2",
-        ));
-        assert_eq!(
-            path,
-            Some(PathBuf::from("/Applications/K2.app/Contents/MacOS/k2-daemon")),
-        );
+        #[cfg(windows)]
+        {
+            let path = bundled_daemon_path(Path::new(r"C:\Program Files\K2\k2.exe"));
+            assert_eq!(
+                path,
+                Some(PathBuf::from(r"C:\Program Files\K2\k2-daemon.exe")),
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            let path = bundled_daemon_path(Path::new(
+                "/Applications/K2.app/Contents/MacOS/k2",
+            ));
+            assert_eq!(
+                path,
+                Some(PathBuf::from("/Applications/K2.app/Contents/MacOS/k2-daemon")),
+            );
+        }
     }
 
     #[test]

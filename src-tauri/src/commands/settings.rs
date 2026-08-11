@@ -372,8 +372,14 @@ pub fn relaunch_via_open(_app: AppHandle) {
             }
         }
     }
-    // Now exit hard — _exit skips Metal destructor crash, helper script handles relaunch
-    unsafe { libc::_exit(0); }
+    // Now exit hard — _exit skips Metal destructor crash, helper script handles relaunch.
+    // libc::_exit is unix-shaped; Windows uses process::exit (no Metal teardown race).
+    #[cfg(unix)]
+    unsafe {
+        libc::_exit(0);
+    }
+    #[cfg(not(unix))]
+    std::process::exit(0);
 }
 
 /// Set the macOS window close button dot (document edited indicator).

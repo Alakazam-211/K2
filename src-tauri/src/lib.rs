@@ -251,6 +251,115 @@ fn check_daemon_version_and_restart() {
     });
 }
 
+/// Non-macOS: if the local daemon is not answering `/boot-status` on the
+/// published port (or no port file exists), spawn the bundled `k2-daemon`
+/// next to this exe and wait briefly for readiness.
+///
+/// macOS uses launchd (`ensure_loaded`); Windows has no service unit yet,
+/// so without this the thin client sits on "connecting" forever against a
+/// stale `~/.k2/daemon.port` (SYN_SENT). Best-effort: log + return if the
+/// binary is missing (dev builds).
+#[cfg(not(target_os = "macos"))]
+fn ensure_local_daemon_process() {
+    use std::time::Duration;
+
+    if local_daemon_boot_ready() {
+        log_debug!("[k2so] local daemon already ready (boot-status)");
+        return;
+    }
+
+    let Some(daemon_bin) = std::env::current_exe()
+        .ok()
+        .and_then(|p| k2_core::daemon_lifecycle::bundled_daemon_path(&p))
+        .filter(|p| p.exists())
+    else {
+        log_debug!(
+            "[k2so] no bundled k2-daemon next to thin client — cannot auto-start (install Program Files layout or run k2-daemon manually)"
+        );
+        return;
+    };
+
+    log_debug!(
+        "[k2so] local daemon not ready; spawning {}",
+        daemon_bin.display()
+    );
+
+    let mut cmd = std::process::Command::new(&daemon_bin);
+    if let Some(dir) = daemon_bin.parent() {
+        cmd.current_dir(dir);
+    }
+    // Detach from the UI process so closing the window does not kill the
+    // daemon (and no console window flashes on Windows).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    match cmd.spawn() {
+        Ok(child) => log_debug!("[k2so] spawned k2-daemon pid={}", child.id()),
+        Err(e) => {
+            log_debug!("[k2so] failed to spawn k2-daemon: {e}");
+            return;
+        }
+    }
+
+    // Wait up to ~8s for /boot-status phase=ready (same port-file reuse
+    // path the daemon uses on restart).
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(200));
+        if local_daemon_boot_ready() {
+            log_debug!("[k2so] local daemon became ready after spawn");
+            return;
+        }
+    }
+    log_debug!("[k2so] local daemon spawn timed out waiting for boot-status ready");
+}
+
+/// True when `~/.k2/daemon.port` points at a live daemon that answers
+/// `/boot-status` with HTTP 2xx (token not required for that route).
+#[cfg(not(target_os = "macos"))]
+fn local_daemon_boot_ready() -> bool {
+    use std::time::Duration;
+
+    let home = k2_core::paths::k2_home();
+    let port_path = home.join("daemon.port");
+    let Ok(raw) = std::fs::read_to_string(&port_path) else {
+        return false;
+    };
+    let Ok(port) = raw.trim().parse::<u16>() else {
+        return false;
+    };
+    let url = format!("http://127.0.0.1:{port}/boot-status");
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(800))
+        .build()
+    else {
+        return false;
+    };
+    match client.get(&url).send() {
+        Ok(resp) if resp.status().is_success() => {
+            // Prefer phase=ready when present; any 2xx means something is
+            // listening and the client can progress past SYN_SENT.
+            match resp.text() {
+                Ok(body) if body.contains("\"phase\"") => {
+                    body.contains("\"phase\":\"ready\"")
+                        || body.contains("\"phase\": \"ready\"")
+                }
+                Ok(_) => true,
+                Err(_) => true,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// True when the bundled `k2-daemon` on disk was written **after** the
 /// currently running daemon process started (plus a small clock skew).
 ///
@@ -891,14 +1000,18 @@ pub fn run() {
             // upgrade. In debug builds we opt out by default — the
             // `target/debug/k2so-daemon` path is volatile, and a dev
             // with `K2SO_INSTALL_DAEMON=1` can override.
-            // Linux/other platforms: the launchd install/heal/autostart
-            // machinery below has no meaning — the daemon is owned by the
-            // k2-daemon .deb's systemd user unit (or started manually).
-            // One clean line instead of launchctl spawn errors.
+            // Linux/other platforms: no launchd. Linux package owns a
+            // systemd user unit; Windows has neither yet — spawn the
+            // bundled k2-daemon next to this exe if nothing answers
+            // /boot-status (fixes "perpetually connecting" when the
+            // thin client launches alone).
             #[cfg(not(target_os = "macos"))]
-            log_debug!(
-                "[k2so] daemon self-heal: launchd unavailable on this platform — skipping plist install/heal/autostart (use the k2-daemon service instead)"
-            );
+            {
+                log_debug!(
+                    "[k2so] daemon self-heal: launchd unavailable — ensure local k2-daemon process"
+                );
+                ensure_local_daemon_process();
+            }
 
             #[cfg(target_os = "macos")]
             perf_timer!("startup_install_daemon_plist", {
@@ -1176,7 +1289,12 @@ pub fn run() {
                             log_debug!("[shutdown] Relaunch mode — using normal exit");
                             std::process::exit(0);
                         } else {
-                            unsafe { libc::_exit(0); }
+                            #[cfg(unix)]
+                            unsafe {
+                                libc::_exit(0);
+                            }
+                            #[cfg(not(unix))]
+                            std::process::exit(0);
                         }
                     }
                 });
@@ -1283,10 +1401,21 @@ pub fn run() {
                 // If it's already unreadable/blank (pathological launch),
                 // reconstruct from config: dev → the configured devUrl, prod →
                 // the tauri://localhost custom-protocol origin.
+                //
+                // Never capture a stale `localhost:5173` URL in a production
+                // binary (plain `cargo build -p k2 --release` without
+                // `cargo tauri build` can leave the window on the vite
+                // devUrl). Renavigating there is how we got the black
+                // window + "K2 couldn't load" sheet on Windows.
                 let app_url = win
                     .url()
                     .ok()
-                    .filter(|u| !u.as_str().is_empty() && u.as_str() != "about:blank")
+                    .filter(|u| {
+                        let s = u.as_str();
+                        !s.is_empty()
+                            && s != "about:blank"
+                            && (tauri::is_dev() || !s.contains("localhost:5173"))
+                    })
                     .or_else(|| {
                         if tauri::is_dev() {
                             app.config().build.dev_url.clone()
@@ -1294,6 +1423,7 @@ pub fn run() {
                             None
                         }
                     })
+                    .or_else(|| "http://tauri.localhost".parse().ok())
                     .or_else(|| "tauri://localhost".parse().ok());
                 std::thread::spawn(move || {
                     use std::sync::atomic::Ordering;
@@ -1429,10 +1559,10 @@ pub fn run() {
                                     handle
                                         .dialog()
                                         .message(
-                                            "K2SO stopped responding. Please quit and relaunch the app.\n\n\
+                                            "K2 stopped responding. Please quit and relaunch the app.\n\n\
                                              If this keeps happening, reinstalling the latest version usually fixes it.",
                                         )
-                                        .title("K2SO couldn't load")
+                                        .title("K2 couldn't load")
                                         .blocking_show();
                                 }
                             }
@@ -1744,7 +1874,7 @@ pub fn run() {
             // this used .expect which panicked and aborted with a stderr
             // message that failed on some sandboxes.
             use std::io::Write;
-            let _ = writeln!(std::io::stderr(), "K2SO failed to build Tauri context: {}", e);
+            let _ = writeln!(std::io::stderr(), "K2 failed to build Tauri context: {}", e);
             std::process::exit(1);
         })
         .run(|app, event| {
@@ -1785,7 +1915,12 @@ pub fn run() {
                         // Use _exit() to skip C++ static destructors (ggml_metal).
                         // This handles Cmd+Q (NSApplication terminate:) which bypasses
                         // the window CloseRequested event and goes straight to exit().
-                        unsafe { libc::_exit(0); }
+                        #[cfg(unix)]
+                        unsafe {
+                            libc::_exit(0);
+                        }
+                        #[cfg(not(unix))]
+                        std::process::exit(0);
                     }
                 }
                 // macOS: user clicked the Dock icon while the window was

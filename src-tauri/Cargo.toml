@@ -114,16 +114,22 @@ ahash = "0.8"
 # Replaces the single-threaded recursion in llm::file_index::search_walk.
 ignore = "0.4"
 
-# Alacritty terminal backend
+# Terminal/render helpers kept as direct deps for historical hot paths;
+# src-tauri no longer imports them in Rust sources (terminal lives in
+# k2-core/daemon). Pure-Rust crates stay cross-platform.
 alacritty_terminal = "0.26.0-rc1"
 parking_lot = "0.12"
+fontdue = "0.9"
+qoi = "0.4"
+
+# Unix-only: PTY event-loop helpers (signal-hook-mio needs UnixStream).
+# Same gate as k2-core — required for Windows MSVC `cargo tauri build`.
+[target.'cfg(unix)'.dependencies]
 polling = "3"
 rustix = { version = "1", features = ["termios", "process"] }
 mio = { version = "1", features = ["os-poll", "os-ext"] }
 signal-hook = "0.3"
 signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
-fontdue = "0.9"
-qoi = "0.4"
 
 # ONLY genuinely mac-only deps belong here. For ~15 months this section
 # header sat at the TOP of the dependency list (just `objc`/`cocoa` intended),

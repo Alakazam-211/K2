@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getDesktopChrome } from '@/lib/desktop-chrome'
+import { TOPBAR_HEIGHT } from '../../../shared/constants'
 
-const btnClass =
-  'flex h-full w-[46px] items-center justify-center text-[var(--color-text-secondary)] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] transition-colors no-drag'
-
+/**
+ * Custom window controls for frameless Win/Linux chrome.
+ * Full top-bar height (hover fill); width 24px (Rosson). Small pad after close.
+ * Hover via normal Tailwind classes (globals @custom-variant hover fixes WebView2).
+ */
 export default function WindowControls(): React.JSX.Element | null {
   const chrome = getDesktopChrome()
   const [maximized, setMaximized] = useState(false)
@@ -14,7 +17,6 @@ export default function WindowControls(): React.JSX.Element | null {
     const win = getCurrentWindow()
     void win.isMaximized().then(setMaximized).catch(() => {})
     let unlistenResize: (() => void) | undefined
-    let unlistenFocus: (() => void) | undefined
     void win
       .listen('tauri://resize', () => {
         void win.isMaximized().then(setMaximized).catch(() => {})
@@ -23,17 +25,8 @@ export default function WindowControls(): React.JSX.Element | null {
         unlistenResize = fn
       })
       .catch(() => {})
-    void win
-      .listen('tauri://focus', () => {
-        void win.isMaximized().then(setMaximized).catch(() => {})
-      })
-      .then((fn) => {
-        unlistenFocus = fn
-      })
-      .catch(() => {})
     return () => {
       unlistenResize?.()
-      unlistenFocus?.()
     }
   }, [chrome.windowControls])
 
@@ -57,22 +50,51 @@ export default function WindowControls(): React.JSX.Element | null {
 
   if (!chrome.windowControls) return null
 
+  // Full TOPBAR_HEIGHT so hover fills the bar vertically (items-center parents
+  // would otherwise shrink buttons to icon height).
+  const clusterStyle: CSSProperties = {
+    display: 'flex',
+    flexShrink: 0,
+    height: TOPBAR_HEIGHT,
+    alignItems: 'stretch',
+    // Small gap past close (was 8; Rosson: ~40% less → 5).
+    paddingRight: 0,
+    // @ts-expect-error -- Electron/WebView app-region
+    WebkitAppRegion: 'no-drag',
+  }
+
+  const btnStyle: CSSProperties = {
+    display: 'flex',
+    width: 24,
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: 'none',
+    padding: 0,
+    margin: 0,
+    cursor: 'default',
+    // @ts-expect-error -- Electron/WebView app-region
+    WebkitAppRegion: 'no-drag',
+  }
+
   return (
-    <div
-      className="flex h-full items-stretch flex-shrink-0 no-drag"
-      style={{
-        // @ts-expect-error -- Electron-specific CSS property
-        WebkitAppRegion: 'no-drag',
-      }}
-    >
-      <button type="button" className={btnClass} onClick={minimize} aria-label="Minimize" title="Minimize">
+    <div className="no-drag" style={clusterStyle}>
+      <button
+        type="button"
+        className="no-drag text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] transition-colors"
+        style={btnStyle}
+        onClick={minimize}
+        aria-label="Minimize"
+        title="Minimize"
+      >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
           <line x1="1" y1="5" x2="9" y2="5" />
         </svg>
       </button>
       <button
         type="button"
-        className={btnClass}
+        className="no-drag text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] transition-colors"
+        style={btnStyle}
         onClick={toggleMax}
         aria-label={maximized ? 'Restore' : 'Maximize'}
         title={maximized ? 'Restore' : 'Maximize'}
@@ -90,7 +112,8 @@ export default function WindowControls(): React.JSX.Element | null {
       </button>
       <button
         type="button"
-        className={`${btnClass} hover:bg-[#e81123] hover:text-white`}
+        className="no-drag text-[var(--color-text-secondary)] hover:bg-[#e81123] hover:text-white transition-colors"
+        style={btnStyle}
         onClick={close}
         aria-label="Close"
         title="Close"

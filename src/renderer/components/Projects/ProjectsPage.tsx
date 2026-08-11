@@ -25,8 +25,8 @@
 // ProjectFeedbackTab, the member-scoped feedback board (§6.6).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { usePageViewStore } from '@/stores/page-view'
+import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
@@ -301,14 +301,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
         role2="surface"
         bordered={false}
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
-        data-tauri-drag-region
-        onMouseDown={(e) => {
-          // The attribute alone only fires when the bar ITSELF is the click
-          // target — the full-width flex child swallows most clicks, so the
-          // bar wasn't draggable (TopBar.tsx has the same fallback).
-          if ((e.target as HTMLElement).closest('button, input, select, .no-drag')) return
-          void getCurrentWindow().startDragging()
-        }}
+        onMouseDown={titleBarDragOnMouseDown}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">

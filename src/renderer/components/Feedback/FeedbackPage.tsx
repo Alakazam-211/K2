@@ -15,8 +15,8 @@
 // dashed empty state; the selection survives filters hiding its card.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useProjectsStore } from '@/stores/projects'
+import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
 import { useFeedbackStore } from '@/stores/feedback'
 import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -506,14 +506,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
         role2="surface"
         bordered={false}
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
-        data-tauri-drag-region
-        onMouseDown={(e) => {
-          // The attribute alone only fires when the bar ITSELF is the click
-          // target — the full-width flex child swallows most clicks, so the
-          // bar wasn't draggable (TopBar.tsx has the same fallback).
-          if ((e.target as HTMLElement).closest('button, input, select, .no-drag')) return
-          void getCurrentWindow().startDragging()
-        }}
+        onMouseDown={titleBarDragOnMouseDown}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">

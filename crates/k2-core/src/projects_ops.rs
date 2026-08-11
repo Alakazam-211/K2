@@ -697,6 +697,11 @@ pub fn projects_init_git_and_open(path: &str, branch: Option<&str>) -> Result<Pr
         .unwrap_or("main")
         .to_string();
 
+    // Before the empty initial commit: if this machine has no git author,
+    // seed global user.name / user.email from the OS account. Skips when
+    // already configured (Rosson 2026-08-11 — fresh Windows install pain).
+    crate::git_identity::ensure_git_identity()?;
+
     let init_output = Command::new("git")
         .args(["init", &format!("--initial-branch={}", branch_name)])
         .current_dir(path)
@@ -714,8 +719,10 @@ pub fn projects_init_git_and_open(path: &str, branch: Option<&str>) -> Result<Pr
     if !commit_output.status.success() {
         let stderr = String::from_utf8_lossy(&commit_output.stderr);
         if stderr.contains("user.email") || stderr.contains("user.name") {
+            // ensure_git_identity should have fixed this; surface a clearer
+            // message if git still rejects the author (rare policy/env case).
             return Err(
-                "Git user not configured. Run:\n  git config --global user.name \"Your Name\"\n  git config --global user.email \"you@example.com\""
+                "Git user still not configured after auto-setup. Run:\n  git config --global user.name \"Your Name\"\n  git config --global user.email \"you@example.com\""
                     .to_string(),
             );
         }

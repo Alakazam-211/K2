@@ -83,3 +83,4 @@ src-tauri/gen/schemas/
 
 # Stray build log (was committed by accident).
 build-daemon-warnings.log
+dist-windows/

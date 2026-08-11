@@ -96,6 +96,8 @@ pub mod fs_commands;
 pub mod fs_compress;
 pub mod fs_extract;
 pub mod git;
+/// Ensure global git user.name / user.email when missing (init-git path).
+pub mod git_identity;
 // Phase 2.5c: workspace heartbeat schedules + launchd + cron live here
 // post-refactor. Was [`agents::heartbeat`]; the `agents/` back-compat
 // alias remains for one release cycle.

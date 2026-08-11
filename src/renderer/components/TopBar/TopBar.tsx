@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
 import { useTabsStore } from '@/stores/tabs'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
@@ -89,12 +89,7 @@ export default function TopBar({
       role2="surface"
       bordered={false}
       className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none"
-      data-tauri-drag-region
-      onMouseDown={(e) => {
-        // Only drag if clicking on the bar itself (not buttons)
-        if ((e.target as HTMLElement).closest('button, input, select, .no-drag')) return
-        getCurrentWindow().startDragging()
-      }}
+      onMouseDown={titleBarDragOnMouseDown}
       style={{
         height: TOPBAR_HEIGHT,
         minHeight: TOPBAR_HEIGHT
@@ -119,7 +114,7 @@ export default function TopBar({
         {/* Primary sidebar toggle */}
         <button
           onClick={onTogglePrimarySidebar}
-          className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+          className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
           style={{
             // @ts-expect-error -- Electron-specific CSS property
             WebkitAppRegion: 'no-drag'
@@ -181,7 +176,7 @@ export default function TopBar({
           {hasRun && (
             <button
               onClick={handleRun}
-              className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[#4ec9b0] transition-colors"
+              className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[#4ec9b0] transition-colors no-drag"
               style={{
                 // @ts-expect-error -- Electron-specific CSS property
                 WebkitAppRegion: 'no-drag'
@@ -216,7 +211,7 @@ export default function TopBar({
           {/* Left panel toggle (opens panel to the left of terminal) */}
           <button
             onClick={onToggleLeftPanel}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
             style={{
               // @ts-expect-error -- Electron-specific CSS property
               WebkitAppRegion: 'no-drag'
@@ -251,7 +246,7 @@ export default function TopBar({
           {/* Right panel toggle (opens panel to the right of terminal) */}
           <button
             onClick={onToggleRightPanel}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
             style={{
               // @ts-expect-error -- Electron-specific CSS property
               WebkitAppRegion: 'no-drag'
@@ -293,7 +288,7 @@ function RunningAgentsTopBarButton(): React.JSX.Element {
   return (
     <button
       onClick={() => useRunningAgentsStore.getState().toggle()}
-      className="relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+      className="relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
       style={{
         // @ts-expect-error -- Electron-specific CSS property
         WebkitAppRegion: 'no-drag'
@@ -326,7 +321,7 @@ function NavButtons(): React.JSX.Element {
       <button
         onClick={() => useTabsStore.getState().goBack()}
         disabled={!canBack}
-        className={`flex h-5 w-5 items-center justify-center transition-colors ${
+        className={`flex h-5 w-5 items-center justify-center transition-colors no-drag ${
           canBack
             ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'
             : 'text-[var(--color-text-muted)] opacity-30'
@@ -341,7 +336,7 @@ function NavButtons(): React.JSX.Element {
       <button
         onClick={() => useTabsStore.getState().goForward()}
         disabled={!canForward}
-        className={`flex h-5 w-5 items-center justify-center transition-colors ${
+        className={`flex h-5 w-5 items-center justify-center transition-colors no-drag ${
           canForward
             ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'
             : 'text-[var(--color-text-muted)] opacity-30'

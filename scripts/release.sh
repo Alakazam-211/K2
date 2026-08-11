@@ -33,6 +33,12 @@
 #   - GitHub Actions secrets (same names): R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
 #     R2_SECRET_ACCESS_KEY (optional R2_ENDPOINT, R2_BUCKET)
 #
+# Windows NSIS (Step 9.5) — sticky box via SSH alias (default k2-win):
+#   Near-term: home LAN PC. Later: retarget HostName to k2-dev-web cloud
+#   Windows; same script. Soft-fail if the box is down unless
+#   K2_REQUIRE_WINDOWS_NSIS=1. Skip with K2_SKIP_WINDOWS_NSIS=1.
+#   See scripts/windows-nsis-build.sh + wiki "Ops - Windows Build Box".
+#
 # Usage:
 #   ./scripts/release.sh <version>
 #   Example: ./scripts/release.sh 0.25.0
@@ -656,6 +662,45 @@ gh release create "$TAG" "${ASSETS[@]}" \
     --repo "$RELEASE_REPO" \
     --title "$TAG" \
     --notes-file "$NOTES_SRC"
+
+# ── Step 9.5: Windows NSIS on sticky box (home LAN now; cloud later) ──
+#
+# Swap-ready: scripts/windows-nsis-build.sh SSHes only to
+# K2_WINDOWS_SSH_HOST (default k2-win). Retarget ~/.ssh/config HostName
+# when k2-dev-web provisions cloud Windows — no release.sh rewrite.
+# Soft-fail by default (home box asleep / offline); hard-fail with
+# K2_REQUIRE_WINDOWS_NSIS=1. Skip entirely: K2_SKIP_WINDOWS_NSIS=1.
+#
+# Long-term optional: pure GHA windows-latest (app-windows.yml) can
+# replace this step; until then the sticky box is the ship host for Win.
+echo ""
+echo "Step 9.5: Windows NSIS installer (sticky box ${K2_WINDOWS_SSH_HOST:-k2-win})..."
+set +e
+"$PROJECT_DIR/scripts/windows-nsis-build.sh" "$VERSION"
+WIN_NSIS_RC=$?
+set -e
+if [ "$WIN_NSIS_RC" -eq 0 ] && [ "${K2_SKIP_WINDOWS_NSIS:-0}" != "1" ]; then
+    WIN_SETUP="$PROJECT_DIR/dist-windows/K2_${VERSION}_x64-setup.exe"
+    WIN_SUMS="$PROJECT_DIR/dist-windows/SHA256SUMS-windows-x86_64.txt"
+    if [ -f "$WIN_SETUP" ]; then
+        gh release upload "$TAG" "$WIN_SETUP" \
+            ${WIN_SUMS:+"$WIN_SUMS"} \
+            --repo "$RELEASE_REPO" --clobber
+        echo "  Uploaded Windows NSIS to ${TAG}."
+    else
+        echo "  WARNING: windows-nsis-build reported OK but ${WIN_SETUP} missing." >&2
+        WIN_NSIS_RC=1
+    fi
+fi
+if [ "$WIN_NSIS_RC" -ne 0 ] && [ "${K2_SKIP_WINDOWS_NSIS:-0}" != "1" ]; then
+    if [ "${K2_REQUIRE_WINDOWS_NSIS:-0}" = "1" ]; then
+        echo "  FATAL: Windows NSIS failed (rc=$WIN_NSIS_RC) and K2_REQUIRE_WINDOWS_NSIS=1." >&2
+        exit 1
+    fi
+    echo "  WARNING: Windows NSIS failed or skipped upload (rc=$WIN_NSIS_RC) — macOS/Linux release still live." >&2
+    echo "  WARNING: re-run: bash scripts/windows-nsis-build.sh ${VERSION} && gh release upload ${TAG} dist-windows/* --clobber" >&2
+    echo "  WARNING: set K2_REQUIRE_WINDOWS_NSIS=1 to make this a hard gate." >&2
+fi
 
 # ── Step 10: Verify the updater can actually FETCH valid JSON ──
 # We GENERATE latest.json + daemon-latest.json above, but a release is only

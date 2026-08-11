@@ -14,7 +14,7 @@ export default function DesktopChromeRight({
   const chrome = getDesktopChrome()
   if (!children && !chrome.windowControls) return null
   return (
-    <div className="flex items-center gap-1 flex-shrink-0">
+    <div className="flex items-center gap-1 flex-shrink-0 self-stretch h-full">
       {children}
       <WindowControls />
     </div>

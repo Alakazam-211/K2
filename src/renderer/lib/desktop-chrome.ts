@@ -20,8 +20,8 @@ export const TRAFFIC_LIGHT_SPACER_BASE_PX = 70
 /** Min width for the App "Menu" button cluster. */
 export const APP_MENU_BUTTON_MIN_WIDTH_PX = 52
 
-/** Approximate width of min · max · close controls (icons nudge left of edge). */
-export const WINDOW_CONTROLS_WIDTH_PX = 138
+/** Approximate width of min · max · close (3 × 24px — Rosson preferred density). */
+export const WINDOW_CONTROLS_WIDTH_PX = 72
 
 /** Align with stores/style.ts macOS detection. */
 export function isMacPlatform(): boolean {

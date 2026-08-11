@@ -1,12 +1,12 @@
 import { type ReactNode } from 'react'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { usePanelsStore } from '../../stores/panels'
 import TimerButton from '@/components/Timer/TimerButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
+import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
 
 interface FocusLayoutProps {
   children: ReactNode
@@ -33,11 +33,7 @@ export default function FocusLayout({
       {/* Top bar — no primary sidebar toggle, but has left/right panel toggles */}
       <div
         className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none"
-        data-tauri-drag-region
-        onMouseDown={(e) => {
-          if ((e.target as HTMLElement).closest('button, input, select, .no-drag')) return
-          getCurrentWindow().startDragging()
-        }}
+        onMouseDown={titleBarDragOnMouseDown}
         style={{
           height: TOPBAR_HEIGHT,
           minHeight: TOPBAR_HEIGHT

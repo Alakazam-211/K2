@@ -3,6 +3,31 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.94 — Windows thin client + unified title bar
+
+### Windows: installable thin client
+
+K2 now ships a **native Windows** desktop app (NSIS installer) alongside macOS
+and Linux. The thin client talks to the local daemon the same way as other
+platforms — open the app, work as usual.
+
+- Frameless window chrome with an in-app **Menu** and min / max / close controls
+- Hover states work correctly under WebView2
+- Local daemon is started automatically when needed (no launchd on Windows)
+
+### macOS: unchanged chrome
+
+macOS keeps the **system menu bar** and **traffic lights**. No Windows-style
+Menu button or custom window controls on Mac.
+
+### Release pipeline
+
+Windows installers for this train are built on the sticky Windows build box
+and attached to the GitHub Release (`K2_*_x64-setup.exe`). Linux app/daemon
+artifacts still come from CI at tag time.
+
+---
+
 ## 0.40.93 — Host-sessions stage `K2_SESSION_ID` (sandbox parity)
 
 ### Host-sessions: `K2_SESSION_ID` in host-curated env

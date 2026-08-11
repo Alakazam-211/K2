@@ -226,7 +226,7 @@ export default function ServerSwitcher(): React.JSX.Element {
     >
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 h-6 px-2 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors rounded"
+        className="flex items-center gap-1.5 h-6 px-2 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors rounded no-drag"
         title={hostIndicator(connectionStatus, recovery, activeHost !== 'local').title}
       >
         {/* Recovery-aware dot: amber while restarting/re-authenticating,

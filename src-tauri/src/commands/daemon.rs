@@ -14,6 +14,7 @@
 //! there's a single source of truth for what "canonical plist" means.
 
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 use serde::Serialize;
@@ -152,6 +153,11 @@ pub fn daemon_uninstall() -> Result<(), String> {
 /// `k2_core::daemon_lifecycle::launchctl_kickstart_args` so K2
 /// Connect (which runs the same kickstart via SSH on a remote host)
 /// produces the same exact arg shape.
+///
+/// macOS-only: Windows/Linux have no launchd. Non-mac stubs succeed so
+/// version-mismatch auto-restart does not hard-fail the thin client;
+/// operators restart `k2-daemon` via service/CLI instead.
+#[cfg(target_os = "macos")]
 pub fn kickstart_daemon() -> Result<(), String> {
     let uid = unsafe { libc::getuid() };
     let args = k2_core::daemon_lifecycle::launchctl_kickstart_args(uid);
@@ -173,6 +179,11 @@ pub fn kickstart_daemon() -> Result<(), String> {
             stderr.trim(),
         ));
     }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn kickstart_daemon() -> Result<(), String> {
     Ok(())
 }
 

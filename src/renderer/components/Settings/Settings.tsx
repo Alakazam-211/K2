@@ -9,7 +9,7 @@ import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
 import { useConnectHostStore } from '@/stores/connect-host'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
 import { CodeEditorSettingsSection, CODE_EDITOR_MANIFEST } from './sections/CodeEditorSettingsSection'
 import { EditorsSection, EDITORS_MANIFEST } from './sections/EditorsSection'
@@ -185,11 +185,7 @@ export default function Settings(): React.JSX.Element {
           and switchable while editing that host's settings. */}
       <div
         className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"
-        data-tauri-drag-region
-        onMouseDown={(e) => {
-          if ((e.target as HTMLElement).closest('button, input, select, .no-drag')) return
-          void getCurrentWindow().startDragging()
-        }}
+        onMouseDown={titleBarDragOnMouseDown}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2">

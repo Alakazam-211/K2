@@ -45,7 +45,7 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
     // Run the blocking HTTP call on a background thread to avoid freezing the UI
     tokio::task::spawn_blocking(|| {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("K2SO-UpdateChecker")
+            .user_agent("K2-UpdateChecker")
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e: reqwest::Error| e.to_string())?;

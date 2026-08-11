@@ -73,7 +73,7 @@ pub fn start_companion() -> Result<String, String> {
     let hook_token = crate::hook_config::get_token();
 
     if hook_port == 0 || hook_token.is_empty() {
-        return Err("K2SO internal server not ready yet".to_string());
+        return Err("K2 internal server not ready yet".to_string());
     }
 
     let ngrok_token = companion.ngrok_auth_token.clone();

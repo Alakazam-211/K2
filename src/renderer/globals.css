@@ -4,6 +4,19 @@
 /* CodeMirror's unlayered runtime style-mod styles (syntax highlighting etc) */
 @layer tw, cm-overrides;
 @import "tailwindcss" layer(tw);
+
+/*
+ * Tailwind v4 default: `hover:` only applies inside `@media (hover: hover)`.
+ * On many Windows machines (WebView2 + touchscreen laptops) that media
+ * query is false, so *every* hover:bg-* / hover:text-* utility never
+ * paints — while macOS Safari/WKWebView reports hover:true and looks fine.
+ *
+ * Restore pre-v4 behavior: real `:hover` always. Matches macOS UX; fixes
+ * Windows top bar, nav, "add workspace", agent rows, etc. in one place.
+ * See: tailwindcss upgrade guide + issues #16531 / #17225.
+ */
+@custom-variant hover (&:hover);
+
 /* Style contract tokens — generated from styles/ by scripts/build-styles.mjs */
 @import "./styles.generated.css";
 
@@ -53,27 +66,33 @@ body {
   height: 100%;
 }
 
-/* macOS traffic light drag region — only the top bar is draggable */
-/* The .drag class is applied explicitly to draggable areas (TopBar) */
-/* Works for both Electron (-webkit-app-region) and Tauri (data-tauri-drag-region) */
+/* Title-bar drag: optional drag strips / macOS overlay. Prefer JS
+   startDragging (titlebar-drag.ts) for whole custom bars so controls
+   stay interactive. */
 .drag {
   -webkit-app-region: drag;
+  app-region: drag;
 }
 
 [data-tauri-drag-region] {
   -webkit-app-region: drag;
+  app-region: drag;
 }
 
-/* Allow interaction with elements inside drag regions */
+/* Interactive controls must never be drag-region paint targets. */
 button,
 input,
 textarea,
 select,
 a,
 [role="button"],
+[role="menuitem"],
+[role="menu"],
 .no-drag {
-  -webkit-app-region: no-drag;
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
 }
+
 
 /* Opt-in text selection for Tickets / Project chat (and similar).
    Resize handlers often set document.body { user-select: none }; CSS

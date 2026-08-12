@@ -3,6 +3,55 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.96 — Windows agents, host-session re-wake, compose hotkeys
+
+Three dogfood fixes: Windows agent launch + tunnel install polish, Scout
+host-session **re-wake after final**, and macOS/global shortcuts while the
+agent message box is focused.
+
+### Windows: agents actually start + no mystery console
+
+- **Agent / preset / pinned-tab launch** finds bare CLI names (`grok`,
+  `claude`, …) again — PATH enrichment was Unix-only; Windows now merges
+  User+Machine Path, known install dirs, and correct `;` separators.
+- **`frpc` ships with the app** (next to `k2.exe`) and is staged under
+  `%USERPROFILE%\.k2\bin` on launch — no separate tunnel client install for
+  K2 Connect. Resolve also finds `frpc.exe` and the install directory.
+- **No black console window** when the app starts the local daemon (daemon
+  is a Windows GUI subsystem build; frpc spawn uses `CREATE_NO_WINDOW`).
+- Release pipeline: Windows NSIS + **`windows-x86_64` in `latest.json`** so
+  Check for Updates works on Windows (missed on 0.40.95).
+
+### Host-sessions / Scout: keep the handle after “done”
+
+After `k2 respond --final` / `k2 done`, Grace still **stops the PTY** (spend
+stops) but **keeps** the durable `api-%` index row when a `sessionId` is set.
+Answer-driven **dead-resume / re-wake** minutes or hours later no longer
+hard-404s solely because the grace reaper wiped the index. Provider JSONL
+was always on disk — this is index policy only. Workspace authz and live
+cell caps are unchanged. Explicit not-live `/kill` can still clear the row.
+
+### Shortcuts work with the agent compose box focused
+
+**Cmd+Shift+T** (launch default agent), **Cmd+T**, **Cmd+W**, and other app
+chords no longer die while the “message the agent” textarea is focused.
+Typing keys still stay local to the box; Cmd/Ctrl chords bubble to the
+global shortcut owner.
+
+### Housekeeping
+
+- Stop writing `MIGRATION-0.37.0.md` into workspace `.k2` / `.k2so` (GH#58
+  untracked-receipt class). Sentinel-only.
+
+### What to try
+
+1. **Windows:** install → launch-bar / pinned agent → bare-name agents open.
+2. **Windows:** start K2 → no bare console on the desktop; Connect finds frpc.
+3. **macOS:** focus agent compose → **Cmd+Shift+T** still launches a session.
+4. **Scout:** host-session `--final` → wait past grace → resume same `sessionId`.
+
+---
+
 ## 0.40.95 — Tickets polish + chat archive + host-session TTL clarity
 
 Follow-on to the Windows desktop ship: **Tickets** get a clearer status

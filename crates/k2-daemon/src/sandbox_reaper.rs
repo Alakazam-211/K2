@@ -11,13 +11,15 @@
 //!   auto-reaped (no silence reap, no `timeout_secs` wall from spawn).
 //!   Continuous productive work may run past 300s+.
 //! - **Grace** — after `k2 respond --final` or `k2 done` ([`mark_complete`]),
-//!   short window ([`FINAL_GRACE_SECS`] = 10s) then reap (work completed).
+//!   short window ([`FINAL_GRACE_SECS`] = 10s) then **process/map** reap
+//!   (work completed). Durable `api-%` index row is **retained** so the same
+//!   `sessionId` stays dead-resumable / re-wakeable (provider JSONL on disk).
 //! - **New activity** (inject / live-resume / non-final respond) cancels Grace
 //!   and re-enters Working (resets the completion path).
 //! - **`timeout_secs`** — still accepted on spawn (JWT lifetime clamp, client
 //!   poll budgets); it does **not** kill a Working cell.
 //! - **Spend control** — integrator **kill** + capability non-remint / caps,
-//!   not mid-write wall.
+//!   not mid-write wall. Explicit not-live `/kill` may still clear the index.
 //!
 //! Activity stamped by spawn / message-live / resume inject (re-enters Working).
 
@@ -233,21 +235,26 @@ fn agent_name_from_tab_index(ws_path: Option<&str>, session_id_str: &str) -> Opt
 ///
 /// ## Durable index (`clear_durable_index`)
 ///
-/// - **`true` (Grace / work-complete reaper):** delete `api-%` tab rows so
-///   GET host-sessions does not retain ended ghosts (Scout list accretion).
-/// - **`false` (integrator live kill):** **keep** the durable row so
-///   `{"session": id}` dead-resume still finds the conversation handle
-///   (prd-v1-host-session-kill-v1 §6 acceptance: dead-resume after kill).
-///   Orphan sweeps that deliberately drop the index use the kill handler's
-///   not_live path + explicit `clear_durable_api_host_rows`.
+/// - **`false` (Grace work-complete reaper + integrator live kill):** **keep**
+///   the durable `api-%` row so `{"session": id}` dead-resume / answer-driven
+///   re-wake still finds the conversation handle after the PTY is gone
+///   (provider JSONL already on disk; index-policy only). List shows
+///   `live:false` for these rows — integrators filter; cap counts live only.
+///   Scout (Julie 2026-08-13): final-grace used to **clear** here → hard-404
+///   ~grace later, exactly when interview answers arrive minutes–hours later.
+/// - **`true` (explicit not-live kill / orphan sweeps):** delete so list does
+///   not retain deliberately reaped ghosts; kill handler may also call
+///   `clear_durable_api_host_rows`.
+/// - Null/`session_id` empty rows remain non-resumable and are GC'd separately.
 pub fn force_teardown_host_session(session_id: &SessionId) {
-    // Grace-class default: clear durable index (work completed / auto reap).
-    force_teardown_host_session_inner(session_id, None, None, true);
+    // Grace-class default: full process/map teardown, **retain** durable index
+    // for dead-resume (same as live kill). See module docs above.
+    force_teardown_host_session_inner(session_id, None, None, false);
 }
 
 /// Like [`force_teardown_host_session`] with workspace + caller-facing id for
 /// tab-index name resolution and dual reaper-key clear (adopted ≠ daemon).
-/// Clears durable index (Grace / not_live cleanup callers).
+/// **Clears** durable index — for not_live `/kill` orphan cleanup only.
 pub(crate) fn force_teardown_host_session_ctx(
     session_id: &SessionId,
     ws_path: &str,
@@ -323,11 +330,11 @@ fn force_teardown_host_session_inner(
         }
     }
 
-    // Durable index: Grace clears (no resume after work-complete). Live kill
-    // preserves so dead-resume can re-exec under the same conversation id.
-    // Prefer agent_name — many host-session rows stamp NULL session_id until
-    // post-hoc adoption, so DELETE-by-session_id alone left ghosts forever
-    // (Scout residual tabs / GUI audit panes after TUI reaped).
+    // Durable index: Grace + live kill **preserve** (dead-resume / re-wake).
+    // Explicit clear only when caller set `clear_durable_index` (not_live kill).
+    // Prefer agent_name when clearing — many host-session rows stamp NULL
+    // session_id until post-hoc adoption, so DELETE-by-session_id alone left
+    // ghosts forever (Scout residual tabs / GUI audit panes after TUI reaped).
     if clear_durable_index {
         clear_durable_api_tab_rows(
             ws_path,
@@ -413,16 +420,16 @@ pub fn is_grace(id: &SessionId) -> bool {
 ///
 /// - Always drops **non-resumable** rows (`session_id` NULL/empty) for this
 ///   agent — they cannot dead-resume and were the smoke residual pile.
-/// - When Grace is armed (work complete), drops **all** durable rows for
-///   this agent (ChildExit often races the Grace tick; map is already
-///   empty so tick-only clear-by-session_id missed).
-/// - Live-kill preserve path: Grace is not armed and session_id is set →
-///   durable row stays for dead-resume.
+/// - **Does not** drop rows that have a session_id — including when Grace is
+///   armed / after work-complete. Provider JSONL + durable index must stay
+///   for dead-resume and answer-driven re-wake (Julie/Scout 2026-08-13).
+/// - Process/map teardown is owned by Grace tick / `/kill`; this only
+///   GC's non-resumable index ghosts on exit.
 pub fn on_api_host_child_exit(session_id: &SessionId, agent_name: &str) {
+    let _ = session_id; // retained for call-site symmetry / future phase checks
     if !agent_name.starts_with("api-") {
         return;
     }
-    let grace = is_grace(session_id);
     let db = k2_core::db::shared();
     let conn = db.lock();
     // Null-sid orphans: never resumable.
@@ -433,9 +440,6 @@ pub fn on_api_host_child_exit(session_id: &SessionId, agent_name: &str) {
            AND (session_id IS NULL OR session_id = '')",
         rusqlite::params![agent_name],
     );
-    if grace {
-        clear_durable_by_agent_name(&conn, agent_name);
-    }
 }
 
 fn tick() -> Duration {
@@ -775,5 +779,50 @@ mod tests {
         on_respond_final(&id);
         assert!(is_grace(&id));
         unregister(&id);
+    }
+
+    /// Grace / ChildExit must not wipe resumable durable index rows
+    /// (session_id set). Scout answer-driven re-wake contract (2026-08-13).
+    #[test]
+    fn on_api_host_child_exit_preserves_resumable_index_row() {
+        k2_core::db::init_for_tests();
+        let sid = SessionId::new();
+        let agent = format!("api-rewake-test-{}", sid);
+        let sid_s = sid.to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT OR IGNORE INTO projects (id, path, name) VALUES ('p-rewake', '/tmp/k2-rewake', 'rewake')",
+                [],
+            )
+            .expect("insert test project");
+            conn.execute(
+                "INSERT INTO workspace_tab_sessions \
+                 (project_id, pane_group_id, agent_name, session_id, last_seen_at) \
+                 VALUES ('p-rewake', ?1, ?2, ?3, 1)",
+                rusqlite::params![&agent, &agent, &sid_s],
+            )
+            .expect("insert resumable api-* tab row");
+        }
+        register(sid, 180);
+        on_respond_final(&sid);
+        assert!(is_grace(&sid));
+        on_api_host_child_exit(&sid, &agent);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_tab_sessions \
+                 WHERE agent_name = ?1 AND session_id = ?2",
+                rusqlite::params![&agent, &sid_s],
+                |r| r.get(0),
+            )
+            .expect("count durable rows");
+        assert_eq!(
+            n, 1,
+            "resumable api-* row must survive ChildExit even under Grace"
+        );
+        unregister(&sid);
     }
 }

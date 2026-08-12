@@ -73,8 +73,10 @@ export function useTerminalShortcuts(cwd: string): void {
       if (!e.metaKey) return
 
       const state = useTabsStore.getState()
+      // Shift reports uppercase letters on some platforms ('T' not 't').
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
 
-      switch (e.key) {
+      switch (key) {
         case 't': {
           if (e.altKey) return
           e.preventDefault()

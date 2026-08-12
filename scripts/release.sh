@@ -434,6 +434,11 @@ if [ -f "$SIG_FILE" ]; then
 fi
 
 PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# App updater manifest. Initially macOS only — Windows `windows-x86_64` is
+# merged in Step 9.5 after NSIS build + minisign (see windows-nsis-build /
+# patch). Publishing darwin-only is fine for Mac; Windows "Check for
+# updates" fails with "None of the fallback platforms windows-x86_64 were
+# found" until that merge (0.40.95 incident).
 cat > "/tmp/latest.json" <<MANIFEST
 {
   "version": "${VERSION}",
@@ -447,7 +452,7 @@ cat > "/tmp/latest.json" <<MANIFEST
   }
 }
 MANIFEST
-echo "  latest.json generated."
+echo "  latest.json generated (darwin-aarch64; windows-x86_64 added after NSIS if present)."
 
 # ── Step 8.5: Standalone per-OS daemon binary + signature + manifest ──
 #
@@ -687,6 +692,18 @@ if [ "$WIN_NSIS_RC" -eq 0 ] && [ "${K2_SKIP_WINDOWS_NSIS:-0}" != "1" ]; then
             ${WIN_SUMS:+"$WIN_SUMS"} \
             --repo "$RELEASE_REPO" --clobber
         echo "  Uploaded Windows NSIS to ${TAG}."
+        # Sign setup for Tauri auto-updater and merge windows-x86_64 into
+        # latest.json (otherwise Windows Check for Updates fails: no
+        # platforms.windows-x86_64 — 0.40.95).
+        if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            if bash "$PROJECT_DIR/scripts/windows-patch-latest-json.sh" "$VERSION" "$WIN_SETUP"; then
+                echo "  Patched + re-uploaded latest.json with windows-x86_64."
+            else
+                echo "  WARNING: windows-patch-latest-json failed — Win setup is on the release, but auto-update may lack windows-x86_64 until re-run." >&2
+            fi
+        else
+            echo "  WARNING: no TAURI signing key in env — skipped latest.json windows-x86_64 patch." >&2
+        fi
     else
         echo "  WARNING: windows-nsis-build reported OK but ${WIN_SETUP} missing." >&2
         WIN_NSIS_RC=1

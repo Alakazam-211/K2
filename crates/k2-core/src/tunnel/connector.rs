@@ -47,25 +47,56 @@ impl Default for FrpcBinary {
     }
 }
 
+/// Filenames for the frpc client on this OS (Windows ships `frpc.exe`).
+fn frpc_basenames() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &["frpc.exe", "frpc"]
+    }
+    #[cfg(not(windows))]
+    {
+        &["frpc"]
+    }
+}
+
 /// Common non-PATH locations to probe for a `frpc` install.
+///
+/// Includes the desktop app install dir (sibling of `k2` / `k2-daemon`) so
+/// NSIS/macOS bundles work without a separate package-manager install, and
+/// `~/.k2/bin` where the thin client stages the bundled sidecar on launch.
 fn common_frpc_locations() -> Vec<PathBuf> {
-    let mut v = vec![
-        PathBuf::from("/opt/homebrew/bin/frpc"),
-        PathBuf::from("/usr/local/bin/frpc"),
-        PathBuf::from("/usr/bin/frpc"),
-    ];
+    let mut v: Vec<PathBuf> = Vec::new();
+    // Absolute system probes are production-only so unit tests that empty
+    // PATH + temp HOME stay deterministic on developer machines with brew.
+    #[cfg(all(not(windows), not(test)))]
+    {
+        v.push(PathBuf::from("/opt/homebrew/bin/frpc"));
+        v.push(PathBuf::from("/usr/local/bin/frpc"));
+        v.push(PathBuf::from("/usr/bin/frpc"));
+    }
+    // Bundled install: next to the running k2 / k2-daemon binary
+    // (`%LOCALAPPDATA%\K2\frpc.exe` on Windows, Contents/MacOS/frpc on macOS).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for name in frpc_basenames() {
+                v.push(dir.join(name));
+            }
+        }
+    }
     if let Some(home) = dirs::home_dir() {
-        v.push(home.join(".local/bin/frpc"));
-        v.push(home.join(".k2/bin/frpc"));
-        // Legacy location pre-`.k2so`→`.k2` cutover (still a valid candidate
-        // via the ~/.k2so→~/.k2 compat symlink, but listed explicitly).
-        v.push(home.join(".k2so/bin/frpc"));
+        for name in frpc_basenames() {
+            v.push(home.join(".local/bin").join(name));
+            v.push(home.join(".k2/bin").join(name));
+            // Legacy location pre-`.k2so`→`.k2` cutover.
+            v.push(home.join(".k2so/bin").join(name));
+        }
     }
     v
 }
 
 /// Resolve the `frpc` executable, or a clear "not installed" error.
-/// Does NOT auto-download — surfacing the requirement is intentional.
+/// Does NOT auto-download — the desktop app stages a bundled sidecar; this
+/// only *finds* it (or a user-installed copy).
 pub fn resolve_frpc(bin: &FrpcBinary) -> Result<PathBuf, String> {
     match bin {
         FrpcBinary::Explicit(p) => {
@@ -80,7 +111,7 @@ pub fn resolve_frpc(bin: &FrpcBinary) -> Result<PathBuf, String> {
             if let Some(found) = which_in_path("frpc") {
                 return Ok(found);
             }
-            // 2) Common install dirs.
+            // 2) Common install dirs + next to current exe (bundled).
             for cand in common_frpc_locations() {
                 if cand.exists() {
                     return Ok(cand);
@@ -88,7 +119,9 @@ pub fn resolve_frpc(bin: &FrpcBinary) -> Result<PathBuf, String> {
             }
             Err(
                 "frpc not installed: the K2 Connect tunnel requires the `frpc` \
-                 client binary (fatedier/frp v0.61+). Install it via your package \
+                 client binary (fatedier/frp v0.61+). Desktop installs of K2 ship \
+                 it next to the app and stage it under ~/.k2/bin — reinstall or \
+                 update K2 if this is missing. Otherwise install via your package \
                  manager (e.g. `brew install frpc`) or download a release from \
                  https://github.com/fatedier/frp/releases and place it on your PATH."
                     .to_string(),
@@ -99,15 +132,35 @@ pub fn resolve_frpc(bin: &FrpcBinary) -> Result<PathBuf, String> {
 
 /// Minimal PATH lookup (no external `which` dep). Returns the first
 /// executable `name` found in the `$PATH` directories.
+///
+/// On Windows also tries `name.exe` (CreateProcess PATHEXT is not applied
+/// to raw path existence checks).
 fn which_in_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
-        let cand = dir.join(name);
-        if is_executable(&cand) {
-            return Some(cand);
+        for base in frpc_path_candidates(name) {
+            let cand = dir.join(base);
+            if is_executable(&cand) {
+                return Some(cand);
+            }
         }
     }
     None
+}
+
+fn frpc_path_candidates(name: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        let mut out = vec![name.to_string()];
+        if !name.ends_with(".exe") && !name.ends_with(".EXE") {
+            out.push(format!("{name}.exe"));
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        vec![name.to_string()]
+    }
 }
 
 #[cfg(unix)]
@@ -1555,12 +1608,21 @@ fn spawn_once(frpc: &Path, watch: Option<Arc<SessionWatch>>) -> Result<Child, St
     let log_err = log
         .try_clone()
         .map_err(|e| format!("clone log handle: {e}"))?;
-    let mut child = Command::new(frpc)
-        .arg("-c")
+    let mut cmd = Command::new(frpc);
+    cmd.arg("-c")
         .arg(&cfg_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // frpc is a console-subsystem binary; without this, each tunnel start
+    // flashes (or leaves) a black cmd window on the Windows desktop.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn frpc ({}): {e}", frpc.display()))?;
 

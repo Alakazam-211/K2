@@ -288,15 +288,16 @@ fn ensure_local_daemon_process() {
     if let Some(dir) = daemon_bin.parent() {
         cmd.current_dir(dir);
     }
-    // Detach from the UI process so closing the window does not kill the
-    // daemon (and no console window flashes on Windows).
+    // Windows: hide console (k2-daemon is CUI unless built with windows
+    // subsystem) and start a new process group so closing the UI does not
+    // tear the daemon down. Prefer CREATE_NO_WINDOW over DETACHED_PROCESS —
+    // DETACHED can still allocate a console for CUI children in some paths.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     }
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -712,14 +713,13 @@ fn watchdog_field_log(line: &str) {
     }
 }
 
-/// Stage the bundled `frpc` tunnel client (shipped as a Tauri
-/// externalBin sidecar at `Contents/MacOS/frpc`) out to
-/// `~/.k2/bin/frpc`, where the daemon's `resolve_frpc` finds it.
+/// Stage the bundled `frpc` tunnel client (Tauri `externalBin` sidecar) out
+/// to `~/.k2/bin/`, where the daemon's `resolve_frpc` finds it.
 ///
-/// We locate the sidecar next to the current executable — the same
-/// `current_exe().parent()` pattern used to find the bundled
-/// `k2so-daemon` — which works identically for a release bundle
-/// (`K2SO.app/Contents/MacOS/`) and for `tauri dev` (`target/debug/`).
+/// Sidecar locations (next to the running executable):
+/// - macOS: `K2.app/Contents/MacOS/frpc`
+/// - Windows NSIS: `%LOCALAPPDATA%\K2\frpc.exe` (Tauri names the peer `.exe`)
+/// - `tauri dev`: `target/debug/frpc` / `frpc.exe`
 ///
 /// Idempotent: only copies when the destination is missing or its bytes
 /// differ from the sidecar (so app upgrades that bump frpc re-stage).
@@ -728,27 +728,42 @@ fn watchdog_field_log(line: &str) {
 /// (rather than the user downloading them) means the staged file carries
 /// no `com.apple.quarantine` flag, so Gatekeeper lets it execute.
 fn stage_bundled_frpc() {
-    // Locate the sidecar next to the running executable.
-    let sidecar = match std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("frpc")))
-    {
-        Some(p) if p.exists() => p,
-        Some(p) => {
-            log_debug!(
-                "[k2so] bundled frpc sidecar not found at {} — skipping stage \
-                 (dev build without externalBin, or older bundle)",
-                p.display()
-            );
-            return;
-        }
-        None => {
-            log_debug!("[k2so] could not resolve current_exe to find frpc sidecar");
-            return;
-        }
+    // Windows ships `frpc.exe`; Unix ships bare `frpc`. Probe both so a
+    // mis-named peer still stages.
+    let sidecar_names: &[&str] = if cfg!(windows) {
+        &["frpc.exe", "frpc"]
+    } else {
+        &["frpc"]
     };
 
-    let dest = k2_core::paths::k2_bin().join("frpc");
+    let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    else {
+        log_debug!("[k2so] could not resolve current_exe to find frpc sidecar");
+        return;
+    };
+
+    let mut sidecar: Option<std::path::PathBuf> = None;
+    for name in sidecar_names {
+        let p = exe_dir.join(name);
+        if p.exists() {
+            sidecar = Some(p);
+            break;
+        }
+    }
+    let Some(sidecar) = sidecar else {
+        log_debug!(
+            "[k2so] bundled frpc sidecar not found next to {} — skipping stage \
+             (dev build without externalBin, or older bundle)",
+            exe_dir.display()
+        );
+        return;
+    };
+
+    // Stage with the platform-native name so resolve_frpc + CreateProcess agree.
+    let dest_name = if cfg!(windows) { "frpc.exe" } else { "frpc" };
+    let dest = k2_core::paths::k2_bin().join(dest_name);
 
     // Skip the copy when the staged bytes already match the sidecar.
     if dest.exists() {
@@ -790,6 +805,16 @@ fn stage_bundled_frpc() {
         {
             log_debug!("[k2so] failed to chmod 0755 {}: {e}", dest.display());
             return;
+        }
+    }
+
+    // Drop a bare `frpc` alias on Windows only if we staged `.exe` and the
+    // legacy extensionless path is missing — older resolve probes used it.
+    #[cfg(windows)]
+    {
+        let bare = k2_core::paths::k2_bin().join("frpc");
+        if !bare.exists() {
+            let _ = std::fs::copy(&dest, &bare);
         }
     }
 

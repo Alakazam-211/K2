@@ -111,8 +111,60 @@ TARGET_DIR_CMD="$(printf '%s' "$TARGET_DIR" | tr '/' '\\')"
 NSIS_DIR_CMD="${TARGET_DIR_CMD}\\release\\bundle\\nsis"
 
 echo "  Extracting on ${HOST}..."
+# Wipe the remote tree first so a prior checkout cannot shadow a partial
+# extract (0.40.95 manual build produced K2_0.40.94_* because C:\k2\K2
+# still had the old Cargo.toml). bat stays at C:\k2\ (uploaded above).
 ssh -o BatchMode=yes -o ServerAliveInterval=30 "$HOST" \
-    "cmd /c \"if not exist ${REMOTE_DIR_CMD} mkdir ${REMOTE_DIR_CMD} && tar -xzf C:\\k2\\tree.tgz -C ${REMOTE_DIR_CMD} && copy /Y C:\\k2\\build-nsis-release.bat C:\\k2\\build-nsis-release.bat\""
+    "powershell -NoProfile -Command \"
+      \\\$ErrorActionPreference = 'Stop'
+      if (Test-Path '${REMOTE_DIR}') { Remove-Item -LiteralPath '${REMOTE_DIR}' -Recurse -Force }
+      New-Item -ItemType Directory -Path '${REMOTE_DIR}' | Out-Null
+      tar -xzf C:/k2/tree.tgz -C '${REMOTE_DIR}'
+    \""
+
+# Fail loud if the remote tree is still the wrong product version
+# (tauri/nsis name the installer from Cargo.toml, not our argv).
+# Pull files over scp so we parse on the Mac (avoids ssh/cmd quoting hell).
+echo "  Verifying remote package.json + src-tauri/Cargo.toml == ${VERSION}..."
+STAGE_V="$(mktemp -d -t k2-win-ver)"
+scp -o BatchMode=yes -o ConnectTimeout=20 \
+    "${HOST}:${REMOTE_DIR}/package.json" \
+    "${HOST}:${REMOTE_DIR}/src-tauri/Cargo.toml" \
+    "$STAGE_V/" >/dev/null
+REMOTE_PKG="$(python3 -c "import json; print(json.load(open('$STAGE_V/package.json'))['version'])")"
+REMOTE_CARGO="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$STAGE_V/Cargo.toml" | head -1)"
+rm -rf "$STAGE_V"
+if [ "$REMOTE_PKG" != "$VERSION" ] || [ "$REMOTE_CARGO" != "$VERSION" ]; then
+    echo "ERROR: after extract, remote versions are package.json=${REMOTE_PKG} Cargo.toml=${REMOTE_CARGO}, expected ${VERSION}." >&2
+    echo "  Tree sync failed — refusing to build a mis-versioned installer." >&2
+    exit 1
+fi
+echo "  remote versions OK (package.json + Cargo.toml = ${VERSION})."
+
+# frpc Windows sidecar is gitignored / not in the tarball. Stage from:
+#   1) prior release dir on the sticky box, or
+#   2) local fetch into a temp path + scp (fetch-frpc.sh).
+FRPC_SIDE="src-tauri/binaries/frpc-x86_64-pc-windows-msvc.exe"
+echo "  Ensuring Windows frpc sidecar (${FRPC_SIDE})..."
+if ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
+    "cmd /c if exist ${REMOTE_DIR_CMD}\\src-tauri\\binaries\\frpc-x86_64-pc-windows-msvc.exe (exit 0) else (exit 1)"; then
+    echo "  frpc sidecar already present on remote."
+elif ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
+    "cmd /c if exist ${TARGET_DIR_CMD}\\release\\frpc.exe (copy /Y ${TARGET_DIR_CMD}\\release\\frpc.exe ${REMOTE_DIR_CMD}\\src-tauri\\binaries\\frpc-x86_64-pc-windows-msvc.exe >nul & exit 0) else (exit 1)"; then
+    echo "  staged frpc from ${TARGET_DIR}/release/frpc.exe"
+else
+    echo "  fetching frpc for x86_64-pc-windows-msvc..."
+    FRPC_TARGET_TRIPLE=x86_64-pc-windows-msvc \
+        "$PROJECT_DIR/scripts/fetch-frpc.sh" >>"$STAGE/frpc-fetch.log" 2>&1 || {
+        echo "ERROR: could not stage Windows frpc (see fetch-frpc / sticky-box release frpc.exe)." >&2
+        tail -20 "$STAGE/frpc-fetch.log" 2>/dev/null || true
+        exit 1
+    }
+    scp -o BatchMode=yes -o ConnectTimeout=60 \
+        "$PROJECT_DIR/$FRPC_SIDE" \
+        "${HOST}:${REMOTE_DIR}/${FRPC_SIDE}"
+    echo "  scp'd frpc sidecar to remote."
+fi
 
 # Drop stale NSIS names so a leftover K2_0.40.93_* can't satisfy a loose check.
 echo "  Clearing prior NSIS outputs under ${NSIS_DIR_CMD}..."

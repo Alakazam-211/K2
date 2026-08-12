@@ -6,6 +6,14 @@
 //! the agent_hooks HTTP server — so that agents keep running while the
 //! Tauri app is quit and the laptop lid is closed.
 //!
+//! On Windows release builds: `windows_subsystem = "windows"` so auto-start
+//! from the thin client does not open a bare console window on the desktop
+//! (k2-daemon is a CUI binary by default; the GUI app is already WINDOWS).
+
+// Hide the console window for release Windows builds. Debug/dev builds keep
+// a console so `cargo run -p k2-daemon` still shows logs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+//!
 //! # Tokio runtime
 //!
 //! The binary is async-first: a multi-thread `#[tokio::main]` runtime hosts

@@ -252,9 +252,15 @@ export function TerminalComposeBar({
         e.preventDefault()
         void send()
       }
-      // Stop terminal-level / global single-key shortcuts from firing while
-      // the human is typing a message in the box.
-      e.stopPropagation()
+      // Stop terminal-level / single-key shortcuts from firing while typing
+      // (plain letters, arrows, etc.). Do NOT stop Cmd/Ctrl app chords —
+      // useTerminalShortcuts lives on window bubble (Cmd+Shift+T launch
+      // agent, Cmd+T tab, Cmd+W, Cmd+N, …) and was dead while this box
+      // was focused. Project chat uses the same narrow pattern (Esc only).
+      const isAppChord = e.metaKey || e.ctrlKey
+      if (!isAppChord) {
+        e.stopPropagation()
+      }
     },
     [send]
   )

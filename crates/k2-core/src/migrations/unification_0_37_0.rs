@@ -31,12 +31,9 @@ use serde::{Deserialize, Serialize};
 use crate::workspace::agent_identity::{agent_dir, agent_type_for, agents_dir};
 use crate::fs_atomic::atomic_write_str;
 
-/// Sentinel filename. Presence under `.k2so/` means the unification
+/// Sentinel filename. Presence under `.k2so/` / `.k2/` means the unification
 /// migration has already run for this workspace.
 pub const SENTINEL_FILENAME: &str = ".unification-0.37.0-done";
-
-/// User-facing migration notice filename.
-pub const MIGRATION_NOTICE_FILENAME: &str = "MIGRATION-0.37.0.md";
 
 /// Outcome summary returned to the caller (logs, daemon status, tests).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -145,8 +142,9 @@ pub fn run_unification(
     // Step 8: aged-out root cruft → legacy.
     archive_root_cruft(project_path, &mut outcome)?;
 
-    // Step 9 + 10: stamp sentinel + write user-facing notice.
-    write_migration_notice(project_path, &outcome)?;
+    // Step 9: stamp sentinel only. Do not write MIGRATION-0.37.0.md (GH#58) —
+    // that receipt was untracked under the workspace dot-dir and got swept into
+    // git; real migration detail lives in the sentinel + migration/legacy/.
     write_sentinel(project_path, &outcome)?;
 
     Ok(outcome)
@@ -468,71 +466,6 @@ fn write_sentinel(project_path: &str, outcome: &UnificationOutcome) -> Result<()
     atomic_write_str(&path, &body).map_err(|e| format!("write sentinel: {e}"))
 }
 
-fn write_migration_notice(
-    project_path: &str,
-    outcome: &UnificationOutcome,
-) -> Result<(), String> {
-    let path = PathBuf::from(project_path)
-        .join(".k2so")
-        .join(MIGRATION_NOTICE_FILENAME);
-    let mut body = String::new();
-    body.push_str("# Workspace–Agent Unification (0.37.0)\n\n");
-    body.push_str(
-        "K2SO 0.37.0 collapsed your workspace's `.k2so/agents/<name>/...` layout \
-         into the single-agent layout. Originals were preserved under \
-         `.k2so/migration/legacy/`.\n\n",
-    );
-    body.push_str("## What moved\n\n");
-    if let Some(p) = &outcome.primary_migrated {
-        body.push_str(&format!(
-            "- **Primary agent (`{p}`)** → `.k2so/agent/AGENT.md`\n"
-        ));
-    } else {
-        body.push_str(
-            "- No primary agent migrated (workspace `agent_mode` is `off`, or none on disk).\n",
-        );
-    }
-    if !outcome.templates_migrated.is_empty() {
-        body.push_str(&format!(
-            "- **Templates** ({}) → `.k2so/agent-templates/<name>/AGENT.md`\n  - {}\n",
-            outcome.templates_migrated.len(),
-            outcome.templates_migrated.join("\n  - ")
-        ));
-    }
-    if outcome.work_items_merged > 0 {
-        body.push_str(&format!(
-            "- **Work items merged** into `.k2so/work/`: {}\n",
-            outcome.work_items_merged
-        ));
-    }
-    if !outcome.legacy_archived.is_empty() {
-        body.push_str(&format!(
-            "- **Archived to `.k2so/migration/legacy/`**:\n  - {}\n",
-            outcome.legacy_archived.join("\n  - ")
-        ));
-    }
-    if !outcome.conflicts.is_empty() {
-        body.push_str(&format!(
-            "\n## Conflicts (manual review)\n\n\
-             {} work item(s) had a name collision with an existing workspace \
-             inbox file. Agent-side copies are at \
-             `.k2so/migration/legacy/work-conflicts/`:\n  - {}\n",
-            outcome.conflicts.len(),
-            outcome.conflicts.join("\n  - ")
-        ));
-    }
-    body.push_str(
-        "\n## Recovery\n\n\
-         Anything in `.k2so/migration/legacy/` is safe to delete after you've \
-         verified your workspace works. Compiled SKILL/CLAUDE files were \
-         dropped (they regenerate from the AGENT.md source on next launch).\n\n\
-         If something looks wrong, the sentinel `.k2so/.unification-0.37.0-done` \
-         can be deleted to force a re-run — but only if you've also restored \
-         the original `.k2so/agents/` layout from the legacy archive.\n",
-    );
-    atomic_write_str(&path, &body).map_err(|e| format!("write migration notice: {e}"))
-}
-
 // ── Resolver (no DB; takes agent_mode as parameter) ────────────────
 
 fn resolve_primary_for_migration(project_path: &str, agent_mode: &str) -> Option<String> {
@@ -668,9 +601,12 @@ mod tests {
         assert!(!p.join(".k2so/agent/SKILL.md").exists());
         // agents/ dir removed entirely.
         assert!(!p.join(".k2so/agents").exists());
-        // Sentinel + notice landed.
+        // Sentinel only — no MIGRATION-0.37.0.md (GH#58: not git-ignored).
         assert!(p.join(".k2so/.unification-0.37.0-done").exists());
-        assert!(p.join(".k2so/MIGRATION-0.37.0.md").exists());
+        assert!(
+            !p.join(".k2so/MIGRATION-0.37.0.md").exists(),
+            "must not write MIGRATION-0.37.0.md into the workspace"
+        );
 
         fs::remove_dir_all(&p).ok();
     }
@@ -865,11 +801,12 @@ mod tests {
         // agents/ removed entirely
         assert!(!p.join(".k2so/agents").exists());
 
-        // Sentinel + notice
+        // Sentinel only — no user-facing MIGRATION receipt (GH#58).
         assert!(p.join(".k2so/.unification-0.37.0-done").exists());
-        let notice = fs::read_to_string(p.join(".k2so/MIGRATION-0.37.0.md")).unwrap();
-        assert!(notice.contains("pod-leader"));
-        assert!(notice.contains("rust-eng"));
+        assert!(
+            !p.join(".k2so/MIGRATION-0.37.0.md").exists(),
+            "must not write MIGRATION-0.37.0.md into the workspace"
+        );
 
         fs::remove_dir_all(&p).ok();
     }

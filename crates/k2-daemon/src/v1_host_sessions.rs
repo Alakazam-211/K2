@@ -1301,9 +1301,10 @@ fn principal_may_observe_host_session(
 /// best-effort durable index / map cleanup (Scout restart orphans). Live
 /// teardown uses
 /// [`crate::sandbox_reaper::force_teardown_host_session_preserve_index`]
-/// (keeps durable row for dead-resume). Grace expiry still clears index.
-/// Cap file / JWTs left in place (K8). Kill tombstone is stamped here only
-/// (auto Grace must not tombstone).
+/// (keeps durable row for dead-resume). Grace expiry also **retains** the
+/// durable index (same re-wake contract — only explicit not_live `/kill`
+/// clears). Cap file / JWTs left in place (K8). Kill tombstone is stamped
+/// here only (auto Grace must not tombstone).
 pub(crate) fn handle_v1_host_kill(
     principal: &V1Principal,
     ws_raw: &str,

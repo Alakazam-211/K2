@@ -438,10 +438,12 @@ impl TerminalManager {
             };
 
             if let Some(cli_dir) = cli_dir {
-                let existing_path = std::env::var("PATH").unwrap_or_default();
+                let existing_path = std::env::var("PATH")
+                    .or_else(|_| std::env::var("Path"))
+                    .unwrap_or_default();
                 pty_options.env.insert(
                     "PATH".to_string(),
-                    format!("{}:{}", cli_dir.to_string_lossy(), existing_path),
+                    crate::terminal::path_env::prepend(&existing_path, &cli_dir),
                 );
             }
         }

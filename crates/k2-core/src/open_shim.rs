@@ -126,20 +126,13 @@ pub fn staged_shim_path() -> Option<PathBuf> {
     }
 }
 
-/// PURE — prepend `bin` to a `:`-separated PATH value so binaries in it
-/// WIN `execvp` lookup (first match wins). No-op when `bin` is already
-/// a segment (idempotent across respawns); an empty `path` yields just
-/// `bin`.
+/// PURE — prepend `bin` to a PATH value so binaries in it WIN
+/// `execvp` / SearchPath lookup (first match wins). Uses
+/// [`crate::terminal::path_env`] so the host separator (`:` / `;`) is
+/// correct — no hardcoded `:`. No-op when `bin` is already a segment
+/// (idempotent across respawns); an empty `path` yields just `bin`.
 pub fn prepend_bin_dir(path: &str, bin: &Path) -> String {
-    let bin_s = bin.to_string_lossy();
-    if path.split(':').any(|seg| seg == bin_s) {
-        return path.to_string();
-    }
-    if path.is_empty() {
-        bin_s.into_owned()
-    } else {
-        format!("{bin_s}:{path}")
-    }
+    crate::terminal::path_env::prepend(path, bin)
 }
 
 #[cfg(test)]

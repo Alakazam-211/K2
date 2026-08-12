@@ -20,6 +20,8 @@ pub mod daemon_pty;
 // `SandboxSpec::default() == Passthrough` keeps every existing path
 // byte-identical.
 pub mod sandbox;
+// Portable PATH split/join/prepend/merge (host separator: `:` / `;`).
+pub mod path_env;
 // PATH enrichment for daemon-spawned children (issue #15). Computes
 // an augmented PATH (login-shell PATH ++ known install dirs ++
 // inherited launchd PATH) so agent CLIs in ~/.local/bin, homebrew,
@@ -133,16 +135,52 @@ pub fn resolve_cwd(cwd: &str) -> String {
 }
 
 /// Detect the user's default shell.
+///
+/// Unix: `$SHELL` if it exists on disk, else zsh/bash/sh fallbacks.
+/// Windows: `%COMSPEC%` (usually `cmd.exe`), else `pwsh` / `powershell`
+/// if resolvable on PATH, else `cmd.exe`.
 pub fn detect_shell() -> String {
-    std::env::var("SHELL")
-        .ok()
-        .filter(|s| std::path::Path::new(s).exists())
-        .unwrap_or_else(|| {
-            for sh in &["/bin/zsh", "/bin/bash", "/bin/sh"] {
-                if std::path::Path::new(sh).exists() {
-                    return sh.to_string();
-                }
+    #[cfg(windows)]
+    {
+        if let Ok(comspec) = std::env::var("COMSPEC") {
+            if std::path::Path::new(&comspec).exists() {
+                return comspec;
             }
-            "/bin/sh".to_string()
-        })
+        }
+        // Prefer PowerShell 7+, then Windows PowerShell, then cmd.
+        for candidate in ["pwsh.exe", "pwsh", "powershell.exe", "powershell"] {
+            if which_on_path(candidate).is_some() {
+                return candidate.to_string();
+            }
+        }
+        "cmd.exe".to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("SHELL")
+            .ok()
+            .filter(|s| std::path::Path::new(s).exists())
+            .unwrap_or_else(|| {
+                for sh in &["/bin/zsh", "/bin/bash", "/bin/sh"] {
+                    if std::path::Path::new(sh).exists() {
+                        return sh.to_string();
+                    }
+                }
+                "/bin/sh".to_string()
+            })
+    }
+}
+
+/// True when `name` resolves as an existing file via a PATH search
+/// (no PATHEXT expansion — callers pass an extension when needed).
+#[cfg(windows)]
+fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH").or_else(|| std::env::var_os("Path"))?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }

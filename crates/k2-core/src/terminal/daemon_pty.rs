@@ -638,23 +638,22 @@ impl DaemonPtySession {
 
         // Issue #15: PATH enrichment. The daemon runs under macOS
         // launchd with a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin),
-        // so children spawned by bare name (`claude`, `cursor`,
+        // and under Windows services with a similarly incomplete
+        // Path, so children spawned by bare name (`claude`, `cursor`,
         // `gemini`) can't find binaries in ~/.local/bin (the Claude
         // native installer default), /opt/homebrew/bin, nvm shims,
-        // etc. — they ENOENT. Augment the child PATH with the union
-        // of the user's login-shell PATH, known install dirs, and the
-        // daemon's inherited PATH (helper is no-op / non-mutating on
-        // non-unix). Respect a caller-provided PATH: if `cfg.env`
-        // already set one explicitly, leave it untouched — only fill
-        // in the enriched value when the caller passed none (which is
-        // the common case: spawn.rs hands an empty env, so agents get
-        // the enriched PATH).
-        if !child_env.contains_key("PATH") {
-            let inherited = std::env::var("PATH").unwrap_or_default();
-            child_env.insert(
-                "PATH".to_string(),
-                login_path::augmented_path(&inherited),
-            );
+        // %APPDATA%\npm, etc. — they ENOENT. Augment the child PATH
+        // with the union of the user's login-shell / User+Machine
+        // PATH, known install dirs, and the daemon's inherited PATH.
+        // Respect a caller-provided PATH/`Path`: if `cfg.env` already
+        // set one explicitly, leave it untouched — only fill in the
+        // enriched value when the caller passed none (which is the
+        // common case: spawn.rs hands an empty env, so agents get the
+        // enriched PATH). On Windows, `PATH` and `Path` are equivalent.
+        if !login_path::env_has_path(&child_env) {
+            let inherited = login_path::process_path();
+            let enriched = login_path::augmented_path(&inherited);
+            child_env.insert("PATH".to_string(), enriched);
         }
 
         child_env
@@ -690,6 +689,17 @@ impl DaemonPtySession {
         if let Some(shim) = crate::open_shim::staged_shim_path() {
             apply_browser_shim_env(&mut child_env, &shim);
         }
+
+        // Capture spawn-failure diagnostics before `req` takes ownership
+        // of `shell` / `child_env`. PATH entry count helps distinguish
+        // bare-name ENOENT (PATH too thin) from other spawn errors.
+        let spawn_prog = shell
+            .as_ref()
+            .map(|s| s.program.clone())
+            .unwrap_or_else(|| "(login-shell)".to_string());
+        let spawn_path_entries = login_path::env_path_entry(&child_env)
+            .map(|(_, v)| crate::terminal::path_env::entry_count(v))
+            .unwrap_or(0);
 
         // Sandbox P1 seam: the single backend-specific step — build
         // `tty::Options`, open the PTY, capture the child PID — now lives
@@ -735,7 +745,19 @@ impl DaemonPtySession {
         // with a specific OS window for controlling-terminal
         // semantics. The daemon has no window, so the backend passes 0.
         let __t_pty = std::time::Instant::now();
-        let SpawnedChild { pty, child_pid } = backend.spawn(req)?;
+        let SpawnedChild { pty, child_pid } = match backend.spawn(req) {
+            Ok(child) => child,
+            Err(e) => {
+                log_debug!(
+                    "[daemon_pty] spawn failed session={} program={} path_entries={} err={}",
+                    cfg.session_id,
+                    spawn_prog,
+                    spawn_path_entries,
+                    e
+                );
+                return Err(e);
+            }
+        };
 
         let pty_ms = __t_pty.elapsed().as_secs_f64() * 1000.0;
         log_debug!(
@@ -1839,10 +1861,18 @@ fn apply_browser_shim_env(
     shim: &std::path::Path,
 ) {
     if let Some(bin) = shim.parent() {
-        let merged = crate::open_shim::prepend_bin_dir(
-            child_env.get("PATH").map(String::as_str).unwrap_or(""),
-            bin,
-        );
+        // Prefer the existing PATH/`Path` value (Windows uses `Path`);
+        // always write back under `PATH` so a single canonical key is set.
+        let current = login_path::env_path_entry(child_env)
+            .map(|(_, v)| v)
+            .unwrap_or("");
+        let merged = crate::open_shim::prepend_bin_dir(current, bin);
+        // Drop a Windows-style `Path` sibling so we don't hand the child
+        // two competing PATH values after enrichment.
+        #[cfg(windows)]
+        {
+            child_env.retain(|k, _| !k.eq_ignore_ascii_case("PATH"));
+        }
         child_env.insert("PATH".to_string(), merged);
     }
     child_env

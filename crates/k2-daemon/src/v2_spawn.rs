@@ -179,8 +179,24 @@ pub struct SpawnRequest {
     pub forced_session_id: Option<SessionId>,
 }
 
+/// Default session cwd when the client omits one.
+/// Prefer the real home dir; never fall back to Unix-only `/tmp` on
+/// Windows (that path does not exist and breaks spawn).
 fn default_cwd() -> String {
-    std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
+    if let Some(home) = dirs::home_dir() {
+        return home.to_string_lossy().into_owned();
+    }
+    if let Ok(up) = std::env::var("USERPROFILE") {
+        if !up.is_empty() {
+            return up;
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return home;
+        }
+    }
+    std::env::temp_dir().to_string_lossy().into_owned()
 }
 fn default_cols() -> u16 {
     80

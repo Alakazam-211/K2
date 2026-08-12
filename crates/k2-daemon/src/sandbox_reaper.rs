@@ -412,6 +412,8 @@ pub fn clear_durable_by_agent_name(conn: &rusqlite::Connection, agent_name: &str
 }
 
 /// True when this session is in Grace (post `--final` / `k2 done`).
+/// Test/observability helper — production call sites use [`phase_label`].
+#[cfg(test)]
 pub fn is_grace(id: &SessionId) -> bool {
     phase_label(id) == Some("grace")
 }

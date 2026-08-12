@@ -114,13 +114,11 @@ echo "  Extracting on ${HOST}..."
 # Wipe the remote tree first so a prior checkout cannot shadow a partial
 # extract (0.40.95 manual build produced K2_0.40.94_* because C:\k2\K2
 # still had the old Cargo.toml). bat stays at C:\k2\ (uploaded above).
+# Prefer cmd `rmdir /S /Q` over PowerShell Remove-Item: on the sticky box
+# Remove-Item often left a half-tree (file locks / long paths) so tar merged
+# into stale 0.40.95 sources and the version gate failed (0.40.96 cut).
 ssh -o BatchMode=yes -o ServerAliveInterval=30 "$HOST" \
-    "powershell -NoProfile -Command \"
-      \\\$ErrorActionPreference = 'Stop'
-      if (Test-Path '${REMOTE_DIR}') { Remove-Item -LiteralPath '${REMOTE_DIR}' -Recurse -Force }
-      New-Item -ItemType Directory -Path '${REMOTE_DIR}' | Out-Null
-      tar -xzf C:/k2/tree.tgz -C '${REMOTE_DIR}'
-    \""
+    "cmd /c \"taskkill /F /IM cargo.exe /T >nul 2>&1 & taskkill /F /IM rustc.exe /T >nul 2>&1 & taskkill /F /IM bun.exe /T >nul 2>&1 & taskkill /F /IM node.exe /T >nul 2>&1 & rmdir /S /Q ${REMOTE_DIR_CMD} >nul 2>&1 & mkdir ${REMOTE_DIR_CMD} & tar -xzf C:\\k2\\tree.tgz -C ${REMOTE_DIR} & if not exist ${REMOTE_DIR_CMD}\\package.json exit /b 1\""
 
 # Fail loud if the remote tree is still the wrong product version
 # (tauri/nsis name the installer from Cargo.toml, not our argv).

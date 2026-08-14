@@ -559,11 +559,26 @@ pub fn set_relaunch_mode() {
     crate::RELAUNCH_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Stop the local bundled `k2-daemon` so a Windows NSIS/in-app update can
+/// overwrite `%LOCALAPPDATA%\K2\k2-daemon.exe`. A live daemon holds the
+/// file lock → installer error "already … in the file path" and the app
+/// comes back on a *new* `k2.exe` talking to the *old* daemon → Connecting
+/// forever (`localPairedPolicy` exact version).
+#[tauri::command]
+pub fn stop_bundled_daemon_for_update() -> Result<(), String> {
+    crate::stop_bundled_daemon_processes();
+    Ok(())
+}
+
 /// Relaunch the app via a helper script that waits for this process to die,
 /// then opens the .app bundle cleanly. This avoids:
 /// 1. Two dock icons (old process still alive when new one launches)
 /// 2. Metal SIGABRT from std::process::exit() running __cxa_finalize_ranges
 /// 3. Tauri's built-in relaunch spawning a bare binary (not a .app bundle)
+///
+/// Windows: `relaunch_via_open` previously only `process::exit(0)` — no
+/// helper — so "Install & Relaunch" quit the app after NSIS without
+/// restarting it.
 #[tauri::command]
 pub fn relaunch_via_open(_app: AppHandle) {
     #[cfg(target_os = "macos")]
@@ -601,6 +616,35 @@ pub fn relaunch_via_open(_app: AppHandle) {
                         .stderr(std::process::Stdio::null())
                         .spawn();
                 }
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let pid = std::process::id();
+        if let Ok(exe) = std::env::current_exe() {
+            let exe_s = exe.display().to_string();
+            let script = format!(
+                "@echo off\r\n\
+                 :wait\r\n\
+                 tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul\r\n\
+                 if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\r\n\
+                 timeout /t 2 /nobreak >nul\r\n\
+                 start \"\" \"{exe_s}\"\r\n\
+                 del \"%~f0\"\r\n"
+            );
+            let script_path = std::env::temp_dir().join(format!("k2-relaunch-{pid}.cmd"));
+            if std::fs::write(&script_path, &script).is_ok() {
+                log_debug!(
+                    "[relaunch] Windows helper {} waiting for PID {pid}",
+                    script_path.display()
+                );
+                let _ = std::process::Command::new("cmd")
+                    .args(["/C", "start", "", "/MIN", &script_path.display().to_string()])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
             }
         }
     }

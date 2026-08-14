@@ -3,6 +3,39 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.97 — Terminals stay up on Projects; Windows update actually installs
+
+Two dogfood fixes: remote and local terminals no longer die with a fake
+“daemon unreachable” when you open the Projects tab (or a pinned chat),
+and Windows in-app update no longer gets stuck Connecting after Download.
+
+### Terminals recover when many panes connect at once
+
+Opening **Projects** (or switching to a **pinned chat** like Cortana)
+could leave some terminals on a red `Kessel: ws error (daemon unreachable
+after retries)` while others kept working. The daemon was fine — the
+client was opening too many terminal connections at once and WebKit
+gave up (`Insufficient resources`).
+
+The app now connects those streams one at a time, backs off when the
+browser is out of sockets, and retries a visible error pane instead of
+leaving it stuck. Same fix on Scout and on a local server.
+
+### Windows: Download no longer breaks the next launch
+
+**Download** used to run the installer immediately, which could not
+replace a running `k2-daemon.exe`, skipped **Install & Relaunch**, and
+left the app Connecting forever. Download now only downloads. Install
+stops the bundled daemon, replaces the files, then relaunches K2.
+
+### What to try
+
+1. **Scout or local:** open Projects with several terminals visible —
+   they should paint, not stay red. Click a pinned chat that was red;
+   it should recover without a full reload.
+2. **Windows (0.40.95/96):** Check for Updates → Download → Install &
+   Relaunch. K2 should come back on 0.40.97, not sit on Connecting.
+
 ## 0.40.96 — Windows agents, host-session re-wake, compose hotkeys
 
 Three dogfood fixes: Windows agent launch + tunnel install polish, Scout

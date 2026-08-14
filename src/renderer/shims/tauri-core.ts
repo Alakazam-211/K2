@@ -19,6 +19,7 @@ const KNOWN_NOOPS = new Set([
   'plugin:app|name',
   'plugin:app|version',
   'relaunch_via_open',
+  'stop_bundled_daemon_for_update',
   'restart_app',
   'open_app_devtools',
 ])

@@ -5,6 +5,20 @@ import { check, type Update } from '@tauri-apps/plugin-updater'
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
 
+type UpdateProgressEvent = {
+  event: 'Started' | 'Progress' | 'Finished'
+  data?: unknown
+}
+
+/** Tauri 2 updater: `download()` then `install()` — do not use
+ *  `downloadAndInstall` for the Settings "Download" button (that runs
+ *  NSIS immediately, skips Install & Relaunch, and on Windows fails to
+ *  overwrite a live `k2-daemon.exe`). */
+type SplitUpdate = Update & {
+  download?: (onEvent?: (event: UpdateProgressEvent) => void) => Promise<void>
+  install?: () => Promise<void>
+}
+
 interface UpdateState {
   status: UpdateStatus
   version: string | null
@@ -16,9 +30,26 @@ interface UpdateState {
   installAndRelaunch: () => Promise<void>
 }
 
-let pendingUpdate: Update | null = null
+let pendingUpdate: SplitUpdate | null = null
 
-export const useUpdateStore = create<UpdateState>((set, get) => ({
+function applyDownloadProgress(
+  event: UpdateProgressEvent,
+  acc: { contentLength: number; downloaded: number },
+  set: (p: Partial<UpdateState>) => void,
+): void {
+  if (event.event === 'Started') {
+    acc.contentLength = (event.data as { contentLength?: number } | undefined)?.contentLength ?? 0
+  } else if (event.event === 'Progress') {
+    acc.downloaded += (event.data as { chunkLength?: number } | undefined)?.chunkLength ?? 0
+    const pct =
+      acc.contentLength > 0 ? Math.round((acc.downloaded / acc.contentLength) * 100) : 0
+    set({ progress: pct })
+  } else if (event.event === 'Finished') {
+    set({ status: 'ready', progress: 100 })
+  }
+}
+
+export const useUpdateStore = create<UpdateState>((set) => ({
   status: 'idle',
   version: null,
   notes: null,
@@ -50,20 +81,15 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   startDownload: async () => {
     if (!pendingUpdate) return
     set({ status: 'downloading', progress: 0 })
+    const acc = { contentLength: 0, downloaded: 0 }
+    const onEvent = (event: UpdateProgressEvent) => applyDownloadProgress(event, acc, set)
     try {
-      let contentLength = 0
-      let downloaded = 0
-      await pendingUpdate.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          contentLength = (event.data as any).contentLength ?? 0
-        } else if (event.event === 'Progress') {
-          downloaded += (event.data as any).chunkLength ?? 0
-          const pct = contentLength > 0 ? Math.round((downloaded / contentLength) * 100) : 0
-          set({ progress: pct })
-        } else if (event.event === 'Finished') {
-          set({ status: 'ready', progress: 100 })
-        }
-      })
+      if (typeof pendingUpdate.download === 'function') {
+        await pendingUpdate.download(onEvent)
+      } else {
+        // Older plugin: no split API — last resort, still installs immediately.
+        await pendingUpdate.downloadAndInstall(onEvent)
+      }
       set({ status: 'ready', progress: 100 })
     } catch (err) {
       console.error('[updater] Download failed:', err)
@@ -73,14 +99,22 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
 
   installAndRelaunch: async () => {
     try {
-      // Use macOS `open -n -a` to relaunch the .app bundle via launchd.
-      // This bypasses Tauri's built-in relaunch which spawns a bare binary
-      // that macOS doesn't register as a GUI app, and survives _exit(0).
+      // Unlock k2-daemon.exe so NSIS can replace it (Windows file lock).
+      await invoke('stop_bundled_daemon_for_update').catch((e) => {
+        console.warn('[updater] stop daemon before install:', e)
+      })
+      if (pendingUpdate && typeof pendingUpdate.install === 'function') {
+        await pendingUpdate.install()
+      }
+      // macOS: open -a helper. Windows: start after this PID dies.
+      // (On Windows, relaunch_via_open used to only process::exit — no relaunch.)
       await invoke('relaunch_via_open')
     } catch (err) {
-      // If relaunch fails, the update was still installed — tell the user
       console.error('[updater] Relaunch failed:', err)
-      set({ status: 'error', error: 'Update installed successfully. Please reopen K2 to use the new version.' })
+      set({
+        status: 'error',
+        error: 'Update installed. Please reopen K2 to use the new version.',
+      })
     }
   },
 }))

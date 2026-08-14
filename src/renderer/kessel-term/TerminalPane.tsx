@@ -52,6 +52,10 @@ import {
   type FrameCoalescer,
 } from './frameCoalescer'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, daemonWsBase, type DaemonWsAvailable } from '../kessel/daemon-ws'
+import {
+  gridDialBackoffRemainingMs,
+  openQueuedGridWebSocket,
+} from '@/lib/grid-dial-queue'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
@@ -589,6 +593,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const pendingInputRef = useRef('')
   // Shared grid-only reattach (soft-resync + dead-WS input recovery).
   const forceGridResyncRef = useRef<(reason: string) => void>(() => {})
+  // Next openGridWs may replace an OPEN/CONNECTING socket — close only
+  // after a dial slot is granted (not all panes CLOSING at once).
+  const replaceExistingRef = useRef(false)
+  const dialAbortRef = useRef<AbortController | null>(null)
   // Mirror of reconnectAttempt for the stall-interval payload (avoids
   // rebinding the interval every attempt bump).
   const reconnectAttemptRef = useRef(0)
@@ -1582,11 +1590,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // sessionId from `sessionIdRef` (set by the spawn effect). Idempotent
   // on an already-open socket: callers guard via `wsRef.current`.
   const openGridWs = useCallback(async (): Promise<void> => {
+    dialAbortRef.current?.abort()
+    const dialAbort = new AbortController()
+    dialAbortRef.current = dialAbort
+
     const sessionId = sessionIdRef.current
     if (!sessionId) return
-    // Don't open a second socket on top of a live/connecting one.
+    const replacing = replaceExistingRef.current
+    replaceExistingRef.current = false
+    // Don't open a second socket on top of a live/connecting one
+    // unless forceGridResync asked to swap after a dial slot.
     const existing = wsRef.current
     if (
+      !replacing &&
       existing &&
       (existing.readyState === WebSocket.OPEN ||
         existing.readyState === WebSocket.CONNECTING)
@@ -1633,9 +1649,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // something's actually wrong — but a transient races doesn't
       // bubble up.
       const WS_BOOT_DEADLINE_MS = 8_000
+      const WS_RESOURCE_DEADLINE_MS = 24_000
       const __t_ws_boot = performance.now()
       let ws: WebSocket | null = null
       let wsAttempt = 0
+      let resourcePressure = false
+      const giveUpDeadlineMs = () =>
+        resourcePressure ? WS_RESOURCE_DEADLINE_MS : WS_BOOT_DEADLINE_MS
       while (true) {
         if (isStale()) return
         wsAttempt += 1
@@ -1648,30 +1668,72 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // proto=k1 opt-in — track for stall breadcrumbs even before the
         // daemon's first binary frame flips k1WireActiveRef.
         gridProtoK1Ref.current = true
-        const candidate = new WebSocket(
-          `${daemonWsBase(creds)}/cli/sessions/grid?session=${sessionId}&token=${creds.token}&proto=k1`,
-        )
-        candidate.binaryType = 'arraybuffer'
-        // Race: open vs. close-before-open. Browser fires both
-        // `onerror` then `onclose` when a connection is rejected
-        // immediately (port not bound, etc.). We bind temporary
-        // listeners; the real ones get attached after the open
-        // resolves successfully.
-        const opened = await new Promise<boolean>((resolve) => {
-          const cleanup = () => {
-            candidate.onopen = null
-            candidate.onerror = null
-            candidate.onclose = null
+        let candidate: WebSocket
+        try {
+          candidate = await openQueuedGridWebSocket(
+            `${daemonWsBase(creds)}/cli/sessions/grid?session=${sessionId}&token=${creds.token}&proto=k1`,
+            {
+              isCancelled: () => isStale() || dialAbort.signal.aborted,
+              signal: dialAbort.signal,
+              beforeDial: () => {
+                const prior = wsRef.current
+                if (!prior) return
+                try {
+                  prior.onopen = null
+                  prior.onmessage = null
+                  prior.onerror = null
+                  prior.onclose = null
+                } catch {
+                  /* ignore */
+                }
+                wsRef.current = null
+                if (prior.readyState !== WebSocket.CLOSED) {
+                  try {
+                    prior.close()
+                  } catch {
+                    /* ignore */
+                  }
+                }
+              },
+            },
+          )
+        } catch (err) {
+          if (isStale() || dialAbort.signal.aborted) return
+          if (err instanceof Error && err.message === 'grid-dial-aborted') return
+          // Any failed queued dial (constructor throw, timeout, lost
+          // network) — leftover backoff may already be 0 after we waited
+          // it out, so latch on the failure itself.
+          resourcePressure = true
+          const elapsedMs = performance.now() - __t_ws_boot
+          if (elapsedMs > giveUpDeadlineMs()) {
+            perfLog('ws_giveup', {
+              attempts: String(wsAttempt),
+              elapsed_ms: Math.round(elapsedMs).toString(),
+            })
+            setPhase({
+              kind: 'error',
+              message: 'ws error (daemon unreachable after retries)',
+            })
+            return
           }
-          candidate.onopen = () => { cleanup(); resolve(true) }
-          candidate.onerror = () => { cleanup(); resolve(false) }
-          candidate.onclose = () => { cleanup(); resolve(false) }
-        })
+          const extra = gridDialBackoffRemainingMs()
+          const delayMs = Math.max(
+            extra,
+            Math.min(250 * 2 ** Math.min(wsAttempt - 1, 3), 2000),
+          )
+          perfLog('ws_retry', {
+            attempt: String(wsAttempt),
+            delay_ms: String(delayMs),
+            elapsed_ms: Math.round(elapsedMs).toString(),
+          })
+          await new Promise((r) => setTimeout(r, delayMs))
+          continue
+        }
         if (isStale()) {
           if (candidate.readyState !== WebSocket.CLOSED) candidate.close()
           return
         }
-        if (opened) {
+        if (candidate.readyState === WebSocket.OPEN) {
           ws = candidate
           perfLog('ws_open', {
             elapsed_ms: (performance.now() - __t_ws).toFixed(1),
@@ -1682,7 +1744,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // Connect failed — back off and retry within the boot
         // deadline. Beyond the deadline, surface the error.
         const elapsedMs = performance.now() - __t_ws_boot
-        if (elapsedMs > WS_BOOT_DEADLINE_MS) {
+        if (elapsedMs > giveUpDeadlineMs()) {
           perfLog('ws_giveup', {
             attempts: String(wsAttempt),
             elapsed_ms: Math.round(elapsedMs).toString(),
@@ -2228,8 +2290,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   // ── Grid-only reattach (soft-resync + dead-WS recovery) ────────
   // Recovery heal / session-events reopen / input on a dead socket /
-  // readyState poll. Grid-only: teardown then openGridWs — never
-  // bump reconnectAttempt / spawn re-POST as primary. Generation latch
+  // readyState poll. Grid-only: mark replace + openGridWs — close the
+  // prior socket in beforeDial after a slot. Never bump
+  // reconnectAttempt / spawn re-POST as primary. Generation latch
   // + microtask open so concurrent reasons only dial once (R5).
   useEffect(() => {
     const forceGridResync = (reason: string) => {
@@ -2252,30 +2315,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         reconnectTimerRef.current = null
       }
 
-      // 2–4. Prior-socket teardown (defeat OPEN early-return + dual-dial).
-      // Even half-open OPEN sockets must be closed — openGridWs no-ops
-      // while readyState is OPEN/CONNECTING, which is the stuck-ready hole.
-      const ws = wsRef.current
-      if (ws) {
-        try {
-          ws.onopen = null
-          ws.onmessage = null
-          ws.onerror = null
-          ws.onclose = null
-        } catch {
-          // ignore
-        }
-        // Null BEFORE close so a late onclose (if any) cannot schedule
-        // reconnectAttempt (`wsRef.current !== ws` guard).
-        wsRef.current = null
-        if (ws.readyState !== WebSocket.CLOSED) {
-          try {
-            ws.close()
-          } catch {
-            // ignore
-          }
-        }
-      }
+      // Keep the live socket until a dial slot is granted (beforeDial).
+      // Closing every pane here was N CLOSING leftovers + new dials.
+      replaceExistingRef.current = true
+      dialAbortRef.current?.abort()
 
       // Always-on prod breadcrumb — remote freezes are diagnosed from release
       // builds; DEV-gating hid the reason that forced a reattach.
@@ -2318,7 +2361,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     if (!isTabVisible) return
     const id = setInterval(() => {
-      if (phaseRef.current.kind !== 'ready') return
+      const kind = phaseRef.current.kind
+      // Visible error is the give-up overlay. Hidden retained panes
+      // stay parked so a background storm does not redial forever.
+      if (kind !== 'ready' && !(kind === 'error' && tabVisibleRef.current)) {
+        return
+      }
       if (
         !shouldHoldGridWs({
           visible: tabVisibleRef.current,
@@ -2332,7 +2380,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       if (ws && ws.readyState === WebSocket.OPEN) return
       // CONNECTING is mid-dial — don't thrash. Only recover dead/missing.
       if (ws && ws.readyState === WebSocket.CONNECTING) return
-      forceGridResyncRef.current('ready-ws-not-open')
+      forceGridResyncRef.current(
+        kind === 'error' ? 'visible-error-retry' : 'ready-ws-not-open',
+      )
     }, 2000)
     return () => clearInterval(id)
   }, [isTabVisible, terminalId])

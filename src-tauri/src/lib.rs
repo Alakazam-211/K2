@@ -199,10 +199,12 @@ fn check_daemon_version_and_restart() {
                 );
                 return;
             }
-            // Linux/other: launchd doesn't exist here, and the daemon is
-            // service-manager-owned (systemd user unit from the k2-daemon
-            // .deb). Log the skew once and leave the daemon alone.
-            #[cfg(not(target_os = "macos"))]
+            // Linux .deb: systemd owns the daemon — do not kill from the
+            // thin client. Windows NSIS: the bundled k2-daemon.exe sits
+            // next to k2.exe; after an in-app update the OLD process is
+            // often still holding the port while the NEW k2.exe waits
+            // forever in ConnectionGate (exact version). Kill + respawn.
+            #[cfg(target_os = "linux")]
             {
                 log_debug!(
                     "[version-check] STALE daemon=v{} app=v{} version_match={} stale_binary={} (attempt={}); launchd unavailable on this platform — restart the k2-daemon service manually (e.g. systemctl --user restart k2-daemon)",
@@ -212,6 +214,20 @@ fn check_daemon_version_and_restart() {
                     stale_binary,
                     attempt
                 );
+                return;
+            }
+            #[cfg(windows)]
+            {
+                log_debug!(
+                    "[version-check] STALE daemon=v{} app=v{} version_match={} stale_binary={} (attempt={}); stopping old k2-daemon and spawning bundled binary",
+                    status.version,
+                    app_version,
+                    version_match,
+                    stale_binary,
+                    attempt
+                );
+                stop_bundled_daemon_processes();
+                ensure_local_daemon_process();
                 return;
             }
             #[cfg(target_os = "macos")]
@@ -321,6 +337,23 @@ fn ensure_local_daemon_process() {
         }
     }
     log_debug!("[k2so] local daemon spawn timed out waiting for boot-status ready");
+}
+
+/// Kill local `k2-daemon.exe` processes (Windows file lock + version heal).
+/// Best-effort; never panics. macOS uses launchd; this is a no-op there.
+pub fn stop_bundled_daemon_processes() {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/IM", "k2-daemon.exe", "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        // Brief pause so the file lock drops before NSIS/overwrite/spawn.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        log_debug!("[k2so] stop_bundled_daemon_processes: taskkill k2-daemon.exe");
+    }
 }
 
 /// True when `~/.k2/daemon.port` points at a live daemon that answers
@@ -1677,6 +1710,7 @@ pub fn run() {
             commands::settings::cli_uninstall,
             commands::settings::set_document_edited,
             commands::settings::set_relaunch_mode,
+            commands::settings::stop_bundled_daemon_for_update,
             commands::settings::relaunch_via_open,
             // Phase 2 Unit 6 — `commands::project_config::*` shims
             // deleted. Renderer hits `/cli/project-config/*` on the

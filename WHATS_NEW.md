@@ -3,6 +3,24 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.98 — Windows reinstall actually replaces the daemon
+
+Re-running the Windows setup no longer fails with **Error opening file
+for writing: …\k2-daemon.exe**. Uninstall was leaving the detached
+daemon running, so the next install could not overwrite it. Clicking
+**Ignore** left a new `k2.exe` talking to the old daemon (Connecting
+forever).
+
+The installer now stops `k2.exe` and `k2-daemon.exe` before it copies
+files, and again before uninstall. Settings → Install & Relaunch was
+already fixed in 0.40.97; this covers running `setup.exe` yourself.
+
+### What to try
+
+1. **Windows:** with K2 (or just the daemon) still running, run
+   `K2_0.40.98_x64-setup.exe`. It should install without the file-lock
+   dialog. After launch, the daemon version matches the app.
+
 ## 0.40.97 — Terminals stay up on Projects; Windows update actually installs
 
 Two dogfood fixes: remote and local terminals no longer die with a fake

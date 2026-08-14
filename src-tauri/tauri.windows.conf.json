@@ -11,6 +11,11 @@
     "externalBin": [
       "binaries/frpc",
       "binaries/k2-daemon"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/hooks.nsh"
+      }
+    }
   }
 }

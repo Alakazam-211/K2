@@ -339,20 +339,22 @@ fn ensure_local_daemon_process() {
     log_debug!("[k2so] local daemon spawn timed out waiting for boot-status ready");
 }
 
-/// Kill local `k2-daemon.exe` processes (Windows file lock + version heal).
-/// Best-effort; never panics. macOS uses launchd; this is a no-op there.
+/// Kill local `k2-daemon.exe` and orphaned `frpc.exe` (Windows file lock
+/// + version heal). Best-effort; never panics. macOS uses launchd.
 pub fn stop_bundled_daemon_processes() {
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/IM", "k2-daemon.exe", "/F"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+        for image in ["k2-daemon.exe", "frpc.exe"] {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/IM", image, "/F", "/T"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
         // Brief pause so the file lock drops before NSIS/overwrite/spawn.
         std::thread::sleep(std::time::Duration::from_millis(400));
-        log_debug!("[k2so] stop_bundled_daemon_processes: taskkill k2-daemon.exe");
+        log_debug!("[k2so] stop_bundled_daemon_processes: taskkill k2-daemon.exe frpc.exe");
     }
 }
 

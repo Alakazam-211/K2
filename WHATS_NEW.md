@@ -3,6 +3,22 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.99 — Windows reinstall replaces a leftover tunnel client
+
+0.40.98 could overwrite `k2.exe` and `k2-daemon.exe`, but an orphaned
+`frpc.exe` (the Connect tunnel) still locked `%LOCALAPPDATA%\K2\frpc.exe`.
+Setup then showed **Error opening file for writing** on that file.
+
+The installer and in-app updater now stop `frpc.exe` as well before they
+copy files. Do **not** click Ignore on that dialog — that leaves a mixed
+old tunnel next to a new app.
+
+### What to try
+
+1. **Windows:** with K2 closed (or even with a leftover tunnel still
+   running), run `K2_0.40.99_x64-setup.exe`. It should install without
+   the frpc file-lock dialog.
+
 ## 0.40.98 — Windows reinstall replaces the daemon; Claude launch-bar works
 
 Two Windows dogfood fixes.

@@ -27,6 +27,8 @@ pub mod path_env;
 // inherited launchd PATH) so agent CLIs in ~/.local/bin, homebrew,
 // nvm shims, etc. resolve by bare name instead of ENOENT.
 pub mod login_path;
+// Windows CreateProcess PATHEXT / .cmd wrap (npm `claude.cmd`).
+pub mod win_cmd;
 // UTF-8 locale defaulting for spawned children (launchd/systemd give
 // the daemon NO LANG/LC_*; locale-less `pbcopy` MacRoman-mangles
 // TUI-driven copies while the screen looks fine).

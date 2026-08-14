@@ -617,14 +617,6 @@ impl DaemonPtySession {
             .durable_args
             .clone()
             .unwrap_or_else(|| spawn_args.clone());
-        // Sandbox P2a: carry program+args as a readable `ShellSpec` (the seam's
-        // `build_worker_invocation` needs to read them back; alacritty's `Shell`
-        // fields are pub(crate)). `Passthrough::spawn` maps this back into
-        // `tty::Shell::new` at the PTY open, so behavior is byte-identical.
-        let shell = cfg.program.as_ref().map(|prog| ShellSpec {
-            program: prog.clone(),
-            args: spawn_args,
-        });
 
         // Build the env we hand to alacritty's tty::new. Without an
         // explicit TERM/COLORTERM, child processes inherit alacritty's
@@ -655,6 +647,20 @@ impl DaemonPtySession {
             let enriched = login_path::augmented_path(&inherited);
             child_env.insert("PATH".to_string(), enriched);
         }
+
+        // Windows: CreateProcess does not apply PATHEXT. Resolve
+        // `claude` → `%APPDATA%\npm\claude.cmd` and wrap .cmd/.bat
+        // through COMSPEC. Unix is a no-op. Uses the PATH we just
+        // put on the child so known npm dirs are visible.
+        // Sandbox P2a: ShellSpec (alacritty Shell fields are pub(crate)).
+        let path_for_resolve = login_path::env_path_entry(&child_env)
+            .map(|(_, v)| v)
+            .unwrap_or("");
+        let shell = cfg.program.as_ref().map(|prog| {
+            let (program, args) =
+                crate::terminal::win_cmd::resolve_spawn(prog, &spawn_args, path_for_resolve);
+            ShellSpec { program, args }
+        });
 
         child_env
             .entry("TERM".to_string())

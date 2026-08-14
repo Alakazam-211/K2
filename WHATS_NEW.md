@@ -3,23 +3,37 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.98 — Windows reinstall actually replaces the daemon
+## 0.40.98 — Windows reinstall replaces the daemon; Claude launch-bar works
 
-Re-running the Windows setup no longer fails with **Error opening file
-for writing: …\k2-daemon.exe**. Uninstall was leaving the detached
-daemon running, so the next install could not overwrite it. Clicking
-**Ignore** left a new `k2.exe` talking to the old daemon (Connecting
-forever).
+Two Windows dogfood fixes.
+
+### Reinstall actually replaces the daemon
+
+Re-running setup no longer fails with **Error opening file for writing:
+…\k2-daemon.exe**. Uninstall left the detached daemon running, so the
+next install could not overwrite it. **Ignore** left a new `k2.exe`
+talking to the old daemon (Connecting forever).
 
 The installer now stops `k2.exe` and `k2-daemon.exe` before it copies
 files, and again before uninstall. Settings → Install & Relaunch was
 already fixed in 0.40.97; this covers running `setup.exe` yourself.
+
+### Launch-bar Claude (and other npm CLIs)
+
+Clicking **Claude** in the launch-bar spawned a bare `claude` via
+CreateProcess, which does not honor `PATHEXT`. PowerShell finds
+`claude.cmd` from npm; the launch-bar did not. Grok’s native
+`grok.exe` already worked. The daemon now resolves `.cmd`/`.bat` on
+PATH and starts them through `cmd.exe`.
 
 ### What to try
 
 1. **Windows:** with K2 (or just the daemon) still running, run
    `K2_0.40.98_x64-setup.exe`. It should install without the file-lock
    dialog. After launch, the daemon version matches the app.
+2. **Windows:** click **Claude** in the launch-bar — it should start
+   the same way as `claude --dangerously-skip-permissions` in
+   PowerShell. Grok should still work.
 
 ## 0.40.97 — Terminals stay up on Projects; Windows update actually installs
 

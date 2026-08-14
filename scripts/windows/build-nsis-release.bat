@@ -59,6 +59,11 @@ echo staged k2-daemon -^> %DAEMON_SIDE%
 
 set "FRPC_SIDE=%BINARIES%\frpc-x86_64-pc-windows-msvc.exe"
 if not exist "%FRPC_SIDE%" (
+  if exist "%CARGO_TARGET_DIR%\release\frpc.exe" (
+    copy /Y "%CARGO_TARGET_DIR%\release\frpc.exe" "%FRPC_SIDE%" >nul
+  )
+)
+if not exist "%FRPC_SIDE%" (
   echo FATAL: frpc sidecar missing at %FRPC_SIDE%
   echo Stage with scripts/fetch-frpc.sh FRPC_TARGET_TRIPLE=x86_64-pc-windows-msvc FRPC_SRC=...
   exit /b 1

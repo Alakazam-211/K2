@@ -145,10 +145,10 @@ echo "  remote versions OK (package.json + Cargo.toml = ${VERSION})."
 FRPC_SIDE="src-tauri/binaries/frpc-x86_64-pc-windows-msvc.exe"
 echo "  Ensuring Windows frpc sidecar (${FRPC_SIDE})..."
 if ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
-    "cmd /c if exist ${REMOTE_DIR_CMD}\\src-tauri\\binaries\\frpc-x86_64-pc-windows-msvc.exe (exit 0) else (exit 1)"; then
+    "cmd /c if not exist ${REMOTE_DIR_CMD}\\src-tauri\\binaries\\frpc-x86_64-pc-windows-msvc.exe exit /b 1"; then
     echo "  frpc sidecar already present on remote."
 elif ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
-    "cmd /c if exist ${TARGET_DIR_CMD}\\release\\frpc.exe (copy /Y ${TARGET_DIR_CMD}\\release\\frpc.exe ${REMOTE_DIR_CMD}\\src-tauri\\binaries\\frpc-x86_64-pc-windows-msvc.exe >nul & exit 0) else (exit 1)"; then
+    "cmd /c if not exist ${TARGET_DIR_CMD}\\release\\frpc.exe exit /b 1 & copy /Y ${TARGET_DIR_CMD}\\release\\frpc.exe ${REMOTE_DIR_CMD}\\src-tauri\\binaries\\frpc-x86_64-pc-windows-msvc.exe"; then
     echo "  staged frpc from ${TARGET_DIR}/release/frpc.exe"
 else
     echo "  fetching frpc for x86_64-pc-windows-msvc..."

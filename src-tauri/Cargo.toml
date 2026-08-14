@@ -1,6 +1,6 @@
 [package]
 name = "k2"
-version = "0.40.96"
+version = "0.40.97"
 edition = "2021"
 description = "Developer workspace with terminals, git worktrees, and agent presets"
 license = "FSL-1.1-Apache-2.0"

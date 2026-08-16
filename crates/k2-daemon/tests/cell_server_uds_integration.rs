@@ -463,6 +463,50 @@ async fn case11_project_is_forced_to_principal_workspace() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connections_list_users_is_200_and_cli_users_is_not_an_agent_verb() {
+    let _g = lock();
+    let home = set_short_home();
+    let (ws_uuid, _ws) = mk_workspace(&home, "ws");
+    let (_sid, token, sock) = mint_bind_serve_in_ws("pane-1", &ws_uuid);
+    settle().await;
+
+    let (status, body) = uds(
+        &sock,
+        &get("/cli/connections?action=list&users=1", Some(&token)),
+    )
+    .await;
+    assert_eq!(
+        status, 200,
+        "hook/UDS connections list+users must 200; body={body}"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&body).unwrap_or_else(|e| panic!("list+users JSON: {e}; body={body}"));
+    let users = v
+        .get("users")
+        .and_then(|u| u.as_array())
+        .unwrap_or_else(|| panic!("users[] missing; body={body}"));
+    assert!(
+        !users.is_empty(),
+        "users[] must include the host owner; body={body}"
+    );
+    for u in users {
+        let obj = u.as_object().expect("user row");
+        assert!(obj.contains_key("username") && obj.contains_key("role") && obj.contains_key("disabled"));
+        assert!(!obj.contains_key("password_hash"));
+        assert!(!obj.contains_key("created_at"));
+        assert!(!obj.contains_key("createdAt"));
+        assert!(!obj.contains_key("token_epoch"));
+    }
+
+    let (ustatus, ubody) = uds(&sock, &get("/cli/users", Some(&token))).await;
+    assert_ne!(ustatus, 200, "GET /cli/users must not succeed on cell UDS; body={ubody}");
+    assert!(
+        ustatus == 403 || ustatus == 404,
+        "GET /cli/users on cell UDS is not an agent verb (403 via require_hook or 404 sentinel); got {ustatus} body={ubody}"
+    );
+}
+
 /// Minimal query-string percent-encoding for a filesystem path.
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

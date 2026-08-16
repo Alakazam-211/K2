@@ -330,6 +330,7 @@ k2 activity [--limit N] [--workspace <path>]
 ```
 k2 connections list
 ```
+- `--users` lists humans on this box and their roles. Do not `k2 msg` those names.
 
 ## Compose a work item
 ```
@@ -1797,6 +1798,15 @@ mod tests {
         assert!(
             body.contains("k2 heartbeat session") && body.contains("--set sales/reviewer"),
             "k2-cli skill must hint sidecar + heartbeat session --set sales/reviewer",
+        );
+        // v17: connections list --users (humans on this box).
+        assert!(
+            body.contains("k2 connections list") && body.contains("--users"),
+            "k2-cli skill must teach `k2 connections list --users`"
+        );
+        assert!(
+            body.contains("Do not `k2 msg` those names"),
+            "k2-cli skill must say not to k2 msg human names"
         );
     }
 

@@ -1191,6 +1191,14 @@ mod tests {
         assert!(is_agent_verb("/cli/dns/verify"));
         // C1 (0.40.45): connections list/add/remove (mutate toggle-gated).
         assert!(is_agent_verb("/cli/connections"));
+        assert!(
+            !is_agent_verb("/cli/users"),
+            "GET /cli/users is owner/admin — not an agent verb"
+        );
+        assert!(
+            !is_agent_verb("/cli/connections/users"),
+            "do not invent /cli/connections/users — users=1 rides /cli/connections"
+        );
         // Heartbeat schedule family (agent-owned workspace schedules).
         assert!(is_agent_verb("/cli/heartbeat/list"));
         assert!(is_agent_verb("/cli/heartbeat/add"));

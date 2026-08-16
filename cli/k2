@@ -6447,7 +6447,8 @@ cmd_release() {
 
 cmd_connections() {
     # #37: `k2 connections --json` (no subcommand) == list --json
-    if [[ "${1:-}" == "--json" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    # Same rewrite for `--users` so `k2 connections --users` lists people.
+    if [[ "${1:-}" == "--json" || "${1:-}" == "--users" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
         set -- list "$@"
     fi
     local action="${1:-list}"
@@ -6466,18 +6467,32 @@ cmd_connections() {
             # daemon-resolved source workspace) so an inherited/parent
             # resolution is self-evident, and flag unreachable peers.
             # #37: honor --json (same contract as tunnel/dns/mail status).
-            local as_json=false
+            local as_json=false include_users=false
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
+                    --users) include_users=true; shift ;;
                     --help|-h) cmd_help_connections; return 0 ;;
-                    *) shift ;;
+                    -*)
+                        echo "Error: unknown flag: $1" >&2
+                        echo "Usage: k2 connections list [--json] [--users]" >&2
+                        exit 2
+                        ;;
+                    *)
+                        echo "Error: unexpected argument: $1" >&2
+                        echo "Usage: k2 connections list [--json] [--users]" >&2
+                        exit 2
+                        ;;
                 esac
             done
             # Prefer UDS when present so scoped agents list their own mesh.
             local raw
-            raw=$(cli_send cli_request "/cli/connections" "action=list")
-            AS_JSON="$as_json" python3 -c "
+            if $include_users; then
+                raw=$(cli_send cli_request "/cli/connections" "action=list" "users=1")
+            else
+                raw=$(cli_send cli_request "/cli/connections" "action=list")
+            fi
+            AS_JSON="$as_json" INCLUDE_USERS="$include_users" python3 -c "
 import json, sys, os
 raw = sys.stdin.read()
 as_json = os.environ.get('AS_JSON') == 'true'
@@ -6495,6 +6510,7 @@ if err is not None:
     sys.exit(1)
 ws = d.get('workspace') or {}
 conns = d.get('connections', []) or []
+include_users = os.environ.get('INCLUDE_USERS') == 'true'
 if as_json:
     out = {
         'ok': True,
@@ -6522,6 +6538,20 @@ if as_json:
                 'projectId': c.get('projectId') or c.get('id'),
                 'reachable': c.get('reachable', True),
             })
+    if include_users:
+        users = d.get('users')
+        if not isinstance(users, list):
+            sys.stdout.write('Error: daemon omitted users[] (asked with users=1)\\n')
+            sys.exit(1)
+        out['users'] = []
+        for u in users:
+            if not isinstance(u, dict):
+                continue
+            out['users'].append({
+                'username': u.get('username') or '',
+                'role': u.get('role') or '',
+                'disabled': bool(u.get('disabled')),
+            })
     print(json.dumps(out, ensure_ascii=False, separators=(',', ':')))
     raise SystemExit(0)
 label = ws.get('name') or ws.get('path') or '?'
@@ -6535,6 +6565,32 @@ for c in conns:
     else:
         flag = '' if c.get('reachable', True) else '  [UNREACHABLE — project missing or path gone]'
         print('  - %s%s' % (c.get('projectName', '?'), flag))
+if include_users:
+    users = d.get('users')
+    if not isinstance(users, list):
+        sys.stdout.write('Error: daemon omitted users[] (asked with users=1)\\n')
+        sys.exit(1)
+    print('')
+    print('People on this host (humans — not workspace-agents; do not k2 msg):')
+    rows = []
+    for u in users:
+        if not isinstance(u, dict):
+            continue
+        rows.append((
+            str(u.get('username') or '?'),
+            str(u.get('role') or '?'),
+            'yes' if u.get('disabled') else 'no',
+        ))
+    if not rows:
+        print('  (none)')
+    else:
+        w_user = max([len(r[0]) for r in rows] + [len('USERNAME')])
+        w_role = max([len(r[1]) for r in rows] + [len('ROLE')])
+        print('%s  %s  %s' % ('USERNAME'.ljust(w_user), 'ROLE'.ljust(w_role), 'DISABLED'))
+        for un, role, dis in rows:
+            print('%s  %s  %s' % (un.ljust(w_user), role.ljust(w_role), dis))
+else:
+    print('These are workspace-agents you can k2 msg. Humans on this box are not listed — k2 connections list --users (do not k2 msg those names).')
 " <<< "$raw"
             ;;
         add)
@@ -6625,8 +6681,8 @@ print('Disconnected.')
 "
             ;;
         *)
-            echo "Usage: k2 connections [list|add|remove] [workspace-name] [--json]" >&2
-            echo "  list [--json]     List connections for this workspace (exit 0)" >&2
+            echo "Usage: k2 connections [list|add|remove] [workspace-name] [--json] [--users]" >&2
+            echo "  list [--json] [--users]  List connections for this workspace (exit 0)" >&2
             echo "  add <name>        Connect (agents need Settings → Allow agents to create connections; exit 3 when gated)" >&2
             echo "  remove <name>     Disconnect (same agent create/remove gate as add; exit 3 when gated)" >&2
             exit 1
@@ -10316,10 +10372,23 @@ cmd_schema() {
     },
     {
       "name": "connections",
-      "usage": "k2 connections <list|add|remove> [<target>]",
+      "usage": "k2 connections <list|add|remove> [<target>] [--json] [--users]",
       "description": "Manage/list the workspaces this one is connected to (the yellow pages used for name addressing).",
       "args": [],
-      "flags": []
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Machine-readable output."},
+        {"name": "--users", "arg": null, "description": "Also list humans on this host and their roles. Do not k2 msg those names."}
+      ]
+    },
+    {
+      "name": "connections list",
+      "usage": "k2 connections list [--json] [--users]",
+      "description": "List connected workspace-agents. --users also prints humans on this host (do not k2 msg those names).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Machine-readable peer JSON. Combined with --users, adds a users array (username/role/disabled only)."},
+        {"name": "--users", "arg": null, "description": "Also list humans on this host and their roles. Do not k2 msg those names."}
+      ]
     },
     {
       "name": "agent hire",
@@ -11955,11 +12024,12 @@ EOF
 
 cmd_help_connections() {
     cat <<'EOF'
-k2 connections [list|add|remove] [workspace-name] [--json]
+k2 connections [list|add|remove] [workspace-name] [--json] [--users]
 
 Manage this workspace's connections to other workspaces (agents).
 
-  list [--json]     List connections for this workspace (exit 0)
+  list [--json] [--users]  List connections for this workspace (exit 0).
+                    --users also prints humans on this host (do not k2 msg those names).
   add <name>        Connect to another workspace (name, path, or <agent>::<host>)
                     Legacy <agent>@<host> still accepted.
   remove <name>     Disconnect from a workspace
@@ -11980,6 +12050,7 @@ MSG / READ PEER GATE
 EXAMPLES
   k2 connections list
   k2 connections list --json
+  k2 connections list --users
   k2 connections add "QA Bot"
   k2 connections add peer::other.k2.dev
   k2 connections remove scout
@@ -15339,7 +15410,7 @@ TALK TO OTHERS
   msg <workspace> --inbox-silent <path> [path…] Package only (no notify; multi-file → one package)
   msg <workspace> --signal <kind> ...   Emit a typed signal (advanced)
   read <workspace> [--lines N]          Read their live terminal (peek before you inject)
-  connections list [--json]             Connected workspaces (bidirectional)
+  connections list [--json] [--users]   Connected workspaces (bidirectional); --users lists humans on this box
   connections add <path|agent::host>    Connect (agent: gated; exit 3 when disabled)
   connections remove <name>             Disconnect (same agent create/remove gate)
 

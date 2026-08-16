@@ -359,7 +359,10 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
     let mut out = String::new();
     out.push_str(
         "Live roster of **connected workspace-agents** (peers, not sub-agents). \
-         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+         These are **workspace-agents** you can `k2 msg`. Humans who can sign \
+         into this K2 box are **not** listed here — they write to you from the \
+         app as `[from <name>]`. To see them: `k2 connections list --users`. \
+         Do **not** `k2 msg` those names. Regenerated whenever K2 rewrites AGENTS.md.\n\n",
     );
     out.push_str("Message / peek:\n\n");
     out.push_str("    k2 msg <workspace-name> \"short live knock\"\n");
@@ -1967,6 +1970,34 @@ mod tests {
         assert!(recommended.contains(&HEARTBEATS_ROSTER_ID));
         assert!(!recommended.contains(&"skills:roster"));
         assert!(!recommended.contains(&"manager:pack"));
+    }
+
+    #[test]
+    fn connections_roster_body_notes_humans_and_users_flag() {
+        let root = unique_root("roster-users");
+        let path = root.to_str().unwrap();
+        let pid = register_project(path);
+
+        let body = render_connections_roster_body(path);
+        assert!(
+            body.contains("k2 connections list --users"),
+            "roster must teach --users; body:\n{body}"
+        );
+        assert!(
+            body.contains("Do **not** `k2 msg` those names")
+                || body.contains("do not `k2 msg` those names"),
+            "roster must say do not k2 msg humans; body:\n{body}"
+        );
+        assert!(
+            body.contains("not** listed") || body.contains("not listed"),
+            "roster must say humans are not listed; body:\n{body}"
+        );
+        assert!(
+            body.contains("k2 msg <workspace-name>"),
+            "roster must still teach k2 msg for peers; body:\n{body}"
+        );
+
+        cleanup_project(path, &pid);
     }
 
     #[test]

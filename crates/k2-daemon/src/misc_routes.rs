@@ -26,6 +26,28 @@ use std::collections::HashMap;
 use crate::cli::{bool_param, need_project, opt_param, respond, respond_unit, str_param};
 use crate::cli_response::CliResponse;
 
+/// `GET /cli/connections?action=list&users=1` (or `include_users=1`).
+fn list_wants_users(params: &HashMap<String, String>) -> bool {
+    bool_param(params, "users") || bool_param(params, "include_users")
+}
+
+/// Attach the agent-facing `users` array to a connections list envelope.
+/// Default list JSON is unchanged — this runs only when `users=1`.
+fn attach_people_users(body: String) -> Result<String, String> {
+    let mut v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("connections list JSON: {e}"))?;
+    let obj = v
+        .as_object_mut()
+        .ok_or_else(|| "connections list JSON is not an object".to_string())?;
+    let owner = crate::workspace_msg::resolve_owner_from();
+    let rows = k2_core::connect_users::list_people_for_agents(&owner)?;
+    obj.insert(
+        "users".to_string(),
+        serde_json::to_value(rows).map_err(|e| format!("serialize users: {e}"))?,
+    );
+    serde_json::to_string(&v).map_err(|e| format!("serialize connections list: {e}"))
+}
+
 /// `kind` + printable `handle` for `sessions live` (D10).
 fn session_kind_and_handle(
     agent_name: &str,
@@ -493,7 +515,16 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     rel_type.as_deref(),
                     actor_is_privileged,
                 ) {
-                    Ok(body) => CliResponse::ok_json(body),
+                    Ok(body) => {
+                        if action == "list" && list_wants_users(params) {
+                            match attach_people_users(body) {
+                                Ok(with_users) => CliResponse::ok_json(with_users),
+                                Err(e) => CliResponse::bad_request(e),
+                            }
+                        } else {
+                            CliResponse::ok_json(body)
+                        }
+                    }
                     Err(e) => {
                         // Teaching deny (toggle off for agent) → 403 so
                         // CLI maps to exit 3; other errors stay 400.
@@ -2641,5 +2672,151 @@ mod subdomain_attribution_route_tests {
         // parallel. The nudge sits strictly AFTER every early 400 return
         // in the handlers — see `claim_rejects_bad_inputs` for the 400s.)
         cleanup(&label, &id);
+    }
+}
+
+#[cfg(test)]
+mod connections_list_users_tests {
+    use super::*;
+    use k2_core::connect_users::{self, Role};
+
+    fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn make_project(suffix: &str) -> (String, String) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = format!("/tmp/conn-users-{suffix}-{}", uuid::Uuid::new_v4());
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, suffix, path],
+        )
+        .expect("insert project");
+        (id, path)
+    }
+
+    fn assert_users_redacted(users: &serde_json::Value) {
+        let arr = users.as_array().expect("users must be an array");
+        assert!(!arr.is_empty(), "users[] must include at least the host owner");
+        for u in arr {
+            let obj = u.as_object().expect("user row object");
+            let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                vec!["disabled", "role", "username"],
+                "users[] rows must be username/role/disabled only: {u}"
+            );
+            let dumped = u.to_string();
+            assert!(
+                !dumped.contains("password")
+                    && !dumped.contains("hash")
+                    && !dumped.contains("created")
+                    && !dumped.contains("token_epoch")
+                    && !dumped.contains("tokenEpoch"),
+                "users[] leaked a secret: {dumped}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_list_json_has_no_users_key() {
+        crate::test_support::with_temp_home(|| {
+            let (_id, path) = make_project("default");
+            let resp = dispatch(
+                "/cli/connections",
+                &params(&[("project", &path), ("action", "list")]),
+            )
+            .expect("connections list");
+            assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            assert!(v.get("connections").is_some(), "list envelope: {}", resp.body);
+            assert!(
+                v.get("users").is_none(),
+                "default list must not include users: {}",
+                resp.body
+            );
+        });
+    }
+
+    #[test]
+    fn users_query_adds_redacted_people_including_member_viewer_disabled() {
+        crate::test_support::with_temp_home(|| {
+            let (_id, path) = make_project("with-users");
+            connect_users::add_user("julie", "password1").expect("add");
+            connect_users::set_role("julie", Role::Admin).expect("role");
+            connect_users::add_user("member1", "password1").expect("add");
+            connect_users::add_user("viewy", "password1").expect("add");
+            connect_users::set_role("viewy", Role::Viewer).expect("role");
+            connect_users::add_user("ghost", "password1").expect("add");
+            connect_users::set_disabled("ghost", true).expect("disable");
+
+            let resp = dispatch(
+                "/cli/connections",
+                &params(&[("project", &path), ("action", "list"), ("users", "1")]),
+            )
+            .expect("connections list+users");
+            assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            assert!(v.get("connections").is_some());
+            let users = v.get("users").expect("users key");
+            assert_users_redacted(users);
+            let names: Vec<&str> = users
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|u| u.get("username").and_then(|n| n.as_str()))
+                .collect();
+            assert!(
+                names.iter().any(|n| *n == "owner" || *n == "Owner"),
+                "empty-settings owner row must be present; got {names:?}"
+            );
+            assert!(names.contains(&"member1"), "member must appear: {names:?}");
+            assert!(names.contains(&"viewy"), "viewer must appear: {names:?}");
+            assert!(names.contains(&"ghost"), "disabled must appear: {names:?}");
+            let ghost = users
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|u| u["username"] == "ghost")
+                .unwrap();
+            assert_eq!(ghost["disabled"], serde_json::json!(true));
+            assert_eq!(
+                users
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|u| u["username"] == "viewy")
+                    .unwrap()["role"],
+                serde_json::json!("viewer")
+            );
+            assert_eq!(
+                users
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|u| u["username"] == "member1")
+                    .unwrap()["role"],
+                serde_json::json!("member")
+            );
+
+            let via_alias = dispatch(
+                "/cli/connections",
+                &params(&[
+                    ("project", &path),
+                    ("action", "list"),
+                    ("include_users", "1"),
+                ]),
+            )
+            .expect("include_users alias");
+            assert_eq!(via_alias.status, "200 OK", "body={}", via_alias.body);
+            let v2: serde_json::Value = serde_json::from_str(&via_alias.body).expect("json");
+            assert!(v2.get("users").is_some());
+        });
     }
 }

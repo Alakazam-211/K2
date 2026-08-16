@@ -198,6 +198,16 @@ impl From<&ConnectUser> for ConnectUserView {
     }
 }
 
+/// Agent-facing person row for `GET /cli/connections?users=1`.
+/// Redacted to `{ username, role, disabled }` — never hash, createdAt, or
+/// token_epoch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PeopleRow {
+    pub username: String,
+    pub role: Role,
+    pub disabled: bool,
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Password policy (K2SO #620)
 // ─────────────────────────────────────────────────────────────────────
@@ -418,6 +428,39 @@ pub fn list_users() -> Result<Vec<ConnectUserView>, String> {
     let mut views: Vec<ConnectUserView> = store.users.iter().map(ConnectUserView::from).collect();
     views.sort_by(|a, b| a.username.cmp(&b.username));
     Ok(views)
+}
+
+/// Humans on this box for agents: synthesized host owner + every stored
+/// connect-user (owner/admin/member/viewer, including disabled).
+///
+/// `owner_display` is the same string as human `[from …]`
+/// (`resolve_owner_from` / `owner_from_or_default`). Empty/blank falls
+/// back to `"owner"`. Dedup is case-insensitive against that display
+/// name: a matching connect-user keeps its **stored** role/disabled
+/// (not forced to owner).
+pub fn list_people_for_agents(owner_display: &str) -> Result<Vec<PeopleRow>, String> {
+    let owner = owner_display.trim();
+    let owner_username = if owner.is_empty() { "owner" } else { owner };
+    let users = list_users()?;
+    let owner_matched = users
+        .iter()
+        .any(|u| u.username.eq_ignore_ascii_case(owner_username));
+    let mut rows = Vec::with_capacity(users.len() + usize::from(!owner_matched));
+    if !owner_matched {
+        rows.push(PeopleRow {
+            username: owner_username.to_string(),
+            role: Role::Owner,
+            disabled: false,
+        });
+    }
+    for u in users {
+        rows.push(PeopleRow {
+            username: u.username,
+            role: u.role,
+            disabled: u.disabled,
+        });
+    }
+    Ok(rows)
 }
 
 /// Provision a new account. Validates + lowercases the username, rejects
@@ -1830,6 +1873,90 @@ mod tests {
             // Wire shape carries the role string.
             let json = serde_json::to_string(&views[0]).unwrap();
             assert!(json.contains("\"role\":\"admin\""), "got: {json}");
+        });
+    }
+
+    fn assert_people_row_keys_only(row: &PeopleRow) {
+        let json = serde_json::to_value(row).expect("people row json");
+        let obj = json.as_object().expect("object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["disabled", "role", "username"],
+            "people row must be username/role/disabled only: {json}"
+        );
+        let dumped = json.to_string();
+        assert!(
+            !dumped.contains("password")
+                && !dumped.contains("hash")
+                && !dumped.contains("created")
+                && !dumped.contains("token_epoch")
+                && !dumped.contains("tokenEpoch"),
+            "people row leaked a secret field: {dumped}"
+        );
+    }
+
+    #[test]
+    fn list_people_for_agents_empty_store_still_has_owner() {
+        with_temp_home(|| {
+            let rows = list_people_for_agents("Rosson").expect("people");
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].username, "Rosson");
+            assert_eq!(rows[0].role, Role::Owner);
+            assert!(!rows[0].disabled);
+            assert_people_row_keys_only(&rows[0]);
+        });
+    }
+
+    #[test]
+    fn list_people_for_agents_includes_member_viewer_and_disabled() {
+        with_temp_home(|| {
+            add_user("julie", "password1").expect("add");
+            set_role("julie", Role::Admin).expect("promote");
+            add_user("member1", "password1").expect("add");
+            add_user("viewy", "password1").expect("add");
+            set_role("viewy", Role::Viewer).expect("demote");
+            add_user("ghost", "password1").expect("add");
+            set_disabled("ghost", true).expect("disable");
+            let rows = list_people_for_agents("Rosson").expect("people");
+            let names: Vec<&str> = rows.iter().map(|r| r.username.as_str()).collect();
+            assert_eq!(names, vec!["Rosson", "ghost", "julie", "member1", "viewy"]);
+            let find = |n: &str| rows.iter().find(|r| r.username == n).expect(n);
+            assert_eq!(find("Rosson").role, Role::Owner);
+            assert!(!find("Rosson").disabled);
+            assert_eq!(find("julie").role, Role::Admin);
+            assert_eq!(find("member1").role, Role::Member);
+            assert_eq!(find("viewy").role, Role::Viewer);
+            assert_eq!(find("ghost").role, Role::Member);
+            assert!(find("ghost").disabled, "disabled connect-user must appear");
+            for r in &rows {
+                assert_people_row_keys_only(r);
+            }
+        });
+    }
+
+    #[test]
+    fn list_people_for_agents_dedups_owner_case_insensitive_keeps_stored() {
+        with_temp_home(|| {
+            add_user("rosson", "password1").expect("add");
+            set_role("rosson", Role::Admin).expect("promote");
+            set_disabled("rosson", true).expect("disable");
+            let rows = list_people_for_agents("Rosson").expect("people");
+            assert_eq!(rows.len(), 1, "owner display matching a connect-user is one row");
+            assert_eq!(rows[0].username, "rosson");
+            assert_eq!(rows[0].role, Role::Admin);
+            assert!(rows[0].disabled);
+        });
+    }
+
+    #[test]
+    fn list_people_for_agents_blank_owner_falls_back() {
+        with_temp_home(|| {
+            let rows = list_people_for_agents("   ").expect("people");
+            assert_eq!(rows[0].username, "owner");
+            assert_eq!(rows[0].role, Role::Owner);
+            assert!(!rows[0].disabled);
         });
     }
 

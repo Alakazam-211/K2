@@ -100,7 +100,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 15: `--set sales/reviewer` for heartbeat delivery.
 /// Bumped to 16: Who am I is a fact sheet (not “msg the primary”);
 /// send-work uses handles + sidecar addresses.
-pub const SKILL_VERSION_WORKSPACE: u32 = 16;
+/// Bumped to 17: `k2 connections list --users` (humans on this box).
+pub const SKILL_VERSION_WORKSPACE: u32 = 17;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

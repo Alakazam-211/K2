@@ -1715,9 +1715,9 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     >
       {/* Env files section */}
       {envFiles.length > 0 && (
-        <div className="px-3 pt-2 pb-1 border-b border-[var(--color-border)]">
+        <div className="border-b border-[var(--color-border)]">
           <button
-            className="w-full flex items-center gap-1.5 mb-1.5 text-left text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+            className="w-full h-8 px-3 flex items-center gap-1.5 text-left text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
             onClick={() => setEnvCollapsed((prev) => !prev)}
           >
             <svg
@@ -1732,7 +1732,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
             <span className="flex-1">Environment</span>
           </button>
           {!envCollapsed && (
-            <div className="flex flex-wrap gap-1.5 pb-1.5">
+            <div className="flex flex-wrap gap-1.5 px-3 pb-2">
               {envFiles.map((entry) => (
                 <button
                   key={entry.path}
@@ -1774,9 +1774,9 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
       {/* AI Config section */}
       {aiConfigEntries.length > 0 && (
-        <div className="px-3 pt-2 pb-1 border-b border-[var(--color-border)]">
+        <div className="border-b border-[var(--color-border)]">
           <button
-            className="w-full flex items-center gap-1.5 mb-1.5 text-left text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+            className="w-full h-8 px-3 flex items-center gap-1.5 text-left text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
             onClick={() => setAiConfigCollapsed((prev) => !prev)}
           >
             <svg
@@ -1791,7 +1791,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
             <span className="flex-1">AI Config</span>
           </button>
           {!aiConfigCollapsed && (
-            <div className="flex flex-wrap gap-1.5 pb-1.5">
+            <div className="flex flex-wrap gap-1.5 px-3 pb-2">
               {aiConfigEntries.map((entry) => (
                 <button
                   key={entry.path}

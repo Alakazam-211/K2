@@ -311,7 +311,11 @@ pub fn run_canonical_setup(
             Some(bytes) => {
                 let backup_rel = format!("{}/{}", backups_rel_dir, rel);
                 let hash = crate::skills::version::skill_checksum_hex(bytes);
-                ("backed_up_then_wrote".to_string(), Some(backup_rel), Some(hash))
+                (
+                    "backed_up_then_wrote".to_string(),
+                    Some(backup_rel),
+                    Some(hash),
+                )
             }
             None => ("created".to_string(), None, None),
         };
@@ -325,8 +329,7 @@ pub fn run_canonical_setup(
             }
             // 2. Write the generated copy (header + signature + body).
             let stamped = format!("{}{}", generated_header(), body);
-            atomic_write_str(&target, &stamped)
-                .map_err(|e| format!("write {rel}: {e}"))?;
+            atomic_write_str(&target, &stamped).map_err(|e| format!("write {rel}: {e}"))?;
         }
 
         entries.push(ManifestEntry {
@@ -350,8 +353,8 @@ pub fn run_canonical_setup(
 
     // Write the manifest alongside the backups.
     let manifest_rel = format!("{}/manifest.json", backups_rel_dir);
-    let manifest_json = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| format!("serialize manifest: {e}"))?;
+    let manifest_json =
+        serde_json::to_string_pretty(&manifest).map_err(|e| format!("serialize manifest: {e}"))?;
     let _ = fs::create_dir_all(&backups_dir);
     atomic_write_str(&root.join(&manifest_rel), &manifest_json)
         .map_err(|e| format!("write manifest: {e}"))?;
@@ -413,7 +416,11 @@ pub fn persist_agent_md(
         Some(bytes) => {
             let backup_rel = format!("{}/{}", backups_rel_dir, rel);
             let hash = crate::skills::version::skill_checksum_hex(bytes);
-            ("backed_up_then_wrote".to_string(), Some(backup_rel), Some(hash))
+            (
+                "backed_up_then_wrote".to_string(),
+                Some(backup_rel),
+                Some(hash),
+            )
         }
         None => ("created".to_string(), None, None),
     };
@@ -425,9 +432,9 @@ pub fn persist_agent_md(
         }
         // AGENT.md is the canonical SOURCE (Model A) — write the merged
         // body verbatim, NO generated-mirror header.
-        atomic_write_str(&agent_md, merged_body)
-            .map_err(|e| format!("write ROLE.md: {e}"))?;
+        atomic_write_str(&agent_md, merged_body).map_err(|e| format!("write ROLE.md: {e}"))?;
         crate::workspace::agent_identity::backup_sibling_legacy_persona(&dir);
+        crate::workspace::skill_regen::write_workspace_skill_file(project_path);
     }
 
     let manifest = SetupManifest {
@@ -450,8 +457,8 @@ pub fn persist_agent_md(
     }
 
     let manifest_rel = format!("{}/manifest.json", backups_rel_dir);
-    let manifest_json = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| format!("serialize manifest: {e}"))?;
+    let manifest_json =
+        serde_json::to_string_pretty(&manifest).map_err(|e| format!("serialize manifest: {e}"))?;
     let _ = fs::create_dir_all(root.join(&backups_rel_dir));
     atomic_write_str(&root.join(&manifest_rel), &manifest_json)
         .map_err(|e| format!("write manifest: {e}"))?;
@@ -507,8 +514,8 @@ pub fn unwind_canonical(
         match &entry.backup_relative_path {
             Some(backup_rel) => {
                 let backup_path = root.join(backup_rel);
-                let bytes = fs::read(&backup_path)
-                    .map_err(|e| format!("read backup {backup_rel}: {e}"))?;
+                let bytes =
+                    fs::read(&backup_path).map_err(|e| format!("read backup {backup_rel}: {e}"))?;
                 if will_write {
                     atomic_write_str_or_bytes(&target, &bytes)
                         .map_err(|e| format!("restore {}: {e}", entry.relative_path))?;
@@ -577,8 +584,7 @@ pub fn latest_manifest(project_path: &str) -> Option<SetupManifest> {
 /// Best-effort running-agent name for the preflight refusal. Returns the
 /// primary agent's name when a live session is detected, else None.
 fn running_agent_name(project_path: &str) -> Option<String> {
-    let primary =
-        crate::workspace::agent_identity::resolve_agent_name(project_path)?;
+    let primary = crate::workspace::agent_identity::resolve_agent_name(project_path)?;
     if is_agent_locked(project_path, &primary) {
         Some(primary)
     } else {
@@ -716,12 +722,16 @@ mod tests {
         std::os::unix::fs::symlink(&real, proj.join(".goosehints")).unwrap();
 
         let probes = detect_canonical_state(path);
-        let by_path: std::collections::HashMap<_, _> =
-            probes.iter().map(|p| (p.relative_path.as_str(), &p.state)).collect();
+        let by_path: std::collections::HashMap<_, _> = probes
+            .iter()
+            .map(|p| (p.relative_path.as_str(), &p.state))
+            .collect();
 
         assert_eq!(
             by_path["CLAUDE.md"],
-            &HarnessFileState::Unified { form: UnifiedForm::Copy },
+            &HarnessFileState::Unified {
+                form: UnifiedForm::Copy
+            },
             "Claude with signature → Unified(Copy)",
         );
         assert_eq!(
@@ -731,7 +741,9 @@ mod tests {
         );
         assert_eq!(
             by_path[".goosehints"],
-            &HarnessFileState::Unified { form: UnifiedForm::Symlink },
+            &HarnessFileState::Unified {
+                form: UnifiedForm::Symlink
+            },
             "symlinked goosehints → Unified(Symlink)",
         );
         // AGENT.md untouched → Skipped — per-harness independence.
@@ -802,7 +814,10 @@ mod tests {
         fs::write(proj.join("CLAUDE.md"), "# original user content\n").unwrap();
 
         let opts = CanonicalSetupOpts {
-            merged_bodies: vec![("CLAUDE.md".to_string(), "# merged canonical body\n".to_string())],
+            merged_bodies: vec![(
+                "CLAUDE.md".to_string(),
+                "# merged canonical body\n".to_string(),
+            )],
             dry_run: false,
             confirm: true,
             force: true,
@@ -812,20 +827,35 @@ mod tests {
 
         // Target now holds the stamped copy.
         let written = fs::read_to_string(proj.join("CLAUDE.md")).unwrap();
-        assert!(written.contains(K2_GENERATED_SIGNATURE), "copy must carry the signature");
-        assert!(written.contains("# merged canonical body"), "copy must carry the body");
-        assert!(written.contains("edit") || written.contains("Edit"), "copy must carry the edit-elsewhere header");
+        assert!(
+            written.contains(K2_GENERATED_SIGNATURE),
+            "copy must carry the signature"
+        );
+        assert!(
+            written.contains("# merged canonical body"),
+            "copy must carry the body"
+        );
+        assert!(
+            written.contains("edit") || written.contains("Edit"),
+            "copy must carry the edit-elsewhere header"
+        );
 
         // Original backed up byte-identical.
         let entry = &outcome.manifest.entries[0];
         assert_eq!(entry.action, "backed_up_then_wrote");
         let backup_rel = entry.backup_relative_path.as_ref().unwrap();
         let backed = fs::read_to_string(proj.join(backup_rel)).unwrap();
-        assert_eq!(backed, "# original user content\n", "backup must be byte-identical to the original");
+        assert_eq!(
+            backed, "# original user content\n",
+            "backup must be byte-identical to the original"
+        );
 
         // manifest.json on disk.
         let manifest_path = outcome.manifest_path.unwrap();
-        assert!(proj.join(&manifest_path).exists(), "manifest.json must be written");
+        assert!(
+            proj.join(&manifest_path).exists(),
+            "manifest.json must be written"
+        );
         fs::remove_dir_all(&proj).ok();
     }
 
@@ -847,13 +877,20 @@ mod tests {
         )
         .unwrap();
         // File is now the generated copy, not the original.
-        assert_ne!(fs::read_to_string(proj.join("CLAUDE.md")).unwrap(), original);
+        assert_ne!(
+            fs::read_to_string(proj.join("CLAUDE.md")).unwrap(),
+            original
+        );
 
         // Unwind from the manifest → byte-identical original restored.
         let actions = unwind_canonical(
             path,
             &outcome.manifest,
-            PersistOpts { dry_run: false, confirm: true, force: true },
+            PersistOpts {
+                dry_run: false,
+                confirm: true,
+                force: true,
+            },
         )
         .unwrap();
         assert_eq!(actions[0].action, "restored");
@@ -886,7 +923,11 @@ mod tests {
         unwind_canonical(
             path,
             &outcome.manifest,
-            PersistOpts { dry_run: false, confirm: true, force: true },
+            PersistOpts {
+                dry_run: false,
+                confirm: true,
+                force: true,
+            },
         )
         .unwrap();
         assert!(
@@ -919,9 +960,15 @@ mod tests {
             },
         )
         .unwrap();
-        let first_backup = first.manifest.entries[0].backup_relative_path.clone().unwrap();
+        let first_backup = first.manifest.entries[0]
+            .backup_relative_path
+            .clone()
+            .unwrap();
         // The first backup is the real original.
-        assert_eq!(fs::read_to_string(proj.join(&first_backup)).unwrap(), original);
+        assert_eq!(
+            fs::read_to_string(proj.join(&first_backup)).unwrap(),
+            original
+        );
 
         // Sleep enough to roll the ISO-second so the second run lands in
         // a distinct backups dir (timestamps are per-second).
@@ -963,7 +1010,8 @@ mod tests {
         .unwrap();
         // Drop the `.lock` file at the agent work dir so is_agent_locked
         // returns true via the filesystem fallback.
-        let lock = crate::workspace::scheduler::agent_work_dir(path, "pod-leader", "").join(".lock");
+        let lock =
+            crate::workspace::scheduler::agent_work_dir(path, "pod-leader", "").join(".lock");
         fs::create_dir_all(lock.parent().unwrap()).unwrap();
         fs::write(&lock, "now").unwrap();
 
@@ -977,8 +1025,14 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(err.contains("pod-leader"), "refusal must name the live agent: {err}");
-        assert!(!proj.join("CLAUDE.md").exists(), "must not write while refusing");
+        assert!(
+            err.contains("pod-leader"),
+            "refusal must name the live agent: {err}"
+        );
+        assert!(
+            !proj.join("CLAUDE.md").exists(),
+            "must not write while refusing"
+        );
 
         // With force, the same call proceeds.
         let ok = run_canonical_setup(
@@ -1034,12 +1088,19 @@ mod tests {
         let outcome = persist_agent_md(
             path,
             "---\nname: x\n---\n\n# Existing persona + organically merged role guidance.\n",
-            PersistOpts { dry_run: false, confirm: true, force: true },
+            PersistOpts {
+                dry_run: false,
+                confirm: true,
+                force: true,
+            },
         )
         .unwrap();
         // ROLE.md is the canonical SOURCE — written verbatim, NO mirror header.
         let written = fs::read_to_string(proj.join(".k2so/agent/ROLE.md")).unwrap();
-        assert!(!written.contains(K2_GENERATED_SIGNATURE), "ROLE.md must NOT be stamped as a generated mirror");
+        assert!(
+            !written.contains(K2_GENERATED_SIGNATURE),
+            "ROLE.md must NOT be stamped as a generated mirror"
+        );
         assert!(written.contains("organically merged role guidance"));
         assert!(
             !proj.join(".k2so/agent/AGENT.md").exists(),
@@ -1050,7 +1111,11 @@ mod tests {
         unwind_canonical(
             path,
             &outcome.manifest,
-            PersistOpts { dry_run: false, confirm: true, force: true },
+            PersistOpts {
+                dry_run: false,
+                confirm: true,
+                force: true,
+            },
         )
         .unwrap();
         assert_eq!(
@@ -1062,9 +1127,49 @@ mod tests {
     }
 
     #[test]
+    fn persist_agent_md_generate_on_refreshes_cwd_agents_md() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        fs::create_dir_all(proj.join(".k2so/agent")).unwrap();
+        fs::write(
+            crate::workspace::agent_identity::workspace_agent_md_path(path),
+            "---\nname: x\n---\n\n# Existing persona\n",
+        )
+        .unwrap();
+        crate::workspace::onboarding::set_agents_md_generate_enabled(path, true).unwrap();
+        crate::workspace::onboarding::set_harness_fanout_enabled(path, false).unwrap();
+        crate::workspace::skill_regen::write_workspace_skill_file(path);
+
+        persist_agent_md(
+            path,
+            "---\nname: x\n---\n\n# Existing persona + PERSIST-MARKER.\n",
+            PersistOpts {
+                dry_run: false,
+                confirm: true,
+                force: true,
+            },
+        )
+        .unwrap();
+
+        let cwd = fs::read_to_string(proj.join("AGENTS.md")).expect("cwd AGENTS.md");
+        assert!(
+            cwd.contains("PERSIST-MARKER"),
+            "persist_agent_md must compose cwd AGENTS.md when generate is on, got:\n{cwd}"
+        );
+        assert!(
+            !proj.join("CLAUDE.md").exists(),
+            "fan-out off must not plant CLAUDE.md"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
     fn iso_timestamp_is_path_safe_and_sorts() {
         let ts = iso_timestamp();
-        assert!(!ts.contains(':'), "timestamp must be path-safe (no colons): {ts}");
+        assert!(
+            !ts.contains(':'),
+            "timestamp must be path-safe (no colons): {ts}"
+        );
         assert!(ts.ends_with('Z'), "timestamp must be UTC: {ts}");
         // Sorts lexicographically as chronological.
         assert_eq!(ts.len(), "2026-06-03T12-34-56Z".len());

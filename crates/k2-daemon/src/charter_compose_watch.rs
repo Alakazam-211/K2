@@ -44,8 +44,42 @@ pub fn start() {
 }
 
 /// Re-read project list + layer paths (after context add/remove / hire).
+/// Updates the watch set only — does not immediately recompose.
 pub fn resync_watches() {
     RESYNC_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+/// Dirs the charter watcher would subscribe for the current project list.
+/// Resync applies this set; it does not compose.
+pub fn wanted_watch_dirs() -> HashMap<PathBuf, HashSet<String>> {
+    let projects = match k2_core::projects_ops::projects_list() {
+        Ok(p) => p,
+        Err(e) => {
+            log_debug!("[daemon/charter-watch] projects_list: {e}");
+            return HashMap::new();
+        }
+    };
+
+    let mut wanted: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+    for proj in projects {
+        let root = PathBuf::from(&proj.path);
+        for src in compose_source_paths(&proj.path) {
+            let dir = src.parent().unwrap_or(root.as_path()).to_path_buf();
+            wanted.entry(dir).or_default().insert(proj.path.clone());
+        }
+        // Also watch the workspace dot-dir so new PROJECT.md / ROLE.md appear.
+        let dot = k2_core::workspace_dot_dir(&proj.path);
+        wanted.entry(dot).or_default().insert(proj.path.clone());
+        wanted.entry(root).or_default().insert(proj.path.clone());
+    }
+    wanted
+}
+
+/// True when `project_path` is in the wanted charter-watch set.
+pub fn project_in_wanted_watch_set(project_path: &str) -> bool {
+    wanted_watch_dirs()
+        .values()
+        .any(|set| set.iter().any(|p| p == project_path))
 }
 
 fn run_loop() -> Result<(), String> {
@@ -121,29 +155,7 @@ fn sync_watches(
     watcher: &mut RecommendedWatcher,
     dir_to_projects: &mut HashMap<PathBuf, HashSet<String>>,
 ) {
-    let projects = match k2_core::projects_ops::projects_list() {
-        Ok(p) => p,
-        Err(e) => {
-            log_debug!("[daemon/charter-watch] projects_list: {e}");
-            return;
-        }
-    };
-
-    let mut wanted: HashMap<PathBuf, HashSet<String>> = HashMap::new();
-    for proj in projects {
-        let root = PathBuf::from(&proj.path);
-        for src in compose_source_paths(&proj.path) {
-            let dir = src.parent().unwrap_or(root.as_path()).to_path_buf();
-            wanted.entry(dir).or_default().insert(proj.path.clone());
-        }
-        // Also watch the workspace dot-dir so new PROJECT.md / AGENT.md appear.
-        let dot = k2_core::workspace_dot_dir(&proj.path);
-        wanted.entry(dot).or_default().insert(proj.path.clone());
-        wanted
-            .entry(root)
-            .or_default()
-            .insert(proj.path.clone());
-    }
+    let wanted = wanted_watch_dirs();
 
     for dir in dir_to_projects.keys() {
         if !wanted.contains_key(dir) {
@@ -153,10 +165,7 @@ fn sync_watches(
     for (dir, set) in &wanted {
         if !dir_to_projects.contains_key(dir) && dir.exists() {
             if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
-                log_debug!(
-                    "[daemon/charter-watch] watch {}: {e}",
-                    dir.display()
-                );
+                log_debug!("[daemon/charter-watch] watch {}: {e}", dir.display());
             } else {
                 log_debug!(
                     "[daemon/charter-watch] watching {} ({} project(s))",
@@ -167,4 +176,67 @@ fn sync_watches(
         }
     }
     *dir_to_projects = wanted;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k2_core::workspace::agent_identity::persona_md_in;
+    use k2_core::workspace::lifecycle::register_workspace_ex;
+    use k2_core::workspace::skill_regen::compose_source_paths;
+
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-charter-watch-{}-{}-{}",
+            tag,
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    #[test]
+    fn resync_watches_sets_flag_without_recomposing() {
+        RESYNC_REQUESTED.store(false, Ordering::Relaxed);
+        resync_watches();
+        assert!(
+            RESYNC_REQUESTED.load(Ordering::Relaxed),
+            "resync must only flip the watch-set flag"
+        );
+    }
+
+    #[test]
+    fn register_workspace_is_in_wanted_watch_set() {
+        k2_core::db::init_for_tests();
+        let dir = unique_dir("hire");
+        let path = dir.to_string_lossy().into_owned();
+        register_workspace_ex(&path, false, true, false).expect("register");
+
+        assert!(
+            project_in_wanted_watch_set(&path),
+            "charter watch set must include the new project after register"
+        );
+
+        let wanted = wanted_watch_dirs();
+        for src in compose_source_paths(&path) {
+            let watch_dir = src.parent().unwrap_or(dir.as_path());
+            assert!(
+                wanted.contains_key(watch_dir),
+                "compose source {} should be watched via {}",
+                src.display(),
+                watch_dir.display()
+            );
+        }
+        let persona = persona_md_in(k2_core::workspace::agent_identity::workspace_agent_path(
+            &path,
+        ));
+        let persona_dir = persona.parent().unwrap_or(dir.as_path());
+        assert!(
+            wanted.contains_key(persona_dir) || wanted.contains_key(&dir),
+            "persona dir must be in the watch set (helper, not hardcoded AGENT.md)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

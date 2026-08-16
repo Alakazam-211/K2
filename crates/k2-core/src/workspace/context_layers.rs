@@ -170,7 +170,7 @@ pub const SUBAGENTS_PACK_ID: &str = "subagents:pack";
 
 /// Which live-generated pack a layer is (if any).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LiveKind {
+pub enum LiveKind {
     Connections,
     Heartbeats,
     Skills,
@@ -320,17 +320,13 @@ fn live_kind_for_source(source: &str) -> Option<LiveKind> {
 }
 
 fn live_kind_for_path(path: &str) -> Option<LiveKind> {
-    if path == CONNECTIONS_ROSTER_PATH
-        || path.ends_with("/context/catalog/connections-roster.md")
-    {
+    if path == CONNECTIONS_ROSTER_PATH || path.ends_with("/context/catalog/connections-roster.md") {
         Some(LiveKind::Connections)
     } else if path == HEARTBEATS_ROSTER_PATH
         || path.ends_with("/context/catalog/heartbeats-roster.md")
     {
         Some(LiveKind::Heartbeats)
-    } else if path == SKILLS_ROSTER_PATH
-        || path.ends_with("/context/catalog/skills-roster.md")
-    {
+    } else if path == SKILLS_ROSTER_PATH || path.ends_with("/context/catalog/skills-roster.md") {
         Some(LiveKind::Skills)
     } else {
         None
@@ -392,10 +388,7 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
             } else {
                 format!(" · {}", peer.relation_types.join(", "))
             };
-            out.push_str(&format!(
-                "- **{}** — `{status}`{rel}\n",
-                peer.project_name
-            ));
+            out.push_str(&format!("- **{}** — `{status}`{rel}\n", peer.project_name));
             if !peer.path.is_empty() {
                 out.push_str(&format!("  - path: `{}`\n", peer.path));
             }
@@ -515,9 +508,7 @@ pub fn render_skills_roster_body(project_path: &str) -> String {
         out.push_str(&format!("  - path: `.k2/skills/{}/SKILL.md`\n", s.name));
     }
     out.push('\n');
-    out.push_str(
-        "This list updates on the next AGENTS.md regen after skills are added/removed.\n",
-    );
+    out.push_str("This list updates on the next AGENTS.md regen after skills are added/removed.\n");
     out
 }
 
@@ -558,11 +549,7 @@ fn list_remote_connection_summaries(project_path: &str) -> Vec<RemoteConnSummary
             }
         })
         .collect();
-    out.sort_by(|a, b| {
-        a.agent
-            .cmp(&b.agent)
-            .then_with(|| a.host.cmp(&b.host))
-    });
+    out.sort_by(|a, b| a.agent.cmp(&b.agent).then_with(|| a.host.cmp(&b.host)));
     out
 }
 
@@ -645,6 +632,12 @@ pub fn sync_live_generated_layers(project_path: &str) {
 /// After connection graph changes: if either side stacks the connections roster,
 /// rewrite AGENTS.md so the always-on roster reflects the new peers.
 pub fn refresh_roster_after_connection_change(project_paths: &[&str]) {
+    refresh_roster_after_live_kind_change(project_paths, LiveKind::Connections);
+}
+
+/// After a live-layer source mutates (connections / heartbeats / skills):
+/// rewrite AGENTS.md only when that live kind is stacked.
+pub fn refresh_roster_after_live_kind_change(project_paths: &[&str], kind: LiveKind) {
     for path in project_paths {
         if path.trim().is_empty() {
             continue;
@@ -652,10 +645,7 @@ pub fn refresh_roster_after_connection_change(project_paths: &[&str]) {
         let Ok(layers) = list_layers(path) else {
             continue;
         };
-        if layers
-            .iter()
-            .any(|l| live_kind_for_layer(l) == Some(LiveKind::Connections))
-        {
+        if layers.iter().any(|l| live_kind_for_layer(l) == Some(kind)) {
             crate::workspace::skill_regen::write_workspace_skill_file(path);
         }
     }
@@ -762,16 +752,18 @@ fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextEr
     let canonical = match id {
         "manager" | "workspace-manager" | "catalog:manager" => "manager:pack",
         "k2-agent" | "k2" | "k2so-agent" | "catalog:k2-agent" => "k2:pack",
-        "connections" | "roster" | "connections-roster" | "connected-agents"
+        "connections"
+        | "roster"
+        | "connections-roster"
+        | "connected-agents"
         | "catalog:connections-roster" => CONNECTIONS_ROSTER_ID,
-        "heartbeats" | "heartbeats-roster" | "catalog:heartbeats-roster" => {
-            HEARTBEATS_ROSTER_ID
-        }
-        "skills" | "skills-roster" | "skills-index" | "catalog:skills-roster" => {
-            SKILLS_ROSTER_ID
-        }
+        "heartbeats" | "heartbeats-roster" | "catalog:heartbeats-roster" => HEARTBEATS_ROSTER_ID,
+        "skills" | "skills-roster" | "skills-index" | "catalog:skills-roster" => SKILLS_ROSTER_ID,
         "wiki-hygiene" | "hygiene" | "catalog:wiki-hygiene" => WIKI_HYGIENE_ID,
-        "subagents" | "subagents:pack" | "always-use-subagents" | "use-subagents"
+        "subagents"
+        | "subagents:pack"
+        | "always-use-subagents"
+        | "use-subagents"
         | "catalog:subagents" => SUBAGENTS_PACK_ID,
         other => other,
     };
@@ -834,10 +826,7 @@ fn materialize_pack_if_needed(
             _ => return Ok(()),
         };
         fs::write(&abs, body).map_err(|e| {
-            ContextError::Db(format!(
-                "cannot write context pack {}: {e}",
-                abs.display()
-            ))
+            ContextError::Db(format!("cannot write context pack {}: {e}", abs.display()))
         })?;
     }
 
@@ -860,21 +849,15 @@ fn materialize_pack_if_needed(
 pub fn resolve_project_id(project_path: &str) -> Result<String, ContextError> {
     let db = crate::db::shared();
     let conn = db.lock();
-    crate::workspace::agent_identity::resolve_project_id(&conn, project_path).ok_or_else(|| {
-        ContextError::NotFound(format!(
-            "workspace not registered: {project_path}"
-        ))
-    })
+    crate::workspace::agent_identity::resolve_project_id(&conn, project_path)
+        .ok_or_else(|| ContextError::NotFound(format!("workspace not registered: {project_path}")))
 }
 
 // ── Path rules ────────────────────────────────────────────────────────
 
 /// Normalize a path for storage: workspace-relative with `/` separators.
 /// Rejects escape outside the workspace root.
-pub fn normalize_layer_path(
-    project_path: &str,
-    raw: &str,
-) -> Result<String, ContextError> {
+pub fn normalize_layer_path(project_path: &str, raw: &str) -> Result<String, ContextError> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(ContextError::BadUsage("path must not be empty".into()));
@@ -1014,7 +997,8 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
 
     // Role persona
     let agent_rel = if let Some(primary) = find_primary_agent(project_path) {
-        let abs = crate::workspace::agent_identity::persona_md_in(agent_dir(project_path, &primary));
+        let abs =
+            crate::workspace::agent_identity::persona_md_in(agent_dir(project_path, &primary));
         let root = Path::new(project_path);
         abs.strip_prefix(root)
             .map(|p| {
@@ -1101,8 +1085,7 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
 pub fn is_system_layer_id(id: &str) -> bool {
     matches!(
         id,
-        "pinned:agent" | "pinned:project" | "pinned:tooling"
-            | "agent" | "project" | "tooling"
+        "pinned:agent" | "pinned:project" | "pinned:tooling" | "agent" | "project" | "tooling"
     )
 }
 
@@ -1483,9 +1466,7 @@ pub fn move_layer(
 
     let target = if let Some(pos) = position {
         if pos < 0 {
-            return Err(ContextError::BadUsage(
-                "position must be >= 0".into(),
-            ));
+            return Err(ContextError::BadUsage("position must be >= 0".into()));
         }
         (pos as usize).min(layers.len() - 1)
     } else if let Some(dir) = direction {
@@ -1800,8 +1781,7 @@ mod tests {
         fs::create_dir_all(layer_file.parent().unwrap()).unwrap();
         fs::write(&layer_file, "# Architecture\n\nDiagrams live here.\n").unwrap();
 
-        let layer = add_layer(path, Some("docs/arch.md"), None, Some("Arch"))
-            .expect("add layer");
+        let layer = add_layer(path, Some("docs/arch.md"), None, Some("Arch")).expect("add layer");
         assert_eq!(layer.path, "docs/arch.md");
         assert!(layer.enabled);
         assert_eq!(layer.position, 0);
@@ -1810,8 +1790,8 @@ mod tests {
         assert!(layer.exists);
         assert!(layer.bytes > 0);
 
-        let err = add_layer(path, Some("docs/arch.md"), None, None)
-            .expect_err("duplicate must fail");
+        let err =
+            add_layer(path, Some("docs/arch.md"), None, None).expect_err("duplicate must fail");
         assert_eq!(err.code(), "duplicate_layer");
 
         let stack = list_stack(path).unwrap();
@@ -1829,8 +1809,8 @@ mod tests {
         let path = root.to_str().unwrap();
         let pid = register_project(path);
 
-        let err = add_layer(path, Some("../../etc/passwd"), None, None)
-            .expect_err("escape must fail");
+        let err =
+            add_layer(path, Some("../../etc/passwd"), None, None).expect_err("escape must fail");
         assert_eq!(err.code(), "path_escape", "got {err}");
 
         cleanup_project(path, &pid);
@@ -1896,8 +1876,7 @@ mod tests {
 
     #[test]
     fn unregistered_project_fails_loud() {
-        let err = list_stack("/tmp/k2-ctx-definitely-not-registered-xyz")
-            .expect_err("must fail");
+        let err = list_stack("/tmp/k2-ctx-definitely-not-registered-xyz").expect_err("must fail");
         assert_eq!(err.code(), "not_found");
     }
 
@@ -1921,18 +1900,29 @@ mod tests {
                 p.kind
             );
             assert!(
-                p.description.as_ref().map(|d| !d.is_empty()).unwrap_or(false),
+                p.description
+                    .as_ref()
+                    .map(|d| !d.is_empty())
+                    .unwrap_or(false),
                 "catalog entry {} missing description",
                 p.id
             );
             assert_eq!(p.author.as_deref(), Some("K2"));
             if p.kind == "static" || p.kind == "path" {
-                assert_eq!(p.version.as_deref(), Some("1.0.0"), "static/path need version");
+                assert_eq!(
+                    p.version.as_deref(),
+                    Some("1.0.0"),
+                    "static/path need version"
+                );
             }
             if p.kind == "live" {
                 assert!(p.version.is_none(), "live packs have no version pin");
             }
-            assert!(!p.tags.is_empty(), "catalog entry {} should have tags", p.id);
+            assert!(
+                !p.tags.is_empty(),
+                "catalog entry {} should have tags",
+                p.id
+            );
             assert!(
                 !p.tags.iter().any(|t| t.eq_ignore_ascii_case("recommended")),
                 "recommended must be a boolean field, not a free-form tag ({})",
@@ -2004,7 +1994,9 @@ mod tests {
 
         let hb = add_layer(path, None, Some("heartbeats:roster"), None).expect("hb roster");
         assert_eq!(hb.source, HEARTBEATS_ROSTER_SOURCE);
-        assert!(root.join(".k2/context/catalog/heartbeats-roster.md").is_file());
+        assert!(root
+            .join(".k2/context/catalog/heartbeats-roster.md")
+            .is_file());
 
         let sk = add_layer(path, None, Some("skills:roster"), None).expect("skills roster");
         assert_eq!(sk.source, SKILLS_ROSTER_SOURCE);
@@ -2020,6 +2012,87 @@ mod tests {
         );
 
         cleanup_project(path, &_pid);
+    }
+
+    fn compose_banner_stamp(body: &str) -> &str {
+        let marker = "<!-- GENERATED by K2 at ";
+        let i = body.find(marker).expect("compose banner");
+        let rest = &body[i + marker.len()..];
+        let end = rest.find(' ').expect("stamp end");
+        &rest[..end]
+    }
+
+    #[test]
+    fn heartbeat_mutate_refreshes_when_roster_stacked_fire_does_not() {
+        crate::db::init_for_tests();
+        let root = unique_root("hb-roster");
+        let path = root.to_str().unwrap();
+        let pid = register_project(path);
+        crate::workspace::onboarding::set_agents_md_generate_enabled(path, true).unwrap();
+        add_layer(path, None, Some("heartbeats:roster"), None).expect("stack hb roster");
+        crate::workspace::skill_regen::write_workspace_skill_file(path);
+
+        crate::heartbeats::k2so_heartbeat_add(
+            path.to_string(),
+            "roster-hb".into(),
+            "daily".into(),
+            "{}".into(),
+        )
+        .expect("add heartbeat");
+
+        let cwd = fs::read_to_string(root.join("AGENTS.md")).expect("cwd AGENTS.md");
+        assert!(
+            cwd.contains("roster-hb"),
+            "heartbeat add with roster stacked must refresh AGENTS.md, got:\n{cwd}"
+        );
+        let stamp = compose_banner_stamp(&cwd).to_string();
+
+        crate::heartbeats::stamp_heartbeat_fired(path, "roster-hb");
+        let after_fire = fs::read_to_string(root.join("AGENTS.md")).expect("after fire");
+        assert_eq!(
+            compose_banner_stamp(&after_fire),
+            stamp.as_str(),
+            "heartbeat fire must not rewrite the compose banner"
+        );
+
+        cleanup_project(path, &pid);
+    }
+
+    #[test]
+    fn skill_write_refreshes_only_when_skills_roster_stacked() {
+        crate::db::init_for_tests();
+        let stacked = unique_root("sk-roster-on");
+        let stacked_path = stacked.to_str().unwrap();
+        let stacked_pid = register_project(stacked_path);
+        crate::workspace::onboarding::set_agents_md_generate_enabled(stacked_path, true).unwrap();
+        add_layer(stacked_path, None, Some("skills:roster"), None).expect("stack skills");
+        crate::workspace::skill_regen::write_workspace_skill_file(stacked_path);
+
+        crate::skills::crud::create(stacked_path, "roster-skill", None).expect("create skill");
+        let stacked_body =
+            fs::read_to_string(stacked.join("AGENTS.md")).expect("stacked cwd AGENTS.md");
+        assert!(
+            stacked_body.contains("roster-skill"),
+            "skill write with roster stacked must refresh AGENTS.md, got:\n{stacked_body}"
+        );
+
+        let bare = unique_root("sk-roster-off");
+        let bare_path = bare.to_str().unwrap();
+        let bare_pid = register_project(bare_path);
+        crate::workspace::onboarding::set_agents_md_generate_enabled(bare_path, true).unwrap();
+        crate::workspace::skill_regen::write_workspace_skill_file(bare_path);
+        let before = fs::read_to_string(bare.join("AGENTS.md")).expect("bare cwd");
+        let stamp = compose_banner_stamp(&before).to_string();
+        crate::skills::crud::create(bare_path, "quiet-skill", None).expect("create without layer");
+        let after = fs::read_to_string(bare.join("AGENTS.md")).expect("bare after");
+        assert_eq!(
+            compose_banner_stamp(&after),
+            stamp.as_str(),
+            "skill write without the skills roster must not restamp AGENTS.md"
+        );
+
+        cleanup_project(stacked_path, &stacked_pid);
+        cleanup_project(bare_path, &bare_pid);
     }
 
     #[test]
@@ -2050,7 +2123,9 @@ mod tests {
         // Full skill remains loadable for depth.
         assert!(
             root.join(".k2/skills/workspace-manager/SKILL.md").is_file()
-                || root.join(".k2so/skills/workspace-manager/SKILL.md").is_file(),
+                || root
+                    .join(".k2so/skills/workspace-manager/SKILL.md")
+                    .is_file(),
             "loadable workspace-manager skill should be ensured on pack add"
         );
 
@@ -2061,7 +2136,11 @@ mod tests {
         assert_eq!(k2_layer.source, "catalog:k2-agent");
         assert!(root.join(".k2/context/catalog/k2-agent.md").is_file());
         let k2_body = fs::read_to_string(root.join(".k2/context/catalog/k2-agent.md")).unwrap();
-        assert!(k2_body.len() < 4_000, "k2 pack must stay lean, len={}", k2_body.len());
+        assert!(
+            k2_body.len() < 4_000,
+            "k2 pack must stay lean, len={}",
+            k2_body.len()
+        );
 
         cleanup_project(path, &_pid);
     }
@@ -2087,8 +2166,8 @@ mod tests {
         let path = root.to_str().unwrap();
         let pid = register_project(path);
 
-        let err = add_layer(path, Some("a.md"), Some("wiki:index"), None)
-            .expect_err("both is bad_usage");
+        let err =
+            add_layer(path, Some("a.md"), Some("wiki:index"), None).expect_err("both is bad_usage");
         assert_eq!(err.code(), "bad_usage");
 
         let err = add_layer(path, None, None, None).expect_err("neither");
@@ -2109,12 +2188,20 @@ mod tests {
         let pin = pinned_info(path);
         assert_eq!(pin[0].id, "pinned:agent");
         assert_eq!(pin[0].label, "Role");
-        assert!(pin[0].path.ends_with("agent/AGENT.md"), "got {}", pin[0].path);
+        assert!(
+            pin[0].path.ends_with("agent/AGENT.md"),
+            "got {}",
+            pin[0].path
+        );
         assert!(pin[0].exists);
 
         fs::write(dir.join("ROLE.md"), "---\nname: neu\n---\nnew\n").unwrap();
         let pin = pinned_info(path);
-        assert!(pin[0].path.ends_with("agent/ROLE.md"), "ROLE.md wins: {}", pin[0].path);
+        assert!(
+            pin[0].path.ends_with("agent/ROLE.md"),
+            "ROLE.md wins: {}",
+            pin[0].path
+        );
         assert!(pin[0].exists);
 
         fs::remove_file(dir.join("AGENT.md")).unwrap();

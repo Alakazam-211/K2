@@ -196,6 +196,8 @@ pub fn create(
     fs::write(&skill_md, &body)
         .map_err(|e| format!("Failed to write {}: {}", skill_md.display(), e))?;
 
+    refresh_agents_md_if_skills_roster(project_path);
+
     Ok(SkillSummary {
         name: name.to_string(),
         title: first_h1(&skill_md),
@@ -212,7 +214,16 @@ pub fn remove(project_path: &str, name: &str) -> Result<(), String> {
     if !dir.exists() {
         return Err(format!("Skill '{}' does not exist", name));
     }
-    safe_delete::trash(&dir).map_err(|e| format!("Failed to trash skill '{}': {}", name, e))
+    safe_delete::trash(&dir).map_err(|e| format!("Failed to trash skill '{}': {}", name, e))?;
+    refresh_agents_md_if_skills_roster(project_path);
+    Ok(())
+}
+
+fn refresh_agents_md_if_skills_roster(project_path: &str) {
+    crate::workspace::context_layers::refresh_roster_after_live_kind_change(
+        &[project_path],
+        crate::workspace::context_layers::LiveKind::Skills,
+    );
 }
 
 // ── Internals ────────────────────────────────────────────────────────

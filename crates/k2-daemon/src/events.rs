@@ -142,6 +142,7 @@ impl AgentHookEventSink for DaemonBroadcastSink {
                     crate::session_events::SessionEvent::ProjectsChanged {},
                 );
                 crate::fs_live::resync_watches();
+                crate::charter_compose_watch::resync_watches();
             }
             // 0.40.38 — chat session rename/pin/refresh, same story.
             HookEvent::SyncChatHistory | HookEvent::ChatRefreshed => {

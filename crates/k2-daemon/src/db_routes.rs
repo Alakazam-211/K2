@@ -782,6 +782,7 @@ fn emit_projects_changed() {
     // Keep the daemon-side FS watcher roots in sync with the project set
     // (Files-drawer multi-writer live refresh).
     crate::fs_live::resync_watches();
+    crate::charter_compose_watch::resync_watches();
 }
 
 pub fn handle_projects_create(body: &[u8]) -> CliResponse {

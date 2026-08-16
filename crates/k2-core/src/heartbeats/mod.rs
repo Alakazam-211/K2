@@ -119,6 +119,8 @@ pub fn k2so_heartbeat_add(
         Err(e) => log_debug!("[heartbeat-add] WARN: ensure_cron_installed: {e}"),
     }
 
+    refresh_agents_md_if_heartbeats_roster(&project_path);
+
     Ok(serde_json::json!({
         "id": id,
         "name": name,
@@ -188,7 +190,10 @@ pub fn k2so_heartbeat_archive(
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
     AgentHeartbeat::archive(&conn, &project_id, &name)
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+    refresh_agents_md_if_heartbeats_roster(&project_path);
+    Ok(())
 }
 
 /// Restore a soft-archived heartbeat. Reserved for a future
@@ -203,7 +208,10 @@ pub fn k2so_heartbeat_unarchive(
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
     AgentHeartbeat::unarchive(&conn, &project_id, &name)
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+    refresh_agents_md_if_heartbeats_roster(&project_path);
+    Ok(())
 }
 
 /// Delete a heartbeat row + best-effort remove its `WAKEUP.md` folder.
@@ -231,6 +239,8 @@ pub fn k2so_heartbeat_remove(project_path: String, name: String) -> Result<(), S
     if hb_dir.exists() {
         let _ = crate::safe_delete_scratch::scratch_safe_trash(&hb_dir);
     }
+    drop(conn);
+    refresh_agents_md_if_heartbeats_roster(&project_path);
     Ok(())
 }
 
@@ -247,7 +257,10 @@ pub fn k2so_heartbeat_set_enabled(
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
     AgentHeartbeat::set_enabled(&conn, &project_id, &name, enabled)
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+    refresh_agents_md_if_heartbeats_roster(&project_path);
+    Ok(())
 }
 
 /// 0.37.8 — flip the per-heartbeat opt-in to deliver WAKEUP.md into
@@ -610,7 +623,10 @@ pub fn k2so_heartbeat_edit(
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
     AgentHeartbeat::update_schedule(&conn, &project_id, &name, &frequency, &spec_json)
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+    refresh_agents_md_if_heartbeats_roster(&project_path);
+    Ok(())
 }
 
 /// Result of a multi-heartbeat tick — one entry per heartbeat eligible
@@ -851,7 +867,16 @@ pub fn k2so_heartbeat_rename(
         new_name,
         hb.wakeup_path
     );
+    drop(conn);
+    refresh_agents_md_if_heartbeats_roster(&project_path);
     Ok(())
+}
+
+fn refresh_agents_md_if_heartbeats_roster(project_path: &str) {
+    crate::workspace::context_layers::refresh_roster_after_live_kind_change(
+        &[project_path],
+        crate::workspace::context_layers::LiveKind::Heartbeats,
+    );
 }
 
 /// Return the most recent `limit` fire rows for a workspace. Powers

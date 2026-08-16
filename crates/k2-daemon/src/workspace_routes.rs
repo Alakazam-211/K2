@@ -54,6 +54,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         crate::session_events::SessionEvent::ProjectsChanged {},
                     );
                     crate::fs_live::resync_watches();
+                    crate::charter_compose_watch::resync_watches();
                     CliResponse::ok_json(body)
                 }
                 Err(e) => CliResponse::bad_request(e),
@@ -70,7 +71,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 seed_agents_md,
                 fanout,
             ) {
-                Ok(body) => CliResponse::ok_json(body),
+                Ok(body) => {
+                    crate::fs_live::resync_watches();
+                    crate::charter_compose_watch::resync_watches();
+                    CliResponse::ok_json(body)
+                }
                 Err(e) => CliResponse::bad_request(e),
             }
         }

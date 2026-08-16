@@ -34,24 +34,21 @@
 //! [`crate::workspace::migrations`] hosts the archive-utility helper
 //! `log_adoption_event` these modules share.
 
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::fs_atomic::{self, atomic_write_str, log_if_err};
 use crate::skills::version::{skill_checksum_hex, SKILL_VERSION_WORKSPACE};
 use crate::skills::writer::{force_symlink, upsert_k2so_section};
 use crate::workspace::agent_identity::{
     agent_dir, agents_dir, backup_sibling_legacy_persona, find_primary_agent, parse_frontmatter,
     persona_md_in, workspace_agent_path, PERSONA_MD_NAME,
 };
+use crate::workspace::migrations::{inject_first_migration_banner, log_adoption_event};
 use crate::workspace::onboarding::{
-    agents_md_generate_enabled, heal_agents_md_generate_marker, harness_fanout_enabled,
+    agents_md_generate_enabled, harness_fanout_enabled, heal_agents_md_generate_marker,
     plant_root_agents_md, root_agents_md_is_ours, set_agents_md_generate_enabled,
-    set_harness_fanout_enabled,
-};
-use crate::fs_atomic::{self, atomic_write_str, log_if_err};
-use crate::workspace::migrations::{
-    inject_first_migration_banner, log_adoption_event,
+    set_harness_fanout_enabled, strip_agents_md_compose_banner,
 };
 
 // ══════════════════════════════════════════════════════════════════════
@@ -108,9 +105,20 @@ pub fn compose_agents_md_public(project_path: &str) -> String {
 /// After publish: plant cwd `AGENTS.md` when generate is on, leftover
 /// fan-out when that marker is on. `k2 agent context regen` goes through
 /// [`write_workspace_skill_file`] — do not double-plant from the CLI path.
+/// Banner-excluding hash skip: a no-op when only the GENERATED timestamp
+/// would change.
 pub fn recompose_agents_md(project_path: &str) {
     let _ = publish_canonical_agents_md(project_path);
     apply_agents_md_after_publish(project_path);
+}
+
+/// Compose `.k2/AGENTS.md` only when the canonical file is missing.
+/// Spawn/attach safety net — must not stamp a new banner on every launch.
+pub fn ensure_agents_md_if_missing(project_path: &str) {
+    let canonical = crate::workspace_dot_dir(project_path).join("AGENTS.md");
+    if !canonical.is_file() {
+        write_workspace_skill_file(project_path);
+    }
 }
 
 /// Absolute paths of authored compose inputs (not the generated AGENTS.md).
@@ -504,11 +512,17 @@ fn publish_canonical_agents_md(project_path: &str) -> PathBuf {
     crate::workspace::context_layers::sync_live_generated_layers(project_path);
 
     let canonical = dot.join("AGENTS.md");
-    log_if_err(
-        "write canonical AGENTS.md",
-        &canonical,
-        atomic_write_str(&canonical, &compose_agents_md(project_path)),
-    );
+    let new_body = compose_agents_md(project_path);
+    let skip_write = fs::read_to_string(&canonical).ok().is_some_and(|existing| {
+        strip_agents_md_compose_banner(&existing) == strip_agents_md_compose_banner(&new_body)
+    });
+    if !skip_write {
+        log_if_err(
+            "write canonical AGENTS.md",
+            &canonical,
+            atomic_write_str(&canonical, &new_body),
+        );
+    }
 
     let cli = dot.join("skills/k2-cli/SKILL.md");
     let _ = ensure_skill_up_to_date(
@@ -578,9 +592,10 @@ fn carry_notes_into_agent_md(project_path: &str, notes: &str) {
         end = MIGRATED_NOTES_END,
     );
 
-    let new_contents = if let (Some(b), Some(e)) =
-        (existing.find(MIGRATED_NOTES_BEGIN), existing.find(MIGRATED_NOTES_END))
-    {
+    let new_contents = if let (Some(b), Some(e)) = (
+        existing.find(MIGRATED_NOTES_BEGIN),
+        existing.find(MIGRATED_NOTES_END),
+    ) {
         // Replace the existing migrated-notes block verbatim — preserves
         // everything before/after, never stacks a second copy.
         let before = &existing[..b];
@@ -657,7 +672,11 @@ pub(crate) fn reap_old_workspace_skill_shape(project_path: &str) {
             // MANAGED ARTIFACT: a K2-created symlink (the old root harness
             // mirror), not user data. Symlink-only guard above ensures a
             // real user file is never touched here — direct remove is safe.
-            log_if_err("reap root SKILL.md symlink", &root_skill, fs::remove_file(&root_skill));
+            log_if_err(
+                "reap root SKILL.md symlink",
+                &root_skill,
+                fs::remove_file(&root_skill),
+            );
         }
     }
 
@@ -671,7 +690,11 @@ pub(crate) fn reap_old_workspace_skill_shape(project_path: &str) {
         root.join(".pi/skills/k2so"),
     ] {
         if stale.exists() {
-            log_if_err("reap stale harness skill mirror", &stale, fs::remove_dir_all(&stale));
+            log_if_err(
+                "reap stale harness skill mirror",
+                &stale,
+                fs::remove_dir_all(&stale),
+            );
         }
     }
     // MANAGED ARTIFACT: K2-created mirror under `.opencode/` (our skill
@@ -735,10 +758,7 @@ pub(crate) fn read_regen_hashes(project_path: &str) -> std::collections::HashMap
 /// Persist the content hashes of every source file that participates in
 /// drift detection. Called at the end of a successful regen so the next
 /// regen has a baseline for comparison.
-fn write_regen_hashes(
-    project_path: &str,
-    hashes: &std::collections::HashMap<String, String>,
-) {
+fn write_regen_hashes(project_path: &str, hashes: &std::collections::HashMap<String, String>) {
     let stamp_path = crate::workspace_dot_dir(project_path).join(".last-skill-regen");
     let payload = serde_json::to_string(hashes).unwrap_or_else(|_| "{}".to_string());
     log_if_err(
@@ -860,8 +880,7 @@ pub fn write_workspace_skill_file_with_body(project_path: &str, _base_body: Opti
     apply_agents_md_after_publish(project_path);
 
     // Step 3: Stamp last-regen hashes (drift baseline for the next regen).
-    let mut hashes: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut hashes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let project_md_path = crate::workspace_dot_dir(project_path).join("PROJECT.md");
     let project_hash = content_hash_of(&project_md_path);
     if !project_hash.is_empty() {
@@ -893,7 +912,11 @@ pub fn write_workspace_skill_file_with_body(project_path: &str, _base_body: Opti
 ///   then replace it with a symlink to AGENTS.md. (The `k2-canonical-agents`
 ///   AI skill is the recommended path to merge that backup into AGENT.md.)
 /// - Missing → create the symlink.
-pub(crate) fn migrate_and_symlink_root_claude_md(canonical: &Path, root_claude: &Path, project_path: &str) {
+pub(crate) fn migrate_and_symlink_root_claude_md(
+    canonical: &Path,
+    root_claude: &Path,
+    project_path: &str,
+) {
     match fs::symlink_metadata(root_claude) {
         Ok(meta) if meta.file_type().is_symlink() => {
             // Refreshing OUR own symlink — managed artifact, not user data.
@@ -936,7 +959,9 @@ pub fn ensure_all_skills_up_to_date(project_path: &str) {
     if !agents_root.exists() {
         return;
     }
-    let Ok(entries) = fs::read_dir(&agents_root) else { return };
+    let Ok(entries) = fs::read_dir(&agents_root) else {
+        return;
+    };
     for entry in entries.flatten() {
         let agent_path = entry.path();
         if !agent_path.is_dir() {
@@ -954,16 +979,15 @@ pub fn ensure_all_skills_up_to_date(project_path: &str) {
         }
         let agent_content = fs::read_to_string(&agent_md).unwrap_or_default();
         let fm = parse_frontmatter(&agent_content);
-        let agent_type = fm.get("type").cloned().unwrap_or_else(|| "agent-template".to_string());
+        let agent_type = fm
+            .get("type")
+            .cloned()
+            .unwrap_or_else(|| "agent-template".to_string());
         let normalized_type = match agent_type.as_str() {
             "pod-leader" | "coordinator" => "manager".to_string(),
             other => other.to_string(),
         };
-        crate::skills::writer::write_agent_skill_file(
-            project_path,
-            &agent_name,
-            &normalized_type,
-        );
+        crate::skills::writer::write_agent_skill_file(project_path, &agent_name, &normalized_type);
     }
 }
 
@@ -1085,8 +1109,7 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
     if !post_unification && !k2so_agent_dir.exists() {
         let _ = fs::create_dir_all(&k2so_agent_dir);
         let k2so_role = "K2SO planner — builds PRDs, milestones, and technical plans";
-        let k2so_body =
-            generate_default_agent_body("k2so", "k2so-agent", k2so_role, &project_path);
+        let k2so_body = generate_default_agent_body("k2so", "k2so-agent", k2so_role, &project_path);
         let k2so_md = format!(
             "---\nname: k2so-agent\nrole: {}\ntype: k2so\n---\n\n{}\n",
             k2so_role, k2so_body
@@ -1112,8 +1135,7 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
     // have already been organized and aren't surfaced in the manager's
     // skill summary.
     let mut inbox_summary = String::new();
-    let ws_inbox_items =
-        crate::inbox::list_folder(std::path::Path::new(&project_path), "");
+    let ws_inbox_items = crate::inbox::list_folder(std::path::Path::new(&project_path), "");
     for item in &ws_inbox_items {
         // `type` dropped in the WorkItem → InboxItem migration; `source`
         // (the WorkItem `source` field) is preserved on InboxItem and
@@ -1191,7 +1213,7 @@ pub fn regenerate_workspace_skill(project_path: String) -> Result<String, String
         let project_md_path = k2so_dir.join("PROJECT.md");
         if !project_md_path.exists() {
             let project_md_content = format!(
-r#"# {project_name}
+                r#"# {project_name}
 
 <!--
   PROJECT.md is the "what" half of agent context — the codebase facts
@@ -1239,7 +1261,8 @@ r#"# {project_name}
 "#,
                 project_name = project_name,
             );
-            let _ = crate::workspace::work_item::atomic_write(&project_md_path, &project_md_content);
+            let _ =
+                crate::workspace::work_item::atomic_write(&project_md_path, &project_md_content);
         }
     }
 
@@ -1420,7 +1443,10 @@ mod tests {
             1,
             "note must appear exactly once after a second reap; got:\n{second}"
         );
-        assert_eq!(first, second, "re-running the reap must be a no-op on AGENT.md");
+        assert_eq!(
+            first, second,
+            "re-running the reap must be a no-op on AGENT.md"
+        );
     }
 
     #[test]
@@ -1448,7 +1474,8 @@ mod tests {
             "the loadable k2-cli skill must ship",
         );
         assert!(
-            proj.join(".k2so/skills/k2-canonical-agents/SKILL.md").exists(),
+            proj.join(".k2so/skills/k2-canonical-agents/SKILL.md")
+                .exists(),
             "the loadable k2-canonical-agents skill must ship",
         );
         // The OLD composed skill must NOT be (re)created.
@@ -1471,8 +1498,14 @@ mod tests {
 
         // Phase 2.1: .k2so/inbox/ (unified primitive) and .k2so/prds/
         // must be scaffolded.
-        assert!(proj.join(".k2so/inbox").is_dir(), ".k2so/inbox/ should be scaffolded");
-        assert!(proj.join(".k2so/prds").is_dir(), ".k2so/prds/ should be scaffolded");
+        assert!(
+            proj.join(".k2so/inbox").is_dir(),
+            ".k2so/inbox/ should be scaffolded"
+        );
+        assert!(
+            proj.join(".k2so/prds").is_dir(),
+            ".k2so/prds/ should be scaffolded"
+        );
 
         // Canonical AGENTS.md must have landed (the new entrypoint).
         assert!(
@@ -1627,7 +1660,10 @@ mod tests {
         .unwrap();
 
         let body = regenerate_workspace_skill(path).expect("regen ok");
-        assert_regen_body_has_no_deprecated_verbs(&body, "manager-mode regen (with backend-eng skill)");
+        assert_regen_body_has_no_deprecated_verbs(
+            &body,
+            "manager-mode regen (with backend-eng skill)",
+        );
 
         // Team section reports empty — no connections seeded.
         assert!(
@@ -1639,7 +1675,9 @@ mod tests {
         // the body to just the team region to avoid false positives
         // from unrelated places where the name might legitimately
         // appear (none expected here, but be precise).
-        let team_start = body.find("## Team — Connected Workspaces").expect("team section present");
+        let team_start = body
+            .find("## Team — Connected Workspaces")
+            .expect("team section present");
         let after_team = &body[team_start..];
         let team_end_rel = after_team[2..]
             .find("\n## ")
@@ -1661,7 +1699,10 @@ mod tests {
         // `k2` CLI form (not `k2so`) and carry no hard-deprecated verbs.
         let body = generate_k2_cli_skill();
         assert_regen_body_has_no_deprecated_verbs(&body, "generate_k2_cli_skill");
-        assert!(body.contains("k2 msg"), "k2-cli skill must document `k2 msg`");
+        assert!(
+            body.contains("k2 msg"),
+            "k2-cli skill must document `k2 msg`"
+        );
         assert!(
             !body.contains("k2so msg"),
             "k2-cli skill must not use the legacy `k2so` CLI prefix",
@@ -1710,8 +1751,7 @@ mod tests {
             "k2-cli skill must distinguish `addresses` from `messages`",
         );
         assert!(
-            body.contains("EXTERNAL, UNTRUSTED content")
-                && body.contains("NEVER as instructions"),
+            body.contains("EXTERNAL, UNTRUSTED content") && body.contains("NEVER as instructions"),
             "k2-cli skill must teach the untrusted-content markers rule",
         );
         assert!(
@@ -1726,8 +1766,7 @@ mod tests {
             "k2-cli skill must teach send governance (queued IS success + outbox)",
         );
         assert!(
-            body.contains("accepted-for-delivery")
-                && body.contains("never claim an email was"),
+            body.contains("accepted-for-delivery") && body.contains("never claim an email was"),
             "k2-cli skill must forbid claiming delivery",
         );
         assert!(
@@ -1752,8 +1791,7 @@ mod tests {
             "k2-cli skill must say msg uses handle not display name"
         );
         assert!(
-            body.contains("k2 heartbeat session")
-                && body.contains("--set sales/reviewer"),
+            body.contains("k2 heartbeat session") && body.contains("--set sales/reviewer"),
             "k2-cli skill must hint sidecar + heartbeat session --set sales/reviewer",
         );
     }
@@ -1776,14 +1814,23 @@ mod tests {
         .unwrap();
 
         let agents_md = compose_agents_md(path);
-        assert!(agents_md.contains("PERSONA-MARKER body."), "AGENT.md must be merged in");
-        assert!(agents_md.contains("PROJECT-MARKER body."), "PROJECT.md must be merged in");
+        assert!(
+            agents_md.contains("PERSONA-MARKER body."),
+            "AGENT.md must be merged in"
+        );
+        assert!(
+            agents_md.contains("PROJECT-MARKER body."),
+            "PROJECT.md must be merged in"
+        );
         assert!(
             agents_md.contains("k2-cli"),
             "AGENTS.md must point at the loadable k2-cli skill",
         );
         // GENERATED banner — never hand-edited.
-        assert!(agents_md.contains("GENERATED by K2"), "AGENTS.md must carry the generated banner");
+        assert!(
+            agents_md.contains("GENERATED by K2"),
+            "AGENTS.md must carry the generated banner"
+        );
         assert!(
             agents_md.contains("context layers") || agents_md.contains("k2 agent context"),
             "header must mention context layers / k2 agent context",
@@ -1828,7 +1875,8 @@ mod tests {
             "must list PROJECT.md: {srcs:?}"
         );
         assert!(
-            srcs.iter().any(|p| p.ends_with("AGENT.md") || p.ends_with("ROLE.md")),
+            srcs.iter()
+                .any(|p| p.ends_with("AGENT.md") || p.ends_with("ROLE.md")),
             "must list persona ROLE.md or pre-heal AGENT.md: {srcs:?}"
         );
         assert!(
@@ -1896,7 +1944,10 @@ mod tests {
             agents_md.contains("PLAIN-PROJECT-MARKER"),
             "PROJECT.md must still compose"
         );
-        assert!(agents_md.contains("## Role"), "Role section heading required");
+        assert!(
+            agents_md.contains("## Role"),
+            "Role section heading required"
+        );
         fs::remove_dir_all(&proj).ok();
     }
 
@@ -1928,7 +1979,10 @@ mod tests {
         );
         assert!(agents_md.contains("## Role"));
         assert!(agents_md.contains("ROLE.md + PROJECT.md + Tooling"));
-        assert!(proj.join("AGENT.md").exists(), "leftover cwd AGENT.md stays");
+        assert!(
+            proj.join("AGENT.md").exists(),
+            "leftover cwd AGENT.md stays"
+        );
         assert!(agent_dir.join("ROLE.md").exists());
         fs::remove_dir_all(&proj).ok();
     }
@@ -1957,7 +2011,11 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        fs::write(proj.join("extra.md"), "# Extra Layer\n\nEXTRA-MARKER body.\n").unwrap();
+        fs::write(
+            proj.join("extra.md"),
+            "# Extra Layer\n\nEXTRA-MARKER body.\n",
+        )
+        .unwrap();
         crate::workspace::context_layers::add_layer(path, Some("extra.md"), None, None)
             .expect("add present layer");
         crate::workspace::context_layers::add_layer(path, Some("missing.md"), None, Some("Gone"))
@@ -1996,8 +2054,7 @@ mod tests {
         );
         // Disabled missing.md must not appear (still-missing.md is a different path).
         assert!(
-            !agents_md.contains("MISSING: missing.md")
-                && !agents_md.contains("## Gone"),
+            !agents_md.contains("MISSING: missing.md") && !agents_md.contains("## Gone"),
             "disabled layer must not appear: {agents_md}"
         );
         // Tooling still last.
@@ -2021,8 +2078,8 @@ mod tests {
 
     fn leftover_points_at(proj: &Path, leftover: &str, expected: &Path) {
         let link = proj.join(leftover);
-        let meta = fs::symlink_metadata(&link)
-            .unwrap_or_else(|e| panic!("{leftover} must exist: {e}"));
+        let meta =
+            fs::symlink_metadata(&link).unwrap_or_else(|e| panic!("{leftover} must exist: {e}"));
         assert!(
             meta.file_type().is_symlink(),
             "{leftover} must be a leftover symlink, got {:?}",
@@ -2036,11 +2093,7 @@ mod tests {
         };
         let got = fs::canonicalize(&resolved).unwrap_or(resolved);
         let want = fs::canonicalize(expected).unwrap_or_else(|_| expected.to_path_buf());
-        assert_eq!(
-            got, want,
-            "{leftover} must point at {}",
-            expected.display()
-        );
+        assert_eq!(got, want, "{leftover} must point at {}", expected.display());
     }
 
     #[test]
@@ -2066,7 +2119,10 @@ mod tests {
         );
         assert!(!proj.join("CLAUDE.md").exists(), "no leftover CLAUDE.md");
         assert!(!proj.join("AGENT.md").exists(), "no leftover AGENT.md");
-        assert!(!proj.join("ROLE.md").exists(), "generate-on must not plant cwd ROLE.md");
+        assert!(
+            !proj.join("ROLE.md").exists(),
+            "generate-on must not plant cwd ROLE.md"
+        );
         assert!(!proj.join("GEMINI.md").exists(), "no leftover GEMINI.md");
         fs::remove_dir_all(&proj).ok();
     }
@@ -2077,7 +2133,9 @@ mod tests {
         let path = proj.to_str().unwrap();
         apply_new_workspace_agents_policy(path, false, false);
         assert!(
-            crate::workspace_dot_dir(proj.as_path()).join("AGENTS.md").is_file(),
+            crate::workspace_dot_dir(proj.as_path())
+                .join("AGENTS.md")
+                .is_file(),
             ".k2/AGENTS.md still composed"
         );
         assert!(
@@ -2098,7 +2156,9 @@ mod tests {
         let kept = fs::read_to_string(proj.join("AGENTS.md")).expect("user file remains");
         assert_eq!(kept, user);
         assert!(
-            crate::workspace_dot_dir(proj.as_path()).join("AGENTS.md").is_file(),
+            crate::workspace_dot_dir(proj.as_path())
+                .join("AGENTS.md")
+                .is_file(),
             ".k2/AGENTS.md still written"
         );
         let mig = crate::workspace_dot_dir(proj.as_path()).join("migration");
@@ -2106,11 +2166,7 @@ mod tests {
             let entries: Vec<_> = fs::read_dir(&mig)
                 .expect("read migration")
                 .flatten()
-                .filter(|e| {
-                    e.file_name()
-                        .to_string_lossy()
-                        .contains("AGENTS")
-                })
+                .filter(|e| e.file_name().to_string_lossy().contains("AGENTS"))
                 .collect();
             assert!(
                 entries.is_empty(),
@@ -2141,7 +2197,10 @@ mod tests {
             body.contains("<!-- GENERATED by K2 at "),
             "recompose must refresh the banner timestamp"
         );
-        assert!(!body.contains("old compose"), "old compose must be replaced");
+        assert!(
+            !body.contains("old compose"),
+            "old compose must be replaced"
+        );
         fs::remove_dir_all(&proj).ok();
     }
 
@@ -2156,7 +2215,10 @@ mod tests {
         std::os::unix::fs::symlink(&canonical, proj.join("AGENTS.md")).unwrap();
         write_workspace_skill_file_with_body(path, None);
         let meta = fs::symlink_metadata(proj.join("AGENTS.md")).expect("symlink remains");
-        assert!(meta.file_type().is_symlink(), "legacy our-symlink stays a symlink");
+        assert!(
+            meta.file_type().is_symlink(),
+            "legacy our-symlink stays a symlink"
+        );
         let resolved = fs::read_to_string(proj.join("AGENTS.md")).expect("follow symlink");
         assert!(
             resolved.contains("<!-- GENERATED by K2 at "),
@@ -2259,7 +2321,9 @@ mod tests {
         let path = proj.to_str().unwrap();
         write_workspace_skill_file_with_body(path, None);
         assert!(
-            crate::workspace_dot_dir(proj.as_path()).join("AGENTS.md").is_file(),
+            crate::workspace_dot_dir(proj.as_path())
+                .join("AGENTS.md")
+                .is_file(),
             "compose still writes .k2/AGENTS.md"
         );
         assert!(
@@ -2324,6 +2388,64 @@ mod tests {
         assert!(
             !proj.join("CLAUDE.md").exists(),
             "skip-harness must force leftover fan-out off"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    fn compose_banner_stamp(body: &str) -> &str {
+        let marker = "<!-- GENERATED by K2 at ";
+        let i = body.find(marker).expect("compose banner");
+        let rest = &body[i + marker.len()..];
+        let end = rest.find(' ').expect("stamp end");
+        &rest[..end]
+    }
+
+    #[test]
+    fn ensure_agents_md_if_missing_is_noop_when_canonical_exists() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        apply_new_workspace_agents_policy(path, true, false);
+        let canonical = crate::workspace_dot_dir(proj.as_path()).join("AGENTS.md");
+        let before = fs::read_to_string(&canonical).expect("canonical");
+        let stamp = compose_banner_stamp(&before).to_string();
+        ensure_agents_md_if_missing(path);
+        let after = fs::read_to_string(&canonical).expect("canonical after");
+        assert_eq!(
+            compose_banner_stamp(&after),
+            stamp.as_str(),
+            "spawn heal must not rewrite an existing .k2/AGENTS.md banner"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn ensure_agents_md_if_missing_composes_when_canonical_absent() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        let canonical = crate::workspace_dot_dir(proj.as_path()).join("AGENTS.md");
+        assert!(!canonical.exists());
+        ensure_agents_md_if_missing(path);
+        assert!(
+            canonical.is_file(),
+            "missing .k2/AGENTS.md must be composed once"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn recompose_skips_when_body_minus_banner_unchanged() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        apply_new_workspace_agents_policy(path, true, false);
+        let cwd = proj.join("AGENTS.md");
+        let before = fs::read_to_string(&cwd).expect("cwd");
+        let stamp = compose_banner_stamp(&before).to_string();
+        recompose_agents_md(path);
+        let after = fs::read_to_string(&cwd).expect("cwd after");
+        assert_eq!(
+            compose_banner_stamp(&after),
+            stamp.as_str(),
+            "hash skip must leave the banner timestamp alone"
         );
         fs::remove_dir_all(&proj).ok();
     }

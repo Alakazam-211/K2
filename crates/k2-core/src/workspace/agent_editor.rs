@@ -10,12 +10,11 @@
 
 use std::fs;
 
+use crate::workspace::agent::cleanup_agent_backups;
 use crate::workspace::agent_identity::{
     agent_dir, backup_sibling_legacy_persona, parse_frontmatter, persona_md_in, PERSONA_MD_NAME,
 };
 use crate::workspace::work_item::atomic_write;
-use crate::workspace::agent::cleanup_agent_backups;
-
 
 /// Get full context needed for the AIFileEditor agent editing session.
 ///
@@ -78,11 +77,8 @@ pub fn k2so_agents_preview_agent_context(
     project_path: String,
     agent_name: String,
 ) -> Result<serde_json::Value, String> {
-    let generated = crate::skills::content::generate_agent_claude_md_content(
-        &project_path,
-        &agent_name,
-        None,
-    )?;
+    let generated =
+        crate::skills::content::generate_agent_claude_md_content(&project_path, &agent_name, None)?;
 
     let dir = agent_dir(&project_path, &agent_name);
     let on_disk_path = dir.join("CLAUDE.md");
@@ -114,11 +110,8 @@ pub fn k2so_agents_regenerate_agent_context(
     project_path: String,
     agent_name: String,
 ) -> Result<String, String> {
-    let md = crate::skills::content::generate_agent_claude_md_content(
-        &project_path,
-        &agent_name,
-        None,
-    )?;
+    let md =
+        crate::skills::content::generate_agent_claude_md_content(&project_path, &agent_name, None)?;
     let claude_md_path = agent_dir(&project_path, &agent_name).join("CLAUDE.md");
     atomic_write(&claude_md_path, &md)?;
     Ok(md)
@@ -162,6 +155,10 @@ pub fn k2so_agents_save_agent_md(
     let dest = dir.join(PERSONA_MD_NAME);
     atomic_write(&dest, &content)?;
     backup_sibling_legacy_persona(&dir);
+    // Explicit compose: generate-on must refresh cwd AGENTS.md even if
+    // the charter watcher is not running. Display/handle frontmatter
+    // writes do not compose (compose strips frontmatter).
+    crate::workspace::skill_regen::write_workspace_skill_file(&project_path);
     Ok(())
 }
 
@@ -200,8 +197,7 @@ mod tests {
             ptype = persona_type,
             role = role,
         );
-        std::fs::write(dir.join(".k2so/agent/AGENT.md"), body)
-            .expect("write seed AGENT.md");
+        std::fs::write(dir.join(".k2so/agent/AGENT.md"), body).expect("write seed AGENT.md");
         dir
     }
 
@@ -210,8 +206,8 @@ mod tests {
         let dir = scratch_workspace_with_primary("cortana", "custom", "test pilot");
         let path = dir.to_string_lossy().into_owned();
 
-        let ctx = k2so_agents_get_editor_context(path, "cortana".to_string())
-            .expect("editor context");
+        let ctx =
+            k2so_agents_get_editor_context(path, "cortana".to_string()).expect("editor context");
         assert_eq!(ctx["agentName"], "cortana");
         assert_eq!(ctx["role"], "test pilot", "role pulled from frontmatter");
         // type=custom: not a manager, normalized agentType
@@ -242,8 +238,7 @@ mod tests {
         let dir = scratch_workspace_with_primary("captain", "pod-leader", "lead");
         let path = dir.to_string_lossy().into_owned();
 
-        let ctx = k2so_agents_get_editor_context(path, "captain".to_string())
-            .expect("ctx");
+        let ctx = k2so_agents_get_editor_context(path, "captain".to_string()).expect("ctx");
         assert_eq!(
             ctx["agentType"], "manager",
             "pod-leader should normalize to manager in the agentType readout"
@@ -268,8 +263,7 @@ mod tests {
         std::fs::write(dir.join(".k2so/agent/AGENT.md"), body).unwrap();
         let path = dir.to_string_lossy().into_owned();
 
-        let ctx = k2so_agents_get_editor_context(path, "alpha".to_string())
-            .expect("ctx");
+        let ctx = k2so_agents_get_editor_context(path, "alpha".to_string()).expect("ctx");
         assert_eq!(
             ctx["isManager"], true,
             "manager:true frontmatter key should flip isManager"
@@ -327,11 +321,11 @@ mod tests {
         // 2. agent-backups/ holds the previous live file (content copy and/or
         //    the moved sibling AGENT.md).
         let backup_dir = agent_dir_path.join("agent-backups");
-        assert!(backup_dir.is_dir(), "agent-backups directory should be created");
-        let backups: Vec<_> = std::fs::read_dir(&backup_dir)
-            .unwrap()
-            .flatten()
-            .collect();
+        assert!(
+            backup_dir.is_dir(),
+            "agent-backups directory should be created"
+        );
+        let backups: Vec<_> = std::fs::read_dir(&backup_dir).unwrap().flatten().collect();
         assert!(
             !backups.is_empty(),
             "first save should create at least one backup, got {} entries",
@@ -357,15 +351,66 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
 
-        let err = k2so_agents_save_agent_md(
-            path,
-            "ghost".to_string(),
-            "anything".to_string(),
-        )
-        .expect_err("missing agent must error");
+        let err = k2so_agents_save_agent_md(path, "ghost".to_string(), "anything".to_string())
+            .expect_err("missing agent must error");
         assert!(
             err.contains("does not exist"),
             "diagnostic should explain the agent isn't on disk, got {err:?}",
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn compose_banner_stamp(body: &str) -> &str {
+        let marker = "<!-- GENERATED by K2 at ";
+        let i = body.find(marker).expect("compose banner");
+        let rest = &body[i + marker.len()..];
+        let end = rest.find(' ').expect("stamp end");
+        &rest[..end]
+    }
+
+    #[test]
+    fn save_agent_md_generate_on_fanout_off_refreshes_cwd_agents_md() {
+        let dir = scratch_workspace_with_primary("scout", "custom", "scout role");
+        let path = dir.to_string_lossy().into_owned();
+        crate::workspace::onboarding::set_agents_md_generate_enabled(&path, true).unwrap();
+        crate::workspace::onboarding::set_harness_fanout_enabled(&path, false).unwrap();
+        crate::workspace::skill_regen::write_workspace_skill_file(&path);
+
+        let marker = "PERSONA-SAVE-MARKER unique body";
+        k2so_agents_save_agent_md(
+            path.clone(),
+            "scout".to_string(),
+            format!(
+                "---\nname: scout\ntype: custom\nrole: scout role\n---\n\n# scout\n\n{marker}\n"
+            ),
+        )
+        .expect("save");
+
+        let dest = persona_md_in(dir.join(".k2so/agent"));
+        assert!(
+            dest.ends_with(PERSONA_MD_NAME)
+                || dest.file_name().and_then(|n| n.to_str()) == Some("AGENT.md"),
+            "save must use the persona helper, got {}",
+            dest.display()
+        );
+        let cwd = std::fs::read_to_string(dir.join("AGENTS.md")).expect("cwd AGENTS.md");
+        assert!(
+            cwd.contains(marker),
+            "generate-on save must refresh cwd AGENTS.md, got:\n{cwd}"
+        );
+        assert!(
+            !dir.join("CLAUDE.md").exists(),
+            "fan-out off must not plant CLAUDE.md"
+        );
+
+        let stamp = compose_banner_stamp(&cwd).to_string();
+        crate::workspace::skill_regen::recompose_agents_md(&path);
+        let after = std::fs::read_to_string(dir.join("AGENTS.md")).expect("cwd after recompose");
+        assert_eq!(
+            compose_banner_stamp(&after),
+            stamp.as_str(),
+            "banner-excluding skip must not restamp after save+recompose"
         );
 
         std::fs::remove_dir_all(&dir).ok();

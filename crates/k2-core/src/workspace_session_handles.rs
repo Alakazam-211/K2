@@ -431,6 +431,48 @@ pub fn resolve_handle(
     }
 }
 
+fn slug_matches(name: &str, slug: &str) -> bool {
+    slugify_custom_name(name).ok().as_deref() == Some(slug)
+}
+
+fn push_unique(matches: &mut Vec<String>, key: String) {
+    if !matches.iter().any(|m| m == &key) {
+        matches.push(key);
+    }
+}
+
+/// Every `chat_session_names` row whose slug matches, scoped to this
+/// workspace. Disk-only chats (named in Chats, never a tab/handle row)
+/// still count: if we cannot place the row in a *different* workspace,
+/// treat it as in this one (fail loud).
+fn collect_named_slug_matches(
+    conn: &Connection,
+    project_id: &str,
+    slug: &str,
+    matches: &mut Vec<String>,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT session_id, custom_name FROM chat_session_names \
+             WHERE TRIM(custom_name) != ''",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (sid, name) = row.map_err(|e| e.to_string())?;
+        if !slug_matches(&name, slug) {
+            continue;
+        }
+        match project_id_for_session_id(conn, &sid)? {
+            Some(pid) if pid != project_id => {}
+            _ => push_unique(matches, sid),
+        }
+    }
+    Ok(())
+}
+
 fn find_conversation_by_slug(
     conn: &Connection,
     project_id: &str,
@@ -438,7 +480,10 @@ fn find_conversation_by_slug(
 ) -> Result<Option<String>, String> {
     let mut matches: Vec<String> = Vec::new();
 
+    collect_named_slug_matches(conn, project_id, slug, &mut matches)?;
+
     // Tab / API extra sessions (provider session_id on the tab row).
+    // Kept so pane-keyed names still resolve if they were missed above.
     let mut stmt = conn
         .prepare(
             "SELECT session_id, pane_group_id FROM workspace_tab_sessions \
@@ -454,17 +499,13 @@ fn find_conversation_by_slug(
         let (session_id, pane) = row.map_err(|e| e.to_string())?;
         if let Some(sid) = session_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             if let Some(name) = custom_name_for_session_id(conn, sid)? {
-                if let Ok(got) = slugify_custom_name(&name) {
-                    if got == slug {
-                        matches.push(sid.to_string());
-                    }
+                if slug_matches(&name, slug) {
+                    push_unique(&mut matches, sid.to_string());
                 }
             }
         } else if let Some(name) = custom_name_for_session_id(conn, &pane)? {
-            if let Ok(got) = slugify_custom_name(&name) {
-                if got == slug {
-                    matches.push(pane);
-                }
+            if slug_matches(&name, slug) {
+                push_unique(&mut matches, pane);
             }
         }
     }
@@ -480,14 +521,9 @@ fn find_conversation_by_slug(
         .map_err(|e| e.to_string())?;
     for key in keys {
         let key = key.map_err(|e| e.to_string())?;
-        if matches.iter().any(|m| m == &key) {
-            continue;
-        }
         if let Some(name) = custom_name_for_session_id(conn, &key)? {
-            if let Ok(got) = slugify_custom_name(&name) {
-                if got == slug {
-                    matches.push(key);
-                }
+            if slug_matches(&name, slug) {
+                push_unique(&mut matches, key);
             }
         }
     }
@@ -501,6 +537,36 @@ fn find_conversation_by_slug(
             "sidecar slug '{slug}' matches more than one chat in this workspace"
         )),
     }
+}
+
+/// Refuse a slug that any other `chat_session_names` row already uses.
+/// Used when the session cannot be placed in a workspace (disk-only).
+pub fn ensure_slug_unique_among_names(
+    conn: &Connection,
+    session_id: &str,
+    slug: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT session_id, custom_name FROM chat_session_names \
+             WHERE TRIM(custom_name) != ''",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (sid, name) = row.map_err(|e| e.to_string())?;
+        if sid == session_id {
+            continue;
+        }
+        if slug_matches(&name, slug) {
+            return Err(format!(
+                "chat name slug '{slug}' is already used by another session in this workspace"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Fail the second rename in a workspace that would share a slug.
@@ -898,6 +964,24 @@ mod tests {
             &c, &project_id, &b, "reviewer",
         )
         .expect_err("second reviewer slug must fail");
+    }
+
+    #[test]
+    fn second_rename_collides_with_disk_only_chat() {
+        let project_id = seed_project("sales-disk");
+        let a = format!("sid-disk-a-{}", uuid::Uuid::new_v4());
+        let b = format!("sid-disk-b-{}", uuid::Uuid::new_v4());
+        // A exists only as a Chats custom_name — no tab, no handle row.
+        insert_custom_name(&a, "Disk Reviewer");
+        insert_tab(&project_id, "pb", Some(&b), "claude");
+        let dbh = conn();
+        let c = dbh.lock();
+        crate::workspace_session_handles::ensure_slug_unique_in_workspace(
+            &c, &project_id, &b, "disk-reviewer",
+        )
+        .expect_err("disk-only custom_name must block a second slug");
+        crate::workspace_session_handles::ensure_slug_unique_among_names(&c, &b, "disk-reviewer")
+            .expect_err("unplaced custom_name must also fail loud");
     }
 
     #[test]

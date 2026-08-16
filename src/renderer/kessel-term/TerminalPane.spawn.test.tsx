@@ -86,6 +86,7 @@ vi.mock('@/stores/tabs', () => ({
   useTabsStore: {
     getState: () => ({
       setTerminalSandboxBackend: vi.fn(),
+      setTerminalConversationId: vi.fn(),
       setTabTitle: vi.fn(),
       tabs: [],
       extraGroups: [],

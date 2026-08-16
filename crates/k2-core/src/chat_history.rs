@@ -3110,8 +3110,12 @@ pub fn rename_session(
                 session_id,
                 &slug,
             )?;
+        } else {
+            crate::workspace_session_handles::ensure_slug_unique_among_names(
+                &conn, session_id, &slug,
+            )?;
         }
-        custom_name.to_string()
+        trimmed.to_string()
     };
     let db = crate::db::shared();
     let conn = db.lock();
@@ -4984,6 +4988,36 @@ mod tests {
         rename_session("claude", &sid, "Renamed Again").expect("rename 2");
         let names2 = get_custom_names().expect("get_custom_names 2");
         assert_eq!(names2.get(&key).map(|s| s.as_str()), Some("Renamed Again"));
+        rename_session("claude", &sid, "  Trimmed Name  ").expect("rename padded");
+        let names3 = get_custom_names().expect("get_custom_names 3");
+        assert_eq!(
+            names3.get(&key).map(|s| s.as_str()),
+            Some("Trimmed Name"),
+            "rename_session must store the trimmed display name"
+        );
+    }
+
+    #[test]
+    fn rename_session_rejects_slug_collision_with_disk_only_chat() {
+        let _g = UNIT6_DB_LOCK.lock();
+        let a = format!("u6-disk-a-{}-{}", std::process::id(), uuid::Uuid::new_v4());
+        let b = format!("u6-disk-b-{}-{}", std::process::id(), uuid::Uuid::new_v4());
+        rename_session("claude", &a, "Disk Only Collider").expect("first disk-only rename");
+        let err = rename_session("claude", &b, "Disk Only Collider")
+            .expect_err("second slug must fail loud");
+        assert!(
+            err.contains("disk-only-collider") || err.to_lowercase().contains("already"),
+            "collision error must name the slug, got: {err}"
+        );
+        let names = get_custom_names().expect("names");
+        assert_eq!(
+            names.get(&format!("claude:{a}")).map(|s| s.as_str()),
+            Some("Disk Only Collider")
+        );
+        assert!(
+            names.get(&format!("claude:{b}")).is_none(),
+            "losing rename must not write a colliding custom_name"
+        );
     }
 
     #[test]

@@ -16,7 +16,7 @@ import { showContextMenu } from '@/lib/context-menu'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { Surface } from '@/components/ui'
-import { persistChatRenameIfSessionTab } from '@/lib/chat-session-tab'
+import { persistChatRenameIfSessionTab, resolvePinnedChatCopyableAddress, resolveSessionTabCopyableAddress, tabLooksLikeChatSession } from '@/lib/chat-session-tab'
 import { useToastStore } from '@/stores/toast'
 
 interface TabBarProps {
@@ -105,18 +105,27 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       e.preventDefault()
       e.stopPropagation()
       const pinned = usePinnedSizeStore.getState().pins[sessionId] ?? null
-      const clickedId = await showContextMenu([
+      const copyAddress = await resolvePinnedChatCopyableAddress(cwd, projectId)
+      const items = [
         pinned
           ? { id: 'unpin-dimensions', label: 'Unpin Dimensions' }
           : { id: 'pin-dimensions', label: 'Pin Dimensions…' },
-      ])
+        ...(copyAddress
+          ? [{ id: 'copy-address', label: copyAddress.label }]
+          : []),
+      ]
+      const clickedId = await showContextMenu(items)
       if (clickedId === 'pin-dimensions') {
         setPinModalSessionId(sessionId)
       } else if (clickedId === 'unpin-dimensions') {
         handleUnpin(sessionId)
+      } else if (clickedId === 'copy-address' && copyAddress) {
+        navigator.clipboard.writeText(copyAddress.clipboard).catch((err) =>
+          console.warn('[tab-bar] copy-address', err),
+        )
       }
     },
-    [handleUnpin]
+    [handleUnpin, cwd, projectId]
   )
 
   // Heartbeat-tab detection key: a Set of every heartbeat's
@@ -173,17 +182,28 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // and program-generated PTY/OSC/session titles can't snap it back.
     if (value) {
       const store = useTabsStore.getState()
-      store.setTabTitle(tabId, value, { locked: true })
       const tab = [...store.tabs, ...store.extraGroups.flatMap((g) => g.tabs)]
         .find((t) => t.id === tabId)
+      const previousTitle = tab?.title ?? ''
+      store.setTabTitle(tabId, value, { locked: true })
       if (tab) {
-        void persistChatRenameIfSessionTab(tab, value, cwd).catch((err) => {
-          console.error('[tab-bar] chat/rename failed:', err)
-          useToastStore.getState().addToast(
-            `Couldn't rename chat: ${err instanceof Error ? err.message : String(err)}`,
-            'error',
-          )
-        })
+        void persistChatRenameIfSessionTab(tab, value, cwd)
+          .then((ok) => {
+            if (!ok && tabLooksLikeChatSession(tab)) {
+              useToastStore.getState().addToast(
+                "Couldn't rename chat: this tab isn't bound to a conversation yet.",
+                'error',
+              )
+            }
+          })
+          .catch((err) => {
+            store.setTabTitle(tabId, previousTitle, { locked: true })
+            console.error('[tab-bar] chat/rename failed:', err)
+            useToastStore.getState().addToast(
+              `Couldn't rename chat: ${err instanceof Error ? err.message : String(err)}`,
+              'error',
+            )
+          })
       }
     }
     setEditingTabId(null)
@@ -376,6 +396,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const tab = allTabs.find((t) => t.id === tabId)
     let tabTerminalId: string | null = null
     let fileViewerPath: string | null = null
+    let copyAddress: Awaited<ReturnType<typeof resolveSessionTabCopyableAddress>> = null
     if (tab) {
       const sessions = usePinnedSizeStore.getState().sessions
       const items = Array.from(tab.paneGroups.values()).flatMap((pg) => pg.items)
@@ -389,6 +410,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           }
         }
       }
+      copyAddress = await resolveSessionTabCopyableAddress(tab, cwd)
     }
 
     const menuItems = [
@@ -396,6 +418,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       { id: 'open-terminal', label: `Open in ${defaultTerminal}` },
       ...(tabTerminalId ? [
         { id: 'copy-terminal-id', label: 'Copy Terminal ID' },
+      ] : []),
+      ...(copyAddress ? [
+        { id: 'copy-address', label: copyAddress.label },
       ] : []),
       ...(fileViewerPath ? [
         { id: 'show-in-finder', label: 'Show in Finder' },
@@ -455,6 +480,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       navigator.clipboard.writeText(tabTerminalId).catch((err) =>
         console.warn('[tab-bar] copy-terminal-id', err),
       )
+    } else if (clickedId === 'copy-address' && copyAddress) {
+      navigator.clipboard.writeText(copyAddress.clipboard).catch((err) =>
+        console.warn('[tab-bar] copy-address', err),
+      )
     } else if (clickedId === 'open-terminal') {
       // Find the cwd from the tab's first terminal pane
       const tabsState = useTabsStore.getState()
@@ -481,7 +510,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         }
       }
     }
-  }, [groupIndex, removeTabFromGroup, handleUnpin])
+  }, [groupIndex, removeTabFromGroup, handleUnpin, cwd])
 
   // Scroll active tab into view when it changes
   useEffect(() => {

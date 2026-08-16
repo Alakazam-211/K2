@@ -1005,7 +1005,13 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         continue;
                     }
                     let (kind, handle) = session_kind_and_handle(&agent_name, &cwd, session.command().as_deref());
-                    out.push(serde_json::json!({
+                    let conversation_id = crate::v2_spawn::conversation_id_for_agent(
+                        &agent_name,
+                        &cwd,
+                        session.command().as_deref(),
+                        &session.args(),
+                    );
+                    let mut row = serde_json::json!({
                         "sessionId": session.session_id().to_string(),
                         "agentName": agent_name,
                         "command": session.command(),
@@ -1014,7 +1020,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         "isV2": session.is_v2(),
                         "kind": kind,
                         "handle": handle,
-                    }));
+                    });
+                    if let Some(id) = conversation_id {
+                        row["conversationId"] = serde_json::Value::String(id);
+                    }
+                    out.push(row);
                 }
                 CliResponse::ok_json(serde_json::to_string(&out).unwrap_or_else(|_| "[]".into()))
             }

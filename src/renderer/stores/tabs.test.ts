@@ -655,6 +655,17 @@ describe('D9 sandbox tab marker', () => {
     useTabsStore.getState().setTerminalSandboxBackend('does-not-exist', 'passthrough')
     expect(useTabsStore.getState().tabs).toBe(before)
   })
+
+  it('setTerminalConversationId stamps the provider uuid, not the PTY id', () => {
+    makeTerminalTab('t1', undefined)
+    expect(firstTerminalData().conversationId).toBeUndefined()
+    useTabsStore.getState().setTerminalConversationId(
+      't1',
+      '01920000-aaaa-7000-8000-000000000001',
+    )
+    expect(firstTerminalData().conversationId).toBe('01920000-aaaa-7000-8000-000000000001')
+    expect(firstTerminalData().sessionId).not.toBe(firstTerminalData().conversationId)
+  })
 })
 
 /**

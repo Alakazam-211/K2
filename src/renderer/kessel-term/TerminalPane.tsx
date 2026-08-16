@@ -1399,6 +1399,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // D9 — resolved sandbox backend, echoed ONLY when the caller
         // asked for sandbox. 'microvm' | 'passthrough' | undefined.
         sandbox?: string
+        conversationId?: string
       }
       let spawn: SpawnResponse | null = null
       let attempt = 0
@@ -1518,6 +1519,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         terminalId,
         spawn.sandbox,
       )
+      if (spawn.conversationId && spawn.conversationId !== sessionId) {
+        useTabsStore.getState().setTerminalConversationId(
+          terminalId,
+          spawn.conversationId,
+        )
+      }
 
       // 0.39.13 — spawn ⊥ stream. The PTY is now spawned/attached on the
       // daemon. We do NOT open the grid-WS here. Instead we stash the

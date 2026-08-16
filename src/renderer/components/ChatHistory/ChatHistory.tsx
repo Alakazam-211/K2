@@ -799,9 +799,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       )
     } catch (err) {
       console.error('[chat-history] Failed to rename:', err)
+      showToast(err instanceof Error ? err.message : String(err))
     }
     setRenamingSession(null)
-  }, [renamingSession, renameValue])
+  }, [renamingSession, renameValue, showToast])
 
   const handleSessionClick = useCallback(
     (session: ChatSession) => {

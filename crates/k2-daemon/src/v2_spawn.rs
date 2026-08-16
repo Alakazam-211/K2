@@ -518,6 +518,56 @@ pub(crate) fn autoinject_premint_session_id(
     args.push(new_sid);
 }
 
+/// Provider conversation uuid from post-inject argv (`--session-id` /
+/// `--resume` / provider grammar). Never the Kessel PTY id.
+pub(crate) fn conversation_id_from_args(command: Option<&str>, args: &[String]) -> Option<String> {
+    k2_core::workspace::provider_resume::session_id_from_spawn_argv(command.unwrap_or(""), args)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Premint / resume uuid for a live cell: argv first, then the tab /
+/// pinned SSOT row. Never the PTY `session_id`.
+pub(crate) fn conversation_id_for_agent(
+    agent_name: &str,
+    cwd: &str,
+    command: Option<&str>,
+    args: &[String],
+) -> Option<String> {
+    if let Some(id) = conversation_id_from_args(command, args) {
+        return Some(id);
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let project_id = k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd)?;
+    if is_uuid_shape(agent_name) && agent_name == project_id {
+        if let Ok(Some(row)) = k2_core::db::schema::WorkspaceSession::get(&conn, &project_id) {
+            if let Some(sid) = row.session_id.filter(|s| !s.trim().is_empty()) {
+                return Some(sid);
+            }
+        }
+    }
+    if let Ok(Some(tab)) =
+        k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(&conn, &project_id, agent_name)
+    {
+        if let Some(sid) = tab
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(sid.to_string());
+        }
+    }
+    None
+}
+
+fn put_conversation_id(out: &mut serde_json::Value, conversation_id: Option<String>) {
+    if let Some(id) = conversation_id {
+        out["conversationId"] = serde_json::Value::String(id);
+    }
+}
+
 /// Handler for `POST /cli/sessions/v2/spawn` — parse the wire body then defer to
 /// [`spawn_session`]. Thin wrapper: ALL spawn plumbing lives in `spawn_session`
 /// so `/v1/sandboxes` reuses it verbatim with a host-trusted request, and the v2
@@ -600,6 +650,15 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             "rows": rows,
             "reused": true,
         });
+        put_conversation_id(
+            &mut out,
+            conversation_id_for_agent(
+                &req.agent_name,
+                &req.cwd,
+                existing.program.as_deref(),
+                &existing.args,
+            ),
+        );
         // A2/B3a — reuse-echo. Mirror the cold-spawn accept-and-mark rule:
         // echo the EXISTING session's resolved backend name only when the
         // caller asked for a sandbox. Absent ⇒ no field ⇒ response
@@ -639,6 +698,8 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     // PREMINT-capable provider (claude + grok). See
     // `autoinject_premint_session_id`.
     autoinject_premint_session_id(command.as_deref(), &mut args, &req.agent_name, &req.cwd);
+    let conversation_id =
+        conversation_id_for_agent(&req.agent_name, &req.cwd, command.as_deref(), &args);
 
     // Ephemeral exec argv: launch-param path attaches the request-scoped
     // prompt here only. Recovery above rewrites identity `args` when
@@ -1223,6 +1284,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         "rows": req.rows,
         "reused": false,
     });
+    put_conversation_id(&mut out, conversation_id);
     // Echo the resolved backend NAME only when the caller asked for a sandbox
     // (accept-and-mark). Absent ⇒ no field ⇒ response byte-identical to
     // pre-seam. The UI must render this literal name — it is NOT a bool, so
@@ -1935,5 +1997,28 @@ mod tests {
             "/w",
         );
         assert_eq!(args.first().map(String::as_str), Some("--session-id"));
+    }
+
+    #[test]
+    fn conversation_id_from_args_is_premint_not_pty() {
+        let premint = "01920000-aaaa-7000-8000-000000000001";
+        let args = args_of(&["--dangerously-skip-permissions", "--session-id", premint]);
+        assert_eq!(
+            conversation_id_from_args(Some("claude"), &args).as_deref(),
+            Some(premint)
+        );
+        assert_eq!(
+            conversation_id_from_args(
+                Some("claude"),
+                &args_of(&["--resume", premint])
+            )
+            .as_deref(),
+            Some(premint)
+        );
+        assert_eq!(
+            conversation_id_from_args(Some("pi"), &args_of(&["--whatever"])),
+            None,
+            "self-minting providers with no identity argv must not invent an id"
+        );
     }
 }

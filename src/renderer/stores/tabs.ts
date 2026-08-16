@@ -5,6 +5,7 @@ import { jittered } from '@/lib/backoff'
 import { agentDisplayName } from '@/lib/workspace-agent'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { asArray } from '@/lib/as-array'
+import { pickConversationId } from '@/lib/chat-session-tab'
 import { terminalKill } from '@/lib/terminal-daemon'
 import type { MosaicNode, MosaicDirection } from 'react-mosaic-component'
 import { RESUMABLE_CLI_TOOLS } from '@shared/constants'
@@ -634,7 +635,9 @@ export interface TerminalItemData {
    *  dropped (v2 daemon-owned) or the daemon row is gone (dead PTY /
    *  remote re-login). Never sent to spawn. */
   commandHint?: string
-  sessionId?: string  // CLI tool session ID for resume on restart
+  sessionId?: string  // Kessel PTY id after v2 reconcile — not the chat key
+  /** Provider conversation uuid (premint / --resume). Never the PTY id. */
+  conversationId?: string
   /** performance.now() timestamp captured at the moment the user
    *  pressed Cmd+T / Cmd+Shift+T / Cmd+D to create this terminal.
    *  Terminal view components compare to performance.now() at their
@@ -1051,6 +1054,7 @@ interface TabsState {
    *  after every successful spawn (fresh + reuse). `'microvm'` drives
    *  the orange tab marker; `'passthrough' | undefined` clears it. */
   setTerminalSandboxBackend: (terminalId: string, backend: string | undefined) => void
+  setTerminalConversationId: (terminalId: string, conversationId: string | undefined) => void
   /** 0.39.39 (#676) — apply a daemon-canonical title to a tab WITHOUT
    *  re-POSTing (used by the `tab_title_changed` broadcast handler + the
    *  on-load `tab-titles` snapshot, so a rename in another client shows
@@ -3135,6 +3139,40 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     })
   },
 
+  setTerminalConversationId: (terminalId: string, conversationId: string | undefined) => {
+    const next = conversationId?.trim() || undefined
+    set((state) => {
+      let anyTabChanged = false
+      const patchTab = (tab: Tab): Tab => {
+        let tabChanged = false
+        const newPaneGroups = new Map<string, PaneGroup>()
+        for (const [pgId, pg] of tab.paneGroups) {
+          let pgChanged = false
+          const newItems = pg.items.map((item) => {
+            if (item.type !== 'terminal') return item
+            const d = item.data as TerminalItemData
+            if (d.terminalId !== terminalId) return item
+            if (d.conversationId === next) return item
+            pgChanged = true
+            return { ...item, data: { ...d, conversationId: next } }
+          })
+          if (pgChanged) tabChanged = true
+          newPaneGroups.set(pgId, pgChanged ? { ...pg, items: newItems } : pg)
+        }
+        if (!tabChanged) return tab
+        anyTabChanged = true
+        return { ...tab, paneGroups: newPaneGroups }
+      }
+      const newTabs = state.tabs.map(patchTab)
+      const newExtraGroups = state.extraGroups.map((g) => {
+        const tabs = g.tabs.map(patchTab)
+        return tabs === g.tabs ? g : { ...g, tabs }
+      })
+      if (!anyTabChanged) return {}
+      return { tabs: newTabs, extraGroups: newExtraGroups }
+    })
+  },
+
   applyDaemonTabTitle: (tabId: string, title: string, locked?: boolean) => {
     // Local-only apply (no re-POST) for the broadcast handler + on-load
     // snapshot. Same pinned-system-agent guard as setTabTitle: those tabs
@@ -4006,8 +4044,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       // the canonical source. Mutates TerminalItemData in place so live
       // TerminalPane components pick up the new values via the
       // subscription that fires from the `set` call below.
-      let refreshedItems = 0
-      for (const tab of state.tabs) {
+      // Group 0 AND extraGroups (split-column extras never got this before).
+      const refreshTabFromDaemon = (tab: Tab): number => {
+        let n = 0
         for (const [pgId, pg] of tab.paneGroups) {
           const session = daemonByPgId.get(pgId)
           if (!session) continue
@@ -4018,20 +4057,33 @@ export const useTabsStore = create<TabsState>((set, get) => ({
             const nextCmd = session.command ?? d.command
             const nextArgs = session.args.length > 0 ? session.args : d.args
             const nextSession = session.sessionId || d.sessionId
+            const nextConversation = pickConversationId(
+              d.conversationId,
+              session.conversationId,
+              session.sessionId,
+            )
             if (
               d.cwd !== nextCwd ||
               d.command !== nextCmd ||
               !arraysEqual(d.args, nextArgs) ||
-              d.sessionId !== nextSession
+              d.sessionId !== nextSession ||
+              d.conversationId !== nextConversation
             ) {
               d.cwd = nextCwd
               d.command = nextCmd
               d.args = nextArgs
               d.sessionId = nextSession
-              refreshedItems += 1
+              d.conversationId = nextConversation
+              n += 1
             }
           }
         }
+        return n
+      }
+      let refreshedItems = 0
+      for (const tab of state.tabs) refreshedItems += refreshTabFromDaemon(tab)
+      for (const group of state.extraGroups) {
+        for (const tab of group.tabs) refreshedItems += refreshTabFromDaemon(tab)
       }
 
       const adopted: Tab[] = []
@@ -4044,6 +4096,11 @@ export const useTabsStore = create<TabsState>((set, get) => ({
             command: session.command ?? undefined,
             args: session.args.length > 0 ? session.args : undefined,
             sessionId: session.sessionId,
+            conversationId: pickConversationId(
+              undefined,
+              session.conversationId,
+              session.sessionId,
+            ),
           }),
         )
       }
@@ -4058,7 +4115,10 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         }
         // Shallow-copy tabs so Zustand subscribers see the change even
         // when only TerminalItemData fields mutated in place.
-        set({ tabs: [...state.tabs, ...adopted] })
+        set({
+          tabs: [...state.tabs, ...adopted],
+          extraGroups: state.extraGroups.map((g) => ({ ...g, tabs: [...g.tabs] })),
+        })
         // Only persist when adopt changed the on-disk tab set. Refresh-only
         // updates fill in transient fields (cwd/command/args/sessionId)
         // that v2 serialization intentionally drops, so the rewrite would
@@ -4746,6 +4806,9 @@ interface DaemonSessionRow {
   args: string[]
   cwd: string
   isV2: boolean
+  kind?: string
+  handle?: string
+  conversationId?: string
 }
 
 /** Query the daemon for live PTYs whose cwd is under `projectPath`.
@@ -4873,6 +4936,7 @@ function buildAdoptedTerminalTab(args: {
   command?: string
   args?: string[]
   sessionId?: string
+  conversationId?: string
   /** P3c (D2) — override the agent_name TerminalPane uses on v2/spawn so it
    *  ATTACHES to an existing daemon session (find-or-spawn returns reused:true)
    *  instead of minting a fresh `tab-<paneGroupId>` PTY. Set for API-spawned
@@ -4897,8 +4961,12 @@ function buildAdoptedTerminalTab(args: {
   )
   // Stamp the daemon-owned sessionId onto the new TerminalItemData so
   // close-as-minimize cross-references work without a refresh round-trip.
-  if (args.sessionId && pg.items[0]?.type === 'terminal') {
-    (pg.items[0].data as TerminalItemData).sessionId = args.sessionId
+  if (pg.items[0]?.type === 'terminal') {
+    const d = pg.items[0].data as TerminalItemData
+    if (args.sessionId) d.sessionId = args.sessionId
+    if (args.conversationId && args.conversationId !== args.sessionId) {
+      d.conversationId = args.conversationId
+    }
   }
   // P3c (D2) — thread the attach/sandbox fields onto the TerminalItemData so
   // TerminalPane attaches to the existing cell (attachAgentName) + the orange
@@ -5129,6 +5197,7 @@ function subscribeForActiveWorkspace(
               command: s.command ?? undefined,
               args: s.args.length > 0 ? s.args : undefined,
               sessionId: s.sessionId,
+              conversationId: pickConversationId(undefined, s.conversationId, s.sessionId),
             }),
           )
         }

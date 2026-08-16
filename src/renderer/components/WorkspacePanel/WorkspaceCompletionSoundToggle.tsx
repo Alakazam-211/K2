@@ -46,7 +46,8 @@ export function WorkspaceCompletionSoundToggle({
   }, [busy, enabled, project.id, project.path])
 
   return (
-    <div className="flex items-start gap-3 py-2 border-t border-[var(--color-border)]">
+    <div className="border border-[var(--color-border)] p-3">
+    <div className="flex items-start gap-3">
       <button
         type="button"
         onClick={() => void toggle()}
@@ -82,6 +83,7 @@ export function WorkspaceCompletionSoundToggle({
           </div>
         )}
       </div>
+    </div>
     </div>
   )
 }

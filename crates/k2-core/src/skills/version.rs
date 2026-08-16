@@ -97,7 +97,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// section (`k2 agent context …`, hire `--context`).
 /// Bumped to 14: Who am I (`k2 whoami`) + heartbeat sidecar hint (D6/D22).
 /// Bumped to 15: `--set sales/reviewer` for heartbeat delivery.
-pub const SKILL_VERSION_WORKSPACE: u32 = 15;
+/// Bumped to 16: Who am I is a fact sheet (not “msg the primary”);
+/// send-work uses handles + sidecar addresses.
+pub const SKILL_VERSION_WORKSPACE: u32 = 16;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

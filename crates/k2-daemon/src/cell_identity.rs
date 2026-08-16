@@ -56,8 +56,12 @@ pub fn apply_cell_identity_env(env: &mut HashMap<String, String>, identity: &Cel
     }
 }
 
-/// Promote-safe identity brief for Claude/Grok/Pi system append.
-/// Never the SSOT — `k2 whoami` is. Snapshot is re-passed on every launch.
+/// Marker so we splice the brief at most once (old wording used
+/// `run \`k2 whoami\`` — do not resurrect that; it read as a command).
+const IDENTITY_BRIEF_MARKER: &str = "K2 cell (this session)";
+
+/// Promote-safe identity fact sheet for Claude/Grok/Pi system append.
+/// Same fields as `k2 whoami` — paste, do not instruct. Not a wake protocol.
 pub fn identity_system_brief(identity: &CellIdentity) -> String {
     let role = match identity.cell {
         CellKind::Canonical => "canonical",
@@ -68,10 +72,13 @@ pub fn identity_system_brief(identity: &CellIdentity) -> String {
         CellKind::Sidecar => format_address(&identity.primary, identity.sidecar_name.as_deref()),
     };
     format!(
-        "K2 cell identity: run `k2 whoami` before claiming to be the workspace agent.\n\
-         If role is sidecar you are not the workspace agent; message the primary with `k2 msg {}`.\n\
-         Launch snapshot (re-check with whoami): role={role} address={address} primary={}",
-        identity.primary, identity.primary
+        "{IDENTITY_BRIEF_MARKER}\n\
+         workspace: {}\n\
+         role:      {role}\n\
+         address:   {address}\n\
+         primary:   {}\n\
+         session:   {}",
+        identity.primary, identity.primary, identity.session_id
     )
 }
 
@@ -101,7 +108,7 @@ pub fn splice_identity_brief(command: Option<&str>, args: &mut Vec<String>, brie
     };
     if let Some(i) = args.iter().position(|a| a == flag) {
         if i + 1 < args.len() {
-            if !args[i + 1].contains("run `k2 whoami`") {
+            if !args[i + 1].contains(IDENTITY_BRIEF_MARKER) {
                 args[i + 1] = format!("{}\n\n{brief}", args[i + 1]);
             }
         } else {
@@ -528,10 +535,22 @@ mod tests {
             session_id: "sid".into(),
         };
         let brief = identity_system_brief(&id);
-        assert!(brief.contains("run `k2 whoami`"), "whoami is the SSOT");
-        assert!(brief.contains("k2 msg sales"));
-        assert!(brief.contains("role=sidecar"));
-        assert!(brief.contains("address=sales/reviewer"));
+        assert!(
+            brief.contains(IDENTITY_BRIEF_MARKER),
+            "brief must be a whoami fact sheet, not a command"
+        );
+        assert!(
+            !brief.contains("k2 msg"),
+            "must not tell the sidecar to message the primary"
+        );
+        assert!(
+            !brief.contains("run `k2 whoami`"),
+            "must not instruct a whoami lookup when the snapshot is already pasted"
+        );
+        assert!(brief.contains("role:      sidecar"));
+        assert!(brief.contains("address:   sales/reviewer"));
+        assert!(brief.contains("primary:   sales"));
+        assert!(brief.contains("session:   sid"));
 
         assert_eq!(identity_argv_flag(Some("claude")), Some("--append-system-prompt"));
         assert_eq!(identity_argv_flag(Some("/usr/bin/pi")), Some("--append-system-prompt"));
@@ -542,7 +561,7 @@ mod tests {
         let mut claude = vec!["--dangerously-skip-permissions".into()];
         splice_identity_brief(Some("claude"), &mut claude, &brief);
         assert_eq!(claude[1], "--append-system-prompt");
-        assert!(claude[2].contains("k2 whoami"));
+        assert!(claude[2].contains(IDENTITY_BRIEF_MARKER));
         splice_identity_brief(Some("claude"), &mut claude, &brief);
         assert_eq!(
             claude.iter().filter(|a| *a == "--append-system-prompt").count(),
@@ -556,7 +575,7 @@ mod tests {
         ];
         splice_identity_brief(Some("claude"), &mut existing, &brief);
         assert!(existing[1].starts_with("existing CLAUDE.md body"));
-        assert!(existing[1].contains("k2 whoami"));
+        assert!(existing[1].contains(IDENTITY_BRIEF_MARKER));
 
         let mut grok = vec![];
         splice_identity_brief(Some("grok"), &mut grok, &brief);

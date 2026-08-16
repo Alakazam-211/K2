@@ -248,19 +248,38 @@ fn generate_k2_cli_skill() -> String {
 How to drive the K2 agent system from a workspace via the `k2` CLI.
 
 ## Who am I
-Before assuming you are the workspace agent, run `k2 whoami`.
-If `role` is `sidecar`, you are **not** `<workspace>`; your address is
-the printed `address`; the primary is `k2 msg <primary>`.
+`k2 whoami` prints this cell (same fields a Claude/Grok/Pi launch already
+pastes). Facts, not a checklist:
+
+```
+workspace: sales          # handle of this workspace
+role:      sidecar        # or canonical
+address:   sales/reviewer # how others reach THIS session
+primary:   sales          # the workspace agent's address
+session:   <id>
+```
+
+`canonical` is the workspace agent. `sidecar` is an extra chat in the
+same workspace (same AGENT.md / inbox) — not a second agent, and not
+the primary session. Owner messages in this chat stay here. Do not
+forward them to `primary` unless asked or the work needs that session.
+
+`k2 whoami` is a lookup if the snapshot is missing. You do not need to
+run it on every turn, and it is not a wake protocol.
 
 ## Send work to a workspace
+Addresses are **handles** (`sales-team`), not display names (`Sales Team`).
 ```
-k2 msg <workspace-name> "live chat — appears in the running session"
-k2 msg <workspace-name> --inbox-wake <path> [path…]     # package + knock (preferred)
-k2 msg <workspace-name> --inbox-silent <path> [path…]   # package only, no notify
+k2 msg <handle> "live chat — appears in the primary session"
+k2 msg <handle>/<sidecar> "…"   # extra chat: sales/1 or sales/reviewer
+k2 msg <handle> --inbox-wake <path> [path…]     # package + knock (preferred)
+k2 msg <handle> --inbox-silent <path> [path…]   # package only, no notify
 ```
-`msg` (live form) fails loudly when the recipient isn't running — use
-`--inbox-wake` / `--inbox-silent` to land a durable tray package the recipient
-opens with `k2 inbox read <id>` on their own schedule. Not `k2 mail`.
+Bare `k2 msg sales` is the primary. Hyphen (`sales-reviewer`) is a
+workspace handle, not a sidecar. `msg` (live form) fails loudly when
+the recipient isn't running — use `--inbox-wake` / `--inbox-silent` to
+land a durable tray package the recipient opens with `k2 inbox read <id>`
+on their own schedule. Not `k2 mail`.
 
 ## View activity
 ```
@@ -1643,14 +1662,22 @@ mod tests {
             body.contains("exit 3"),
             "k2-cli skill must state owner verbs are server-enforced (exit 3)",
         );
-        // v14: whoami + D22 heartbeat sidecar hint.
+        // v16: whoami fact sheet + handle/sidecar addressing.
         assert!(
             body.contains("k2 whoami"),
-            "k2-cli skill must teach `k2 whoami`",
+            "k2-cli skill must document `k2 whoami`",
         );
         assert!(
-            body.contains("If `role` is `sidecar`"),
-            "k2-cli skill must teach sidecar role vs workspace agent",
+            body.contains("Owner messages in this chat stay here"),
+            "k2-cli skill must say sidecar owner chat is not a forward-to-primary protocol"
+        );
+        assert!(
+            body.contains("k2 msg <handle>/<sidecar>"),
+            "k2-cli skill must document sidecar addresses"
+        );
+        assert!(
+            body.contains("Addresses are **handles**"),
+            "k2-cli skill must say msg uses handle not display name"
         );
         assert!(
             body.contains("k2 heartbeat session")

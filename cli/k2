@@ -9854,9 +9854,9 @@ cmd_help_whoami() {
     cat <<'EOF'
 k2 whoami [--json]
 
-Print this cell's identity. Run this before assuming you are the
-workspace agent. If role is sidecar, you are not <workspace>; your
-address is the printed address; the primary is `k2 msg <primary>`.
+Print this cell's identity (same fields a launch snapshot pastes).
+Sidecar means this chat is an extra session of the workspace, not the
+primary. Owner messages here stay here unless you need the primary.
 
   workspace: sales
   role:      sidecar | canonical

@@ -35,10 +35,10 @@ hint to train a sidecar (`k2 heartbeat session <name> --set sales/reviewer`)
 instead of dumping a flow on the primary. `--set` accepts a sidecar
 handle or the old session UUID + `--provider`.
 
-Claude / Grok / Pi launches get a short **whoami** brief on
-`--append-system-prompt` (Grok: `--rules`). That is a hint, not the
-source of truth — `k2 whoami` is. Codex / Gemini / Cursor / Hermes
-stay env + whoami only.
+Claude / Grok / Pi launches get a **whoami fact sheet** on
+`--append-system-prompt` (Grok: `--rules`) — the fields, not “run
+whoami” / “msg the primary.” Codex / Gemini / Cursor / Hermes stay
+env only (they already load AGENTS.md). `k2 whoami` is a lookup.
 
 ### Compose bar remembers sends; Esc cancels the turn
 

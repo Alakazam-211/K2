@@ -49,6 +49,7 @@ import { WorkspaceApiKeysPanel } from './ApiTokensSection'
 import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessionsToggle'
 import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
 import { workspaceGrantSlug } from './api-keys-api'
+import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -2669,6 +2670,26 @@ function AgentDisplayNameField({
   )
 }
 
+function federatedHostFromTunnel(status: {
+  running?: boolean
+  public_url?: string | null
+  subdomain?: string | null
+} | null): string | null {
+  if (!status?.running) return null
+  const url = status.public_url?.trim()
+  if (url) {
+    try {
+      const host = new URL(url.includes('://') ? url : `https://${url}`).hostname
+      if (host) return host
+    } catch {
+      /* fall through to subdomain */
+    }
+  }
+  const sub = status.subdomain?.trim()
+  if (sub) return sub.includes('.') ? sub : `${sub}.k2.dev`
+  return null
+}
+
 function AgentHandleField({
   projectPath,
   projectHandle,
@@ -2681,6 +2702,8 @@ function AgentHandleField({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const confirm = useConfirmDialogStore((s) => s.confirm)
+  const { status } = useTunnelUrls()
+  const tunnelHost = federatedHostFromTunnel(status)
 
   useEffect(() => {
     let cancelled = false
@@ -2703,7 +2726,7 @@ function AgentHandleField({
     const ok = await confirm({
       title: 'Change handle?',
       message:
-        `Changing the handle changes this agent's address (${handle || 'old'}::host → ${next}::host). Existing federated connections will break until the other side reconnects or updates the handle.`,
+        `Changing the handle changes this agent's address (${handle || 'old'}::${tunnelHost ?? 'host'} → ${next}::${tunnelHost ?? 'host'}). Existing federated connections will break until the other side reconnects or updates the handle.`,
       confirmLabel: 'Change handle',
       destructive: true,
     })
@@ -2747,8 +2770,20 @@ function AgentHandleField({
           {busy ? 'Saving…' : 'Change handle…'}
         </button>
       </div>
-      {handle && (
-        <p className="text-[9px] font-mono text-[var(--color-text-primary)] mt-1">{handle}::host</p>
+      {handle && tunnelHost && (
+        <p className="text-[9px] font-mono text-[var(--color-text-muted)] mt-1">{handle}::{tunnelHost}</p>
+      )}
+      {handle && !tunnelHost && (
+        <p className="text-[9px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          Get a subdomain so this agent can talk to other people&apos;s agents on K2.{' '}
+          <button
+            type="button"
+            className="text-[var(--color-accent)] hover:underline bg-transparent border-none p-0 cursor-pointer no-drag"
+            onClick={() => useSettingsStore.getState().setSection('k2-connect')}
+          >
+            Open K2 Connect
+          </button>
+        </p>
       )}
       {error && (
         <p className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</p>

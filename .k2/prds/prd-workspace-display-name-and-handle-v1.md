@@ -1,9 +1,9 @@
 # PRD — Workspace Agent Name vs Handle
 
-**Date:** 2026-08-17 · **Owner:** Rosson · **Status:** Locked for implement (research complete; migration sequenced)  
+**Date:** 2026-08-17 · **Owner:** Rosson · **Status:** Locked for implement (reviewed against live code; patches applied)  
 **Product:** daemon (`k2-core` + `k2-daemon`) first; `k2` CLI; thin renderer (Settings Agent tab, Workspace tab, nav already follows `projects.name`)  
 **Related:** `prd-sidecar-identity-and-addressing-v1.md` (session handles already split), `prd-federation-passport-dual-auth-and-colon-addressing.md` (`agent::host` vs wire `fp::ws_uuid::agent`), `prd-cross-server-agent-comms.md`, `prd-session-addressed-msg-read-talk-v1.md` (D12), `agent-display-name.md` (**superseded** for lockstep / “display is label-only / dupes OK”)  
-**Research:** 2026-08-17 — federated delivery, display-name write path, Workspace-tab Agent Name. Local `k2 msg` works after rename; federated does not.
+**Research:** 2026-08-17 — federated delivery, display-name write path, Workspace-tab Agent Name. Review vs live tree same day (diagnosis confirmed; A+B does not resurrect a pre-rename token).
 
 ---
 
@@ -54,6 +54,8 @@ Two fields, different jobs.
 - Changing Handle is a **new address**. Peers’ connection rows, roster lookups, and any memorized `k2 msg old-handle::host` still point at the old token. We may keep the previous handle as a **temporary alias** so it is not an instant 403, but that is a grace period, not a promise. The UI still warns.
 
 Do **not** invent Title Case. If the live name is already `sales`, display stays `sales` and handle is `sales`.
+
+**Already-broken federated links stay broken until re-pair (locked).** If they already changed Agent Display Name, the peer’s connection row still has the old token (`sales`) and lockstep already overwrote `name:` — we cannot recover `sales` unless it is the folder basename. `slug("sales")` is `sales`, not `sales-team`. That 403 exists **today**. Migrate does not have to heal it. After this ships they add the connection once against the handle; that row sticks. Later Display Name edits do not require another pair.
 
 ---
 
@@ -121,7 +123,24 @@ Pinned Chat / Inbox **tab titles** stay `Chat` / `Inbox` (intentional). Pane **h
 
 ### 3.6 Sidecar pattern to copy
 
-`slugify_custom_name`: trim, lowercase, whitespace runs → single `-`, reject `/` `:` `\` NUL / controls. Unique per workspace. Display (`Reviewer`) ≠ handle (`reviewer`).
+`slugify_custom_name`: trim, lowercase, whitespace runs → single `-`, reject `/` `:` `\` NUL / controls. Unique per workspace. Display (`Reviewer`) ≠ handle (`reviewer`). **Do not change this function** — live sidecar addresses are `k2---marketing` / `scout_v3`. Workspace handles use a **new** helper (§6).
+
+### 3.7 API layer and pinned tabs (stay in one piece)
+
+Pinned Chat / host-sessions are **not** keyed on the display name.
+
+| Surface | Live key | After this PRD |
+|---|---|---|
+| Canonical PTY / `v2_session_map` | bare `project_id` (`canonical_key_for`) | unchanged |
+| `workspace_sessions.session_id` | provider conversation UUID | unchanged |
+| Federated inbound | `signal.to.workspace` = `projects.id` | unchanged |
+| Pinned Chat / Inbox **tab titles** | `"Chat"` / `"Inbox"` | unchanged |
+| Host-session id | `/v1/w/<slug>/host-sessions/<uuid>` | UUID unchanged |
+| `/v1/w/<slug>` | `projects.name` (exact / NOCASE, fail-closed) then folder basename (`v1_sandboxes.rs` `resolve_workspace_slug`) | **add handle + aliases** as first matches; keep name + basename so existing `/v1/w/Sales%20Team` and `/v1/w/<folder>` keep working |
+
+`attachAgentName` / renderer `agentName` on the pinned item is routing sugar; `deliver_live` and resume use `project_id` + saved session id. Do **not** remapping pinned tabs or host-session rows.
+
+Wiki public-chat slugs and `connections add <token>` use the same name/basename resolvers — teach them handle the same way as §9.5.
 
 ---
 
@@ -133,7 +152,7 @@ Pinned Chat / Inbox **tab titles** stay `Chat` / `Inbox` (intentional). Pane **h
 2. Migrate every existing workspace **without losing the pretty name** and **without breaking live PTYs, paths, or UUIDs**.
 3. Slug handles: spaces → `-`, all lowercase, collapse hyphen runs.
 4. Host-local handle uniqueness (case-insensitive), fail-loud on new writes.
-5. Federated send/roster/connection gate accept **old and new spellings** during the upgrade (slug-match + aliases).
+5. Federated send/roster/connection gate **slug-match** spellings that are the same token (`sales team` ↔ `sales-team`). Do **not** claim this resurrects a pre-rename token (`sales` vs `sales-team`); those links re-pair once.
 6. Agent Name edits never rewrite handle or connection rows.
 7. Handle edits warn that federated connections will break; previous handle may be kept as a grace alias.
 8. Workspace tab **Agent Name** shows the display name.
@@ -149,6 +168,8 @@ Pinned Chat / Inbox **tab titles** stay `Chat` / `Inbox` (intentional). Pane **h
 - Inventing prettier display names than what is already live.
 - Changing wire form `fp::workspace_uuid::agent`.
 - Owner display name (`Your name` in General).
+- Remapping pinned tabs, `workspace_sessions`, or host-session UUIDs.
+- Auto-healing federated rows whose stored agent is a **different** token than the slugged display (the already-broken `sales` → `Sales Team` case). Re-pair is the heal.
 
 ---
 
@@ -159,25 +180,28 @@ Pinned Chat / Inbox **tab titles** stay `Chat` / `Inbox` (intentional). Pane **h
 | D1 | **Two fields.** Display (Agent Name) and Handle. Not lockstep after migration. |
 | D2 | **Copy first, slug second.** Freeze today’s `agent_display_name()` into display. Then derive handle from that string. Never slug the only copy. |
 | D3 | **Do not invent Title Case.** Preserve the live pretty string exactly. |
-| D4 | **Slug = sidecar algorithm + hyphen collapse.** See §6. `K2 - Marketing` → `k2-marketing`, not `k2---marketing`. |
+| D4 | **New `slugify_address_token` for workspace handles.** Sidecar keeps live `slugify_custom_name` (do not change it). Workspace slug = sidecar rules **plus** hyphen-collapse and `_` → `-`. `K2 - Marketing` → `k2-marketing`. |
 | D5 | **`projects.name` stays the pretty Agent Name** so nav / Active bar keep working with no renderer rewrite on day one. |
-| D6 | **New `projects.handle`** (NOT NULL after backfill, unique case-insensitive on this host). AGENT.md `name:` is rewritten to the handle (roster already reads `name:`). AGENT.md `display_name:` is the pretty name. |
-| D7 | **Local `k2 msg` / whoami / `K2_PRIMARY` / sidecar prefix use handle.** Display remains an **alias** for local resolve (quoted `k2 msg "Sales Team"` still works). |
+| D6 | **New `projects.handle`** (NOT NULL after backfill, unique case-insensitive on this host). AGENT.md `name:` is rewritten to the handle (roster already reads `name:`). AGENT.md `display_name:` is the pretty name. **Create paths** (`Project::create`, `projects_create`, lifecycle INSERT, `k2 agent hire`) must mint a handle (slug of requested name or folder; same `-2` suffix). A NOT NULL column with no create default breaks `k2 workspace open`. |
+| D7 | **Local `k2 msg` / whoami / `K2_PRIMARY` / sidecar prefix use handle.** `workspace_address_name` must read `projects.handle`, not `projects.name`. Display remains an **alias** for local resolve (quoted `k2 msg "Sales Team"` still works). |
 | D8 | **Roster `agent` is the handle.** Also publish `aliases[]` (pre-slug lowercase, folder basename, previous handle if any). |
-| D9 | **Match federated agent tokens by slug**, not raw string. `Sales Team` = `sales team` = `sales-team`. Also match `aliases`. |
-| D10 | **Connection gate uses the same matcher.** On a successful roster+connection match, **lazy-rewrite** the row’s `agent` / `remote_addr` to the canonical handle. |
+| D9 | **Match federated agent tokens by slug**, not raw string. `Sales Team` = `sales team` = `sales-team`. Also match `aliases`. Same matcher in **CLI and** `src/renderer/lib/federation.ts` (`resolveRemoteWorkspacePath`). |
+| D10 | **Connection gate uses the same matcher** for tokens that slug to each other. Lazy-rewrite a row only when roster handle/alias **matches that row**. Do not guess a single roster entry onto an unrelated stored token (`sales` ↛ `sales-team`). |
 | D11 | **Handle change is explicit** (Settings + `k2 workspace set-handle`). Confirm copy: existing federated connections **will break** until the other side updates. Previous handle → grace alias (not a promise). |
 | D12 | **Agent Name change is silent** — display + `projects.name` only. No roster identity change. No connection rewrite. |
-| D13 | **Collision on migrate:** first workspace (stable `projects.rowid`) keeps the slug; later ones get `slug-2`, `slug-3`, … Log each suffix. Never steal. Never fail daemon boot. |
+| D13 | **Collision on migrate:** first workspace (stable `projects.rowid`) keeps the slug; later ones get `slug-2`, `slug-3`, … Log each suffix. Never steal. Never fail daemon boot. Alias inserts are **OR IGNORE** (two folders named `Cortana` must not roll back 0103). |
 | D14 | **Workspace tab** reads `agent_display_name()` (display), not `k2so_agents_list` folder names. |
 | D15 | **Uniqueness is host-local, handle-only.** Two workspaces may share a display (`Sales`) if handles differ (`sales`, `sales-2`). `Scout` vs `scout` is one handle. |
-| D16 | **No folder rename. No UUID change. No PTY remap.** |
+| D16 | **No folder rename. No UUID change. No PTY remap.** Pinned tabs and host-session UUIDs stay. |
+| D18 | **`[from]` stamps the handle** (CLI default, `humanize_chat_from`, principal helper). Display is chrome only. |
+| D19 | **`/v1/w/<slug>` + wiki slugs + `connections add`** use the same resolve order as §9.5 (handle, alias, name, basename). Fail-closed on ambiguity stays. Existing pretty-name and folder slugs keep working because `projects.name` stays pretty. |
+| D20 | **Already-broken stays broken until re-pair.** Migrate will not resurrect a pre-rename handle that lockstep deleted. That is accepted. |
 
 ---
 
 ## 6. Slug algorithm
 
-Shared helper (reuse / extend `slugify_custom_name` so workspace and sidecar never drift):
+New helper `slugify_address_token` (workspace handles only). **Do not** extend live `slugify_custom_name` — that would retarget existing sidecar addresses (`workspace/k2---marketing`, `workspace/scout_v3`).
 
 ```
 trim
@@ -230,9 +254,11 @@ Backfill before adding NOT NULL (or add nullable, fill, then tighten). Path uniq
 
 ### 7.3 `workspace_remote_connections`
 
-No new required column in v1. Matching becomes slug + alias (§9). Lazy rewrite updates `agent` and `remote_addr` to `handle::host`.
+No new required column in v1. Matching slug-equates tokens (`sales team` ↔ `sales-team`). Lazy rewrite only when the stored agent already matches a roster handle or alias.
 
-**Follow-up (not blocking):** add `remote_workspace_id` and key the gate on `(source_project_id, peer_fingerprint, remote_workspace_id)`. Wire already has the UUID. That is the long-term “name is not the key” end state. v1 slug-match is enough to stop the current outage.
+**Accepted gap:** a stored `sales` next to a new handle `sales-team` stays 403. That link was already dead. User re-pairs once.
+
+**Follow-up (not blocking):** add `remote_workspace_id` and key the gate on `(source_project_id, peer_fingerprint, remote_workspace_id)`. Wire already has the UUID. That is the long-term “name is not the key” end state — not required to ship the split.
 
 ### 7.4 Aliases (runtime, not a new table in v1)
 
@@ -251,7 +277,7 @@ projects.handle_aliases TEXT  -- JSON array of lowercase tokens, or
 -- a tiny project_handle_aliases(project_id, alias) table
 ```
 
-**Lock:** small table `project_handle_aliases(project_id, alias TEXT, UNIQUE(alias COLLATE NOCASE))` so a host-wide alias cannot point at two workspaces. Migrate writes aliases; explicit handle change inserts the old handle.
+**Lock:** small table `project_handle_aliases(project_id, alias TEXT, UNIQUE(alias COLLATE NOCASE))` so a host-wide alias cannot point at two workspaces. Migrate writes aliases with **`INSERT OR IGNORE`** (or `ON CONFLICT DO NOTHING`); log skipped collisions; **never** fail the 0103 transaction because two workspaces share a basename. Explicit handle change inserts the old handle the same way. Writers also refuse a new handle that collides with someone else’s alias.
 
 ---
 
@@ -276,11 +302,12 @@ for each projects row, stable order by rowid:
   6. set projects.handle = candidate
   7. rewrite AGENT.md name: = candidate
      (do NOT rewrite display_name: except step 2)
-  8. insert aliases (skip if equal to handle, skip empties):
+  8. insert aliases OR IGNORE (skip if equal to handle, skip empties):
        - lowercase(pretty) with spaces still spaces   # "sales team"
        - slug is handle                               # skip
        - folder basename lowercased                   # "cortana"
        - previous name: lowercased if different
+       (do not invent a pre-lockstep token we no longer have)
   9. invalidate agent_display_name cache for path
 
 then, for each workspace_remote_connections row:
@@ -306,9 +333,9 @@ If we slug `name:` / `projects.name` first, the sidebar becomes `sales-team` and
 
 | Us | Them | What happens |
 |---|---|---|
-| Upgraded | Old (roster `sales team`) | We slug-match `sales-team` ↔ `sales team`. Send works. Lazy rewrite our row to `sales-team` only after **their** roster shows the new handle (or we keep the row as stored and match via slug forever). |
-| Old | Upgraded (roster `sales-team`) | They still accept our `sales team` via their aliases/slug-match. |
-| Both upgraded | Both | Roster `sales-team`, rows heal to `sales-team`. |
+| Upgraded | Old (roster `sales team`) | New CLI slug-matches `sales-team` ↔ `sales team`. Send works if **our** stored row slugs to the same token. |
+| Old CLI | Upgraded (roster `agent` = `sales-team`) | Old CLI is exact `agent.lower() == want` and **does not read `aliases[]`**. Unspaced `sales` still works when handle is `sales`. Spaced `k2 msg "sales team"::host` is **NONE** until they type `sales-team` or upgrade. Those links were already broken. |
+| Both upgraded | Both | Roster `sales-team`. Rows whose agent slugs to that handle heal. A leftover `sales` row (pre-pretty rename) stays dead until **re-pair**. |
 
 **Do not** delete aliases in v1. A later cleanup PRD can expire them.
 
@@ -331,13 +358,9 @@ A roster entry matches `want` when any of:
 Zero matches → `NONE` (list published handles).  
 Two+ workspace UUIDs → `AMBIG`.
 
-Old CLI that only does `agent.lower() == want.lower()` still works **after they type the new handle**, and still works for unspaced names. Spaced names on an old CLI talking to a new roster (`sales-team`) miss until they upgrade **or** we also publish the pre-slug form as the **primary** `agent` for a transition — **rejected.** Primary `agent` is the handle. Compatibility is slug-match + aliases on **new** code. Old clients need the other side’s aliases listed… wait: old client compares `want.lower() == roster.agent`. If we only publish `sales-team`, old `k2 msg "sales team"::host` **misses**.
+**Lock D17:** roster JSON `agent` = handle, plus `aliases[]`. New CLI and the renderer (`federation.ts` `resolveRemoteWorkspacePath`) slug-match handle + aliases. Old CLI (`cli/k2` exact `agent.lower()`) does **not** read aliases — only `want == handle` works there (unspaced names). We do **not** keep `agent: "sales team"` as the primary field.
 
-**Lock D17:** roster JSON keeps `agent` = handle, **and** includes `aliases`. New clients slug-match. For **old clients**, also put the most useful legacy token in aliases — they will **not** read aliases.
-
-So old client + new server is only safe when `want.lower() == handle` (no spaces). The spaced-name break is why we are shipping this; those users are already broken. We do not keep `agent: "sales team"` as primary.
-
-Optional compatibility (implementer may include): if `aliases` is non-empty, duplicate roster entries are **forbidden** (AMBIG / spoof). One row per workspace UUID.
+One roster row per workspace UUID. Duplicate aliases across workspaces are skipped (OR IGNORE), never two rows for one UUID.
 
 ### 9.3 Send gate (`WorkspaceRemoteConnection::exists`)
 
@@ -347,19 +370,19 @@ After:
 
 1. Split want → `(agent, host)`, normalize host as today.  
 2. Load source rows for that host (or all source rows and filter host).  
-3. Hit if `norm(want.agent) == norm(row.agent)` **or** `norm(want.agent)` is in the **remote** aliases we last saw (optional cache) **or** `norm(want.agent) == slug(row.agent)`.  
-4. v1 minimum: `norm(want.agent) == norm(row.agent)` is enough for `sales team` vs `sales-team` **on our stored copy**. Combined with migrate step 10 (slug stored agents), old rows become `sales-team` and also match `sales team` via `norm`.
+3. Hit if `norm(want.agent) == norm(row.agent)`. That is enough for `sales team` vs `sales-team` **on a stored copy of the pretty/spaced form**.  
+4. Stored `sales` vs want `sales-team`: **no match** (D20). Re-pair.
 
-Folder-basename reverse rows (`cortana`) do **not** slug to `sales-team`. Those need **aliases on the receiver’s roster** (`cortana` listed). Sender (old or new) looks up `cortana`, new roster aliases include `cortana` → UUID → send. Gate: sender’s row is `cortana::us`; `norm(cortana)==norm(cortana)`. Works **without** rewriting until lazy heal.
+Folder-basename reverse rows (`cortana`) do **not** slug to `sales-team`. Those need **aliases on the receiver’s roster** (`cortana` listed). Sender looks up `cortana` → alias → UUID. Gate: stored `cortana` matches want `cortana`. Works without rewriting.
 
 ### 9.4 Lazy heal
 
-When `peer-roster` is fetched and exactly one entry matches a stored connection (handle or alias):
+When `peer-roster` is fetched and a stored connection’s agent matches that entry’s handle **or** aliases (slug-equal):
 
-- If `row.agent != entry.agent` (canonical handle), update `agent` + `remote_addr`.  
+- If `row.agent != entry.agent`, update `agent` + `remote_addr` to the canonical handle.  
 - UNIQUE conflict → keep the canonical row, delete the stale spelling.
 
-Heal is best-effort. Matching does not depend on it.
+Do **not** attach an unmatched leftover (`sales`) to “the only agent on that host.” Heal is best-effort. Re-pair is the supported heal for D20 rows.
 
 ### 9.5 Local resolve (`resolve_workspace`)
 
@@ -374,16 +397,23 @@ Add, in order:
 
 If display name collides across two workspaces, **handle still unique** — users should type the handle. Name collision: fail-closed (**change from today’s first-rowid**). Loud `AMBIG` with both handles. This is the one local behavior change; it is correct.
 
+Same order for `resolve_workspace_slug` (`/v1/w/<slug>`), wiki `slug_candidates`, and `connections::resolve_target_project_id`.
+
 ### 9.6 `k2 whoami` / `K2_PRIMARY`
 
-Print **handle**, not display. Sidecar address `handle/reviewer`. Display may appear as a separate `name:` line later; not required in v1.
+Print **handle**, not display. Implement by switching `workspace_address_name` to `projects.handle` (today it returns `projects.name` if it has no `/` `:`). Sidecar address `handle/reviewer`. Display may appear as a separate `name:` line later; not required in v1.
 
 ### 9.7 `[from]` stamps
 
-- Local canonical: `[from <handle>]` or `[from <display>]`?  
-  **Lock D18:** stamp **handle** for anything a peer might reply to (`k2 msg`). Display in UI chrome only. Federated already lowercases `resolve_agent_name` → handle after migrate.  
-- Sidecar: `[from handle/reviewer]` unchanged grammar.  
-- Federated inbound: `[from handle::host]` (already `federated_from_label`).
+**Lock D18:** stamp **handle** for anything a peer might reply to. One helper; point all of these at it:
+
+- CLI `k2 msg` default `--from` (today GETs `/cli/workspace/agent-display-name` — pretty)
+- `humanize_chat_from` (UUID → today `agent_display_name`)
+- `display_from_for_principal` / `caller_workspace` (today `workspace_address_name` = pretty after D5)
+
+Display stays UI chrome only (nav, Workspace tab, pane headers).  
+Sidecar: `[from handle/reviewer]`.  
+Federated inbound: `[from handle::host]` (`federated_from_label`).
 
 ---
 
@@ -399,7 +429,7 @@ Print **handle**, not display. Sidecar address `handle/reviewer`. Display may ap
 - Cache bust + `SyncProjects` + live session **label** (look up by **bare `project_id`**, not `project_id:old_name` — that lookup is currently wrong).  
 - No uniqueness on display.
 
-Renderer `AgentDisplayNameField` help text: “Shown in the nav and Workspace tab. Does not change the handle or federated address.”
+Renderer `AgentDisplayNameField` help text: “Shown in the nav and Workspace tab. Does not change the handle or federated address.” Drop the current “for UI and federated addresses / must be unique on this server” copy. Client `validate` must also ban `:` (daemon already does).
 
 ### 10.2 Handle — new
 
@@ -416,6 +446,14 @@ Renderer `AgentDisplayNameField` help text: “Shown in the nav and Workspace ta
   > Changing the handle changes this agent’s address (`old::host` → `new::host`). Existing federated connections will break until the other side reconnects or updates the handle.
 
 - No confirm bypass in the GUI. CLI: `--i-know-this-breaks-federation` required (fail-loud otherwise).
+
+### 10.2b Create / hire (must mint a handle)
+
+`Project::create`, `projects_create`, workspace `lifecycle` raw INSERT, `k2 workspace open`, `k2 agent hire --name`:
+
+- Display = requested pretty name (or folder basename).  
+- Handle = `slugify_address_token` of that name (or basename), with `-2` suffix on collision.  
+- After slice C, `hire` / `agent set --name` update **display** only; **first create** also seeds handle. A later `--name` must not rotate the handle.
 
 ### 10.3 `POST /cli/projects/update { name }`
 
@@ -491,7 +529,9 @@ Stay `Chat` / `Inbox`. Out of scope.
 | Sidecar table 0102 | First segment becomes handle; ordinals/slugs unchanged |
 | Owner display name | Separate |
 | Mixed-version federation for **unspaced** names | Handle often equals old token (`sales`) |
-| Mixed-version + **spaced** names | New clients slug-match; old clients were already failing |
+| Mixed-version + **spaced** names | New clients slug-match; old CLI was already failing |
+| `/v1/w/<pretty-or-folder>/host-sessions` | `projects.name` + basename still resolve; handle added |
+| Pinned Chat session / host-session UUID | `project_id` + session id, not the name |
 
 ---
 
@@ -507,13 +547,18 @@ No `unwrap_or` in assertions. No skip-if-missing.
 6. **`set-handle`** without confirm flag → error; with flag → handle changes, old handle aliased.  
 7. **Local resolve:** `k2 msg sales-team`, `k2 msg "Sales Team"`, UUID, path. Ambiguous display → AMBIG with both handles.  
 8. **Roster:** `agent` is handle; aliases contain pre-slug + basename.  
-9. **Send gate:** stored `sales team` + want `sales-team` → connected. Stored `cortana` + roster alias `cortana` → connected.  
-10. **Lazy heal:** after roster fetch, row `agent` becomes handle.  
+9. **Send gate:** stored `sales team` + want `sales-team` → connected. Stored `cortana` + roster alias `cortana` → connected. Stored `sales` + want `sales-team` → **not** connected (D20).  
+10. **Lazy heal:** after roster fetch, a **matching** row’s `agent` becomes handle. Unrelated leftover `sales` is left alone.  
 11. **Inbound:** still UUID → `deliver_live`; ignore `to.name`.  
 12. **Workspace tab:** display name, not skills folder.  
 13. **Label push:** rename display updates live label via **bare `project_id`** lookup.  
-14. **Sidecar:** `handle/reviewer` still resolves; `Sales Team/reviewer` rejected (`/`).  
-15. **Uniqueness:** second `set-handle sales-team` → error naming the other workspace.
+14. **Sidecar:** `handle/reviewer` still resolves; `Sales Team/reviewer` rejected (`/`). Live sidecar slugs (`scout_v3`) unchanged.  
+15. **Uniqueness:** second `set-handle sales-team` → error naming the other workspace.  
+16. **Alias collision:** two `Cortana` folders → 0103 still applies; second basename alias skipped.  
+17. **Create path:** `projects/create` / hire inserts `handle`; missing handle does not 500.  
+18. **`/v1/w/sales-team`** and `/v1/w/Sales%20Team` both resolve the same workspace when name is `Sales Team` and handle is `sales-team`.  
+19. **`[from]`:** CLI default and `humanize_chat_from` stamp handle, not display.  
+20. **Renderer roster:** `resolveRemoteWorkspacePath("sales team")` hits handle `sales-team` via alias/slug.
 
 ---
 
@@ -521,14 +566,14 @@ No `unwrap_or` in assertions. No skip-if-missing.
 
 | Slice | Scope | Done when |
 |---|---|---|
-| **A — schema + migrate** | 0103 `handle` + aliases table; boot backfill §8; tests 1–4 | `k2 whoami` still works on old names via alias; files have both fields |
-| **B — readers** | resolve_workspace D7/§9.5; roster D8/D9; send gate D10; whoami; slug-match; heal | Federated spaced names work against a migrated peer |
-| **C — writers** | split set-display vs set-handle; stop lockstep; confirm copy D11 | Display rename does not break federation |
-| **D — UI** | Agent tab Handle field + warning; Workspace tab display; help text | Workspace tab matches nav |
+| **A — schema + migrate** | 0103 `handle` + aliases table; boot backfill §8; create-path handle; tests 1–4, 16–17 | Display copied; handle slugged; daemon still boots on alias collisions |
+| **B — readers** | resolve_workspace + `/v1` + wiki + connections; roster D8/D9; CLI **and** renderer slug-match; whoami/`workspace_address_name`; `[from]` helper; send gate D10 | Slug-equal federated names work; `/v1/w/<handle>` works; already-broken `sales` rows still 403 |
+| **C — writers** | split set-display vs set-handle; stop lockstep; confirm copy D11; hire seeds handle only on create | Display rename does not break federation |
+| **D — UI** | Agent tab Handle field + warning; Workspace tab display; help text (not “federated address”) | Workspace tab matches nav |
 | **E — CLI + skill** | `set-handle`, k2-cli whoami/msg docs, stale comments | Skill says handle is the address |
 
 Do not ship C without B (otherwise we split fields and matching still exact-strings).  
-A+B alone already fixes most live federated failures (slug-match + slugged stored rows + aliases).
+A+B does **not** claim to fix pre-rename leftover tokens. Re-pair after C is the documented heal.
 
 ---
 
@@ -545,11 +590,13 @@ A+B alone already fixes most live federated failures (slug-match + slugged store
 
 ## 17. Out of scope follow-ups
 
-- Key `workspace_remote_connections` on remote workspace UUID.  
+- Key `workspace_remote_connections` on remote workspace UUID (true name-independent gate).  
+- Guess-heal a leftover `sales` row onto the only roster agent on that host.  
 - Expire aliases after N days / after both sides seen on new handle.  
 - Enable sidebar Rename as display-only.  
 - Federated sidecar addresses.  
-- POST-ify `set-agent-display-name`.
+- POST-ify `set-agent-display-name`.  
+- Changing live sidecar `slugify_custom_name` results.
 
 ---
 
@@ -570,11 +617,13 @@ migrate A:
 
 runtime B:
         they k2 msg cortana::us        → alias → our UUID → deliver_live
-        they k2 msg "sales team"::us   → slug-match / alias
+        they k2 msg "sales team"::us   → new CLI slug-match; old CLI NONE (already broken)
         they k2 msg sales-team::us     → handle
+        leftover peer row agent=sales  → still 403; re-pair once
         we k2 msg <their-handle>::them → slug-match their roster
         display rename to "Sales"      → nav "Sales"; handle still sales-team
         handle change to "revenue"     → WARN; alias sales-team; peers must update
+        /v1/w/sales-team and /v1/w/Sales%20Team → same pinned workspace
 ```
 
-That is the elevation: pretty name is free; handle is the address; migration copies the first and slugs the second; matching treats the old spellings as the same agent until everyone is on the handle.
+Pretty name is free; handle is the address; migration copies the first and slugs the second; slug-equal spellings keep working; already-dead pre-rename tokens re-pair once and then stay fixed.

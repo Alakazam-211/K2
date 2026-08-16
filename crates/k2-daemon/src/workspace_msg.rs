@@ -718,11 +718,21 @@ pub fn deliver_live(
     let target = match resolve_msg_target(workspace_token) {
         Some(t) => t,
         None => {
-            let mut resp = MsgResponse::fail(MsgReason::WorkspaceNotFound);
             let suggest_token =
                 k2_core::workspace_session_handles::split_workspace_handle(workspace_token)
                     .map(|(ws, _)| ws)
                     .unwrap_or(workspace_token);
+            if let WorkspaceResolve::Ambiguous { handles } =
+                resolve_workspace_detailed(suggest_token)
+            {
+                let mut resp = MsgResponse::fail(MsgReason::WorkspaceNotFound);
+                resp.hint = Some(format!(
+                    "AMBIG: '{suggest_token}' matches multiple workspaces. Use a unique handle: {}",
+                    handles.join(", ")
+                ));
+                return resp;
+            }
+            let mut resp = MsgResponse::fail(MsgReason::WorkspaceNotFound);
             let suggestion = {
                 let db = k2_core::db::shared();
                 let conn = db.lock();

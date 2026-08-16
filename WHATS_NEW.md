@@ -59,6 +59,22 @@ The workspace drawer has connected-agents / API sections and a
 per-workspace completion-sound bell (AND-gated with the global
 Settings toggle — mute the workspace, or mute everything).
 
+### Agent Name vs Handle
+
+A workspace now has two names:
+
+- **Agent Name** (display) — what you see in the nav, Workspace tab, and
+  chat header. Change it anytime. Capitals and spaces are fine.
+- **Handle** — the address: `k2 msg sales-team`,
+  `sales-team::box.k2.dev`, `[from sales-team]`, sidecar
+  `sales-team/reviewer`. Lowercase, spaces become `-`.
+
+Existing pretty names are copied into Agent Name; the handle is slugged
+from that (`Sales Team` → `sales-team`). If a federated link was
+already broken by an old rename, re-add the connection once against the
+handle — later display edits will not break it. Changing the handle
+still needs a confirm: that *is* a new address.
+
 ### Settings / chrome
 
 Settings gear is gone from the top bar — **GateChrome** + the

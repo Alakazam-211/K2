@@ -8,7 +8,6 @@ import { agentDisplayName } from '@/lib/workspace-agent'
 // k2so_agents_*/inbox/workspace_relations host calls stay on Tauri
 // invoke (host-only, out of scope).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { isBuiltinAgentType } from '@/lib/agent-type'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { usePageViewStore } from '@/stores/page-view'
@@ -20,15 +19,6 @@ import { WorkspaceApiSection } from './WorkspaceApiSection'
 import { ConnectedAgentsSection } from './ConnectedAgentsSection'
 import { WorkspaceCompletionSoundBell } from './WorkspaceCompletionSoundToggle'
 
-// ── Types ────────────────────────────────────────────────────────────────
-
-interface K2soAgentInfo {
-  name: string
-  role: string
-  isCoordinator: boolean
-  agentType: string
-}
-
 // Phase 2.1c Item 2 — `WorkItem` interface removed. The badge fetch
 // now uses `invoke<number>('k2so_inbox_count', ...)` so the only
 // renderer-side type that survived the migration is the count itself.
@@ -38,7 +28,6 @@ interface K2soAgentInfo {
 // ── Component ────────────────────────────────────────────────────────────
 
 export default function WorkspacePanel(): React.JSX.Element {
-  const [agents, setAgents] = useState<K2soAgentInfo[]>([])
   const [displayName, setDisplayName] = useState('')
   const [wsInboxCount, setWsInboxCount] = useState(0)
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
@@ -80,11 +69,6 @@ export default function WorkspacePanel(): React.JSX.Element {
     if (!activeProjectId || !activeProjectPath) return
     let cancelled = false
     const load = async (): Promise<void> => {
-      try {
-        const result = await invoke<K2soAgentInfo[]>('k2so_agents_list', { projectPath: activeProjectPath })
-        // Web shim may soft-resolve null; never store a non-array.
-        if (!cancelled) setAgents(Array.isArray(result) ? result : [])
-      } catch { if (!cancelled) setAgents([]) }
       // Phase 2.1c Item 2 — workspace inbox primitive count endpoint
       // (replaces the legacy `k2so_agents_workspace_inbox_list` whose
       // full-payload fetch was wasted bandwidth for a sidebar badge).
@@ -122,33 +106,6 @@ export default function WorkspacePanel(): React.JSX.Element {
   }, [activeProjectPath])
 
   const agentMode = activeProject?.agentMode || 'off'
-  const isManagerMode = agentMode === 'manager' || agentMode === 'coordinator' || agentMode === 'pod'
-  // Primary agent for the workspace — match the resolution that
-  // ensurePinnedAgentTabForMode uses when wiring the Inbox/Chat
-  // tabs, so the WorkspacePanel header shows the same agent name
-  // those tabs render. Falling back to alphabetical agents[0] was
-  // wrong for `custom` workspaces that also keep a `k2so-agent`
-  // template alongside their custom agent (the alphabetically
-  // earlier `k2so-agent` would win, hiding the actual primary).
-  const primaryAgent = useMemo(() => {
-    if (isManagerMode) {
-      return (
-        agents.find((a) => a.isCoordinator)
-        ?? agents.find((a) => a.agentType === 'manager')
-        ?? agents.find((a) => a.agentType === 'coordinator')
-        ?? agents[0]
-        ?? null
-      )
-    }
-    if (agentMode === 'custom') {
-      return agents.find((a) => a.agentType === 'custom') ?? agents[0] ?? null
-    }
-    if (agentMode === 'agent') {
-      // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
-      return agents.find((a) => isBuiltinAgentType(a.agentType)) ?? agents[0] ?? null
-    }
-    return agents[0] ?? null
-  }, [agents, agentMode, isManagerMode])
   const workspaces = activeProject?.workspaces ?? []
   // Filter to only worktree workspaces (not the main workspace)
   const worktrees = useMemo(() =>
@@ -172,13 +129,13 @@ export default function WorkspacePanel(): React.JSX.Element {
       <div className="px-3 py-3 border-b border-[var(--color-border)]">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-baseline gap-2 min-w-0">
-            {(displayName || primaryAgent?.name) && (
+            {(displayName || activeProject.handle) && (
               <>
                 <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
                   Agent Name
                 </span>
                 <span className="text-xs text-[var(--color-text-primary)] truncate">
-                  {displayName || primaryAgent?.name}
+                  {displayName || activeProject.name}
                 </span>
                 {activeProject.handle && (
                   <span className="text-[10px] font-mono text-[var(--color-text-muted)] truncate">

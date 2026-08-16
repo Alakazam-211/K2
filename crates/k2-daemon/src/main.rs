@@ -2019,6 +2019,14 @@ fn run_workspace_legacy_migrations_sweep() {
                 project.path,
             );
         }
+        // Authored persona AGENT.md → ROLE.md. After repoint so a just-moved
+        // stray AGENT.md is renamed in the same boot. Never touches cwd leftover.
+        if k2_core::workspace::agent::heal_persona_role_md(&project.path) {
+            log_debug!(
+                "[daemon/migrations] heal_persona_role_md({}): .k2/agent/AGENT.md → ROLE.md",
+                project.path,
+            );
+        }
         workspace::harvest_per_agent_claude_md_files(&project.path);
         workspace::migrate_or_scaffold_lead_heartbeat(&project.path);
         workspace::ensure_workspace_wakeups(&project.path);

@@ -15,7 +15,7 @@ import {
 /**
  * Workspace Manager / K2 Agent role-skill editor (canonical-agents PRD
  * §9.1). The SAME pattern as ProjectContextEditor — the normal AIFileEditor
- * pointed at the agent's `.k2so/agent/AGENT.md`, with the role-briefing
+ * pointed at the agent's `.k2/agent/ROLE.md`, with the role-briefing
  * seed (organic-integration contract from canonicalAgentSeeds). The agent
  * weaves the role guidance into the existing AGENT.md; the left preview
  * shows AGENT.md updating live. The deterministic core (persist_agent_md)
@@ -35,7 +35,7 @@ export function RoleSkillEditor({
   const [content, setContent] = useState('')
   const [previewMode, setPreviewMode] = useState<'preview' | 'edit'>('preview')
 
-  const filePath = `${projectPath}/.k2/agent/AGENT.md`
+  const filePath = `${projectPath}/.k2/agent/ROLE.md`
   // Watch the agent dir so AGENT.md edits surface live in the preview.
   const watchDir = `${projectPath}/.k2/agent`
   const label = roleSkillLabel(role)

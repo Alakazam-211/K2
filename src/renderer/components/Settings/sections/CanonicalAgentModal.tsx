@@ -132,7 +132,7 @@ export function CanonicalAgentModal({
       [
         `You are the K2 Canonical Agent for the workspace "${projectName}".`,
         ``,
-        `Source of truth (Model A): .k2/agent/AGENT.md + .k2/PROJECT.md. The per-harness`,
+        `Source of truth (Model A): .k2/agent/ROLE.md + .k2/PROJECT.md. The per-harness`,
         `files (CLAUDE.md, GEMINI.md, …) are MIRRORS derived from them — never the reverse.`,
         ``,
         `All destructive file mutation goes through the deterministic core (backup + atomic`,

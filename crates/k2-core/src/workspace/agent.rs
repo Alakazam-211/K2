@@ -25,7 +25,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::skills::writer::{generate_default_agent_body, write_agent_skill_file};
 use crate::workspace::agent_identity::{
-    agent_dir, agent_type_for, agents_dir, parse_frontmatter, workspace_agent_path,
+    agent_dir, agent_type_for, agents_dir, backup_sibling_legacy_persona, parse_frontmatter,
+    persona_md_in, persona_present_in, workspace_agent_path, PERSONA_MD_NAME,
 };
 use crate::workspace::session::simple_date;
 use crate::workspace::work_item::atomic_write;
@@ -209,7 +210,7 @@ pub fn create(
     // they get back the existing K2soAgentInfo and proceed to the
     // edit flow.
     let unified_primary = crate::workspace_dot_dir(&project_path).join("agent");
-    if unified_primary.join("AGENT.md").exists() {
+    if persona_present_in(&unified_primary) {
         let existing_type = agent_type_for(&project_path, &name);
         return Ok(K2soAgentInfo {
             name,
@@ -248,7 +249,7 @@ pub fn create(
     // Best-effort — an existing inbox is fine.
     let _ = fs::create_dir_all(crate::inbox::inbox_root(std::path::Path::new(&project_path)));
 
-    let agent_md = dir.join("AGENT.md");
+    let agent_md = dir.join(PERSONA_MD_NAME);
     let mut frontmatter = format!("name: {}\nrole: {}\ntype: {}", name, role, agent_type);
     if is_manager {
         frontmatter.push_str("\nmanager: true");
@@ -266,6 +267,7 @@ pub fn create(
 
     let content = format!("---\n{}\n---\n\n{}\n", frontmatter, body);
     atomic_write(&agent_md, &content)?;
+    backup_sibling_legacy_persona(&dir);
 
     write_agent_skill_file(&project_path, &name, &agent_type);
     ensure_agent_wakeup(&project_path, &name, &agent_type);
@@ -293,8 +295,8 @@ pub fn create(
 /// legacy folder.
 ///
 /// Conservative + idempotent:
-/// - No-op if canonical `.k2so/agent/AGENT.md` already exists (never
-///   clobber a real persona).
+/// - No-op if canonical `.k2/agent/ROLE.md` **or** pre-heal `AGENT.md`
+///   already exists (never clobber a real persona).
 /// - No-op if there's no legacy `.k2so/agents/` directory.
 /// - Picks the first non-`.archive` legacy agent dir that has an
 ///   `AGENT.md`, then moves ALL its entries (AGENT.md + any docs/subdirs
@@ -307,7 +309,7 @@ pub fn create(
 /// Returns `true` if it moved anything.
 pub fn repoint_stray_legacy_agent(project_path: &str) -> bool {
     let canonical = workspace_agent_path(project_path);
-    if canonical.join("AGENT.md").exists() {
+    if persona_present_in(&canonical) {
         return false; // canonical persona already present — nothing to do
     }
     let legacy_root = agents_dir(project_path);
@@ -381,6 +383,72 @@ pub fn repoint_stray_legacy_agent(project_path: &str) -> bool {
     moved > 0
 }
 
+/// Heal authored persona `.k2/agent/AGENT.md` → `.k2/agent/ROLE.md`.
+///
+/// Idempotent. Never invents a persona. Never touches cwd `./AGENT.md`
+/// (that leftover is a fan-out alias of the compose).
+///
+/// - `ROLE.md` missing + `AGENT.md` present → single `fs::rename`
+///   (`AGENT.md` and `ROLE.md` are different names even on APFS).
+/// - Both exist → `ROLE.md` wins; sibling `AGENT.md` is moved into
+///   `agent-backups/`.
+/// - Optional: if the on-disk listing is `role.md`, two-step
+///   case-normalize to `ROLE.md`.
+pub fn heal_persona_role_md(project_path: &str) -> bool {
+    let dir = workspace_agent_path(project_path);
+    if !dir.exists() {
+        return false;
+    }
+
+    // Case-normalize `role.md` → `ROLE.md` (APFS/Windows). Different
+    // names (`AGENT.md` ↔ `ROLE.md`) must NOT go through this path.
+    if let Some(actual) = actual_filename_in(&dir, PERSONA_MD_NAME) {
+        if actual != PERSONA_MD_NAME {
+            let src = dir.join(&actual);
+            let tmp = dir.join(".role.md.case-tmp");
+            let dest = dir.join(PERSONA_MD_NAME);
+            if fs::rename(&src, &tmp).is_ok() {
+                let _ = fs::rename(&tmp, &dest);
+            }
+        }
+    }
+
+    let role = dir.join(PERSONA_MD_NAME);
+    let legacy = dir.join("AGENT.md");
+    if role.exists() {
+        if legacy.exists() {
+            backup_sibling_legacy_persona(&dir);
+            return true;
+        }
+        return false;
+    }
+    if !legacy.exists() {
+        return false;
+    }
+    match fs::rename(&legacy, &role) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::log_debug!(
+                "[heal-persona-role] {}: rename AGENT.md → ROLE.md failed: {e}",
+                project_path
+            );
+            false
+        }
+    }
+}
+
+fn actual_filename_in(dir: &Path, want: &str) -> Option<String> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let s = name.to_string_lossy();
+        if s.eq_ignore_ascii_case(want) {
+            return Some(s.into_owned());
+        }
+    }
+    None
+}
+
 /// Delete an agent's dir. Refuses for manager agents or agents with
 /// active work items unless `force` is true.
 pub fn delete_inner(project_path: &str, name: &str, force: bool) -> Result<(), String> {
@@ -389,7 +457,7 @@ pub fn delete_inner(project_path: &str, name: &str, force: bool) -> Result<(), S
         return Err(format!("Agent '{}' does not exist", name));
     }
 
-    let agent_md = dir.join("AGENT.md");
+    let agent_md = persona_md_in(&dir);
     if agent_md.exists() {
         let content = fs::read_to_string(&agent_md).unwrap_or_default();
         let fm = parse_frontmatter(&content);
@@ -437,9 +505,9 @@ pub fn delete(project_path: String, name: String) -> Result<(), String> {
     delete_inner(&project_path, &name, false)
 }
 
-/// Read an agent's raw `AGENT.md` content.
+/// Read an agent's raw persona (`ROLE.md`, or pre-heal `AGENT.md`).
 pub fn get_profile(project_path: String, agent_name: String) -> Result<String, String> {
-    let path = agent_dir(&project_path, &agent_name).join("AGENT.md");
+    let path = persona_md_in(agent_dir(&project_path, &agent_name));
     if !path.exists() {
         return Err(format!("Agent '{}' does not exist", agent_name));
     }
@@ -457,8 +525,10 @@ pub fn update_profile(
     if !dir.exists() {
         return Err(format!("Agent '{}' does not exist", agent_name));
     }
-    let path = dir.join("AGENT.md");
-    atomic_write(&path, &content)
+    let path = dir.join(PERSONA_MD_NAME);
+    atomic_write(&path, &content)?;
+    backup_sibling_legacy_persona(&dir);
+    Ok(())
 }
 
 /// Pure, I/O-free rewrite of an `AGENT.md` content blob with `field`
@@ -537,9 +607,9 @@ pub fn update_field(
         return Err(format!("Agent '{}' does not exist", name));
     }
 
-    let md_path = dir.join("AGENT.md");
+    let md_path = persona_md_in(&dir);
     let content = fs::read_to_string(&md_path)
-        .map_err(|e| format!("Failed to read agent.md: {}", e))?;
+        .map_err(|e| format!("Failed to read persona: {}", e))?;
 
     let updated = update_agent_md_field(&content, &field, &value)?;
 
@@ -552,7 +622,9 @@ pub fn update_field(
     let _ = fs::copy(&md_path, backup_dir.join(&backup_name));
     cleanup_agent_backups(&backup_dir, 20);
 
-    atomic_write(&md_path, &updated)?;
+    let dest = dir.join(PERSONA_MD_NAME);
+    atomic_write(&dest, &updated)?;
+    backup_sibling_legacy_persona(&dir);
     Ok(updated)
 }
 
@@ -786,12 +858,13 @@ mod tests {
 
     #[test]
     fn create_writes_canonical_agent_dir_not_legacy() {
-        // A fresh workspace (no `.k2/agent/AGENT.md` yet) must get its new
+        // A fresh workspace (no `.k2/agent/ROLE.md` yet) must get its new
         // agent scaffolded at the CANONICAL singular `.k2/agent/`, NOT the
         // legacy plural `.k2/agents/<name>/`. (Pre-0.39.x `create()` used the
         // `agent_dir()` resolver — the legacy plural fallback — as the
         // creation target, so a user's agent docs landed in the plural tree
-        // instead of `.k2/agent/AGENT.md`. Post-0.40.4 the dot-dir is `.k2/`.)
+        // instead of `.k2/agent/ROLE.md`. Post-0.40.4 the dest filename is
+        // ROLE.md.)
         let dir = std::env::temp_dir().join(format!(
             "k2so-commands-create-canonical-{}-{}",
             std::process::id(),
@@ -804,6 +877,7 @@ mod tests {
         let path = dir.to_string_lossy().into_owned();
 
         // Sanity: no canonical path exists pre-call.
+        assert!(!dir.join(".k2/agent/ROLE.md").exists());
         assert!(!dir.join(".k2/agent/AGENT.md").exists());
 
         let result = create(
@@ -815,10 +889,14 @@ mod tests {
         );
         assert!(result.is_ok(), "fresh create should succeed: {result:?}");
 
-        // Canonical persona is written.
+        // Canonical persona is written to ROLE.md, never AGENT.md.
         assert!(
-            dir.join(".k2/agent/AGENT.md").exists(),
-            "create() must write the canonical .k2/agent/AGENT.md",
+            dir.join(".k2/agent/ROLE.md").exists(),
+            "create() must write the canonical .k2/agent/ROLE.md",
+        );
+        assert!(
+            !dir.join(".k2/agent/AGENT.md").exists(),
+            "create() must not plant pre-heal AGENT.md",
         );
         // And the legacy plural folder must NOT be created.
         assert!(
@@ -827,5 +905,105 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repoint_noop_when_only_role_md_exists() {
+        let ws = tmp_ws();
+        let wss = ws.to_string_lossy().to_string();
+        let canonical = ws.join(".k2so/agent");
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("ROLE.md"), "role persona").unwrap();
+        let legacy = ws.join(".k2so/agents/scout");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("AGENT.md"), "legacy stray").unwrap();
+
+        assert!(
+            !repoint_stray_legacy_agent(&wss),
+            "must no-op when only ROLE.md exists"
+        );
+        assert_eq!(
+            fs::read_to_string(canonical.join("ROLE.md")).unwrap(),
+            "role persona"
+        );
+        assert!(
+            !canonical.join("AGENT.md").exists(),
+            "repoint must not drop stray AGENT.md next to live ROLE.md"
+        );
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn heal_renames_agent_md_to_role_md_when_dest_missing() {
+        let ws = tmp_ws();
+        let wss = ws.to_string_lossy().to_string();
+        let dir = workspace_agent_path(&wss);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("AGENT.md"), "---\nname: scout\n---\nbody\n").unwrap();
+
+        assert!(heal_persona_role_md(&wss), "single rename must report work");
+        assert!(dir.join("ROLE.md").exists(), "ROLE.md is the dest");
+        assert!(!dir.join("AGENT.md").exists(), "AGENT.md must be gone");
+        assert_eq!(
+            fs::read_to_string(dir.join("ROLE.md")).unwrap(),
+            "---\nname: scout\n---\nbody\n"
+        );
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn heal_noop_when_role_md_already_there() {
+        let ws = tmp_ws();
+        let wss = ws.to_string_lossy().to_string();
+        let dir = workspace_agent_path(&wss);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("ROLE.md"), "already\n").unwrap();
+
+        assert!(!heal_persona_role_md(&wss), "no-op when ROLE.md exists");
+        assert_eq!(fs::read_to_string(dir.join("ROLE.md")).unwrap(), "already\n");
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn heal_both_exist_role_wins_and_backups_agent_md() {
+        let ws = tmp_ws();
+        let wss = ws.to_string_lossy().to_string();
+        let dir = workspace_agent_path(&wss);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("ROLE.md"), "role wins\n").unwrap();
+        fs::write(dir.join("AGENT.md"), "legacy sibling\n").unwrap();
+
+        assert!(heal_persona_role_md(&wss));
+        assert_eq!(fs::read_to_string(dir.join("ROLE.md")).unwrap(), "role wins\n");
+        assert!(!dir.join("AGENT.md").exists());
+        let backups: Vec<_> = fs::read_dir(dir.join("agent-backups"))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            fs::read_to_string(backups[0].path()).unwrap(),
+            "legacy sibling\n"
+        );
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn heal_never_touches_cwd_leftover_agent_md() {
+        let ws = tmp_ws();
+        let wss = ws.to_string_lossy().to_string();
+        fs::write(ws.join("AGENT.md"), "cwd leftover compose alias\n").unwrap();
+
+        assert!(!heal_persona_role_md(&wss));
+        assert_eq!(
+            fs::read_to_string(ws.join("AGENT.md")).unwrap(),
+            "cwd leftover compose alias\n"
+        );
+        assert!(!ws.join("ROLE.md").exists(), "must not plant cwd ROLE.md");
+        assert!(
+            !workspace_agent_path(&wss).join("ROLE.md").exists(),
+            "must not invent a persona from leftover"
+        );
+        let _ = fs::remove_dir_all(&ws);
     }
 }

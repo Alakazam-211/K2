@@ -34,7 +34,10 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
-use crate::workspace::agent_identity::{parse_frontmatter, workspace_agent_md_path};
+use crate::workspace::agent_identity::{
+    backup_sibling_legacy_persona, parse_frontmatter, persona_md_in, workspace_agent_md_path,
+    workspace_agent_path,
+};
 
 /// Cache entry: the resolved display name + the AGENT.md mtime it was
 /// derived from. A `None` mtime means AGENT.md was missing at read
@@ -66,7 +69,7 @@ fn current_mtime(path: &std::path::Path) -> Option<SystemTime> {
 ///    requires a workspace with no `projects` row, i.e. an unregistered
 ///    path; should not happen in practice).
 pub fn agent_display_name(project_path: &str) -> String {
-    let agent_md = workspace_agent_md_path(project_path);
+    let agent_md = persona_md_in(workspace_agent_path(project_path));
     let mtime = current_mtime(&agent_md);
 
     {
@@ -206,13 +209,15 @@ pub fn invalidate_agent_display_name_cache(project_path: &str) {
 pub fn set_agent_display_name(project_path: &str, name: &str) -> Result<(), String> {
     validate_display_name(name)?;
 
-    let agent_md = workspace_agent_md_path(project_path);
+    let dir = workspace_agent_path(project_path);
+    let live = persona_md_in(&dir);
+    let dest = workspace_agent_md_path(project_path);
 
-    let content = if agent_md.exists() {
-        fs::read_to_string(&agent_md)
-            .map_err(|e| format!("Cannot read AGENT.md at {}: {}", agent_md.display(), e))?
+    let content = if live.exists() {
+        fs::read_to_string(&live)
+            .map_err(|e| format!("Cannot read persona at {}: {}", live.display(), e))?
     } else {
-        if let Some(parent) = agent_md.parent() {
+        if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Cannot create {}: {}", parent.display(), e))?;
         }
@@ -223,7 +228,8 @@ pub fn set_agent_display_name(project_path: &str, name: &str) -> Result<(), Stri
 
     let updated = rewrite_frontmatter_field(&content, "display_name", name);
 
-    crate::workspace::work_item::atomic_write(&agent_md, &updated)?;
+    crate::workspace::work_item::atomic_write(&dest, &updated)?;
+    backup_sibling_legacy_persona(&dir);
 
     // projects.name follows the display rename. 0 rows updated =
     // unregistered path — fine; a real DB error is not.
@@ -511,6 +517,35 @@ mod tests {
 
         set_agent_display_name(&path, "Solo Label").expect("unregistered rename ok");
         assert_eq!(agent_display_name(&path), "Solo Label");
+        assert!(
+            workspace_agent_md_path(&path).exists(),
+            "display write dest is ROLE.md"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn set_display_name_heals_legacy_agent_md_to_role_md() {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-display-heal-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(dir.join(".k2/agent")).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        std::fs::write(
+            dir.join(".k2/agent/AGENT.md"),
+            "---\nname: scout\n---\nbody\n",
+        )
+        .unwrap();
+
+        set_agent_display_name(&path, "Scout Label").expect("rename");
+        assert!(dir.join(".k2/agent/ROLE.md").exists());
+        assert!(!dir.join(".k2/agent/AGENT.md").exists());
+        let md = std::fs::read_to_string(dir.join(".k2/agent/ROLE.md")).unwrap();
+        assert!(md.contains("display_name: Scout Label"));
+        assert_eq!(agent_display_name(&path), "Scout Label");
 
         std::fs::remove_dir_all(&dir).ok();
     }

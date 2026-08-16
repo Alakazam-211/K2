@@ -383,6 +383,8 @@ pub fn persist_agent_md(
     opts: PersistOpts,
 ) -> Result<CanonicalSetupOutcome, String> {
     let root = PathBuf::from(project_path);
+    let dir = crate::workspace::agent_identity::workspace_agent_path(project_path);
+    let live = crate::workspace::agent_identity::persona_md_in(&dir);
     let agent_md = workspace_agent_md_path(project_path);
     let rel = relpath_of(&root, &agent_md);
 
@@ -405,7 +407,7 @@ pub fn persist_agent_md(
             .unwrap_or_else(|| ".k2".to_string()),
         timestamp
     );
-    let prior = read_prior(&agent_md);
+    let prior = read_prior(&live);
 
     let (action, backup_rel, pre_hash) = match &prior {
         Some(bytes) => {
@@ -424,7 +426,8 @@ pub fn persist_agent_md(
         // AGENT.md is the canonical SOURCE (Model A) — write the merged
         // body verbatim, NO generated-mirror header.
         atomic_write_str(&agent_md, merged_body)
-            .map_err(|e| format!("write AGENT.md: {e}"))?;
+            .map_err(|e| format!("write ROLE.md: {e}"))?;
+        crate::workspace::agent_identity::backup_sibling_legacy_persona(&dir);
     }
 
     let manifest = SetupManifest {
@@ -1034,12 +1037,16 @@ mod tests {
             PersistOpts { dry_run: false, confirm: true, force: true },
         )
         .unwrap();
-        // AGENT.md is the canonical SOURCE — written verbatim, NO mirror header.
-        let written = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
-        assert!(!written.contains(K2_GENERATED_SIGNATURE), "AGENT.md must NOT be stamped as a generated mirror");
+        // ROLE.md is the canonical SOURCE — written verbatim, NO mirror header.
+        let written = fs::read_to_string(proj.join(".k2so/agent/ROLE.md")).unwrap();
+        assert!(!written.contains(K2_GENERATED_SIGNATURE), "ROLE.md must NOT be stamped as a generated mirror");
         assert!(written.contains("organically merged role guidance"));
+        assert!(
+            !proj.join(".k2so/agent/AGENT.md").exists(),
+            "sibling AGENT.md must be moved aside after write"
+        );
 
-        // Unwind restores the exact original.
+        // Unwind restores the exact original onto ROLE.md.
         unwind_canonical(
             path,
             &outcome.manifest,
@@ -1047,7 +1054,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap(),
+            fs::read_to_string(proj.join(".k2so/agent/ROLE.md")).unwrap(),
             original,
             "persist_agent_md must be byte-reversible (PRD §13.6)",
         );

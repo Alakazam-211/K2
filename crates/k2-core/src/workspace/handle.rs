@@ -9,7 +9,10 @@ use std::path::Path;
 
 use rusqlite::{params, Connection};
 
-use crate::workspace::agent_identity::{parse_frontmatter, workspace_agent_md_path};
+use crate::workspace::agent_identity::{
+    backup_sibling_legacy_persona, parse_frontmatter, persona_md_in, workspace_agent_md_path,
+    workspace_agent_path,
+};
 use crate::workspace::display::{invalidate_agent_display_name_cache, rewrite_frontmatter_field};
 use crate::workspace_session_handles::{
     is_uuid_shape, normalize_address_token, slugify_address_token,
@@ -205,14 +208,18 @@ pub fn set_workspace_handle(project_path: &str, requested: &str) -> Result<Strin
 }
 
 fn rewrite_agent_md_name(project_path: &str, handle: &str) -> Result<(), String> {
-    let agent_md = workspace_agent_md_path(project_path);
-    if !agent_md.exists() {
+    let dir = workspace_agent_path(project_path);
+    let live = persona_md_in(&dir);
+    if !live.exists() {
         return Ok(());
     }
-    let content = fs::read_to_string(&agent_md)
-        .map_err(|e| format!("Cannot read AGENT.md at {}: {}", agent_md.display(), e))?;
+    let content = fs::read_to_string(&live)
+        .map_err(|e| format!("Cannot read persona at {}: {}", live.display(), e))?;
     let updated = rewrite_frontmatter_field(&content, "name", handle);
-    crate::workspace::work_item::atomic_write(&agent_md, &updated)
+    let dest = workspace_agent_md_path(project_path);
+    crate::workspace::work_item::atomic_write(&dest, &updated)?;
+    backup_sibling_legacy_persona(&dir);
+    Ok(())
 }
 
 /// §8 boot backfill. Idempotent. Never fails daemon boot (per-row errors
@@ -263,7 +270,8 @@ fn backfill_one(
     path: &str,
     existing_handle: Option<&str>,
 ) -> Result<(), String> {
-    let md_path = workspace_agent_md_path(path);
+    let dir = workspace_agent_path(path);
+    let md_path = persona_md_in(&dir);
     let md_content = fs::read_to_string(&md_path).ok();
     let fm = md_content
         .as_deref()
@@ -283,7 +291,9 @@ fn backfill_one(
         if display_empty {
             let content = md_content.as_deref().unwrap_or("---\n---\n\n");
             let updated = rewrite_frontmatter_field(content, "display_name", &pretty);
-            let _ = crate::workspace::work_item::atomic_write(&md_path, &updated);
+            let dest = workspace_agent_md_path(path);
+            let _ = crate::workspace::work_item::atomic_write(&dest, &updated);
+            backup_sibling_legacy_persona(&dir);
         }
     }
 

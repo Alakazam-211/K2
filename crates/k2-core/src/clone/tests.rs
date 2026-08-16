@@ -265,7 +265,7 @@ fn add_gitignored_agent_state(fx: &Fixture) {
         "node_modules/\n.env\n.env.*\n/.k2/\n",
     );
     write(
-        &fx.project.join(".k2/agent/AGENT.md"),
+        &fx.project.join(".k2/agent/ROLE.md"),
         "# Agent\npersona and standing orders\n",
     );
     write(
@@ -286,7 +286,7 @@ fn gitignored_k2_dir_force_included() {
 
     let ws = rel_paths(&inv, DestinationClass::Workspace);
     assert!(
-        ws.contains(".k2/agent/AGENT.md"),
+        ws.contains(".k2/agent/ROLE.md"),
         "gitignored .k2/ agent file must be force-included, got {ws:?}"
     );
     assert!(
@@ -320,7 +320,7 @@ fn gitignored_k2_dir_force_included() {
     fs::create_dir_all(&extract).unwrap();
     let names = untar(&out, &extract);
     assert!(
-        names.iter().any(|n| n == "workspace/.k2/agent/AGENT.md"),
+        names.iter().any(|n| n == "workspace/.k2/agent/ROLE.md"),
         "gitignored .k2/ file must reach the bundle, got {names:?}"
     );
     assert!(
@@ -410,7 +410,7 @@ fn k2_credential_file_scrubbed_despite_force_include() {
     );
     // benign neighbors still travel.
     assert!(
-        ws.contains(".k2/agent/AGENT.md"),
+        ws.contains(".k2/agent/ROLE.md"),
         "benign .k2/ files still included, got {ws:?}"
     );
 }

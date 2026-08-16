@@ -947,4 +947,38 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(body["error"]["code"], "not_found");
     }
+
+    #[test]
+    fn agent_conf_persona_path_old_new_and_both() {
+        let (name, path) = unique("persona-path");
+        insert_project(&name, &path);
+        let dir = k2_core::workspace::agent_identity::workspace_agent_path(&path);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(dir.join("AGENT.md"), "---\nname: old\n---\nold\n").unwrap();
+        let body: serde_json::Value = serde_json::from_str(
+            &crate::agents_routes::handle_agent_conf(&name).body,
+        )
+        .unwrap();
+        let p = body["personaPath"].as_str().expect("old personaPath");
+        assert!(p.ends_with("agent/AGENT.md"), "old-only: {p}");
+
+        std::fs::write(dir.join("ROLE.md"), "---\nname: neu\n---\nnew\n").unwrap();
+        let body: serde_json::Value = serde_json::from_str(
+            &crate::agents_routes::handle_agent_conf(&name).body,
+        )
+        .unwrap();
+        let p = body["personaPath"].as_str().expect("both personaPath");
+        assert!(p.ends_with("agent/ROLE.md"), "ROLE.md wins: {p}");
+
+        std::fs::remove_file(dir.join("AGENT.md")).unwrap();
+        let body: serde_json::Value = serde_json::from_str(
+            &crate::agents_routes::handle_agent_conf(&name).body,
+        )
+        .unwrap();
+        let p = body["personaPath"].as_str().expect("new personaPath");
+        assert!(p.ends_with("agent/ROLE.md"), "new-only: {p}");
+
+        let _ = std::fs::remove_dir_all(&path);
+    }
 }

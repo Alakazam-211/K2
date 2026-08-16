@@ -51,7 +51,7 @@ export function RoleSkillButton({
         <span className="text-xs text-[var(--color-text-secondary)]">{label} skill</span>
         <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
           Weaves the {label} role guidance into{' '}
-          <span className="font-mono">.k2/agent/AGENT.md</span> organically — your existing
+          <span className="font-mono">.k2/agent/ROLE.md</span> organically — your existing
           context is preserved, never overwritten with a templated block.
         </p>
       </div>

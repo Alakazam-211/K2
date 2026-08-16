@@ -10330,7 +10330,7 @@ cmd_schema() {
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
         {"name": "--agent", "arg": "preset", "description": "Which agent PROGRAM this workspace launches (preset id/label/command token; see k2 preset list). Must exist and be enabled. Without it, spawns fall through to the global default and ultimately Claude."},
         {"name": "--template", "arg": "archetype", "description": "Built-in persona archetype: worker | manager | qa | researcher. Mutually exclusive with --persona (both = exit 2)."},
-        {"name": "--persona", "arg": "file.md", "description": "Use this file as the agent's persona (copied to <dir>/.k2/agent/AGENT.md)."},
+        {"name": "--persona", "arg": "file.md", "description": "Use this file as the agent's persona (copied to <dir>/.k2/agent/ROLE.md)."},
         {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 (default: custom). 'off' also sets enabled=false."},
         {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
         {"name": "--connect", "arg": "name", "description": "Wire a connection to another agent (repeatable). Connections are always mutual (bidirectional)."},
@@ -12643,7 +12643,7 @@ for a in actions:
 # 3. Persona (charter file) via the existing save+backup machinery.
 for a in actions:
     if a["step"] == "write-persona" and a["status"] == "pending":
-        # Scaffold `.k2/agent/AGENT.md` first when the workspace has no
+        # Scaffold `.k2/agent/ROLE.md` first when the workspace has no
         # persona yet — /cli/agents/create is a no-op when it exists,
         # and save-agent-md refuses to write into a missing agent dir.
         agent_name = re.sub(r"[^A-Za-z0-9_-]", "-", os.path.basename(path)) or "agent"
@@ -12723,7 +12723,7 @@ FLAGS
   --template <archetype>  Scaffold the persona from a built-in archetype:
                           worker | manager | qa | researcher
   --persona <file.md>     Use this file as the agent's persona (copied to
-                          <dir>/.k2/agent/AGENT.md). Mutually exclusive with
+                          <dir>/.k2/agent/ROLE.md). Mutually exclusive with
                           --template (passing both = exit 2).
   --mode <mode>           Agent mode: off | custom | manager | k2   (default: custom).
                           "off" also sets --enabled false.
@@ -13299,9 +13299,12 @@ agent_name = re.sub(r"[^A-Za-z0-9_-]", "-", basename) or "agent"
 persona_path = conf.get("personaPath") if registered else None
 if not persona_path:
     for dot in (".k2", ".k2so"):
-        cand = os.path.join(path, dot, "agent", "AGENT.md")
-        if os.path.isfile(cand):
-            persona_path = cand
+        for name in ("ROLE.md", "AGENT.md"):
+            cand = os.path.join(path, dot, "agent", name)
+            if os.path.isfile(cand):
+                persona_path = cand
+                break
+        if persona_path:
             break
 persona_exists = bool(persona_path)
 
@@ -13657,7 +13660,7 @@ if a and a["status"] == "pending":
 # 2. write-persona
 a = one("write-persona")
 if a and a["status"] == "pending":
-    # /cli/agents/create scaffolds the canonical .k2/agent/AGENT.md
+    # /cli/agents/create scaffolds the canonical .k2/agent/ROLE.md
     # (no-op when it exists); a template/--persona then writes through
     # /cli/agents/save-agent-md — the same backup-aware door
     # `k2 agent set --persona` uses.
@@ -14410,13 +14413,13 @@ def on_off(en):
 print("PINNED  (system — on|off via: k2 agent context on|off pinned:agent|project|tooling)")
 if not pinned:
     # Sensible defaults when daemon omits explicit pinned rows
-    print("  on   Agent     .k2/agent/AGENT.md")
+    print("  on   Role     .k2/agent/ROLE.md")
     print("  on   Project   .k2/PROJECT.md")
     print("  on   Tooling   (generated k2-cli pointer)")
 else:
     for p in pinned:
         label = (p.get("label") or p.get("name") or p.get("key") or p.get("id") or "layer").strip()
-        # Shorten "Agent (persona)" → first word for alignment
+        # Shorten "Agent (persona)" / "Role" → first word for alignment
         short = label.split()[0] if label else "layer"
         path = p.get("path") or p.get("detail") or ""
         if not path and (p.get("generated") or p.get("kind") == "tooling" or "tooling" in label.lower()):

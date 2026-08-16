@@ -160,10 +160,10 @@ pub fn load_custom_layers(tier: &str) -> String {
 /// The ORGANIC role-integration directive shared by the role-knowledge
 /// skills (Workspace Manager, K2 Agent). PRD §3.2 + §3.3: when a role
 /// skill runs, the agent weaves this role guidance into the user's
-/// existing `.k2so/agent/AGENT.md` WITH JUDGMENT — reading what's there,
+/// existing `.k2/agent/ROLE.md` WITH JUDGMENT — reading what's there,
 /// preserving accumulated context, never injecting a templated/marked
 /// block. The deterministic core (`workspace::canonical::persist_agent_md`)
-/// then backs up AGENT.md and writes the merged text atomically, so the
+/// then backs up ROLE.md and writes the merged text atomically, so the
 /// integration is byte-reversible.
 ///
 /// `role` is the human-readable role name ("Workspace Manager", "K2
@@ -172,19 +172,19 @@ pub fn load_custom_layers(tier: &str) -> String {
 /// programmatic injection.
 fn organic_role_integration_section(role: &str) -> String {
     format!(
-        r#"## Integrating this role into your AGENT.md (organic, not a block)
+        r#"## Integrating this role into your ROLE.md (organic, not a block)
 
 This skill is **role knowledge** — how to operate as a {role}. When asked
 to apply it to this workspace, integrate it **organically** into your
-canonical persona at `.k2/agent/AGENT.md`:
+canonical persona at `.k2/agent/ROLE.md`:
 
-1. **Read** the existing `.k2/agent/AGENT.md` (and the surrounding
+1. **Read** the existing `.k2/agent/ROLE.md` (and the surrounding
    workspace context) first.
 2. **Weave** the {role} guidance in **with judgment** — preserve the
    user's accumulated context, reconcile overlaps, keep what still
    applies. Your judgment is the only thing that knows what to keep.
 3. Hand the merged text to the deterministic safety net, which **backs
-   up** the old `AGENT.md` and writes your merge atomically (byte-
+   up** the old `ROLE.md` and writes your merge atomically (byte-
    reversible).
 
 **Never inject a templated or marked block.** Do not paste a fenced
@@ -193,7 +193,7 @@ auto-rewrite, do not bulldoze existing content. In a long-lived
 workspace a mechanical block displaces context the agent relied on —
 that is exactly the failure mode this organic model exists to avoid.
 Refreshing the role later means **re-running this skill**, re-reading
-AGENT.md, and re-integrating by hand; it is never a silent programmatic
+ROLE.md, and re-integrating by hand; it is never a silent programmatic
 rewrite.
 
 "#,
@@ -808,8 +808,8 @@ Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, sk
 /// dry-run → confirm → apply → report → unwind.
 ///
 /// Unlike the role-knowledge skills, this one does NOT integrate a role
-/// into AGENT.md. It operates on the workspace's harness files: it pulls
-/// existing harness content INTO `.k2so/agent/AGENT.md` + `.k2so/PROJECT.md`
+/// into ROLE.md. It operates on the workspace's harness files: it pulls
+/// existing harness content INTO `.k2/agent/ROLE.md` + `.k2/PROJECT.md`
 /// (Model A) first so nothing is lost, then mirrors out to the chosen
 /// per-harness files as K2SO-generated copies. Every destructive act
 /// goes through the deterministic safety net
@@ -826,7 +826,7 @@ overwrite the user's content.
 Each AI coding tool reads its project notes from a different file
 (`CLAUDE.md`, `GEMINI.md`, `.goosehints`, `.cursor/rules`, `AGENTS.md`,
 …). The point of canonicalization is: the user writes their context
-**once** and every tool sees the same picture. **`.k2/agent/AGENT.md`
+**once** and every tool sees the same picture. **`.k2/agent/ROLE.md`
 + `.k2/PROJECT.md` are the canonical source of truth (Model A);** the
 per-harness files are **generated mirrors** of them.
 
@@ -845,7 +845,7 @@ per-harness files are **generated mirrors** of them.
    untouched, independently.
 4. **Merge into Model A first** — read the existing harness files,
    judge valuable user context vs boilerplate/stale, and **weave the
-   substance into `.k2/agent/AGENT.md` / `.k2/PROJECT.md`** so
+   substance into `.k2/agent/ROLE.md` / `.k2/PROJECT.md`** so
    nothing is lost. Canonical is a target STRUCTURE the user's content
    is poured into, never a template that bulldozes it.
 5. **Mirror out** — derive the chosen per-harness files FROM Model A.
@@ -2059,8 +2059,8 @@ mod tests {
                 "{name} role skill must explicitly forbid injecting a templated/marked block",
             );
             assert!(
-                lc.contains(".k2/agent/agent.md"),
-                "{name} role skill must point integration at .k2/agent/AGENT.md (Model A)",
+                lc.contains(".k2/agent/role.md"),
+                "{name} role skill must point integration at .k2/agent/ROLE.md (Model A)",
             );
             assert_no_programmatic_injection(body, name);
             assert_no_deprecated_verbs(body, name);
@@ -2078,7 +2078,7 @@ mod tests {
             "Diagnose",
             "Ask intent",
             "which harnesses",
-            "AGENT.md",
+            "ROLE.md",
             "PROJECT.md",
             "Mirror out",
             "DRY-RUN",

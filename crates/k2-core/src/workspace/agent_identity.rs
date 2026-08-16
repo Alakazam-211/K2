@@ -15,6 +15,15 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Canonical authored persona filename (compose input). Capitals, same
+/// convention as `PROJECT.md` / `AGENTS.md`.
+pub const PERSONA_MD_NAME: &str = "ROLE.md";
+
+/// Pre-heal authored persona filename. Dual-read only; never a new write dest.
+/// Distinct from leftover cwd `./AGENT.md` (fan-out alias of the compose).
+pub const LEGACY_PERSONA_MD_NAME: &str = "AGENT.md";
 
 /// Resolve a project's primary-key id from its filesystem path. `None`
 /// when the project hasn't been registered via `projects` yet.
@@ -45,11 +54,65 @@ pub fn workspace_agent_path(project_path: &str) -> PathBuf {
     crate::workspace_dot_dir(project_path).join("agent")
 }
 
-/// `<project>/.k2so/agent/AGENT.md` — the workspace agent's persona
-/// file post-0.37.0. Convenience over `workspace_agent_path().join("AGENT.md")`.
-#[allow(dead_code)]
+/// `<project>/.k2/agent/ROLE.md` — write path for the workspace agent's
+/// authored persona. Always `ROLE.md`; never the pre-heal `AGENT.md`.
 pub fn workspace_agent_md_path(project_path: &str) -> PathBuf {
-    workspace_agent_path(project_path).join("AGENT.md")
+    workspace_agent_path(project_path).join(PERSONA_MD_NAME)
+}
+
+/// Resolve the on-disk persona file in `dir`.
+///
+/// Prefer `ROLE.md` if present, else `AGENT.md`, else `ROLE.md` (new writes).
+/// Does not newly accept lowercase-only `role.md` as a live name (APFS
+/// `exists("ROLE.md")` is true for `role.md`; heal that case separately).
+pub fn persona_md_in(dir: impl AsRef<Path>) -> PathBuf {
+    let dir = dir.as_ref();
+    let role = dir.join(PERSONA_MD_NAME);
+    if role.exists() {
+        return role;
+    }
+    let legacy = dir.join(LEGACY_PERSONA_MD_NAME);
+    if legacy.exists() {
+        return legacy;
+    }
+    role
+}
+
+/// True when `dir` holds an authored persona (`ROLE.md` or pre-heal `AGENT.md`).
+pub fn persona_present_in(dir: impl AsRef<Path>) -> bool {
+    let dir = dir.as_ref();
+    dir.join(PERSONA_MD_NAME).exists() || dir.join(LEGACY_PERSONA_MD_NAME).exists()
+}
+
+/// After a successful write to `ROLE.md`, if sibling `AGENT.md` remains,
+/// move it into `agent-backups/` (do not clobber `ROLE.md`).
+pub fn backup_sibling_legacy_persona(dir: impl AsRef<Path>) {
+    let dir = dir.as_ref();
+    let legacy = dir.join(LEGACY_PERSONA_MD_NAME);
+    if !legacy.exists() {
+        return;
+    }
+    // ROLE.md must already be the live file; otherwise this is a heal/rename.
+    if !dir.join(PERSONA_MD_NAME).exists() {
+        return;
+    }
+    let backup_dir = dir.join("agent-backups");
+    if fs::create_dir_all(&backup_dir).is_err() {
+        return;
+    }
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut dest = backup_dir.join(format!("agent-{ts}.md"));
+    if dest.exists() {
+        dest = backup_dir.join(format!("agent-{ts}-{}.md", std::process::id()));
+    }
+    if fs::rename(&legacy, &dest).is_err() {
+        if fs::copy(&legacy, &dest).is_ok() {
+            let _ = fs::remove_file(&legacy);
+        }
+    }
 }
 
 /// Post-0.37.0: `<project>/.k2so/agent-templates/<template_name>/` —
@@ -97,16 +160,16 @@ pub fn skill_dir(project_path: &str, skill_name: &str) -> PathBuf {
 /// resolve onto the unified path transparently.
 ///
 /// **Layout-aware.** Probes in this order:
-/// 1. `<project>/.k2so/agent/AGENT.md` exists — post-0.37.0 primary
-///    workspace-agent. `agent_name` is ignored here; the primary is
-///    keyed on workspace, not name. Historic call sites
-///    (e.g. `agent_dir(project, "pod-leader")`) keep working without
-///    changes during the deprecation window.
+/// 1. `<project>/.k2/agent/` has `ROLE.md` **or** pre-heal `AGENT.md` —
+///    post-0.37.0 primary workspace-agent. `agent_name` is ignored
+///    here; the primary is keyed on workspace, not name. Historic
+///    call sites (e.g. `agent_dir(project, "pod-leader")`) keep
+///    working without changes during the deprecation window.
 ///
-///    Probing for AGENT.md (not just the dir) matters because the
-///    unification migration `mkdir -p`s `.k2so/agent/` BEFORE it
+///    Probing for the persona file (not just the dir) matters because
+///    the unification migration `mkdir -p`s `.k2/agent/` BEFORE it
 ///    moves any files. During that window the dir exists but has
-///    no AGENT.md yet, and the migration's own primary-detection
+///    no persona yet, and the migration's own primary-detection
 ///    walk needs `agent_type_for` to read from the LEGACY
 ///    `.k2so/agents/<name>/AGENT.md` to determine the primary.
 ///    Gating the probe on the populated state avoids a
@@ -126,7 +189,7 @@ pub fn skill_dir(project_path: &str, skill_name: &str) -> PathBuf {
 ///    boot sweep migrates every registered workspace).
 pub fn agent_dir(project_path: &str, agent_name: &str) -> PathBuf {
     let primary = workspace_agent_path(project_path);
-    if primary.join("AGENT.md").exists() {
+    if persona_present_in(&primary) {
         return primary;
     }
     // Phase 2.5b: probe the consolidated `.k2so/skills/<name>/` home
@@ -173,7 +236,7 @@ pub fn parse_frontmatter(content: &str) -> HashMap<String, String> {
 /// `"agent-template"` if no frontmatter or no `type:` field is found
 /// (same default the scheduler uses elsewhere).
 pub fn agent_type_for(project_path: &str, agent_name: &str) -> String {
-    let md = agent_dir(project_path, agent_name).join("AGENT.md");
+    let md = persona_md_in(agent_dir(project_path, agent_name));
     if let Ok(content) = fs::read_to_string(&md) {
         let fm = parse_frontmatter(&content);
         if let Some(t) = fm.get("type") {
@@ -210,17 +273,17 @@ pub fn agent_types_equal(a: &str, b: &str) -> bool {
 /// Agent-templates are never scheduleable.
 ///
 /// **0.37.0 unification.** Post-migration the workspace's single
-/// agent lives at `.k2so/agent/AGENT.md` and the legacy
-/// `.k2so/agents/<name>/` tree is gone. We probe the unified path
-/// first — if it has an AGENT.md, parse the frontmatter `name:`
-/// and return it. Pre-0.37.0 workspaces (or freshly-created ones
-/// that haven't been migrated yet) fall through to the legacy
+/// agent lives at `.k2/agent/ROLE.md` (pre-heal: `AGENT.md`) and the
+/// legacy `.k2so/agents/<name>/` tree is gone. We probe the unified
+/// path first — if it has a persona file, parse the frontmatter
+/// `name:` and return it. Pre-0.37.0 workspaces (or freshly-created
+/// ones that haven't been migrated yet) fall through to the legacy
 /// scan. Without this probe, every heartbeat fire on a migrated
 /// workspace silently failed at "no scheduleable agent in this
 /// workspace" because `agents_root.exists()` returned false.
 pub fn find_primary_agent(project_path: &str) -> Option<String> {
-    // Post-0.37.0 unified primary.
-    let unified_md = workspace_agent_path(project_path).join("AGENT.md");
+    // Post-0.37.0 unified primary. ROLE.md wins when both exist.
+    let unified_md = persona_md_in(workspace_agent_path(project_path));
     if let Ok(content) = fs::read_to_string(&unified_md) {
         let fm = parse_frontmatter(&content);
         if let Some(name) = fm.get("name") {
@@ -564,5 +627,121 @@ mod tests {
         assert_eq!(root, base.join(".k2").join("agents"));
         let agent = agent_dir(&root_str, "foo");
         assert_eq!(agent, root.join("foo"));
+    }
+
+    fn unique_persona_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-persona-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).expect("mkdir persona dir");
+        dir
+    }
+
+    #[test]
+    fn persona_md_in_reads_legacy_agent_md() {
+        let dir = unique_persona_dir("old-only");
+        fs::write(dir.join("AGENT.md"), "---\nname: scout\n---\nold\n").unwrap();
+        let got = persona_md_in(&dir);
+        assert_eq!(got, dir.join("AGENT.md"));
+        assert!(persona_present_in(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persona_md_in_prefers_role_md() {
+        let dir = unique_persona_dir("new-only");
+        fs::write(dir.join("ROLE.md"), "---\nname: scout\n---\nnew\n").unwrap();
+        assert_eq!(persona_md_in(&dir), dir.join("ROLE.md"));
+        assert!(persona_present_in(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persona_md_in_role_wins_when_both_exist() {
+        let dir = unique_persona_dir("both");
+        fs::write(dir.join("AGENT.md"), "legacy\n").unwrap();
+        fs::write(dir.join("ROLE.md"), "role\n").unwrap();
+        assert_eq!(persona_md_in(&dir), dir.join("ROLE.md"));
+        assert_eq!(fs::read_to_string(persona_md_in(&dir)).unwrap(), "role\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persona_md_in_defaults_to_role_md_when_absent() {
+        let dir = unique_persona_dir("absent");
+        assert!(!persona_present_in(&dir));
+        assert_eq!(persona_md_in(&dir), dir.join("ROLE.md"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_agent_md_path_is_always_role_md() {
+        let path = unique_ws_path("write-dest");
+        assert_eq!(
+            workspace_agent_md_path(&path),
+            workspace_agent_path(&path).join("ROLE.md")
+        );
+    }
+
+    #[test]
+    fn backup_sibling_legacy_persona_moves_agent_md() {
+        let dir = unique_persona_dir("backup");
+        fs::write(dir.join("ROLE.md"), "role\n").unwrap();
+        fs::write(dir.join("AGENT.md"), "legacy\n").unwrap();
+        backup_sibling_legacy_persona(&dir);
+        assert!(dir.join("ROLE.md").exists());
+        assert!(!dir.join("AGENT.md").exists());
+        let backups: Vec<_> = fs::read_dir(dir.join("agent-backups"))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read_to_string(backups[0].path()).unwrap(), "legacy\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_primary_agent_reads_old_new_and_both() {
+        let path = unique_ws_path("primary");
+        let dir = workspace_agent_path(&path);
+        fs::create_dir_all(&dir).unwrap();
+
+        fs::write(
+            dir.join("AGENT.md"),
+            "---\nname: oldname\ntype: custom\n---\nold\n",
+        )
+        .unwrap();
+        assert_eq!(find_primary_agent(&path), Some("oldname".to_string()));
+
+        fs::write(
+            dir.join("ROLE.md"),
+            "---\nname: newname\ntype: custom\n---\nnew\n",
+        )
+        .unwrap();
+        assert_eq!(
+            find_primary_agent(&path),
+            Some("newname".to_string()),
+            "ROLE.md wins when both exist"
+        );
+
+        fs::remove_file(dir.join("AGENT.md")).unwrap();
+        assert_eq!(find_primary_agent(&path), Some("newname".to_string()));
+
+        let _ = fs::remove_dir_all(crate::workspace_dot_dir(&path));
+    }
+
+    #[test]
+    fn agent_dir_primary_probe_accepts_role_or_agent_md() {
+        let path = unique_ws_path("probe");
+        let dir = workspace_agent_path(&path);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("ROLE.md"), "---\nname: r\n---\n").unwrap();
+        assert_eq!(agent_dir(&path, "ignored"), dir);
+        fs::remove_file(dir.join("ROLE.md")).unwrap();
+        fs::write(dir.join("AGENT.md"), "---\nname: a\n---\n").unwrap();
+        assert_eq!(agent_dir(&path, "ignored"), dir);
+        let _ = fs::remove_dir_all(crate::workspace_dot_dir(&path));
     }
 }

@@ -10,7 +10,9 @@
 
 use std::fs;
 
-use crate::workspace::agent_identity::{agent_dir, parse_frontmatter};
+use crate::workspace::agent_identity::{
+    agent_dir, backup_sibling_legacy_persona, parse_frontmatter, persona_md_in, PERSONA_MD_NAME,
+};
 use crate::workspace::work_item::atomic_write;
 use crate::workspace::agent::cleanup_agent_backups;
 
@@ -35,7 +37,7 @@ pub fn k2so_agents_get_editor_context(
         return Err(format!("Agent '{}' does not exist", agent_name));
     }
 
-    let agent_md = fs::read_to_string(dir.join("AGENT.md")).unwrap_or_default();
+    let agent_md = fs::read_to_string(persona_md_in(&dir)).unwrap_or_default();
     let fm = parse_frontmatter(&agent_md);
     let is_manager = fm.get("pod_leader").map_or(false, |v| v == "true")
         || fm.get("coordinator").map_or(false, |v| v == "true")
@@ -57,7 +59,7 @@ pub fn k2so_agents_get_editor_context(
         "agentType": agent_type,
         "isManager": is_manager,
         "agentMd": agent_md,
-        "agentMdPath": dir.join("AGENT.md").to_string_lossy(),
+        "agentMdPath": persona_md_in(&dir).to_string_lossy(),
         "agentDir": dir.to_string_lossy(),
     }))
 }
@@ -138,10 +140,10 @@ pub fn k2so_agents_save_agent_md(
         return Err(format!("Agent '{}' does not exist", agent_name));
     }
 
-    let agent_md_path = dir.join("AGENT.md");
+    let live = persona_md_in(&dir);
 
-    // Back up existing agent.md before overwriting
-    if agent_md_path.exists() {
+    // Back up whichever live file existed before overwriting.
+    if live.exists() {
         let backup_dir = dir.join("agent-backups");
         fs::create_dir_all(&backup_dir).ok();
 
@@ -150,14 +152,17 @@ pub fn k2so_agents_save_agent_md(
             .unwrap_or_default()
             .as_secs();
         let backup_name = format!("agent-{}.md", timestamp);
-        let existing = fs::read_to_string(&agent_md_path).unwrap_or_default();
+        let existing = fs::read_to_string(&live).unwrap_or_default();
         fs::write(backup_dir.join(&backup_name), &existing).ok();
 
         // Keep only the 20 most recent backups
         cleanup_agent_backups(&backup_dir, 20);
     }
 
-    atomic_write(&agent_md_path, &content)
+    let dest = dir.join(PERSONA_MD_NAME);
+    atomic_write(&dest, &content)?;
+    backup_sibling_legacy_persona(&dir);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -212,11 +217,15 @@ mod tests {
         // type=custom: not a manager, normalized agentType
         assert_eq!(ctx["agentType"], "custom");
         assert_eq!(ctx["isManager"], false);
-        // The on-disk AGENT.md body should be returned verbatim.
+        // The on-disk persona body should be returned verbatim.
         let agent_md = ctx["agentMd"].as_str().expect("agentMd string");
         assert!(agent_md.contains("Initial body."));
-        // Both path fields should be set.
-        assert!(ctx["agentMdPath"].as_str().unwrap().ends_with("AGENT.md"));
+        // Live path prefers ROLE.md, else pre-heal AGENT.md.
+        let md_path = ctx["agentMdPath"].as_str().unwrap();
+        assert!(
+            md_path.ends_with("AGENT.md") || md_path.ends_with("ROLE.md"),
+            "agentMdPath must be the live persona file, got {md_path}"
+        );
         assert!(ctx["agentDir"].as_str().unwrap().contains(".k2so/agent"));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -297,7 +306,7 @@ mod tests {
 
         // Read the current body so we can assert the backup matches it.
         let agent_dir_path = dir.join(".k2so/agent");
-        let pre_save = std::fs::read_to_string(agent_dir_path.join("AGENT.md")).unwrap();
+        let pre_save = std::fs::read_to_string(persona_md_in(&agent_dir_path)).unwrap();
 
         k2so_agents_save_agent_md(
             path.clone(),
@@ -307,27 +316,32 @@ mod tests {
         )
         .expect("save");
 
-        // 1. The new content landed.
-        let new_body = std::fs::read_to_string(agent_dir_path.join("AGENT.md")).unwrap();
+        // 1. The new content landed on ROLE.md; sibling AGENT.md is backed up.
+        let new_body = std::fs::read_to_string(agent_dir_path.join("ROLE.md")).unwrap();
         assert!(new_body.contains("New body."));
+        assert!(
+            !agent_dir_path.join("AGENT.md").exists(),
+            "save must write ROLE.md and move sibling AGENT.md"
+        );
 
-        // 2. agent-backups/ exists with exactly one backup matching pre_save.
+        // 2. agent-backups/ holds the previous live file (content copy and/or
+        //    the moved sibling AGENT.md).
         let backup_dir = agent_dir_path.join("agent-backups");
         assert!(backup_dir.is_dir(), "agent-backups directory should be created");
         let backups: Vec<_> = std::fs::read_dir(&backup_dir)
             .unwrap()
             .flatten()
             .collect();
-        assert_eq!(
-            backups.len(),
-            1,
-            "first save should create exactly one backup, got {} entries",
+        assert!(
+            !backups.is_empty(),
+            "first save should create at least one backup, got {} entries",
             backups.len(),
         );
-        let backup_body = std::fs::read_to_string(backups[0].path()).unwrap();
-        assert_eq!(
-            backup_body, pre_save,
-            "backup must preserve the previous AGENT.md byte-for-byte"
+        assert!(
+            backups.iter().any(|b| {
+                std::fs::read_to_string(b.path()).ok().as_deref() == Some(pre_save.as_str())
+            }),
+            "backup must preserve the previous persona byte-for-byte"
         );
 
         std::fs::remove_dir_all(&dir).ok();

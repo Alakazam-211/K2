@@ -47,9 +47,9 @@ export function AgentContextDiagram(): React.JSX.Element {
         <div className="flex flex-col gap-1.5">
           <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">Context management stack</div>
           <div className="border border-violet-400/50 bg-violet-400/10 px-2 py-1.5">
-            <div className="text-[11px] font-semibold text-violet-200">AGENT.md</div>
-            <div className="text-[8px] font-mono text-violet-200/60 mt-0.5 truncate">.k2/agent/AGENT.md</div>
-            <div className="text-[8px] text-violet-200/70">pinned · persona</div>
+            <div className="text-[11px] font-semibold text-violet-200">ROLE.md</div>
+            <div className="text-[8px] font-mono text-violet-200/60 mt-0.5 truncate">.k2/agent/ROLE.md</div>
+            <div className="text-[8px] text-violet-200/70">pinned · role</div>
           </div>
           <div className="border border-violet-400/40 bg-violet-400/5 px-2 py-1.5">
             <div className="text-[11px] font-medium text-violet-200/90">PROJECT.md</div>

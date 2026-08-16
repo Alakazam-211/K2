@@ -7,7 +7,7 @@ import { AgentContextDiagram } from './AgentContextDiagram'
 // agents" picker. Post-`agents/`-removal a workspace IS one agent: there is
 // a single agent under .k2/agent/ + a flat skills list under .k2/skills/.
 // This page is the explainer + control surface for the AGENTS.md-canonical
-// flow: you author .k2/AGENT.md (persona) + .k2/PROJECT.md (project), K2
+// flow: you author .k2/agent/ROLE.md (role) + .k2/PROJECT.md (project), K2
 // GENERATES the canonical .k2/AGENTS.md entrypoint from them, and the
 // per-harness files (CLAUDE.md, GEMINI.md, .cursor/rules) are read-only
 // symlink MIRRORS of that generated canon. AGENTS.md is the cross-tool
@@ -18,7 +18,7 @@ import { AgentContextDiagram } from './AgentContextDiagram'
 // section stays `general` so search jumps to General; deep-link id `agent-skills` still
 // redirects via the settings store.
 export const AGENT_SKILLS_MANIFEST: SettingEntry[] = [
-  { id: 'agent-skills.canonical-flow', section: 'general', group: 'Workspaces', label: 'Canonical Agent Flow', description: 'How the context stack (AGENT + PROJECT + optional layers) generates .k2/AGENTS.md and mirrors out to harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'AGENT.md', 'context stack', 'help'] },
+  { id: 'agent-skills.canonical-flow', section: 'general', group: 'Workspaces', label: 'Canonical Agent Flow', description: 'How the context stack (ROLE + PROJECT + optional layers) generates .k2/AGENTS.md and mirrors out to harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'ROLE.md', 'context stack', 'help'] },
   { id: 'agent-skills.workspace-manager', section: 'general', group: 'Workspaces', label: 'Workspace Manager skill', description: 'Opt-in loadable role skill — manager guidance (not auto-stacked into AGENTS.md)', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
   { id: 'agent-skills.k2-agent', section: 'general', group: 'Workspaces', label: 'K2 Agent skill', description: 'Opt-in loadable role skill — planner guidance (not auto-stacked into AGENTS.md)', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
   { id: 'agent-skills.k2-canonical-agent', section: 'general', group: 'Workspaces', label: 'K2 Canonical Agent skill', description: 'Opt-in skill — unify the workspace harness files safely (merge + mirror)', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
@@ -32,19 +32,19 @@ const OPT_IN_SKILLS: { dir: string; label: string; blurb: string }[] = [
     dir: 'workspace-manager',
     label: 'Workspace Manager',
     blurb:
-      'Role knowledge for the manager — standing orders, the k2 CLI verb surface, delegation/review. The agent weaves it into AGENT.md organically. Enable + run it from a manager workspace’s Agent section.',
+      'Role knowledge for the manager — standing orders, the k2 CLI verb surface, delegation/review. The agent weaves it into ROLE.md organically. Enable + run it from a manager workspace’s Agent section.',
   },
   {
     dir: 'k2-agent',
     label: 'K2 Agent',
     blurb:
-      'Role knowledge for the planner agent — PRDs, milestones, technical plans. Woven into AGENT.md organically. Enable + run it from a K2-Agent workspace’s Agent section.',
+      'Role knowledge for the planner agent — PRDs, milestones, technical plans. Woven into ROLE.md organically. Enable + run it from a K2-Agent workspace’s Agent section.',
   },
   {
     dir: 'k2-canonical-agent',
     label: 'K2 Canonical Agent',
     blurb:
-      'Unifies the workspace’s AI-harness files safely: diagnose per-harness state, merge existing harness content into AGENT.md/PROJECT.md, regenerate the canonical .k2/AGENTS.md, then mirror it out — backed up and byte-reversible. Available to every workspace.',
+      'Unifies the workspace’s AI-harness files safely: diagnose per-harness state, merge existing harness content into ROLE.md/PROJECT.md, regenerate the canonical .k2/AGENTS.md, then mirror it out — backed up and byte-reversible. Available to every workspace.',
   },
 ]
 

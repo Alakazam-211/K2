@@ -73,7 +73,8 @@ pub const SKILL_VERSION_K2SO_AGENT: u32 = 8;
 pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 8;
 pub const SKILL_VERSION_TEMPLATE: u32 = 3;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
-pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
+/// v2 = authored persona file is `.k2/agent/ROLE.md`.
+pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

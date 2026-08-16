@@ -1012,9 +1012,9 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
     let (inc_agent, inc_project, inc_tooling) = system_include_flags(project_path);
     let mut out = Vec::with_capacity(3);
 
-    // Agent persona
+    // Role persona
     let agent_rel = if let Some(primary) = find_primary_agent(project_path) {
-        let abs = agent_dir(project_path, &primary).join("AGENT.md");
+        let abs = crate::workspace::agent_identity::persona_md_in(agent_dir(project_path, &primary));
         let root = Path::new(project_path);
         abs.strip_prefix(root)
             .map(|p| {
@@ -1023,10 +1023,12 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
                     .collect::<Vec<_>>()
                     .join("/")
             })
-            .unwrap_or_else(|_| ".k2/agent/AGENT.md".into())
+            .unwrap_or_else(|_| ".k2/agent/ROLE.md".into())
     } else {
-        // Prefer actual dot-dir name when present.
-        let agent_md = crate::workspace_dot_dir(project_path).join("agent/AGENT.md");
+        // Prefer actual dot-dir name when present; helper prefers ROLE.md.
+        let agent_md = crate::workspace::agent_identity::persona_md_in(
+            crate::workspace_dot_dir(project_path).join("agent"),
+        );
         if agent_md.exists() {
             let root = Path::new(project_path);
             agent_md
@@ -1037,16 +1039,16 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
                         .collect::<Vec<_>>()
                         .join("/")
                 })
-                .unwrap_or_else(|_| ".k2/agent/AGENT.md".into())
+                .unwrap_or_else(|_| ".k2/agent/ROLE.md".into())
         } else {
-            ".k2/agent/AGENT.md".into()
+            ".k2/agent/ROLE.md".into()
         }
     };
     let (exists, bytes) = disk_meta(project_path, &agent_rel);
     out.push(PinnedLayer {
         id: "pinned:agent".into(),
         path: agent_rel,
-        label: "Agent (persona)".into(),
+        label: "Role".into(),
         exists,
         bytes,
         generated: false,
@@ -1771,7 +1773,12 @@ mod tests {
         let stack = list_stack(path).expect("list_stack");
         assert!(stack.layers.is_empty(), "no optional layers yet");
         assert_eq!(stack.pinned.len(), 3);
-        assert!(stack.pinned[0].label.contains("Agent"));
+        assert_eq!(stack.pinned[0].label, "Role");
+        assert!(
+            stack.pinned[0].path.ends_with("ROLE.md"),
+            "default pinned path is ROLE.md, got {}",
+            stack.pinned[0].path
+        );
         assert!(stack.pinned[1].label.contains("Project"));
         assert!(stack.pinned[2].label.contains("Tooling"));
         assert!(stack.pinned[2].generated);
@@ -2086,6 +2093,34 @@ mod tests {
 
         let err = add_layer(path, None, None, None).expect_err("neither");
         assert_eq!(err.code(), "bad_usage");
+
+        cleanup_project(path, &pid);
+    }
+
+    #[test]
+    fn pinned_info_persona_old_new_and_both() {
+        let root = unique_root("persona-pin");
+        let path = root.to_str().unwrap();
+        let pid = register_project(path);
+        let dir = crate::workspace::agent_identity::workspace_agent_path(path);
+        fs::create_dir_all(&dir).unwrap();
+
+        fs::write(dir.join("AGENT.md"), "---\nname: old\n---\nold\n").unwrap();
+        let pin = pinned_info(path);
+        assert_eq!(pin[0].id, "pinned:agent");
+        assert_eq!(pin[0].label, "Role");
+        assert!(pin[0].path.ends_with("agent/AGENT.md"), "got {}", pin[0].path);
+        assert!(pin[0].exists);
+
+        fs::write(dir.join("ROLE.md"), "---\nname: neu\n---\nnew\n").unwrap();
+        let pin = pinned_info(path);
+        assert!(pin[0].path.ends_with("agent/ROLE.md"), "ROLE.md wins: {}", pin[0].path);
+        assert!(pin[0].exists);
+
+        fs::remove_file(dir.join("AGENT.md")).unwrap();
+        let pin = pinned_info(path);
+        assert!(pin[0].path.ends_with("agent/ROLE.md"));
+        assert!(pin[0].exists);
 
         cleanup_project(path, &pid);
     }

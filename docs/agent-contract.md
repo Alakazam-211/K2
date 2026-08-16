@@ -21,7 +21,7 @@ never surprised.
 A workspace launches whatever its **default agent** resolves to, with 4-level
 precedence (`crates/k2-core/src/workspace/agent_resolve.rs`):
 
-1. An `AGENT.md` `launch:` block in the workspace (full manual override).
+1. A `ROLE.md` `launch:` block in the workspace (full manual override).
 2. The workspace's own default (`projects.default_agent` — a preset id).
 3. The global default agent (Settings).
 4. The literal fallback: `claude --dangerously-skip-permissions`.
@@ -73,7 +73,7 @@ On top of that, the preset's **`env` metadata** (a JSON object) is merged into
 the child environment at every daemon-initiated spawn. Precedence, highest
 first:
 
-1. `AGENT.md` `launch:` block env (a launch block replaces the profile
+1. `ROLE.md` `launch:` block env (a launch block replaces the profile
    wholesale — preset env never leaks under it),
 2. K2-internal env (`K2_HOOK_TOKEN` and friends),
 3. **preset `env`**,

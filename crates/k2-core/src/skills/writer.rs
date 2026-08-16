@@ -59,10 +59,11 @@ pub fn skill_update_footer(project_path: &str, agent_name: Option<&str>) -> Stri
         .to_string();
     let agent_line = match agent_name {
         Some(name) => {
-            let agent_md = agent_dir(project_path, name)
-                .join("AGENT.md")
-                .display()
-                .to_string();
+            let agent_md = crate::workspace::agent_identity::persona_md_in(
+                agent_dir(project_path, name),
+            )
+            .display()
+            .to_string();
             format!(
                 "- **Your role / persona / standing orders** — edit `{}`",
                 agent_md

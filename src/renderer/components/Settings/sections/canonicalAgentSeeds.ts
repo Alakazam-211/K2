@@ -28,9 +28,9 @@ export function roleSkillLabel(role: RoleSkill): string {
 export function roleSeedSystemPrompt(role: RoleSkill): string {
   const label = roleSkillLabel(role)
   return [
-    `Run the ${label} skill. READ the existing AGENT.md, weave the role guidance in organically with judgment, PRESERVE existing context, NEVER inject a templated block. The deterministic core backs up AGENT.md and writes your merged text atomically.`,
+    `Run the ${label} skill. READ the existing ROLE.md, weave the role guidance in organically with judgment, PRESERVE existing context, NEVER inject a templated block. The deterministic core backs up ROLE.md and writes your merged text atomically.`,
     ``,
-    `The ${label} role knowledge lives in the skill under .k2so/skills/${role}/SKILL.md — load it, then integrate it into the user's AGENT.md (.k2so/agent/AGENT.md) without displacing the accumulated context the agent already relies on. If a section already covers the role, refine it in place rather than appending a duplicate block.`,
+    `The ${label} role knowledge lives in the skill under .k2/skills/${role}/SKILL.md — load it, then integrate it into the user's ROLE.md (.k2/agent/ROLE.md) without displacing the accumulated context the agent already relies on. If a section already covers the role, refine it in place rather than appending a duplicate block.`,
   ].join('\n')
 }
 
@@ -40,7 +40,7 @@ export function roleSeedSystemPrompt(role: RoleSkill): string {
  */
 export function roleSeedMessage(role: RoleSkill, projectName: string): string {
   const label = roleSkillLabel(role)
-  return `Run the ${label} skill for the workspace "${projectName}". First read .k2so/agent/AGENT.md, then weave the ${label} role guidance into it organically — preserving everything the user already wrote. Show me the merged result before the core persists it.`
+  return `Run the ${label} skill for the workspace "${projectName}". First read .k2/agent/ROLE.md, then weave the ${label} role guidance into it organically — preserving everything the user already wrote. Show me the merged result before the core persists it.`
 }
 
 /**
@@ -49,7 +49,7 @@ export function roleSeedMessage(role: RoleSkill, projectName: string): string {
  * to .k2so/.canonical-setup/plan.md → STOP for confirmation.
  */
 export const CANONICAL_SETUP_SEED =
-  `Run the K2 Canonical Agent skill. Detect per-harness canonical state, summarize it, ask which harnesses I want and what I want to do. Pull existing harness content INTO AGENT.md/PROJECT.md first (Model A), then mirror out. Produce a DRY-RUN plan to .k2so/.canonical-setup/plan.md and STOP for confirmation before writing.`
+  `Run the K2 Canonical Agent skill. Detect per-harness canonical state, summarize it, ask which harnesses I want and what I want to do. Pull existing harness content INTO ROLE.md/PROJECT.md first (Model A), then mirror out. Produce a DRY-RUN plan to .k2so/.canonical-setup/plan.md and STOP for confirmation before writing.`
 
 /**
  * K2 Canonical Agent — MANAGE / UNDO mode seed (PRD §9.2, verbatim).

@@ -1079,10 +1079,13 @@ mod migration_safety_tests {
 
         reap_old_workspace_skill_shape(proj.to_str().unwrap());
 
-        let agent_md = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
+        let agent_md = fs::read_to_string(crate::workspace::agent_identity::persona_md_in(
+            proj.join(".k2so/agent"),
+        ))
+        .unwrap();
         assert!(
             agent_md.contains("My real user note line 1.") && agent_md.contains("My real user note line 2."),
-            "both user lines must survive into AGENT.md, got:\n{agent_md}"
+            "both user lines must survive into the persona, got:\n{agent_md}"
         );
         assert!(
             !agent_md.contains(USER_NOTES_PLACEHOLDER),
@@ -1118,10 +1121,13 @@ mod migration_safety_tests {
 
         reap_old_workspace_skill_shape(proj.to_str().unwrap());
 
-        let agent_md = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
+        let agent_md = fs::read_to_string(crate::workspace::agent_identity::persona_md_in(
+            proj.join(".k2so/agent"),
+        ))
+        .unwrap();
         assert!(
             !agent_md.contains(MIGRATED_NOTES_BEGIN),
-            "pure K2 noise must NOT produce a migrated-notes block in AGENT.md"
+            "pure K2 noise must NOT produce a migrated-notes block in the persona"
         );
         assert!(!proj.join(".k2so/skills/k2so").exists(), "old skill still reaped");
         fs::remove_dir_all(&proj).ok();
@@ -1327,10 +1333,13 @@ mod migration_safety_tests {
 
         reap_old_workspace_skill_shape(proj.to_str().unwrap());
 
-        let agent_md = fs::read_to_string(proj.join(".k2so/agent/AGENT.md")).unwrap();
+        let agent_md = fs::read_to_string(crate::workspace::agent_identity::persona_md_in(
+            proj.join(".k2so/agent"),
+        ))
+        .unwrap();
         assert!(
             agent_md.contains("IMPORTED-CLAUDE-MARKER from a pre-existing memory."),
-            "the imported CLAUDE.md content must be carried into AGENT.md, got:\n{agent_md}"
+            "the imported CLAUDE.md content must be carried into the persona, got:\n{agent_md}"
         );
         assert!(
             agent_md.contains(MIGRATED_NOTES_BEGIN) && agent_md.contains(MIGRATED_NOTES_END),

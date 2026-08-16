@@ -443,8 +443,8 @@ pub fn boot_sweep_ensure_canonical_sessions() {
         // Skip workspaces without an AGENT.md (mode set but agent
         // not yet authored). The boot sweep should not implicitly
         // synthesize an agent.
-        let agent_md = k2_core::workspace_dot_dir(path).join("agent/AGENT.md");
-        if !agent_md.exists() {
+        let agent_home = k2_core::workspace_dot_dir(path).join("agent");
+        if !k2_core::workspace::agent_identity::persona_present_in(&agent_home) {
             continue;
         }
         match ensure_canonical_session(path) {

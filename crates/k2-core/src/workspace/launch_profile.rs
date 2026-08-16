@@ -187,7 +187,7 @@ pub fn load_agent_config(
     if !dir.exists() {
         return Ok(None);
     }
-    let md_path: PathBuf = dir.join("AGENT.md");
+    let md_path: PathBuf = crate::workspace::agent_identity::persona_md_in(&dir);
     let Ok(content) = fs::read_to_string(&md_path) else {
         return Ok(None);
     };

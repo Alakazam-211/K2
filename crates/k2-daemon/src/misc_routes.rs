@@ -123,10 +123,14 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             // normalization maps k2 → k2so.
                             let bot_mode = matches!(mode.as_str(),
                                 "custom" | "manager" | "k2so" | "k2");
-                            let agent_md =
-                                k2_core::workspace_dot_dir(&p).join("agent/AGENT.md");
+                            let agent_home =
+                                k2_core::workspace_dot_dir(&p).join("agent");
                             let mut ensure_summary = serde_json::Value::Null;
-                            if bot_mode && agent_md.exists() {
+                            if bot_mode
+                                && k2_core::workspace::agent_identity::persona_present_in(
+                                    &agent_home,
+                                )
+                            {
                                 match crate::canonical_session::ensure_canonical_session(&p) {
                                     Ok(out) => {
                                         ensure_summary = serde_json::json!({

@@ -272,9 +272,9 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] flex-shrink-0">
             <div className="text-[10px] font-medium text-[var(--color-text-muted)]">
-              <span className="text-[var(--color-text-primary)]">AGENT.md</span>
+              <span className="text-[var(--color-text-primary)]">ROLE.md</span>
               <span className="mx-1.5">·</span>
-              Source — compiled into SKILL.md and every CLI harness file on close
+              Source — compiled into AGENTS.md
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               {previewMode === 'preview' && (

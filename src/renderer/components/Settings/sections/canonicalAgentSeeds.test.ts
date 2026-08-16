@@ -42,17 +42,17 @@ describe('canonical-agent seed prompts', () => {
   it('role system prompts enforce the organic, never-templated contract', () => {
     for (const role of ['workspace-manager', 'k2-agent'] as const) {
       const p = roleSeedSystemPrompt(role)
-      expect(p).toContain('READ the existing AGENT.md')
+      expect(p).toContain('READ the existing ROLE.md')
       expect(p).toContain('weave the role guidance in organically')
       expect(p).toContain('PRESERVE existing context')
       expect(p).toContain('NEVER inject a templated block')
-      expect(p).toContain('backs up AGENT.md and writes your merged text atomically')
+      expect(p).toContain('backs up ROLE.md and writes your merged text atomically')
     }
   })
 
   it('canonical setup seed enforces diagnose → Model-A → dry-run → stop', () => {
     expect(CANONICAL_SETUP_SEED).toContain('Detect per-harness canonical state')
-    expect(CANONICAL_SETUP_SEED).toContain('Pull existing harness content INTO AGENT.md/PROJECT.md first (Model A)')
+    expect(CANONICAL_SETUP_SEED).toContain('Pull existing harness content INTO ROLE.md/PROJECT.md first (Model A)')
     expect(CANONICAL_SETUP_SEED).toContain('DRY-RUN plan to .k2so/.canonical-setup/plan.md')
     expect(CANONICAL_SETUP_SEED).toContain('STOP for confirmation before writing')
   })

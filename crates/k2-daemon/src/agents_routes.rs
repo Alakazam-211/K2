@@ -918,10 +918,10 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
     // projects.name — the existing renamable-for-display invariant).
     let name = k2_core::workspace::display::agent_display_name(&path);
 
-    // Charter file (persona). Canonical post-0.37.0 location only —
-    // conf reports what `k2 agent set --persona` writes.
-    let persona = k2_core::workspace_dot_dir(&path).join("agent/AGENT.md");
-    let persona_path = if persona.exists() {
+    // Charter file (persona). Reports the path that exists, preferring ROLE.md.
+    let agent_home = k2_core::workspace_dot_dir(&path).join("agent");
+    let persona = k2_core::workspace::agent_identity::persona_md_in(&agent_home);
+    let persona_path = if k2_core::workspace::agent_identity::persona_present_in(&agent_home) {
         serde_json::json!(persona.to_string_lossy())
     } else {
         serde_json::Value::Null

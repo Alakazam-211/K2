@@ -14413,7 +14413,7 @@ def on_off(en):
 print("PINNED  (system — on|off via: k2 agent context on|off pinned:agent|project|tooling)")
 if not pinned:
     # Sensible defaults when daemon omits explicit pinned rows
-    print("  on   Role     .k2/agent/ROLE.md")
+    print("  on   Role (persona)     .k2/agent/ROLE.md")
     print("  on   Project   .k2/PROJECT.md")
     print("  on   Tooling   (generated k2-cli pointer)")
 else:

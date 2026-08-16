@@ -1032,7 +1032,7 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
     out.push(PinnedLayer {
         id: "pinned:agent".into(),
         path: agent_rel,
-        label: "Role".into(),
+        label: "Role (persona)".into(),
         exists,
         bytes,
         generated: false,
@@ -1754,7 +1754,7 @@ mod tests {
         let stack = list_stack(path).expect("list_stack");
         assert!(stack.layers.is_empty(), "no optional layers yet");
         assert_eq!(stack.pinned.len(), 3);
-        assert_eq!(stack.pinned[0].label, "Role");
+        assert_eq!(stack.pinned[0].label, "Role (persona)");
         assert!(
             stack.pinned[0].path.ends_with("ROLE.md"),
             "default pinned path is ROLE.md, got {}",
@@ -2187,7 +2187,7 @@ mod tests {
         fs::write(dir.join("AGENT.md"), "---\nname: old\n---\nold\n").unwrap();
         let pin = pinned_info(path);
         assert_eq!(pin[0].id, "pinned:agent");
-        assert_eq!(pin[0].label, "Role");
+        assert_eq!(pin[0].label, "Role (persona)");
         assert!(
             pin[0].path.ends_with("agent/AGENT.md"),
             "got {}",

@@ -271,7 +271,7 @@ export const FALLBACK_PINNED: PinnedLayer[] = [
   {
     id: 'pinned:agent',
     path: '.k2/agent/ROLE.md',
-    label: 'Role',
+    label: 'Role (persona)',
     exists: true,
     bytes: 0,
     enabled: true,

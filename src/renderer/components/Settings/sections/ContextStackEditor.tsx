@@ -390,9 +390,11 @@ export function ContextStackEditor({
       layer.source === 'catalog:connections-roster' ||
       layer.source === 'catalog:heartbeats-roster' ||
       layer.source === 'catalog:skills-roster' ||
+      layer.source === 'catalog:users-roster' ||
       layer.path.includes('connections-roster.md') ||
       layer.path.includes('heartbeats-roster.md') ||
-      layer.path.includes('skills-roster.md')
+      layer.path.includes('skills-roster.md') ||
+      layer.path.includes('users-roster.md')
     // Wiki + live rosters: View only (not AI File Editor).
     const canEdit = !isWiki && !isLiveRoster && layer.exists && !!layer.path
     return {

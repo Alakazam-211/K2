@@ -467,6 +467,16 @@ mod tests {
             presets.iter().any(|p| p["id"] == "skills:roster"),
             "skills:roster catalog listed"
         );
+        assert!(
+            presets.iter().any(|p| p["id"] == "users:roster"),
+            "users:roster catalog listed"
+        );
+        let users = presets
+            .iter()
+            .find(|p| p["id"] == "users:roster")
+            .expect("users:roster");
+        assert_eq!(users["kind"], "live");
+        assert_eq!(users["recommended"], false);
 
         cleanup(&path, &pid);
     }

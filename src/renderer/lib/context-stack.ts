@@ -427,6 +427,18 @@ export const DEFAULT_CATALOG_ENTRIES: ContextCatalogEntry[] = [
     author: 'K2',
     tags: ['live', 'roster', 'skills'],
   },
+  {
+    id: 'users:roster',
+    path: '.k2/context/catalog/users-roster.md',
+    label: 'User roster',
+    source: 'catalog:users-roster',
+    kind: 'live',
+    recommended: false,
+    description:
+      'Live list of humans on this K2 box (username, role, disabled). Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.',
+    author: 'K2',
+    tags: ['live', 'roster', 'users'],
+  },
 ]
 
 /** Merge API catalog with known defaults (order + client metadata fill). */

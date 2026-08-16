@@ -163,6 +163,10 @@ pub const SKILLS_ROSTER_PATH: &str = ".k2/context/catalog/skills-roster.md";
 pub const SKILLS_ROSTER_SOURCE: &str = "catalog:skills-roster";
 pub const SKILLS_ROSTER_ID: &str = "skills:roster";
 
+pub const USERS_ROSTER_PATH: &str = ".k2/context/catalog/users-roster.md";
+pub const USERS_ROSTER_SOURCE: &str = "catalog:users-roster";
+pub const USERS_ROSTER_ID: &str = "users:roster";
+
 pub const WIKI_HYGIENE_PATH: &str = ".k2/context/catalog/wiki-hygiene.md";
 pub const WIKI_HYGIENE_SOURCE: &str = "catalog:wiki-hygiene";
 pub const WIKI_HYGIENE_ID: &str = "wiki:hygiene";
@@ -177,6 +181,7 @@ pub enum LiveKind {
     Connections,
     Heartbeats,
     Skills,
+    Users,
 }
 
 fn builtin_catalog_entry(
@@ -207,8 +212,8 @@ fn builtin_catalog_entry(
 
 /// Built-in catalog entries: wiki seeds + lean packs + live rosters.
 ///
-/// Live rosters (connections / heartbeats / skills) rebuild on every AGENTS.md
-/// compose so always-on context tracks a changing workspace.
+/// Live rosters (connections / heartbeats / skills / users) rebuild on every
+/// AGENTS.md compose so always-on context tracks a changing workspace.
 pub fn list_catalog() -> Vec<ContextCatalogEntry> {
     vec![
         builtin_catalog_entry(
@@ -310,6 +315,17 @@ pub fn list_catalog() -> Vec<ContextCatalogEntry> {
             false,
             &["live", "roster", "skills"],
         ),
+        builtin_catalog_entry(
+            USERS_ROSTER_ID,
+            USERS_ROSTER_PATH,
+            "User roster",
+            USERS_ROSTER_SOURCE,
+            "live",
+            "Live list of humans on this K2 box (username, role, disabled). Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.",
+            None,
+            false,
+            &["live", "roster", "users"],
+        ),
     ]
 }
 
@@ -318,6 +334,7 @@ fn live_kind_for_source(source: &str) -> Option<LiveKind> {
         CONNECTIONS_ROSTER_SOURCE => Some(LiveKind::Connections),
         HEARTBEATS_ROSTER_SOURCE => Some(LiveKind::Heartbeats),
         SKILLS_ROSTER_SOURCE => Some(LiveKind::Skills),
+        USERS_ROSTER_SOURCE => Some(LiveKind::Users),
         _ => None,
     }
 }
@@ -331,6 +348,8 @@ fn live_kind_for_path(path: &str) -> Option<LiveKind> {
         Some(LiveKind::Heartbeats)
     } else if path == SKILLS_ROSTER_PATH || path.ends_with("/context/catalog/skills-roster.md") {
         Some(LiveKind::Skills)
+    } else if path == USERS_ROSTER_PATH || path.ends_with("users-roster.md") {
+        Some(LiveKind::Users)
     } else {
         None
     }
@@ -351,6 +370,7 @@ pub fn render_live_layer_body(project_path: &str, layer: &ContextLayer) -> Optio
         LiveKind::Connections => Some(render_connections_roster_body(project_path)),
         LiveKind::Heartbeats => Some(render_heartbeats_roster_body(project_path)),
         LiveKind::Skills => Some(render_skills_roster_body(project_path)),
+        LiveKind::Users => Some(render_users_roster_body(project_path)),
     }
 }
 
@@ -361,8 +381,10 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
         "Live roster of **connected workspace-agents** (peers, not sub-agents). \
          These are **workspace-agents** you can `k2 msg`. Humans who can sign \
          into this K2 box are **not** listed here — they write to you from the \
-         app as `[from <name>]`. To see them: `k2 connections list --users`. \
-         Do **not** `k2 msg` those names. Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+         app as `[from <name>]`. To see them: `k2 connections list --users`, \
+         or stack **User roster** (`k2 agent context add users:roster`) for \
+         always-on context. Do **not** `k2 msg` those names. Regenerated whenever \
+         K2 rewrites AGENTS.md.\n\n",
     );
     out.push_str("Message / peek:\n\n");
     out.push_str("    k2 msg <workspace-name> \"short live knock\"\n");
@@ -518,6 +540,36 @@ pub fn render_skills_roster_body(project_path: &str) -> String {
     out
 }
 
+/// Live list of humans on this box (username / role / disabled).
+///
+/// Same rows as `connect_users::list_people_for_agents` — host owner plus
+/// every stored connect-user, including member, viewer, and disabled.
+/// Owner display comes from app settings (trim / empty → `"owner"`).
+pub fn render_users_roster_body(_project_path: &str) -> String {
+    let owner = crate::app_settings::load()
+        .owner_display_name
+        .unwrap_or_default();
+    let rows = crate::connect_users::list_people_for_agents(owner.trim()).unwrap_or_default();
+
+    let mut out = String::new();
+    out.push_str(
+        "These are **humans** who can sign into this K2 box — not workspace-agents.\n\
+         They write to you from the app as `[from <name>]`. Do **not** `k2 msg` these names.\n\
+         CLI lookup: `k2 connections list --users`. Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+    );
+    out.push_str("| USERNAME | ROLE | DISABLED |\n");
+    out.push_str("| --- | --- | --- |\n");
+    for r in rows {
+        let disabled = if r.disabled { "yes" } else { "no" };
+        out.push_str(&format!(
+            "| {} | {} | {disabled} |\n",
+            r.username,
+            r.role.as_wire()
+        ));
+    }
+    out
+}
+
 struct RemoteConnSummary {
     agent: String,
     host: String,
@@ -572,6 +624,7 @@ fn live_kind_meta(kind: LiveKind) -> (&'static str, &'static str, &'static str) 
             HEARTBEATS_ROSTER_SOURCE,
         ),
         LiveKind::Skills => (SKILLS_ROSTER_PATH, "Skills roster", SKILLS_ROSTER_SOURCE),
+        LiveKind::Users => (USERS_ROSTER_PATH, "User roster", USERS_ROSTER_SOURCE),
     }
 }
 
@@ -581,6 +634,7 @@ fn render_live_file(project_path: &str, kind: LiveKind) -> String {
         LiveKind::Connections => render_connections_roster_body(project_path),
         LiveKind::Heartbeats => render_heartbeats_roster_body(project_path),
         LiveKind::Skills => render_skills_roster_body(project_path),
+        LiveKind::Users => render_users_roster_body(project_path),
     };
     format!("# {title}\n\n{body}")
 }
@@ -619,13 +673,14 @@ pub fn sync_live_generated_layers(project_path: &str) {
     let Ok(layers) = list_layers(project_path) else {
         return;
     };
-    let mut seen = [false; 3];
+    let mut seen = [false; 4];
     for layer in &layers {
         if let Some(kind) = live_kind_for_layer(layer) {
             let idx = match kind {
                 LiveKind::Connections => 0,
                 LiveKind::Heartbeats => 1,
                 LiveKind::Skills => 2,
+                LiveKind::Users => 3,
             };
             if !seen[idx] {
                 seen[idx] = true;
@@ -641,7 +696,7 @@ pub fn refresh_roster_after_connection_change(project_paths: &[&str]) {
     refresh_roster_after_live_kind_change(project_paths, LiveKind::Connections);
 }
 
-/// After a live-layer source mutates (connections / heartbeats / skills):
+/// After a live-layer source mutates (connections / heartbeats / skills / users):
 /// rewrite AGENTS.md only when that live kind is stacked.
 pub fn refresh_roster_after_live_kind_change(project_paths: &[&str], kind: LiveKind) {
     for path in project_paths {
@@ -655,6 +710,49 @@ pub fn refresh_roster_after_live_kind_change(project_paths: &[&str], kind: LiveK
             crate::workspace::skill_regen::write_workspace_skill_file(path);
         }
     }
+}
+
+/// After connect-user mutations: rewrite AGENTS.md only on workspaces
+/// that stack the User roster. Host-wide people, stacked workspaces only.
+/// Best-effort — never fail the user mutation.
+pub fn refresh_users_roster_after_people_change() {
+    let paths = match list_project_paths_with_users_roster() {
+        Ok(p) => p,
+        Err(e) => {
+            crate::log_debug!("[context] users roster refresh skipped: {e}");
+            return;
+        }
+    };
+    if paths.is_empty() {
+        return;
+    }
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    refresh_roster_after_live_kind_change(&refs, LiveKind::Users);
+}
+
+fn list_project_paths_with_users_roster() -> Result<Vec<String>, ContextError> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT p.path \
+             FROM project_context_layers l \
+             JOIN projects p ON p.id = l.project_id \
+             WHERE l.source = ?1 OR l.path LIKE '%users-roster.md'",
+        )
+        .map_err(|e| ContextError::Db(e.to_string()))?;
+    let rows = stmt
+        .query_map(params![USERS_ROSTER_SOURCE], |r| r.get::<_, String>(0))
+        .map_err(|e| ContextError::Db(e.to_string()))?;
+    let mut out = Vec::new();
+    for row in rows {
+        match row {
+            Ok(p) if !p.trim().is_empty() => out.push(p),
+            Ok(_) => {}
+            Err(e) => crate::log_debug!("[context] users roster path row skipped: {e}"),
+        }
+    }
+    Ok(out)
 }
 
 /// Lean always-on Manager layer — triage/delegate orientation, not the full skill.
@@ -765,6 +863,13 @@ fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextEr
         | "catalog:connections-roster" => CONNECTIONS_ROSTER_ID,
         "heartbeats" | "heartbeats-roster" | "catalog:heartbeats-roster" => HEARTBEATS_ROSTER_ID,
         "skills" | "skills-roster" | "skills-index" | "catalog:skills-roster" => SKILLS_ROSTER_ID,
+        "users:roster"
+        | "users"
+        | "users-roster"
+        | "people"
+        | "people-roster"
+        | "user-roster"
+        | "catalog:users-roster" => USERS_ROSTER_ID,
         "wiki-hygiene" | "hygiene" | "catalog:wiki-hygiene" => WIKI_HYGIENE_ID,
         "subagents"
         | "subagents:pack"
@@ -794,6 +899,7 @@ fn is_materializing_pack(entry: &ContextCatalogEntry) -> bool {
             | CONNECTIONS_ROSTER_SOURCE
             | HEARTBEATS_ROSTER_SOURCE
             | SKILLS_ROSTER_SOURCE
+            | USERS_ROSTER_SOURCE
     )
 }
 
@@ -1921,6 +2027,15 @@ mod tests {
         assert!(catalog.iter().any(|p| p.id == CONNECTIONS_ROSTER_ID));
         assert!(catalog.iter().any(|p| p.id == HEARTBEATS_ROSTER_ID));
         assert!(catalog.iter().any(|p| p.id == SKILLS_ROSTER_ID));
+        let users = catalog
+            .iter()
+            .find(|p| p.id == USERS_ROSTER_ID)
+            .expect("users:roster catalog entry");
+        assert_eq!(users.kind, "live");
+        assert!(!users.recommended, "users:roster is opt-in");
+        assert_eq!(users.label, "User roster");
+        assert_eq!(users.source, USERS_ROSTER_SOURCE);
+        assert_eq!(users.path, USERS_ROSTER_PATH);
         for p in &catalog {
             assert!(
                 matches!(p.kind.as_str(), "live" | "static" | "path"),
@@ -1969,6 +2084,8 @@ mod tests {
         assert!(recommended.contains(&CONNECTIONS_ROSTER_ID));
         assert!(recommended.contains(&HEARTBEATS_ROSTER_ID));
         assert!(!recommended.contains(&"skills:roster"));
+        assert!(!recommended.contains(&USERS_ROSTER_ID));
+        assert!(!recommended.contains(&"users:roster"));
         assert!(!recommended.contains(&"manager:pack"));
     }
 
@@ -1995,6 +2112,14 @@ mod tests {
         assert!(
             body.contains("k2 msg <workspace-name>"),
             "roster must still teach k2 msg for peers; body:\n{body}"
+        );
+        assert!(
+            body.contains("users:roster"),
+            "roster may point at User roster catalog id; body:\n{body}"
+        );
+        assert!(
+            !body.contains("| USERNAME |"),
+            "connections roster must not grow a human username table; body:\n{body}"
         );
 
         cleanup_project(path, &pid);
@@ -2031,6 +2156,169 @@ mod tests {
         );
 
         cleanup_project(path, &_pid);
+    }
+
+    #[test]
+    fn users_roster_catalog_is_live_not_recommended_and_roster_alias_stays_connections() {
+        let catalog = list_catalog();
+        let users = catalog
+            .iter()
+            .find(|p| p.id == USERS_ROSTER_ID)
+            .expect("users:roster");
+        assert_eq!(users.kind, "live");
+        assert!(!users.recommended);
+        assert_eq!(users.label, "User roster");
+
+        let root = unique_root("roster-alias");
+        let path = root.to_str().unwrap();
+        let pid = register_project(path);
+        let layer = add_layer(path, None, Some("roster"), None).expect("bare roster");
+        assert_eq!(
+            layer.source, CONNECTIONS_ROSTER_SOURCE,
+            "bare roster must stay connections:roster"
+        );
+        assert_eq!(layer.path, CONNECTIONS_ROSTER_PATH);
+        let people = add_layer(path, None, Some("people"), None).expect("people alias");
+        assert_eq!(people.source, USERS_ROSTER_SOURCE);
+        cleanup_project(path, &pid);
+    }
+
+    #[test]
+    fn users_roster_catalog_materializes_and_composes_live() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let root = unique_root("users-roster");
+            let path = root.to_str().unwrap();
+            let pid = register_project(path);
+
+            let layer = add_layer(path, None, Some("users:roster"), None).expect("users roster");
+            assert_eq!(layer.source, USERS_ROSTER_SOURCE);
+            assert_eq!(layer.path, USERS_ROSTER_PATH);
+            assert!(layer.exists);
+            let abs = root.join(".k2/context/catalog/users-roster.md");
+            assert!(abs.is_file(), "users roster file must materialize");
+            let file_body = fs::read_to_string(&abs).unwrap();
+            assert!(
+                file_body.contains("USERNAME") && file_body.contains("ROLE"),
+                "roster file should be a people table; first 300:\n{}",
+                &file_body[..file_body.len().min(300)]
+            );
+
+            fs::remove_file(&abs).ok();
+            let composed = show_composed(path).expect("compose");
+            assert!(
+                composed.contains("User roster") && composed.contains("USERNAME"),
+                "composed AGENTS.md must inline live user roster; first 500:\n{}",
+                &composed[..composed.len().min(500)]
+            );
+
+            cleanup_project(path, &pid);
+        });
+    }
+
+    fn set_test_owner_display(name: &str) {
+        let mut s = crate::app_settings::load();
+        s.owner_display_name = Some(name.to_string());
+        crate::app_settings::save(&s).expect("save owner display");
+    }
+
+    #[test]
+    fn render_users_roster_body_owner_member_viewer_disabled_no_secrets() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            set_test_owner_display("Rosson");
+            let empty = render_users_roster_body("/unused");
+            assert!(
+                empty.contains("Rosson") && empty.contains("owner") && empty.contains("no"),
+                "empty store must still list host owner; body:\n{empty}"
+            );
+            assert!(
+                !empty.contains("password")
+                    && !empty.contains("hash")
+                    && !empty.contains("token_epoch"),
+                "empty roster leaked secrets; body:\n{empty}"
+            );
+
+            crate::connect_users::add_user("julie", "password1").expect("add julie");
+            crate::connect_users::set_role("julie", crate::connect_users::Role::Admin)
+                .expect("promote");
+            crate::connect_users::add_user("member1", "password1").expect("add member");
+            crate::connect_users::add_user("viewy", "password1").expect("add viewer");
+            crate::connect_users::set_role("viewy", crate::connect_users::Role::Viewer)
+                .expect("demote");
+            crate::connect_users::add_user("ghost", "password1").expect("add ghost");
+            crate::connect_users::set_disabled("ghost", true).expect("disable");
+
+            let body = render_users_roster_body("/unused");
+            assert!(body.contains("Rosson"), "missing owner; body:\n{body}");
+            assert!(
+                body.contains("julie") && body.contains("admin"),
+                "missing admin; body:\n{body}"
+            );
+            assert!(
+                body.contains("member1") && body.contains("member"),
+                "missing member; body:\n{body}"
+            );
+            assert!(
+                body.contains("viewy") && body.contains("viewer"),
+                "missing viewer; body:\n{body}"
+            );
+            assert!(
+                body.contains("ghost") && body.contains("yes"),
+                "disabled user must appear; body:\n{body}"
+            );
+            let lower = body.to_ascii_lowercase();
+            assert!(
+                !lower.contains("password")
+                    && !body.contains("hash")
+                    && !body.contains("token_epoch")
+                    && !body.contains("tokenEpoch"),
+                "people table must not leak secrets; body:\n{body}"
+            );
+        });
+    }
+
+    #[test]
+    fn render_users_roster_body_teaches_from_stamp_and_users_flag() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let body = render_users_roster_body("/unused");
+            assert!(
+                body.contains("Do **not** `k2 msg`") || body.contains("do not `k2 msg`"),
+                "must say do not k2 msg humans; body:\n{body}"
+            );
+            assert!(
+                body.contains("[from <name>]"),
+                "must mention [from <name>] stamps; body:\n{body}"
+            );
+            assert!(
+                body.contains("k2 connections list --users") || body.contains("--users"),
+                "must teach --users lookup; body:\n{body}"
+            );
+        });
+    }
+
+    #[test]
+    fn users_roster_not_in_default_empty_stack() {
+        let root = unique_root("users-empty-stack");
+        let path = root.to_str().unwrap();
+        let pid = register_project(path);
+
+        let stack = list_stack(path).expect("list_stack");
+        assert!(
+            stack.layers.is_empty(),
+            "default empty stack must have no optional layers"
+        );
+        assert!(
+            !stack.layers.iter().any(|l| l.source == USERS_ROSTER_SOURCE
+                || l.path.ends_with("users-roster.md")),
+            "users:roster must not be seeded"
+        );
+        let composed = show_composed(path).expect("compose");
+        assert!(
+            !composed.contains("## User roster"),
+            "default compose must not inline User roster; first 400:\n{}",
+            &composed[..composed.len().min(400)]
+        );
+
+        cleanup_project(path, &pid);
     }
 
     #[test]

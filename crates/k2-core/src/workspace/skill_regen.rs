@@ -464,6 +464,7 @@ k2 agent context list|add|on|off|move|regen   # manage stack layers
 k2 agent hire <dir> --context wiki:hygiene --context connections:roster
 k2 agent context catalog                                    # local context catalog
 k2 agent context add manager:pack                           # day-2 stack
+k2 agent context add users:roster                           # humans on this box; do not k2 msg
 ```
 Optional path layers compose into `.k2/AGENTS.md` with Agent / Project /
 Tooling. Prefer short standing orders; load skills for depth.
@@ -1807,6 +1808,11 @@ mod tests {
         assert!(
             body.contains("Do not `k2 msg` those names"),
             "k2-cli skill must say not to k2 msg human names"
+        );
+        // v18: opt-in User roster catalog layer.
+        assert!(
+            body.contains("k2 agent context add users:roster"),
+            "k2-cli skill must mention `k2 agent context add users:roster`"
         );
     }
 

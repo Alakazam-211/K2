@@ -101,7 +101,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 16: Who am I is a fact sheet (not “msg the primary”);
 /// send-work uses handles + sidecar addresses.
 /// Bumped to 17: `k2 connections list --users` (humans on this box).
-pub const SKILL_VERSION_WORKSPACE: u32 = 17;
+/// Bumped to 18: `k2 agent context add users:roster` (opt-in people layer).
+pub const SKILL_VERSION_WORKSPACE: u32 = 18;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

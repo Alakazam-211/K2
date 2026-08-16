@@ -493,7 +493,9 @@ pub fn add_user(username: &str, password: &str) -> Result<(), String> {
             must_change_password: false,
         });
         Ok(())
-    })
+    })?;
+    crate::workspace::context_layers::refresh_users_roster_after_people_change();
+    Ok(())
 }
 
 /// Remove an account and revoke any live sessions for it.
@@ -508,6 +510,7 @@ pub fn remove_user(username: &str) -> Result<(), String> {
         Ok(())
     })?;
     revoke_user_sessions(&username);
+    crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
 }
 
@@ -572,6 +575,7 @@ pub fn set_disabled(username: &str, disabled: bool) -> Result<(), String> {
     if disabled {
         revoke_user_sessions(&username);
     }
+    crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
 }
 
@@ -596,6 +600,7 @@ pub fn set_role(username: &str, role: Role) -> Result<(), String> {
         Ok(())
     })?;
     revoke_user_sessions(&username);
+    crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
 }
 

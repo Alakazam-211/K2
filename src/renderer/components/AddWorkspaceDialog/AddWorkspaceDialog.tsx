@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Callout, DialogScrim } from '@/components/ui'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 
@@ -18,6 +18,11 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
   const close = useAddWorkspaceDialogStore((s) => s.close)
   const setIsPending = useAddWorkspaceDialogStore((s) => s.setIsPending)
   const setError = useAddWorkspaceDialogStore((s) => s.setError)
+  const [seedWiki, setSeedWiki] = useState(true)
+
+  useEffect(() => {
+    if (isOpen) setSeedWiki(true)
+  }, [isOpen])
 
   // Close on Escape
   useEffect(() => {
@@ -33,7 +38,7 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
     if (!onConfirm) return
     setIsPending(true)
     try {
-      await onConfirm()
+      await onConfirm({ seedWiki })
       close()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
@@ -78,6 +83,36 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
               Workspace Settings → Agent — it unifies your harness files safely and reversibly.
             </p>
           </div>
+        </div>
+
+        <div className="px-5 pb-3">
+          <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
+            <input
+              type="checkbox"
+              checked={seedWiki}
+              onChange={(e) => setSeedWiki(e.target.checked)}
+              className="peer sr-only"
+              disabled={isPending}
+            />
+            <span
+              aria-hidden="true"
+              className="mt-0.5 w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
+            >
+              {seedWiki && (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+                </svg>
+              )}
+            </span>
+            <span className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+              Seed the wiki
+              <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                Creates <span className="font-mono">Home.md</span> and{' '}
+                <span className="font-mono">_Index.md</span> under{' '}
+                <span className="font-mono">.k2/wiki/</span>. Uncheck to skip.
+              </span>
+            </span>
+          </label>
         </div>
 
         {/* Error */}

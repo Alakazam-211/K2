@@ -260,7 +260,7 @@ interface ProjectsState {
   activeWorkspaceId: string | null
 
   fetchProjects: () => Promise<void>
-  addProject: (path: string) => Promise<void>
+  addProject: (path: string, opts?: { seedWiki?: boolean }) => Promise<void>
   removeProject: (id: string) => Promise<void>
   setActiveProject: (id: string | null) => void
   setActiveWorkspace: (projectId: string, workspaceId: string) => void
@@ -434,11 +434,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     }
   },
 
-  addProject: async (path: string) => {
+  addProject: async (path: string, opts?: { seedWiki?: boolean }) => {
     try {
+      const seedWiki = opts?.seedWiki !== false
       // Capture the new project's ID from the backend result (untagged enum:
       // NeedsGitInit has needsGitInit field, Project has id field)
-      const result = await daemonCliPost<Record<string, unknown>>('projects/add-from-path', { path })
+      const result = await daemonCliPost<Record<string, unknown>>('projects/add-from-path', { path, seedWiki })
       // The old Tauri `projects_add_from_path` emitted `sync:projects`. A
       // git-init-needed result short-circuits below WITHOUT a DB write, so
       // only emit on the real add path (after fetchProjects, below).
@@ -446,7 +447,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // Check if the folder needs git initialization
       if (result && 'needsGitInit' in result) {
         console.log('[projects] Opening git init dialog for:', result.path)
-        useGitInitDialogStore.getState().open(result.path as string, result.name as string)
+        useGitInitDialogStore.getState().open(result.path as string, result.name as string, seedWiki)
         return
       }
 

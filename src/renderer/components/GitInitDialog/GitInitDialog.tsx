@@ -16,6 +16,7 @@ export default function GitInitDialog(): React.JSX.Element | null {
   const path = useGitInitDialogStore((s) => s.path)
   const name = useGitInitDialogStore((s) => s.name)
   const error = useGitInitDialogStore((s) => s.error)
+  const seedWiki = useGitInitDialogStore((s) => s.seedWiki)
   const close = useGitInitDialogStore((s) => s.close)
   const setIsPending = useGitInitDialogStore((s) => s.setIsPending)
   const setError = useGitInitDialogStore((s) => s.setError)
@@ -95,28 +96,28 @@ export default function GitInitDialog(): React.JSX.Element | null {
     if (!path) return
     setIsPending(true)
     try {
-      await daemonCliPost('projects/init-git-and-open', { path, branch: branchName })
+      await daemonCliPost('projects/init-git-and-open', { path, branch: branchName, seedWiki })
       void emit('sync:projects').catch(() => {})
       close()
       await selectNewProject()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     }
-  }, [path, branchName, close, selectNewProject, setIsPending, setError])
+  }, [path, branchName, seedWiki, close, selectNewProject, setIsPending, setError])
 
   // Open without git
   const handleOpenWithoutGit = useCallback(async () => {
     if (!path) return
     setIsPending(true)
     try {
-      await daemonCliPost('projects/add-without-git', { path })
+      await daemonCliPost('projects/add-without-git', { path, seedWiki })
       void emit('sync:projects').catch(() => {})
       close()
       await selectNewProject()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     }
-  }, [path, close, selectNewProject, setIsPending, setError])
+  }, [path, seedWiki, close, selectNewProject, setIsPending, setError])
 
   // Close on Escape
   useEffect(() => {

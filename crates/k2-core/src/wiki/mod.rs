@@ -898,6 +898,15 @@ Add one line per note as the wiki grows.
     Ok(created)
 }
 
+/// Seed Home/_Index on a newly registered workspace. Best-effort: a
+/// seed failure must not roll back the DB row. Idempotent.
+pub fn seed_wiki_on_add(path: &str) {
+    match seed_wiki(Path::new(path)) {
+        Ok(_) => {}
+        Err(e) => crate::log_debug!("[wiki] seed on add {path}: {e}"),
+    }
+}
+
 // ── Internals ────────────────────────────────────────────────────────────
 
 #[derive(Default)]
@@ -1162,7 +1171,36 @@ mod tests {
         let ws = temp_ws("seed");
         let created = seed_wiki(&ws).unwrap();
         assert!(created.contains(&"Home.md".into()));
+        assert!(created.contains(&"_Index.md".into()));
         assert!(ws.join(".k2/wiki/Home.md").is_file());
+        assert!(ws.join(".k2/wiki/_Index.md").is_file());
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn seed_is_idempotent_and_does_not_overwrite() {
+        let ws = temp_ws("seed-idemp");
+        seed_wiki(&ws).unwrap();
+        let home = ws.join(".k2/wiki/Home.md");
+        fs::write(&home, "CUSTOM HOME\n").unwrap();
+        let created = seed_wiki(&ws).unwrap();
+        assert!(
+            created.is_empty(),
+            "second seed must not rewrite existing notes, got {created:?}"
+        );
+        let body = fs::read_to_string(&home).unwrap();
+        assert_eq!(body, "CUSTOM HOME\n");
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn seed_wiki_on_add_writes_home() {
+        let ws = temp_ws("seed-on-add");
+        seed_wiki_on_add(&ws.to_string_lossy());
+        assert!(
+            ws.join(".k2/wiki/Home.md").is_file(),
+            "seed_wiki_on_add must create Home.md"
+        );
         let _ = fs::remove_dir_all(&ws);
     }
 

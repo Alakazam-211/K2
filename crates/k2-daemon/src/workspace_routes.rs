@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::cli::{need_project, opt_param, str_param};
+use crate::cli::{need_project, opt_param, seed_wiki_wanted, str_param};
 use crate::cli_response::CliResponse;
 
 /// Workspace-domain GET dispatch. Returns `Some(resp)` for a handled
@@ -34,7 +34,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // ── Workspace lifecycle ─────────────────────────────────────
         "/cli/workspace/create" => {
             let target = str_param(params, "path");
-            match k2_core::workspace::lifecycle::create_workspace(&target) {
+            let seed_wiki = seed_wiki_wanted(params);
+            match k2_core::workspace::lifecycle::create_workspace_ex(&target, seed_wiki) {
                 Ok(body) => {
                     // 0.39.45 (GH #18/#26): broadcast so every client
                     // re-fetches its project list — CLI-created
@@ -51,7 +52,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         }
         "/cli/workspace/open" => {
             let target = str_param(params, "path");
-            match k2_core::workspace::lifecycle::open_workspace(&target) {
+            let seed_wiki = seed_wiki_wanted(params);
+            match k2_core::workspace::lifecycle::open_workspace_ex(&target, seed_wiki) {
                 Ok(body) => CliResponse::ok_json(body),
                 Err(e) => CliResponse::bad_request(e),
             }

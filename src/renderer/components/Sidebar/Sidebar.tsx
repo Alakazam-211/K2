@@ -793,8 +793,8 @@ export default function Sidebar(): React.JSX.Element {
     // add has no destructive effects — no consent preview needed.
     useAddWorkspaceDialogStore.getState().open({
       path: folderPath,
-      onConfirm: async () => {
-        await addProject(folderPath)
+      onConfirm: async ({ seedWiki }) => {
+        await addProject(folderPath, { seedWiki })
         try {
           await daemonCliPost('agents/run-workspace-ingest', { project_path: folderPath })
         } catch (err) {

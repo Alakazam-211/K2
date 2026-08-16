@@ -39,6 +39,11 @@ fn run_git(args: &[&str], cwd: &str) -> Option<String> {
 /// a directory-exists precheck + `fs::create_dir_all`) and
 /// `/cli/workspace/open` (which pre-checks `is_dir`).
 pub fn register_workspace(path: &str) -> Result<String, String> {
+    register_workspace_ex(path, true)
+}
+
+/// `seed_wiki` defaults on for new agents (opt-out via `false`).
+pub fn register_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, String> {
     let db = crate::db::shared();
     let conn = db.lock();
 
@@ -100,12 +105,16 @@ pub fn register_workspace(path: &str) -> Result<String, String> {
         Ok(()) => {
             let _ = conn.execute_batch("COMMIT");
             emit(HookEvent::SyncProjects, serde_json::Value::Null);
+            if seed_wiki {
+                crate::wiki::seed_wiki_on_add(path);
+            }
             Ok(serde_json::json!({
                 "success": true,
                 "projectId": project_id,
                 "workspaceId": workspace_id,
                 "name": name,
                 "path": path,
+                "wikiSeeded": seed_wiki,
             })
             .to_string())
         }
@@ -119,6 +128,10 @@ pub fn register_workspace(path: &str) -> Result<String, String> {
 /// `/cli/workspace/create` — create the directory if missing, then
 /// [`register_workspace`].
 pub fn create_workspace(path: &str) -> Result<String, String> {
+    create_workspace_ex(path, true)
+}
+
+pub fn create_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, String> {
     if path.is_empty() {
         return Err("Missing 'path' parameter".to_string());
     }
@@ -126,19 +139,23 @@ pub fn create_workspace(path: &str) -> Result<String, String> {
         return Err(format!("Directory already exists: {}", path));
     }
     fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {}", e))?;
-    register_workspace(path)
+    register_workspace_ex(path, seed_wiki)
 }
 
 /// `/cli/workspace/open` — verify the path is an existing directory
 /// and register it.
 pub fn open_workspace(path: &str) -> Result<String, String> {
+    open_workspace_ex(path, true)
+}
+
+pub fn open_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, String> {
     if path.is_empty() {
         return Err("Missing 'path' parameter".to_string());
     }
     if !Path::new(path).is_dir() {
         return Err(format!("Directory not found: {}", path));
     }
-    register_workspace(path)
+    register_workspace_ex(path, seed_wiki)
 }
 
 /// `/cli/workspace/cleanup` — drop `workspaces` rows whose
@@ -227,4 +244,51 @@ pub fn remove_workspace_db_only(path: &str) -> Result<String, String> {
         "teardown": serde_json::Value::Null,
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn unique_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-lifecycle-{}-{}-{}",
+            label,
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    #[test]
+    fn register_workspace_seeds_wiki_by_default() {
+        crate::db::init_for_tests();
+        let dir = unique_dir("seed-on");
+        let path = dir.to_string_lossy().into_owned();
+        register_workspace(&path).expect("register");
+        assert!(
+            dir.join(".k2/wiki/Home.md").is_file(),
+            "default register must seed Home.md"
+        );
+        assert!(
+            dir.join(".k2/wiki/_Index.md").is_file(),
+            "default register must seed _Index.md"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn register_workspace_ex_false_skips_wiki() {
+        crate::db::init_for_tests();
+        let dir = unique_dir("seed-off");
+        let path = dir.to_string_lossy().into_owned();
+        register_workspace_ex(&path, false).expect("register");
+        assert!(
+            !dir.join(".k2/wiki").exists(),
+            "opt-out must not create .k2/wiki"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

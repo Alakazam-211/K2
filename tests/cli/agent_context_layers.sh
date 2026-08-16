@@ -101,6 +101,7 @@ assert_contains "schema has agent context add" "$schema_out" '"name": "agent con
 assert_contains "schema has agent context move" "$schema_out" '"name": "agent context move"'
 assert_contains "schema has agent context catalog" "$schema_out" '"name": "agent context catalog"'
 assert_contains "schema hire has --context" "$schema_out" '"name": "--context"'
+assert_contains "schema hire has --no-wiki" "$schema_out" '"name": "--no-wiki"'
 assert_contains "schema on mentions system layers" "$schema_out" 'pinned:agent'
 
 # ── 3. Help ──────────────────────────────────────────────────────────
@@ -117,6 +118,8 @@ done
 help_hire="$(PORT=1 TOKEN=fake "$K2_CLI" agent hire --help 2>&1)" || true
 assert_contains "hire help has --context" "$help_hire" "--context"
 assert_contains "hire help mentions catalog seeds" "$help_hire" "wiki:index"
+assert_contains "hire help has --no-wiki" "$help_hire" "--no-wiki"
+assert_contains "hire help says wiki seeded by default" "$help_hire" "seeded by default"
 
 # Top-level teach
 set +e

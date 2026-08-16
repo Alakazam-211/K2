@@ -1038,9 +1038,15 @@ pub fn handle_projects_touch_interaction_clear(body: &[u8]) -> CliResponse {
     unit_ok(pops::projects_touch_interaction_clear(&b.id))
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 struct PathBody {
     path: String,
+    #[serde(default = "default_true", alias = "seedWiki")]
+    seed_wiki: bool,
 }
 
 pub fn handle_projects_add_from_path(body: &[u8]) -> CliResponse {
@@ -1048,7 +1054,7 @@ pub fn handle_projects_add_from_path(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let result = pops::projects_add_from_path(&b.path);
+    let result = pops::projects_add_from_path_ex(&b.path, b.seed_wiki);
     if result.is_ok() {
         emit_projects_changed();
     }
@@ -1060,7 +1066,7 @@ pub fn handle_projects_add_without_git(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let result = pops::projects_add_without_git(&b.path);
+    let result = pops::projects_add_without_git_ex(&b.path, b.seed_wiki);
     if result.is_ok() {
         emit_projects_changed();
     }
@@ -1071,6 +1077,8 @@ pub fn handle_projects_add_without_git(body: &[u8]) -> CliResponse {
 struct InitGitBody {
     path: String,
     branch: Option<String>,
+    #[serde(default = "default_true", alias = "seedWiki")]
+    seed_wiki: bool,
 }
 
 pub fn handle_projects_init_git_and_open(body: &[u8]) -> CliResponse {
@@ -1078,7 +1086,7 @@ pub fn handle_projects_init_git_and_open(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let result = pops::projects_init_git_and_open(&b.path, b.branch.as_deref());
+    let result = pops::projects_init_git_and_open_ex(&b.path, b.branch.as_deref(), b.seed_wiki);
     if result.is_ok() {
         emit_projects_changed();
     }

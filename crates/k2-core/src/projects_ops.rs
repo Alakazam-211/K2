@@ -530,6 +530,10 @@ pub enum AddFromPathResult {
 }
 
 pub fn projects_add_from_path(path: &str) -> Result<AddFromPathResult, String> {
+    projects_add_from_path_ex(path, true)
+}
+
+pub fn projects_add_from_path_ex(path: &str, seed_wiki: bool) -> Result<AddFromPathResult, String> {
     let p = Path::new(path);
     let name = p
         .file_name()
@@ -627,6 +631,11 @@ pub fn projects_add_from_path(path: &str) -> Result<AddFromPathResult, String> {
         let project = Project::get(&conn, &project_id).map_err(|e| e.to_string())?;
         Ok(AddFromPathResult::Project(project))
     })?;
+    if seed_wiki {
+        if let AddFromPathResult::Project(_) = &result {
+            crate::wiki::seed_wiki_on_add(path);
+        }
+    }
     Ok(result)
 }
 
@@ -658,6 +667,10 @@ fn reconcile_focus_group(
 }
 
 pub fn projects_add_without_git(path: &str) -> Result<Project, String> {
+    projects_add_without_git_ex(path, true)
+}
+
+pub fn projects_add_without_git_ex(path: &str, seed_wiki: bool) -> Result<Project, String> {
     let name = Path::new(path)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -669,7 +682,7 @@ pub fn projects_add_without_git(path: &str) -> Result<Project, String> {
     let workspace_id = Uuid::new_v4().to_string();
     let tab_order = next_tab_order(&conn);
 
-    with_transaction(&conn, || {
+    let project = with_transaction(&conn, || {
         Project::create(
             &conn, &project_id, &name, path, "#3b82f6", tab_order, 0, None, None,
         )
@@ -688,10 +701,22 @@ pub fn projects_add_without_git(path: &str) -> Result<Project, String> {
         )
         .map_err(|e| e.to_string())?;
         Project::get(&conn, &project_id).map_err(|e| e.to_string())
-    })
+    })?;
+    if seed_wiki {
+        crate::wiki::seed_wiki_on_add(path);
+    }
+    Ok(project)
 }
 
 pub fn projects_init_git_and_open(path: &str, branch: Option<&str>) -> Result<Project, String> {
+    projects_init_git_and_open_ex(path, branch, true)
+}
+
+pub fn projects_init_git_and_open_ex(
+    path: &str,
+    branch: Option<&str>,
+    seed_wiki: bool,
+) -> Result<Project, String> {
     let branch_name = branch
         .filter(|b| !b.trim().is_empty())
         .unwrap_or("main")
@@ -740,7 +765,7 @@ pub fn projects_init_git_and_open(path: &str, branch: Option<&str>) -> Result<Pr
     let workspace_id = Uuid::new_v4().to_string();
     let tab_order = next_tab_order(&conn);
 
-    with_transaction(&conn, || {
+    let project = with_transaction(&conn, || {
         Project::create(
             &conn, &project_id, &name, path, "#3b82f6", tab_order, 0, None, None,
         )
@@ -759,7 +784,11 @@ pub fn projects_init_git_and_open(path: &str, branch: Option<&str>) -> Result<Pr
         )
         .map_err(|e| e.to_string())?;
         Project::get(&conn, &project_id).map_err(|e| e.to_string())
-    })
+    })?;
+    if seed_wiki {
+        crate::wiki::seed_wiki_on_add(path);
+    }
+    Ok(project)
 }
 
 // ── Worktree enablement ────────────────────────────────────────────────

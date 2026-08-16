@@ -75,6 +75,14 @@ already broken by an old rename, re-add the connection once against the
 handle — later display edits will not break it. Changing the handle
 still needs a confirm: that *is* a new address.
 
+### Wiki seeds on add (opt-out)
+
+New workspaces and `k2 agent hire` now seed `.k2/wiki/Home.md` +
+`_Index.md` by default so every agent starts with a knowledge base.
+Uncheck **Seed the wiki** in Add Workspace, or pass `--no-wiki` on
+`k2 workspace create|open` and `k2 agent hire`. Existing notes are
+never overwritten.
+
 ### Settings / chrome
 
 Settings gear is gone from the top bar — **GateChrome** + the

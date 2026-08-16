@@ -86,6 +86,18 @@ pub fn bool_param(params: &HashMap<String, String>, key: &str) -> bool {
     )
 }
 
+/// Wiki seed on workspace add/open/create. Default ON; opt out with
+/// `no_wiki=1` or `seed_wiki=0|false|off|no`.
+pub fn seed_wiki_wanted(params: &HashMap<String, String>) -> bool {
+    if bool_param(params, "no_wiki") {
+        return false;
+    }
+    match opt_param(params, "seed_wiki").as_deref() {
+        Some("0") | Some("false") | Some("off") | Some("no") => false,
+        _ => true,
+    }
+}
+
 // ── Main dispatch ─────────────────────────────────────────────────────
 
 /// Route a single `/cli/*` path to its handler. Assumes the caller
@@ -145,4 +157,36 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
         return resp;
     }
     CliResponse::not_found()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn seed_wiki_wanted_defaults_on() {
+        assert!(seed_wiki_wanted(&HashMap::new()));
+        assert!(seed_wiki_wanted(&params(&[("path", "/tmp/x")])));
+        assert!(seed_wiki_wanted(&params(&[("seed_wiki", "1")])));
+    }
+
+    #[test]
+    fn seed_wiki_wanted_opts_out() {
+        assert!(!seed_wiki_wanted(&params(&[("no_wiki", "1")])));
+        assert!(!seed_wiki_wanted(&params(&[("no_wiki", "true")])));
+        assert!(!seed_wiki_wanted(&params(&[("seed_wiki", "0")])));
+        assert!(!seed_wiki_wanted(&params(&[("seed_wiki", "false")])));
+        assert!(
+            !seed_wiki_wanted(&params(&[("no_wiki", "1"), ("seed_wiki", "1")])),
+            "no_wiki wins over seed_wiki=1"
+        );
+    }
 }

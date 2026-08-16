@@ -9542,14 +9542,25 @@ except Exception as ex:
 }
 
 cmd_workspace_create() {
-    local target_path="${1:-}"
+    local target_path="" no_wiki=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-wiki) no_wiki=true; shift ;;
+            -*) echo "Unknown flag: $1" >&2; echo "Usage: k2 workspace create <path> [--no-wiki]" >&2; exit 1 ;;
+            *) if [ -z "$target_path" ]; then target_path="$1"; else echo "Unexpected extra argument: $1" >&2; exit 1; fi; shift ;;
+        esac
+    done
     if [ -z "$target_path" ]; then
-        echo "Usage: k2 workspace create <path>" >&2
+        echo "Usage: k2 workspace create <path> [--no-wiki]" >&2
         exit 1
     fi
     # Resolve to absolute path
-    target_path="$(cd "$(dirname "$target_path")" 2>/dev/null && pwd)/$(basename "$target_path")" 2>/dev/null || target_path="$1"
-    cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")"
+    target_path="$(cd "$(dirname "$target_path")" 2>/dev/null && pwd)/$(basename "$target_path")" 2>/dev/null || target_path="$target_path"
+    if [ "$no_wiki" = true ]; then
+        cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")" "no_wiki=1"
+    else
+        cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")"
+    fi
 }
 
 cmd_workspace_preview() {
@@ -9684,16 +9695,27 @@ else:
 }
 
 cmd_workspace_open() {
-    local target_path="${1:-}"
+    local target_path="" no_wiki=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-wiki) no_wiki=true; shift ;;
+            -*) echo "Unknown flag: $1" >&2; echo "Usage: k2 workspace open <path> [--no-wiki]" >&2; exit 1 ;;
+            *) if [ -z "$target_path" ]; then target_path="$1"; else echo "Unexpected extra argument: $1" >&2; exit 1; fi; shift ;;
+        esac
+    done
     if [ -z "$target_path" ]; then
-        echo "Usage: k2 workspace open <path>" >&2
+        echo "Usage: k2 workspace open <path> [--no-wiki]" >&2
         exit 1
     fi
     # Resolve to absolute path
     if [ -d "$target_path" ]; then
         target_path="$(cd "$target_path" && pwd)"
     fi
-    cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")"
+    if [ "$no_wiki" = true ]; then
+        cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")" "no_wiki=1"
+    else
+        cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")"
+    fi
 }
 
 # 0.39.0f Phase 2.1b: cmd_mode orphan removed. `k2 mode` is
@@ -10297,8 +10319,8 @@ cmd_schema() {
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--context <path|catalog-id>]... [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, set mode + default agent program, wire connections, join projects, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--context <path|catalog-id>]... [--no-wiki] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), set mode + default agent program, wire connections, join projects, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": true}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
@@ -10310,6 +10332,7 @@ cmd_schema() {
         {"name": "--connect", "arg": "name", "description": "Wire a connection to another agent (repeatable). Connections are always mutual (bidirectional)."},
         {"name": "--project", "arg": "project", "description": "Add the new agent to a project (name or id, repeatable; see k2 project list). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
         {"name": "--context", "arg": "path|catalog-id", "description": "Seed an always-on context layer after open (repeatable). Path must exist; catalog ids from `k2 agent context catalog` (wiki:index|home|hygiene, subagents:pack, manager:pack, k2:pack, connections|heartbeats|skills:roster, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
+        {"name": "--no-wiki", "arg": null, "description": "Skip seeding .k2/wiki/Home.md + _Index.md on first register (wiki is seeded by default)."},
         {"name": "--launch", "arg": null, "description": "Start the agent's session after provisioning."},
         {"name": "--onboard", "arg": "msg", "description": "Send msg to the agent after it starts (implies --launch)."},
         {"name": "--dry-run", "arg": null, "description": "Print the exact action plan; change nothing."},
@@ -11888,8 +11911,8 @@ DAILY SUBCOMMANDS
   update --field <f> --value <v>    Edit workspace agent profile
 
 LIFECYCLE (less common)
-  create <path>                     Create folder + register
-  open <path>                       Register existing folder
+  create <path> [--no-wiki]         Create folder + register (wiki seeded unless --no-wiki)
+  open <path> [--no-wiki]           Register existing folder (wiki seeded unless --no-wiki)
   remove <path>                     Deregister (files stay)
   triage                            Plain-text summary of pending work
 
@@ -12717,6 +12740,8 @@ FLAGS
                           connections|heartbeats|skills:roster) warn if the file
                           is missing and still stack. Same layer on re-hire = no-op.
                           Day-2: k2 agent context …
+  --no-wiki               Do not seed .k2/wiki (Home.md + _Index.md). Wiki is
+                          seeded by default on first register.
   --launch                Start the agent's session after provisioning
   --onboard <msg>         Send <msg> to the agent after it starts (implies --launch)
   --dry-run               Show the full plan; change nothing
@@ -13020,7 +13045,7 @@ EOF
 cmd_agent_hire() {
     if _wants_help "$@"; then cmd_help_agent_hire; exit 0; fi
     local dir="" name="" template="" persona="" mode="" enabled="" onboard="" agent_preset=""
-    local launch=false dry_run=false as_json=false
+    local launch=false dry_run=false as_json=false no_wiki=false
     local connects=() projects=() contexts=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -13051,6 +13076,7 @@ cmd_agent_hire() {
             --context)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--context requires a path or catalog id (see: k2 agent context catalog)"; exit 2; }
                 contexts+=("$2"); shift 2 ;;
+            --no-wiki) no_wiki=true; shift ;;
             --launch) launch=true; shift ;;
             --onboard)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--onboard requires a message"; exit 2; }
@@ -13114,6 +13140,7 @@ cmd_agent_hire() {
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
     PROJECTS="$projects_json" CONTEXTS="$contexts_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
+    NO_WIKI="$no_wiki" \
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
@@ -13133,6 +13160,7 @@ onboard = os.environ.get("ONBOARD", "")
 agent_preset = os.environ.get("AGENT_PRESET", "")
 dry_run = os.environ.get("DRY_RUN") == "true"
 as_json = os.environ.get("AS_JSON") == "true"
+no_wiki = os.environ.get("NO_WIKI") == "true"
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
 
@@ -13337,9 +13365,12 @@ else:
     wp["status"] = "pending"
 actions.append(wp)
 
-actions.append(
-    {"step": "register-workspace", "status": "skipped", "reason": "already-registered"}
-    if registered else {"step": "register-workspace", "status": "pending"})
+if registered:
+    actions.append({"step": "register-workspace", "status": "skipped",
+                    "reason": "already-registered"})
+else:
+    actions.append({"step": "register-workspace", "status": "pending",
+                    "wiki": "skip" if no_wiki else "seed"})
 
 if registered and conf.get("mode") == desired_mode:
     actions.append({"step": "set-mode", "mode": desired_mode,
@@ -13508,6 +13539,10 @@ def emit(ok, changed):
                 line = "write-persona: from %s" % a.get("source")
         elif step == "register-workspace":
             line = "register-workspace"
+            if a.get("wiki") == "skip":
+                line += " (no wiki seed)"
+            elif a.get("wiki") == "seed":
+                line += " (seed wiki)"
         elif step == "set-mode":
             line = "mode: %s" % a["mode"]
         elif step == "set-enabled":
@@ -13610,7 +13645,10 @@ if a and a["status"] == "pending":
 # 3. register-workspace
 a = one("register-workspace")
 if a and a["status"] == "pending":
-    resp = http_get("/cli/workspace/open", {"path": path})
+    open_params = {"path": path}
+    if no_wiki:
+        open_params["no_wiki"] = "1"
+    resp = http_get("/cli/workspace/open", open_params)
     err = resp.get("error")
     if isinstance(err, str) and "already registered" in err:
         a["status"] = "skipped"

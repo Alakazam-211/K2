@@ -16,7 +16,7 @@ import {
   findTabByPaneGroupId,
   restampSessionTabs,
 } from '@/lib/chat-session-tab'
-import { IconHeartEKG } from '@/components/icons/IconHeartEKG'
+import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { sessionIdsTargetedByHeartbeats } from '@/lib/heartbeat-delivery'
 
@@ -151,8 +151,11 @@ function DateWithHeartbeat({
   return (
     <span className="flex items-center gap-1 flex-shrink-0">
       {heartbeat && (
-        <span title="A heartbeat delivers into this chat">
-          <IconHeartEKG className="w-3 h-3 text-[var(--color-accent)]" />
+        <span
+          className="flex-shrink-0 text-[var(--color-text-muted)] opacity-80"
+          title="A heartbeat delivers into this chat"
+        >
+          <IconAutonomous className="w-3.5 h-3.5" />
         </span>
       )}
       <span

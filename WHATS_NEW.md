@@ -31,13 +31,14 @@ wake **that** chat, not the pinned one. Hyphen (`sales-reviewer`) is
 still a workspace name, not a sidecar.
 
 New heartbeats land in the **pinned** chat by default, with a loud
-hint to train a sidecar (`k2 heartbeat session <name> --set …`)
-instead of dumping a flow on the primary.
+hint to train a sidecar (`k2 heartbeat session <name> --set sales/reviewer`)
+instead of dumping a flow on the primary. `--set` accepts a sidecar
+handle or the old session UUID + `--provider`.
 
-Still coming before ship: Claude / Grok / Pi `--append-system-prompt`
-(or Grok `--rules`) as a *hint* on top of `k2 whoami`;
-`heartbeat session --set sales/reviewer` (today `--set` is still a
-session UUID + `--provider`).
+Claude / Grok / Pi launches get a short **whoami** brief on
+`--append-system-prompt` (Grok: `--rules`). That is a hint, not the
+source of truth — `k2 whoami` is. Codex / Gemini / Cursor / Hermes
+stay env + whoami only.
 
 ### Compose bar remembers sends; Esc cancels the turn
 

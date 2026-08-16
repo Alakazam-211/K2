@@ -241,6 +241,15 @@ impl MsgResponse {
 /// Resolve a workspace token (name, absolute path, or UUID) to its
 /// canonical filesystem path. Returns `None` when no `projects` row
 /// matches.
+/// Inbox / tray compose: `sales/reviewer` is still the **sales** inbox
+/// (workspace-shared). Strip the handle, then resolve as a workspace.
+pub fn resolve_workspace_allowing_handle(token: &str) -> Option<String> {
+    let ws = k2_core::workspace_session_handles::split_workspace_handle(token)
+        .map(|(ws, _)| ws)
+        .unwrap_or(token);
+    resolve_workspace(ws)
+}
+
 pub fn resolve_workspace(token: &str) -> Option<String> {
     if token.is_empty() {
         return None;

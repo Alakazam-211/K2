@@ -56,6 +56,63 @@ pub fn apply_cell_identity_env(env: &mut HashMap<String, String>, identity: &Cel
     }
 }
 
+/// Promote-safe identity brief for Claude/Grok/Pi system append.
+/// Never the SSOT — `k2 whoami` is. Snapshot is re-passed on every launch.
+pub fn identity_system_brief(identity: &CellIdentity) -> String {
+    let role = match identity.cell {
+        CellKind::Canonical => "canonical",
+        CellKind::Sidecar => "sidecar",
+    };
+    let address = match identity.cell {
+        CellKind::Canonical => identity.primary.clone(),
+        CellKind::Sidecar => format_address(&identity.primary, identity.sidecar_name.as_deref()),
+    };
+    format!(
+        "K2 cell identity: run `k2 whoami` before claiming to be the workspace agent.\n\
+         If role is sidecar you are not the workspace agent; message the primary with `k2 msg {}`.\n\
+         Launch snapshot (re-check with whoami): role={role} address={address} primary={}",
+        identity.primary, identity.primary
+    )
+}
+
+/// Flag that can carry the brief. Claude / Pi: `--append-system-prompt`.
+/// Grok: `--rules`. Everyone else: None (env + whoami only).
+pub fn identity_argv_flag(command: Option<&str>) -> Option<&'static str> {
+    let name = command
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|c| {
+            let first = c.split_whitespace().next().unwrap_or("");
+            Some(first.rsplit('/').next().unwrap_or(first))
+        })?;
+    match name {
+        "claude" | "pi" => Some("--append-system-prompt"),
+        "grok" => Some("--rules"),
+        _ => None,
+    }
+}
+
+/// Splice `brief` onto argv. Concatenates if the flag is already present
+/// (do not drop existing CLAUDE.md / wake context). Idempotent if the
+/// brief marker is already in that value.
+pub fn splice_identity_brief(command: Option<&str>, args: &mut Vec<String>, brief: &str) {
+    let Some(flag) = identity_argv_flag(command) else {
+        return;
+    };
+    if let Some(i) = args.iter().position(|a| a == flag) {
+        if i + 1 < args.len() {
+            if !args[i + 1].contains("run `k2 whoami`") {
+                args[i + 1] = format!("{}\n\n{brief}", args[i + 1]);
+            }
+        } else {
+            args.push(brief.to_string());
+        }
+    } else {
+        args.push(flag.to_string());
+        args.push(brief.to_string());
+    }
+}
+
 /// Classify this spawn and (for sidecars) allocate/reuse a handle.
 ///
 /// - Canonical / pinned: `agent_name == project_id`
@@ -328,22 +385,22 @@ pub fn apply_spawn_identity(
     args: &[String],
     daemon_session_id: &str,
     pane_or_tab_key: &str,
-) {
+) -> Option<CellIdentity> {
     if env.get("K2_API_CELL").map(|v| !v.is_empty()).unwrap_or(false)
         || k2_core::workspace_session_handles::is_api_agent_name(agent_name)
     {
-        return;
+        return None;
     }
-    if let Some(id) = resolve_spawn_identity(
+    let id = resolve_spawn_identity(
         project_id,
         agent_name,
         command,
         args,
         daemon_session_id,
         pane_or_tab_key,
-    ) {
-        apply_cell_identity_env(env, &id);
-    }
+    )?;
+    apply_cell_identity_env(env, &id);
+    Some(id)
 }
 
 #[cfg(test)]
@@ -460,5 +517,53 @@ mod tests {
         assert_eq!(info2.address, "sales/reviewer");
         assert_eq!(info2.primary, "sales");
         assert_eq!(info2.session, "sess-side");
+    }
+
+    #[test]
+    fn splice_claude_and_pi_append_grok_rules_codex_untouched() {
+        let id = CellIdentity {
+            cell: CellKind::Sidecar,
+            sidecar_name: Some("reviewer".into()),
+            primary: "sales".into(),
+            session_id: "sid".into(),
+        };
+        let brief = identity_system_brief(&id);
+        assert!(brief.contains("run `k2 whoami`"), "whoami is the SSOT");
+        assert!(brief.contains("k2 msg sales"));
+        assert!(brief.contains("role=sidecar"));
+        assert!(brief.contains("address=sales/reviewer"));
+
+        assert_eq!(identity_argv_flag(Some("claude")), Some("--append-system-prompt"));
+        assert_eq!(identity_argv_flag(Some("/usr/bin/pi")), Some("--append-system-prompt"));
+        assert_eq!(identity_argv_flag(Some("grok")), Some("--rules"));
+        assert_eq!(identity_argv_flag(Some("codex")), None);
+        assert_eq!(identity_argv_flag(Some("gemini")), None);
+
+        let mut claude = vec!["--dangerously-skip-permissions".into()];
+        splice_identity_brief(Some("claude"), &mut claude, &brief);
+        assert_eq!(claude[1], "--append-system-prompt");
+        assert!(claude[2].contains("k2 whoami"));
+        splice_identity_brief(Some("claude"), &mut claude, &brief);
+        assert_eq!(
+            claude.iter().filter(|a| *a == "--append-system-prompt").count(),
+            1,
+            "must not double the flag"
+        );
+
+        let mut existing = vec![
+            "--append-system-prompt".into(),
+            "existing CLAUDE.md body".into(),
+        ];
+        splice_identity_brief(Some("claude"), &mut existing, &brief);
+        assert!(existing[1].starts_with("existing CLAUDE.md body"));
+        assert!(existing[1].contains("k2 whoami"));
+
+        let mut grok = vec![];
+        splice_identity_brief(Some("grok"), &mut grok, &brief);
+        assert_eq!(grok, vec!["--rules".to_string(), brief.clone()]);
+
+        let mut codex = vec!["resume".into(), "x".into()];
+        splice_identity_brief(Some("codex"), &mut codex, &brief);
+        assert_eq!(codex, vec!["resume".to_string(), "x".to_string()]);
     }
 }

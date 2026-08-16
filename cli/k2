@@ -1421,8 +1421,8 @@ except Exception as e:
     [ -n "$wakeup_abs" ] && echo "Wakeup file: $wakeup_abs"
     echo
     echo "NOTE: this schedule lands in the workspace PINNED chat." >&2
-    echo "      A sidecar + \`k2 heartbeat session $name --set <session-id> --provider <p>\`" >&2
-    echo "      is often better for a trained flow." >&2
+    echo "      A sidecar + \`k2 heartbeat session $name --set sales/reviewer\`" >&2
+    echo "      (or --set <session-id> --provider <p>) is often better for a trained flow." >&2
     echo
     if [ -n "$instructions" ] && [ -n "$wakeup_abs" ]; then
         printf '%s\n' "$instructions" > "$wakeup_abs"
@@ -1716,7 +1716,7 @@ except Exception as e:
 #   k2 heartbeat session <name>                    # show current target
 #   k2 heartbeat session <name> --pinned           # workspace pinned chat
 #   k2 heartbeat session <name> --auto             # own session, new on next fire
-#   k2 heartbeat session <name> --set <session-id> --provider <p>
+#   k2 heartbeat session <name> --set <session-id|workspace/handle> [--provider <p>]
 # The set path hits /cli/heartbeat/set-session; the daemon validates
 # the provider, refuses the reserved pinned-chat session, and requires
 # the session to exist on disk. Read path is client-side off
@@ -1731,13 +1731,13 @@ cmd_heartbeat_session() {
             --provider) provider="${2:-}"; shift 2 ;;
             -*)
                 echo "Unknown flag for 'heartbeat session': $1" >&2
-                echo "Usage: k2 heartbeat session <name> [--pinned | --auto | --set <session-id> --provider <p>]" >&2
+                echo "Usage: k2 heartbeat session <name> [--pinned | --auto | --set <session-id|workspace/handle> [--provider <p>]]" >&2
                 exit 1
                 ;;
             *)  if [ -z "$name" ]; then name="$1"; fi; shift ;;
         esac
     done
-    [ -z "$name" ] && { echo "Usage: k2 heartbeat session <name> [--pinned | --auto | --set <session-id> --provider <p>]" >&2; exit 1; }
+    [ -z "$name" ] && { echo "Usage: k2 heartbeat session <name> [--pinned | --auto | --set <session-id|workspace/handle> [--provider <p>]]" >&2; exit 1; }
 
     if [ -z "$mode" ]; then
         # Read-only: print the current delivery target.
@@ -1764,10 +1764,11 @@ else:
     fi
 
     if [ "$mode" = "session" ]; then
-        [ -z "$session_id" ] && { echo "Usage: k2 heartbeat session <name> --set <session-id> --provider <p>" >&2; exit 1; }
-        [ -z "$provider" ] && { echo "--set requires --provider <p> (claude, grok, cursor, gemini, pi, codex, hermes)" >&2; exit 1; }
+        [ -z "$session_id" ] && { echo "Usage: k2 heartbeat session <name> --set <session-id|workspace/handle> [--provider <p>]" >&2; exit 1; }
+        # UUID still wants --provider. Sidecar handle (sales/reviewer or 1)
+        # lets the daemon infer the provider.
     elif [ -n "$provider" ]; then
-        echo "--provider only applies with --set <session-id>" >&2; exit 1
+        echo "--provider only applies with --set <session-id|workspace/handle>" >&2; exit 1
     fi
 
     cli_send cli_request "/cli/heartbeat/set-session" \
@@ -10844,7 +10845,7 @@ cmd_schema() {
     },
     {
       "name": "heartbeat session",
-      "usage": "k2 heartbeat session <name> [--pinned | --auto | --set <session-id> --provider <p>]",
+      "usage": "k2 heartbeat session <name> [--pinned | --auto | --set <session-id|workspace/handle> [--provider <p>]]",
       "description": "Show or set where a heartbeat's wake message lands: the workspace pinned chat (--pinned), the heartbeat's own session minted fresh on the next fire (--auto), or a specific saved provider session (--set + --provider). With no flags, prints the current target.",
       "args": [{"name": "name", "required": true}],
       "flags": [
@@ -14808,7 +14809,8 @@ SCHEDULE (CRUD on heartbeat definitions)
        --instructions "text" | --instructions-file <path>
          write the WAKEUP.md (the job that runs on fire) at create time
        New schedules land in the PINNED chat. For a trained flow prefer
-       a sidecar: k2 heartbeat session <n> --set <session-id> --provider <p>
+       a sidecar: k2 heartbeat session <n> --set sales/reviewer
+       (UUID form still works: --set <session-id> --provider <p>)
   heartbeat schedule list [--archived] [--json]  (--json: raw array)
   heartbeat schedule remove <n> [--purge]
   heartbeat schedule unarchive <n>
@@ -14830,10 +14832,10 @@ DELIVERY (where a fire's wake message lands)
   heartbeat session <n>          Show the current delivery target
   heartbeat session <n> --pinned Deliver into the workspace pinned chat
   heartbeat session <n> --auto   Own session (a new one on the next fire)
-  heartbeat session <n> --set <session-id> --provider <p>
+  heartbeat session <n> --set <session-id|workspace/handle> [--provider <p>]
                                  Deliver into a specific saved session
-                                 (p: claude, grok, cursor, gemini, pi,
-                                 codex, hermes; the session must exist)
+                                 (handle: sales/reviewer or 1; UUID form
+                                 still wants --provider claude|grok|…)
 
 INSPECTION (read-only)
   heartbeat show <n> [--json]    Single heartbeat details

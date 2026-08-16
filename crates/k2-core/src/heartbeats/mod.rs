@@ -291,6 +291,113 @@ pub fn k2so_heartbeat_set_use_workspace_session(
 ///
 /// Returns `{"success":true,"mode":...}` (+ `sessionId`/`provider`
 /// for mode `session`) so the route can echo the applied state.
+/// Resolve `--set` to a provider conversation id.
+/// Accepts a raw session UUID, `sales/reviewer`, or a bare handle (`1` / `reviewer`)
+/// in this workspace. Infers provider from the tab row / Chats name when possible.
+fn resolve_set_session_target(
+    project_path: &str,
+    project_id: &str,
+    raw: &str,
+    explicit_provider: Option<&str>,
+) -> Result<(String, Option<String>), String> {
+    let token = raw.trim();
+    let handle = if let Some((ws, handle)) =
+        crate::workspace_session_handles::split_workspace_handle(token)
+    {
+        let here = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT path FROM projects WHERE id = ?1",
+                rusqlite::params![project_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+        };
+        let named = workspace_name_to_path(ws);
+        if let (Some(here), Some(named)) = (here, named) {
+            if here != named {
+                return Err(format!("handle '{token}' is not in this workspace"));
+            }
+        }
+        let _ = project_path;
+        handle.to_string()
+    } else if crate::workspace_session_handles::is_uuid_shape(token)
+        || explicit_provider.is_some()
+    {
+        // UUID, or legacy `--set <opaque-id> --provider <p>`.
+        return Ok((token.to_string(), infer_provider_for_session(token)));
+    } else {
+        token.to_string()
+    };
+
+    let key = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let key = match crate::workspace_session_handles::resolve_handle(
+            &conn, project_id, &handle,
+        ) {
+            Ok(key) => key,
+            Err(_) => {
+                // Not a known handle — treat as a raw session id and let
+                // the provider / disk-probe gates fail loud.
+                return Ok((token.to_string(), infer_provider_for_session(token)));
+            }
+        };
+        // Prefer the provider conversation id on the tab row when the
+        // handle table is still keyed on pane_group_id.
+        crate::db::schema::WorkspaceTabSession::get_by_session_id(&conn, &key)
+            .ok()
+            .flatten()
+            .and_then(|t| t.session_id)
+            .or_else(|| {
+                crate::db::schema::WorkspaceTabSession::get(&conn, project_id, &key)
+                    .ok()
+                    .flatten()
+                    .and_then(|t| t.session_id)
+            })
+            .unwrap_or(key)
+    };
+    let provider = infer_provider_for_session(&key);
+    Ok((key, provider))
+}
+
+/// Best-effort provider for a conversation key (tab command, else chat_session_names).
+fn infer_provider_for_session(session_id: &str) -> Option<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    if let Ok(Some(tab)) =
+        crate::db::schema::WorkspaceTabSession::get_by_session_id(&conn, session_id)
+    {
+        if let Some(cmd) = tab.command.as_deref() {
+            if let Some(adapter) =
+                crate::workspace::provider_resume::provider_resume_for_command(cmd)
+            {
+                return Some(adapter.provider.to_string());
+            }
+        }
+    }
+    conn.query_row(
+        "SELECT provider FROM chat_session_names WHERE session_id = ?1 \
+         AND TRIM(provider) != '' ORDER BY updated_at DESC LIMIT 1",
+        rusqlite::params![session_id],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Avoid a daemon↔core cycle: resolve a workspace name to path via projects.
+fn workspace_name_to_path(token: &str) -> Option<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT path FROM projects WHERE name = ?1 COLLATE NOCASE ORDER BY rowid LIMIT 1",
+        rusqlite::params![token],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
 pub fn k2so_heartbeat_set_session(
     project_path: String,
     name: String,
@@ -334,12 +441,18 @@ pub fn k2so_heartbeat_set_session(
             Ok(serde_json::json!({ "success": true, "mode": "auto" }))
         }
         "session" => {
-            let session_id = session_id
+            let raw = session_id
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| "mode 'session' requires a 'session_id' parameter".to_string())?;
+            let (session_id, inferred_provider) =
+                resolve_set_session_target(&project_path, &project_id, &raw, provider.as_deref())?;
             let provider = provider
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| "mode 'session' requires a 'provider' parameter".to_string())?;
+                .or(inferred_provider)
+                .ok_or_else(|| {
+                    "mode 'session' requires --provider <p> (or pass a sidecar handle like sales/reviewer)"
+                        .to_string()
+                })?;
             // (a) provider must be a known ProviderResume adapter —
             // an unknown provider could never be probed or resumed.
             let adapter = crate::workspace::provider_resume::provider_resume_for_provider(
@@ -1215,6 +1328,47 @@ mod tests {
         assert!(!hb.use_workspace_session, "session mode clears the pinned flag");
         assert_eq!(hb.last_session_id.as_deref(), Some(sid));
         assert_eq!(hb.session_provider.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn set_session_accepts_sidecar_handle_and_infers_provider() {
+        let guard = HomeGuard::new("handle-set");
+        let path = format!("/fixture/hb-set-handle-{}", uuid::Uuid::new_v4());
+        let project_id = seed_project_and_heartbeat(&path);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let hash = crate::chat_history::claude_project_hash(&path);
+        let dir = guard.home.join(".claude").join("projects").join(&hash);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{sid}.jsonl")), b"{\"cwd\":\"/x\"}\n").unwrap();
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO workspace_tab_sessions \
+                 (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+                 VALUES (?1, ?2, ?3, ?4, 'claude', unixepoch())",
+                rusqlite::params![project_id, "pane-rev", format!("tab-pane-rev"), sid],
+            )
+            .expect("tab");
+            conn.execute(
+                "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+                 VALUES ('claude', ?1, 'Reviewer', 0, unixepoch())",
+                rusqlite::params![sid],
+            )
+            .expect("name");
+            crate::workspace_session_handles::allocate_ordinal(&conn, &project_id, &sid)
+                .expect("ord");
+        }
+        let v = k2so_heartbeat_set_session(
+            path,
+            "hb".into(),
+            "session".into(),
+            Some("reviewer".into()),
+            None,
+        )
+        .expect("handle --set without --provider");
+        assert_eq!(v["sessionId"], sid);
+        assert_eq!(v["provider"], "claude");
     }
 
     #[test]

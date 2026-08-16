@@ -219,6 +219,7 @@ pub fn spawn_agent_session_v2_blocking(
     // but the wire shape is otherwise identical.
     let session_id = SessionId::new();
     let mut env = req.env.clone();
+    let mut spawn_args = req.args.clone().unwrap_or_default();
 
     // COMPAT-58 (#58 Phase 1 / PR-A) — real passport at every agent spawn
     // path (wake / heartbeat / canonical / agents launch). Same seam as
@@ -264,15 +265,22 @@ pub fn spawn_agent_session_v2_blocking(
                 .filter(|p| !p.is_empty())
                 .unwrap_or_else(|| req.agent_name.clone())
         });
-        crate::cell_identity::apply_spawn_identity(
+        if let Some(id) = crate::cell_identity::apply_spawn_identity(
             &mut env,
             workspace_uuid.trim(),
             &map_key,
             req.command.as_deref(),
-            req.args.as_deref().unwrap_or(&[]),
+            &spawn_args,
             &session_id.to_string(),
             &map_key,
-        );
+        ) {
+            let brief = crate::cell_identity::identity_system_brief(&id);
+            crate::cell_identity::splice_identity_brief(
+                req.command.as_deref(),
+                &mut spawn_args,
+                &brief,
+            );
+        }
     }
 
     let cfg = DaemonPtyConfig {
@@ -281,7 +289,7 @@ pub fn spawn_agent_session_v2_blocking(
         rows: req.rows,
         cwd: Some(PathBuf::from(&req.cwd)),
         program: req.command.clone(),
-        args: req.args.clone().unwrap_or_default(),
+        args: spawn_args,
         durable_args: None,
         env,
         drain_on_exit: true,

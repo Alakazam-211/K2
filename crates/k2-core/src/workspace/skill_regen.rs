@@ -376,14 +376,14 @@ k2 heartbeat signal wakeup <name>              # print/edit the WAKEUP.md
 k2 heartbeat signal fire <name>                # fire now (skip schedule window)
 k2 heartbeat signal wake                       # auto-wake (no name needed)
 k2 heartbeat session <name>                    # show where the wake message lands
-k2 heartbeat session <name> --pinned | --auto | --set <session-id> --provider <p>
+k2 heartbeat session <name> --pinned | --auto | --set <session-id|workspace/handle> [--provider <p>]
                                                # pinned chat / fresh-per-fire /
                                                #   a specific trained session
 ```
 A heartbeat keeps reusing its saved session, so you can train a session on a
 flow once and have the schedule repeat it with a one-line wakeup.
 New `schedule add` lands in the **pinned** chat. For a trained flow, prefer
-a sidecar session: `k2 heartbeat session <name> --set <session-id> --provider <p>`.
+a sidecar: `k2 heartbeat session <name> --set sales/reviewer`.
 Run `k2 heartbeat --help` for the full surface.
 
 ## Agent presets (which agent program a workspace launches)
@@ -1654,9 +1654,8 @@ mod tests {
         );
         assert!(
             body.contains("k2 heartbeat session")
-                && body.contains("--set")
-                && body.contains("--provider"),
-            "k2-cli skill must hint sidecar + heartbeat session --set for trained flows",
+                && body.contains("--set sales/reviewer"),
+            "k2-cli skill must hint sidecar + heartbeat session --set sales/reviewer",
         );
     }
 

@@ -108,7 +108,7 @@ struct SetFocusBody {
 /// the child NEVER receives the daemon owner token. Bind the per-cell
 /// UDS after create. Teardown revoke runs best-effort on kill.
 pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
-    let body: CreateBody = match serde_json::from_slice(body_bytes) {
+    let mut body: CreateBody = match serde_json::from_slice(body_bytes) {
         Ok(b) => b,
         Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
     };
@@ -152,21 +152,30 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
         );
         // Renderer `create` often has no agent_name (shell vs harness).
         // Classify from cwd + command; unknown/shell → omit identity.
-        crate::cell_identity::apply_spawn_identity(
+        let mut spawn_args = body.args.clone().unwrap_or_default();
+        if let Some(id) = crate::cell_identity::apply_spawn_identity(
             &mut env,
             workspace_uuid.trim(),
             &body.id,
             body.command.as_deref(),
-            body.args.as_deref().unwrap_or(&[]),
+            &spawn_args,
             &body.id,
             &body.id,
-        );
+        ) {
+            let brief = crate::cell_identity::identity_system_brief(&id);
+            crate::cell_identity::splice_identity_brief(
+                body.command.as_deref(),
+                &mut spawn_args,
+                &brief,
+            );
+        }
         if minted {
             passport_sid = Some(sid);
         }
         if minted || env.contains_key("K2_CELL") {
             passport_env = Some(env);
         }
+        body.args = Some(spawn_args);
     }
 
     let manager = k2_core::terminal::shared();

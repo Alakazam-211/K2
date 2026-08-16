@@ -831,8 +831,9 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             );
         }
         // Identity env. Extra harness tabs → sidecar; pinned → canonical.
-        // Blank shells omit identity. Zero PTY inject.
-        crate::cell_identity::apply_spawn_identity(
+        // Blank shells omit identity. Zero PTY inject. Claude/Grok/Pi
+        // also get a promote-safe whoami brief on argv (D19 — not SSOT).
+        if let Some(id) = crate::cell_identity::apply_spawn_identity(
             &mut cfg.env,
             &workspace_uuid,
             &req.agent_name,
@@ -842,7 +843,14 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             req.agent_name
                 .strip_prefix("tab-")
                 .unwrap_or(&req.agent_name),
-        );
+        ) {
+            let brief = crate::cell_identity::identity_system_brief(&id);
+            crate::cell_identity::splice_identity_brief(
+                cfg.program.as_deref(),
+                &mut cfg.args,
+                &brief,
+            );
+        }
     }
 
     // P4-H6 — PER-SESSION worker uid + fail-closed PER-SESSION egress, set up

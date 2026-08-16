@@ -127,9 +127,11 @@ pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
             "Missing workspace (or target/project) — the inbox to compose into",
         );
     }
-    let Some(resolved_path) = crate::workspace_msg::resolve_workspace(&target_token) else {
+    let Some(resolved_path) = crate::workspace_msg::resolve_workspace_allowing_handle(&target_token)
+    else {
         // Same "unknown workspace" shape as live msg — not a connection
-        // deny. CLI maps this to exit 1 (not exit 3).
+        // deny. CLI maps this to exit 1 (not exit 3). `sales/reviewer`
+        // is the sales inbox (shared) + a sidecar knock.
         return crate::workspace_routes::workspace_not_found_response(&target_token);
     };
     // C2: composing into ANOTHER workspace's inbox requires a local
@@ -291,7 +293,8 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
             "Missing workspace (or target/project) — the inbox to deliver into",
         );
     }
-    let Some(resolved_path) = crate::workspace_msg::resolve_workspace(&target_token) else {
+    let Some(resolved_path) = crate::workspace_msg::resolve_workspace_allowing_handle(&target_token)
+    else {
         return crate::workspace_routes::workspace_not_found_response(&target_token);
     };
     let principal = crate::caller_workspace::principal_from_params(params);
@@ -348,7 +351,8 @@ pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliRespon
             "Missing workspace (or target/project) — the inbox to deliver into",
         );
     }
-    let Some(resolved_path) = crate::workspace_msg::resolve_workspace(&target_token) else {
+    let Some(resolved_path) = crate::workspace_msg::resolve_workspace_allowing_handle(&target_token)
+    else {
         return crate::workspace_routes::workspace_not_found_response(&target_token);
     };
     let principal = crate::caller_workspace::principal_from_params(params);

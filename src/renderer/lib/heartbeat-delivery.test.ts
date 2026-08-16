@@ -18,6 +18,7 @@ import {
   applyDeliveryTarget,
   deriveDeliveryTarget,
   selectableSessions,
+  sessionIdsTargetedByHeartbeats,
   setHeartbeatSession,
   type HeartbeatSessionCandidate,
 } from './heartbeat-delivery'
@@ -58,6 +59,44 @@ describe('selectableSessions — pinned-chat exclusion', () => {
       candidate({ sessionId: 'archived', timestamp: 9, archived: true }),
     ]
     expect(selectableSessions(rows, null).map((r) => r.sessionId)).toEqual(['live'])
+  })
+})
+
+describe('sessionIdsTargetedByHeartbeats', () => {
+  it('marks lastSessionId for auto and explicit session targets', () => {
+    const ids = sessionIdsTargetedByHeartbeats(
+      [
+        { useWorkspaceSession: false, lastSessionId: 'sid-a' },
+        { useWorkspaceSession: false, lastSessionId: 'sid-b', sessionProvider: 'claude' },
+      ],
+      'pinned-ws',
+    )
+    expect(ids.has('sid-a')).toBe(true)
+    expect(ids.has('sid-b')).toBe(true)
+    expect(ids.has('pinned-ws')).toBe(false)
+  })
+
+  it('pinned-mode heartbeats mark the workspace pinned chat once', () => {
+    const ids = sessionIdsTargetedByHeartbeats(
+      [
+        { useWorkspaceSession: true, lastSessionId: 'stale-own' },
+        { useWorkspaceSession: true, lastSessionId: null },
+      ],
+      'pinned-ws',
+    )
+    expect([...ids]).toEqual(['pinned-ws'])
+  })
+
+  it('one icon is enough when several heartbeats share a session', () => {
+    const ids = sessionIdsTargetedByHeartbeats(
+      [
+        { useWorkspaceSession: false, lastSessionId: 'shared' },
+        { useWorkspaceSession: false, lastSessionId: 'shared', sessionProvider: 'grok' },
+      ],
+      null,
+    )
+    expect(ids.size).toBe(1)
+    expect(ids.has('shared')).toBe(true)
   })
 })
 

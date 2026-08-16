@@ -96,6 +96,25 @@ export function applyDeliveryTarget<T extends HeartbeatDeliveryFields>(
  *  INVARIANT: the session currently bound to the workspace's pinned
  *  chat never appears as a normal row — it's reachable only through
  *  the "Pinned chat" entry. */
+/** Session ids that at least one heartbeat currently delivers into.
+ *  Pinned-mode heartbeats map to `pinnedWorkspaceSessionId` (the
+ *  workspace's canonical chat). Auto / --set map to `lastSessionId`. */
+export function sessionIdsTargetedByHeartbeats(
+  rows: Array<Partial<HeartbeatDeliveryFields> & { lastSessionId?: string | null }>,
+  pinnedWorkspaceSessionId: string | null,
+): Set<string> {
+  const ids = new Set<string>()
+  for (const row of rows) {
+    if (row.useWorkspaceSession) {
+      if (pinnedWorkspaceSessionId) ids.add(pinnedWorkspaceSessionId)
+      continue
+    }
+    const sid = row.lastSessionId?.trim()
+    if (sid) ids.add(sid)
+  }
+  return ids
+}
+
 export function selectableSessions(
   rows: HeartbeatSessionCandidate[],
   pinnedSessionId: string | null,

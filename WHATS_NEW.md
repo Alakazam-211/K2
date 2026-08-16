@@ -51,6 +51,8 @@ stealing focus out of the box.
 
 Renaming a chat in **Chats** is the name the session tab shows
 (`chat-session-tab` — custom name wins, else the provider title).
+A session that a heartbeat delivers into shows the same heart-EKG
+icon as the workspace drawer, to the left of the date.
 API host-session tabs can stay out of the strip: per-workspace
 **Hide API sessions** (they remain under Chat history → API).
 The workspace drawer has connected-agents / API sections and a

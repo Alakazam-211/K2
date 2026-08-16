@@ -39,6 +39,9 @@ export interface HeartbeatRow {
   enabled: boolean
   lastFired: string | null
   lastSessionId: string | null
+  /** True when delivery is the workspace pinned chat (not lastSessionId). */
+  useWorkspaceSession?: boolean
+  sessionProvider?: string | null
   archivedAt: string | null
   createdAt: number
   /** Daemon-side terminal id of the live PTY currently attached to

@@ -16,6 +16,9 @@ import {
   findTabByPaneGroupId,
   restampSessionTabs,
 } from '@/lib/chat-session-tab'
+import { IconHeartEKG } from '@/components/icons/IconHeartEKG'
+import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
+import { sessionIdsTargetedByHeartbeats } from '@/lib/heartbeat-delivery'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -137,6 +140,34 @@ const DATE_GROUP_ORDER: DateGroup[] = ['Today', 'Yesterday', 'This Week', 'This 
 
 const AGE_ORANGE_MS = 20 * 86400000
 
+function DateWithHeartbeat({
+  timestamp,
+  heartbeat,
+}: {
+  timestamp: number
+  heartbeat: boolean
+}): React.JSX.Element {
+  const old = Date.now() - timestamp >= AGE_ORANGE_MS
+  return (
+    <span className="flex items-center gap-1 flex-shrink-0">
+      {heartbeat && (
+        <span title="A heartbeat delivers into this chat">
+          <IconHeartEKG className="w-3 h-3 text-[var(--color-accent)]" />
+        </span>
+      )}
+      <span
+        className="text-[10px] font-mono tabular-nums"
+        style={{
+          color: old ? 'var(--color-status-working)' : 'var(--color-text-muted)',
+        }}
+        title={old ? 'Session is 20+ days old' : undefined}
+      >
+        {formatTime(timestamp)}
+      </span>
+    </span>
+  )
+}
+
 /** Get the right-most leaf node ID in a mosaic tree */
 function getRightmostLeaf(tree: unknown): string | null {
   if (tree === null || tree === undefined) return null
@@ -255,6 +286,55 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const { project: activeProject, workspace: activeWorkspace, projectPath } = useMemo(
     () => resolveChatHistoryHost(projects, hostProjectPath, activeProjectId, activeWorkspaceId),
     [projects, hostProjectPath, activeProjectId, activeWorkspaceId],
+  )
+
+  const heartbeatEntries = useHeartbeatSessionsStore((s) => s.active)
+  const heartbeatLoadedFor = useHeartbeatSessionsStore((s) => s.loadedFor)
+  const refreshHeartbeats = useHeartbeatSessionsStore((s) => s.refresh)
+  const [pinnedWorkspaceSessionId, setPinnedWorkspaceSessionId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!projectPath) return
+    if (heartbeatLoadedFor !== projectPath) {
+      void refreshHeartbeats(projectPath)
+    }
+  }, [projectPath, heartbeatLoadedFor, refreshHeartbeats])
+
+  useEffect(() => {
+    if (!projectPath) {
+      setPinnedWorkspaceSessionId(null)
+      return
+    }
+    const needsPinned = heartbeatEntries.some((e) => e.row.useWorkspaceSession)
+    if (!needsPinned) {
+      setPinnedWorkspaceSessionId(null)
+      return
+    }
+    let cancelled = false
+    void daemonCliGet<{ resumeSession?: string; resumedExisting?: boolean }>(
+      'workspace/resume-chat-args',
+      { project: projectPath },
+    )
+      .then((r) => {
+        if (cancelled) return
+        const sid = r?.resumedExisting && r.resumeSession?.trim() ? r.resumeSession.trim() : null
+        setPinnedWorkspaceSessionId(sid)
+      })
+      .catch(() => {
+        if (!cancelled) setPinnedWorkspaceSessionId(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectPath, heartbeatEntries])
+
+  const heartbeatSessionIds = useMemo(
+    () =>
+      sessionIdsTargetedByHeartbeats(
+        heartbeatEntries.map((e) => e.row),
+        pinnedWorkspaceSessionId,
+      ),
+    [heartbeatEntries, pinnedWorkspaceSessionId],
   )
 
   const fetchSessions = useCallback(async (showLoading = false) => {
@@ -1014,22 +1094,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                       )}
                     </div>
 
-                    <span
-                      className="text-[10px] font-mono flex-shrink-0 tabular-nums"
-                      style={{
-                        color:
-                          Date.now() - session.timestamp >= AGE_ORANGE_MS
-                            ? 'var(--color-status-working)'
-                            : 'var(--color-text-muted)',
-                      }}
-                      title={
-                        Date.now() - session.timestamp >= AGE_ORANGE_MS
-                          ? 'Session is 20+ days old'
-                          : undefined
-                      }
-                    >
-                      {formatTime(session.timestamp)}
-                    </span>
+                    <DateWithHeartbeat
+                      timestamp={session.timestamp}
+                      heartbeat={heartbeatSessionIds.has(session.sessionId)}
+                    />
                   </button>
                 )
               }
@@ -1126,9 +1194,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                                 {s.live ? 'live · click to open' : 'idle · click to resume'}
                               </span>
                             </div>
-                            <span className="text-[10px] text-[var(--color-text-muted)] font-mono flex-shrink-0 tabular-nums">
-                              {formatTime(s.lastSeenAt > 1e12 ? s.lastSeenAt : s.lastSeenAt * 1000)}
-                            </span>
+                            <DateWithHeartbeat
+                              timestamp={s.lastSeenAt > 1e12 ? s.lastSeenAt : s.lastSeenAt * 1000}
+                              heartbeat={heartbeatSessionIds.has(s.sessionId)}
+                            />
                           </button>
                         ))
                       )}
@@ -1178,9 +1247,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                     {reopening === s.sessionId ? 'launching in sandbox…' : 'sandbox · click to re-launch'}
                   </span>
                 </div>
-                <span className="text-[10px] text-[var(--color-text-muted)] font-mono flex-shrink-0 tabular-nums">
-                  {formatTime(s.timestamp)}
-                </span>
+                <DateWithHeartbeat
+                  timestamp={s.timestamp}
+                  heartbeat={heartbeatSessionIds.has(s.sessionId)}
+                />
               </button>
             ))}
           </>

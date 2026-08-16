@@ -43,7 +43,7 @@ export class AppErrorBoundary extends React.Component<
             </p>
             <button
               onClick={() => window.location.reload()}
-              className="px-3 py-1.5 text-xs font-medium text-[var(--color-accent)] border border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer no-drag"
+              className="px-3 py-1.5 text-xs font-medium text-[var(--color-accent)] border border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer no-drag rounded-none"
             >
               Reload
             </button>

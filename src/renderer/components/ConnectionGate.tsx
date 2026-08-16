@@ -1321,7 +1321,7 @@ function RecoveryBanner({
             style={{
               padding: '0.15rem 0.6rem',
               fontSize: '0.75rem',
-              borderRadius: 'var(--radius-field, 0px)',
+              borderRadius: 0,
               border: '1px solid var(--color-border, rgba(255,255,255,0.25))',
               background: 'var(--color-accent, #2f6feb)',
               color: 'var(--color-on-accent)',
@@ -1341,7 +1341,7 @@ function RecoveryBanner({
             style={{
               padding: '0.15rem 0.6rem',
               fontSize: '0.75rem',
-              borderRadius: 'var(--radius-field, 0px)',
+              borderRadius: 0,
               border: '1px solid var(--color-border, rgba(255,255,255,0.25))',
               background: 'var(--color-accent, #2f6feb)',
               color: 'var(--color-on-accent)',
@@ -1434,7 +1434,7 @@ function ConnectingOverlay({ decision, attempts, importFailed }: ConnectingOverl
             style={{
               padding: '0.5rem 1.25rem',
               fontSize: '0.85rem',
-              borderRadius: '4px',
+              borderRadius: 0,
               border: '1px solid var(--color-border, rgba(255,255,255,0.15))',
               background: 'var(--color-bg-elevated, rgba(255,255,255,0.05))',
               color: 'inherit',

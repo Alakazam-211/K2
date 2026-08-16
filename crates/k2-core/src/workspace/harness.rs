@@ -48,24 +48,19 @@ use crate::workspace::skill_regen::write_workspace_skill_file;
 // Constants
 // ══════════════════════════════════════════════════════════════════════
 
-/// The workspace-root files K2 can take over via symlink / scaffold in the
-/// AGENTS.md-canonical shape. On teardown we walk this list and either
-/// freeze the current canonical `.k2/AGENTS.md` body into each as a real
-/// file (keep_current mode), or restore the archive from `.k2/migration/`
-/// (restore_original mode).
+/// Leftover harness names freeze/restore walks. Cwd `AGENTS.md` is
+/// generate-owned — not a fan-out victim. A legacy our-symlink at
+/// `AGENTS.md` is handled as an exception in teardown.
 ///
-/// `AGENTS.md` is the cross-tool entrypoint (the mirror every tool reads);
 /// `CLAUDE.md` is the Claude Code bridge; `GEMINI.md`, `AGENT.md`,
-/// `.goosehints`, and the Cursor MDC are the remaining harness mirrors.
-/// The old root `SKILL.md` is NO LONGER a managed mirror — the reap
-/// removes that symlink.
+/// `.goosehints`, and the Cursor MDC are the remaining leftover mirrors.
 pub const HARNESS_WORKSPACE_FILES: &[&str] = &[
-    "AGENTS.md",
     "CLAUDE.md",
     "GEMINI.md",
     "AGENT.md",
     ".goosehints",
     ".cursor/rules/k2so.mdc",
+    // NOT cwd AGENTS.md — generate owns that path.
     // NOT .aider.conf.yml — that's a config file with merged entries,
     // handled separately below.
 ];

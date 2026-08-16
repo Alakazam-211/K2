@@ -1042,11 +1042,19 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 #[derive(Deserialize)]
 struct PathBody {
     path: String,
     #[serde(default = "default_true", alias = "seedWiki")]
     seed_wiki: bool,
+    #[serde(default = "default_true", alias = "seedAgentsMd")]
+    seed_agents_md: bool,
+    #[serde(default = "default_false", alias = "fanout")]
+    fanout: bool,
 }
 
 pub fn handle_projects_add_from_path(body: &[u8]) -> CliResponse {
@@ -1054,7 +1062,7 @@ pub fn handle_projects_add_from_path(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let result = pops::projects_add_from_path_ex(&b.path, b.seed_wiki);
+    let result = pops::projects_add_from_path_ex(&b.path, b.seed_wiki, b.seed_agents_md, b.fanout);
     if result.is_ok() {
         emit_projects_changed();
     }
@@ -1066,7 +1074,7 @@ pub fn handle_projects_add_without_git(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let result = pops::projects_add_without_git_ex(&b.path, b.seed_wiki);
+    let result = pops::projects_add_without_git_ex(&b.path, b.seed_wiki, b.seed_agents_md, b.fanout);
     if result.is_ok() {
         emit_projects_changed();
     }
@@ -1079,6 +1087,10 @@ struct InitGitBody {
     branch: Option<String>,
     #[serde(default = "default_true", alias = "seedWiki")]
     seed_wiki: bool,
+    #[serde(default = "default_true", alias = "seedAgentsMd")]
+    seed_agents_md: bool,
+    #[serde(default = "default_false", alias = "fanout")]
+    fanout: bool,
 }
 
 pub fn handle_projects_init_git_and_open(body: &[u8]) -> CliResponse {
@@ -1086,7 +1098,13 @@ pub fn handle_projects_init_git_and_open(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let result = pops::projects_init_git_and_open_ex(&b.path, b.branch.as_deref(), b.seed_wiki);
+    let result = pops::projects_init_git_and_open_ex(
+        &b.path,
+        b.branch.as_deref(),
+        b.seed_wiki,
+        b.seed_agents_md,
+        b.fanout,
+    );
     if result.is_ok() {
         emit_projects_changed();
     }

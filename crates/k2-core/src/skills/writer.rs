@@ -219,7 +219,7 @@ pub fn write_skill_to_all_harnesses(
     // here — otherwise each per-agent run clobbers the block written
     // by the previous one.
     if write_shared_markers {
-        upsert_k2so_section(&root.join("AGENTS.md"), content);
+        // cwd AGENTS.md is owned by generate — never marker-inject here.
         let github_dir = root.join(".github");
         let _ = fs::create_dir_all(&github_dir);
         upsert_k2so_section(&github_dir.join("copilot-instructions.md"), content);
@@ -434,7 +434,10 @@ mod tests {
         );
         assert!(proj.join(".opencode/agent/k2so-test.md").exists(), "OpenCode fan-out present");
         assert!(proj.join(".pi/skills/k2so-test/SKILL.md").exists(), "Pi fan-out present");
-        assert!(proj.join("AGENTS.md").exists(), "AGENTS.md marker injected");
+        assert!(
+            !proj.join("AGENTS.md").exists(),
+            "writer must not take over cwd AGENTS.md (generate owns that path)"
+        );
         assert!(
             proj.join(".github/copilot-instructions.md").exists(),
             "copilot-instructions marker injected",

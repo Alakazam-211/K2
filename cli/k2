@@ -9542,25 +9542,27 @@ except Exception as ex:
 }
 
 cmd_workspace_create() {
-    local target_path="" no_wiki=false
+    local target_path="" no_wiki=false no_agents_md=false fanout=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-wiki) no_wiki=true; shift ;;
-            -*) echo "Unknown flag: $1" >&2; echo "Usage: k2 workspace create <path> [--no-wiki]" >&2; exit 1 ;;
+            --no-agents-md) no_agents_md=true; shift ;;
+            --fanout) fanout=true; shift ;;
+            -*) echo "Unknown flag: $1" >&2; echo "Usage: k2 workspace create <path> [--no-wiki] [--no-agents-md] [--fanout]" >&2; exit 1 ;;
             *) if [ -z "$target_path" ]; then target_path="$1"; else echo "Unexpected extra argument: $1" >&2; exit 1; fi; shift ;;
         esac
     done
     if [ -z "$target_path" ]; then
-        echo "Usage: k2 workspace create <path> [--no-wiki]" >&2
+        echo "Usage: k2 workspace create <path> [--no-wiki] [--no-agents-md] [--fanout]" >&2
         exit 1
     fi
     # Resolve to absolute path
     target_path="$(cd "$(dirname "$target_path")" 2>/dev/null && pwd)/$(basename "$target_path")" 2>/dev/null || target_path="$target_path"
-    if [ "$no_wiki" = true ]; then
-        cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")" "no_wiki=1"
-    else
-        cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")"
-    fi
+    local extra=()
+    [ "$no_wiki" = true ] && extra+=("no_wiki=1")
+    [ "$no_agents_md" = true ] && extra+=("no_agents_md=1")
+    [ "$fanout" = true ] && extra+=("fanout=1")
+    cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")" "${extra[@]}"
 }
 
 cmd_workspace_preview() {
@@ -9695,27 +9697,29 @@ else:
 }
 
 cmd_workspace_open() {
-    local target_path="" no_wiki=false
+    local target_path="" no_wiki=false no_agents_md=false fanout=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-wiki) no_wiki=true; shift ;;
-            -*) echo "Unknown flag: $1" >&2; echo "Usage: k2 workspace open <path> [--no-wiki]" >&2; exit 1 ;;
+            --no-agents-md) no_agents_md=true; shift ;;
+            --fanout) fanout=true; shift ;;
+            -*) echo "Unknown flag: $1" >&2; echo "Usage: k2 workspace open <path> [--no-wiki] [--no-agents-md] [--fanout]" >&2; exit 1 ;;
             *) if [ -z "$target_path" ]; then target_path="$1"; else echo "Unexpected extra argument: $1" >&2; exit 1; fi; shift ;;
         esac
     done
     if [ -z "$target_path" ]; then
-        echo "Usage: k2 workspace open <path> [--no-wiki]" >&2
+        echo "Usage: k2 workspace open <path> [--no-wiki] [--no-agents-md] [--fanout]" >&2
         exit 1
     fi
     # Resolve to absolute path
     if [ -d "$target_path" ]; then
         target_path="$(cd "$target_path" && pwd)"
     fi
-    if [ "$no_wiki" = true ]; then
-        cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")" "no_wiki=1"
-    else
-        cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")"
-    fi
+    local extra=()
+    [ "$no_wiki" = true ] && extra+=("no_wiki=1")
+    [ "$no_agents_md" = true ] && extra+=("no_agents_md=1")
+    [ "$fanout" = true ] && extra+=("fanout=1")
+    cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")" "${extra[@]}"
 }
 
 # 0.39.0f Phase 2.1b: cmd_mode orphan removed. `k2 mode` is
@@ -10319,8 +10323,8 @@ cmd_schema() {
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--context <path|catalog-id>]... [--no-wiki] [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), set mode + default agent program, wire connections, join projects, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--context <path|catalog-id>]... [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": true}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
@@ -10333,6 +10337,8 @@ cmd_schema() {
         {"name": "--project", "arg": "project", "description": "Add the new agent to a project (name or id, repeatable; see k2 project list). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
         {"name": "--context", "arg": "path|catalog-id", "description": "Seed an always-on context layer after open (repeatable). Path must exist; catalog ids from `k2 agent context catalog` (wiki:index|home|hygiene, subagents:pack, manager:pack, k2:pack, connections|heartbeats|skills:roster, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
         {"name": "--no-wiki", "arg": null, "description": "Skip seeding .k2/wiki/Home.md + _Index.md on first register (wiki is seeded by default)."},
+        {"name": "--no-agents-md", "arg": null, "description": "Skip planting cwd AGENTS.md on first register (generated by default for new agents). Compose still writes .k2/AGENTS.md."},
+        {"name": "--fanout", "arg": null, "description": "Opt in to leftover harness fan-out (CLAUDE.md, GEMINI.md, AGENT.md, …). Off by default."},
         {"name": "--launch", "arg": null, "description": "Start the agent's session after provisioning."},
         {"name": "--onboard", "arg": "msg", "description": "Send msg to the agent after it starts (implies --launch)."},
         {"name": "--dry-run", "arg": null, "description": "Print the exact action plan; change nothing."},
@@ -11911,8 +11917,11 @@ DAILY SUBCOMMANDS
   update --field <f> --value <v>    Edit workspace agent profile
 
 LIFECYCLE (less common)
-  create <path> [--no-wiki]         Create folder + register (wiki seeded unless --no-wiki)
-  open <path> [--no-wiki]           Register existing folder (wiki seeded unless --no-wiki)
+  create <path> [--no-wiki] [--no-agents-md] [--fanout]
+                                    Create folder + register (wiki + cwd AGENTS.md
+                                    seeded unless opted out; leftover fan-out off)
+  open <path> [--no-wiki] [--no-agents-md] [--fanout]
+                                    Register existing folder (same defaults)
   remove <path>                     Deregister (files stay)
   triage                            Plain-text summary of pending work
 
@@ -12742,6 +12751,10 @@ FLAGS
                           Day-2: k2 agent context …
   --no-wiki               Do not seed .k2/wiki (Home.md + _Index.md). Wiki is
                           seeded by default on first register.
+  --no-agents-md          Do not plant cwd AGENTS.md. Compose still writes
+                          .k2/AGENTS.md. Generate is on by default for new agents.
+  --fanout                Plant leftover harness names (CLAUDE.md, GEMINI.md,
+                          AGENT.md, …). Off by default.
   --launch                Start the agent's session after provisioning
   --onboard <msg>         Send <msg> to the agent after it starts (implies --launch)
   --dry-run               Show the full plan; change nothing
@@ -13046,6 +13059,7 @@ cmd_agent_hire() {
     if _wants_help "$@"; then cmd_help_agent_hire; exit 0; fi
     local dir="" name="" template="" persona="" mode="" enabled="" onboard="" agent_preset=""
     local launch=false dry_run=false as_json=false no_wiki=false
+    local no_agents_md=false fanout=false
     local connects=() projects=() contexts=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -13077,6 +13091,8 @@ cmd_agent_hire() {
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--context requires a path or catalog id (see: k2 agent context catalog)"; exit 2; }
                 contexts+=("$2"); shift 2 ;;
             --no-wiki) no_wiki=true; shift ;;
+            --no-agents-md) no_agents_md=true; shift ;;
+            --fanout) fanout=true; shift ;;
             --launch) launch=true; shift ;;
             --onboard)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--onboard requires a message"; exit 2; }
@@ -13140,7 +13156,7 @@ cmd_agent_hire() {
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
     PROJECTS="$projects_json" CONTEXTS="$contexts_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
-    NO_WIKI="$no_wiki" \
+    NO_WIKI="$no_wiki" NO_AGENTS_MD="$no_agents_md" FANOUT="$fanout" \
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
@@ -13161,6 +13177,8 @@ agent_preset = os.environ.get("AGENT_PRESET", "")
 dry_run = os.environ.get("DRY_RUN") == "true"
 as_json = os.environ.get("AS_JSON") == "true"
 no_wiki = os.environ.get("NO_WIKI") == "true"
+no_agents_md = os.environ.get("NO_AGENTS_MD") == "true"
+fanout = os.environ.get("FANOUT") == "true"
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
 
@@ -13371,6 +13389,22 @@ if registered:
 else:
     actions.append({"step": "register-workspace", "status": "pending",
                     "wiki": "skip" if no_wiki else "seed"})
+
+if no_agents_md:
+    actions.append({"step": "generate-agents-md", "status": "skipped",
+                    "reason": "no-agents-md"})
+elif registered:
+    actions.append({"step": "generate-agents-md", "status": "skipped",
+                    "reason": "already"})
+else:
+    actions.append({"step": "generate-agents-md", "status": "pending"})
+
+if not fanout:
+    actions.append({"step": "fanout", "status": "skipped", "reason": "off"})
+elif registered:
+    actions.append({"step": "fanout", "status": "skipped", "reason": "already"})
+else:
+    actions.append({"step": "fanout", "status": "pending"})
 
 if registered and conf.get("mode") == desired_mode:
     actions.append({"step": "set-mode", "mode": desired_mode,
@@ -13648,6 +13682,10 @@ if a and a["status"] == "pending":
     open_params = {"path": path}
     if no_wiki:
         open_params["no_wiki"] = "1"
+    if no_agents_md:
+        open_params["no_agents_md"] = "1"
+    if fanout:
+        open_params["fanout"] = "1"
     resp = http_get("/cli/workspace/open", open_params)
     err = resp.get("error")
     if isinstance(err, str) and "already registered" in err:
@@ -13659,6 +13697,27 @@ if a and a["status"] == "pending":
     else:
         a["status"] = "done"
         changed = True
+        ga = one("generate-agents-md")
+        if ga and ga["status"] == "pending":
+            agents_path = os.path.join(path, "AGENTS.md")
+            body = ""
+            if os.path.isfile(agents_path) and not os.path.islink(agents_path):
+                try:
+                    with open(agents_path, encoding="utf-8", errors="replace") as fh:
+                        body = fh.read()
+                except OSError:
+                    body = ""
+            if os.path.islink(agents_path) or "GENERATED by K2" in body:
+                ga["status"] = "done"
+            elif os.path.lexists(agents_path):
+                ga["status"] = "skipped"
+                ga["reason"] = "user AGENTS.md present"
+            else:
+                ga["status"] = "skipped"
+                ga["reason"] = "user AGENTS.md present"
+        fa = one("fanout")
+        if fa and fa["status"] == "pending":
+            fa["status"] = "done"
 
 # 4. set-mode + set-enabled + set-default-agent in ONE
 #    /cli/workspace/set batch (the route applies agent_mode first so an

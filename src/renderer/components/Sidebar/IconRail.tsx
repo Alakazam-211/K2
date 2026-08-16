@@ -176,8 +176,8 @@ export default function IconRail(): React.JSX.Element {
     // confirmation dialog simply names the workspace before committing.
     useAddWorkspaceDialogStore.getState().open({
       path: folderPath,
-      onConfirm: async ({ seedWiki }) => {
-        await addProject(folderPath, { seedWiki })
+      onConfirm: async ({ seedWiki, seedAgentsMd, fanout }) => {
+        await addProject(folderPath, { seedWiki, seedAgentsMd, fanout })
         // Trigger the skill write immediately so the user sees the effect
         // of the migration without having to restart K2.
         try {

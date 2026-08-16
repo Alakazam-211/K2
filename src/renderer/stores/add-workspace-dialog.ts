@@ -7,9 +7,12 @@ interface AddWorkspaceDialogState {
   error: string | null
   /** Fires when the user confirms. The caller passes in a handler that
    * completes the add (projects_add_from_path + k2so_agents_run_workspace_ingest). */
-  onConfirm: ((opts: { seedWiki: boolean }) => Promise<void>) | null
+  onConfirm: ((opts: { seedWiki: boolean; seedAgentsMd: boolean; fanout: boolean }) => Promise<void>) | null
 
-  open: (args: { path: string; onConfirm: (opts: { seedWiki: boolean }) => Promise<void> }) => void
+  open: (args: {
+    path: string
+    onConfirm: (opts: { seedWiki: boolean; seedAgentsMd: boolean; fanout: boolean }) => Promise<void>
+  }) => void
   close: () => void
   setIsPending: (pending: boolean) => void
   setError: (error: string | null) => void

@@ -19,9 +19,15 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
   const setIsPending = useAddWorkspaceDialogStore((s) => s.setIsPending)
   const setError = useAddWorkspaceDialogStore((s) => s.setError)
   const [seedWiki, setSeedWiki] = useState(true)
+  const [seedAgentsMd, setSeedAgentsMd] = useState(true)
+  const [fanout, setFanout] = useState(false)
 
   useEffect(() => {
-    if (isOpen) setSeedWiki(true)
+    if (isOpen) {
+      setSeedWiki(true)
+      setSeedAgentsMd(true)
+      setFanout(false)
+    }
   }, [isOpen])
 
   // Close on Escape
@@ -38,7 +44,7 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
     if (!onConfirm) return
     setIsPending(true)
     try {
-      await onConfirm({ seedWiki })
+      await onConfirm({ seedWiki, seedAgentsMd, fanout })
       close()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
@@ -69,18 +75,17 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
           </p>
         </div>
 
-        {/* Plain-language reassurance — adding a workspace is non-destructive. */}
+        {/* Generate adds cwd AGENTS.md when missing; it will not replace a user file.
+            Leftover fan-out can replace CLAUDE.md / GEMINI.md / … */}
         <div className="px-5 pb-3">
           <div className="border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-3 py-3 text-[11px] leading-relaxed text-[var(--color-text-secondary)] space-y-2">
             <p>
-              K2 connects to this folder without touching any of your files. Your existing
-              AI-tool notes (<span className="font-mono">CLAUDE.md</span>,{' '}
-              <span className="font-mono">GEMINI.md</span>, …) stay exactly as they are.
-            </p>
-            <p>
-              When you want every AI tool to share one set of project notes, run the{' '}
-              <span className="text-[var(--color-text-primary)]">K2 Canonical Agent</span> from
-              Workspace Settings → Agent — it unifies your harness files safely and reversibly.
+              Generate will <span className="text-[var(--color-text-primary)]">add</span>{' '}
+              <span className="font-mono">AGENTS.md</span> when that file is missing. It will
+              not replace a file you already wrote. Leftover fan-out (off by default){' '}
+              <span className="text-[var(--color-text-primary)]">can replace</span>{' '}
+              <span className="font-mono">CLAUDE.md</span>,{' '}
+              <span className="font-mono">GEMINI.md</span>, and other harness names.
             </p>
           </div>
         </div>
@@ -110,6 +115,61 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
                 Creates <span className="font-mono">Home.md</span> and{' '}
                 <span className="font-mono">_Index.md</span> under{' '}
                 <span className="font-mono">.k2/wiki/</span>. Uncheck to skip.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 cursor-pointer select-none no-drag mt-2">
+            <input
+              type="checkbox"
+              checked={seedAgentsMd}
+              onChange={(e) => setSeedAgentsMd(e.target.checked)}
+              className="peer sr-only"
+              disabled={isPending}
+            />
+            <span
+              aria-hidden="true"
+              className="mt-0.5 w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
+            >
+              {seedAgentsMd && (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+                </svg>
+              )}
+            </span>
+            <span className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+              Write cwd AGENTS.md
+              <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                The file most AI tools load. Uncheck to keep it only under{' '}
+                <span className="font-mono">.k2/</span>. A user-authored file is never overwritten.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 cursor-pointer select-none no-drag mt-2">
+            <input
+              type="checkbox"
+              checked={fanout}
+              onChange={(e) => setFanout(e.target.checked)}
+              className="peer sr-only"
+              disabled={isPending}
+            />
+            <span
+              aria-hidden="true"
+              className="mt-0.5 w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
+            >
+              {fanout && (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+                </svg>
+              )}
+            </span>
+            <span className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+              Also symlink leftover harness files
+              <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                <span className="font-mono">CLAUDE.md</span>,{' '}
+                <span className="font-mono">GEMINI.md</span>,{' '}
+                <span className="font-mono">AGENT.md</span>, … →{' '}
+                <span className="font-mono">AGENTS.md</span>. Some tools still look for those names.
+                Existing leftover files can be replaced.
               </span>
             </span>
           </label>

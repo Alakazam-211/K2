@@ -82,7 +82,17 @@ pub fn teardown_workspace_harness_files(
     let current_body = fs::read_to_string(&canonical).unwrap_or_default();
     let mut results: Vec<TeardownResult> = Vec::new();
 
-    for rel in HARNESS_WORKSPACE_FILES {
+    // Leftover names only. Cwd AGENTS.md is generate-owned (real file
+    // is left alone). Exception: a legacy our-symlink at AGENTS.md may
+    // still be frozen/restored.
+    let mut teardown_rels: Vec<&str> = HARNESS_WORKSPACE_FILES.to_vec();
+    let agents_rel = "AGENTS.md";
+    let agents_path = root.join(agents_rel);
+    if crate::workspace::onboarding::is_our_agents_md_symlink(project_path, &agents_path) {
+        teardown_rels.push(agents_rel);
+    }
+
+    for rel in teardown_rels {
         let path = root.join(rel);
         let Ok(meta) = fs::symlink_metadata(&path) else { continue };
         if !meta.file_type().is_symlink() {

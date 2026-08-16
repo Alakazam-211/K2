@@ -98,6 +98,24 @@ pub fn seed_wiki_wanted(params: &HashMap<String, String>) -> bool {
     }
 }
 
+/// Cwd `AGENTS.md` generate on workspace add/open/create. Default ON;
+/// opt out with `no_agents_md=1` or `seed_agents_md=0|false|off|no`.
+pub fn agents_md_wanted(params: &HashMap<String, String>) -> bool {
+    if bool_param(params, "no_agents_md") {
+        return false;
+    }
+    match opt_param(params, "seed_agents_md").as_deref() {
+        Some("0") | Some("false") | Some("off") | Some("no") => false,
+        _ => true,
+    }
+}
+
+/// Leftover harness fan-out on workspace add/open/create. Default OFF;
+/// opt in with `fanout=1|true|on`.
+pub fn fanout_wanted(params: &HashMap<String, String>) -> bool {
+    bool_param(params, "fanout")
+}
+
 // ── Main dispatch ─────────────────────────────────────────────────────
 
 /// Route a single `/cli/*` path to its handler. Assumes the caller
@@ -188,5 +206,34 @@ mod tests {
             !seed_wiki_wanted(&params(&[("no_wiki", "1"), ("seed_wiki", "1")])),
             "no_wiki wins over seed_wiki=1"
         );
+    }
+
+    #[test]
+    fn agents_md_wanted_defaults_on() {
+        assert!(agents_md_wanted(&HashMap::new()));
+        assert!(agents_md_wanted(&params(&[("path", "/tmp/x")])));
+        assert!(agents_md_wanted(&params(&[("seed_agents_md", "1")])));
+    }
+
+    #[test]
+    fn agents_md_wanted_opts_out() {
+        assert!(!agents_md_wanted(&params(&[("no_agents_md", "1")])));
+        assert!(!agents_md_wanted(&params(&[("no_agents_md", "true")])));
+        assert!(!agents_md_wanted(&params(&[("seed_agents_md", "0")])));
+        assert!(!agents_md_wanted(&params(&[("seed_agents_md", "false")])));
+        assert!(
+            !agents_md_wanted(&params(&[("no_agents_md", "1"), ("seed_agents_md", "1")])),
+            "no_agents_md wins over seed_agents_md=1"
+        );
+    }
+
+    #[test]
+    fn fanout_wanted_defaults_off() {
+        assert!(!fanout_wanted(&HashMap::new()));
+        assert!(!fanout_wanted(&params(&[("path", "/tmp/x")])));
+        assert!(fanout_wanted(&params(&[("fanout", "1")])));
+        assert!(fanout_wanted(&params(&[("fanout", "true")])));
+        assert!(fanout_wanted(&params(&[("fanout", "on")])));
+        assert!(!fanout_wanted(&params(&[("fanout", "0")])));
     }
 }

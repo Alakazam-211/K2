@@ -12,11 +12,12 @@ import React from 'react'
 // Per-harness + opt-in, not a blanket "12 harnesses". CLAUDE.md is called out
 // as the bridge because Claude Code can't read AGENTS.md natively.
 const HARNESS_MIRRORS: { label: string; path: string; note?: string }[] = [
-  { label: 'Claude Code', path: './CLAUDE.md', note: 'bridge — Claude Code can’t read AGENTS.md natively' },
-  { label: 'Gemini', path: './GEMINI.md' },
-  { label: 'Cursor', path: './.cursor/rules/k2.mdc' },
-  { label: 'Goose', path: './.goosehints' },
-  { label: 'GitHub Copilot', path: './.github/copilot-instructions.md' },
+  { label: 'cwd AGENTS.md', path: './AGENTS.md', note: 'generate — real-file copy of .k2/AGENTS.md' },
+  { label: 'Claude Code', path: './CLAUDE.md', note: 'fan-out only — Claude Code can’t read AGENTS.md natively' },
+  { label: 'Gemini', path: './GEMINI.md', note: 'fan-out only' },
+  { label: 'Cursor', path: './.cursor/rules/k2so.mdc', note: 'fan-out only' },
+  { label: 'Goose', path: './.goosehints', note: 'fan-out only' },
+  { label: 'GitHub Copilot', path: './.github/copilot-instructions.md', note: 'fan-out only' },
 ]
 
 // The two LOADABLE skills — separate lane, NOT the canonical entrypoint.
@@ -134,8 +135,9 @@ export function AgentContextDiagram(): React.JSX.Element {
         Manage always-on context via the per-workspace{' '}
         <span className="text-[var(--color-text-secondary)] font-medium">stack editor</span> or{' '}
         <span className="font-mono text-[var(--color-text-secondary)]">k2 agent context</span>.
-        Mirroring is <span className="text-[var(--color-text-secondary)] font-medium">opt-in and per-harness</span>
-        {' '}— harness files stay <span className="text-[var(--color-text-secondary)]">symlinks</span> to AGENTS.md.
+        Generate writes cwd <span className="font-mono">AGENTS.md</span>. Leftover names
+        {' '}(<span className="font-mono">CLAUDE.md</span>, <span className="font-mono">GEMINI.md</span>, …)
+        appear only when <span className="text-[var(--color-text-secondary)] font-medium">fan-out is on</span>.
       </div>
     </div>
   )

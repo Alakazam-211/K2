@@ -102,6 +102,8 @@ assert_contains "schema has agent context move" "$schema_out" '"name": "agent co
 assert_contains "schema has agent context catalog" "$schema_out" '"name": "agent context catalog"'
 assert_contains "schema hire has --context" "$schema_out" '"name": "--context"'
 assert_contains "schema hire has --no-wiki" "$schema_out" '"name": "--no-wiki"'
+assert_contains "schema hire has --no-agents-md" "$schema_out" '"name": "--no-agents-md"'
+assert_contains "schema hire has --fanout" "$schema_out" '"name": "--fanout"'
 assert_contains "schema on mentions system layers" "$schema_out" 'pinned:agent'
 
 # ── 3. Help ──────────────────────────────────────────────────────────
@@ -120,6 +122,15 @@ assert_contains "hire help has --context" "$help_hire" "--context"
 assert_contains "hire help mentions catalog seeds" "$help_hire" "wiki:index"
 assert_contains "hire help has --no-wiki" "$help_hire" "--no-wiki"
 assert_contains "hire help says wiki seeded by default" "$help_hire" "seeded by default"
+assert_contains "hire help has --no-agents-md" "$help_hire" "--no-agents-md"
+assert_contains "hire help has --fanout" "$help_hire" "--fanout"
+
+help_ws_create="$(PORT=1 TOKEN=fake "$K2_CLI" workspace create --help 2>&1)" || true
+if ! printf '%s' "$help_ws_create" | grep -q -- "--no-agents-md"; then
+    help_ws_create="$(PORT=1 TOKEN=fake "$K2_CLI" workspace --help 2>&1)" || true
+fi
+assert_contains "workspace help has --no-agents-md" "$help_ws_create" "--no-agents-md"
+assert_contains "workspace help has --fanout" "$help_ws_create" "--fanout"
 
 # Top-level teach
 set +e

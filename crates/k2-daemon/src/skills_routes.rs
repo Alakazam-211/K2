@@ -24,6 +24,10 @@
 //!       → `workspace::onboarding::set_harness_fanout_enabled`
 //! - `POST /cli/onboarding/harness-fanout-enabled` (read)
 //!       → `workspace::onboarding::harness_fanout_enabled`
+//! - `POST /cli/onboarding/set-agents-md-generate-enabled`
+//!       → `workspace::onboarding::set_agents_md_generate_enabled`
+//! - `POST /cli/onboarding/agents-md-generate-enabled` (read)
+//!       → `workspace::onboarding::agents_md_generate_enabled`
 //! - `POST /cli/canonical/detect-state` (read)
 //!       → `workspace::canonical::detect_canonical_state`
 //!
@@ -219,6 +223,64 @@ pub fn handle_set_harness_fanout_enabled(body: &[u8]) -> CliResponse {
     CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 
+/// Handler for `POST /cli/onboarding/set-agents-md-generate-enabled`.
+///
+/// On: write the generate marker + compose + plant. If plant skips
+/// (user-authored cwd `AGENTS.md`), the marker stays on and the
+/// response includes `skipped`. Off: remove the marker; do **not**
+/// delete cwd `AGENTS.md`. If leftover fan-out is on, retarget links.
+pub fn handle_set_agents_md_generate_enabled(body: &[u8]) -> CliResponse {
+    let b: SetHarnessFanoutBody = match parse(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if b.project_path.is_empty() {
+        return CliResponse::bad_request("missing project_path");
+    }
+    if let Err(e) =
+        k2_core::workspace::onboarding::set_agents_md_generate_enabled(&b.project_path, b.enabled)
+    {
+        return CliResponse::bad_request(e);
+    }
+    if b.enabled {
+        if let Err(e) =
+            k2_core::workspace::skill_regen::regenerate_workspace_skill(b.project_path.clone())
+        {
+            return CliResponse::bad_request(format!("regen after enable: {e}"));
+        }
+        let canonical = k2_core::workspace_dot_dir(&b.project_path).join("AGENTS.md");
+        let composed = match std::fs::read_to_string(&canonical) {
+            Ok(body) => body,
+            Err(e) => {
+                return CliResponse::bad_request(format!("read canonical AGENTS.md: {e}"));
+            }
+        };
+        let plant =
+            k2_core::workspace::onboarding::plant_root_agents_md(&b.project_path, &composed);
+        if let k2_core::workspace::onboarding::PlantResult::Skipped { reason } = plant {
+            return CliResponse::ok_json(
+                serde_json::json!({ "success": true, "skipped": reason }).to_string(),
+            );
+        }
+    } else {
+        k2_core::workspace::skill_regen::apply_leftover_harness_fanout(&b.project_path);
+    }
+    CliResponse::ok_json(r#"{"success":true}"#.to_string())
+}
+
+/// GET-equivalent read: `POST /cli/onboarding/agents-md-generate-enabled` → `{ "enabled": bool }`.
+pub fn handle_agents_md_generate_enabled(body: &[u8]) -> CliResponse {
+    let b: ProjectPathBody = match parse(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if b.project_path.is_empty() {
+        return CliResponse::bad_request("missing project_path");
+    }
+    let enabled = k2_core::workspace::onboarding::agents_md_generate_enabled(&b.project_path);
+    CliResponse::ok_json(serde_json::json!({ "enabled": enabled }).to_string())
+}
+
 /// GET-equivalent read: `POST /cli/onboarding/harness-fanout-enabled` → `{ "enabled": bool }`.
 /// Host-aware mirror of the `k2so_harness_fanout_enabled` Tauri command — wraps the SAME
 /// `k2_core::workspace::onboarding::harness_fanout_enabled` so local + remote stay identical.
@@ -357,20 +419,19 @@ mod tests {
             "marker should report enabled after the write"
         );
 
-        // GAP 1: enabling must ALSO regen immediately so the harness
-        // mirrors materialize without waiting for the next boot. With the
-        // fan-out marker set, `regenerate_workspace_skill` GENERATES the
-        // canonical `.k2/AGENTS.md` AND symlinks the harness mirrors at it —
-        // the root `AGENTS.md` (the cross-tool standard) proves the fan-out
-        // ran, not just the canonical write. (New AGENTS.md-canonical shape;
-        // the old composed `.k2/skills/k2so/SKILL.md` was reaped.)
+        // Fan-out enable plants leftover names, not cwd AGENTS.md
+        // (generate is a separate marker, off here).
         assert!(
             tmp.join(".k2/AGENTS.md").exists(),
             "canonical .k2/AGENTS.md should exist after enable+regen"
         );
         assert!(
-            tmp.join("AGENTS.md").exists(),
-            "root AGENTS.md mirror should materialize immediately on enable"
+            !tmp.join("AGENTS.md").exists(),
+            "fan-out must not plant cwd AGENTS.md (generate owns that path)"
+        );
+        assert!(
+            tmp.join("CLAUDE.md").exists(),
+            "leftover CLAUDE.md must materialize immediately on fan-out enable"
         );
 
         let body = serde_json::json!({ "project_path": pp, "enabled": false }).to_string();
@@ -441,6 +502,106 @@ mod tests {
     #[test]
     fn detect_canonical_state_rejects_missing_project_path() {
         let r = handle_detect_canonical_state(br#"{}"#);
+        assert_eq!(r.status, "400 Bad Request");
+        assert!(r.body.contains("project_path"), "body={}", r.body);
+    }
+
+    #[test]
+    fn set_agents_md_generate_on_plants_and_off_leaves_file() {
+        let tmp = std::env::temp_dir().join(format!(
+            "k2so-generate-routes-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).expect("mk tempdir");
+        let pp = tmp.to_string_lossy().to_string();
+
+        let body = serde_json::json!({ "project_path": pp, "enabled": true }).to_string();
+        let r = handle_set_agents_md_generate_enabled(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "enable body={}", r.body);
+        assert!(
+            k2_core::workspace::onboarding::agents_md_generate_enabled(&pp),
+            "marker must report enabled after the write"
+        );
+        assert!(
+            tmp.join(".k2/AGENTS.md").is_file(),
+            "canonical .k2/AGENTS.md must exist after set-on"
+        );
+        let root = tmp.join("AGENTS.md");
+        let meta = std::fs::symlink_metadata(&root).expect("cwd AGENTS.md planted");
+        assert!(
+            meta.file_type().is_file() && !meta.file_type().is_symlink(),
+            "set-on plants a real cwd file"
+        );
+        let planted = std::fs::read_to_string(&root).expect("read planted");
+        assert!(
+            planted.contains("<!-- GENERATED by K2"),
+            "planted file must carry the compose banner"
+        );
+        assert!(
+            !tmp.join("CLAUDE.md").exists(),
+            "set-generate must not plant leftover names"
+        );
+
+        let body = serde_json::json!({ "project_path": pp, "enabled": false }).to_string();
+        let r = handle_set_agents_md_generate_enabled(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "disable body={}", r.body);
+        assert!(
+            !k2_core::workspace::onboarding::agents_md_generate_enabled(&pp),
+            "marker must report disabled after set-off"
+        );
+        assert!(
+            root.is_file(),
+            "set-off must leave cwd AGENTS.md in place"
+        );
+        let after_off = std::fs::read_to_string(&root).expect("file remains");
+        assert_eq!(after_off, planted, "set-off must not rewrite or delete the file");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn set_agents_md_generate_on_skips_user_file() {
+        let tmp = std::env::temp_dir().join(format!(
+            "k2so-generate-skip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).expect("mk tempdir");
+        let pp = tmp.to_string_lossy().to_string();
+        std::fs::write(tmp.join("AGENTS.md"), "# human notes\nkeep me\n").unwrap();
+
+        let body = serde_json::json!({ "project_path": pp, "enabled": true }).to_string();
+        let r = handle_set_agents_md_generate_enabled(body.as_bytes());
+        assert_eq!(r.status, "200 OK", "enable body={}", r.body);
+        assert!(
+            r.body.contains("skipped"),
+            "user file must return skipped reason, body={}",
+            r.body
+        );
+        assert!(
+            k2_core::workspace::onboarding::agents_md_generate_enabled(&pp),
+            "toggle stays on even when plant skips"
+        );
+        let kept = std::fs::read_to_string(tmp.join("AGENTS.md")).expect("user file");
+        assert_eq!(kept, "# human notes\nkeep me\n");
+        assert!(
+            !tmp.join(".k2/migration").exists(),
+            "generate must not archive the user file"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn agents_md_generate_enabled_read_rejects_missing_project_path() {
+        let r = handle_agents_md_generate_enabled(br#"{}"#);
         assert_eq!(r.status, "400 Bad Request");
         assert!(r.body.contains("project_path"), "body={}", r.body);
     }

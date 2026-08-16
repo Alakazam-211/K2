@@ -1443,8 +1443,14 @@ mod migration_safety_tests {
             "old composed skill must never be written by the new shape"
         );
 
-        // Every harness mirror points at the canonical AGENTS.md.
-        for name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "AGENT.md", ".goosehints"] {
+        // Leftover harness mirrors point at the canonical AGENTS.md.
+        // Fan-out no longer takes over cwd AGENTS.md (generate owns it;
+        // this fixture has no generate marker).
+        assert!(
+            !proj.join("AGENTS.md").exists(),
+            "fan-out without generate must not plant cwd AGENTS.md"
+        );
+        for name in ["CLAUDE.md", "GEMINI.md", "AGENT.md", ".goosehints"] {
             let path = proj.join(name);
             let meta = fs::symlink_metadata(&path).unwrap();
             assert!(
@@ -1561,7 +1567,7 @@ mod migration_safety_tests {
             results
         );
 
-        for name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "AGENT.md", ".goosehints"] {
+        for name in ["CLAUDE.md", "GEMINI.md", "AGENT.md", ".goosehints"] {
             let path = proj.join(name);
             let meta = fs::symlink_metadata(&path).expect(name);
             assert!(
@@ -1599,11 +1605,11 @@ mod migration_safety_tests {
         assert_eq!(fs::read_to_string(proj.join(".goosehints")).unwrap(), pre_goose);
         assert_eq!(fs::read_to_string(proj.join(".aider.conf.yml")).unwrap(), pre_aider);
 
-        // AGENTS.md had no prior original (K2 created the symlink fresh) —
-        // restore sends the K2-created mirror to the trash.
+        // Fan-out no longer plants cwd AGENTS.md; generate did not run
+        // on this fixture, so the path stays absent through restore.
         assert!(
             !proj.join("AGENTS.md").exists(),
-            "AGENTS.md should be removed on restore (no prior original)"
+            "cwd AGENTS.md must stay absent when generate never planted it"
         );
 
         assert!(proj.join(".k2so/AGENTS.md").exists());
@@ -1953,22 +1959,27 @@ mod migration_safety_tests {
     }
 
     #[test]
-    fn fanout_archives_nonempty_agents_md_via_safe_symlink() {
+    fn write_path_fanout_does_not_archive_user_agents_md() {
         let proj = scratch_project();
-        let canonical = proj.join(".k2so/AGENTS.md");
-        fs::write(&canonical, "# canon\n\nCanonical body here.\n").unwrap();
-        let target = proj.join("AGENTS.md");
+        let project_path = proj.to_str().unwrap();
+        crate::workspace::onboarding::set_harness_fanout_enabled(project_path, true).unwrap();
+        crate::workspace::onboarding::set_agents_md_generate_enabled(project_path, true).unwrap();
         let original = "user-authored AGENTS.md content\n";
-        fs::write(&target, original).unwrap();
+        fs::write(proj.join("AGENTS.md"), original).unwrap();
 
-        safe_symlink_harness_file(&canonical, &target, proj.to_str().unwrap(), "AGENTS.md");
+        write_workspace_skill_file_with_body(project_path, None);
 
+        let kept = fs::read_to_string(proj.join("AGENTS.md")).expect("user file remains");
+        assert_eq!(kept, original, "generate must not archive a user AGENTS.md");
+        let meta = fs::symlink_metadata(proj.join("AGENTS.md")).expect("still present");
         assert!(
-            archive_holds_content(&proj, original),
-            "user AGENTS.md must be archived before the symlink replaces it"
+            meta.file_type().is_file() && !meta.file_type().is_symlink(),
+            "fan-out must not replace cwd AGENTS.md with a symlink"
         );
-        let meta = fs::symlink_metadata(&target).unwrap();
-        assert!(meta.file_type().is_symlink(), "AGENTS.md must be a symlink after fan-out");
+        assert!(
+            !archive_holds_content(&proj, original),
+            "no .k2/migration/ entry for user AGENTS.md"
+        );
         fs::remove_dir_all(&proj).ok();
     }
 

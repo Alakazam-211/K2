@@ -16,7 +16,7 @@ export const CANONICAL_PITCH_SUBTITLE =
 // overwrite existing content — the safe route for an existing project is the
 // K2 Canonical Agent skill (it merges content first). Best for new projects.
 export const FANOUT_ENABLE_WARNING =
-  'Your existing harness files (CLAUDE.md, AGENTS.md, …) are moved into .k2/migration/ before they’re replaced with symlinks to K2’s canon — nothing is deleted, and you can restore them straight from that folder if you change your mind.'
+  'Your existing leftover harness files (CLAUDE.md, GEMINI.md, AGENT.md, …) are moved into .k2/migration/ before they’re replaced with symlinks to AGENTS.md — nothing is deleted, and you can restore them straight from that folder if you change your mind. Cwd AGENTS.md is not a fan-out victim.'
 
 /**
  * Role-skill button (Workspace Manager / K2 Agent). Opens the normal
@@ -81,6 +81,9 @@ export function CanonicalAgentButton({
   onOpen: (mode: 'setup' | 'manage') => void
 }): React.JSX.Element {
   const unified = anyHarnessUnified(probes)
+  const [generateEnabled, setGenerateEnabled] = useState(false)
+  const [generateBusy, setGenerateBusy] = useState(false)
+  const [generateSkip, setGenerateSkip] = useState<string | null>(null)
   const [fanoutEnabled, setFanoutEnabled] = useState(false)
   const [fanoutBusy, setFanoutBusy] = useState(false)
   // Enabling opens the confirmation modal; disabling applies immediately.
@@ -89,12 +92,38 @@ export function CanonicalAgentButton({
 
   useEffect(() => {
     let cancelled = false
+    daemonCliPost<{ enabled: boolean }>('onboarding/agents-md-generate-enabled', { project_path: projectPath })
+      .then((r) => r.enabled)
+      .then((on) => { if (!cancelled) setGenerateEnabled(on) })
+      .catch(() => { /* default off for existing workspaces without a marker */ })
     daemonCliPost<{ enabled: boolean }>('onboarding/harness-fanout-enabled', { project_path: projectPath })
       .then((r) => r.enabled)
       .then((on) => { if (!cancelled) setFanoutEnabled(on) })
       .catch(() => { /* default off */ })
     return () => { cancelled = true }
   }, [projectPath])
+
+  async function toggleGenerate(): Promise<void> {
+    if (generateBusy) return
+    const next = !generateEnabled
+    setGenerateBusy(true)
+    setGenerateEnabled(next)
+    setGenerateSkip(null)
+    try {
+      const r = await daemonCliPost<{ success?: boolean; skipped?: string }>(
+        'onboarding/set-agents-md-generate-enabled',
+        { project_path: projectPath, enabled: next },
+      )
+      if (next && r.skipped) {
+        setGenerateSkip(r.skipped)
+      }
+    } catch (err) {
+      console.error('[canonical] set_agents_md_generate_enabled failed:', err)
+      setGenerateEnabled(!next)
+    } finally {
+      setGenerateBusy(false)
+    }
+  }
 
   async function toggleFanout(): Promise<void> {
     if (fanoutBusy) return
@@ -148,6 +177,46 @@ export function CanonicalAgentButton({
           className="flex-shrink-0 px-2.5 py-1 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors whitespace-nowrap no-drag cursor-pointer"
         >
           {unified ? 'Manage / Undo' : 'Set up'}
+        </button>
+      </div>
+
+      {/* Generate toggle — immediately above leftover fan-out. */}
+      <div className="flex items-start gap-2 pt-1.5 border-t border-[var(--color-border)]">
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] font-medium text-[var(--color-text-secondary)] leading-tight">
+            Generate AGENTS.md
+          </div>
+          <p className="text-[9px] text-[var(--color-text-muted)] leading-snug mt-0.5">
+            Write the cwd <span className="font-mono">AGENTS.md</span> most AI tools load
+            (from persona + project + stack). Turn off to stop refreshing it; the file is left in place.
+          </p>
+          {generateSkip ? (
+            <p className="text-[9px] text-[var(--color-status-warn-amber-soft)] leading-snug mt-0.5">
+              Plant skipped: {generateSkip}
+            </p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={generateEnabled}
+          aria-label="Generate cwd AGENTS.md"
+          disabled={generateBusy}
+          onClick={() => void toggleGenerate()}
+          title={
+            generateEnabled
+              ? 'Generate on — refresh cwd AGENTS.md on compose'
+              : 'Generate off — compose stays under .k2/AGENTS.md only'
+          }
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            generateEnabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              generateEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
         </button>
       </div>
 

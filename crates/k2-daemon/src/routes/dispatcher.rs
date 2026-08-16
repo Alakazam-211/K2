@@ -713,6 +713,8 @@ async fn handle_one_request(
             | "/cli/skills/write-opt-in"
             | "/cli/onboarding/set-harness-fanout-enabled"
             | "/cli/onboarding/harness-fanout-enabled"
+            | "/cli/onboarding/set-agents-md-generate-enabled"
+            | "/cli/onboarding/agents-md-generate-enabled"
             | "/cli/canonical/detect-state"
             | "/cli/agents/regenerate-workspace-skill"
             | "/cli/agents/save-agent-md"
@@ -3354,6 +3356,8 @@ async fn handle_one_request(
             && (p.starts_with("/cli/skills/")
                 || p == "/cli/onboarding/set-harness-fanout-enabled"
                 || p == "/cli/onboarding/harness-fanout-enabled"
+                || p == "/cli/onboarding/set-agents-md-generate-enabled"
+                || p == "/cli/onboarding/agents-md-generate-enabled"
                 || p == "/cli/canonical/detect-state"
                 || p == "/cli/agents/regenerate-workspace-skill"
                 || p == "/cli/agents/save-agent-md"
@@ -5851,6 +5855,12 @@ fn dispatch_connect_gap_post(
         // read locally → always false. These read routes close that gap.
         "/cli/onboarding/harness-fanout-enabled" => {
             crate::skills_routes::handle_harness_fanout_enabled(body)
+        }
+        "/cli/onboarding/set-agents-md-generate-enabled" => {
+            crate::skills_routes::handle_set_agents_md_generate_enabled(body)
+        }
+        "/cli/onboarding/agents-md-generate-enabled" => {
+            crate::skills_routes::handle_agents_md_generate_enabled(body)
         }
         "/cli/canonical/detect-state" => {
             crate::skills_routes::handle_detect_canonical_state(body)

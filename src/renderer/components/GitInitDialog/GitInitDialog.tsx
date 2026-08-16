@@ -17,6 +17,8 @@ export default function GitInitDialog(): React.JSX.Element | null {
   const name = useGitInitDialogStore((s) => s.name)
   const error = useGitInitDialogStore((s) => s.error)
   const seedWiki = useGitInitDialogStore((s) => s.seedWiki)
+  const seedAgentsMd = useGitInitDialogStore((s) => s.seedAgentsMd)
+  const fanout = useGitInitDialogStore((s) => s.fanout)
   const close = useGitInitDialogStore((s) => s.close)
   const setIsPending = useGitInitDialogStore((s) => s.setIsPending)
   const setError = useGitInitDialogStore((s) => s.setError)
@@ -96,28 +98,34 @@ export default function GitInitDialog(): React.JSX.Element | null {
     if (!path) return
     setIsPending(true)
     try {
-      await daemonCliPost('projects/init-git-and-open', { path, branch: branchName, seedWiki })
+      await daemonCliPost('projects/init-git-and-open', {
+        path,
+        branch: branchName,
+        seedWiki,
+        seedAgentsMd,
+        fanout,
+      })
       void emit('sync:projects').catch(() => {})
       close()
       await selectNewProject()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     }
-  }, [path, branchName, seedWiki, close, selectNewProject, setIsPending, setError])
+  }, [path, branchName, seedWiki, seedAgentsMd, fanout, close, selectNewProject, setIsPending, setError])
 
   // Open without git
   const handleOpenWithoutGit = useCallback(async () => {
     if (!path) return
     setIsPending(true)
     try {
-      await daemonCliPost('projects/add-without-git', { path, seedWiki })
+      await daemonCliPost('projects/add-without-git', { path, seedWiki, seedAgentsMd, fanout })
       void emit('sync:projects').catch(() => {})
       close()
       await selectNewProject()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     }
-  }, [path, seedWiki, close, selectNewProject, setIsPending, setError])
+  }, [path, seedWiki, seedAgentsMd, fanout, close, selectNewProject, setIsPending, setError])
 
   // Close on Escape
   useEffect(() => {

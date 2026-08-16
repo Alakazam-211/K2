@@ -39,11 +39,16 @@ fn run_git(args: &[&str], cwd: &str) -> Option<String> {
 /// a directory-exists precheck + `fs::create_dir_all`) and
 /// `/cli/workspace/open` (which pre-checks `is_dir`).
 pub fn register_workspace(path: &str) -> Result<String, String> {
-    register_workspace_ex(path, true)
+    register_workspace_ex(path, true, true, false)
 }
 
-/// `seed_wiki` defaults on for new agents (opt-out via `false`).
-pub fn register_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, String> {
+/// `seed_wiki` / `seed_agents_md` default on; `fanout` default off.
+pub fn register_workspace_ex(
+    path: &str,
+    seed_wiki: bool,
+    seed_agents_md: bool,
+    fanout: bool,
+) -> Result<String, String> {
     let db = crate::db::shared();
     let conn = db.lock();
 
@@ -108,6 +113,11 @@ pub fn register_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, Stri
             if seed_wiki {
                 crate::wiki::seed_wiki_on_add(path);
             }
+            crate::workspace::skill_regen::apply_new_workspace_agents_policy(
+                path,
+                seed_agents_md,
+                fanout,
+            );
             Ok(serde_json::json!({
                 "success": true,
                 "projectId": project_id,
@@ -115,6 +125,8 @@ pub fn register_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, Stri
                 "name": name,
                 "path": path,
                 "wikiSeeded": seed_wiki,
+                "agentsMdSeeded": seed_agents_md,
+                "fanout": fanout,
             })
             .to_string())
         }
@@ -128,10 +140,15 @@ pub fn register_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, Stri
 /// `/cli/workspace/create` — create the directory if missing, then
 /// [`register_workspace`].
 pub fn create_workspace(path: &str) -> Result<String, String> {
-    create_workspace_ex(path, true)
+    create_workspace_ex(path, true, true, false)
 }
 
-pub fn create_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, String> {
+pub fn create_workspace_ex(
+    path: &str,
+    seed_wiki: bool,
+    seed_agents_md: bool,
+    fanout: bool,
+) -> Result<String, String> {
     if path.is_empty() {
         return Err("Missing 'path' parameter".to_string());
     }
@@ -139,23 +156,28 @@ pub fn create_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, String
         return Err(format!("Directory already exists: {}", path));
     }
     fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {}", e))?;
-    register_workspace_ex(path, seed_wiki)
+    register_workspace_ex(path, seed_wiki, seed_agents_md, fanout)
 }
 
 /// `/cli/workspace/open` — verify the path is an existing directory
 /// and register it.
 pub fn open_workspace(path: &str) -> Result<String, String> {
-    open_workspace_ex(path, true)
+    open_workspace_ex(path, true, true, false)
 }
 
-pub fn open_workspace_ex(path: &str, seed_wiki: bool) -> Result<String, String> {
+pub fn open_workspace_ex(
+    path: &str,
+    seed_wiki: bool,
+    seed_agents_md: bool,
+    fanout: bool,
+) -> Result<String, String> {
     if path.is_empty() {
         return Err("Missing 'path' parameter".to_string());
     }
     if !Path::new(path).is_dir() {
         return Err(format!("Directory not found: {}", path));
     }
-    register_workspace_ex(path, seed_wiki)
+    register_workspace_ex(path, seed_wiki, seed_agents_md, fanout)
 }
 
 /// `/cli/workspace/cleanup` — drop `workspaces` rows whose
@@ -276,6 +298,18 @@ mod tests {
             dir.join(".k2/wiki/_Index.md").is_file(),
             "default register must seed _Index.md"
         );
+        assert!(
+            dir.join(".k2/AGENTS.md").is_file(),
+            "default register must compose .k2/AGENTS.md"
+        );
+        assert!(
+            dir.join("AGENTS.md").is_file(),
+            "default register must plant cwd AGENTS.md"
+        );
+        assert!(
+            !dir.join("CLAUDE.md").exists(),
+            "default register must not plant leftover CLAUDE.md"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -284,7 +318,7 @@ mod tests {
         crate::db::init_for_tests();
         let dir = unique_dir("seed-off");
         let path = dir.to_string_lossy().into_owned();
-        register_workspace_ex(&path, false).expect("register");
+        register_workspace_ex(&path, false, true, false).expect("register");
         assert!(
             !dir.join(".k2/wiki").exists(),
             "opt-out must not create .k2/wiki"

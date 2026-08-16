@@ -1717,7 +1717,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       {envFiles.length > 0 && (
         <div className="border-b border-[var(--color-border)]">
           <button
-            className="w-full h-8 px-3 flex items-center gap-1.5 text-left text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+            className="w-full h-9 px-3 flex items-center gap-1.5 text-left text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
             onClick={() => setEnvCollapsed((prev) => !prev)}
           >
             <svg
@@ -1776,7 +1776,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       {aiConfigEntries.length > 0 && (
         <div className="border-b border-[var(--color-border)]">
           <button
-            className="w-full h-8 px-3 flex items-center gap-1.5 text-left text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+            className="w-full h-9 px-3 flex items-center gap-1.5 text-left text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
             onClick={() => setAiConfigCollapsed((prev) => !prev)}
           >
             <svg

@@ -952,7 +952,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   return (
     <div className="h-full flex flex-col overflow-hidden relative">
       {/* Header */}
-      <div className="h-8 px-3 border-b border-[var(--color-border)] flex items-center justify-between flex-shrink-0">
+      <div className="h-9 px-3 border-b border-[var(--color-border)] flex items-center justify-between flex-shrink-0">
         <span className="text-xs font-medium text-[var(--color-text-secondary)] font-mono">
           Chat History
         </span>

@@ -138,7 +138,7 @@ export default function WorkspacePanel(): React.JSX.Element {
                   {displayName || activeProject.name}
                 </span>
                 {activeProject.handle && (
-                  <span className="text-[10px] font-mono text-[var(--color-text-muted)] truncate">
+                  <span className="text-[10px] font-mono text-[var(--color-text-primary)] truncate">
                     {activeProject.handle}
                   </span>
                 )}

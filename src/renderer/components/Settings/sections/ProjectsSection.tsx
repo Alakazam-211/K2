@@ -2737,7 +2737,7 @@ function AgentHandleField({
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          className="flex-1 min-w-0 px-2 py-1 text-xs font-mono bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
+          className="flex-1 min-w-0 px-2 py-1 text-xs font-mono bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
         />
         <button
           onClick={() => { void onChange() }}
@@ -2748,7 +2748,7 @@ function AgentHandleField({
         </button>
       </div>
       {handle && (
-        <p className="text-[9px] font-mono text-[var(--color-text-muted)] mt-1">{handle}::host</p>
+        <p className="text-[9px] font-mono text-[var(--color-text-primary)] mt-1">{handle}::host</p>
       )}
       {error && (
         <p className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</p>

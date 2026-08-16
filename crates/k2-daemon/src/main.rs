@@ -69,6 +69,7 @@ mod federation_routes;
 mod feedback_routes;
 mod fs_routes;
 mod fs_live;
+mod charter_compose_watch;
 mod grid_emitter;
 mod git_routes;
 mod heartbeat_launch;
@@ -106,6 +107,7 @@ mod routes;
 mod seed_users;
 // COMPAT-58 (#58 Phase 1 / PR-A): scoped per-session hook tokens + per-cell UDS
 // (default ON; opt out with K2_HOOK_SCOPED=0). Owner never enters agent env.
+mod cell_identity;
 mod cell_server;
 mod cell_uds;
 // P4-H5: host nft fail-closed egress allowlist for microVM cells (see lib.rs).
@@ -1084,6 +1086,7 @@ async fn async_main() {
     // thin client (local multi-window + K2 Connect) can refresh its
     // FileTree. DB is ready above; projects_list() is live.
     fs_live::start();
+    charter_compose_watch::start();
 
     // heartbeat.port watchdog — see `run_heartbeat_port_watchdog` docs.
     // The daemon takes over `~/.k2so/heartbeat.port` whenever Tauri

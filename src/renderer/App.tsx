@@ -902,8 +902,8 @@ function AppRoot(): React.JSX.Element {
       {/* Settings overlay — covers the (still-mounted) workspace */}
       {settingsOpen && (
         <div className="fixed inset-0 z-[200] flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]">
-          {/* Settings renders its OWN top-bar (traffic-light spacer + "K2
-              <Server>" + switcher, #686). */}
+          {/* Settings renders its OWN top-bar (same left cluster as
+              other pages: K2 + server picker + ⚙/Agents/Projects/Tickets). */}
           <div className="flex-1 min-h-0">
             <Settings />
           </div>

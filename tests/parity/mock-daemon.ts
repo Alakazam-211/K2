@@ -62,8 +62,8 @@ export const DEFAULT_SETTINGS = {
   focusGroupsEnabled: false,
   activeFocusGroupId: null,
   sidebarCollapsed: false,
-  leftPanelOpen: false,
-  rightPanelOpen: false,
+  leftPanelOpen: true,
+  rightPanelOpen: true,
   leftPanelActiveTab: 'files',
   rightPanelActiveTab: 'chat',
   leftPanelTabs: ['files'],
@@ -104,6 +104,8 @@ export const DEFAULT_SETTINGS = {
   // every real daemon response (typed struct), so the mock carries it too;
   // the renderer's read-back applies it to <html> data-* attributes.
   style: { id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '' },
+  // F4 — typed AppSettings.completion_sound_enabled (default ON).
+  completionSoundEnabled: true,
 }
 
 /** One-level-nested deep merge matching the daemon's `deep_merge`

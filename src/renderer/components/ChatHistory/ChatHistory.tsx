@@ -3,13 +3,19 @@ import { onChatHistoryChanged } from '@/stores/session-events'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
-import { useTabsStore, type TerminalItemData } from '@/stores/tabs'
+import { useTabsStore, openApiHostSessionTab, type TerminalItemData } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { usePresetsStore } from '@/stores/presets'
 import { resolveAgentCommand } from '@/lib/agent-resolve'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { KeyCombo } from '@/components/KeySymbol'
 import { resolveChatHistoryHost } from './resolveHost'
+import {
+  collectStoreTabs,
+  chatDisplayName,
+  findTabByPaneGroupId,
+  restampSessionTabs,
+} from '@/lib/chat-session-tab'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -23,6 +29,7 @@ interface ChatSession {
   originBranch: string | null
   archived?: boolean
   archivedAt?: number
+  customName?: string | null
 }
 
 /** Date buckets inside the General collapsible (not top-level sections). */
@@ -36,6 +43,14 @@ interface SandboxChat {
   title: string
   timestamp: number
   messageCount: number
+}
+
+interface ApiChat {
+  sessionId: string
+  agentName: string
+  live: boolean
+  lastSeenAt: number
+  fromApi?: boolean
 }
 
 // ── CLI tool config ─────────────────────────────────────────────────
@@ -213,10 +228,12 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const [renameValue, setRenameValue] = useState('')
   // Sandboxed chats (API-triggered sandbox sessions) — the audit-resume list.
   const [sandboxSessions, setSandboxSessions] = useState<SandboxChat[]>([])
+  const [apiSessions, setApiSessions] = useState<ApiChat[]>([])
   // Three top-level chat sections (replaces single "Chats" collapsible).
   const [showPinned, setShowPinned] = useState(true)
   const [showGeneral, setShowGeneral] = useState(true)
   const [showArchived, setShowArchived] = useState(true)
+  const [showApi, setShowApi] = useState(true)
   const [showSandbox, setShowSandbox] = useState(true)
   const [reopening, setReopening] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -243,6 +260,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const fetchSessions = useCallback(async (showLoading = false) => {
     if (!projectPath) {
       setSessions([])
+      setApiSessions([])
       setLoading(false)
       return
     }
@@ -270,11 +288,33 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     } catch {
       setSandboxSessions([])
     }
+    try {
+      const api = await daemonCliGet<ApiChat[]>('host-sessions/list', { project: projectPath })
+      setApiSessions(Array.isArray(api) ? api : [])
+    } catch {
+      setApiSessions([])
+    }
   }, [projectPath])
 
   // Re-launch a sandbox chat INSIDE its sandbox (audit-resume). The daemon
   // re-mounts the session's persistent layer + `claude --resume`; the cell
   // surfaces as its orange tab via the app-level adoption.
+  const handleApiClick = useCallback((session: ApiChat) => {
+    if (!projectPath) return
+    openApiHostSessionTab({
+      kind: 'session_added',
+      workspace_path: projectPath,
+      pane_group_id: null,
+      agent_name: session.agentName,
+      command: null,
+      args: [],
+      session_id: session.sessionId,
+      isV2: true,
+      sandbox_backend: 'host',
+      forceAdopt: true,
+    })
+  }, [projectPath])
+
   const handleSandboxClick = useCallback(async (session: SandboxChat) => {
     if (!projectPath || reopening) return
     setReopening(session.sessionId)
@@ -326,8 +366,23 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     return onChatHistoryChanged(() => {
       fetchSessions(false)
       fetchCustomNames()
+      if (!projectPath) return
+      void daemonCliGet<ChatSession[]>('chat/list', { project_path: projectPath })
+        .then((rows) => {
+          const tabsStore = useTabsStore.getState()
+          const tabs = collectStoreTabs(tabsStore)
+          for (const s of Array.isArray(rows) ? rows : []) {
+            restampSessionTabs(
+              tabs,
+              s.sessionId,
+              chatDisplayName({ customName: s.customName, title: s.title }),
+              tabsStore.setTabTitle,
+            )
+          }
+        })
+        .catch(() => { /* list refetch already logged in fetchSessions */ })
     })
-  }, [fetchSessions, fetchCustomNames])
+  }, [fetchSessions, fetchCustomNames, projectPath])
 
   // Poll every 30 seconds for new sessions
   useEffect(() => {
@@ -346,15 +401,23 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const { pinnedSessions, generalByDate, archivedSessions, generalCount } = useMemo(() => {
     const q = searchQuery.toLowerCase().trim()
     const filtered = q
-      ? sessions.filter((s) => s.title.toLowerCase().includes(q))
+      ? sessions.filter((s) => {
+          if (s.title.toLowerCase().includes(q)) return true
+          const custom = s.customName?.toLowerCase()
+          if (custom?.includes(q)) return true
+          const overlay = customNames[`${s.provider}:${s.sessionId}`]?.toLowerCase()
+          return !!overlay?.includes(q)
+        })
       : sessions
     const sorted = [...filtered].sort((a, b) => b.timestamp - a.timestamp)
 
     const pinned: ChatSession[] = []
     const archived: ChatSession[] = []
     const byDate = new Map<DateGroup, ChatSession[]>()
+    const apiIds = new Set(apiSessions.map((s) => s.sessionId))
 
     for (const session of sorted) {
+      if (apiIds.has(session.sessionId)) continue
       if (session.archived) {
         archived.push(session)
         continue
@@ -379,7 +442,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       archivedSessions: archived,
       generalCount: gCount,
     }
-  }, [sessions, searchQuery, pinnedKeys])
+  }, [sessions, searchQuery, pinnedKeys, apiSessions, customNames])
 
   // Flat ordered list for keyboard nav: Pinned → General date groups → Archived
   const flatSessions = useMemo(() => {
@@ -569,7 +632,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         { label: isPinned ? 'Unpin' : 'Pin', action: () => handleTogglePin(session) },
         { label: 'Rename', action: () => {
           setRenamingSession(session)
-          setRenameValue(customNames[key] ?? session.title)
+          setRenameValue(chatDisplayName({
+            customName: session.customName ?? customNames[key],
+            title: session.title,
+          }))
           setTimeout(() => renameInputRef.current?.focus(), 0)
         }},
         { label: 'Copy Path', action: () => copySessionPath() },
@@ -633,18 +699,26 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         session_id: renamingSession.sessionId,
         custom_name: renameValue.trim(),
       })
-      // Update local custom names
       const key = `${renamingSession.provider}:${renamingSession.sessionId}`
-      setCustomNames((prev) => ({ ...prev, [key]: renameValue.trim() }))
-      // Update any open tab with this session's title
+      const nextName = renameValue.trim()
+      setCustomNames((prev) => ({ ...prev, [key]: nextName }))
+      setSessions((prev) => prev.map((s) => (
+        s.sessionId === renamingSession.sessionId && s.provider === renamingSession.provider
+          ? { ...s, customName: nextName }
+          : s
+      )))
       const tabsStore = useTabsStore.getState()
-      const oldTitle = customNames[key] ?? renamingSession.title
-      tabsStore.renameTabByTitle(oldTitle, renameValue.trim())
+      restampSessionTabs(
+        collectStoreTabs(tabsStore),
+        renamingSession.sessionId,
+        nextName,
+        tabsStore.setTabTitle,
+      )
     } catch (err) {
       console.error('[chat-history] Failed to rename:', err)
     }
     setRenamingSession(null)
-  }, [renamingSession, renameValue, customNames])
+  }, [renamingSession, renameValue])
 
   const handleSessionClick = useCallback(
     (session: ChatSession) => {
@@ -659,7 +733,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
       const tabsStore = useTabsStore.getState()
       const key = `${session.provider}:${session.sessionId}`
-      const displayTitle = customNames[key] ?? session.title
+      const displayTitle = chatDisplayName({
+        customName: session.customName ?? customNames[key],
+        title: session.title,
+      })
 
       // Determine if we're resuming across worktree boundaries.
       // When the current workspace branch differs from the session's origin,
@@ -719,12 +796,15 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         ]
         for (const { tabs, idx } of groups) {
           for (const tab of tabs) {
+            if (tab.isSystemAgent) continue
             for (const [, pg] of tab.paneGroups) {
               for (const item of pg.items) {
                 if (item.type !== 'terminal') continue
                 const td = item.data as TerminalItemData
                 if (td.command !== config.command) continue
                 if (!td.args?.includes(session.sessionId)) continue
+                if (td.heartbeatName || td.fromApi || td.attachAgentName?.startsWith('api-')) continue
+                tabsStore.setTabTitle(tab.id, title, { locked: true })
                 if (idx === 0) {
                   tabsStore.setActiveTab(tab.id)
                 } else {
@@ -740,11 +820,15 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       // If split into columns, open in the rightmost group
       const targetGroup = tabsStore.splitCount > 1 ? tabsStore.splitCount - 1 : 0
 
-      tabsStore.addTabToGroup(targetGroup, projectPath, {
+      const pgId = tabsStore.addTabToGroup(targetGroup, projectPath, {
         title,
         command: config.command,
         args,
+        locked: true,
       })
+      const st = useTabsStore.getState()
+      const created = findTabByPaneGroupId(collectStoreTabs(st), pgId)
+      if (created) st.setTabTitle(created.id, title, { locked: true })
     },
     [projectPath, customNames, activeWorkspace, showToast]
   )
@@ -916,7 +1000,10 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                       ) : (
                         <>
                           <span className="text-[11px] text-[var(--color-text-secondary)] font-mono truncate leading-tight">
-                            {customNames[`${session.provider}:${session.sessionId}`] ?? session.title}
+                            {chatDisplayName({
+                              customName: session.customName ?? customNames[`${session.provider}:${session.sessionId}`],
+                              title: session.title,
+                            })}
                           </span>
                           <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-tight flex items-center gap-1.5 truncate">
                             {session.messageCount > 0 && (
@@ -1005,6 +1092,45 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                             </div>
                           )
                         })
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── API (host-sessions; close-as-minimize) ── */}
+                  {sectionHeader('API', showApi, () => setShowApi((v) => !v), apiSessions.length)}
+                  {showApi && (
+                    <div className="py-0.5">
+                      {apiSessions.length === 0 ? (
+                        <p className="px-3 py-2 text-[10px] text-[var(--color-text-muted)] font-mono">No API sessions</p>
+                      ) : (
+                        apiSessions.map((s) => (
+                          <button
+                            key={s.sessionId}
+                            type="button"
+                            onClick={() => handleApiClick(s)}
+                            title={s.live ? 'Open API session' : 'Resume API session'}
+                            className="no-drag w-full flex items-center gap-2 px-3 h-8 hover:bg-white/[0.04] active:bg-white/[0.06] text-left group transition-colors"
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                                s.live
+                                  ? 'bg-[var(--color-status-success)]'
+                                  : 'bg-[var(--color-text-muted)]'
+                              }`}
+                            />
+                            <div className="flex-1 min-w-0 flex flex-col justify-center">
+                              <span className="text-[11px] text-[var(--color-text-secondary)] font-mono truncate leading-tight">
+                                {s.agentName}
+                              </span>
+                              <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-tight truncate">
+                                {s.live ? 'live · click to open' : 'idle · click to resume'}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-[var(--color-text-muted)] font-mono flex-shrink-0 tabular-nums">
+                              {formatTime(s.lastSeenAt > 1e12 ? s.lastSeenAt : s.lastSeenAt * 1000)}
+                            </span>
+                          </button>
+                        ))
                       )}
                     </div>
                   )}

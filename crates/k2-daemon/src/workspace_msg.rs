@@ -318,6 +318,100 @@ pub fn resolve_workspace(token: &str) -> Option<String> {
     None
 }
 
+/// First-arg target for `k2 msg` / `talk` / `read` (D12).
+///
+/// Federation `agent::host` is split in the CLI — not parsed here.
+/// `sales-reviewer` is a workspace name (or fail), never a sidecar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MsgTarget {
+    WorkspaceCanonical { path: String },
+    Sidecar {
+        path: String,
+        handle: String,
+        conversation_key: String,
+    },
+    /// UUID that matched a live or durable session (provider or PTY id).
+    Session { session_id: String },
+}
+
+/// Resolve `k2 msg` first arg. Order (D12):
+/// 1. `agent::host` — not parsed here
+/// 2. contains `/` and not an absolute path → `workspace/handle`
+/// 3. UUID-shaped → live/durable session first; else project UUID
+/// 4. else workspace → canonical
+pub fn resolve_msg_target(first_arg: &str) -> Option<MsgTarget> {
+    let token = first_arg.trim();
+    if token.is_empty() {
+        return None;
+    }
+
+    if let Some((ws, handle)) = k2_core::workspace_session_handles::split_workspace_handle(token)
+    {
+        let path = resolve_workspace(ws)?;
+        let project_id = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            resolve_project_id(&conn, &path)
+        }?;
+        let conversation_key = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::workspace_session_handles::resolve_handle(&conn, &project_id, handle).ok()
+        }?;
+        return Some(MsgTarget::Sidecar {
+            path,
+            handle: handle.to_string(),
+            conversation_key,
+        });
+    }
+
+    if k2_core::workspace_session_handles::is_uuid_shape(token) {
+        if session_exists_live_or_durable(token) {
+            return Some(MsgTarget::Session {
+                session_id: token.to_string(),
+            });
+        }
+        if let Some(path) = resolve_workspace(token) {
+            return Some(MsgTarget::WorkspaceCanonical { path });
+        }
+        return None;
+    }
+
+    resolve_workspace(token).map(|path| MsgTarget::WorkspaceCanonical { path })
+}
+
+fn session_exists_live_or_durable(session_id: &str) -> bool {
+    if let Some(sid) = SessionId::parse(session_id) {
+        if session_lookup::lookup_by_session_id(&sid).is_some() {
+            return true;
+        }
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if k2_core::db::schema::WorkspaceTabSession::get_by_session_id(&conn, session_id)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return true;
+    }
+    if WorkspaceSession::get_by_session_id(&conn, session_id)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return true;
+    }
+    if k2_core::workspace_session_handles::project_id_for_session_id(&conn, session_id)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return true;
+    }
+    false
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Bytes formatter — `[from <name>] <text>` prefix
 // ─────────────────────────────────────────────────────────────────────
@@ -646,19 +740,25 @@ pub fn deliver_live(
     wake: bool,
     wake_timeout: Duration,
 ) -> MsgResponse {
-    // Resolve workspace once. WorkspaceNotFound is permanent; surface
-    // immediately without entering the retry loop. 0.39.45 (#33): the
-    // hint carries a did-you-mean suggestion when a close name exists.
-    let project_path = match resolve_workspace(workspace_token) {
-        Some(p) => p,
+    // Resolve once (D12). Unknown token is permanent; surface immediately.
+    let target = match resolve_msg_target(workspace_token) {
+        Some(t) => t,
         None => {
             let mut resp = MsgResponse::fail(MsgReason::WorkspaceNotFound);
+            let suggest_token =
+                k2_core::workspace_session_handles::split_workspace_handle(workspace_token)
+                    .map(|(ws, _)| ws)
+                    .unwrap_or(workspace_token);
             let suggestion = {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
-                k2_core::connections::suggest_project_name(&conn, workspace_token)
+                k2_core::connections::suggest_project_name(&conn, suggest_token)
             };
-            if let Some(s) = suggestion {
+            if workspace_token.contains('/') && !workspace_token.starts_with('/') {
+                resp.hint = Some(format!(
+                    "Unknown workspace/handle '{workspace_token}'. Use `k2 msg <workspace>` for the primary or `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions live`). Hyphenated names like `sales-reviewer` are workspaces, not sidecars."
+                ));
+            } else if let Some(s) = suggestion {
                 resp.hint = Some(format!(
                     "Unknown workspace '{workspace_token}' — did you mean '{s}'? Run `k2so connections list` to see available workspaces."
                 ));
@@ -669,7 +769,33 @@ pub fn deliver_live(
 
     let mut last: Option<MsgResponse> = None;
     for attempt in 1..=MAX_ATTEMPTS {
-        let mut result = attempt_delivery(&project_path, text, from, command, wake, wake_timeout);
+        let mut result = match &target {
+            MsgTarget::WorkspaceCanonical { path } => {
+                attempt_delivery(path, text, from, command, wake, wake_timeout)
+            }
+            MsgTarget::Sidecar {
+                path,
+                handle,
+                conversation_key,
+            } => attempt_sidecar_delivery(
+                path,
+                handle,
+                conversation_key,
+                text,
+                from,
+                command,
+                wake,
+                wake_timeout,
+            ),
+            MsgTarget::Session { session_id } => attempt_session_delivery(
+                session_id,
+                text,
+                from,
+                command,
+                wake,
+                wake_timeout,
+            ),
+        };
         result.attempts = attempt;
 
         if result.success {
@@ -1166,6 +1292,38 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
     }
 }
 
+/// Persist compose-bar send history. Called ONLY after a successful
+/// `POST /cli/terminal/send-message`. Tickets go through
+/// [`send_message_to_session`] and must never call this.
+pub fn persist_compose_send_if_delivered(success: bool, cwd: &str, from: &str, text: &str) {
+    if !success {
+        return;
+    }
+    let _ = k2_core::workspace_compose_history::record_compose_send_for_cwd(cwd, text, from);
+}
+
+/// After a successful inject: resolve the live session cwd and record.
+/// Unknown/missing session or unregistered path: skip (send already
+/// succeeded).
+pub fn persist_compose_send_after_success(session_id: &str, from: &str, text: &str) {
+    let Some(sid) = SessionId::parse(session_id) else {
+        return;
+    };
+    let Some(live) = session_lookup::lookup_by_session_id(&sid) else {
+        return;
+    };
+    persist_compose_send_if_delivered(true, &live.cwd(), from, text);
+}
+
+/// `GET /cli/terminal/compose-history` body. Newest first. Unknown
+/// workspace → empty `items` (not an error).
+pub fn compose_history_response(project_id: &str, workspace_path: &str) -> String {
+    let items = k2_core::workspace_compose_history::list_for_query(project_id, workspace_path)
+        .unwrap_or_default();
+    serde_json::to_string(&serde_json::json!({ "items": items }))
+        .unwrap_or_else(|_| "{\"items\":[]}".to_string())
+}
+
 /// Host sessions F1 (prd-v1-api-completion §3) — deliver a RAW payload into
 /// a LIVE session, optionally waiting for TUI readiness first.
 ///
@@ -1235,6 +1393,341 @@ pub fn inject_raw_into_session_with_profile(
 // ─────────────────────────────────────────────────────────────────────
 // Branch implementations
 // ─────────────────────────────────────────────────────────────────────
+
+fn lookup_live_for_conversation(conversation_key: &str) -> Option<session_lookup::LiveSession> {
+    if let Some(sid) = SessionId::parse(conversation_key) {
+        if let Some(live) = session_lookup::lookup_by_session_id(&sid) {
+            return Some(live);
+        }
+    }
+    for (agent_name, live) in session_lookup::snapshot_all() {
+        if k2_core::workspace::provider_resume::argv_references_session(
+            &live.args(),
+            conversation_key,
+        ) {
+            return Some(live);
+        }
+        if agent_name == conversation_key
+            || agent_name == format!("tab-{conversation_key}")
+        {
+            return Some(live);
+        }
+    }
+    let tab = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceTabSession::get_by_session_id(&conn, conversation_key)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                // conversation_key may still be pane_group_id
+                let rows = k2_core::db::schema::WorkspaceTabSession::list_by_project(
+                    &conn,
+                    // unknown project — scan is too wide; skip
+                    "",
+                )
+                .ok();
+                let _ = rows;
+                None
+            })
+    };
+    if let Some(tab) = tab {
+        if let Some(live) = session_lookup::lookup_any(&tab.agent_name) {
+            return Some(live);
+        }
+    }
+    None
+}
+
+fn tab_row_for_conversation(
+    project_id: &str,
+    conversation_key: &str,
+) -> Option<k2_core::db::schema::WorkspaceTabSession> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if let Some(row) =
+        k2_core::db::schema::WorkspaceTabSession::get_by_session_id(&conn, conversation_key)
+            .ok()
+            .flatten()
+    {
+        return Some(row);
+    }
+    if let Some(row) = k2_core::db::schema::WorkspaceTabSession::get(
+        &conn,
+        project_id,
+        conversation_key,
+    )
+    .ok()
+    .flatten()
+    {
+        return Some(row);
+    }
+    k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
+        &conn,
+        project_id,
+        conversation_key,
+    )
+    .ok()
+    .flatten()
+    .or_else(|| {
+        k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
+            &conn,
+            project_id,
+            &format!("tab-{conversation_key}"),
+        )
+        .ok()
+        .flatten()
+    })
+}
+
+fn inject_cell(
+    live: &session_lookup::LiveSession,
+    text: &str,
+    from: &str,
+    command: &str,
+    branch: &str,
+) -> MsgResponse {
+    let payload = format_message(from, text, command);
+    match inject_and_submit(live, &payload) {
+        InjectOutcome::Delivered => MsgResponse::ok(live.session_id().to_string(), branch),
+        InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
+        InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
+        InjectOutcome::GateHold => MsgResponse::fail(MsgReason::HitlGateOpen),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attempt_sidecar_delivery(
+    project_path: &str,
+    handle: &str,
+    conversation_key: &str,
+    text: &str,
+    from: &str,
+    command: &str,
+    wake: bool,
+    wake_timeout: Duration,
+) -> MsgResponse {
+    let project_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match resolve_project_id(&conn, project_path) {
+            Some(p) => p,
+            None => return MsgResponse::fail(MsgReason::WorkspaceNotFound),
+        }
+    };
+
+    if let Some(live) = lookup_live_for_conversation(conversation_key) {
+        return inject_cell(&live, text, from, command, "sidecar_live");
+    }
+    // Also try the tab's agent_name if the reverse index has a row.
+    if let Some(tab) = tab_row_for_conversation(&project_id, conversation_key) {
+        if let Some(live) = session_lookup::lookup_any(&tab.agent_name) {
+            return inject_cell(&live, text, from, command, "sidecar_live_tab");
+        }
+    }
+
+    if !wake {
+        return MsgResponse::fail(MsgReason::DormantNoWake);
+    }
+
+    wake_sidecar_and_fire(
+        project_path,
+        &project_id,
+        conversation_key,
+        handle,
+        text,
+        from,
+        command,
+        wake_timeout,
+    )
+}
+
+fn attempt_session_delivery(
+    session_id: &str,
+    text: &str,
+    from: &str,
+    command: &str,
+    wake: bool,
+    wake_timeout: Duration,
+) -> MsgResponse {
+    if let Some(live) = lookup_live_for_conversation(session_id) {
+        return inject_cell(&live, text, from, command, "session_live");
+    }
+
+    // Durable reverse-index: tab row, then canonical workspace_sessions.
+    let tab = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceTabSession::get_by_session_id(&conn, session_id)
+            .ok()
+            .flatten()
+    };
+    if let Some(tab) = tab {
+        if let Some(live) = session_lookup::lookup_any(&tab.agent_name) {
+            return inject_cell(&live, text, from, command, "session_live_tab");
+        }
+        if !wake {
+            return MsgResponse::fail(MsgReason::DormantNoWake);
+        }
+        let path = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT path FROM projects WHERE id = ?1",
+                rusqlite::params![tab.project_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+        };
+        let Some(path) = path else {
+            return MsgResponse::fail(MsgReason::WorkspaceNotFound);
+        };
+        return wake_sidecar_and_fire(
+            &path,
+            &tab.project_id,
+            session_id,
+            session_id,
+            text,
+            from,
+            command,
+            wake_timeout,
+        );
+    }
+
+    let canonical = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        WorkspaceSession::get_by_session_id(&conn, session_id)
+            .ok()
+            .flatten()
+    };
+    if let Some(row) = canonical {
+        let path = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT path FROM projects WHERE id = ?1",
+                rusqlite::params![row.project_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+        };
+        let Some(path) = path else {
+            return MsgResponse::fail(MsgReason::WorkspaceNotFound);
+        };
+        return attempt_delivery(&path, text, from, command, wake, wake_timeout);
+    }
+
+    if !wake {
+        return MsgResponse::fail(MsgReason::DormantNoWake);
+    }
+    MsgResponse::fail(MsgReason::WorkspaceNotFound)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wake_sidecar_and_fire(
+    project_path: &str,
+    project_id: &str,
+    conversation_key: &str,
+    _handle: &str,
+    text: &str,
+    from: &str,
+    command: &str,
+    wake_timeout: Duration,
+) -> MsgResponse {
+    let lock_key = format!("{project_id}:{conversation_key}");
+    let wake_lock = wake_lock_for(&lock_key);
+    let _wake_guard = wake_lock.lock();
+
+    if let Some(live) = lookup_live_for_conversation(conversation_key) {
+        return inject_cell(&live, text, from, command, "sidecar_wake_coalesced");
+    }
+
+    let Some(tab) = tab_row_for_conversation(project_id, conversation_key) else {
+        log_debug!(
+            "[msg/wake_sidecar] no durable tab row for key={conversation_key} project={project_id}"
+        );
+        return MsgResponse::fail(MsgReason::WorkspaceNotFound);
+    };
+
+    let saved_cmd = tab.command.clone().filter(|s| !s.is_empty());
+    let Some(spawn_command) = saved_cmd else {
+        return MsgResponse::fail(MsgReason::NoAgentMode);
+    };
+    let mut spawn_args: Vec<String> = tab
+        .args_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    if let Some(sid) = tab.session_id.as_deref().filter(|s| !s.is_empty()) {
+        if let Some(adapter) =
+            k2_core::workspace::provider_resume::provider_resume_for_command(&spawn_command)
+        {
+            if !adapter.argv_carries_session_identity(&spawn_args) {
+                spawn_args = adapter.resume_args(&spawn_args, sid);
+            }
+        }
+    }
+
+    let (spawn_command, spawn_args, wake_timeout) =
+        match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
+            Ok(c) if !c.is_empty() => (
+                c,
+                Vec::new(),
+                wake_timeout.min(Duration::from_millis(1500)),
+            ),
+            _ => (spawn_command, spawn_args, wake_timeout),
+        };
+
+    let cwd = tab
+        .cwd
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| project_path.to_string());
+    let wake_start = std::time::Instant::now();
+    let outcome = match spawn_agent_session_v2_blocking(SpawnWorkspaceSessionRequest {
+        agent_name: tab.agent_name.clone(),
+        project_id: Some(project_id.to_string()),
+        cwd,
+        command: Some(spawn_command),
+        args: Some(spawn_args),
+        cols: 120,
+        rows: 38,
+        // Register under the tab/API map key — never the canonical slot.
+        canonical_key: Some(tab.agent_name.clone()),
+        env: HashMap::new(),
+    }) {
+        Ok(o) => o,
+        Err(e) => {
+            log_debug!("[msg/wake_sidecar] spawn failed: {e}");
+            return MsgResponse::fail(MsgReason::SpawnFailed);
+        }
+    };
+    let target_id = outcome.session_id.to_string();
+    let live = match session_lookup::lookup_by_session_id(&outcome.session_id) {
+        Some(l) => l,
+        None => {
+            log_debug!(
+                "[msg/wake_sidecar] post-spawn lookup miss for session={target_id}"
+            );
+            return MsgResponse::fail(MsgReason::SpawnFailed);
+        }
+    };
+    let payload = format_message(from, text, command);
+    match deliver_post_wake(
+        &live,
+        &payload,
+        wake_timeout,
+        &k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
+    ) {
+        InjectOutcome::Delivered => {
+            MsgResponse::ok_woke(target_id, "sidecar_wake", wake_start.elapsed().as_millis() as u64)
+        }
+        InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
+        InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
+        InjectOutcome::GateHold => MsgResponse::fail(MsgReason::HitlGateOpen),
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn inject_live(
@@ -1752,6 +2245,137 @@ mod tests {
     }
 
     #[test]
+    fn format_message_sidecar_from_prefix() {
+        assert_eq!(
+            format_message("sales/reviewer", "hi", ""),
+            "[from sales/reviewer] hi"
+        );
+        assert_eq!(format_message("sales", "hi", ""), "[from sales] hi");
+    }
+
+    #[test]
+    fn resolve_msg_target_workspace_handle_and_not_hyphen() {
+        k2_core::db::init_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let pid = uuid::Uuid::new_v4().to_string();
+        let path = format!("/tmp/msg-target-sales-{pid}");
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, 'sales', ?2)",
+            rusqlite::params![pid, path],
+        )
+        .expect("seed sales");
+        let sid = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO workspace_tab_sessions \
+             (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+             VALUES (?1, 'pane-1', 'tab-pane-1', ?2, 'claude', unixepoch())",
+            rusqlite::params![pid, sid],
+        )
+        .expect("tab");
+        k2_core::workspace_session_handles::allocate_ordinal(&conn, &pid, &sid)
+            .expect("ord");
+        drop(conn);
+
+        match resolve_msg_target("sales").expect("canonical") {
+            MsgTarget::WorkspaceCanonical { path: p } => assert_eq!(p, path),
+            other => panic!("expected canonical, got {other:?}"),
+        }
+        match resolve_msg_target("sales/1").expect("sidecar 1") {
+            MsgTarget::Sidecar {
+                handle,
+                conversation_key,
+                ..
+            } => {
+                assert_eq!(handle, "1");
+                assert_eq!(conversation_key, sid);
+            }
+            other => panic!("expected sidecar, got {other:?}"),
+        }
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+                 VALUES ('claude', ?1, 'Reviewer', 0, unixepoch())",
+                rusqlite::params![sid],
+            )
+            .expect("rename");
+        }
+        match resolve_msg_target("sales/reviewer").expect("sidecar reviewer") {
+            MsgTarget::Sidecar { handle, conversation_key, .. } => {
+                assert_eq!(handle, "reviewer");
+                assert_eq!(conversation_key, sid);
+            }
+            other => panic!("expected sidecar reviewer, got {other:?}"),
+        }
+        assert!(
+            resolve_msg_target("sales/1").is_none(),
+            "old ordinal must fail after rename"
+        );
+        assert!(
+            resolve_msg_target("sales-reviewer").is_none()
+                || matches!(
+                    resolve_msg_target("sales-reviewer"),
+                    Some(MsgTarget::WorkspaceCanonical { .. })
+                ),
+            "hyphen must not parse as sidecar"
+        );
+        if let Some(t) = resolve_msg_target("sales-reviewer") {
+            assert!(
+                matches!(t, MsgTarget::WorkspaceCanonical { .. }),
+                "sales-reviewer is workspace-or-fail, not sidecar: {t:?}"
+            );
+        }
+        assert!(
+            resolve_msg_target("agent::host").is_none()
+                || matches!(
+                    resolve_msg_target("agent::host"),
+                    Some(MsgTarget::WorkspaceCanonical { .. })
+                )
+        );
+        assert!(split_abs_stays_workspace());
+    }
+
+    fn split_abs_stays_workspace() -> bool {
+        k2_core::workspace_session_handles::split_workspace_handle("/Users/foo/sales").is_none()
+    }
+
+    #[test]
+    fn resolve_msg_target_session_uuid_before_project() {
+        k2_core::db::init_for_tests();
+        let session_uuid = uuid::Uuid::new_v4().to_string();
+        let project_uuid = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, 'uuid-ws', ?2)",
+                rusqlite::params![
+                    project_uuid,
+                    format!("/tmp/msg-uuid-ws-{project_uuid}")
+                ],
+            )
+            .expect("project");
+            conn.execute(
+                "INSERT INTO workspace_tab_sessions \
+                 (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+                 VALUES (?1, 'p', 'tab-p', ?2, 'claude', unixepoch())",
+                rusqlite::params![project_uuid, session_uuid],
+            )
+            .expect("tab sid");
+        }
+        match resolve_msg_target(&session_uuid).expect("session") {
+            MsgTarget::Session { session_id } => assert_eq!(session_id, session_uuid),
+            other => panic!("session uuid must resolve as session first, got {other:?}"),
+        }
+        match resolve_msg_target(&project_uuid).expect("project") {
+            MsgTarget::WorkspaceCanonical { .. } => {}
+            other => panic!("project uuid without session row is workspace, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn format_message_never_emits_raw_passport_uuid() {
         // Even when callers stamp projects.id as `from`, chat must not
         // show the UUID. Unresolvable ids fall back to "external".
@@ -2037,6 +2661,123 @@ mod tests {
         let r = send_message_to_session("not-a-uuid", "owner", "hi");
         assert!(!r.success);
         assert_eq!(r.reason.as_deref(), Some("pty_died"));
+    }
+
+    fn ensure_compose_hist_project(id: &str, path: &str) {
+        k2_core::db::init_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO projects \
+             (id, path, name, color, agent_mode, pinned, tab_order) \
+             VALUES (?1, ?2, ?3, '#123456', 'off', 0, 0)",
+            rusqlite::params![id, path, "compose-hist"],
+        )
+        .expect("insert project");
+    }
+
+    fn compose_hist_count(project_id: &str) -> i64 {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT COUNT(*) FROM workspace_compose_send_history WHERE project_id = ?1",
+            rusqlite::params![project_id],
+            |row| row.get(0),
+        )
+        .expect("count history")
+    }
+
+    #[test]
+    fn send_message_to_session_does_not_persist_history() {
+        // Tickets inject via send_message_to_session. Failed *and*
+        // successful injects through that helper must not write history.
+        k2_core::db::init_for_tests();
+        let pid = format!("csh-ticket-{}", uuid::Uuid::new_v4());
+        let path = format!("/tmp/{pid}");
+        ensure_compose_hist_project(&pid, &path);
+        let before = compose_hist_count(&pid);
+        let r = send_message_to_session("not-a-uuid", "owner", "ticket body");
+        assert!(!r.success, "inject must fail without a live session");
+        assert_eq!(
+            compose_hist_count(&pid),
+            before,
+            "send_message_to_session must never write compose history"
+        );
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![pid])
+            .expect("cleanup");
+    }
+
+    #[test]
+    fn persist_compose_send_only_on_success() {
+        k2_core::db::init_for_tests();
+        let pid = format!("csh-ok-{}", uuid::Uuid::new_v4());
+        let path = format!("/tmp/{pid}");
+        ensure_compose_hist_project(&pid, &path);
+
+        persist_compose_send_if_delivered(false, &path, "owner", "failed send");
+        assert_eq!(
+            compose_hist_count(&pid),
+            0,
+            "failed inject must not store a row"
+        );
+
+        persist_compose_send_if_delivered(true, &path, "owner", "   ");
+        assert_eq!(
+            compose_hist_count(&pid),
+            0,
+            "empty/whitespace must not store a row"
+        );
+
+        persist_compose_send_if_delivered(true, &path, "owner", "delivered line");
+        assert_eq!(
+            compose_hist_count(&pid),
+            1,
+            "successful send must persist"
+        );
+
+        persist_compose_send_if_delivered(true, "/tmp/k2-compose-hist-unknown-cwd", "owner", "x");
+        assert_eq!(
+            compose_hist_count(&pid),
+            1,
+            "unknown cwd must skip insert; send still conceptually succeeds"
+        );
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![pid])
+            .expect("cleanup");
+    }
+
+    #[test]
+    fn compose_history_response_newest_first() {
+        k2_core::db::init_for_tests();
+        let pid = format!("csh-get-{}", uuid::Uuid::new_v4());
+        let path = format!("/tmp/{pid}");
+        ensure_compose_hist_project(&pid, &path);
+        persist_compose_send_if_delivered(true, &path, "owner", "one");
+        persist_compose_send_if_delivered(true, &path, "alice", "two");
+        let json = compose_history_response("", &path);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("json");
+        let bodies: Vec<&str> = v["items"]
+            .as_array()
+            .expect("items array")
+            .iter()
+            .map(|i| i["body"].as_str().expect("body"))
+            .collect();
+        assert_eq!(bodies, vec!["two", "one"], "GET newest-first: {json}");
+        let empty = compose_history_response("", "/tmp/k2-compose-hist-no-ws");
+        let ev: serde_json::Value = serde_json::from_str(&empty).expect("empty json");
+        assert_eq!(
+            ev["items"].as_array().expect("items").len(),
+            0,
+            "unknown path must return empty items"
+        );
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![pid])
+            .expect("cleanup");
     }
 
     // ── Composer 1a (D1) — per-session lock keying ───────────────────

@@ -4,6 +4,8 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { useTabsStore } from '@/stores/tabs'
+import { onChatHistoryChanged } from '@/stores/session-events'
+import { chatDisplayName } from '@/lib/chat-session-tab'
 import {
   selectableSessions,
   type HeartbeatDeliveryMode,
@@ -54,6 +56,11 @@ export function HeartbeatSessionPicker({
   const [open, setOpen] = useState(false)
   // null = not fetched yet (distinct from an empty workspace).
   const [sessions, setSessions] = useState<HeartbeatSessionCandidate[] | null>(null)
+  const [historyEpoch, setHistoryEpoch] = useState(0)
+
+  useEffect(() => onChatHistoryChanged(() => {
+    setHistoryEpoch((n) => n + 1)
+  }), [])
   // 0.40.48 host-aware fix: pinned-session ids now come from the ACTIVE
   // host's `chat/pinned` (global-scoped, same route ChatHistory uses) —
   // the old `workspace_session_get` invoke read THIS Mac's DB, so against
@@ -74,24 +81,36 @@ export function HeartbeatSessionPicker({
   const needTitle = value.mode === 'session' && !!value.sessionId
 
   useEffect(() => {
-    if (!open && !(needTitle && sessions === null)) return
+    if (!open && !(needTitle && (sessions === null || historyEpoch > 0))) return
     let cancelled = false
-    void daemonCliGet<Array<{
-      sessionId: string
-      title: string
-      timestamp: number
-      messageCount: number
-      provider?: string
-      archived?: boolean
-    }>>('chat/list', { project_path: projectPath })
-      .then((rows) => {
+    void Promise.all([
+      daemonCliGet<Array<{
+        sessionId: string
+        title: string
+        timestamp: number
+        messageCount: number
+        provider?: string
+        archived?: boolean
+        customName?: string | null
+      }>>('chat/list', { project_path: projectPath }),
+      daemonCliGet<Record<string, string>>('chat/custom-names').catch(() => ({}) as Record<string, string>),
+    ])
+      .then(([rows, names]) => {
         if (cancelled) return
         // Rows missing a provider (older daemons) degrade to "claude",
         // matching ChatHeader's normalization. Drop archived (restore first).
         setSessions(
           rows
             .filter((r) => !r.archived)
-            .map((r) => ({ ...r, provider: r.provider || 'claude', archived: r.archived })),
+            .map((r) => {
+              const provider = r.provider || 'claude'
+              return {
+                ...r,
+                provider,
+                archived: r.archived,
+                customName: r.customName || names[`${provider}:${r.sessionId}`] || null,
+              }
+            }),
         )
       })
       .catch((err) => {
@@ -102,7 +121,7 @@ export function HeartbeatSessionPicker({
     // open-toggles (refresh candidates like ChatHeader does), not on
     // its own fetch landing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, needTitle, projectPath])
+  }, [open, needTitle, projectPath, historyEpoch])
 
   // Pinned-chat session ids — rows that must never be offered as normal
   // options. Resolved when the popover opens; session rows hold until it
@@ -149,7 +168,7 @@ export function HeartbeatSessionPicker({
     if (value.mode === 'pinned') return 'Pinned chat'
     if (value.mode === 'session') {
       const found = sessions?.find((s) => s.sessionId === value.sessionId)
-      return found?.title || 'Saved session'
+      return (found ? chatDisplayName(found) : '') || 'Saved session'
     }
     return 'Own session'
   }, [value.mode, value.sessionId, sessions])
@@ -256,7 +275,7 @@ export function HeartbeatSessionPicker({
                 >
                   {/* Provider mark so mixed-agent lists scan. */}
                   <ProviderIcon provider={s.provider} size={12} />
-                  <span className="flex-1 truncate">{s.title || 'Untitled chat'}</span>
+                  <span className="flex-1 truncate">{chatDisplayName(s) || 'Untitled chat'}</span>
                   <span className="flex-shrink-0 text-[9px] text-[var(--color-text-muted)] opacity-70">
                     {s.messageCount}
                   </span>

@@ -128,13 +128,14 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
     let mut passport_env: Option<std::collections::HashMap<String, String>> = None;
     let mut passport_sid: Option<k2_core::session::SessionId> = None;
     if let Some(sid) = k2_core::session::SessionId::parse(&body.id) {
+        let workspace_uuid = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::workspace::agent_identity::resolve_project_id(&conn, &body.cwd)
+                .unwrap_or_default()
+        };
         let principal = crate::session_token::HookPrincipal {
-            workspace_uuid: {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                k2_core::workspace::agent_identity::resolve_project_id(&conn, &body.cwd)
-                    .unwrap_or_default()
-            },
+            workspace_uuid: workspace_uuid.clone(),
             agent_address: body.id.clone(),
         };
         let owner = k2_core::hook_config::get_token();
@@ -149,8 +150,21 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
             None,
             owner,
         );
+        // Renderer `create` often has no agent_name (shell vs harness).
+        // Classify from cwd + command; unknown/shell → omit identity.
+        crate::cell_identity::apply_spawn_identity(
+            &mut env,
+            workspace_uuid.trim(),
+            &body.id,
+            body.command.as_deref(),
+            body.args.as_deref().unwrap_or(&[]),
+            &body.id,
+            &body.id,
+        );
         if minted {
             passport_sid = Some(sid);
+        }
+        if minted || env.contains_key("K2_CELL") {
             passport_env = Some(env);
         }
     }

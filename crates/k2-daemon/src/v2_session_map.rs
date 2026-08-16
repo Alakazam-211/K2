@@ -220,14 +220,14 @@ fn register_inner(key: String, session: Arc<DaemonPtySession>) {
                     &session.args,
                 );
             let row = k2_core::db::schema::WorkspaceTabSession {
-                project_id,
-                pane_group_id,
-                agent_name: key,
+                project_id: project_id.clone(),
+                pane_group_id: pane_group_id.clone(),
+                agent_name: key.clone(),
                 // Set when spawn args carry session identity in the
                 // provider's grammar; None otherwise. The upsert uses
                 // COALESCE so a subsequent re-register without the flag
                 // won't clobber a previously-stamped value.
-                session_id: claimed_session_id,
+                session_id: claimed_session_id.clone(),
                 command: session.program.clone(),
                 args_json,
                 cwd: Some(cwd),
@@ -240,6 +240,17 @@ fn register_inner(key: String, session: Arc<DaemonPtySession>) {
                 pinned_set_by: None,
             };
             let _ = k2_core::db::schema::WorkspaceTabSession::upsert(&conn, &row);
+            // First persist of a sidecar harness session allocates a
+            // durable ordinal. Resume / re-register of the same key
+            // does not increment.
+            let _ = k2_core::workspace_session_handles::ensure_sidecar_handle(
+                &conn,
+                &project_id,
+                &key,
+                session.program.as_deref(),
+                claimed_session_id.as_deref(),
+                &pane_group_id,
+            );
         }
     }
 }

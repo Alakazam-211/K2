@@ -164,6 +164,8 @@ interface SettingsState {
 
   // Pre-select a specific project in the projects section
   initialProjectId: string | null
+  /** Workspace settings sub-tab (agent | context | schedule | …). One-shot. */
+  initialWorkspaceTab: string | null
 
   // Pre-select a specific project GROUP in the project-groups section
   // (the Projects-page gear / right-click deep-link — prd-projects-v1 §6.5)
@@ -183,7 +185,11 @@ interface SettingsState {
   pendingUpdateCheck: boolean
 
   // Actions
-  openSettings: (section?: SettingsSection, projectId?: string) => void
+  openSettings: (
+    section?: SettingsSection,
+    projectId?: string,
+    workspaceTab?: string,
+  ) => void
   closeSettings: () => void
   setSection: (section: SettingsSection) => void
   updateTerminalSettings: (partial: Partial<TerminalSettings>) => void
@@ -360,13 +366,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   style: { ...DEFAULT_STYLE },
   defaultAgent: 'claude',
   initialProjectId: null,
+  initialWorkspaceTab: null,
   initialProjectGroupId: null,
   lastActiveProjectId: null,
   lastActiveWorkspaceId: null,
   loaded: false,
   pendingUpdateCheck: false,
 
-  openSettings: (section?: SettingsSection, projectId?: string) => {
+  openSettings: (
+    section?: SettingsSection,
+    projectId?: string,
+    workspaceTab?: string,
+  ) => {
     // The optional preselect payload routes by section: the legacy
     // 'projects' (Workspaces / Agents) section consumes initialProjectId; the
     // 'project-groups' (Projects) section consumes initialProjectGroupId.
@@ -380,12 +391,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       activeSection: resolved,
       ...(generalSubTab ? { generalSubTab } : {}),
       initialProjectId: section === 'project-groups' ? null : (projectId ?? null),
-      initialProjectGroupId: section === 'project-groups' ? (projectId ?? null) : null
+      initialProjectGroupId: section === 'project-groups' ? (projectId ?? null) : null,
+      initialWorkspaceTab: workspaceTab ?? null,
     })
   },
 
   closeSettings: () => {
-    set({ settingsOpen: false })
+    set({ settingsOpen: false, initialWorkspaceTab: null })
   },
 
   setSection: (section: SettingsSection) => {

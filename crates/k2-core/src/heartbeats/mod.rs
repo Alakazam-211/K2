@@ -55,37 +55,9 @@ pub fn k2so_heartbeat_add(
     let project_id = resolve_project_id(&conn, &project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
 
-    // 0.37.0: heartbeats are workspace-level (.k2so/heartbeats/<sched>/),
-    // independent of which agent owns them.
-    //
-    // 0.38.10 hotfix: validate against `projects.agent_mode` (the
-    // workspace-level declaration), not `find_primary_agent` (which
-    // probes `.k2so/agent/AGENT.md` for a `name:` field). Pre-0.38.10
-    // the disk probe rejected workspaces that had been mode-flipped
-    // to custom/manager/k2so-agent BEFORE AGENT.md was written (or
-    // whose AGENT.md lacked a `name:` frontmatter) — the DB knew
-    // they were bots but the disk hadn't caught up yet. The
-    // workspace-mode column is the authoritative signal; if the user
-    // said "this is an agent workspace," we trust that.
-    let mode: Option<String> = conn
-        .query_row(
-            "SELECT agent_mode FROM projects WHERE id = ?1",
-            rusqlite::params![project_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .ok()
-        .flatten();
-    let mode_str = mode.unwrap_or_default();
-    // Stage A dual-read: stored `k2so`, CLI-canonical `k2`, and the
-    // historic skill-tag misspelling `k2so-agent` all mean builtin mode.
-    if !(matches!(mode_str.as_str(), "custom" | "manager" | "k2so-agent")
-        || crate::workspace::agent_identity::is_builtin_agent_type(&mode_str))
-    {
-        return Err(
-            "Workspace is not configured as an agent. Set mode to Custom, Workspace Manager, or K2SO Agent first (Settings → Workspaces or `k2so mode <type>`)."
-                .to_string(),
-        );
-    }
+    // Heartbeats are workspace-level (.k2/heartbeats/<sched>/). Workspace
+    // types (custom / manager / k2) are retired — any registered
+    // workspace can add a heartbeat.
 
     // Create heartbeat folder and scaffold wakeup.md at the
     // workspace-level path the runtime reads from.
@@ -984,6 +956,36 @@ mod tests {
 
     /// Seed a saved delivery session directly (bypassing the disk
     /// probe) so mode transitions can be asserted.
+    #[test]
+    fn heartbeat_add_does_not_require_workspace_type() {
+        crate::db::init_for_tests();
+        let dir = std::env::temp_dir().join(format!(
+            "k2-hb-add-no-mode-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, agent_mode) VALUES (?1, 'off-ws', ?2, 'off')",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), path],
+            )
+            .unwrap();
+        }
+        let out = k2so_heartbeat_add(
+            path.clone(),
+            "daily-check".into(),
+            "daily".into(),
+            "{}".into(),
+        )
+        .expect("add must succeed when workspace type is off / unset");
+        assert_eq!(out["name"], "daily-check");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn seed_saved_session(project_id: &str, session_id: &str, provider: &str) {
         let db = crate::db::shared();
         let conn = db.lock();
@@ -991,6 +993,56 @@ mod tests {
             &conn, project_id, "hb", Some(session_id), Some(provider),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn new_heartbeat_insert_is_pinned_and_preexisting_auto_stays_auto() {
+        crate::db::init_for_tests();
+        let path = format!(
+            "/fixture/hb-d22-insert-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        );
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let project_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, 'd22', ?2)",
+            rusqlite::params![project_id, path],
+        )
+        .expect("seed project");
+        conn.execute(
+            "INSERT INTO workspace_heartbeats \
+             (id, project_id, name, frequency, spec_json, wakeup_path, enabled, created_at, use_workspace_session) \
+             VALUES (?1, ?2, 'legacy-auto', 'daily', '{}', '.k2/heartbeats/legacy-auto/WAKEUP.md', 1, unixepoch(), 0)",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), project_id],
+        )
+        .expect("seed pre-existing auto");
+        AgentHeartbeat::insert(
+            &conn,
+            &uuid::Uuid::new_v4().to_string(),
+            &project_id,
+            "fresh-pinned",
+            "daily",
+            "{}",
+            ".k2/heartbeats/fresh-pinned/WAKEUP.md",
+            true,
+        )
+        .expect("new insert");
+        let legacy = AgentHeartbeat::get_by_name(&conn, &project_id, "legacy-auto")
+            .expect("q")
+            .expect("legacy row");
+        assert!(
+            !legacy.use_workspace_session,
+            "D22: must not UPDATE existing auto rows onto pinned"
+        );
+        let fresh = AgentHeartbeat::get_by_name(&conn, &project_id, "fresh-pinned")
+            .expect("q")
+            .expect("fresh row");
+        assert!(
+            fresh.use_workspace_session,
+            "D22: new INSERT has use_workspace_session == true"
+        );
     }
 
     #[test]

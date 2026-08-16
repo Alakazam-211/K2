@@ -97,6 +97,8 @@ export type ProjectPathEntry = {
   path: string
   /** First workspace id by tabOrder (layout key `${projectId}:${workspaceId}`). */
   primaryWorkspaceId: string | null
+  /** When true, do not auto-adopt API host-session / sandbox tabs. */
+  hideApiSessions?: boolean
 }
 let _projectsPathIndexRef: (() => ProjectPathEntry[]) | null = null
 export function registerProjectsPathIndex(getter: () => ProjectPathEntry[]): void {
@@ -397,6 +399,17 @@ function closeTerminalForRenderer(data: TerminalItemData): void {
   //       creation time (e.g. a normal chat tab that smart_launch
   //       happened to inject into). Same close-as-minimize semantics
   //       apply: PTY survives, the row click can re-surface later.
+  // API host-session / sandbox cockpit tabs (`api-…`) — minimize, don't
+  // kill. Same contract as heartbeats: PTY stays in v2_session_map so
+  // Chat history → API can re-surface the session.
+  if (isApiOriginTerminal(data)) {
+    console.info(
+      '[tabs] api-session tab close — leaving PTY alive (agent=%s, terminalId=%s)',
+      data.attachAgentName ?? '(none)',
+      data.terminalId,
+    )
+    return
+  }
   if (data.heartbeatName && data.projectPath && data.surfacedAgentName) {
     daemonCliPost('session/set-surfaced', {
       project_path: data.projectPath,
@@ -674,6 +687,8 @@ export interface TerminalItemData {
    *  orange). Runtime-only; intentionally NOT serialized — it is
    *  re-derived from the next spawn response on reattach. */
   sandboxBackend?: string
+  /** API-origin session (`api-…` host-session / sandbox). Close minimizes. */
+  fromApi?: boolean
 }
 
 export interface FileViewerItemData {
@@ -955,7 +970,7 @@ interface TabsState {
   activeTabId: string | null
 
   // Existing actions (signatures preserved)
-  addTab: (cwd: string, options?: { title?: string; command?: string; args?: string[] }) => string
+  addTab: (cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }) => string
   removeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
   splitPane: (
@@ -1080,7 +1095,7 @@ interface TabsState {
   splitTerminalArea: (cwd: string) => void    // add a column (max 3)
   unsplitTerminalArea: () => void              // remove rightmost column
   setActiveGroup: (index: number) => void
-  addTabToGroup: (groupIndex: number, cwd: string, options?: { title?: string; command?: string; args?: string[] }) => string
+  addTabToGroup: (groupIndex: number, cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }) => string
   removeTabFromGroup: (groupIndex: number, tabId: string) => void
   setActiveTabInGroup: (groupIndex: number, tabId: string) => void
   moveTabToGroup: (fromGroup: number, toGroup: number, tabId: string) => void
@@ -1778,7 +1793,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     set({ activeTabId: tabId, navIndex: newIndex })
   },
 
-  addTab: (cwd: string, options?: { title?: string; command?: string; args?: string[] }) => {
+  addTab: (cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }) => {
     // Route to the active group
     const activeGroup = get().activeGroupIndex
     if (activeGroup > 0) {
@@ -1799,7 +1814,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       id: tabId,
       title,
       mosaicTree: paneGroupId,
-      paneGroups: new Map([[paneGroupId, paneGroup]])
+      paneGroups: new Map([[paneGroupId, paneGroup]]),
+      ...(options?.locked ? { locked: true } : {}),
     }
 
     set((state) => ({
@@ -3382,7 +3398,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     set({ activeGroupIndex: index })
   },
 
-  addTabToGroup: (groupIndex: number, cwd: string, options?: { title?: string; command?: string; args?: string[] }): string => {
+  addTabToGroup: (groupIndex: number, cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }): string => {
     tabCounter++
     const tabId = crypto.randomUUID()
     const pgId = crypto.randomUUID()
@@ -3394,7 +3410,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       id: tabId,
       title,
       mosaicTree: pgId,
-      paneGroups: new Map([[pgId, pg]])
+      paneGroups: new Map([[pgId, pg]]),
+      ...(options?.locked ? { locked: true } : {}),
     }
 
     if (groupIndex === 0) {
@@ -4892,6 +4909,7 @@ function buildAdoptedTerminalTab(args: {
     if (args.attachAgentName) d.attachAgentName = args.attachAgentName
     if (args.sandbox) d.sandbox = true
     if (args.sandboxBackend) d.sandboxBackend = args.sandboxBackend
+    if (args.attachAgentName?.startsWith('api-')) d.fromApi = true
   }
   tabCounter++
   return {
@@ -5361,6 +5379,12 @@ function tabIsDropCandidateForApiSessionRemoval(tab: Tab, agentName: string): bo
  *  orange marker for microvm cells. The tab is appended WITHOUT switching
  *  the active tab — surfacing an externally-spawned cell must never yank
  *  the user off their current tab. */
+function isApiOriginTerminal(data: TerminalItemData): boolean {
+  if (data.fromApi) return true
+  const agent = data.attachAgentName
+  return typeof agent === 'string' && agent.startsWith('api-')
+}
+
 export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
   // Scope: only adopt API-labelled cells. Daemon stamps sandbox_backend for
   // real sandboxes (`microvm`) and host-sessions (`host`); bare PTYs omit it.
@@ -5368,6 +5392,12 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
   if (!backend) return false
   const agentName = event.agent_name
   if (!agentName) return false
+  // Workspace "hide sessions": do not auto-surface onto the strip.
+  // Explicit Chat-history clicks call openApiHostSessionTab (force).
+  if (!event.forceAdopt) {
+    const project = findProjectForSessionPath(event.workspace_path || '')
+    if (project?.hideApiSessions) return false
+  }
 
   const state = useTabsStore.getState()
   // De-dupe: the spawning/owning window (or a re-delivered event) already has
@@ -5409,6 +5439,94 @@ export function adoptApiSandboxSession(event: SessionAddedEvent): boolean {
   // sales host-session spawns).
   placeApiAdoptedTab(tab, event.workspace_path || '')
   return true
+}
+
+/** Explicit Chat-history open: adopt (even when hide-sessions is on) and focus. */
+export function openApiHostSessionTab(event: SessionAddedEvent): boolean {
+  const forced: SessionAddedEvent = { ...event, forceAdopt: true }
+  const state = useTabsStore.getState()
+  const already = isApiSandboxSessionSurfaced(state, event.agent_name, event.session_id)
+  if (!already) {
+    adoptApiSandboxSession(forced)
+  }
+  const next = useTabsStore.getState()
+  const find = (tabs: Tab[]): Tab | undefined =>
+    tabs.find((t) => tabMatchesApiSession(t, event.agent_name, event.session_id))
+  const hit =
+    find(next.tabs) ??
+    next.extraGroups.flatMap((g) => g.tabs).find((t) => tabMatchesApiSession(t, event.agent_name, event.session_id))
+  if (hit) {
+    useTabsStore.getState().setActiveTab(hit.id)
+    return true
+  }
+  return already
+}
+
+/** Hide-sessions ON: drop API cockpit tabs without killing PTYs. */
+export function minimizeApiSessionsForWorkspace(workspacePath: string): number {
+  const project = findProjectForSessionPath(workspacePath)
+  const state = useTabsStore.getState()
+  const isApiTab = (t: Tab): boolean => {
+    for (const pg of t.paneGroups.values()) {
+      for (const item of pg.items) {
+        if (item.type !== 'terminal') continue
+        if (isApiOriginTerminal(item.data as TerminalItemData)) return true
+      }
+    }
+    return false
+  }
+  const inWorkspace = (t: Tab): boolean => {
+    if (!project) return isApiTab(t)
+    for (const pg of t.paneGroups.values()) {
+      for (const item of pg.items) {
+        if (item.type !== 'terminal') continue
+        const d = item.data as TerminalItemData
+        if (!isApiOriginTerminal(d)) continue
+        const cwd = d.cwd || d.projectPath || ''
+        if (!cwd) return true
+        return findProjectForSessionPath(cwd)?.id === project.id
+      }
+    }
+    return false
+  }
+  const drop = (tabs: Tab[]): Tab[] => tabs.filter((t) => !inWorkspace(t))
+  const main = drop(state.tabs)
+  const extra = state.extraGroups.map((g) => ({
+    tabs: drop(g.tabs),
+    activeTabId: g.activeTabId,
+  }))
+  let bgDelta = 0
+  const nextBg: Record<string, WorkspaceTabSnapshot> = {}
+  for (const [key, snap] of Object.entries(state.backgroundWorkspaces)) {
+    const tabs = drop(snap.tabs)
+    const extraGroups = snap.extraGroups.map((g) => ({
+      tabs: drop(g.tabs),
+      activeTabId: g.activeTabId,
+    }))
+    bgDelta +=
+      snap.tabs.length -
+      tabs.length +
+      snap.extraGroups.reduce((n, g, i) => n + (g.tabs.length - extraGroups[i].tabs.length), 0)
+    nextBg[key] = { ...snap, tabs, extraGroups }
+  }
+  const mainDelta = state.tabs.length - main.length
+  const extraDelta = state.extraGroups.reduce((n, g, i) => n + (g.tabs.length - extra[i].tabs.length), 0)
+  if (mainDelta === 0 && extraDelta === 0 && bgDelta === 0) return 0
+  let newActiveId = state.activeTabId
+  if (newActiveId && !main.find((t) => t.id === newActiveId)) {
+    const still = extra.some((g) => g.tabs.find((t) => t.id === newActiveId))
+    if (!still) newActiveId = main[0]?.id ?? null
+  }
+  useTabsStore.setState({
+    tabs: main,
+    activeTabId: newActiveId,
+    extraGroups: extra.map((g) => ({
+      tabs: g.tabs,
+      activeTabId: g.tabs.find((t) => t.id === g.activeTabId) ? g.activeTabId : g.tabs[0]?.id ?? null,
+    })),
+    backgroundWorkspaces: nextBg,
+  })
+  return mainDelta + extraDelta + bgDelta
 }
 
 /** Close cockpit tabs that were surfacing an API-spawned session after the

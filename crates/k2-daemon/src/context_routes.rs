@@ -196,6 +196,7 @@ fn handle_add(body: &[u8]) -> CliResponse {
         parsed.label.as_deref(),
     ) {
         Ok(layer) => {
+            crate::charter_compose_watch::resync_watches();
             let stack = context_layers::list_stack(&project_path).ok();
             CliResponse::ok_json(
                 serde_json::json!({
@@ -230,7 +231,10 @@ fn handle_remove(body: &[u8]) -> CliResponse {
         Err(r) => return r,
     };
     match context_layers::remove_layer(&project_path, &parsed.id) {
-        Ok(()) => CliResponse::ok_json(r#"{"ok":true}"#.to_string()),
+        Ok(()) => {
+            crate::charter_compose_watch::resync_watches();
+            CliResponse::ok_json(r#"{"ok":true}"#.to_string())
+        }
         Err(e) => err_response(e),
     }
 }
@@ -255,13 +259,16 @@ fn handle_set_enabled(body: &[u8]) -> CliResponse {
         Err(r) => return r,
     };
     match context_layers::set_enabled(&project_path, &parsed.id, parsed.enabled) {
-        Ok(layer) => CliResponse::ok_json(
-            serde_json::json!({
-                "ok": true,
-                "layer": layer,
-            })
-            .to_string(),
-        ),
+        Ok(layer) => {
+            crate::charter_compose_watch::resync_watches();
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "layer": layer,
+                })
+                .to_string(),
+            )
+        }
         Err(e) => err_response(e),
     }
 }
@@ -294,13 +301,16 @@ fn handle_move(body: &[u8]) -> CliResponse {
         parsed.position,
         parsed.direction.as_deref(),
     ) {
-        Ok(layer) => CliResponse::ok_json(
-            serde_json::json!({
-                "ok": true,
-                "layer": layer,
-            })
-            .to_string(),
-        ),
+        Ok(layer) => {
+            crate::charter_compose_watch::resync_watches();
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "layer": layer,
+                })
+                .to_string(),
+            )
+        }
         Err(e) => err_response(e),
     }
 }

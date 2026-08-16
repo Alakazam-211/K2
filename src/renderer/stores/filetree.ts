@@ -4,8 +4,12 @@ const HIDDEN_FILES_STORAGE_KEY = 'k2so.showHiddenFiles'
 
 function loadShowHiddenFiles(): boolean {
   try {
-    return localStorage.getItem(HIDDEN_FILES_STORAGE_KEY) === 'true'
-  } catch { return false }
+    const v = localStorage.getItem(HIDDEN_FILES_STORAGE_KEY)
+    // Unset = first launch: show dotfiles (onboarding). Explicit
+    // 'false' stays hidden; only 'true' (or missing) shows them.
+    if (v === null) return true
+    return v === 'true'
+  } catch { return true }
 }
 
 function saveShowHiddenFiles(v: boolean): void {

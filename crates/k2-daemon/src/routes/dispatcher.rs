@@ -2514,6 +2514,47 @@ async fn handle_one_request(
             let r = crate::presence::handle_grant(actor_role, &body_bytes);
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // GET /cli/whoami — cell identity (canonical | sidecar). Dual-auth:
+        // owner/connect-user (TCP fallback via env/query) OR scoped hook.
+        // Distinct from /cli/auth/whoami (connect-user role).
+        "/cli/whoami" => {
+            let _ = stream.read(&mut buf).await;
+            let (auth_ok, scoped_principal) = token_or_scoped_hook_auth(
+                "/cli/whoami",
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            if !auth_ok {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            if let Some(v) = {
+                let presented = bearer_token
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| super::http::extract_token(&query));
+                presented.and_then(|t| crate::session_token::require_hook(t, "/cli/whoami"))
+            } {
+                params.insert("cell_session_id".to_string(), v.session_id);
+            }
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch("/cli/whoami", &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // GET /cli/auth/whoami — AUTHORIZED (owner OR connect-user). Lets
         // a client confirm its session + learn whether it's the owner.
         // We resolve identity here: owner token first, then a live
@@ -4044,6 +4085,15 @@ async fn handle_one_request(
                 params.insert(k, v);
             }
             // Preserve recipient `workspace=` (routing); stamp identity.
+            if let Some(v) = {
+                let presented = bearer_token
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| super::http::extract_token(&query));
+                presented.and_then(|t| crate::session_token::require_hook(t, p))
+            } {
+                params.insert("cell_session_id".to_string(), v.session_id);
+            }
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
             }
@@ -4288,6 +4338,13 @@ async fn handle_one_request(
                     &from,
                     &text,
                 );
+                if resp.success {
+                    crate::workspace_msg::persist_compose_send_after_success(
+                        &session_id,
+                        &from,
+                        &text,
+                    );
+                }
                 serde_json::to_string(&resp)
                     .unwrap_or_else(|_| "{\"success\":false}".to_string())
             })
@@ -4300,6 +4357,49 @@ async fn handle_one_request(
                 })
                 .to_string()
             });
+            super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
+        }
+        // Composer send history — GET last 50 sent lines for a workspace.
+        // Same authorize_send_message gate as send-message (owner always;
+        // connect-user only when the target workspace is opted in).
+        // Scoped API tokens stay off (not an agent verb).
+        p if !is_post && p == "/cli/terminal/compose-history" => {
+            let _ = stream.read(&mut buf).await;
+            let params = super::http::parse_params(&path, &query);
+            let workspace_path = params.get("workspace_path").cloned().unwrap_or_default();
+            let project_id = params.get("project_id").cloned().unwrap_or_default();
+            let opt_in_path = if !project_id.is_empty() {
+                k2_core::workspace_compose_history::project_path_for_id(&project_id)
+                    .unwrap_or_default()
+            } else {
+                k2_core::workspace_compose_history::resolve_project_id_for_path(&workspace_path)
+                    .and_then(|id| k2_core::workspace_compose_history::project_path_for_id(&id))
+                    .unwrap_or_default()
+            };
+            let remote_opt_in = if opt_in_path.is_empty() {
+                k2_core::app_settings::load().allow_remote_instruct
+            } else {
+                k2_core::workspace::settings::remote_instruct_allowed_for_path(&opt_in_path)
+            };
+            match super::http::authorize_send_message(
+                &query,
+                state.token.as_str(),
+                remote_opt_in,
+            ) {
+                super::http::SendMessageAuth::Denied => {
+                    super::http::send_response(
+                        &mut *stream,
+                        "403 Forbidden",
+                        "application/json",
+                        r#"{"error":"invalid or missing token"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+                super::http::SendMessageAuth::Owner
+                | super::http::SendMessageAuth::ConnectUser { .. } => {}
+            }
+            let body = crate::workspace_msg::compose_history_response(&project_id, &workspace_path);
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
         }
         // ── P3a (sandbox / K2-as-a-server) — API-key auth-tier MANAGEMENT.

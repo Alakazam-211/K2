@@ -1420,6 +1420,10 @@ except Exception as e:
     echo "Created heartbeat: $name"
     [ -n "$wakeup_abs" ] && echo "Wakeup file: $wakeup_abs"
     echo
+    echo "NOTE: this schedule lands in the workspace PINNED chat." >&2
+    echo "      A sidecar + \`k2 heartbeat session $name --set <session-id> --provider <p>\`" >&2
+    echo "      is often better for a trained flow." >&2
+    echo
     if [ -n "$instructions" ] && [ -n "$wakeup_abs" ]; then
         printf '%s\n' "$instructions" > "$wakeup_abs"
         echo "Wake instructions written ($(printf '%s' "$instructions" | wc -c | tr -d ' ') bytes)."
@@ -5495,6 +5499,59 @@ cmd_done() {
     cli_request "/cli/done" "$params"
 }
 
+cmd_whoami() {
+    local json="false"
+    for arg in "$@"; do
+        case "$arg" in
+            --help|-h) cmd_help_whoami; return 0 ;;
+            --json) json="true" ;;
+            -*)
+                echo "Error: unknown flag '$arg' (try 'k2 whoami --help')" >&2
+                exit 1 ;;
+        esac
+    done
+    local q=""
+    [ -n "${K2_SESSION_ID:-}" ] && q="${q}session=$(urlencode "$K2_SESSION_ID")&"
+    [ -n "${K2_CELL:-}" ] && q="${q}cell=$(urlencode "$K2_CELL")&"
+    [ -n "${K2_SIDECAR_NAME:-}" ] && q="${q}sidecar_name=$(urlencode "$K2_SIDECAR_NAME")&"
+    [ -n "${K2_PRIMARY:-}" ] && q="${q}primary=$(urlencode "$K2_PRIMARY")&"
+    local resp
+    resp=$(cli_send cli_request "/cli/whoami" "${q%&}")
+    if [ "$json" = "true" ]; then
+        printf '%s\n' "$resp"
+        if printf '%s' "$resp" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); sys.exit(0 if isinstance(d,dict) and 'role' in d else 1)" 2>/dev/null; then
+            return 0
+        fi
+        return 1
+    fi
+    printf '%s' "$resp" | python3 -c "
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.stderr.write('Error: daemon returned an unparseable whoami response\n')
+    sys.exit(1)
+if isinstance(d, dict) and 'error' in d:
+    err = d.get('error')
+    hint = d.get('hint') or ''
+    if isinstance(err, dict):
+        sys.stderr.write('Error: %s\n' % (err.get('hint') or err.get('code') or err))
+    else:
+        sys.stderr.write('Error: %s\n' % err)
+        if hint:
+            sys.stderr.write('%s\n' % hint)
+    sys.exit(1)
+def field(label, key):
+    return '%-10s %s' % (label + ':', d.get(key, ''))
+print(field('workspace', 'workspace'))
+print(field('role', 'role'))
+print(field('address', 'address'))
+print(field('primary', 'primary'))
+print(field('session', 'session'))
+"
+}
+
 cmd_msg() {
     # `k2 msg <workspace> "text" [--from <name>]`
     #
@@ -5600,6 +5657,13 @@ cmd_msg() {
     # The daemon also substitutes "external" defensively if it gets an
     # empty string, so the recipient PTY always sees a [from ...] prefix.
     local from="$explicit_from"
+    if [[ -z "$from" ]]; then
+        # Sidecar cells stamp sales/reviewer (D15). Daemon rewrite is
+        # SSOT on scoped UDS; this covers TCP / env-only fallbacks.
+        if [[ "${K2_CELL:-}" == "sidecar" && -n "${K2_PRIMARY:-}" && -n "${K2_SIDECAR_NAME:-}" ]]; then
+            from="${K2_PRIMARY}/${K2_SIDECAR_NAME}"
+        fi
+    fi
     if [[ -z "$from" ]]; then
         # Prefer the agent display name (persona / projects.name) so the
         # recipient sees [from ProposalWriter], never a passport UUID.
@@ -6197,13 +6261,15 @@ if not sessions:
     print('No live sessions in this workspace.' + note)
     sys.exit(0)
 print(f'{len(sessions)} live session(s):' + note)
-print(f'  {\"TERMINAL_ID\":<38}  {\"AGENT\":<30}  {\"CMD\":<14}  CWD')
+print(f'  {\"TERMINAL_ID\":<38}  {\"KIND\":<10}  {\"HANDLE\":<22}  {\"AGENT\":<24}  {\"CMD\":<14}  CWD')
 for s in sessions:
     sid = s.get('sessionId') or s.get('terminalId') or '?'
-    name = s.get('agentName', '?')[:30]
+    kind = (s.get('kind') or '')[:10]
+    handle = (s.get('handle') or '')[:22]
+    name = s.get('agentName', '?')[:24]
     cmd = (s.get('command') or 'shell')[:14]
     cwd = s.get('cwd', '')
-    print(f'  {sid:<38}  {name:<30}  {cmd:<14}  {cwd}')
+    print(f'  {sid:<38}  {kind:<10}  {handle:<22}  {name:<24}  {cmd:<14}  {cwd}')
 "
             ;;
     esac
@@ -9637,6 +9703,7 @@ cmd_help() {
         -a|--advanced|advanced)   cmd_help_v2_advanced ;;
         --internal|internal)      cmd_help_internal ;;
         msg)                      cmd_help_msg ;;
+        whoami)                   cmd_help_whoami ;;
         talk)                     cmd_help_talk ;;
         read)                     cmd_help_read ;;
         inbox)                    cmd_help_inbox ;;
@@ -9661,12 +9728,31 @@ cmd_help() {
     esac
 }
 
+cmd_help_whoami() {
+    cat <<'EOF'
+k2 whoami [--json]
+
+Print this cell's identity. Run this before assuming you are the
+workspace agent. If role is sidecar, you are not <workspace>; your
+address is the printed address; the primary is `k2 msg <primary>`.
+
+  workspace: sales
+  role:      sidecar | canonical
+  address:   sales/reviewer   (or sales/1 or just sales)
+  primary:   sales
+  session:   <provider conversation id, else daemon PTY id>
+
+Exit 0. Fails loud if identity cannot be determined (run inside a
+workspace session). --json prints the daemon object.
+EOF
+}
+
 cmd_help_msg() {
     cat <<'EOF'
-k2 msg <workspace|agent::host> "text" [--from <name>] [--command "<text>"] [--no-wake]
+k2 msg <workspace|workspace/handle|sessionId|agent::host> "text" [--from <name>] [--command "<text>"] [--no-wake]
 
 Deliver a message to a workspace's agent, live. By DEFAULT msg AUTO-WAKES
-a dormant canonical session: if the agent's session is asleep, msg
+a dormant session: if the agent's session is asleep, msg
 resumes/spawns it, waits until READY, then delivers (the legacy
 wake-on-message behavior). Pass `--no-wake` for a blind live-only send
 (returns `dormant_no_wake` instead of waking). A workspace with no
@@ -9675,7 +9761,13 @@ success only when the message has landed in the agent's session.
 
 ARGUMENTS
   <workspace>    Local workspace name (preferred — see `k2 connections
-                 list`), absolute path, or project UUID.
+                 list`), absolute path, or project UUID. Bare name =
+                 the primary (canonical) chat.
+  <workspace>/<handle>
+                 Sidecar: `sales/1` (durable ordinal) or `sales/reviewer`
+                 (Chats custom name). Slash, not hyphen: `sales-reviewer`
+                 is a workspace name, not a sidecar.
+  <sessionId>    UUID of a live or durable session (machine/API form).
   <agent>::<host>
                  Federated peer (GH #47). Example: ProposalWriter::box.k2.dev
                  Legacy agent@host still works temporarily (not email).
@@ -13850,9 +13942,11 @@ LOCAL CATALOG (also hire --context)
 
 WORKSPACE
   Resolved from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD (same as other
-  agent verbs). Passed to the daemon as `project`.
+  agent verbs). Override with --workspace / --project (path, name, or uuid)
+  so an orchestrator can recompose a peer without cwd-switching.
 
 FLAGS
+  --workspace|--project <ws>  Target workspace (path, name, or uuid)
   --label <name>          With add: optional display label
   --outline               With show: section headings only
   --json                  Machine-readable output (catalog: full metadata)
@@ -13877,6 +13971,8 @@ EXAMPLES
   k2 agent context move 0 top
   k2 agent context show --outline
   k2 agent context regen
+  k2 agent context regen --workspace julie
+  k2 agent context list --workspace /path/to/peer
 EOF
 }
 
@@ -14231,6 +14327,28 @@ PYEOF
 
 cmd_agent_context() {
     if _wants_help "$@" || [ $# -eq 0 ]; then
+        cmd_help_agent_context
+        exit 0
+    fi
+    # Global --workspace/--project so every subcommand can target a peer
+    # (Scout: k2 agent context has no workspace flag).
+    local ctx_args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace|--project)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "$1 requires a workspace path, name, or uuid"; exit 2; }
+                _wiki_apply_project "$2" || { _agent_err "not_found" "unknown workspace '$2'"; exit 4; }
+                export K2_PROJECT_PATH="$PROJECT"
+                shift 2 ;;
+            --workspace=*|--project=*)
+                _wiki_apply_project "${1#*=}" || { _agent_err "not_found" "unknown workspace '${1#*=}'"; exit 4; }
+                export K2_PROJECT_PATH="$PROJECT"
+                shift ;;
+            *) ctx_args+=("$1"); shift ;;
+        esac
+    done
+    set -- "${ctx_args[@]}"
+    if [ $# -eq 0 ]; then
         cmd_help_agent_context
         exit 0
     fi
@@ -14689,6 +14807,8 @@ SCHEDULE (CRUD on heartbeat definitions)
          --hourly --start 09:00 --end 17:00 --every 30 --unit minutes
        --instructions "text" | --instructions-file <path>
          write the WAKEUP.md (the job that runs on fire) at create time
+       New schedules land in the PINNED chat. For a trained flow prefer
+       a sidecar: k2 heartbeat session <n> --set <session-id> --provider <p>
   heartbeat schedule list [--archived] [--json]  (--json: raw array)
   heartbeat schedule remove <n> [--purge]
   heartbeat schedule unarchive <n>
@@ -15010,7 +15130,9 @@ other workspaces. A Project is different: a NAMED GROUP of workspaces
 with one shared chat + one PoC agent (see PROJECTS below).
 
 TALK TO OTHERS
+  whoami [--json]                       This cell: workspace / role / address / session
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
+  msg <workspace>/<handle> "text"       Sidecar (`sales/1`, `sales/reviewer`; slash not hyphen)
   msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)
   msg <workspace> --inbox-wake <path> [path…]   Package + short live notify (tray; multi-file → one package)
   msg <workspace> --inbox-silent <path> [path…] Package only (no notify; multi-file → one package)
@@ -22753,6 +22875,9 @@ EOF
         else
             shift; cmd_done "$@"
         fi
+        ;;
+    whoami)
+        shift; cmd_whoami "$@"
         ;;
     msg)
         # Phase 2.1: msg now has --inbox and --signal flag forms.

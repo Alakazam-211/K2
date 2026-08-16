@@ -64,6 +64,27 @@ export function shouldSendOnKey(e: {
 }
 
 /**
+ * Esc / Ctrl+C from the compose box cancel the agent's current turn
+ * by injecting the same PTY bytes the terminal would send. Compose
+ * stays focused — no focus flip. Cmd+C is copy (not interrupt).
+ * Mid-IME composition must not fire.
+ */
+export function composeInterruptSequence(e: {
+  key: string
+  ctrlKey: boolean
+  metaKey: boolean
+  altKey: boolean
+  isComposing: boolean
+}): string | null {
+  if (e.isComposing) return null
+  if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey) return '\x1b'
+  if ((e.key === 'c' || e.key === 'C') && e.ctrlKey && !e.metaKey && !e.altKey) {
+    return '\x03'
+  }
+  return null
+}
+
+/**
  * Composer 1c (D4) + #67 per-workspace — renderer-hide predicate. Mirrors
  * the DAEMON's capability gate (`authorize_send_message` +
  * `remote_instruct_opt_in_for_session`): the composer is permitted iff
@@ -111,4 +132,60 @@ export function shouldShowTerminalComposeBar(phase: {
 }): boolean {
   if (phase.kind !== 'ready' && phase.kind !== 'connecting') return false
   return typeof phase.sessionId === 'string' && phase.sessionId.length > 0
+}
+
+/** Wire shape of `GET /cli/terminal/compose-history`. */
+export interface ComposeHistoryItem {
+  id: string
+  body: string
+  author: string
+  created_at: number
+}
+
+/**
+ * Compose-bar send-history key. ArrowUp recalls only when the caret is
+ * collapsed at offset 0. Mid-draft Up returns null so the caret can
+ * move. ArrowDown always reports `newer`; the caller no-ops at draft
+ * index `-1` (does not preventDefault).
+ */
+export function composeHistoryKeyAction(input: {
+  key: string
+  selectionStart: number | null
+  selectionEnd: number | null
+}): 'older' | 'newer' | null {
+  if (input.key === 'ArrowUp') {
+    if (input.selectionStart === 0 && input.selectionEnd === 0) return 'older'
+    return null
+  }
+  if (input.key === 'ArrowDown') return 'newer'
+  return null
+}
+
+/**
+ * Walk compose send history. `index` `-1` is the pre-Up draft;
+ * `0` is newest. `items` is newest-first. `draft` is the stashed
+ * pre-Up text (or empty) restored when walking back to `-1`.
+ */
+export function applyComposeHistoryNav(input: {
+  action: 'older' | 'newer'
+  index: number
+  draft: string
+  items: readonly string[]
+}): { index: number; text: string; preventDefault: boolean } {
+  const { action, index, draft, items } = input
+  if (items.length === 0) {
+    return { index: -1, text: draft, preventDefault: false }
+  }
+  if (action === 'older') {
+    const next = index < 0 ? 0 : Math.min(index + 1, items.length - 1)
+    return { index: next, text: items[next] ?? draft, preventDefault: true }
+  }
+  if (index < 0) {
+    return { index: -1, text: draft, preventDefault: false }
+  }
+  if (index === 0) {
+    return { index: -1, text: draft, preventDefault: true }
+  }
+  const next = index - 1
+  return { index: next, text: items[next] ?? draft, preventDefault: true }
 }

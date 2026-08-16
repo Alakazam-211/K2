@@ -137,9 +137,8 @@ export interface AppSettingsResponse {
   useLlmHitlDetection?: boolean
   // F4 — play a soft chime when an agent finishes while its pane isn't
   // being watched (the unseen-done fire; see completion-sound.ts).
-  // Persisted via the daemon's settings.json deep-merge (no Rust struct
-  // field needed). Optional: older snapshots omit it → readers treat
-  // absent as true (default ON).
+  // Backed by typed `AppSettings.completion_sound_enabled`. Optional:
+  // older snapshots omit it → readers treat absent as true (default ON).
   completionSoundEnabled?: boolean
   // Style System P3 — the persisted Style selection. Backed by the typed
   // Rust `StyleSettings` struct in k2-core/app_settings.rs (a typed field

@@ -117,6 +117,12 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // env K2_SANDBOX_WORKSPACE_CELL_CAP or 15). See
         // `get_host_session_cell_cap`.
         "host_session_cell_cap",
+        // Hide auto-surfaced API host-session / sandbox tabs (default 0).
+        // Sessions remain listed in Chat history → API.
+        "hide_api_sessions",
+        // Per-workspace completion chime (default 1 / ON). AND-gated
+        // with the global Settings → General toggle in the renderer.
+        "completion_sound_enabled",
     ]
 }
 
@@ -210,6 +216,16 @@ pub fn update_project_setting(
     if field == "wiki_public_chat" && value != "0" && value != "1" {
         return Err(format!(
             "wiki_public_chat must be '0' or '1', got {value:?}"
+        ));
+    }
+    if field == "hide_api_sessions" && value != "0" && value != "1" {
+        return Err(format!(
+            "hide_api_sessions must be '0' or '1', got {value:?}"
+        ));
+    }
+    if field == "completion_sound_enabled" && value != "0" && value != "1" {
+        return Err(format!(
+            "completion_sound_enabled must be '0' or '1', got {value:?}"
         ));
     }
     // Validate value for the new enum-like setting so a typo doesn't
@@ -339,7 +355,7 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 pinned, name, use_session_stream, allow_remote_instruct, \
                 dns_manage_enabled, agents_can_create_connections, \
                 api_guest_policy, wiki_public_chat, api_skip_permissions, \
-                host_session_cell_cap \
+                host_session_cell_cap, hide_api_sessions, completion_sound_enabled \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -375,6 +391,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 }
                 _ => serde_json::Value::Null,
             };
+            let hide_api = row.get::<_, i64>(14).unwrap_or(0) == 1;
+            let completion_sound = row.get::<_, i64>(15).unwrap_or(1) != 0;
             Ok(serde_json::json!({
                 "mode": row.get::<_, String>(0).unwrap_or_else(|_| "off".to_string()),
                 "worktreeMode": row.get::<_, i64>(1).unwrap_or(0) == 1,
@@ -398,6 +416,10 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "apiSkipPermissions": api_skip,
                 // Concurrent host-session cells for this workspace (null = inherit).
                 "hostSessionCellCap": host_cap_json,
+                // Hide auto-surfaced API session tabs (default off).
+                "hideApiSessions": hide_api,
+                // Per-workspace completion chime (default ON).
+                "completionSoundEnabled": completion_sound,
             }))
         },
     )
@@ -763,6 +785,36 @@ pub fn get_host_session_cell_cap(project_path: &str) -> usize {
         .unwrap_or_else(daemon_default_host_session_cell_cap)
 }
 
+/// Per-workspace "hide API sessions" — when true, the renderer must not
+/// auto-adopt `/v1` host-session / sandbox tabs. Fail-closed: unknown
+/// path → false (show sessions).
+pub fn get_hide_api_sessions(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT hide_api_sessions FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .ok()
+    .is_some_and(|v| v == 1)
+}
+
+/// Per-workspace completion chime. Default ON. Unknown path → true
+/// (same as a missing column / pre-migration row).
+pub fn get_completion_sound_enabled(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT completion_sound_enabled FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .ok()
+    .map(|v| v != 0)
+    .unwrap_or(true)
+}
+
 /// The EFFECTIVE address cap for `project_path` (D6): number of
 /// addresses an agent may mint, `0` = unlimited.
 ///
@@ -1070,6 +1122,60 @@ mod tests {
     }
 
     // ── DNS K1 per-workspace DNS-manage opt-in ─────────────────────
+
+    #[test]
+    fn hide_api_sessions_defaults_off_and_round_trips() {
+        let path = unique_path("hide-api-sessions");
+        let _pid = insert_project(&path);
+
+        let settings = get_project_settings(&path).expect("read default");
+        assert_eq!(settings["hideApiSessions"], false);
+        assert!(!get_hide_api_sessions(&path));
+
+        update_project_setting(&path, "hide_api_sessions", "1").expect("opt in");
+        assert!(get_hide_api_sessions(&path));
+        let settings = get_project_settings(&path).expect("read on");
+        assert_eq!(settings["hideApiSessions"], true);
+
+        update_project_setting(&path, "hide_api_sessions", "0").expect("opt out");
+        assert!(!get_hide_api_sessions(&path));
+        let settings = get_project_settings(&path).expect("read off");
+        assert_eq!(settings["hideApiSessions"], false);
+
+        let err = update_project_setting(&path, "hide_api_sessions", "true")
+            .expect_err("non 0/1 must fail loudly");
+        assert!(
+            err.contains("hide_api_sessions"),
+            "error must name the field, got {err}"
+        );
+    }
+
+    #[test]
+    fn completion_sound_enabled_defaults_on_and_round_trips() {
+        let path = unique_path("completion-sound");
+        let _pid = insert_project(&path);
+
+        let settings = get_project_settings(&path).expect("read default");
+        assert_eq!(settings["completionSoundEnabled"], true);
+        assert!(get_completion_sound_enabled(&path));
+
+        update_project_setting(&path, "completion_sound_enabled", "0").expect("mute");
+        assert!(!get_completion_sound_enabled(&path));
+        let settings = get_project_settings(&path).expect("read off");
+        assert_eq!(settings["completionSoundEnabled"], false);
+
+        update_project_setting(&path, "completion_sound_enabled", "1").expect("unmute");
+        assert!(get_completion_sound_enabled(&path));
+        let settings = get_project_settings(&path).expect("read on");
+        assert_eq!(settings["completionSoundEnabled"], true);
+
+        let err = update_project_setting(&path, "completion_sound_enabled", "true")
+            .expect_err("non 0/1 must fail loudly");
+        assert!(
+            err.contains("completion_sound_enabled"),
+            "error must name the field, got {err}"
+        );
+    }
 
     /// A fresh workspace row defaults to DNS-manage OFF (fail-closed),
     /// surfaces as `dnsManageEnabled: false` in the settings JSON, and

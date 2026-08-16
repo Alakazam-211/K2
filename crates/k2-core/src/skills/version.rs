@@ -95,7 +95,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 1;
 /// `wait` loop, send governance.
 /// Bumped to 13 in 0.40.64: k2-cli skill gains a lean "Always-on context"
 /// section (`k2 agent context …`, hire `--context`).
-pub const SKILL_VERSION_WORKSPACE: u32 = 13;
+/// Bumped to 14: Who am I (`k2 whoami`) + heartbeat sidecar hint (D6/D22).
+pub const SKILL_VERSION_WORKSPACE: u32 = 14;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

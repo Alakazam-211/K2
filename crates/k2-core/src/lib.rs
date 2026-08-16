@@ -107,6 +107,9 @@ pub mod heartbeats;
 // Post-Phase-2.1 "workspace == agent" 1:1 means these are
 // workspace-scoped concerns; was scattered under `agents/`.
 pub mod workspace;
+pub mod workspace_compose_history;
+/// Durable sidecar handles (`sales/1`, `sales/reviewer`).
+pub mod workspace_session_handles;
 pub mod hook_config;
 pub mod inbox;
 /// Per-workspace knowledge base (brain map) under `.k2/wiki/`.

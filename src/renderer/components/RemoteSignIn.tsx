@@ -28,6 +28,7 @@ import {
 } from '@/stores/connect-host'
 import { IconLock } from '@/components/icons/IconLock'
 import { isWebClient } from '@/lib/is-web'
+import GateChrome from './TopBar/GateChrome'
 
 export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element {
   const selectHost = useConnectHostStore((s) => s.selectHost)
@@ -154,7 +155,9 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     'w-full px-2.5 py-1.5 text-[13px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]'
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-primary)]">
+    <div className="fixed inset-0 z-[10000] flex flex-col bg-[var(--color-bg)] text-[var(--color-text-primary)]">
+      <GateChrome />
+      <div className="flex-1 min-h-0 flex items-center justify-center">
       <form
         onSubmit={(e) => {
           e.preventDefault()
@@ -251,6 +254,7 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
           </button>
         </div>
       </form>
+      </div>
     </div>
   )
 }

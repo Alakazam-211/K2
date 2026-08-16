@@ -1,10 +1,12 @@
 // Projects V1 P4 (prd-projects-v1 §6.0) — which top-level PAGE the app
-// shows. The top bar's 3-tab switcher (Agents | Projects | Feedback)
+// shows. The top bar's switcher (⚙ | Agents | Projects | Tickets)
 // selects one of three page views: 'agents' is today's default workspace
 // view (Sidebar + tabs + terminal); 'projects' and 'feedback' render as
-// full-page overlays gated on this store. Wiki is a fourth page opened
-// only from the workspace drawer (no permanent PageTabs entry); Esc or
-// selecting a switcher tab returns to agents / that page.
+// full-page overlays gated on this store. Settings is a store overlay
+// (settingsOpen), not an AppPage — the cog is a fourth tab that opens
+// it. Wiki is opened only from the workspace drawer (no permanent
+// PageTabs entry); Esc or selecting a switcher tab returns to agents /
+// that page.
 //
 // This is the SSOT for "which page" — `useFeedbackStore.isOpen` mirrors
 // it (feedback.ts subscribes) so every pre-switcher consumer of that

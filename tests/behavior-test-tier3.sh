@@ -989,7 +989,7 @@ for route in "/cli/heartbeat/add" "/cli/heartbeat/list" "/cli/heartbeat/remove" 
     fi
 done
 
-for cli_fn in cmd_heartbeat_add cmd_heartbeat_list cmd_heartbeat_remove cmd_heartbeat_enable_disable cmd_heartbeat_status; do
+for cli_fn in cmd_heartbeat_add cmd_heartbeat_list cmd_heartbeat_remove cmd_heartbeat_enable_disable cmd_heartbeat_status cmd_whoami; do
     if grep -q "^$cli_fn()" "$K2SO_CLI"; then
         pass "multi-heartbeat: CLI $cli_fn present"
     else

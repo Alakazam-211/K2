@@ -15,7 +15,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
-import { useWindowModeStore } from '@/stores/window-mode'
+import { useWindowModeStore, noteViewerInteractionBlocked } from '@/stores/window-mode'
 import { showContextMenu } from '@/lib/context-menu'
 import { KeyCombo } from '@/components/KeySymbol'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
@@ -360,12 +360,13 @@ function ResourceRow({
       suppressClickRef.current = false
       return
     }
-    if (readOnly) return
+    if (noteViewerInteractionBlocked()) return
     dropHtmlDocOnDashboard(doc)
   }
 
   const handleMouseDown = (e: React.MouseEvent): void => {
-    if (readOnly || e.button !== 0) return
+    if (e.button !== 0) return
+    if (noteViewerInteractionBlocked()) return
     const startX = e.clientX
     const startY = e.clientY
     let started = false
@@ -1099,12 +1100,13 @@ function RailResource({
       suppressClickRef.current = false
       return
     }
-    if (readOnly) return
+    if (noteViewerInteractionBlocked()) return
     dropHtmlDocOnDashboard(doc)
   }
 
   const handleMouseDown = (e: React.MouseEvent): void => {
-    if (readOnly || e.button !== 0) return
+    if (e.button !== 0) return
+    if (noteViewerInteractionBlocked()) return
     const startX = e.clientX
     const startY = e.clientY
     let started = false

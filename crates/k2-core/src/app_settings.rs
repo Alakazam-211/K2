@@ -174,9 +174,9 @@ pub struct AppSettings {
     pub active_focus_group_id: Option<String>,
     #[serde(default)]
     pub sidebar_collapsed: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub left_panel_open: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub right_panel_open: bool,
     #[serde(default = "default_left_panel_tab")]
     pub left_panel_active_tab: String,
@@ -348,6 +348,18 @@ pub struct AppSettings {
     /// persist.
     #[serde(default)]
     pub use_llm_hitl_detection: bool,
+    /// F4 — play a soft chime when an agent finishes while its pane
+    /// isn't being watched. **Defaults ON**. A typed `bool` is required:
+    /// `AppSettings` round-trips through `serde_json::from_value` on
+    /// every `load`/`update`, which silently drops keys with no matching
+    /// field — an untyped key would never persist (the pre-typed
+    /// deep-merge left this flag stuck at the renderer default).
+    ///
+    /// Wire name `completionSoundEnabled` (serde camelCase). Per-workspace
+    /// mute lives on `projects.completion_sound_enabled` (migration 0101);
+    /// the renderer AND-gates both.
+    #[serde(default = "default_true")]
+    pub completion_sound_enabled: bool,
     /// Companion C4 (prd-companion-v2 §4) — the mobile-push relay
     /// gateway base URL (e.g. `https://push.k2.dev`). Env override:
     /// `K2_PUSH_GATEWAY_URL`. **`None`/blank = push is DORMANT**: the
@@ -636,8 +648,8 @@ impl Default for AppSettings {
             focus_groups_enabled: false,
             active_focus_group_id: None,
             sidebar_collapsed: false,
-            left_panel_open: false,
-            right_panel_open: false,
+            left_panel_open: true,
+            right_panel_open: true,
             left_panel_active_tab: default_left_panel_tab(),
             right_panel_active_tab: default_right_panel_tab(),
             left_panel_tabs: default_left_panel_tabs(),
@@ -661,6 +673,7 @@ impl Default for AppSettings {
             remote_sessions_enabled: false,
             web_client_enabled: true,
             use_llm_hitl_detection: false,
+            completion_sound_enabled: true,
             push_gateway_url: None,
             push_gateway_token: None,
             mail_agent_send: default_mail_agent_send(),
@@ -1119,6 +1132,39 @@ mod tests {
         let after = reset().expect("reset");
         assert!(after.web_client_enabled);
         assert!(load().web_client_enabled);
+    }
+
+    /// F4 — the global completion-sound toggle must default ON, persist
+    /// an explicit OFF through save→load (the pre-typed deep-merge
+    /// dropped the key), and ingest the camelCase `completionSoundEnabled`
+    /// key via `update()`.
+    #[test]
+    fn completion_sound_enabled_defaults_on_and_persists_off() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        assert!(load().completion_sound_enabled);
+        assert!(AppSettings::default().completion_sound_enabled);
+
+        let mut s = AppSettings::default();
+        s.completion_sound_enabled = false;
+        save(&s).expect("save");
+        assert!(!load().completion_sound_enabled);
+
+        let merged = update(serde_json::json!({
+            "completionSoundEnabled": true
+        }))
+        .expect("update");
+        assert!(merged.completion_sound_enabled);
+        assert!(load().completion_sound_enabled);
+
+        let off = update(serde_json::json!({ "completionSoundEnabled": false })).expect("off");
+        assert!(!off.completion_sound_enabled);
+        assert!(!load().completion_sound_enabled);
+
+        let after = reset().expect("reset");
+        assert!(after.completion_sound_enabled);
+        assert!(load().completion_sound_enabled);
     }
 
     /// DNS K1 — the dns-manage opt-in must default OFF on a fresh settings

@@ -16,6 +16,8 @@ import { showContextMenu } from '@/lib/context-menu'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { Surface } from '@/components/ui'
+import { persistChatRenameIfSessionTab } from '@/lib/chat-session-tab'
+import { useToastStore } from '@/stores/toast'
 
 interface TabBarProps {
   cwd: string
@@ -169,9 +171,23 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // Empty → keep the old title (no-op rename), just exit edit mode.
     // This is the USER rename path — mark it locked so the rename is sticky
     // and program-generated PTY/OSC/session titles can't snap it back.
-    if (value) useTabsStore.getState().setTabTitle(tabId, value, { locked: true })
+    if (value) {
+      const store = useTabsStore.getState()
+      store.setTabTitle(tabId, value, { locked: true })
+      const tab = [...store.tabs, ...store.extraGroups.flatMap((g) => g.tabs)]
+        .find((t) => t.id === tabId)
+      if (tab) {
+        void persistChatRenameIfSessionTab(tab, value, cwd).catch((err) => {
+          console.error('[tab-bar] chat/rename failed:', err)
+          useToastStore.getState().addToast(
+            `Couldn't rename chat: ${err instanceof Error ? err.message : String(err)}`,
+            'error',
+          )
+        })
+      }
+    }
     setEditingTabId(null)
-  }, [])
+  }, [cwd])
 
   // Focus + select the rename input whenever edit mode opens.
   useEffect(() => {
@@ -792,11 +808,15 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 // — the heartbeat row is the source of truth so we
                 // pick up the relationship without needing the data to
                 // be stamped.
-                const isHeartbeatTab = Array.from(tab.paneGroups.values()).some((pg) =>
+                const isMinimizeTab = Array.from(tab.paneGroups.values()).some((pg) =>
                   pg.items.some((item) => {
                     if (item.type !== 'terminal') return false
                     const td = item.data as TerminalItemData
                     if ((td as any).heartbeatName) return true
+                    if (td.fromApi) return true
+                    if (typeof td.attachAgentName === 'string' && td.attachAgentName.startsWith('api-')) {
+                      return true
+                    }
                     if (!td.args) return false
                     for (const a of td.args) {
                       if (heartbeatLastSessionIds.has(a)) return true
@@ -810,7 +830,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 // and reveal the close glyph on hover. Heartbeat tabs
                 // get `–` (minimize), regular tabs get `×` — same hover
                 // pattern, different glyph.
-                const closeGlyph = isHeartbeatTab ? (
+                const closeGlyph = isMinimizeTab ? (
                   <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                     <line x1="1.5" y1="4" x2="6.5" y2="4" />
                   </svg>
@@ -824,10 +844,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     className="ml-2 flex h-4 w-4 flex-shrink-0 items-center justify-center hover:bg-[var(--color-wash-2)] group/close"
                     onClick={(e) => handleCloseTab(e, tab.id)}
                     title={
-                      isHeartbeatTab
+                      isMinimizeTab
                         ? isAgentActive
-                          ? 'Heartbeat agent is working — hide anyway (PTY keeps running)'
-                          : 'Hide tab — heartbeat keeps running in the background'
+                          ? 'Session is working — hide anyway (PTY keeps running)'
+                          : 'Hide tab — session keeps running in the background'
                         : isAgentActive
                           ? 'Agent is active — close anyway'
                           : hasUnseenDone

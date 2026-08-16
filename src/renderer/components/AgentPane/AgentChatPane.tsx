@@ -13,7 +13,8 @@ import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useActiveStore } from '@/stores/active'
 import { useServerSupports } from '@/lib/server-capabilities'
-import { subscribeToWorkspaceSessionEvents } from '@/stores/session-events'
+import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged } from '@/stores/session-events'
+import { chatDisplayName } from '@/lib/chat-session-tab'
 import {
   initialBreakerState,
   recordSpawn,
@@ -172,6 +173,7 @@ interface HistorySession {
   messageCount: number
   /** Discovery provider id ("claude"/"cursor"/"gemini"/"pi"/"codex"/…). */
   provider: string
+  customName?: string | null
 }
 
 function ChatHeader({
@@ -184,6 +186,11 @@ function ChatHeader({
 }: ChatHeaderProps): React.JSX.Element {
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyEpoch, setHistoryEpoch] = useState(0)
+
+  useEffect(() => onChatHistoryChanged(() => {
+    setHistoryEpoch((n) => n + 1)
+  }), [])
 
   // 0.37.12 — fetch chat history for the dropdown title + popover list.
   // Runs on mount, when the current session changes (title converges
@@ -195,20 +202,31 @@ function ChatHeader({
   // rows missing a provider (older daemons) degrade to "claude".
   useEffect(() => {
     let cancelled = false
-    void daemonCliGet<Array<{
-      sessionId: string
-      title: string
-      timestamp: number
-      messageCount: number
-      provider?: string
-      archived?: boolean
-    }>>('chat/list', { project_path: projectPath })
-      .then((rows) => {
+    void Promise.all([
+      daemonCliGet<Array<{
+        sessionId: string
+        title: string
+        timestamp: number
+        messageCount: number
+        provider?: string
+        archived?: boolean
+        customName?: string | null
+      }>>('chat/list', { project_path: projectPath }),
+      daemonCliGet<Record<string, string>>('chat/custom-names').catch(() => ({}) as Record<string, string>),
+    ])
+      .then(([rows, names]) => {
         if (cancelled) return
         // Resume picker: hide user-archived sessions (restore first).
         const sorted = rows
           .filter((r) => !r.archived)
-          .map((r) => ({ ...r, provider: r.provider || 'claude' }))
+          .map((r) => {
+            const provider = r.provider || 'claude'
+            return {
+              ...r,
+              provider,
+              customName: r.customName || names[`${provider}:${r.sessionId}`] || null,
+            }
+          })
           .sort((a, b) => b.timestamp - a.timestamp)
         setHistorySessions(sorted)
       })
@@ -216,12 +234,12 @@ function ChatHeader({
         console.warn('[AgentChatPane] chat/list failed:', err)
       })
     return () => { cancelled = true }
-  }, [projectPath, currentSessionId, historyOpen])
+  }, [projectPath, currentSessionId, historyOpen, historyEpoch])
 
   const currentChatTitle = useMemo<string>(() => {
     if (!currentSessionId) return 'New chat'
     const found = historySessions.find((s) => s.sessionId === currentSessionId)
-    if (found?.title) return found.title
+    if (found) return chatDisplayName(found) || 'New chat'
     return 'New chat'
   }, [historySessions, currentSessionId])
 
@@ -279,7 +297,7 @@ function ChatHeader({
                 >
                   {/* Slice 4 — provider mark so mixed-agent lists scan. */}
                   <ProviderIcon provider={s.provider} size={12} />
-                  <span className="flex-1 truncate">{s.title || 'Untitled chat'}</span>
+                  <span className="flex-1 truncate">{chatDisplayName(s) || 'Untitled chat'}</span>
                   <span className="flex-shrink-0 text-[9px] text-[var(--color-text-muted)] opacity-70">
                     {s.messageCount}
                   </span>

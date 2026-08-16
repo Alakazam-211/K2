@@ -61,6 +61,7 @@ registerProjectsPathIndex(() =>
       id: p.id,
       path: p.path,
       primaryWorkspaceId: sorted[0]?.id ?? null,
+      hideApiSessions: (p.hideApiSessions ?? 0) === 1,
     }
   }),
 )
@@ -239,6 +240,12 @@ interface Project {
   // current global default when the row is created (non-retroactive).
   // Written via POST projects/update `defaultAgent` ('' clears to null).
   defaultAgent: string | null
+  // 0099 — hide auto-surfaced API host-session tabs (0/1, default 0).
+  // Chat history still lists them. Written via workspace/set hide_api_sessions.
+  hideApiSessions?: number
+  // 0101 — per-workspace completion chime (0/1, default 1 / ON).
+  // Missing → treat as 1. Written via workspace/set completion_sound_enabled.
+  completionSoundEnabled?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

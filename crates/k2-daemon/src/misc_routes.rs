@@ -26,6 +26,66 @@ use std::collections::HashMap;
 use crate::cli::{bool_param, need_project, opt_param, respond, respond_unit, str_param};
 use crate::cli_response::CliResponse;
 
+/// `kind` + printable `handle` for `sessions live` (D10).
+fn session_kind_and_handle(
+    agent_name: &str,
+    cwd: &str,
+    command: Option<&str>,
+) -> (String, String) {
+    let project_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd)
+    };
+    let Some(project_id) = project_id else {
+        return ("other".to_string(), String::new());
+    };
+    let primary = k2_core::workspace_session_handles::workspace_address_name_shared(&project_id)
+        .unwrap_or_else(|_| {
+            std::path::Path::new(cwd)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+    if k2_core::workspace_session_handles::is_canonical_agent_name(agent_name, &project_id) {
+        return ("canonical".to_string(), primary);
+    }
+    if k2_core::workspace_session_handles::is_api_agent_name(agent_name) {
+        return ("api".to_string(), String::new());
+    }
+    if k2_core::workspace_session_handles::is_sidecar_harness(agent_name, &project_id, command)
+    {
+        let tab = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
+                &conn,
+                &project_id,
+                agent_name,
+            )
+            .ok()
+            .flatten()
+        };
+        let pane = agent_name.strip_prefix("tab-").unwrap_or(agent_name);
+        let key = k2_core::workspace_session_handles::conversation_key_for(
+            tab.as_ref().and_then(|t| t.session_id.as_deref()),
+            tab.as_ref()
+                .map(|t| t.pane_group_id.as_str())
+                .unwrap_or(pane),
+        );
+        let handle = k2_core::workspace_session_handles::handle_for_session_shared(
+            &project_id,
+            &key,
+            tab.as_ref().and_then(|t| t.session_id.as_deref()),
+        )
+        .ok();
+        let address =
+            k2_core::workspace_session_handles::format_address(&primary, handle.as_deref());
+        return ("sidecar".to_string(), address);
+    }
+    ("other".to_string(), String::new())
+}
+
 /// Long-tail `/cli/*` dispatch. Returns `Some(resp)` for a handled
 /// path, `None` if unknown (caller renders 404).
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
@@ -940,6 +1000,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     if !matches {
                         continue;
                     }
+                    let (kind, handle) = session_kind_and_handle(&agent_name, &cwd, session.command().as_deref());
                     out.push(serde_json::json!({
                         "sessionId": session.session_id().to_string(),
                         "agentName": agent_name,
@@ -947,6 +1008,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         "args": session.args(),
                         "cwd": cwd,
                         "isV2": session.is_v2(),
+                        "kind": kind,
+                        "handle": handle,
                     }));
                 }
                 CliResponse::ok_json(serde_json::to_string(&out).unwrap_or_else(|_| "[]".into()))
@@ -1040,6 +1103,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // ── Phase 2 Unit 6: chat history (GET) ────────────────────
         "/cli/chat/list" => crate::chat_routes::handle_list(params),
         "/cli/sandbox/list" => crate::sandbox_chat_routes::handle_sandbox_list(params),
+        "/cli/host-sessions/list" => crate::v1_host_sessions::handle_cli_host_sessions_list(params),
         "/cli/chat/storage-paths" => crate::chat_routes::handle_storage_paths(params),
         "/cli/chat/custom-names" => crate::chat_routes::handle_custom_names(params),
         "/cli/chat/pinned" => crate::chat_routes::handle_pinned(params),

@@ -37,9 +37,8 @@ WS="$SANDBOX_HOME/inbox-heartbeat-ws"
 mkdir -p "$WS"
 (cd "$WS" && git init -q && git commit --allow-empty -m "init" -q 2>/dev/null || true)
 
-# Scaffold .k2so + an agent primary so heartbeat/add doesn't reject
-# "no scheduleable agent in this workspace". The agent_mode column
-# also gates heartbeat/add — set it to "custom" via /cli/mode.
+# Scaffold .k2so + an agent primary. Heartbeat add no longer requires
+# a workspace type (custom / manager / k2).
 mkdir -p "$WS/.k2so/agent"
 cat >"$WS/.k2so/agent/AGENT.md" <<'EOF'
 ---
@@ -67,13 +66,6 @@ if ! echo "$REG_RESP" | grep -qF "\"path\":\"$WS\""; then
     exit 1
 fi
 echo "  registered workspace OK"
-
-# Flip the workspace to agent mode 'custom' so heartbeat/add's
-# agent_mode guard passes. Note: /cli/mode is GET-only (not in the
-# POST allowlist) — the mutation lives behind the query param.
-MODE_URL="http://127.0.0.1:${K2SO_PORT}/cli/mode?project=${WS_ENC}&set=custom&token=${K2SO_TOKEN}"
-MODE_RESP="$(curl -sf --connect-timeout 5 --max-time 15 "$MODE_URL")"
-echo "  /cli/mode set=custom → $MODE_RESP"
 
 # ── Seed inbox items ─────────────────────────────────────────────────
 

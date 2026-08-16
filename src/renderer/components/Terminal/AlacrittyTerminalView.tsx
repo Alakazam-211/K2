@@ -1076,7 +1076,13 @@ export function AlacrittyTerminalView({
       {/* Composer Phase 1b — message bar docked beneath the pane. The
        *  pane's `terminalId` IS the resolved PTY SessionId the
        *  send-message route needs. */}
-      <TerminalComposeBar sessionId={terminalId} workspacePath={cwd} />
+      <TerminalComposeBar
+        sessionId={terminalId}
+        workspacePath={cwd}
+        onInjectInput={(data) => {
+          if (ptyIdRef.current) void terminalWrite(ptyIdRef.current, data)
+        }}
+      />
     </div>
   )
 }

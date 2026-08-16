@@ -783,7 +783,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             }
         };
         let principal = crate::session_token::HookPrincipal {
-            workspace_uuid,
+            workspace_uuid: workspace_uuid.clone(),
             agent_address,
         };
         // B3a — resolve the credential mode + per-workspace key HOST-SIDE.
@@ -830,6 +830,19 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
                 session_id_for_response
             );
         }
+        // Identity env. Extra harness tabs → sidecar; pinned → canonical.
+        // Blank shells omit identity. Zero PTY inject.
+        crate::cell_identity::apply_spawn_identity(
+            &mut cfg.env,
+            &workspace_uuid,
+            &req.agent_name,
+            cfg.program.as_deref(),
+            &cfg.args,
+            &session_id_for_response.to_string(),
+            req.agent_name
+                .strip_prefix("tab-")
+                .unwrap_or(&req.agent_name),
+        );
     }
 
     // P4-H6 — PER-SESSION worker uid + fail-closed PER-SESSION egress, set up

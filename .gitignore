@@ -5,7 +5,12 @@ dist/
 # lives at the repo root now. Keep src-tauri/target/ ignored too for any
 # stale per-package builds from older checkouts.
 target/
+# Isolated compile dirs used by worktree/land smoke tests (never ship).
+/target-*/
 src-tauri/target/
+# Local worktrees / MCP config — not product.
+/.bmr-wt/
+/.mcp.json
 # Bundled frpc tunnel sidecar (Apache-2.0, fatedier/frp). Staged into the
 # build by scripts/fetch-frpc.sh; a ~14MB binary must not bloat the repo.
 src-tauri/binaries/

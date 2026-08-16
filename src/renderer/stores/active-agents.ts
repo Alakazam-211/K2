@@ -564,8 +564,9 @@ function armUnseenDone(paneId: string): void {
   const timer = setTimeout(() => {
     _unseenDoneTimers.delete(paneId)
     // Re-bind again at fire time — stash/cwd may have been unavailable
-    // when the stop event first landed.
-    ensurePaneProjectBound(paneId)
+    // when the stop event first landed. Pass this bind to the chime so
+    // a late resolve can mute the correct workspace. Null → global only.
+    const projectId = ensurePaneProjectBound(paneId)
     const s = useActiveAgentsStore.getState()
     // Merged status (0.40.39): the client map alone reports false idle
     // for parked panes — daemon truth must veto the chime at fire time
@@ -586,7 +587,7 @@ function armUnseenDone(paneId: string): void {
     next.set(paneId, Date.now())
     useActiveAgentsStore.setState({ unseenDone: next })
     // Only UNSEEN completions chime — a watched pane never reaches here.
-    playCompletionSound()
+    playCompletionSound(projectId)
   }, UNSEEN_DONE_DEBOUNCE_MS)
   _unseenDoneTimers.set(paneId, timer)
 }

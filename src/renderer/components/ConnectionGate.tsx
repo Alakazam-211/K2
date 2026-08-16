@@ -60,6 +60,7 @@ import {
 } from '@/lib/connection-gate-probe'
 import { RemoteSignIn } from './RemoteSignIn'
 import { AppErrorBoundary } from './AppErrorBoundary'
+import GateChrome from './TopBar/GateChrome'
 
 /** Shape of the daemon's GET /boot-status response. `detail` is free-text
  *  for the UI only — never branch on it. `instanceId` (0.40.48, optional —
@@ -1392,18 +1393,27 @@ function ConnectingOverlay({ decision, attempts, importFailed }: ConnectingOverl
         width: '100vw',
         height: '100vh',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
         flexDirection: 'column',
-        gap: '1.25rem',
         background: 'var(--color-bg, #0a0a0a)',
         color: 'var(--color-text-primary, #e0e0e0)',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
         userSelect: 'none',
         WebkitUserSelect: 'none',
         cursor: 'default',
       }}
     >
+      <GateChrome />
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexDirection: 'column',
+          gap: '1.25rem',
+          fontFamily: 'var(--font-ui)',
+        }}
+      >
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
         <div style={{ fontSize: '1rem', fontWeight: 500 }}>{heading}</div>
         {subline !== null && (
@@ -1435,6 +1445,7 @@ function ConnectingOverlay({ decision, attempts, importFailed }: ConnectingOverl
           </button>
         </div>
       )}
+      </div>
     </div>
   )
 }

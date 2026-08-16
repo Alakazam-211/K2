@@ -237,7 +237,7 @@ pub fn spawn_agent_session_v2_blocking(
                     .unwrap_or_default()
             });
         let principal = crate::session_token::HookPrincipal {
-            workspace_uuid,
+            workspace_uuid: workspace_uuid.clone(),
             agent_address: req.agent_name.clone(),
         };
         let owner = k2_core::hook_config::get_token();
@@ -257,6 +257,22 @@ pub fn spawn_agent_session_v2_blocking(
                 session_id
             );
         }
+        // Identity env (K2_CELL / handle / primary / session). No PTY inject.
+        let map_key = req.canonical_key.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
+            req.project_id
+                .clone()
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| req.agent_name.clone())
+        });
+        crate::cell_identity::apply_spawn_identity(
+            &mut env,
+            workspace_uuid.trim(),
+            &map_key,
+            req.command.as_deref(),
+            req.args.as_deref().unwrap_or(&[]),
+            &session_id.to_string(),
+            &map_key,
+        );
     }
 
     let cfg = DaemonPtyConfig {

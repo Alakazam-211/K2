@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { daemonCliGetText } from '@/lib/daemon-cli'
+import { emit } from '@tauri-apps/api/event'
+import { daemonCliGet } from '@/lib/daemon-cli'
+import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import {
   type HeartbeatEntry,
   useHeartbeatSessionsStore,
@@ -10,22 +12,16 @@ import { useToastStore } from '@/stores/toast'
 /**
  * One row in the Workspace panel's Heartbeats section.
  *
- * Layout (single line):
- *   [indicator]  <name>   <Daily 9 AM>           [Launch]
- *
- * Indicators (squares, not circles, per K2 status convention):
- *   - 'live'       : braille spinner (animated)
- *   - 'resumable'  : filled square
- *   - 'scheduled'  : hollow square
- *   - 'archived'   : muted hollow square
+ * Layout:
+ *   [indicator]  <name>   <Daily 9 AM>
+ *   Next run: …
+ *   [toggle]                          [Launch]
  *
  * Click semantics:
  *   - Click row body → openHeartbeatTab (focus live, spawn-and-resume
  *     otherwise) — connects the user to the actual chat session.
- *   - Click `Launch` → k2so_heartbeat_force_fire (spawns a fresh fire
- *     using the heartbeat's WAKEUP.md, regardless of whether a live
- *     session exists). The agent-lock check still prevents
- *     double-spawn against an already-running session.
+ *   - Click `Launch` → `/cli/heartbeat/launch?force=1` (test-fire even
+ *     when the toggle is off). Archived rows cannot launch.
  */
 export function HeartbeatEntryRow({
   entry,
@@ -67,82 +63,36 @@ export function HeartbeatEntryRow({
   }
 
   const handleLaunch = useCallback(async (e: React.MouseEvent) => {
-    // Stop the row click from also firing — Launch is its own action.
     e.stopPropagation()
-    if (busy || !projectPath) return
+    if (busy || !projectPath || entry.state === 'archived') return
     setBusy(true)
-    const toast = useToastStore.getState()
     try {
-      // The smart-launch decision tree (fresh-fire / inject-into-live /
-      // resume-and-fire) lives in `crates/k2-daemon/src/heartbeat_launch.rs`
-      // so the cron tick, the CLI, and this Launch button all converge on
-      // the same path. 0.40.48 host-aware: launch on the ACTIVE host — the
-      // old Tauri bridge pointed at THIS Mac's daemon, so launching a
-      // remote workspace's heartbeat failed with "project not found" and
-      // the wakeup never reached the host's session. Same /cli route the
-      // CLI's `fire` verb uses (present on every supported daemon), so
-      // local behavior is unchanged.
-      const resp = await daemonCliGetText('heartbeat/launch', {
-        project: projectPath,
-        name: entry.row.name,
-      })
-      // Daemon returns a JSON string mirroring the heartbeat_fires
-      // audit decision; surface a friendly toast based on the
-      // branch it took.
-      // 0.37.8: when the heartbeat has `use_workspace_session = true`,
-      // the branch is tagged `workspace_session:<inner>` (e.g.
-      // `workspace_session:fresh_fire`) — the inner cascade is the
-      // chat-tab `deliver_live` cascade, not the heartbeat-keyed one.
-      type LaunchResp = {
-        success: boolean
-        decision: string
-        branch?: string
-        reason?: string
-      }
-      const parsed: LaunchResp = JSON.parse(resp)
-      if (!parsed.success) {
-        toast.addToast(
-          `Launch failed: ${parsed.reason ?? parsed.decision}`,
-          'error',
-          4000,
-        )
-        return
-      }
-      const branchLabel: Record<string, string> = {
-        fresh_fire: 'Fired',
-        injected: 'Sent wakeup to running session for',
-        resume_and_fire: 'Resumed + fired',
-      }
-      let verb: string
-      if (parsed.branch && parsed.branch.startsWith('workspace_session:')) {
-        verb = 'Sent wakeup to pinned chat for'
-      } else if (parsed.branch && parsed.branch in branchLabel) {
-        verb = branchLabel[parsed.branch]
-      } else {
-        verb = 'Fired'
-      }
-      toast.addToast(`${verb} "${entry.row.name}"`, 'success', 2500)
-      // Refetch heartbeat rows so the "Next run" line picks up the
-      // freshly-stamped last_fired immediately. Without this, the
-      // store's cached row still shows the OLD last_fired and the
-      // countdown looks frozen until the next periodic refresh.
-      //
-      // The schedule logic does the right thing per frequency type:
-      //   - hourly (every_seconds): last_fired bumps → next run is
-      //     `every_seconds` from now → countdown resets
-      //   - daily/weekly/monthly/yearly: last_fired = today → the
-      //     "already fired today" guard kicks in → next run rolls
-      //     forward to tomorrow / next-matching-day at the same
-      //     wall-clock time. NEVER drifts mid-day.
-      void useHeartbeatSessionsStore.getState().refresh(projectPath)
-    } catch (err) {
-      toast.addToast(`Launch failed: ${String(err)}`, 'error', 4000)
+      await launchHeartbeat(projectPath, entry.row.name)
     } finally {
       setBusy(false)
     }
-  }, [busy, projectPath, entry.row.name])
+  }, [busy, projectPath, entry.row.name, entry.state])
 
-  const archivedOrDisabled = entry.state === 'archived' || !entry.row.enabled
+  const handleToggle = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (busy || !projectPath || entry.state === 'archived') return
+    setBusy(true)
+    try {
+      await daemonCliGet('heartbeat/enable', {
+        project: projectPath,
+        name: entry.row.name,
+        enabled: entry.row.enabled ? '0' : '1',
+      })
+      void useHeartbeatSessionsStore.getState().refresh(projectPath)
+      void emit('sync:projects').catch(() => {})
+    } catch (err) {
+      useToastStore.getState().addToast(`Toggle failed: ${String(err)}`, 'error', 4000)
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, projectPath, entry.row.name, entry.row.enabled, entry.state])
+
+  const archived = entry.state === 'archived'
 
   // Row is a div, not a button — the Launch button nests inside, and
   // HTML5 disallows nested interactive elements (browsers eject the
@@ -192,20 +142,42 @@ export function HeartbeatEntryRow({
           {entry.row.name}
         </span>
         <span className="text-[9px] text-[var(--color-text-muted)] truncate flex-1">
-          {entry.row.enabled ? describeSpec(entry.row.frequency, entry.row.specJson) : 'Disabled'}
+          {describeSpec(entry.row.frequency, entry.row.specJson)}
         </span>
-        <button
-          onClick={handleLaunch}
-          disabled={busy || archivedOrDisabled}
-          title={launchTooltip(entry)}
-          className="px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
-        >
-          {busy ? '…' : 'Launch'}
-        </button>
       </div>
       {nextRun && (
         <div className="text-[9px] text-[var(--color-text-muted)] truncate pt-0.5">
           Next run: {nextRun}
+        </div>
+      )}
+      {!archived && (
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <button
+            type="button"
+            onClick={handleToggle}
+            role="switch"
+            aria-checked={entry.row.enabled}
+            disabled={busy}
+            className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+              entry.row.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+            }`}
+            title={entry.row.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}
+          >
+            <span
+              className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+                entry.row.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+          <button
+            type="button"
+            onClick={handleLaunch}
+            disabled={busy}
+            title={launchTooltip(entry)}
+            className="px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+          >
+            {busy ? '…' : 'Launch'}
+          </button>
         </div>
       )}
     </div>
@@ -228,7 +200,7 @@ export function HeartbeatEntryRow({
  */
 function launchTooltip(entry: HeartbeatEntry): string {
   if (entry.state === 'archived') return 'Restore from archive before launching'
-  if (!entry.row.enabled) return 'Enable this heartbeat before launching'
+  if (!entry.row.enabled) return 'Fire now to test — stays off the schedule until you enable it.'
   let mode: string
   try {
     const v = JSON.parse(entry.row.specJson) as { frequency?: string }

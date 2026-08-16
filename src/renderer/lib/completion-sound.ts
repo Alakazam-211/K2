@@ -1,13 +1,15 @@
 // Completion chime — plays ONLY for unseen completions (the active-agents
 // store's unseen-done fire), never for every working→idle: if you're
-// watching the pane you saw it finish, no noise. Gated by the
-// `completionSoundEnabled` setting (Settings → General).
+// watching the pane you saw it finish, no noise. AND-gated by the
+// global `completionSoundEnabled` setting (Settings → General) and the
+// per-workspace `projects.completionSoundEnabled` flag (default ON).
 //
 // The chime is SYNTHESIZED (Web Audio, two soft sine notes with a fast
 // decay — a marimba/glass tap, not an alarm) instead of a bundled audio
 // asset: license-clean by construction, works offline, no CSP concerns,
 // and no binary blob in the repo.
 import { useSettingsStore } from '@/stores/settings'
+import { useProjectsStore } from '@/stores/projects'
 
 /** Chime-storm throttle — several agents finishing together (multi-agent
  *  fan-out) produce ONE chime, not a cluster. */
@@ -30,8 +32,19 @@ function note(ctx: AudioContext, freq: number, at: number, dur: number): void {
   osc.stop(at + dur + 0.05)
 }
 
-export function playCompletionSound(): void {
+function workspaceSoundEnabled(projectId?: string | null): boolean {
+  if (!projectId) return true
+  const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
+  // Missing field / unknown project → treat as ON (column default 1).
+  return (project?.completionSoundEnabled ?? 1) !== 0
+}
+
+/** `projectId` is the fire-time pane bind. Null/undefined → global gate only. */
+export function playCompletionSound(projectId?: string | null): void {
   if (!useSettingsStore.getState().completionSoundEnabled) return
+  // Workspace mute is checked BEFORE the 3s throttle so a muted
+  // workspace finishing does not swallow a later unmuted chime.
+  if (!workspaceSoundEnabled(projectId)) return
   const now = Date.now()
   if (now - _lastPlayedAt < THROTTLE_MS) return
   _lastPlayedAt = now

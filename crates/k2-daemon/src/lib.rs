@@ -50,6 +50,7 @@ pub mod feedback_routes;
 pub mod federation_routes;
 pub mod fs_routes;
 pub mod fs_live;
+pub mod charter_compose_watch;
 pub mod grid_emitter;
 pub mod git_routes;
 pub mod heartbeat_launch;
@@ -92,6 +93,7 @@ pub mod routes;
 pub mod seed_users;
 // COMPAT-58 (#58 Phase 1 / PR-A): scoped per-session hook tokens + per-cell UDS
 // (default ON; opt out with K2_HOOK_SCOPED=0). Owner never enters agent env.
+pub mod cell_identity;
 pub mod cell_server;
 pub mod cell_uds;
 // P4-H5 (sandbox hardening): host nft fail-closed egress allowlist for microVM

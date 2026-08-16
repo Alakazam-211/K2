@@ -9,7 +9,7 @@ import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
 import { useConnectHostStore } from '@/stores/connect-host'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
-import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
 import { CodeEditorSettingsSection, CODE_EDITOR_MANIFEST } from './sections/CodeEditorSettingsSection'
 import { EditorsSection, EDITORS_MANIFEST } from './sections/EditorsSection'
@@ -36,6 +36,9 @@ import { WakeSchedulerSection, WAKE_SCHEDULER_MANIFEST } from './sections/WakeSc
 import { PermissionsSection, PERMISSIONS_MANIFEST } from './sections/PermissionsSection'
 import { DictationLabSection, DICTATION_LAB_MANIFEST } from './sections/DictationLabSection'
 import ServerSwitcher from '../TopBar/ServerSwitcher'
+import PageTabs from '../TopBar/PageTabs'
+import TimerButton from '@/components/Timer/TimerButton'
+import ModeToggle from '@/components/Presence/ModeToggle'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { webFeatures } from '@/web/features'
 
@@ -177,15 +180,13 @@ export default function Settings(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full w-full min-h-0 bg-[var(--color-bg)]">
-      {/* Top-bar — mirrors the main page's top-bar (TopBar.tsx left cluster):
-          traffic-light spacer + "K2" wordmark + ServerSwitcher, so Settings
-          shows "K2 <Server Name>" up top exactly like the main view. The
-          active-server display/switcher lives HERE now (relocated out of the
-          settings sidebar) so the connected-host context is always visible
-          and switchable while editing that host's settings. */}
+      {/* Top-bar — same left cluster as the other pages so Agents /
+          Projects / Tickets stay reachable (settings cog is the
+          selected tab). */}
       <div
         className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}
+        onDoubleClick={titleBarOnDoubleClick}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2">
@@ -196,8 +197,14 @@ export default function Settings(): React.JSX.Element {
           </span>
           {/* K2 server switcher (Local / saved servers / add) */}
           <ServerSwitcher />
+          <PageTabs />
         </div>
-        <DesktopChromeRight />
+        <DesktopChromeRight>
+          <div className="flex items-center gap-1 no-drag">
+            <TimerButton />
+            <ModeToggle />
+          </div>
+        </DesktopChromeRight>
       </div>
 
       <div className="flex flex-1 w-full min-h-0">

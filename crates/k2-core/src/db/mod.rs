@@ -784,6 +784,27 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0098_feedback_needs_discussion",
             include_str!("../../drizzle_sql/0098_feedback_needs_discussion.sql"),
         ),
+        // 0099 — durable from_api on workspace_tab_sessions + per-workspace
+        // hide_api_sessions (Chat history API section / close-as-minimize).
+        (
+            "0099_api_session_origin_and_hide",
+            include_str!("../../drizzle_sql/0099_api_session_origin_and_hide.sql"),
+        ),
+        // 0100 — per-workspace compose-bar send history (Up/Down).
+        (
+            "0100_workspace_compose_send_history",
+            include_str!("../../drizzle_sql/0100_workspace_compose_send_history.sql"),
+        ),
+        // 0101 — per-workspace completion chime mute (default ON).
+        (
+            "0101_workspace_completion_sound",
+            include_str!("../../drizzle_sql/0101_workspace_completion_sound.sql"),
+        ),
+        // 0102 — durable sidecar ordinals (workspace/handle addressing).
+        (
+            "0102_workspace_session_handles",
+            include_str!("../../drizzle_sql/0102_workspace_session_handles.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import { serverSupports } from '@/lib/server-capabilities'
 import { subscribeToWorkspaceTabEvents } from '@/stores/session-events'
 import { useToastStore } from '@/stores/toast'
@@ -876,6 +877,7 @@ export function HeartbeatsPanel({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [renameError, setRenameError] = useState<string | null>(null)
+  const [launchingName, setLaunchingName] = useState<string | null>(null)
   const toast = useToastStore.getState()
 
   const refresh = useCallback(async () => {
@@ -964,6 +966,17 @@ export function HeartbeatsPanel({
     void emit('sync:projects').catch(() => {})
   }
 
+  const handleLaunch = async (row: HeartbeatRow): Promise<void> => {
+    if (!project || launchingName) return
+    setLaunchingName(row.name)
+    try {
+      await launchHeartbeat(project.path, row.name)
+      await refresh()
+    } finally {
+      setLaunchingName(null)
+    }
+  }
+
   // Delivery drop-down (replaces the 0.37.8 pinned-chat checkbox) —
   // persist where this heartbeat's wakeup goes. Optimistic: the row's
   // local state flips immediately and reverts on daemon rejection.
@@ -1050,8 +1063,7 @@ export function HeartbeatsPanel({
         </div>
       ) : (
         <div className="border border-[var(--color-border)]">
-          <div className="grid grid-cols-[auto_1.2fr_2fr_auto_auto] gap-3 px-3 py-1.5 bg-[var(--color-bg-elevated)] text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
-            <div>On/Off</div>
+          <div className="grid grid-cols-[1.2fr_2fr_auto_auto] gap-3 px-3 py-1.5 bg-[var(--color-bg-elevated)] text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
             <div>Heartbeat Name</div>
             <div>Schedule (click to edit)</div>
             <div className="text-right pr-[28px]">Wakeup</div>
@@ -1068,26 +1080,10 @@ export function HeartbeatsPanel({
             return (
               <div
                 key={r.id}
-                className="grid grid-cols-[auto_1.2fr_2fr_auto_auto] gap-3 px-3 py-2 border-b border-[var(--color-border)] last:border-b-0 text-xs items-center"
+                className="px-3 py-2 border-b border-[var(--color-border)] last:border-b-0 text-xs"
               >
-                {/* Col 1 — On/Off toggle (its own column now) */}
-                <button
-                  onClick={() => handleToggle(r)}
-                  role="switch"
-                  aria-checked={r.enabled}
-                  className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
-                    r.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-                  }`}
-                  title={r.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}
-                >
-                  <span
-                    className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-                      r.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-                    }`}
-                  />
-                </button>
-
-                {/* Col 2 — name (click-to-edit) + last-fired hint */}
+                <div className="grid grid-cols-[1.2fr_2fr_auto_auto] gap-3 items-center">
+                {/* Col 1 — name (click-to-edit) + last-fired hint */}
                 <div className="flex flex-col min-w-0">
                   {isRenaming ? (
                     <input
@@ -1195,6 +1191,37 @@ export function HeartbeatsPanel({
                     <line x1="7" y1="1" x2="1" y2="7" />
                   </svg>
                 </button>
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-2">
+                  <button
+                    onClick={() => handleToggle(r)}
+                    role="switch"
+                    aria-checked={r.enabled}
+                    className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 ${
+                      r.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+                    }`}
+                    title={r.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}
+                  >
+                    <span
+                      className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+                        r.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void handleLaunch(r) }}
+                    disabled={launchingName === r.name}
+                    title={
+                      r.enabled
+                        ? 'Fire this heartbeat now'
+                        : 'Fire now to test — stays off the schedule until you enable it'
+                    }
+                    className="px-2 py-0.5 text-[10px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {launchingName === r.name ? '…' : 'Launch'}
+                  </button>
+                </div>
               </div>
             )
           })}

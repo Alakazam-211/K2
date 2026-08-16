@@ -1,6 +1,5 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { usePresetsStore } from '@/stores/presets'
-import { useTabsStore } from '@/stores/tabs'
 import { showContextMenu } from '@/lib/context-menu'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 
@@ -16,46 +15,6 @@ interface InlineFormState {
   icon: string
 }
 
-/**
- * Determine which preset commands are currently running in any terminal pane.
- * Returns a Set of preset IDs that have a matching command in the tabs store.
- */
-function useRunningPresetIds(): Set<string> {
-  const tabs = useTabsStore((s) => s.tabs)
-  const presets = usePresetsStore((s) => s.presets)
-
-  return useMemo(() => {
-    const running = new Set<string>()
-
-    // Collect all active terminal commands across all tabs/paneGroups
-    const activeCommands = new Set<string>()
-    for (const tab of tabs) {
-      if (!tab.paneGroups) continue
-      for (const [, pg] of tab.paneGroups) {
-        if (!pg?.items) continue
-        for (const item of pg.items) {
-          if (item.type === 'terminal') {
-            const data = item.data as { command?: string }
-            if (data.command) {
-              activeCommands.add(data.command)
-            }
-          }
-        }
-      }
-    }
-
-    for (const preset of presets) {
-      // Extract the base command (first token) from the preset
-      const baseCommand = preset.command.split(/\s+/)[0]
-      if (baseCommand && activeCommands.has(baseCommand)) {
-        running.add(preset.id)
-      }
-    }
-
-    return running
-  }, [tabs, presets])
-}
-
 export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
   const {
     presets,
@@ -66,7 +25,6 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
     updatePreset,
     reorderPresets,
   } = usePresetsStore()
-  const runningIds = useRunningPresetIds()
 
   const [form, setForm] = useState<InlineFormState>({
     visible: false,
@@ -278,7 +236,6 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
     >
       {/* Preset buttons */}
       {enabledPresets.map((preset, idx) => {
-        const isRunning = runningIds.has(preset.id)
         const isHovered = hoveredId === preset.id
         const isDragged = reorderDragIdx === idx
         const showDropBefore = reorderDropIdx === idx
@@ -312,13 +269,8 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
               flexShrink: 0,
               transition: 'background-color 120ms ease, color 120ms ease',
               opacity: isDragged ? 0.3 : 1,
-              backgroundColor: isRunning
-                ? (isHovered ? '#1a2a1a' : '#111a11')
-                : (isHovered ? 'var(--color-bg-inset)' : 'transparent'),
-              color: isRunning
-                ? '#70c070'
-                : (isHovered ? '#e0e0e0' : '#808080'),
-              borderLeft: isRunning ? '2px solid var(--color-status-ok-soft)' : '2px solid transparent',
+              backgroundColor: isHovered ? 'var(--color-bg-inset)' : 'transparent',
+              color: isHovered ? '#e0e0e0' : '#808080',
             }}
           >
             {showDropBefore && (
@@ -333,19 +285,6 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
               <AgentIcon agent={preset.label} size={14} />
             )}
             <span style={{ lineHeight: 1 }}>{preset.label}</span>
-            {isRunning && (
-              <span
-                style={{
-                  display: 'inline-block',
-                  width: '5px',
-                  height: '5px',
-                  backgroundColor: 'var(--color-status-ok-soft)',
-                  borderRadius: '50%',
-                  marginLeft: '2px',
-                  flexShrink: 0,
-                }}
-              />
-            )}
           </button>
         )
       })}

@@ -30,11 +30,14 @@ vi.mock('@/stores/connect-host', () => ({
   }),
 }))
 
+import { useToastStore } from './toast'
 import {
   useWindowModeStore,
   deriveDefaultMode,
   isViewerModeActive,
   initWindowModeDefault,
+  noteViewerInteractionBlocked,
+  VIEWER_BLOCKED_TOAST,
   __resetWindowModeForTests,
 } from './window-mode'
 
@@ -45,6 +48,7 @@ const flush = async (): Promise<void> => {
 
 beforeEach(() => {
   __resetWindowModeForTests()
+  useToastStore.setState({ toasts: [] })
   whoami.role = null
 })
 
@@ -112,6 +116,29 @@ describe('isViewerModeActive (client-side suppression predicate)', () => {
     expect(isViewerModeActive()).toBe(true)
     useWindowModeStore.getState().setMode('claimer')
     expect(isViewerModeActive()).toBe(false)
+  })
+})
+
+describe('noteViewerInteractionBlocked', () => {
+  it('unresolved does not toast', () => {
+    expect(noteViewerInteractionBlocked()).toBe(false)
+    expect(useToastStore.getState().toasts).toHaveLength(0)
+  })
+
+  it('resolved viewer toasts once then throttles', () => {
+    useWindowModeStore.getState().setMode('viewer')
+    expect(noteViewerInteractionBlocked()).toBe(true)
+    const first = useToastStore.getState().toasts
+    expect(first).toHaveLength(1)
+    expect(first[0].message).toBe(VIEWER_BLOCKED_TOAST)
+    expect(noteViewerInteractionBlocked()).toBe(true)
+    expect(useToastStore.getState().toasts).toHaveLength(1)
+  })
+
+  it('resolved claimer does not toast', () => {
+    useWindowModeStore.getState().setMode('claimer')
+    expect(noteViewerInteractionBlocked()).toBe(false)
+    expect(useToastStore.getState().toasts).toHaveLength(0)
   })
 })
 

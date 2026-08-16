@@ -946,27 +946,9 @@ pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliR
         Err(resp) => return resp,
     };
 
-    let rows: Vec<(String, String, i64)> = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let queried: Result<Vec<(String, String, i64)>, rusqlite::Error> = (|| {
-            let mut stmt = conn.prepare(
-                "SELECT wts.session_id, wts.agent_name, wts.last_seen_at \
-                 FROM workspace_tab_sessions wts \
-                 JOIN projects p ON p.id = wts.project_id \
-                 WHERE p.path = ?1 AND wts.agent_name LIKE 'api-%' \
-                   AND wts.session_id IS NOT NULL \
-                 ORDER BY wts.last_seen_at DESC",
-            )?;
-            let mapped = stmt.query_map(rusqlite::params![ws_path], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
-            })?;
-            Ok(mapped.flatten().collect())
-        })();
-        match queried {
-            Ok(v) => v,
-            Err(e) => return CliResponse::internal_error(format!("list host sessions: {e}")),
-        }
+    let rows = match list_api_session_rows(&ws_path) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::internal_error(format!("list host sessions: {e}")),
     };
 
     // F7: one row per sessionId (latest last_seen wins). Historical rows with
@@ -1002,6 +984,71 @@ pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliR
     CliResponse::ok_json(
         serde_json::json!({ "workspace": slug, "sessions": sessions }).to_string(),
     )
+}
+
+/// Durable API-origin rows for a workspace path (`from_api` or `api-…` name).
+fn list_api_session_rows(ws_path: &str) -> Result<Vec<(String, String, i64)>, String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT wts.session_id, wts.agent_name, wts.last_seen_at \
+             FROM workspace_tab_sessions wts \
+             JOIN projects p ON p.id = wts.project_id \
+             WHERE p.path = ?1 \
+               AND (wts.from_api = 1 OR wts.agent_name LIKE 'api-%') \
+               AND wts.session_id IS NOT NULL \
+             ORDER BY wts.last_seen_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let mapped = stmt
+        .query_map(rusqlite::params![ws_path], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(mapped.flatten().collect())
+}
+
+/// Owner-cockpit list: `GET /cli/host-sessions/list?project=<path>`.
+/// Same durable index as `GET /v1/w/<ws>/host-sessions` (from_api rows).
+pub fn handle_cli_host_sessions_list(params: &std::collections::HashMap<String, String>) -> CliResponse {
+    let Some(ws_path) = params
+        .get("project")
+        .or_else(|| params.get("project_path"))
+        .cloned()
+        .filter(|s| !s.is_empty())
+    else {
+        return CliResponse::bad_request("Missing project parameter");
+    };
+    let rows = match list_api_session_rows(&ws_path) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::internal_error(format!("list host sessions: {e}")),
+    };
+    let mut by_sid: std::collections::BTreeMap<String, (String, i64)> =
+        std::collections::BTreeMap::new();
+    for (sid, agent, last_seen) in rows {
+        match by_sid.get(&sid) {
+            Some((_, prev)) if *prev >= last_seen => {}
+            _ => {
+                by_sid.insert(sid, (agent, last_seen));
+            }
+        }
+    }
+    crate::v2_session_map::reconcile_dead_children();
+    let sessions: Vec<serde_json::Value> = by_sid
+        .into_iter()
+        .map(|(sid, (agent, last_seen))| {
+            let live = host_session_row_is_live(&sid, &agent);
+            serde_json::json!({
+                "sessionId": sid,
+                "agentName": agent,
+                "live": live,
+                "lastSeenAt": last_seen,
+                "fromApi": true,
+            })
+        })
+        .collect();
+    CliResponse::ok_json(serde_json::json!(sessions).to_string())
 }
 
 /// Whether a host-sessions list row is truly live (backing PTY child alive).

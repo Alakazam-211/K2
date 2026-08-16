@@ -4,10 +4,11 @@
 // survives workspace/tab switches AND app crashes/restarts), hits
 // Enter, and the message is delivered to the agent via the daemon route
 // POST /cli/terminal/send-message (attributed `[from <name>] `, submitted
-// once through the per-session injection lock). NOT raw keystrokes — raw TUI
-// control (arrows, Ctrl-C, menu nav) still goes through typing in the
-// terminal itself. Renderer-hide is gated by composerPermitted (1c); the
-// daemon enforces the same gate server-side.
+// once through the per-session injection lock). Esc / Ctrl+C inject the
+// same PTY bytes as the terminal (cancel the current turn) without
+// stealing compose focus. Other raw TUI control (arrows, menu nav)
+// still goes through the terminal itself. Renderer-hide is gated by
+// composerPermitted (1c); the daemon enforces the same gate server-side.
 //
 // File drops: local paths are inserted into the draft; on a remote host the
 // same `.k2/downloads` upload path as terminal drops runs first, then the
@@ -19,7 +20,7 @@
 // box; a failed send restores the text (the box reappearing IS the feedback).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
   buildComposeDropPayload,
   filesFromDataTransfer,
@@ -29,7 +30,11 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import {
+  type ComposeHistoryItem,
   type MsgResponse,
+  applyComposeHistoryNav,
+  composeHistoryKeyAction,
+  composeInterruptSequence,
   composerPermitted,
   mapMsgResponseToStatus,
   shouldSendOnKey,
@@ -45,6 +50,11 @@ interface TerminalComposeBarProps {
    * `<cwd>/.k2/downloads/` (same as terminal grid drops).
    */
   workspacePath?: string
+  /**
+   * Inject raw PTY bytes into this pane's session (same path as
+   * typing in the grid). Used for Esc / Ctrl+C turn-cancel.
+   */
+  onInjectInput?: (data: string) => void
 }
 
 /** Insert `chunk` into draft at caret (or append). Adds a separating space when needed. */
@@ -66,6 +76,7 @@ export function insertIntoDraft(draft: string, chunk: string, caret: number | nu
 export function TerminalComposeBar({
   sessionId,
   workspacePath = '',
+  onInjectInput,
 }: TerminalComposeBarProps): React.JSX.Element | null {
   // 1c (D4) + #67 renderer-hide: shown iff the active host is LOCAL (owner)
   // OR the app-level master is on OR the ACTIVE WORKSPACE opted into remote
@@ -98,6 +109,9 @@ export function TerminalComposeBar({
     }
   })
   const [sending, setSending] = useState(false)
+  const [history, setHistory] = useState<string[]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const historyDraftRef = useRef('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
@@ -109,6 +123,8 @@ export function TerminalComposeBar({
     } catch {
       setDraft('')
     }
+    setHistoryIndex(-1)
+    historyDraftRef.current = ''
   }, [draftKey])
 
   // Persist on every change (localStorage writes are cheap + synchronous — this
@@ -135,6 +151,33 @@ export function TerminalComposeBar({
   useEffect(() => {
     autoGrow()
   }, [draft, autoGrow])
+
+  // Workspace-shared send history (daemon). Drafts stay localStorage.
+  useEffect(() => {
+    setHistoryIndex(-1)
+    historyDraftRef.current = ''
+    if (!workspacePath) {
+      setHistory([])
+      return
+    }
+    let cancelled = false
+    void daemonCliGet<{ items?: ComposeHistoryItem[] }>('terminal/compose-history', {
+      workspace_path: workspacePath,
+    })
+      .then((resp) => {
+        if (cancelled) return
+        const bodies = (resp.items ?? [])
+          .map((item) => item.body)
+          .filter((body) => typeof body === 'string' && body.length > 0)
+        setHistory(bodies)
+      })
+      .catch(() => {
+        if (!cancelled) setHistory([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [workspacePath])
 
   const insertPathsText = useCallback((payload: string) => {
     if (!payload) return
@@ -238,6 +281,10 @@ export function TerminalComposeBar({
       // IS the feedback) — but never clobber a fresh draft already started.
       if (mapMsgResponseToStatus(resp).kind !== 'delivered') {
         setDraft((cur) => (cur.length === 0 ? text : cur))
+      } else {
+        setHistory((prev) => [text, ...prev].slice(0, 50))
+        setHistoryIndex(-1)
+        historyDraftRef.current = ''
       }
     } catch {
       setDraft((cur) => (cur.length === 0 ? text : cur))
@@ -248,9 +295,45 @@ export function TerminalComposeBar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      const interrupt = composeInterruptSequence({
+        key: e.key,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        isComposing: e.nativeEvent.isComposing,
+      })
+      if (interrupt) {
+        e.preventDefault()
+        e.stopPropagation()
+        onInjectInput?.(interrupt)
+        return
+      }
       if (shouldSendOnKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) {
         e.preventDefault()
         void send()
+      } else {
+        const histAction = composeHistoryKeyAction({
+          key: e.key,
+          selectionStart: e.currentTarget.selectionStart,
+          selectionEnd: e.currentTarget.selectionEnd,
+        })
+        if (histAction) {
+          const draftForRestore = historyIndex === -1 ? draft : historyDraftRef.current
+          if (histAction === 'older' && historyIndex === -1) {
+            historyDraftRef.current = draft
+          }
+          const next = applyComposeHistoryNav({
+            action: histAction,
+            index: historyIndex,
+            draft: draftForRestore,
+            items: history,
+          })
+          if (next.preventDefault) {
+            e.preventDefault()
+            setHistoryIndex(next.index)
+            setDraft(next.text)
+          }
+        }
       }
       // Stop terminal-level / single-key shortcuts from firing while typing
       // (plain letters, arrows, etc.). Do NOT stop Cmd/Ctrl app chords —
@@ -262,7 +345,7 @@ export function TerminalComposeBar({
         e.stopPropagation()
       }
     },
-    [send]
+    [send, draft, history, historyIndex, onInjectInput]
   )
 
   // 1c renderer-hide (after all hooks): not permitted → render nothing.
@@ -284,7 +367,13 @@ export function TerminalComposeBar({
       <textarea
         ref={textareaRef}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          if (historyIndex !== -1) {
+            setHistoryIndex(-1)
+            historyDraftRef.current = ''
+          }
+        }}
         onKeyDown={handleKeyDown}
         onDragOver={handleDragOver}
         onDrop={handleDrop}

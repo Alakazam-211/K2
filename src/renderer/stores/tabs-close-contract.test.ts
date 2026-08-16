@@ -264,4 +264,24 @@ describe('A6 close contract — view-lifecycle paths never close sessions', () =
     expect(v2Closes()).toEqual([])
     expect(killed.ids).toEqual([])
   })
+
+  it('api-origin tabs close-as-minimize: PTY survives, no v2 close', async () => {
+    useTabsStore.setState({
+      tabs: [
+        terminalTab('tab-api', 'pg-api', {
+          attachAgentName: 'api-scout-aaaa',
+          fromApi: true,
+          sessionId: 'sess-api-1',
+        }),
+      ],
+      activeTabId: 'tab-api',
+    })
+
+    useTabsStore.getState().removeTab('tab-api')
+    await flushAsync()
+
+    expect(useTabsStore.getState().tabs).toHaveLength(0)
+    expect(v2Closes()).toEqual([])
+    expect(killed.ids).toEqual([])
+  })
 })

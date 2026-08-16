@@ -67,6 +67,7 @@ import {
   useWindowModeStore,
   isViewerModeActive,
   initWindowModeDefault,
+  noteViewerInteractionBlocked,
 } from '@/stores/window-mode'
 import { useSessionLabelsStore } from '@/stores/session-labels'
 import { useActiveAgentsStore } from '@/stores/active-agents'
@@ -2986,7 +2987,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const sendInput = useCallback((text: string) => {
     // S5 — viewer mode sends nothing (advisory; the daemon gate is
     // authoritative and also covers clients that skip this check).
-    if (isViewerModeActive()) return
+    if (noteViewerInteractionBlocked()) return
     // Typing auto-claims server-side (the daemon's Input handler flips
     // `active_subscriber`), so keep the CLIENT's controller mirror
     // truthful: real input is a deliberate interaction — stamp it and
@@ -4358,6 +4359,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     lastClaimInteractionRef.current = performance.now()
     mouseDownLinkRef.current = hoveredLink?.link ?? null
     mouseDownInPaneRef.current = true
+    // Scrollbar mousedown stopPropagates; a click on the grid while
+    // the eyeball is on is a pencil-required interaction.
+    noteViewerInteractionBlocked()
   }, [hoveredLink])
 
   // 0.37.11 — global mouseup safety net. Catches the case where the
@@ -5598,7 +5602,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
        *  same daemon sessionId) so focus/draft UX is not interrupted.
        *  Still requires a resolved daemon sessionId (never terminalId). */}
       {shouldShowTerminalComposeBar(phase) && 'sessionId' in phase && phase.sessionId && (
-        <TerminalComposeBar sessionId={phase.sessionId} workspacePath={cwd} />
+        <TerminalComposeBar
+          sessionId={phase.sessionId}
+          workspacePath={cwd}
+          onInjectInput={sendInput}
+        />
       )}
     </div>
   )

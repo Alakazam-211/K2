@@ -140,6 +140,51 @@ pub(crate) fn resolve_screen_lines(
             Err(Some(resp)) => return Err(resp),
             Err(None) => {}
         }
+        // `sales/1` → that sidecar session (D14). Session UUID first-arg
+        // is handled below via session=.
+        if let Some(crate::workspace_msg::MsgTarget::Sidecar { conversation_key, .. }) =
+            crate::workspace_msg::resolve_msg_target(ws)
+        {
+            if let Some(sid) = k2_core::session::SessionId::parse(&conversation_key) {
+                if let Some(session) = crate::v2_session_map::lookup_by_session_id(&sid) {
+                    return Ok(v2_grid_lines(&session, requested_lines));
+                }
+            }
+            for (name, session) in crate::session_lookup::snapshot_all() {
+                if k2_core::workspace::provider_resume::argv_references_session(
+                    &session.args(),
+                    &conversation_key,
+                ) || name == conversation_key
+                    || name == format!("tab-{conversation_key}")
+                {
+                    return Ok(v2_grid_lines(&session.0, requested_lines));
+                }
+            }
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            if let Some(tab) =
+                k2_core::db::schema::WorkspaceTabSession::get_by_session_id(&conn, &conversation_key)
+                    .ok()
+                    .flatten()
+            {
+                if let Some(session) = crate::v2_session_map::lookup_by_agent_name(&tab.agent_name)
+                {
+                    return Ok(v2_grid_lines(&session, requested_lines));
+                }
+            }
+            return Err(CliResponse::bad_request(format!(
+                "no live session for sidecar '{ws}' — it may be asleep (check `k2 sessions live`)"
+            )));
+        }
+        if let Some(crate::workspace_msg::MsgTarget::Session { session_id }) =
+            crate::workspace_msg::resolve_msg_target(ws)
+        {
+            if let Some(sid) = k2_core::session::SessionId::parse(&session_id) {
+                if let Some(session) = crate::v2_session_map::lookup_by_session_id(&sid) {
+                    return Ok(v2_grid_lines(&session, requested_lines));
+                }
+            }
+        }
         let project_path = match crate::workspace_msg::resolve_workspace(ws) {
             Some(p) => p,
             None => {

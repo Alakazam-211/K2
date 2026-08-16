@@ -59,7 +59,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { activateProject } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useToastStore } from '@/stores/toast'
-import { useWindowModeStore } from '@/stores/window-mode'
+import { useWindowModeStore, noteViewerInteractionBlocked } from '@/stores/window-mode'
 import {
   activateOnLiveSessionAttach,
   resolveAllMemberSessions,
@@ -616,10 +616,7 @@ export default function ProjectDashboard({
       notePaneFocus(paneRequest.workspaceId)
       return
     }
-    if (readOnlyRef.current) {
-      useToastStore
-        .getState()
-        .addToast('View-only — an owner or admin can add panes to this dashboard.', 'info')
+    if (noteViewerInteractionBlocked()) {
       return
     }
     const next = insertEdge(rootRef.current, 'right', {
@@ -706,7 +703,7 @@ export default function ProjectDashboard({
   /** Shared drop application (external drags + pane-header moves). */
   const performDrop = useCallback(
     (source: DragSource, x: number, y: number): void => {
-      if (readOnlyRef.current) return
+      if (noteViewerInteractionBlocked()) return
       const zone = zoneAtPoint(x, y)
       if (!zone) return
       const result = applyDrop(rootRef.current, source, zone)
@@ -743,7 +740,8 @@ export default function ProjectDashboard({
   // an existing pane always moves, never duplicates).
   const startPaneDrag = useCallback(
     (e: React.MouseEvent, paneId: string): void => {
-      if (readOnlyRef.current || e.button !== 0) return
+      if (e.button !== 0) return
+      if (noteViewerInteractionBlocked()) return
       if ((e.target as HTMLElement).closest('button')) return
       e.preventDefault()
       const startX = e.clientX
@@ -789,7 +787,8 @@ export default function ProjectDashboard({
   // against the split's own span), save on release (§6.8.3).
   const startDividerDrag = useCallback(
     (e: React.MouseEvent, divider: DividerGeom): void => {
-      if (readOnlyRef.current || e.button !== 0) return
+      if (e.button !== 0) return
+      if (noteViewerInteractionBlocked()) return
       e.preventDefault()
       const grid = gridRef.current
       if (!grid) return

@@ -122,6 +122,11 @@ pub fn handle_settings_update(body: &[u8], actor_can_manage: bool) -> CliRespons
             // by the dispatcher's /v1 arm) flips the surface live, with no
             // restart and no confirm+reboot dialog. K2_API force-on still wins.
             k2_core::app_settings::set_api_enabled(merged.api_enabled);
+            // Local-window live-sync (v1): renderer listens on `sync:settings`.
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::SyncSettings,
+                serde_json::Value::Null,
+            );
             match serde_json::to_string(&merged) {
                 Ok(body) => CliResponse::ok_json(body),
                 Err(e) => CliResponse::bad_request(format!("serialize merged: {e}")),
@@ -145,6 +150,10 @@ pub fn handle_settings_reset() -> CliResponse {
             k2_core::federation::set_enabled(defaults.federation_enabled);
             // …and the /v1 API switch back to its default (OFF) too (1c).
             k2_core::app_settings::set_api_enabled(defaults.api_enabled);
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::SyncSettings,
+                serde_json::Value::Null,
+            );
             match serde_json::to_string(&defaults) {
                 Ok(body) => CliResponse::ok_json(body),
                 Err(e) => CliResponse::bad_request(format!("serialize defaults: {e}")),

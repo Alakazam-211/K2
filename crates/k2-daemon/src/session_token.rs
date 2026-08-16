@@ -457,6 +457,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/terminal/set-focus",
         "/cli/terminal/pin-size",
         "/cli/terminal/send-message",
+        "/cli/terminal/compose-history",
         "/cli/terminal/classify",
         // Wave 0: mail owner/admin surfaces stay off the scoped allowlist
         // (server lifecycle, domains, config, approvals, external link,
@@ -532,6 +533,9 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/federation/peers",
         "/cli/federation/peer-roster",
         "/cli/federation/send",
+        // Sidecar identity: `k2 whoami` (NOT /cli/auth/whoami — that
+        // `role` is connect-user).
+        "/cli/whoami",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -1206,6 +1210,14 @@ mod tests {
         assert!(is_agent_verb("/cli/federation/peers"));
         assert!(is_agent_verb("/cli/federation/peer-roster"));
         assert!(is_agent_verb("/cli/federation/send"));
+        assert!(
+            is_agent_verb("/cli/whoami"),
+            "scoped tokens must reach GET /cli/whoami"
+        );
+        assert!(
+            !is_agent_verb("/cli/auth/whoami"),
+            "/cli/auth/whoami is connect-user identity — not an agent verb"
+        );
     }
 
     #[test]
@@ -1411,6 +1423,8 @@ mod tests {
             "/cli/daemon/restart",
             "/cli/sessions/v2/spawn",
             "/cli/terminal/create",
+            "/cli/terminal/send-message",
+            "/cli/terminal/compose-history",
         ] {
             assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
         }

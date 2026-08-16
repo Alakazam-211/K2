@@ -484,6 +484,7 @@ mod unix_impl {
         } else {
             None
         };
+        params.insert("cell_session_id".to_string(), this_session_id.clone());
         stamp_principal(&mut params, &principal);
         if let Some(t) = inbox_target {
             params.insert("project".to_string(), t.clone());

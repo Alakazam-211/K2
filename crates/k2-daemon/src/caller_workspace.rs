@@ -207,11 +207,12 @@ pub fn stamp_principal(
     params.insert("project_id".to_string(), principal.workspace_uuid.clone());
     params.insert(PRINCIPAL_BOUND_KEY.to_string(), "1".to_string());
 
+    let cell_sid = params.get("cell_session_id").cloned();
     let uuid = principal.workspace_uuid.trim();
     if uuid.is_empty() {
         params.insert(
             "from".to_string(),
-            display_from_for_principal(principal, None),
+            display_from_for_principal(principal, None, cell_sid.as_deref()),
         );
         params.remove("project");
         params.remove("project_path");
@@ -221,7 +222,7 @@ pub fn stamp_principal(
         Some(path) => {
             params.insert(
                 "from".to_string(),
-                display_from_for_principal(principal, Some(&path)),
+                display_from_for_principal(principal, Some(&path), cell_sid.as_deref()),
             );
             params.insert("project".to_string(), path.clone());
             params.insert("project_path".to_string(), path);
@@ -232,7 +233,7 @@ pub fn stamp_principal(
             // chat attribution does not fall through as a passport id.
             params.insert(
                 "from".to_string(),
-                display_from_for_principal(principal, None),
+                display_from_for_principal(principal, None, cell_sid.as_deref()),
             );
             params.remove("project");
             params.remove("project_path");
@@ -246,18 +247,137 @@ pub fn stamp_principal(
 /// → `projects.name`). Fall back to `agent_address` only when it is a
 /// non-empty, non-UUID label (legacy / ad-hoc mints). Never prefer a
 /// bare UUID — that is the passport key, not the human name.
-fn display_from_for_principal(principal: &HookPrincipal, path: Option<&str>) -> String {
-    if let Some(path) = path {
-        let name = k2_core::workspace::display::agent_display_name(path);
-        if !name.trim().is_empty() {
-            return name;
+fn display_from_for_principal(
+    principal: &HookPrincipal,
+    path: Option<&str>,
+    cell_session_id: Option<&str>,
+) -> String {
+    let ws_name = path
+        .map(|p| k2_core::workspace::display::agent_display_name(p))
+        .filter(|n| !n.trim().is_empty());
+    let primary = {
+        let pid = principal.workspace_uuid.trim();
+        if !pid.is_empty() {
+            k2_core::workspace_session_handles::workspace_address_name_shared(pid).ok()
+        } else {
+            None
+        }
+    };
+    let label = primary.or(ws_name).unwrap_or_else(|| {
+        let addr = principal.agent_address.trim();
+        if !addr.is_empty() && !is_uuid_shape(addr) {
+            addr.to_string()
+        } else {
+            "agent".to_string()
+        }
+    });
+
+    if let Some(handle) = sidecar_handle_for_caller(principal, cell_session_id) {
+        return k2_core::workspace_session_handles::format_address(&label, Some(&handle));
+    }
+    label
+}
+
+fn sidecar_handle_for_caller(
+    principal: &HookPrincipal,
+    cell_session_id: Option<&str>,
+) -> Option<String> {
+    let pid = principal.workspace_uuid.trim();
+    if pid.is_empty() {
+        return None;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+
+    if let Some(sid) = cell_session_id.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(tab) = k2_core::db::schema::WorkspaceTabSession::get_by_session_id(&conn, sid)
+            .ok()
+            .flatten()
+        {
+            if k2_core::workspace_session_handles::is_sidecar_harness(
+                &tab.agent_name,
+                pid,
+                tab.command.as_deref(),
+            ) {
+                let key = k2_core::workspace_session_handles::conversation_key_for(
+                    tab.session_id.as_deref(),
+                    &tab.pane_group_id,
+                );
+                return k2_core::workspace_session_handles::handle_for_session(
+                    &conn,
+                    pid,
+                    &key,
+                    tab.session_id.as_deref(),
+                )
+                .ok();
+            }
+        }
+        // Live PTY id → map key → tab row.
+        if let Some(parsed) = k2_core::session::SessionId::parse(sid) {
+            if let Some(live) = crate::session_lookup::lookup_by_session_id(&parsed) {
+                if let Some((agent_name, _)) = crate::session_lookup::snapshot_all()
+                    .into_iter()
+                    .find(|(_, s)| s.session_id() == live.session_id())
+                {
+                    if k2_core::workspace_session_handles::is_sidecar_harness(
+                        &agent_name,
+                        pid,
+                        live.command().as_deref(),
+                    ) {
+                        if let Some(tab) =
+                            k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
+                                &conn, pid, &agent_name,
+                            )
+                            .ok()
+                            .flatten()
+                        {
+                            let key = k2_core::workspace_session_handles::conversation_key_for(
+                                tab.session_id.as_deref(),
+                                &tab.pane_group_id,
+                            );
+                            return k2_core::workspace_session_handles::handle_for_session(
+                                &conn,
+                                pid,
+                                &key,
+                                tab.session_id.as_deref(),
+                            )
+                            .ok();
+                        }
+                    }
+                }
+            }
         }
     }
+
     let addr = principal.agent_address.trim();
-    if !addr.is_empty() && !is_uuid_shape(addr) {
-        return addr.to_string();
+    if k2_core::workspace_session_handles::is_tab_agent_name(addr)
+        || k2_core::workspace_session_handles::is_api_agent_name(addr)
+    {
+        if let Some(tab) =
+            k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(&conn, pid, addr)
+                .ok()
+                .flatten()
+        {
+            if k2_core::workspace_session_handles::is_sidecar_harness(
+                &tab.agent_name,
+                pid,
+                tab.command.as_deref(),
+            ) {
+                let key = k2_core::workspace_session_handles::conversation_key_for(
+                    tab.session_id.as_deref(),
+                    &tab.pane_group_id,
+                );
+                return k2_core::workspace_session_handles::handle_for_session(
+                    &conn,
+                    pid,
+                    &key,
+                    tab.session_id.as_deref(),
+                )
+                .ok();
+            }
+        }
     }
-    "agent".to_string()
+    None
 }
 
 fn is_uuid_shape(s: &str) -> bool {

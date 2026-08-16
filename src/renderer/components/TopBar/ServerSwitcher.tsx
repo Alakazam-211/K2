@@ -20,7 +20,7 @@
 // When `activeHost === 'local'` this is purely cosmetic — selecting
 // "Local" is the no-op default and behaves byte-identically to today.
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   useConnectHostStore,
   type ConnectHost,
@@ -109,7 +109,9 @@ export default function ServerSwitcher(): React.JSX.Element {
   const requestAddServerFocus = useAddServerFocusStore((s) => s.requestAddServerFocus)
 
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const searchRef = useRef<HTMLInputElement | null>(null)
 
   // Close the dropdown on outside click / Escape.
   useEffect(() => {
@@ -132,21 +134,46 @@ export default function ServerSwitcher(): React.JSX.Element {
     }
   }, [open])
 
+  // Open → focus + select the search field so typing replaces immediately.
+  useEffect(() => {
+    if (!open) {
+      setQuery('')
+      return
+    }
+    const el = searchRef.current
+    if (!el) return
+    el.focus()
+    el.select()
+  }, [open])
+
   const activeLabel = activeHost === 'local' ? 'Local' : activeHost.label
 
   // Saved remotes only — Local stays pinned first below. Sort by display
   // label so a long address book is scannable; hostname breaks ties.
-  const hostsSorted = [...hosts].sort((a, b) => {
-    const byLabel = a.label.localeCompare(b.label, undefined, {
-      sensitivity: 'base',
-      numeric: true,
+  const hostsSorted = useMemo(() => {
+    const sorted = [...hosts].sort((a, b) => {
+      const byLabel = a.label.localeCompare(b.label, undefined, {
+        sensitivity: 'base',
+        numeric: true,
+      })
+      if (byLabel !== 0) return byLabel
+      return a.hostname.localeCompare(b.hostname, undefined, {
+        sensitivity: 'base',
+        numeric: true,
+      })
     })
-    if (byLabel !== 0) return byLabel
-    return a.hostname.localeCompare(b.hostname, undefined, {
-      sensitivity: 'base',
-      numeric: true,
+    const q = query.trim().toLowerCase()
+    if (!q) return sorted
+    return sorted.filter((h) => {
+      const hay = `${h.label} ${h.hostname} ${h.port}`.toLowerCase()
+      return hay.includes(q)
     })
-  })
+  }, [hosts, query])
+
+  const showLocal = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return !q || 'local'.includes(q)
+  }, [query])
 
   const pick = useCallback(
     (h: 'local' | ConnectHost) => {
@@ -255,31 +282,55 @@ export default function ServerSwitcher(): React.JSX.Element {
 
       {open && (
         <div
-          className="absolute left-0 top-7 z-50 min-w-[220px] rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-lg py-1 text-[12px]"
+          className="absolute left-0 top-7 z-50 w-[260px] rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-lg py-1 text-[12px] flex flex-col"
         >
-          {/* Local — always first */}
-          <SwitcherRow
-            label="Local"
-            active={activeHost === 'local'}
-            statusDot={activeHost === 'local' ? connectionStatus : null}
-            onClick={() => pick('local')}
-          />
+          <div className="px-2 pb-1">
+            <input
+              ref={searchRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+              placeholder="Search servers…"
+              aria-label="Search servers"
+              className="w-full h-7 px-2 text-[11px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"
+            />
+          </div>
 
-          {hostsSorted.length > 0 && <div className="my-1 h-px bg-[var(--color-border)]" />}
-
-          {hostsSorted.map((h) => {
-            const isActive = activeHost !== 'local' && activeHost.id === h.id
-            return (
+          <div className="max-h-[min(320px,60vh)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+            {showLocal && (
               <SwitcherRow
-                key={h.id}
-                label={h.label}
-                sublabel={`${h.hostname}:${h.port}`}
-                active={isActive}
-                statusDot={isActive ? connectionStatus : null}
-                onClick={() => pick(h)}
+                label="Local"
+                active={activeHost === 'local'}
+                statusDot={activeHost === 'local' ? connectionStatus : null}
+                onClick={() => pick('local')}
               />
-            )
-          })}
+            )}
+
+            {showLocal && hostsSorted.length > 0 && (
+              <div className="my-1 h-px bg-[var(--color-border)]" />
+            )}
+
+            {hostsSorted.map((h) => {
+              const isActive = activeHost !== 'local' && activeHost.id === h.id
+              return (
+                <SwitcherRow
+                  key={h.id}
+                  label={h.label}
+                  sublabel={`${h.hostname}:${h.port}`}
+                  active={isActive}
+                  statusDot={isActive ? connectionStatus : null}
+                  onClick={() => pick(h)}
+                />
+              )
+            })}
+
+            {!showLocal && hostsSorted.length === 0 && (
+              <div className="px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
+                No matching servers
+              </div>
+            )}
+          </div>
 
           <div className="my-1 h-px bg-[var(--color-border)]" />
 

@@ -16,16 +16,17 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
-import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { useFeedbackStore } from '@/stores/feedback'
 import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
-import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
+import TimerButton from '@/components/Timer/TimerButton'
+import ModeToggle from '@/components/Presence/ModeToggle'
 import { Surface } from '@/components/ui'
 import {
   collectAssignees,
@@ -650,6 +651,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
         bordered={false}
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}
+        onDoubleClick={titleBarOnDoubleClick}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">
@@ -661,9 +663,6 @@ export default function FeedbackPage(): React.JSX.Element | null {
               every page; the Feedback tab reads selected here. (Replaces
               the old Back button — Esc still returns to Agents.) */}
           <ServerSwitcher />
-          {/* Settings cog sits BETWEEN the server picker and the tabs
-              (Rosson, 2026-07-06): K2 | Server | ⚙ | Tabs | … */}
-          <SettingsGearButton />
           <div className="no-drag">
             <PageTabs />
           </div>
@@ -671,6 +670,9 @@ export default function FeedbackPage(): React.JSX.Element | null {
 
         <DesktopChromeRight>
           <div className="flex items-center gap-2 no-drag">
+            <TimerButton />
+            <ModeToggle />
+            <div className="w-px h-4 bg-[var(--color-border)]" />
             <button
               type="button"
               onClick={close}

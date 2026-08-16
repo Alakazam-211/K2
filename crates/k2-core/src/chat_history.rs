@@ -1298,6 +1298,10 @@ pub struct ChatSession {
     /// When the user archived this session (unix ms), if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<i64>,
+    /// User-chosen display name from `chat_session_names`. Transcript
+    /// `title` is never overwritten; empty/whitespace names stay unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_name: Option<String>,
 }
 
 struct SessionAccumulator {
@@ -1491,6 +1495,7 @@ fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, proje
                     origin_branch: origin_branch.clone(),
                     archived: false,
                     archived_at: None,
+                    custom_name: None,
                 },
             );
         }
@@ -1589,6 +1594,7 @@ pub fn parse_claude_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
                     message_count: acc.count,
                     archived: false,
                     archived_at: None,
+                    custom_name: None,
                 },
             )
         })
@@ -1719,6 +1725,7 @@ pub fn parse_cursor_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
                 origin_branch: None,
                 archived: false,
                 archived_at: None,
+                custom_name: None,
             };
             match best_by_id.get(&chat_id) {
                 Some(existing) => {
@@ -1847,6 +1854,7 @@ pub fn parse_cursor_ide_sessions(project_filter: Option<&str>) -> Result<Vec<Cha
                 message_count: 0,
                 archived: false,
                 archived_at: None,
+                custom_name: None,
             });
         }
     }
@@ -2044,6 +2052,7 @@ pub fn parse_gemini_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSes
                 message_count,
                 archived: false,
                 archived_at: None,
+                custom_name: None,
             });
         }
     }
@@ -2206,6 +2215,7 @@ pub fn parse_pi_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession
                 message_count,
                 archived: false,
                 archived_at: None,
+                custom_name: None,
             });
         }
     }
@@ -2388,6 +2398,7 @@ pub fn parse_codex_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSess
                         message_count: 0,
                         archived: false,
                         archived_at: None,
+                        custom_name: None,
                     });
                 }
             }
@@ -2585,6 +2596,7 @@ fn parse_grok_sessions_in_root(
                 message_count: grok_message_count(&session_dir),
                 archived: false,
                 archived_at: None,
+                custom_name: None,
             });
         }
     }
@@ -2678,6 +2690,7 @@ fn parse_hermes_sessions_in_db(
             message_count: msg_count.max(0) as usize,
             archived: false,
             archived_at: None,
+            custom_name: None,
         })
     };
     let collected = match &family {
@@ -2758,6 +2771,7 @@ pub fn list_all_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession
             origin_branch: None,
             archived: true,
             archived_at: meta.archived_at,
+            custom_name: None,
         });
     }
 
@@ -2776,7 +2790,25 @@ pub fn list_all_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession
     archived.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
     non_archived.extend(archived);
+    overlay_custom_names(&mut non_archived);
     Ok(non_archived)
+}
+
+/// Fill `custom_name` from `chat_session_names` without touching transcript `title`.
+/// Empty/whitespace stored names stay `None` so the client falls back to `title`.
+fn overlay_custom_names(sessions: &mut [ChatSession]) {
+    let Ok(names) = get_custom_names() else {
+        return;
+    };
+    for session in sessions.iter_mut() {
+        let key = format!("{}:{}", session.provider, session.session_id);
+        if let Some(name) = names.get(&key) {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                session.custom_name = Some(trimmed.to_string());
+            }
+        }
+    }
 }
 
 // ── Storage path discovery ─────────────────────────────────────────────
@@ -3059,13 +3091,35 @@ pub fn rename_session(
     session_id: &str,
     custom_name: &str,
 ) -> Result<(), String> {
+    // Blank / whitespace clears the Chats name so the durable ordinal
+    // address works again. Non-empty names must slugify as a sidecar
+    // handle: reject `/` and `:`, fail loud on collision.
+    let trimmed = custom_name.trim();
+    let stored = if trimmed.is_empty() {
+        String::new()
+    } else {
+        let slug = crate::workspace_session_handles::slugify_custom_name(custom_name)?;
+        let db = crate::db::shared();
+        let conn = db.lock();
+        if let Some(project_id) =
+            crate::workspace_session_handles::project_id_for_session_id(&conn, session_id)?
+        {
+            crate::workspace_session_handles::ensure_slug_unique_in_workspace(
+                &conn,
+                &project_id,
+                session_id,
+                &slug,
+            )?;
+        }
+        custom_name.to_string()
+    };
     let db = crate::db::shared();
     let conn = db.lock();
     conn.execute(
         "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
          VALUES (?1, ?2, ?3, 0, unixepoch()) \
          ON CONFLICT(provider, session_id) DO UPDATE SET custom_name = ?3, updated_at = unixepoch()",
-        rusqlite::params![provider, session_id, custom_name],
+        rusqlite::params![provider, session_id, stored],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -4930,6 +4984,84 @@ mod tests {
         rename_session("claude", &sid, "Renamed Again").expect("rename 2");
         let names2 = get_custom_names().expect("get_custom_names 2");
         assert_eq!(names2.get(&key).map(|s| s.as_str()), Some("Renamed Again"));
+    }
+
+    #[test]
+    fn rename_session_rejects_slash_and_colon() {
+        let _g = UNIT6_DB_LOCK.lock();
+        let sid = format!("u6-rn-slash-{}-{}", std::process::id(), uuid::Uuid::new_v4());
+        let err = rename_session("claude", &sid, "sales/reviewer")
+            .expect_err("slash in custom_name must fail loud");
+        assert!(
+            err.contains('/') || err.to_lowercase().contains("path"),
+            "error must mention path/slash, got: {err}"
+        );
+        let err2 = rename_session("claude", &sid, "sales:reviewer")
+            .expect_err("colon in custom_name must fail loud");
+        assert!(
+            err2.contains(':') || err2.to_lowercase().contains("path"),
+            "error must mention path/colon, got: {err2}"
+        );
+    }
+
+    #[test]
+    fn list_all_sessions_overlays_custom_name_without_mutating_title() {
+        let _home = UNIT6_HOME_LOCK.lock();
+        let _db = UNIT6_DB_LOCK.lock();
+        let _h = U6HomeGuard::new("list-custom-name");
+        let home = dirs::home_dir().expect("home");
+
+        let project = "/Users/z/proj-custom-name";
+        let sid = format!("01920000-cccc-7000-8000-{:012x}", std::process::id() as u64);
+        write_grok_session(
+            &home.join(".grok").join("sessions"),
+            "%2Fproj-custom-name",
+            &sid,
+            project,
+            "2026-07-03T10:00:00Z",
+            None,
+        );
+        rename_session("grok", &sid, "  My Custom Name  ").expect("rename padded");
+
+        let sessions = list_all_sessions(Some(project)).expect("list");
+        let found = sessions
+            .iter()
+            .find(|s| s.session_id == sid)
+            .expect("listed grok session");
+        assert_eq!(found.title.as_str(), "test session");
+        assert_eq!(found.custom_name.as_deref(), Some("My Custom Name"));
+
+        rename_session("grok", &sid, "   ").expect("blank rename");
+        let sessions_blank = list_all_sessions(Some(project)).expect("list blank");
+        let found_blank = sessions_blank
+            .iter()
+            .find(|s| s.session_id == sid)
+            .expect("listed grok session after blank");
+        assert_eq!(found_blank.title.as_str(), "test session");
+        assert_eq!(found_blank.custom_name.as_deref(), None);
+
+        let arch_sid = format!("u6-arch-{}-{}", std::process::id(), uuid::Uuid::new_v4());
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO chat_session_names \
+                 (provider, session_id, custom_name, pinned, updated_at, archived, \
+                  archive_title, archive_project_path) \
+                 VALUES ('claude', ?1, 'Custom Archive Name', 0, unixepoch(), 1, \
+                         'Transcript Archive Title', ?2)",
+                rusqlite::params![arch_sid, project],
+            )
+            .expect("insert archived row");
+        }
+        let sessions_arch = list_all_sessions(Some(project)).expect("list archive");
+        let archived = sessions_arch
+            .iter()
+            .find(|s| s.session_id == arch_sid)
+            .expect("listed archived session");
+        assert_eq!(archived.title.as_str(), "Transcript Archive Title");
+        assert_eq!(archived.custom_name.as_deref(), Some("Custom Archive Name"));
+        assert!(archived.archived);
     }
 
     #[test]

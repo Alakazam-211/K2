@@ -254,6 +254,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // the canonical project path. Used by the CLI to detect whether
         // a `msg` first-arg is a workspace (new flow) or an agent name
         // (legacy flow + deprecation warning).
+        // Sidecar identity — `k2 whoami`. GET-only; POST 405s at the
+        // dispatcher / cell-server method gate.
+        "/cli/whoami" => crate::cell_identity::handle_whoami(params),
         "/cli/workspace/resolve" => {
             // Param name: `q` (query). Avoids collision with the auth
             // token URL param (`token=<auth>`) the cli_request helper

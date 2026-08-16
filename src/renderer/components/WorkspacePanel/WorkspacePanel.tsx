@@ -14,6 +14,9 @@ import { showContextMenu } from '@/lib/context-menu'
 import WorktreeDialog from '@/components/Sidebar/WorktreeDialog'
 import { HeartbeatsPanel } from '@/components/HeartbeatsPanel/HeartbeatsPanel'
 import { UrlsPortsSection } from './UrlsPortsSection'
+import { WorkspaceApiSection } from './WorkspaceApiSection'
+import { ConnectedAgentsSection } from './ConnectedAgentsSection'
+import { WorkspaceCompletionSoundBell } from './WorkspaceCompletionSoundToggle'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -29,15 +32,6 @@ interface K2soAgentInfo {
 // renderer-side type that survived the migration is the count itself.
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-const modeLabels: Record<string, string> = {
-  off: 'None',
-  custom: 'Custom Agent',
-  agent: 'K2 Agent',
-  manager: 'Workspace Manager',
-  coordinator: 'Workspace Manager', // legacy
-  pod: 'Workspace Manager', // legacy
-}
 
 // ── Component ────────────────────────────────────────────────────────────
 
@@ -150,30 +144,21 @@ export default function WorkspacePanel(): React.JSX.Element {
     <div className="h-full flex flex-col overflow-hidden">
       {/* ── Status ── */}
       <div className="px-3 py-3 border-b border-[var(--color-border)]">
-        {/* Workspace identity — two static labels. The colored
-            status indicator + click-to-activate-agent-tab affordance
-            were retired when per-heartbeat session indicators arrived;
-            users now click individual heartbeat rows below to
-            launch / resume their sessions, so the agent name no
-            longer needs to be interactive at the workspace level. */}
-        <div className="flex items-baseline gap-2">
-          <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
-            Workspace Type
-          </span>
-          <span className="text-xs text-[var(--color-text-primary)] truncate">
-            {modeLabels[agentMode] ?? 'None'}
-          </span>
-        </div>
-        {agentMode !== 'off' && (
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
-              Agent Name
-            </span>
-            <span className="text-xs font-mono text-[var(--color-text-primary)] truncate">
-              {primaryAgent?.name ?? '—'}
-            </span>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-baseline gap-2 min-w-0">
+            {primaryAgent?.name && (
+              <>
+                <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
+                  Agent Name
+                </span>
+                <span className="text-xs font-mono text-[var(--color-text-primary)] truncate">
+                  {primaryAgent.name}
+                </span>
+              </>
+            )}
           </div>
-        )}
+          <WorkspaceCompletionSoundBell project={activeProject} />
+        </div>
 
         {/* Off mode inbox shortcut — navigation affordance when the
             workspace has undelegated inbox items. */}
@@ -214,15 +199,17 @@ export default function WorkspacePanel(): React.JSX.Element {
           collapsible header (matching the Worktrees pattern below)
           and a content area, both with their own border-b dividers
           that span edge-to-edge. */}
-      {agentMode !== 'off' && <HeartbeatsPanel />}
+      <HeartbeatsPanel />
 
-      {/* ── Connected Agents (incoming) ── */}
+      {/* ── Connected Agents (present connections only) ── */}
       <ConnectedAgentsSection projectId={activeProject.id} />
 
       {/* ── URLs & Ports ── (collapsible; K2 Connect tunnel surface +
           nested subdomain map, live via tunnel_status_changed /
           tunnel_subdomains_changed) */}
       <UrlsPortsSection projectId={activeProject.id} />
+
+      <WorkspaceApiSection project={activeProject} />
 
       {/* ── Worktrees ── (collapsible; chevron toggles, count badge
           and new-worktree button stay clickable via stopPropagation) */}
@@ -430,67 +417,6 @@ function WorktreeRow({
             <div className="text-[10px] text-[var(--color-text-muted)] truncate">{branch}</div>
           )}
         </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Connected Agents Section (incoming relations) ───────────────────────
-
-interface WorkspaceRelation {
-  id: string
-  sourceProjectId: string
-  targetProjectId: string
-  relationType: string
-  createdAt: string
-}
-
-function ConnectedAgentsSection({ projectId }: { projectId: string }): React.JSX.Element | null {
-  const [relations, setRelations] = useState<WorkspaceRelation[]>([])
-  const [loaded, setLoaded] = useState(false)
-  const projects = useProjectsStore((s) => s.projects)
-
-  useEffect(() => {
-    let cancelled = false
-    // Host-aware: read through the daemon so incoming connections resolve
-    // when driving a remote K2 Connect host (the LOCAL Tauri invoke
-    // misfired against a remote daemon).
-    daemonCliGet<WorkspaceRelation[]>('relations/list-incoming', { project_id: projectId })
-      .then((result) => { if (!cancelled) { setRelations(result); setLoaded(true) } })
-      .catch(() => { if (!cancelled) { setRelations([]); setLoaded(true) } })
-    return () => { cancelled = true }
-  }, [projectId])
-
-  // Resolve source project details
-  const projectsById = useMemo(() => {
-    const map = new Map<string, typeof projects[number]>()
-    for (const p of projects) map.set(p.id, p)
-    return map
-  }, [projects])
-
-  // Don't render anything if no incoming connections
-  if (!loaded || relations.length === 0) return null
-
-  return (
-    <div className="px-3 py-2 border-b border-[var(--color-border)]">
-      <span className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
-        Connected Agents
-      </span>
-      <div className="mt-1.5 space-y-1">
-        {relations.map((rel) => {
-          const source = projectsById.get(rel.sourceProjectId)
-          return (
-            <div key={rel.id} className="flex items-center gap-2">
-              <span
-                className="w-2 h-2 flex-shrink-0 rounded-full"
-                style={{ backgroundColor: source?.color || 'var(--color-neutral)' }}
-              />
-              <span className="text-[11px] text-[var(--color-text-secondary)] truncate">
-                {source?.name || 'Unknown'}
-              </span>
-            </div>
-          )
-        })}
       </div>
     </div>
   )

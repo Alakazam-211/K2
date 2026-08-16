@@ -54,6 +54,7 @@ export interface HeartbeatSessionCandidate {
   provider: string
   /** User-archived sessions are never offered as resume targets. */
   archived?: boolean
+  customName?: string | null
 }
 
 /** Derive the drop-down's current value from a heartbeat row.

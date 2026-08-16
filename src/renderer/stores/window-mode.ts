@@ -23,6 +23,7 @@
 import { create } from 'zustand'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { onActiveHostChange } from '@/stores/connect-host'
+import { useToastStore } from '@/stores/toast'
 
 export type WindowMode = 'viewer' | 'claimer'
 
@@ -65,6 +66,24 @@ export function isViewerModeActive(): boolean {
   return s.resolved && s.mode === 'viewer'
 }
 
+export const VIEWER_BLOCKED_TOAST =
+  "you're in view mode, change to edit mode on the top-right."
+
+const VIEWER_TOAST_THROTTLE_MS = 3500
+let lastViewerToastAt = 0
+
+/** If viewer mode is active, show the hint toast (throttled) and
+ *  return true so callers abort the pencil-required interaction. */
+export function noteViewerInteractionBlocked(): boolean {
+  if (!isViewerModeActive()) return false
+  const now = Date.now()
+  if (now - lastViewerToastAt >= VIEWER_TOAST_THROTTLE_MS) {
+    lastViewerToastAt = now
+    useToastStore.getState().addToast(VIEWER_BLOCKED_TOAST, 'info', 4000)
+  }
+  return true
+}
+
 // ── Default resolution (single-flight) ────────────────────────────────
 let defaultStarted = false
 
@@ -90,6 +109,7 @@ export function initWindowModeDefault(): void {
 
 function reset(): void {
   defaultStarted = false
+  lastViewerToastAt = 0
   useWindowModeStore.setState({ mode: 'viewer', resolved: false, capable: true })
 }
 

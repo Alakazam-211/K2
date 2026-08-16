@@ -784,3 +784,35 @@ describe('browser pane items', () => {
     expect((item.data as BrowserItemData).title).toBe('Example')
   })
 })
+
+describe('addTab / addTabToGroup locked option', () => {
+  beforeEach(reset)
+
+  it('addTabToGroup returns a pane-group id and sets Tab.locked at construction', () => {
+    const pgId = useTabsStore.getState().addTabToGroup(0, '/tmp/proj', {
+      title: 'My Chat',
+      command: 'claude',
+      args: ['--resume', '01920000-aaaa-7000-8000-000000000001'],
+      locked: true,
+    })
+    const tabs = useTabsStore.getState().tabs
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].paneGroups.has(pgId)).toBe(true)
+    expect(tabs[0].id).not.toBe(pgId)
+    expect(tabs[0].locked).toBe(true)
+    expect(tabs[0].title).toBe('My Chat')
+  })
+
+  it('addTab sets Tab.locked when options.locked is true', () => {
+    const pgId = useTabsStore.getState().addTab('/tmp/proj', { title: 'Locked', locked: true })
+    const tab = useTabsStore.getState().tabs.find((t) => t.paneGroups.has(pgId))
+    expect(tab).toBeDefined()
+    expect(tab!.locked).toBe(true)
+    expect(tab!.title).toBe('Locked')
+  })
+
+  it('unlocked construction leaves Tab.locked unset', () => {
+    useTabsStore.getState().addTabToGroup(0, '/tmp/proj', { title: 'Plain' })
+    expect(useTabsStore.getState().tabs[0].locked).toBeUndefined()
+  })
+})

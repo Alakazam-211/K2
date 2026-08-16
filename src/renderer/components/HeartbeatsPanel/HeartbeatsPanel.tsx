@@ -10,11 +10,12 @@ import {
 import { serverSupports } from '@/lib/server-capabilities'
 import { IconHeartEKG } from '@/components/icons/IconHeartEKG'
 import { HeartbeatEntryRow } from './HeartbeatEntry'
+import { SectionManageCog } from '@/components/WorkspacePanel/SectionManageCog'
 
 /**
  * Heartbeats section — workspace-scoped audit surface for scheduled
  * heartbeat chat sessions. Mounted inside `WorkspacePanel` for the
- * active workspace when agent mode is not off.
+ * active workspace. Always visible (workspace types are retiring).
  *
  * Sections:
  *   - Live      : PTY currently running (braille spinner indicator)
@@ -22,7 +23,7 @@ import { HeartbeatEntryRow } from './HeartbeatEntry'
  *   - Scheduled : configured but never fired (hollow dot)
  *   - Archived  : collapsed by default, persisted per-workspace
  *
- * Header carries the heart-with-EKG icon and a `manage` link that
+ * Header carries the heart-with-EKG icon and a settings cog that
  * opens Settings → Heartbeats for full CRUD. Empty / off-mode state
  * shows guidance text rather than disappearing entirely so the
  * section never looks broken.
@@ -35,7 +36,6 @@ export function HeartbeatsPanel(): React.JSX.Element {
     [projects, activeProjectId],
   )
   const projectPath = project?.path ?? null
-  const agentMode = project?.agentMode ?? 'off'
 
   const active = useHeartbeatSessionsStore((s) => s.active)
   const archived = useHeartbeatSessionsStore((s) => s.archived)
@@ -49,7 +49,7 @@ export function HeartbeatsPanel(): React.JSX.Element {
   // against an older/remote daemon that doesn't emit it we keep the 5s
   // poll fallback so the live-dot still converges.
   useEffect(() => {
-    if (!projectPath || agentMode === 'off') {
+    if (!projectPath) {
       clear()
       unsubscribeHeartbeatLive()
       return
@@ -61,7 +61,7 @@ export function HeartbeatsPanel(): React.JSX.Element {
     }
     const t = setInterval(() => refresh(projectPath), 5000)
     return () => clearInterval(t)
-  }, [projectPath, agentMode, refresh, clear])
+  }, [projectPath, refresh, clear])
 
   // Per-workspace localStorage key for the Archived section's collapse
   // state. Strictly tied to project.id (not path or undefined) so the
@@ -96,11 +96,7 @@ export function HeartbeatsPanel(): React.JSX.Element {
     setSectionOpen(localStorage.getItem(sectionKey) !== 'closed')
   }, [sectionKey])
 
-  // The Workspace panel only mounts this section when a project is
-  // selected and agentMode !== 'off', so we no longer need the
-  // standalone empty-state messages. Defensive guard kept (returns
-  // nothing) so imports elsewhere don't crash on edge cases.
-  if (!project || agentMode === 'off') {
+  if (!project) {
     return <></>
   }
 
@@ -168,20 +164,14 @@ export function HeartbeatsPanel(): React.JSX.Element {
             </span>
           )}
         </span>
-        <span
-          onClick={(e) => {
-            e.stopPropagation()
-            // Pass the active project's id so Settings opens to THIS
-            // workspace's heartbeats, not whichever workspace the
-            // Settings module last had selected. Same call shape the
-            // Sidebar's right-click → Workspace Settings uses.
-            useSettingsStore.getState().openSettings('projects', project.id)
+        <SectionManageCog
+          title="Manage heartbeats"
+          onClick={() => {
+            // Workspace settings → Heartbeats tab (`schedule`), not the
+            // default Agent tab and not the global Heartbeats section.
+            useSettingsStore.getState().openSettings('projects', project.id, 'schedule')
           }}
-          className="text-[9px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
-          title="Manage in Settings"
-        >
-          manage
-        </span>
+        />
       </button>
 
       {sectionOpen && (

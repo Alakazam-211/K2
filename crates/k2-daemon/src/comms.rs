@@ -120,6 +120,10 @@ pub fn require_local_peer_for_principal(
 /// Resolve a workspace token (name | path | uuid) to `(path, project_id)`,
 /// or `None` if unregistered.
 pub fn resolve_target_project(token: &str) -> Option<(String, String)> {
+    // `sales/reviewer` is a sidecar address — peer-gate on the workspace.
+    let token = k2_core::workspace_session_handles::split_workspace_handle(token)
+        .map(|(ws, _)| ws)
+        .unwrap_or(token);
     let path = crate::workspace_msg::resolve_workspace(token)?;
     let db = k2_core::db::shared();
     let conn = db.lock();

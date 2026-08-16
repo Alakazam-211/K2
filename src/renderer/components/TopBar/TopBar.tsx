@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { useTabsStore } from '@/stores/tabs'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
@@ -11,7 +11,6 @@ import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import ServerSwitcher from './ServerSwitcher'
 import PageTabs from './PageTabs'
-import SettingsGearButton from './SettingsGearButton'
 import DesktopChromeLeft from './DesktopChromeLeft'
 import DesktopChromeRight from './DesktopChromeRight'
 import { Surface } from '@/components/ui'
@@ -90,6 +89,7 @@ export default function TopBar({
       bordered={false}
       className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none"
       onMouseDown={titleBarDragOnMouseDown}
+      onDoubleClick={titleBarOnDoubleClick}
       style={{
         height: TOPBAR_HEIGHT,
         minHeight: TOPBAR_HEIGHT
@@ -105,11 +105,7 @@ export default function TopBar({
         <span className="text-[10px] font-bold tracking-widest text-[var(--color-text-muted)] uppercase flex-shrink-0">K2</span>
         {/* K2 Connect server switcher (This Mac / saved servers / add) */}
         <ServerSwitcher />
-        {/* Settings cog sits BETWEEN the server picker and the tabs
-            (Rosson, 2026-07-06): K2 | Server | ⚙ | Tabs | … */}
-        <SettingsGearButton />
-        {/* §6.0 — the 3-tab page switcher (Agents | Projects | Feedback).
-            Absorbs the v0.40.26 Feedback button; badges ride the tabs. */}
+        {/* §6.0 — ⚙ | Agents | Projects | Tickets (settings is first). */}
         <PageTabs />
         {/* Primary sidebar toggle */}
         <button

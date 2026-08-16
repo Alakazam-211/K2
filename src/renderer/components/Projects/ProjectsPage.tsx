@@ -3,7 +3,7 @@
 //
 // A top-level page selected from the §6.0 switcher; body idiom borrowed
 // from FeedbackPage.tsx: a fixed-inset overlay with its own draggable
-// top bar (which carries the ServerSwitcher + the 3-tab switcher, so
+// top bar (which carries the ServerSwitcher + the page switcher, so
 // the server dropdown stays visible here). LEFT NAV = ProjectNav
 // (Pinned + list + member drawer), collapsible to an ICON RAIL via the
 // top-bar toggle (§6.7.1 — the Agents page's sidebar-collapse idiom,
@@ -26,13 +26,14 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { usePageViewStore } from '@/stores/page-view'
-import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
-import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
+import TimerButton from '@/components/Timer/TimerButton'
+import ModeToggle from '@/components/Presence/ModeToggle'
 import { Surface } from '@/components/ui'
 import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
@@ -302,6 +303,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
         bordered={false}
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}
+        onDoubleClick={titleBarOnDoubleClick}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">
@@ -310,9 +312,6 @@ export default function ProjectsPage(): React.JSX.Element | null {
             K2
           </span>
           <ServerSwitcher />
-          {/* Settings cog sits BETWEEN the server picker and the tabs
-              (Rosson, 2026-07-06): K2 | Server | ⚙ | Tabs | … */}
-          <SettingsGearButton />
           <div className="no-drag">
             <PageTabs />
           </div>
@@ -354,6 +353,9 @@ export default function ProjectsPage(): React.JSX.Element | null {
             the panel is closed. Window controls sit after page affordances. */}
         <DesktopChromeRight>
           <div className="flex items-center gap-1">
+            <TimerButton />
+            <ModeToggle />
+            <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
             <button
               type="button"
               onClick={() => useProjectGroupsStore.getState().setChatCollapsed(!chatCollapsed)}

@@ -7,6 +7,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   type MsgResponse,
+  applyComposeHistoryNav,
+  composeHistoryKeyAction,
+  composeInterruptSequence,
   composerPermitted,
   mapMsgResponseToStatus,
   shouldSendOnKey,
@@ -31,6 +34,40 @@ describe('shouldSendOnKey', () => {
   it('a non-Enter key never sends', () => {
     expect(shouldSendOnKey({ key: 'a', shiftKey: false, isComposing: false })).toBe(false)
     expect(shouldSendOnKey({ key: 'Tab', shiftKey: false, isComposing: false })).toBe(false)
+  })
+})
+
+// ── Esc / Ctrl+C from compose cancel the turn (PTY bytes) ───────────
+
+describe('composeInterruptSequence', () => {
+  const idle = { ctrlKey: false, metaKey: false, altKey: false, isComposing: false }
+
+  it('Escape injects ESC', () => {
+    expect(composeInterruptSequence({ ...idle, key: 'Escape' })).toBe('\x1b')
+  })
+
+  it('Ctrl+C injects ETX', () => {
+    expect(composeInterruptSequence({ ...idle, key: 'c', ctrlKey: true })).toBe('\x03')
+    expect(composeInterruptSequence({ ...idle, key: 'C', ctrlKey: true })).toBe('\x03')
+  })
+
+  it('Cmd+C is copy — not interrupt', () => {
+    expect(composeInterruptSequence({ ...idle, key: 'c', metaKey: true })).toBeNull()
+    expect(
+      composeInterruptSequence({ ...idle, key: 'c', ctrlKey: true, metaKey: true }),
+    ).toBeNull()
+  })
+
+  it('does not fire mid-IME composition', () => {
+    expect(composeInterruptSequence({ ...idle, key: 'Escape', isComposing: true })).toBeNull()
+    expect(
+      composeInterruptSequence({ ...idle, key: 'c', ctrlKey: true, isComposing: true }),
+    ).toBeNull()
+  })
+
+  it('plain letters and Enter are not interrupts', () => {
+    expect(composeInterruptSequence({ ...idle, key: 'a' })).toBeNull()
+    expect(composeInterruptSequence({ ...idle, key: 'Enter' })).toBeNull()
   })
 })
 
@@ -159,5 +196,108 @@ describe('shouldShowTerminalComposeBar', () => {
     expect(
       shouldShowTerminalComposeBar({ kind: 'ready', sessionId: '' }),
     ).toBe(false)
+  })
+})
+
+// ── Compose send-history caret / key helper ──────────────────────────
+// ArrowUp only when caret is collapsed at offset 0. Mid-draft Up must
+// NOT claim the key. Down at index -1 restores the pre-Up draft.
+
+describe('composeHistoryKeyAction', () => {
+  it('ArrowUp at collapsed offset 0 recalls older', () => {
+    expect(
+      composeHistoryKeyAction({ key: 'ArrowUp', selectionStart: 0, selectionEnd: 0 }),
+    ).toBe('older')
+  })
+
+  it('ArrowUp mid-draft does NOT recall (caret can move)', () => {
+    expect(
+      composeHistoryKeyAction({ key: 'ArrowUp', selectionStart: 3, selectionEnd: 3 }),
+    ).toBeNull()
+  })
+
+  it('ArrowUp with a selection at 0 does NOT recall', () => {
+    expect(
+      composeHistoryKeyAction({ key: 'ArrowUp', selectionStart: 0, selectionEnd: 4 }),
+    ).toBeNull()
+  })
+
+  it('ArrowDown reports newer (caller no-ops at draft index -1)', () => {
+    expect(
+      composeHistoryKeyAction({ key: 'ArrowDown', selectionStart: 0, selectionEnd: 0 }),
+    ).toBe('newer')
+    expect(
+      composeHistoryKeyAction({ key: 'ArrowDown', selectionStart: 2, selectionEnd: 2 }),
+    ).toBe('newer')
+  })
+
+  it('non-arrow keys are ignored', () => {
+    expect(
+      composeHistoryKeyAction({ key: 'Enter', selectionStart: 0, selectionEnd: 0 }),
+    ).toBeNull()
+  })
+})
+
+describe('applyComposeHistoryNav', () => {
+  const items = ['newest', 'older', 'oldest']
+
+  it('first Up from draft index -1 shows newest', () => {
+    const next = applyComposeHistoryNav({
+      action: 'older',
+      index: -1,
+      draft: 'wip',
+      items,
+    })
+    expect(next).toEqual({ index: 0, text: 'newest', preventDefault: true })
+  })
+
+  it('further Up walks older, then pins at oldest', () => {
+    const mid = applyComposeHistoryNav({
+      action: 'older',
+      index: 0,
+      draft: 'wip',
+      items,
+    })
+    expect(mid).toEqual({ index: 1, text: 'older', preventDefault: true })
+    const end = applyComposeHistoryNav({
+      action: 'older',
+      index: 2,
+      draft: 'wip',
+      items,
+    })
+    expect(end).toEqual({ index: 2, text: 'oldest', preventDefault: true })
+  })
+
+  it('Down from newest restores the pre-Up draft', () => {
+    const next = applyComposeHistoryNav({
+      action: 'newer',
+      index: 0,
+      draft: 'wip',
+      items,
+    })
+    expect(next).toEqual({ index: -1, text: 'wip', preventDefault: true })
+  })
+
+  it('Down at draft index -1 does not preventDefault', () => {
+    const next = applyComposeHistoryNav({
+      action: 'newer',
+      index: -1,
+      draft: 'wip',
+      items,
+    })
+    expect(next.preventDefault).toBe(false)
+    expect(next.index).toBe(-1)
+    expect(next.text).toBe('wip')
+  })
+
+  it('empty history never claims the key', () => {
+    const up = applyComposeHistoryNav({
+      action: 'older',
+      index: -1,
+      draft: '',
+      items: [],
+    })
+    expect(up.preventDefault).toBe(false)
+    expect(up.index).toBe(-1)
   })
 })

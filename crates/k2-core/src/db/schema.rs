@@ -122,6 +122,14 @@ pub struct Project {
     /// resolve time. Stamped with the current global default when the
     /// row is created (non-retroactive for pre-existing rows).
     pub default_agent: Option<String>,
+    /// Hide auto-surfaced API host-session / sandbox tabs (migration 0099).
+    /// 1 = do not adopt onto the strip; 0 (default) = show. Chat history
+    /// still lists them. Fail-closed: default 0.
+    pub hide_api_sessions: i64,
+    /// Per-workspace completion chime (migration 0101). 1 = chime when an
+    /// unwatched agent in this workspace finishes (AND the global toggle);
+    /// 0 = mute this workspace. Default ON.
+    pub completion_sound_enabled: i64,
 }
 
 impl Project {
@@ -137,7 +145,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -167,6 +175,8 @@ impl Project {
                 dns_manage_enabled: row.get(21).unwrap_or(0),
                 agents_can_create_connections: row.get(22).unwrap_or(0),
                 default_agent: row.get(23).ok().flatten(),
+                hide_api_sessions: row.get(24).unwrap_or(0),
+                completion_sound_enabled: row.get(25).unwrap_or(1),
             })
         })?;
         rows.collect()
@@ -177,7 +187,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -207,6 +217,8 @@ impl Project {
                     dns_manage_enabled: row.get(21).unwrap_or(0),
                     agents_can_create_connections: row.get(22).unwrap_or(0),
                     default_agent: row.get(23).ok().flatten(),
+                    hide_api_sessions: row.get(24).unwrap_or(0),
+                    completion_sound_enabled: row.get(25).unwrap_or(1),
                 })
             },
         )
@@ -848,15 +860,17 @@ impl WorkspaceTabSession {
         conn.execute(
             "INSERT INTO workspace_tab_sessions \
                 (project_id, pane_group_id, agent_name, session_id, command, args_json, cwd, last_seen_at, \
-                 pinned_cols, pinned_rows, pinned_set_by) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), ?8, ?9, ?10) \
+                 pinned_cols, pinned_rows, pinned_set_by, from_api) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), ?8, ?9, ?10, \
+                     CASE WHEN ?3 LIKE 'api-%' THEN 1 ELSE 0 END) \
              ON CONFLICT(project_id, pane_group_id) DO UPDATE SET \
                 agent_name = excluded.agent_name, \
                 session_id = COALESCE(excluded.session_id, workspace_tab_sessions.session_id), \
                 command = excluded.command, \
                 args_json = excluded.args_json, \
                 cwd = excluded.cwd, \
-                last_seen_at = unixepoch()",
+                last_seen_at = unixepoch(), \
+                from_api = CASE WHEN excluded.agent_name LIKE 'api-%' THEN 1 ELSE workspace_tab_sessions.from_api END",
             params![
                 row.project_id,
                 row.pane_group_id,
@@ -1003,7 +1017,92 @@ impl WorkspaceTabSession {
              WHERE project_id = ?1 AND pane_group_id = ?2",
             params![project_id, pane_group_id, session_id],
         )?;
+        // Rekey pane → provider conversation id so resume keeps the
+        // same ordinal (does not increment).
+        let agent_name = conn
+            .query_row(
+                "SELECT agent_name, command FROM workspace_tab_sessions \
+                 WHERE project_id = ?1 AND pane_group_id = ?2",
+                params![project_id, pane_group_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .ok();
+        if let Some((agent_name, command)) = agent_name {
+            let _ = crate::workspace_session_handles::ensure_sidecar_handle(
+                conn,
+                project_id,
+                &agent_name,
+                command.as_deref(),
+                Some(session_id),
+                pane_group_id,
+            );
+        }
         Ok(())
+    }
+
+    /// Reverse-index: provider conversation id → tab row (wake that cell).
+    pub fn get_by_session_id(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Option<WorkspaceTabSession>> {
+        let mut stmt = conn.prepare(
+            "SELECT project_id, pane_group_id, agent_name, session_id, \
+                    command, args_json, cwd, last_seen_at, \
+                    pinned_cols, pinned_rows, pinned_set_by \
+             FROM workspace_tab_sessions \
+             WHERE session_id = ?1 \
+             ORDER BY last_seen_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![session_id], |r| {
+            Ok(WorkspaceTabSession {
+                project_id: r.get(0)?,
+                pane_group_id: r.get(1)?,
+                agent_name: r.get(2)?,
+                session_id: r.get(3)?,
+                command: r.get(4)?,
+                args_json: r.get(5)?,
+                cwd: r.get(6)?,
+                last_seen_at: r.get(7)?,
+                pinned_cols: r.get(8)?,
+                pinned_rows: r.get(9)?,
+                pinned_set_by: r.get(10)?,
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// All tab rows for a workspace (sessions-live / whoami / uniqueness).
+    pub fn list_by_project(
+        conn: &Connection,
+        project_id: &str,
+    ) -> Result<Vec<WorkspaceTabSession>> {
+        let mut stmt = conn.prepare(
+            "SELECT project_id, pane_group_id, agent_name, session_id, \
+                    command, args_json, cwd, last_seen_at, \
+                    pinned_cols, pinned_rows, pinned_set_by \
+             FROM workspace_tab_sessions \
+             WHERE project_id = ?1 \
+             ORDER BY last_seen_at DESC",
+        )?;
+        let rows = stmt.query_map(params![project_id], |r| {
+            Ok(WorkspaceTabSession {
+                project_id: r.get(0)?,
+                pane_group_id: r.get(1)?,
+                agent_name: r.get(2)?,
+                session_id: r.get(3)?,
+                command: r.get(4)?,
+                args_json: r.get(5)?,
+                cwd: r.get(6)?,
+                last_seen_at: r.get(7)?,
+                pinned_cols: r.get(8)?,
+                pinned_rows: r.get(9)?,
+                pinned_set_by: r.get(10)?,
+            })
+        })?;
+        rows.collect()
     }
 }
 
@@ -1352,6 +1451,37 @@ impl WorkspaceSession {
              FROM workspace_sessions WHERE terminal_id = ?1 LIMIT 1"
         )?;
         let mut rows = stmt.query_map(params![terminal_id], |row| {
+            Ok(WorkspaceSession {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                terminal_id: row.get(2)?,
+                session_id: row.get(3)?,
+                harness: row.get(4)?,
+                owner: row.get(5)?,
+                status: row.get(6)?,
+                status_message: row.get(7)?,
+                last_activity_at: row.get(8)?,
+                created_at: row.get(9)?,
+                active_terminal_id: row.get(10)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(s)) => Ok(Some(s)),
+            Some(Err(e)) => Err(e),
+            None => Ok(None),
+        }
+    }
+
+    /// Reverse-index: provider conversation id → canonical workspace row.
+    pub fn get_by_session_id(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Option<WorkspaceSession>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, terminal_id, session_id, harness, owner, status, status_message, last_activity_at, created_at, active_terminal_id \
+             FROM workspace_sessions WHERE session_id = ?1 LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![session_id], |row| {
             Ok(WorkspaceSession {
                 id: row.get(0)?,
                 project_id: row.get(1)?,
@@ -1752,10 +1882,13 @@ impl AgentHeartbeat {
         wakeup_path: &str,
         enabled: bool,
     ) -> Result<()> {
+        // D22: NEW inserts land in the pinned (workspace) chat.
+        // Explicit column — do not ALTER the table DEFAULT (existing
+        // auto rows stay 0; do not UPDATE them).
         conn.execute(
             "INSERT INTO workspace_heartbeats \
-             (id, project_id, name, frequency, spec_json, wakeup_path, enabled, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch())",
+             (id, project_id, name, frequency, spec_json, wakeup_path, enabled, created_at, use_workspace_session) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), 1)",
             params![id, project_id, name, frequency, spec_json, wakeup_path, enabled as i64],
         )?;
         Ok(())

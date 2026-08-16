@@ -2,22 +2,23 @@
 // (prd-workspace-kb-brain-map-and-publish §7.2).
 //
 // Pattern mirrors FeedbackPage / ProjectsPage: fixed-inset overlay with
-// its own top bar (ServerSwitcher + Settings gear + PageTabs). Opened
+// its own top bar (ServerSwitcher + PageTabs). Opened
 // only from WorkspacePanel → View Wiki; not a permanent PageTabs entry.
 // Esc (or close) returns to Agents.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import remarkGfm from 'remark-gfm'
-import { titleBarDragOnMouseDown } from '@/lib/titlebar-drag'
+import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { usePageViewStore } from '@/stores/page-view'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { useToastStore } from '@/stores/toast'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import PageTabs from '@/components/TopBar/PageTabs'
-import SettingsGearButton from '@/components/TopBar/SettingsGearButton'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
+import TimerButton from '@/components/Timer/TimerButton'
+import ModeToggle from '@/components/Presence/ModeToggle'
 import { Surface } from '@/components/ui'
 import Markdown from '@/components/Markdown/Markdown'
 import WikiGraph from './WikiGraph'
@@ -446,6 +447,7 @@ export default function WikiPage(): React.JSX.Element | null {
         bordered={false}
         className="flex items-center border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
         onMouseDown={titleBarDragOnMouseDown}
+        onDoubleClick={titleBarOnDoubleClick}
         style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
       >
         <div className="flex items-center gap-2 flex-1">
@@ -454,7 +456,6 @@ export default function WikiPage(): React.JSX.Element | null {
             K2
           </span>
           <ServerSwitcher />
-          <SettingsGearButton />
           <div className="no-drag">
             <PageTabs />
           </div>
@@ -470,6 +471,9 @@ export default function WikiPage(): React.JSX.Element | null {
 
         <DesktopChromeRight>
           <div className="flex items-center gap-2 no-drag">
+            <TimerButton />
+            <ModeToggle />
+            <div className="w-px h-4 bg-[var(--color-border)]" />
             <button
               type="button"
               onClick={closeWiki}

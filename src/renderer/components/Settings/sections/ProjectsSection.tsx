@@ -46,6 +46,8 @@ import { CanonicalAgentModal } from './CanonicalAgentModal'
 import { type HarnessProbe } from './canonicalState'
 import { RoleSkillButton, CanonicalAgentButton } from './CanonicalAgentButtons'
 import { WorkspaceApiKeysPanel } from './ApiTokensSection'
+import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessionsToggle'
+import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
 import { workspaceGrantSlug } from './api-keys-api'
 
 /**
@@ -70,7 +72,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.heartbeat', section: 'projects', label: 'Heartbeat Schedule', description: 'Scheduled / hourly / off per-project heartbeat mode', keywords: ['heartbeat', 'schedule', 'cron', 'hourly', 'scheduled'] },
   { id: 'projects.agents', section: 'projects', label: 'Project Agents', description: 'Custom agent personas + wake-up files per workspace', keywords: ['agent', 'persona', 'wakeup', 'create'] },
   { id: 'projects.worktrees', section: 'projects', label: 'Worktree Folders', description: 'Enable/disable per-agent git worktrees', keywords: ['worktree', 'git', 'branch'] },
-  { id: 'projects.relations', section: 'projects', label: 'Connected Workspaces', description: 'Workspace relations for cross-project messaging', keywords: ['relations', 'connected', 'cross-workspace', 'links'] },
+  { id: 'projects.relations', section: 'projects', label: 'Connections', description: 'Local and federated connections for this workspace', keywords: ['relations', 'connected', 'connections', 'cross-workspace', 'links', 'federation'] },
   { id: 'projects.cursor-migrate', section: 'projects', label: 'Cursor Session Migration', description: 'Port Cursor IDE sessions into K2', keywords: ['cursor', 'migrate', 'session', 'import'] },
 ]
 
@@ -965,11 +967,30 @@ function WorktreeFoldersOnDisk({
 type WorkspaceSettingsTab =
   | 'agent'
   | 'context'
+  | 'connections'
   | 'skills'
   | 'schedule'
   | 'worktrees'
   | 'import'
   | 'api'
+
+const WORKSPACE_SETTINGS_TABS: WorkspaceSettingsTab[] = [
+  'agent',
+  'context',
+  'connections',
+  'skills',
+  'schedule',
+  'worktrees',
+  'import',
+  'api',
+]
+
+function parseWorkspaceSettingsTab(value: string | null): WorkspaceSettingsTab | null {
+  if (value && (WORKSPACE_SETTINGS_TABS as string[]).includes(value)) {
+    return value as WorkspaceSettingsTab
+  }
+  return null
+}
 
 // ── Workspace Detail (right panel content) ─────────────────────────────
 function ProjectDetail({
@@ -1024,7 +1045,20 @@ function ProjectDetail({
   const [canonicalModalMode, setCanonicalModalMode] = useState<'setup' | 'manage' | null>(null)
   const [canonicalProbes, setCanonicalProbes] = useState<HarnessProbe[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [settingsTab, setSettingsTab] = useState<WorkspaceSettingsTab>('agent')
+  // Consume the deep-link on first paint so manage → Heartbeats does not
+  // flash Agent, and so a remount still sees the requested tab.
+  const initialWorkspaceTab = useSettingsStore((s) => s.initialWorkspaceTab)
+  const [settingsTab, setSettingsTab] = useState<WorkspaceSettingsTab>(
+    () => parseWorkspaceSettingsTab(useSettingsStore.getState().initialWorkspaceTab) ?? 'agent',
+  )
+  useEffect(() => {
+    const parsed = parseWorkspaceSettingsTab(initialWorkspaceTab)
+    if (parsed) setSettingsTab(parsed)
+  }, [initialWorkspaceTab])
+  const selectSettingsTab = (tab: WorkspaceSettingsTab): void => {
+    useSettingsStore.setState({ initialWorkspaceTab: null })
+    setSettingsTab(tab)
+  }
 
   // Close takeovers when the selected workspace changes — keep settingsTab
   // so the user stays on Context / Heartbeats / etc. while flipping agents.
@@ -1265,6 +1299,7 @@ function ProjectDetail({
     { id: 'agent', label: 'Agent' },
     // Context always visible — holds PROJECT.md; Agent Settings nested inside.
     { id: 'context', label: 'Context' },
+    { id: 'connections', label: 'Connections' },
     { id: 'skills', label: 'Skills' },
     { id: 'schedule', label: 'Heartbeats' },
     { id: 'worktrees', label: 'Worktrees' },
@@ -1323,7 +1358,7 @@ function ProjectDetail({
                 role="tab"
                 type="button"
                 aria-selected={active}
-                onClick={() => setSettingsTab(tab.id)}
+                onClick={() => selectSettingsTab(tab.id)}
                 className={`px-3 py-2 text-[11px] font-medium transition-colors no-drag cursor-pointer border-b-2 -mb-px ${
                   active
                     ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
@@ -1464,6 +1499,7 @@ function ProjectDetail({
               )}
 
               <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
+              <WorkspaceCompletionSoundToggle project={project} />
             </SettingsGroup>
 
             <SettingsGroup title="Remote Access">
@@ -1471,12 +1507,6 @@ function ProjectDetail({
             </SettingsGroup>
             <SettingsGroup title="DNS">
               <DnsManageToggle project={project} fetchProjects={fetchProjects} />
-            </SettingsGroup>
-            <SettingsGroup title="Connections">
-              <AgentsCreateConnectionsToggle project={project} fetchProjects={fetchProjects} />
-            </SettingsGroup>
-            <SettingsGroup title="Connected Workspaces">
-              <ConnectedWorkspacesPanel projectId={project.id} />
             </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
@@ -1505,6 +1535,17 @@ function ProjectDetail({
               }
             />
           </div>
+        )}
+
+        {settingsTab === 'connections' && (
+          <>
+            <SettingsGroup title="Connections">
+              <AgentsCreateConnectionsToggle project={project} fetchProjects={fetchProjects} />
+            </SettingsGroup>
+            <SettingsGroup title="Connected Workspaces">
+              <ConnectedWorkspacesPanel projectId={project.id} />
+            </SettingsGroup>
+          </>
         )}
 
         {settingsTab === 'skills' && (
@@ -1580,6 +1621,9 @@ function ProjectDetail({
         )}
         {settingsTab === 'api' && (
           <div className="space-y-6">
+            <SettingsGroup title="Sessions">
+              <HideApiSessionsToggle project={project} />
+            </SettingsGroup>
             <WorkspaceHostSessionCapPanel projectPath={project.path} />
             <WorkspaceApiKeysPanel workspaceSlug={workspaceGrantSlug(project)} />
           </div>

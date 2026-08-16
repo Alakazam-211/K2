@@ -11,6 +11,7 @@ import { llmChat } from '@/lib/llmDaemonClient'
 import { settingsUpdate } from '@/lib/daemon-settings'
 import { useAssistantStore, type DebugPass, type InteractionLogEntry } from '../../stores/assistant'
 import { useSettingsStore } from '../../stores/settings'
+import { usePageViewStore } from '../../stores/page-view'
 import { useTabsStore } from '../../stores/tabs'
 import { useProjectsStore } from '../../stores/projects'
 import { usePanelsStore } from '../../stores/panels'
@@ -637,6 +638,21 @@ function DebugLogEntry({ entry }: { entry: InteractionLogEntry }): React.JSX.Ele
   )
 }
 
+function AssistantCloseButton({ onClose }: { onClose: () => void }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="no-drag flex h-5 w-5 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-transparent border-none cursor-pointer outline-none"
+      onClick={onClose}
+      title="Close"
+    >
+      <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+        <path d="M4 4l8 8M12 4l-8 8" />
+      </svg>
+    </button>
+  )
+}
+
 export default function AssistantBar(): React.JSX.Element | null {
   const isOpen = useAssistantStore((s) => s.isOpen)
   const isLoading = useAssistantStore((s) => s.isLoading)
@@ -656,6 +672,8 @@ export default function AssistantBar(): React.JSX.Element | null {
   const clearLog = useAssistantStore((s) => s.clearLog)
 
   const openSettings = useSettingsStore((s) => s.openSettings)
+  const settingsOpen = useSettingsStore((s) => s.settingsOpen)
+  const page = usePageViewStore((s) => s.page)
 
   const [message, setMessage] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -690,6 +708,21 @@ export default function AssistantBar(): React.JSX.Element | null {
     }
   }, [isOpen, setLastResult])
 
+  const handleClose = useCallback(() => {
+    if (useAssistantStore.getState().isLoading) {
+      abortedRef.current = true
+      setLoading(false)
+    }
+    close()
+  }, [setLoading, close])
+
+  // The bar is position:fixed z-900, so it covers Settings / Projects /
+  // Tickets / Wiki unless we dismiss it when the user leaves Agents.
+  useEffect(() => {
+    if (!useAssistantStore.getState().isOpen) return
+    handleClose()
+  }, [page, settingsOpen, handleClose])
+
   // Listen for Escape globally whenever the console is open
   useEffect(() => {
     if (!isOpen) return
@@ -697,16 +730,12 @@ export default function AssistantBar(): React.JSX.Element | null {
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
-        if (isLoading) {
-          abortedRef.current = true
-          setLoading(false)
-        }
-        close()
+        handleClose()
       }
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [isOpen, isLoading, setLoading, close])
+  }, [isOpen, handleClose])
 
   // Clear lastResult after it's been logged (no auto-close)
   useEffect(() => {
@@ -814,7 +843,7 @@ export default function AssistantBar(): React.JSX.Element | null {
         if (showHistory) {
           setShowHistory(false)
         } else {
-          close()
+          handleClose()
         }
         return
       }
@@ -861,7 +890,7 @@ export default function AssistantBar(): React.JSX.Element | null {
         return
       }
     },
-    [close, handleSubmit, history, historyIndex, message, showHistory]
+    [handleClose, handleSubmit, history, historyIndex, message, showHistory]
   )
 
   // When the user types normally, reset history navigation
@@ -918,6 +947,7 @@ export default function AssistantBar(): React.JSX.Element | null {
           <span className="text-[11px] text-[var(--color-text-muted)] flex-shrink-0 tabular-nums">
             {Math.round(downloadProgress)}%
           </span>
+          <AssistantCloseButton onClose={handleClose} />
         </div>
       </div>
     )
@@ -932,7 +962,7 @@ export default function AssistantBar(): React.JSX.Element | null {
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.preventDefault()
-            close()
+            handleClose()
           }
         }}
         tabIndex={-1}
@@ -961,6 +991,7 @@ export default function AssistantBar(): React.JSX.Element | null {
           >
             ESC
           </kbd>
+          <AssistantCloseButton onClose={handleClose} />
         </div>
       </div>
     )
@@ -969,6 +1000,9 @@ export default function AssistantBar(): React.JSX.Element | null {
   // Main console UI
   return (
     <div className="fixed bottom-0 left-0 right-0 z-[900]" style={barStyle}>
+      <div className="absolute top-1.5 right-2 z-10">
+        <AssistantCloseButton onClose={handleClose} />
+      </div>
       {/* ── Debug log panel (expandable raw output) ────────────────── */}
       {showDebugLog && (
         <div
@@ -979,7 +1013,7 @@ export default function AssistantBar(): React.JSX.Element | null {
             overflowY: 'auto',
           }}
         >
-          <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid var(--color-border)' }}>
+          <div className="flex items-center justify-between px-4 py-2 pr-10" style={{ borderBottom: '1px solid var(--color-border)' }}>
             <span className="text-[11px] text-[var(--color-text-muted)] tracking-wide">
               Debug Log ({interactionLog.length})
             </span>
@@ -1027,7 +1061,7 @@ export default function AssistantBar(): React.JSX.Element | null {
 
             if (isSystem) {
               return (
-                <div key={`${entry.timestamp}-${i}`} className="px-4 py-1.5">
+                <div key={`${entry.timestamp}-${i}`} className="px-4 py-1.5 pr-10">
                   <span className="text-[10px]" style={{ color: isLoaded ? 'var(--color-status-ok)' : 'var(--color-text-muted)', opacity: isLoaded ? 0.7 : 0.4 }}>
                     {isLoaded ? '●' : '○'} {entry.result}
                   </span>
@@ -1036,7 +1070,7 @@ export default function AssistantBar(): React.JSX.Element | null {
             }
 
             return (
-              <div key={`${entry.timestamp}-${i}`} className="px-4 py-1.5">
+              <div key={`${entry.timestamp}-${i}`} className="px-4 py-1.5 pr-10">
                 <div className="flex items-baseline gap-2">
                   <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0 opacity-40">{'>'}</span>
                   <span className="text-[11px] text-[var(--color-text-muted)]">{entry.message}</span>

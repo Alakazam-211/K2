@@ -8,6 +8,7 @@ import {
   contextErrorMessage,
   DEFAULT_CATALOG_ENTRIES,
   FALLBACK_PINNED,
+  FALLBACK_TOOLING_PREVIEW,
   fetchContextCatalog,
   fetchContextStack,
   layerDisplayLabel,
@@ -39,13 +40,6 @@ interface Props {
   /** Canonical Agent controls — rendered under the stack in the left column. */
   canonicalSlot?: React.ReactNode
 }
-
-const TOOLING_PREVIEW = `## Tooling
-
-This workspace is managed by **K2**. You have the \`k2\` CLI — load the **k2-cli** skill (\`.k2/skills/k2-cli/SKILL.md\`) for the full command reference (\`msg\`, \`inbox\`, \`activity\`, \`connections\`, \`heartbeat\`, \`feedback\`, \`project\`, \`mail\`).
-
-This section is generated — toggle it on/off in the stack; there is no separate file to edit.
-`
 
 type Selected =
   | { kind: 'system'; id: string }
@@ -383,6 +377,7 @@ export function ContextStackEditor({
         canEdit,
         isWiki: false,
         isTooling: Boolean(row.generated),
+        preview: row.preview,
       }
     }
     const layer = stack.layers.find((l) => l.id === selected.id)
@@ -407,6 +402,7 @@ export function ContextStackEditor({
       canEdit,
       isWiki: isWiki || isLiveRoster,
       isTooling: false,
+      preview: undefined,
     }
   }, [selected, stack])
 
@@ -590,7 +586,7 @@ export function ContextStackEditor({
             )}
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            {selectedMeta?.isWiki && (
+            {(selectedMeta?.isWiki || selectedMeta?.isTooling) && (
               <span className="text-[9px] text-[var(--color-text-muted)] italic">view only</span>
             )}
             {selectedMeta?.canEdit && onEdit && (
@@ -613,8 +609,16 @@ export function ContextStackEditor({
           )}
           {selectedMeta?.isTooling && (
             <div className="absolute inset-0 overflow-y-auto p-4 [scrollbar-gutter:stable]">
+              <p className="text-[10px] text-[var(--color-text-muted)] leading-snug mb-3">
+                Generated block inlined into{' '}
+                <span className="font-mono text-[var(--color-text-secondary)]">AGENTS.md</span>
+                {' '}as <span className="font-mono">## Tooling</span> when this layer is on.
+                There is no file to edit.
+              </p>
               <div className="prose prose-invert prose-sm max-w-none text-[12px] text-[var(--color-text-secondary)]">
-                <Markdown remarkPlugins={[remarkGfm]}>{TOOLING_PREVIEW}</Markdown>
+                <Markdown remarkPlugins={[remarkGfm]}>
+                  {selectedMeta.preview?.trim() || FALLBACK_TOOLING_PREVIEW}
+                </Markdown>
               </div>
             </div>
           )}

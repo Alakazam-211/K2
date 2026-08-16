@@ -33,6 +33,8 @@ export interface PinnedLayer {
   enabled?: boolean
   /** Openable in AI File Editor (false for tooling / wiki packs). */
   editable?: boolean
+  /** Generated AGENTS.md body when there is no file (Tooling). */
+  preview?: string
 }
 
 /** Built-in / installed catalog entry for Browse catalog + `k2 agent context catalog`. */
@@ -92,6 +94,7 @@ function normalizePinned(p: PinnedLayer): PinnedLayer {
     generated: Boolean(p.generated),
     enabled: p.enabled === undefined ? true : Boolean(p.enabled),
     editable: p.editable === undefined ? !Boolean(p.generated) : Boolean(p.editable),
+    preview: typeof p.preview === 'string' && p.preview.trim() ? p.preview : undefined,
   }
 }
 
@@ -266,6 +269,13 @@ export function contextErrorMessage(err: unknown, fallback = 'Request failed'): 
   return raw || fallback
 }
 
+/** Same block compose inlines as `## Tooling` (keep in lockstep with
+ *  `AGENTS_MD_TOOLING_SECTION` in k2-core). Used when the daemon is
+ *  unreachable or an older daemon omits `preview`. */
+export const FALLBACK_TOOLING_PREVIEW = `## Tooling
+
+This workspace is managed by **K2**. You have the \`k2\` CLI — load the **k2-cli** skill (\`.k2/skills/k2-cli/SKILL.md\`) for the full command reference (\`msg\`, \`inbox\`, \`activity\`, \`connections\`, \`heartbeat\`, \`feedback\` to ask your human a durable question, \`project\` for your project group's shared chat — reply to a \`[project:<name>]\`-prefixed message with \`k2 project msg <name> "..."\`, never \`k2 msg\` — and \`mail\` for your agent email: mint/read/wait, send under your human's governance).`
+
 /** Static pinned rows when the daemon is unreachable (UI scaffold). */
 export const FALLBACK_PINNED: PinnedLayer[] = [
   {
@@ -295,6 +305,7 @@ export const FALLBACK_PINNED: PinnedLayer[] = [
     generated: true,
     enabled: true,
     editable: false,
+    preview: FALLBACK_TOOLING_PREVIEW,
   },
 ]
 

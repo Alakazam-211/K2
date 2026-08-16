@@ -56,6 +56,9 @@ pub struct PinnedLayer {
     /// Whether the AI File Editor can open this path (false for tooling / wiki packs).
     #[serde(default = "default_true")]
     pub editable: bool,
+    /// Generated body shown in Settings when there is no file (Tooling).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -1038,6 +1041,7 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
         generated: false,
         enabled: inc_agent,
         editable: true,
+        preview: None,
     });
 
     // Project
@@ -1064,6 +1068,7 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
         generated: false,
         enabled: inc_project,
         editable: true,
+        preview: None,
     });
 
     // Tooling footer (generated k2-cli pointer)
@@ -1072,10 +1077,15 @@ pub fn pinned_info(project_path: &str) -> Vec<PinnedLayer> {
         path: String::new(),
         label: "Tooling (k2-cli pointer)".into(),
         exists: true,
-        bytes: 0,
+        bytes: crate::workspace::skill_regen::AGENTS_MD_TOOLING_SECTION.len() as u64,
         generated: true,
         enabled: inc_tooling,
         editable: false,
+        preview: Some(
+            crate::workspace::skill_regen::AGENTS_MD_TOOLING_SECTION
+                .trim_end()
+                .to_string(),
+        ),
     });
 
     out
@@ -1763,6 +1773,22 @@ mod tests {
         assert!(stack.pinned[1].label.contains("Project"));
         assert!(stack.pinned[2].label.contains("Tooling"));
         assert!(stack.pinned[2].generated);
+        let tooling = stack.pinned[2]
+            .preview
+            .as_deref()
+            .expect("tooling preview");
+        assert!(
+            tooling.starts_with("## Tooling"),
+            "preview must be the AGENTS.md section, got {tooling:?}"
+        );
+        assert!(
+            tooling.contains("k2-cli") && tooling.contains(".k2/skills/k2-cli/SKILL.md"),
+            "preview must show the k2-cli pointer body"
+        );
+        assert_eq!(
+            tooling,
+            crate::workspace::skill_regen::AGENTS_MD_TOOLING_SECTION.trim_end()
+        );
         assert!(stack.pinned[0].enabled);
         assert!(stack.pinned[1].enabled);
         assert!(stack.pinned[2].enabled);

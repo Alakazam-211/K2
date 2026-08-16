@@ -3,6 +3,78 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.100 — Sidecars, compose memory, quieter API tabs (in progress)
+
+Not released yet. This is the running log of everything landed on `main`
+after **0.40.99**. More QoL is still coming before we cut the build.
+
+### Sidecars — extra chats in a workspace are not a second agent
+
+Opening another agent in **sales** used to start a second PTY that
+thought it *was* sales. `k2 msg sales` always hit the primary. A raw
+session UUID was the only other address, and people do not type those.
+
+Extra harness sessions are now **sidecars** of the workspace agent
+(same AGENT.md / inbox). They learn that from env + **`k2 whoami`**,
+not from a spawn prompt (no token burn on open).
+
+```
+k2 whoami                 # role, address, primary, session
+k2 msg sales              # primary
+k2 msg sales/1            # first unnamed extra (durable — closing tabs
+                          # does not renumber)
+k2 msg sales/reviewer     # renamed in Chats
+```
+
+Reply stamp is typeable: `[from sales/reviewer]`. Asleep sidecars
+wake **that** chat, not the pinned one. Hyphen (`sales-reviewer`) is
+still a workspace name, not a sidecar.
+
+New heartbeats land in the **pinned** chat by default, with a loud
+hint to train a sidecar (`k2 heartbeat session <name> --set …`)
+instead of dumping a flow on the primary.
+
+Still coming before ship: Claude / Grok / Pi `--append-system-prompt`
+(or Grok `--rules`) as a *hint* on top of `k2 whoami`;
+`heartbeat session --set sales/reviewer` (today `--set` is still a
+session UUID + `--provider`).
+
+### Compose bar remembers sends; Esc cancels the turn
+
+Up/Down in the compose box walks the last 50 sends for that
+workspace (shared across clients for now). Esc or Ctrl+C from
+compose injects the same cancel bytes the terminal would, **without**
+stealing focus out of the box.
+
+### Chat history, tab names, and the workspace drawer
+
+Renaming a chat in **Chats** is the name the session tab shows
+(`chat-session-tab` — custom name wins, else the provider title).
+API host-session tabs can stay out of the strip: per-workspace
+**Hide API sessions** (they remain under Chat history → API).
+The workspace drawer has connected-agents / API sections and a
+per-workspace completion-sound bell (AND-gated with the global
+Settings toggle — mute the workspace, or mute everything).
+
+### Settings / chrome
+
+Settings gear is gone from the top bar — **GateChrome** + the
+existing page tabs / server switcher own that chrome. Heartbeat
+and Projects settings match the new delivery + sound fields.
+
+### What to try (dev / next build)
+
+1. Open a second Claude (or Grok / Pi) tab in a workspace → run
+   `k2 whoami` there → `role: sidecar`, `address: <ws>/1`.
+2. Rename that chat to **Reviewer** → `k2 msg <ws>/reviewer "hi"`.
+   Bare `k2 msg <ws>` still hits the primary.
+3. Compose: send two lines, Up/Down recalls them; Esc cancels a
+   turn without leaving the box.
+4. Workspace drawer: bell mutes that workspace’s completion chime;
+   Hide API sessions keeps `/v1` tabs out of the strip.
+
+---
+
 ## 0.40.99 — Windows reinstall replaces a leftover tunnel client
 
 0.40.98 could overwrite `k2.exe` and `k2-daemon.exe`, but an orphaned

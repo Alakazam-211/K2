@@ -1500,9 +1500,6 @@ function ProjectDetail({
               )}
 
               <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
-            </SettingsGroup>
-
-            <SettingsGroup title="Completion sound">
               <WorkspaceCompletionSoundToggle project={project} />
             </SettingsGroup>
 

@@ -122,7 +122,7 @@ export default function PageTabs(): React.JSX.Element {
         selected={!settingsOpen && page === 'projects'}
         onSelect={() => select('projects')}
         badge={projectsUnread}
-        title="Projects — grouped agents, shared dashboards"
+        title="Projects — grouped agents, shared dashboards (⌘P)"
       >
         Projects
       </PageTab>

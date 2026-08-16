@@ -83,6 +83,11 @@ Uncheck **Seed the wiki** in Add Workspace, or pass `--no-wiki` on
 `k2 workspace create|open` and `k2 agent hire`. Existing notes are
 never overwritten.
 
+### ⌘P opens Projects
+
+The Keybindings row that still said **Review Queue** is **Open
+Projects**. ⌘P (View → Projects) opens the Projects page.
+
 ### Settings / chrome
 
 Settings gear is gone from the top bar — **GateChrome** + the

@@ -384,6 +384,11 @@ function AppRoot(): React.JSX.Element {
         e.preventDefault()
         toggleRunningAgents()
       }
+      if (e.metaKey && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault()
+        useSettingsStore.getState().closeSettings()
+        usePageViewStore.getState().setPage('projects')
+      }
       // Cmd+[ to go back, Cmd+] to go forward
       if (e.metaKey && !e.shiftKey && e.key === '[') {
         e.preventDefault()
@@ -631,6 +636,10 @@ function AppRoot(): React.JSX.Element {
       // macOS, so the menu event is how ⌘J reaches us from the menu path.
       listen('menu:running-agents', () => {
         useRunningAgentsStore.getState().toggle()
+      }).then(track)
+      listen('menu:projects', () => {
+        useSettingsStore.getState().closeSettings()
+        usePageViewStore.getState().setPage('projects')
       }).then(track)
       listen('menu:toggle-sidebar', () => {
         useSidebarStore.getState().toggle()

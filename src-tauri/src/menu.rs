@@ -97,6 +97,7 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
             // 0.40.31 — "Review Queue" (CmdOrCtrl+P) re-pointed to the ⌘J
             // Running Agents session switcher; the Review Queue UI is gone.
             &MenuItem::with_id(handle, "running-agents", "Running Agents", true, Some("CmdOrCtrl+J"))?,
+            &MenuItem::with_id(handle, "projects", "Projects", true, Some("CmdOrCtrl+P"))?,
             &MenuItem::with_id(handle, "toggle-sidebar", "Toggle Sidebar", true, Some("CmdOrCtrl+B"))?,
             &MenuItem::with_id(handle, "toggle-assistant", "Toggle Assistant", true, Some("CmdOrCtrl+L"))?,
             &MenuItem::with_id(handle, "focus-window", "Open in Focus Window", true, Some("CmdOrCtrl+Shift+F"))?,
@@ -202,6 +203,9 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         }
         "running-agents" => {
             emit_to_focused(app, "menu:running-agents");
+        }
+        "projects" => {
+            emit_to_focused(app, "menu:projects");
         }
         "toggle-sidebar" => {
             emit_to_focused(app, "menu:toggle-sidebar");

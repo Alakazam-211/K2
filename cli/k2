@@ -754,15 +754,53 @@ if "error" in d:
     sys.exit(0)
 roster = d.get("roster") or {}
 agents = roster.get("agents") or []
-agent_lc = (agent or "").strip().lower()
-matches = [a for a in agents if (a.get("agent") or "").strip().lower() == agent_lc]
-if not matches:
+
+def slugify(s):
+    if not s:
+        return ""
+    for ch in s:
+        if ch in "/:\\" or ch == "\0" or (ord(ch) < 32):
+            return (s or "").strip().lower()
+    t = s.strip().lower().replace("_", "-")
+    t = "-".join(p for p in t.split() if p)
+    while "--" in t:
+        t = t.replace("--", "-")
+    t = t.strip("-")
+    t = "".join(c for c in t if c.isalnum() or c == "-")
+    while "--" in t:
+        t = t.replace("--", "-")
+    return t.strip("-")
+
+def norm(s):
+    g = slugify(s)
+    return g if g else (s or "").strip().lower()
+
+want = norm(agent)
+matches = []
+for a in agents:
+    handle = (a.get("agent") or "").strip()
+    aliases = a.get("aliases") or []
+    wname = a.get("workspace_name") or ""
+    hit = norm(handle) == want or any(norm(x) == want for x in aliases)
+    if not hit and wname.strip() and norm(wname) == want:
+        hit = True
+    if hit:
+        matches.append(a)
+# workspace_name convenience: if two UUIDs match, AMBIG
+ids = []
+seen = set()
+for a in matches:
+    wid = a.get("workspace_id") or ""
+    if wid not in seen:
+        seen.add(wid)
+        ids.append(a)
+if not ids:
     names = ", ".join(a.get("agent", "?") for a in agents)
     print("NONE\t%s" % names); sys.exit(0)
-if len(matches) > 1:
-    info = "; ".join("%s (%s)" % (a.get("workspace_name", "?"), a.get("workspace_id", "?")) for a in matches)
+if len(ids) > 1:
+    info = "; ".join("%s (%s)" % (a.get("workspace_name", "?"), a.get("workspace_id", "?")) for a in ids)
     print("AMBIG\t%s" % info); sys.exit(0)
-print("OK\t%s" % (matches[0].get("workspace_id", "") or ""))
+print("OK\t%s" % (ids[0].get("workspace_id", "") or ""))
 ' "$agent")
 
     local rkind rdetail
@@ -3937,6 +3975,57 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
 }
 
+# D11: change the federated address. Requires an explicit confirm flag.
+cmd_workspace_set_handle() {
+    local confirm=""
+    local args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --i-know-this-breaks-federation) confirm=1; shift ;;
+            *) args+=("$1"); shift ;;
+        esac
+    done
+    local target="${args[0]:-}"
+    local new_handle="${args[1]:-}"
+    if [[ -z "$target" || -z "$new_handle" ]]; then
+        echo "Usage: k2 workspace set-handle <workspace> <handle> --i-know-this-breaks-federation" >&2
+        exit 1
+    fi
+    if [[ -z "$confirm" ]]; then
+        echo "Changing the handle changes this agent's address (old::host → new::host)." >&2
+        echo "Existing federated connections will break until the other side reconnects or updates the handle." >&2
+        echo "Re-run with --i-know-this-breaks-federation to confirm." >&2
+        exit 1
+    fi
+    local resolved_path
+    resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+    if [ -z "$resolved_path" ]; then
+        resolved_path="$target"
+    fi
+    local body
+    body=$(python3 -c 'import json,sys; print(json.dumps({"project":sys.argv[1],"handle":sys.argv[2]}))' \
+        "$resolved_path" "$new_handle")
+    cli_post_json "/cli/workspace/set-handle" "$body" \
+        | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    if "error" in d:
+        err = d.get("error")
+        if isinstance(err, dict):
+            print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+        else:
+            print("Error: %s" % err, file=sys.stderr)
+        sys.exit(1)
+    print("Set handle to: %s" % d.get("handle", ""))
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+}
+
 # Phase 0b (prd-wiki-public-chat-api-loopback-v1) — per-workspace owner API
 # guest policy. Re-injected by the daemon on every /v1 host-session spawn and
 # message-live so external callers are framed as non-owners. Callers cannot
@@ -5666,23 +5755,33 @@ cmd_msg() {
         fi
     fi
     if [[ -z "$from" ]]; then
-        # Prefer the agent display name (persona / projects.name) so the
-        # recipient sees [from ProposalWriter], never a passport UUID.
-        # Scoped UDS stamps also rewrite server-side; this covers TCP /
-        # owner-token fallbacks and keeps CLI self-attribution correct.
+        # Prefer the workspace handle (D18) so [from] is a reply address,
+        # never a pretty display name or a passport UUID.
         local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
         if [[ -n "$sender_path" ]]; then
             local sender_name
-            sender_name=$(cli_request "/cli/workspace/agent-display-name" \
+            sender_name=$(cli_request "/cli/workspace/handle" \
                 "project=$(urlencode "$sender_path")" 2>/dev/null \
                 | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
-    name = (d.get("display_name") or "").strip()
+    name = (d.get("handle") or "").strip()
     if name:
         print(name)
 except Exception:
     pass' 2>/dev/null)
+            if [[ -z "$sender_name" ]]; then
+                sender_name=$(cli_request "/cli/workspace/agent-display-name" \
+                    "project=$(urlencode "$sender_path")" 2>/dev/null \
+                    | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    name = (d.get("handle") or "").strip()
+    if name:
+        print(name)
+except Exception:
+    pass' 2>/dev/null)
+            fi
             if [[ -z "$sender_name" ]]; then
                 sender_name=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$sender_path")" 2>/dev/null \
                     | python3 -c 'import json,sys,os
@@ -22683,6 +22782,7 @@ EOF
             cleanup)           cmd_workspace_cleanup ;;
             agent-name)        shift 2; cmd_workspace_get_agent_display_name "$@" ;;
             set-agent-name)    shift 2; cmd_workspace_set_agent_display_name "$@" ;;
+            set-handle)        shift 2; cmd_workspace_set_handle "$@" ;;
             resume-chat-args)  shift 2; cmd_workspace_resume_chat_args "$@" ;;
             # B3a (sandbox) — set/clear the per-workspace Anthropic API key.
             api-key)           shift 2; cmd_workspace_set_api_key "$@" ;;
@@ -22692,7 +22792,7 @@ EOF
             api-skip-permissions) shift 2; cmd_workspace_api_skip_permissions "$@" ;;
             # Per-workspace concurrent host-session live cell cap (default 15, max 512).
             host-session-cell-cap|api-host-session-cap) shift 2; cmd_workspace_host_session_cell_cap "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|...> [args]" >&2; exit 1 ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|set-agent-name|set-handle|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

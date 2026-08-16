@@ -897,12 +897,53 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
         Ok(body) => {
             let parsed: serde_json::Value =
                 serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+            lazy_heal_connections_from_roster_json(&parsed);
             CliResponse::ok_json(
                 serde_json::json!({ "peer": peer.fingerprint, "roster": parsed }).to_string(),
             )
         }
         Err(e) => json_err("502 Bad Gateway", format!("fetch peer roster: {e}")),
     }
+}
+
+/// D10: rewrite stored connection agents that already match a roster
+/// handle or alias. Never attach leftover `sales` to "the only agent".
+fn lazy_heal_connections_from_roster_json(parsed: &serde_json::Value) {
+    let agents = parsed
+        .get("agents")
+        .or_else(|| parsed.get("roster").and_then(|r| r.get("agents")))
+        .and_then(|v| v.as_array());
+    let Some(agents) = agents else {
+        return;
+    };
+    let mut roster: Vec<(String, Vec<String>)> = Vec::new();
+    for a in agents {
+        let handle = a
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if handle.is_empty() {
+            continue;
+        }
+        let aliases = a
+            .get("aliases")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        roster.push((handle, aliases));
+    }
+    if roster.is_empty() {
+        return;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::workspace::handle::heal_remote_connections_from_roster(&conn, &roster);
 }
 
 /// GET `<base>/cli/federation/roster?fp&ts&sig` and return the body. Blocking

@@ -22,6 +22,7 @@ pub mod agent_launch;
 pub mod agent_resolve;
 pub mod checkin;
 pub mod display;
+pub mod handle;
 pub mod events;
 pub mod launch_profile;
 // Phase 2.5e: workspace lifecycle DB ops (register / create / open /

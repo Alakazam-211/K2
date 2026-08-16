@@ -292,14 +292,9 @@ fn slug_candidates(workspace: &Path) -> Vec<String> {
     }
     let db = k2_core::db::shared();
     let conn = db.lock();
-    if let Ok(name) = conn.query_row(
-        "SELECT name FROM projects WHERE path = ?1 ORDER BY rowid LIMIT 1",
-        rusqlite::params![&project],
-        |r| r.get::<_, String>(0),
-    ) {
-        let t = name.trim().to_string();
-        if !t.is_empty() && !t.contains('/') && !out.iter().any(|s| s == &t) {
-            out.push(t);
+    for s in k2_core::workspace::handle::slug_candidates_for_path(&conn, &project) {
+        if !s.contains('/') && !out.iter().any(|x| x == &s) {
+            out.push(s);
         }
     }
     out

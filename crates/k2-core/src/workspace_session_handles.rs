@@ -54,6 +54,105 @@ pub fn slugify_custom_name(name: &str) -> Result<String, String> {
     Ok(slug)
 }
 
+/// Slug a workspace display / handle candidate into an address token.
+///
+/// D4: **new helper** — do not change [`slugify_custom_name`] (live sidecar
+/// addresses like `scout_v3` / `k2---marketing` must stay). Workspace
+/// handles add `_` → `-` and hyphen-collapse so `K2 - Marketing` →
+/// `k2-marketing`.
+///
+/// Rejects `/` `:` `\` NUL / C0 controls. Result must match
+/// `^[a-z0-9]+(-[a-z0-9]+)*$`.
+pub fn slugify_address_token(name: &str) -> Result<String, String> {
+    if name.chars().any(|c| c == '/' || c == ':' || c == '\\' || c == '\0' || c.is_control()) {
+        return Err(
+            "workspace handle cannot contain '/', ':', or other path characters".to_string(),
+        );
+    }
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("workspace handle is empty".to_string());
+    }
+    let mut slug = trimmed.to_lowercase().replace('_', "-");
+    slug = slug
+        .split_whitespace()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    slug = collapse_hyphens(&slug);
+    slug = slug
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    slug = collapse_hyphens(&slug);
+    if slug.is_empty() {
+        return Err("workspace handle is empty after slugify".to_string());
+    }
+    if !is_address_token(&slug) {
+        return Err(format!(
+            "workspace handle '{slug}' is not a valid address token (expected lowercase letters, digits, and single hyphens)"
+        ));
+    }
+    Ok(slug)
+}
+
+fn collapse_hyphens(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_hyphen = false;
+    for c in s.chars() {
+        if c == '-' {
+            if !prev_hyphen && !out.is_empty() {
+                out.push('-');
+            }
+            prev_hyphen = true;
+        } else {
+            out.push(c);
+            prev_hyphen = false;
+        }
+    }
+    if out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+/// `^[a-z0-9]+(-[a-z0-9]+)*$`
+pub fn is_address_token(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut chars = s.chars().peekable();
+    let mut saw_alnum = false;
+    while let Some(c) = chars.next() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            saw_alnum = true;
+            continue;
+        }
+        if c == '-' {
+            match chars.peek() {
+                Some(n) if n.is_ascii_lowercase() || n.is_ascii_digit() => continue,
+                _ => return false,
+            }
+        }
+        return false;
+    }
+    saw_alnum && !s.starts_with('-') && !s.ends_with('-') && !s.contains("--")
+}
+
+/// D9/D10 matcher: slug if it succeeds, else trim + ASCII lowercase.
+pub fn normalize_address_token(token: &str) -> String {
+    match slugify_address_token(token) {
+        Ok(s) => s,
+        Err(_) => token.trim().to_ascii_lowercase(),
+    }
+}
+
+/// True when two tokens slug-equate (`Sales Team` = `sales team` = `sales-team`).
+/// Different tokens (`sales` vs `sales-team`) do **not** match (D20).
+pub fn address_tokens_match(a: &str, b: &str) -> bool {
+    normalize_address_token(a) == normalize_address_token(b)
+}
+
 /// True when `agent_name` is the workspace's canonical (pinned) slot.
 pub fn is_canonical_agent_name(agent_name: &str, project_id: &str) -> bool {
     !project_id.is_empty() && agent_name == project_id
@@ -450,18 +549,28 @@ pub fn project_id_for_session_id(
     Ok(None)
 }
 
-/// Workspace address token (`projects.name`, else folder basename).
+/// Workspace address token: `projects.handle` (D7). Falls back to slugging
+/// `projects.name` or the folder basename when handle is not yet minted
+/// (unmigrated test rows). Never returns a display string with spaces.
 pub fn workspace_address_name(conn: &Connection, project_id: &str) -> Result<String, String> {
-    let (name, path): (String, String) = conn
+    let (handle, name, path): (Option<String>, String, String) = conn
         .query_row(
-            "SELECT name, path FROM projects WHERE id = ?1",
+            "SELECT handle, name, path FROM projects WHERE id = ?1",
             params![project_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .map_err(|_| format!("workspace not found: {project_id}"))?;
+    if let Some(h) = handle {
+        let h = h.trim();
+        if !h.is_empty() {
+            return Ok(h.to_string());
+        }
+    }
     let name = name.trim();
-    if !name.is_empty() && !name.contains('/') && !name.contains(':') {
-        return Ok(name.to_string());
+    if !name.is_empty() {
+        if let Ok(slug) = slugify_address_token(name) {
+            return Ok(slug);
+        }
     }
     let base = std::path::Path::new(&path)
         .file_name()
@@ -469,10 +578,9 @@ pub fn workspace_address_name(conn: &Connection, project_id: &str) -> Result<Str
         .unwrap_or_default();
     let base = base.trim();
     if base.is_empty() {
-        Err("workspace has no addressable name".to_string())
-    } else {
-        Ok(base.to_string())
+        return Err("workspace has no addressable name".to_string());
     }
+    slugify_address_token(base).or_else(|_| Ok(base.to_ascii_lowercase()))
 }
 
 /// Full address: `sales` (canonical) or `sales/reviewer` (sidecar).
@@ -655,6 +763,38 @@ mod tests {
         slugify_custom_name("sales:reviewer").expect_err("colon");
         slugify_custom_name("   ").expect_err("empty");
         slugify_custom_name("a\\b").expect_err("backslash");
+        // Live sidecar spellings must stay (D4 — do not change this fn).
+        assert_eq!(slugify_custom_name("scout_v3").expect("ok"), "scout_v3");
+        assert_eq!(
+            slugify_custom_name("K2 - Marketing").expect("ok"),
+            "k2---marketing"
+        );
+    }
+
+    #[test]
+    fn slugify_address_token_workspace_rules() {
+        assert_eq!(slugify_address_token("sales").expect("ok"), "sales");
+        assert_eq!(slugify_address_token("Sales").expect("ok"), "sales");
+        assert_eq!(slugify_address_token("Sales Team").expect("ok"), "sales-team");
+        assert_eq!(
+            slugify_address_token("  Code Review  ").expect("ok"),
+            "code-review"
+        );
+        assert_eq!(slugify_address_token("QA Bot").expect("ok"), "qa-bot");
+        assert_eq!(
+            slugify_address_token("K2 - Marketing Manager").expect("ok"),
+            "k2-marketing-manager"
+        );
+        assert_eq!(slugify_address_token("scout_v3").expect("ok"), "scout-v3");
+        slugify_address_token("sales/1").expect_err("slash");
+        slugify_address_token("name::host").expect_err("colon");
+        slugify_address_token("   ").expect_err("empty");
+        assert!(address_tokens_match("Sales Team", "sales-team"));
+        assert!(address_tokens_match("sales team", "sales-team"));
+        assert!(
+            !address_tokens_match("sales", "sales-team"),
+            "D20: leftover pre-rename token must not slug-match the new handle"
+        );
     }
 
     #[test]

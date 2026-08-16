@@ -41,10 +41,56 @@ export interface RosterAgent {
   workspace_id: string
   /** Peer-side workspace display name. */
   workspace_name: string
-  /** The peer workspace's agent name. */
+  /** The peer workspace's handle (address). */
   agent: string
   /** `<workspace-uuid>::<agent>` — prefix the peer selector to address it. */
   address: string
+  /** Pre-slug / basename / previous-handle tokens (D8). */
+  aliases?: string[]
+}
+
+/** D4 workspace-handle slug (renderer twin of `slugify_address_token`). */
+export function slugifyAddressToken(name: string): string | null {
+  for (const ch of name) {
+    const code = ch.charCodeAt(0)
+    if (ch === '/' || ch === ':' || ch === '\\' || ch === '\0' || code < 32) {
+      return null
+    }
+  }
+  let slug = name.trim().toLowerCase().replace(/_/g, '-')
+  slug = slug.split(/\s+/).filter(Boolean).join('-')
+  slug = slug.replace(/-+/g, '-').replace(/^-|-$/g, '')
+  slug = slug.replace(/[^a-z0-9-]/g, '')
+  slug = slug.replace(/-+/g, '-').replace(/^-|-$/g, '')
+  if (!slug || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) return null
+  return slug
+}
+
+export function normalizeAddressToken(token: string): string {
+  return slugifyAddressToken(token) ?? token.trim().toLowerCase()
+}
+
+/** D9: match want against handle + aliases + workspace_name. */
+export function rosterAgentMatches(want: string, entry: RosterAgent): boolean {
+  const n = normalizeAddressToken(want)
+  if (n === normalizeAddressToken(entry.agent)) return true
+  for (const alias of entry.aliases ?? []) {
+    if (n === normalizeAddressToken(alias)) return true
+  }
+  const wname = (entry.workspace_name ?? '').trim()
+  return wname.length > 0 && n === normalizeAddressToken(wname)
+}
+
+export function matchRosterAgents(want: string, agents: RosterAgent[]): RosterAgent[] {
+  const hits = agents.filter((a) => rosterAgentMatches(want, a))
+  const seen = new Set<string>()
+  const out: RosterAgent[] = []
+  for (const a of hits) {
+    if (seen.has(a.workspace_id)) continue
+    seen.add(a.workspace_id)
+    out.push(a)
+  }
+  return out
 }
 
 /**
@@ -443,14 +489,13 @@ function workspaceBasename(path: string): string {
  *  joining the peer roster (agent→workspace UUID, via the LOCAL peer-roster seam)
  *  with the peer's projects/list (UUID→path). Never throws; returns {error} when
  *  it can't resolve unambiguously. */
-async function resolveRemoteWorkspacePath(
+export async function resolveRemoteWorkspacePath(
   localC: DaemonCreds, remoteC: DaemonCreds, remoteFp: string, remoteAgent: string,
 ): Promise<{ path: string } | { error: string }> {
   const rosterBody = await cliGet<{ roster?: { agents?: RosterAgent[] } }>(
     localC, 'federation/peer-roster', { peer: remoteFp })
   const agents = rosterBody?.roster?.agents ?? []
-  const want = remoteAgent.trim().toLowerCase()
-  const matches = agents.filter((a) => a.agent.trim().toLowerCase() === want)
+  const matches = matchRosterAgents(remoteAgent, agents)
   if (matches.length === 0) return { error: `no workspace on the peer exposes agent "${remoteAgent}"` }
   if (matches.length > 1) return { error: `agent "${remoteAgent}" is ambiguous on the peer (${matches.length} workspaces)` }
   const wsId = matches[0].workspace_id

@@ -130,28 +130,35 @@ fn resolve_target_project_id(
     conn: &rusqlite::Connection,
     token: &str,
 ) -> Result<String, String> {
+    use crate::workspace::handle::{resolve_workspace_token, WorkspaceTokenResolve};
+    let path = match resolve_workspace_token(conn, token) {
+        WorkspaceTokenResolve::Found { path } => path,
+        WorkspaceTokenResolve::Ambiguous { handles } => {
+            return Err(format!(
+                "Workspace '{}' is ambiguous — matches handles {}. Type the handle.",
+                token,
+                handles.join(", ")
+            ));
+        }
+        WorkspaceTokenResolve::Miss => {
+            return Err(match suggest_project_name(conn, token) {
+                Some(s) => format!(
+                    "Workspace '{}' not found — did you mean '{}'? Run `k2 connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
+                    token, s
+                ),
+                None => format!(
+                    "Workspace '{}' not found. Run `k2 connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
+                    token
+                ),
+            });
+        }
+    };
     conn.query_row(
-        "SELECT id FROM projects WHERE name = ?1 OR path = ?1 ORDER BY rowid LIMIT 1",
-        rusqlite::params![token],
+        "SELECT id FROM projects WHERE path = ?1",
+        rusqlite::params![path],
         |row| row.get::<_, String>(0),
     )
-    .or_else(|_| {
-        conn.query_row(
-            "SELECT id FROM projects WHERE name = ?1 COLLATE NOCASE ORDER BY rowid LIMIT 1",
-            rusqlite::params![token],
-            |row| row.get::<_, String>(0),
-        )
-    })
-    .map_err(|_| match suggest_project_name(conn, token) {
-        Some(s) => format!(
-            "Workspace '{}' not found — did you mean '{}'? Run `k2 connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
-            token, s
-        ),
-        None => format!(
-            "Workspace '{}' not found. Run `k2 connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
-            token
-        ),
-    })
+    .map_err(|_| format!("Workspace '{token}' not found."))
 }
 
 /// Resolve `(name, path)` for a project id; `("Unknown", "")` when the

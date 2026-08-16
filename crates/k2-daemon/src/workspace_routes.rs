@@ -148,12 +148,34 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // always returns a string. Mtime-cached, so render-path
         // callers can hit this freely.
         "/cli/workspace/agent-display-name" => match need_project(params) {
-            Ok(p) => CliResponse::ok_json(
-                serde_json::json!({
-                    "display_name": k2_core::workspace::display::agent_display_name(&p),
-                })
-                .to_string(),
-            ),
+            Ok(p) => {
+                let handle = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    k2_core::workspace::handle::project_handle_for_path(&conn, &p)
+                        .unwrap_or_default()
+                };
+                CliResponse::ok_json(
+                    serde_json::json!({
+                        "display_name": k2_core::workspace::display::agent_display_name(&p),
+                        "handle": handle,
+                    })
+                    .to_string(),
+                )
+            }
+            Err(r) => r,
+        },
+
+        "/cli/workspace/handle" => match need_project(params) {
+            Ok(p) => {
+                let handle = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    k2_core::workspace::handle::project_handle_for_path(&conn, &p)
+                        .unwrap_or_default()
+                };
+                CliResponse::ok_json(serde_json::json!({ "handle": handle }).to_string())
+            }
             Err(r) => r,
         },
 
@@ -195,15 +217,13 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             .ok()
                         };
                         if let Some(project_id) = project_id_opt {
-                            if let Some(agent_name) =
-                                k2_core::workspace::agent_identity::resolve_agent_name(&p)
+                            // D13/label push: live map key is bare project_id.
+                            let canonical_key =
+                                crate::canonical_session::canonical_key_for(&project_id);
+                            if let Some(session) =
+                                crate::v2_session_map::lookup_by_agent_name(&canonical_key)
                             {
-                                let canonical_key = format!("{project_id}:{agent_name}");
-                                if let Some(session) =
-                                    crate::v2_session_map::lookup_by_agent_name(&canonical_key)
-                                {
-                                    session.set_label(new_name.clone(), true);
-                                }
+                                session.set_label(new_name.clone(), true);
                             }
                         }
                         k2_core::agent_hooks::emit(
@@ -265,11 +285,19 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             if q.is_empty() {
                 return Some(CliResponse::bad_request("Missing q (workspace name | path | UUID)"));
             }
-            match crate::workspace_msg::resolve_workspace(&q) {
-                Some(path) => CliResponse::ok_json(
+            match crate::workspace_msg::resolve_workspace_detailed(&q) {
+                crate::workspace_msg::WorkspaceResolve::Found(path) => CliResponse::ok_json(
                     serde_json::json!({ "path": path }).to_string(),
                 ),
-                None => CliResponse::bad_request(format!("workspace not found: {q}")),
+                crate::workspace_msg::WorkspaceResolve::Ambiguous { handles } => {
+                    CliResponse::bad_request(format!(
+                        "AMBIG: workspace '{q}' matches more than one project (handles: {})",
+                        handles.join(", ")
+                    ))
+                }
+                crate::workspace_msg::WorkspaceResolve::Miss => {
+                    CliResponse::bad_request(format!("workspace not found: {q}"))
+                }
             }
         }
         // 0.38.6: `k2so msg <workspace>` is strictly live-or-fail.
@@ -377,6 +405,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // chain gets an explicit 405 instead of a confusing 404 — the
         // `feedback_post_only_route_guards` house rule.
         "/cli/workspace/set" => CliResponse::method_not_allowed(),
+        "/cli/workspace/set-handle" => CliResponse::method_not_allowed(),
 
         _ => return None,
     };
@@ -587,6 +616,49 @@ pub fn handle_workspace_set(body: &[u8]) -> CliResponse {
     )
 }
 
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default)]
+struct SetHandleBody {
+    project: String,
+    handle: String,
+}
+
+/// `POST /cli/workspace/set-handle` — D11. Confirm lives in CLI/UI;
+/// the daemon always applies a valid unique slug.
+pub fn handle_set_handle(body: &[u8]) -> CliResponse {
+    let b: SetHandleBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    if b.project.is_empty() {
+        return CliResponse::bad_request("missing 'project' (workspace name | path | UUID)");
+    }
+    if b.handle.trim().is_empty() {
+        return CliResponse::bad_request("missing 'handle'");
+    }
+    let Some(path) = crate::workspace_msg::resolve_workspace(&b.project) else {
+        return workspace_not_found_response(&b.project);
+    };
+    match k2_core::workspace::handle::set_workspace_handle(&path, &b.handle) {
+        Ok(handle) => {
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::SyncProjects,
+                serde_json::Value::Null,
+            );
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "success": true,
+                    "handle": handle,
+                    "path": path,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — 0.40.24 S2 settings plane
 // ──────────────────────────────────────────────────────────────────────
@@ -740,6 +812,14 @@ mod tests {
             .expect("route must be claimed by the GET chain");
         assert_eq!(resp.status, "405 Method Not Allowed");
         assert!(resp.body.contains("POST required"), "body={}", resp.body);
+    }
+
+    #[test]
+    fn workspace_set_handle_get_dispatch_is_405() {
+        let params = HashMap::new();
+        let resp = dispatch("/cli/workspace/set-handle", &params)
+            .expect("route must be claimed by the GET chain");
+        assert_eq!(resp.status, "405 Method Not Allowed");
     }
 
     /// B2: the CLI-canonical `k2` spelling stores as the legacy `k2so`

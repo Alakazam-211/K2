@@ -251,80 +251,35 @@ pub fn resolve_workspace_allowing_handle(token: &str) -> Option<String> {
 }
 
 pub fn resolve_workspace(token: &str) -> Option<String> {
+    match resolve_workspace_detailed(token) {
+        WorkspaceResolve::Found(path) => Some(path),
+        WorkspaceResolve::Ambiguous { .. } | WorkspaceResolve::Miss => None,
+    }
+}
+
+/// Local resolve with AMBIG surface (D19 / §9.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceResolve {
+    Found(String),
+    Ambiguous { handles: Vec<String> },
+    Miss,
+}
+
+pub fn resolve_workspace_detailed(token: &str) -> WorkspaceResolve {
     if token.is_empty() {
-        return None;
+        return WorkspaceResolve::Miss;
     }
     let db = k2_core::db::shared();
     let conn = db.lock();
-
-    // Absolute path (cheapest case — user passes the cwd).
-    if token.starts_with('/') {
-        return conn
-            .query_row(
-                "SELECT path FROM projects WHERE path = ?1",
-                rusqlite::params![token],
-                |r| r.get::<_, String>(0),
-            )
-            .ok();
-    }
-
-    // UUID lookup. `projects.id` is a v4 UUID; cheap to detect by
-    // length + dashes without pulling in the uuid crate for parsing.
-    if token.len() == 36 && token.chars().filter(|c| *c == '-').count() == 4 {
-        if let Ok(path) = conn.query_row(
-            "SELECT path FROM projects WHERE id = ?1",
-            rusqlite::params![token],
-            |r| r.get::<_, String>(0),
-        ) {
-            return Some(path);
+    match k2_core::workspace::handle::resolve_workspace_token(&conn, token) {
+        k2_core::workspace::handle::WorkspaceTokenResolve::Found { path } => {
+            WorkspaceResolve::Found(path)
         }
-    }
-
-    // Name match. Workspace names are short and usually unique within
-    // the user's set; if multiple workspaces share a name we return
-    // the first by insertion order (most users won't hit this).
-    if let Ok(path) = conn.query_row(
-        "SELECT path FROM projects WHERE name = ?1 ORDER BY rowid LIMIT 1",
-        rusqlite::params![token],
-        |r| r.get::<_, String>(0),
-    ) {
-        return Some(path);
-    }
-
-    // 0.39.45 (#33): case-insensitive fallback. Operators (and LLM
-    // agents especially) infer plausible casing from context — `appa`
-    // for a workspace registered as `Appa` — and used to bounce with
-    // workspace_not_found on wiring that was actually fine. Exact-case
-    // still wins above when two projects differ only by case.
-    if let Ok(path) = conn.query_row(
-        "SELECT path FROM projects WHERE name = ?1 COLLATE NOCASE ORDER BY rowid LIMIT 1",
-        rusqlite::params![token],
-        |r| r.get::<_, String>(0),
-    ) {
-        return Some(path);
-    }
-
-    // Basename match — parity with `resolve_workspace_slug` (/v1 host-sessions).
-    // Display `name` can differ from the folder (e.g. name "Sales Interview",
-    // path .../sales-interview). CLI `host-session-cell-cap get sales-interview`
-    // used only this resolve → 404 while POST /v1/w/sales-interview/host-sessions
-    // worked (Julie/Scout 2026-08). Ambiguous basenames → None (fail-closed).
-    let mut stmt = conn.prepare("SELECT path FROM projects").ok()?;
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).ok()?;
-    let mut base_matches: Vec<String> = Vec::new();
-    for path in rows.flatten() {
-        let matches_base = std::path::Path::new(&path)
-            .file_name()
-            .map(|b| b.to_string_lossy().eq_ignore_ascii_case(token))
-            .unwrap_or(false);
-        if matches_base {
-            base_matches.push(path);
+        k2_core::workspace::handle::WorkspaceTokenResolve::Ambiguous { handles } => {
+            WorkspaceResolve::Ambiguous { handles }
         }
+        k2_core::workspace::handle::WorkspaceTokenResolve::Miss => WorkspaceResolve::Miss,
     }
-    if base_matches.len() == 1 {
-        return Some(base_matches.into_iter().next().unwrap());
-    }
-    None
 }
 
 /// First-arg target for `k2 msg` / `talk` / `read` (D12).
@@ -356,6 +311,11 @@ pub fn resolve_msg_target(first_arg: &str) -> Option<MsgTarget> {
 
     if let Some((ws, handle)) = k2_core::workspace_session_handles::split_workspace_handle(token)
     {
+        // First segment must already be a handle token (D14). Pretty
+        // names like `Sales Team/reviewer` are rejected (`/`).
+        if !k2_core::workspace_session_handles::is_address_token(ws) {
+            return None;
+        }
         let path = resolve_workspace(ws)?;
         let project_id = {
             let db = k2_core::db::shared();
@@ -471,10 +431,8 @@ pub fn format_message_user(from: &str, text: &str) -> String {
     format!("[from {sender}] {text}")
 }
 
-/// Last-mile chat attribution: never put a bare project/passport UUID
-/// into the `[from …]` prefix. `k2 msg` / `k2 talk` (and any other
-/// caller) may still hand us a UUID from a scoped stamp or CLI
-/// mis-derive — resolve it to the agent display name when possible.
+/// Last-mile chat attribution: stamp the **handle** (D18), never a
+/// display name or a bare project/passport UUID.
 fn humanize_chat_from(from: &str, empty_fallback: &str) -> String {
     let trimmed = from.trim();
     if trimmed.is_empty() {
@@ -483,11 +441,18 @@ fn humanize_chat_from(from: &str, empty_fallback: &str) -> String {
     if !is_uuid_shape(trimmed) {
         return trimmed.to_string();
     }
-    // Passport / projects.id → human label.
+    // Passport / projects.id → handle.
     if let Some(path) = resolve_workspace(trimmed) {
-        let name = k2_core::workspace::display::agent_display_name(&path);
-        if !name.trim().is_empty() && !is_uuid_shape(name.trim()) {
-            return name;
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Some(id) = resolve_project_id(&conn, &path) {
+            if let Ok(handle) =
+                k2_core::workspace_session_handles::workspace_address_name(&conn, &id)
+            {
+                if !handle.trim().is_empty() && !is_uuid_shape(handle.trim()) {
+                    return handle;
+                }
+            }
         }
         if let Some(base) = Path::new(&path)
             .file_name()
@@ -2397,6 +2362,47 @@ mod tests {
         assert!(
             out.starts_with("[from "),
             "must still frame a from prefix: {out}"
+        );
+    }
+
+    #[test]
+    fn format_message_uuid_stamps_handle_not_display() {
+        k2_core::db::init_for_tests();
+        let id = uuid::Uuid::new_v4().to_string();
+        let dir = std::env::temp_dir().join(format!(
+            "k2-from-handle-{}-{}",
+            std::process::id(),
+            &id
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![&id, "Sales Team", &path],
+            )
+            .unwrap();
+            k2_core::workspace::handle::backfill_workspace_handles(&conn);
+        }
+        let handle = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::workspace::handle::project_handle(&conn, &id).expect("handle")
+        };
+        let out = format_message(&id, "hello", "");
+        assert_eq!(out, format!("[from {handle}] hello"));
+        assert!(!out.contains("Sales Team"), "display must not stamp [from]");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sidecar_pretty_name_slash_is_rejected() {
+        k2_core::db::init_for_tests();
+        assert!(
+            resolve_msg_target("Sales Team/reviewer").is_none(),
+            "pretty name is not a sidecar first segment"
         );
     }
 

@@ -120,6 +120,7 @@ pub fn init_for_tests() -> Arc<ReentrantMutex<Connection>> {
     run_migrations(&conn).expect("test migrations");
     seed_agent_presets(&conn).expect("test seed");
     seed_audit_sentinels(&conn).expect("test audit sentinels");
+    crate::workspace::handle::backfill_workspace_handles(&conn);
     let handle = Arc::new(ReentrantMutex::new(conn));
     match SHARED.set(handle.clone()) {
         Ok(()) => handle,
@@ -188,6 +189,7 @@ pub fn init_database() -> Result<Arc<ReentrantMutex<Connection>>> {
     run_migrations(&conn)?;
     seed_agent_presets(&conn)?;
     seed_audit_sentinels(&conn)?;
+    crate::workspace::handle::backfill_workspace_handles(&conn);
 
     let handle = Arc::new(ReentrantMutex::new(conn));
     // Race-free publish: whoever wins gets their handle stored, losers
@@ -213,6 +215,7 @@ pub(crate) fn bootstrap_test_db_at<P: AsRef<Path>>(path: P) -> Result<()> {
     run_migrations(&conn)?;
     seed_agent_presets(&conn)?;
     seed_audit_sentinels(&conn)?;
+    crate::workspace::handle::backfill_workspace_handles(&conn);
     Ok(())
 }
 
@@ -230,6 +233,7 @@ pub(crate) fn isolated_test_connection() -> Connection {
     run_migrations(&conn).expect("migrations");
     seed_agent_presets(&conn).expect("seed");
     seed_audit_sentinels(&conn).expect("audit sentinels");
+    crate::workspace::handle::backfill_workspace_handles(&conn);
     conn
 }
 
@@ -804,6 +808,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         (
             "0102_workspace_session_handles",
             include_str!("../../drizzle_sql/0102_workspace_session_handles.sql"),
+        ),
+        // 0103 — workspace Agent Name vs Handle split.
+        (
+            "0103_workspace_agent_handle",
+            include_str!("../../drizzle_sql/0103_workspace_agent_handle.sql"),
         ),
     ];
 

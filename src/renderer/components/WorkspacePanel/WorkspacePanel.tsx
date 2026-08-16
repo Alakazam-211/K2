@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { agentDisplayName } from '@/lib/workspace-agent'
 // Plan B — projects_update / workspaces_delete AND the daemon-data git
 // reads/mutations (git_remove_worktree) are host-aware: route through
 // the `/cli/*` HTTP layer (local OR remote). open_in_finder + the
@@ -37,6 +39,7 @@ interface K2soAgentInfo {
 
 export default function WorkspacePanel(): React.JSX.Element {
   const [agents, setAgents] = useState<K2soAgentInfo[]>([])
+  const [displayName, setDisplayName] = useState('')
   const [wsInboxCount, setWsInboxCount] = useState(0)
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
 
@@ -95,6 +98,29 @@ export default function WorkspacePanel(): React.JSX.Element {
     return () => { cancelled = true; clearInterval(interval) }
   }, [activeProjectId, activeProjectPath])
 
+  useEffect(() => {
+    if (!activeProjectPath) {
+      setDisplayName('')
+      return
+    }
+    let cancelled = false
+    const loadName = (): void => {
+      void agentDisplayName(activeProjectPath)
+        .then((n) => { if (!cancelled) setDisplayName(n) })
+        .catch(() => { if (!cancelled) setDisplayName('') })
+    }
+    loadName()
+    let unlisten: (() => void) | undefined
+    void listen('sync:projects', () => { loadName() }).then((fn) => {
+      if (cancelled) fn()
+      else unlisten = fn
+    })
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [activeProjectPath])
+
   const agentMode = activeProject?.agentMode || 'off'
   const isManagerMode = agentMode === 'manager' || agentMode === 'coordinator' || agentMode === 'pod'
   // Primary agent for the workspace — match the resolution that
@@ -146,14 +172,19 @@ export default function WorkspacePanel(): React.JSX.Element {
       <div className="px-3 py-3 border-b border-[var(--color-border)]">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-baseline gap-2 min-w-0">
-            {primaryAgent?.name && (
+            {(displayName || primaryAgent?.name) && (
               <>
                 <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
                   Agent Name
                 </span>
-                <span className="text-xs font-mono text-[var(--color-text-primary)] truncate">
-                  {primaryAgent.name}
+                <span className="text-xs text-[var(--color-text-primary)] truncate">
+                  {displayName || primaryAgent?.name}
                 </span>
+                {activeProject.handle && (
+                  <span className="text-[10px] font-mono text-[var(--color-text-muted)] truncate">
+                    {activeProject.handle}
+                  </span>
+                )}
               </>
             )}
           </div>

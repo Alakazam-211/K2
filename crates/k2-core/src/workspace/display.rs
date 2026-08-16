@@ -173,6 +173,11 @@ pub fn validate_display_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Drop the in-memory display-name cache for `project_path`.
+pub fn invalidate_agent_display_name_cache(project_path: &str) {
+    cache().lock().unwrap().remove(project_path);
+}
+
 /// Write `display_name: <name>` into AGENT.md frontmatter atomically.
 /// Creates the field if absent, replaces it if present. Leaves every
 /// other frontmatter line and the body untouched.
@@ -185,42 +190,21 @@ pub fn validate_display_name(name: &str) -> Result<(), String> {
 /// Reading via `agent_display_name` already tolerates a partial
 /// frontmatter, so the stub is enough to make the read path resolve.
 ///
-/// ## Name stores (0.40.24 S3 + federated-handle fix)
+/// ## Name stores (display vs handle split)
 ///
-/// A rename updates **three** surfaces so local addressing, UI labels,
-/// and federated `name::host` stamps stay one coherent identity:
+/// D12: an Agent Name change writes **display only**:
 ///
-/// 1. AGENT.md `display_name:` — friendly label (UI / conf).
-/// 2. AGENT.md `name:` — technical persona name; federation outbound
-///    `from` and roster projection resolve this via
-///    [`crate::workspace::agent_identity::resolve_agent_name`]. Keeping
-///    it in lockstep with the user-facing rename is what makes
-///    Settings / `k2 agent set --name` actually change
-///    `[from <name>::<host>]` (previously only `display_name` moved,
-///    so peers still saw stale handles like `pod-leader`).
-/// 3. `projects.name` — local name-based addressing
-///    (`resolve_workspace` / `k2 msg <name>`).
+/// 1. AGENT.md `display_name:` — friendly label (UI / nav).
+/// 2. `projects.name` — sidebar / Active bar (D5).
 ///
-/// Canonical PTY map keys remain bare `project_id` (0.37.5) — rewriting
-/// `name:` does **not** drop live sessions. Federated user addresses stay
-/// the intuitive `<name>::<host>` form (not UUIDs).
-///
-/// **Uniqueness (host-local):** the lowercased handle must not already
-/// belong to another registered workspace (persona `name:` /
-/// `display_name:` / `projects.name`). Collisions would make roster
-/// resolution AMBIG and break reply routing for `k2 msg name::host`.
+/// It does **not** rewrite AGENT.md `name:` or `projects.handle`. Those
+/// are the federated street address; changing them is `set-handle`.
+/// Display is not unique (D15).
 ///
 /// An UNREGISTERED path (no `projects` row yet) still writes AGENT.md
-/// only; uniqueness is skipped when there is no peer project list to
-/// compare against in practice (still checked when DB is available).
+/// only; 0 DB rows updated is not an error.
 pub fn set_agent_display_name(project_path: &str, name: &str) -> Result<(), String> {
     validate_display_name(name)?;
-    if let Some(other) = agent_handle_collision(project_path, name) {
-        return Err(format!(
-            "Agent name '{name}' is already used by workspace '{other}'. \
-             Federated addresses are name::host — names must be unique on this server."
-        ));
-    }
 
     let agent_md = workspace_agent_md_path(project_path);
 
@@ -237,16 +221,12 @@ pub fn set_agent_display_name(project_path: &str, name: &str) -> Result<(), Stri
         "---\n---\n\n".to_string()
     };
 
-    // Keep display_name + technical name in lockstep so federation
-    // (resolve_agent_name → name:) and UI (display_name) never diverge
-    // after a user rename.
-    let with_display = rewrite_frontmatter_field(&content, "display_name", name);
-    let updated = rewrite_frontmatter_field(&with_display, "name", name);
+    let updated = rewrite_frontmatter_field(&content, "display_name", name);
 
     crate::workspace::work_item::atomic_write(&agent_md, &updated)?;
 
-    // projects.name (the ADDRESSING name) follows the rename. 0 rows
-    // updated = unregistered path — fine; a real DB error is not.
+    // projects.name follows the display rename. 0 rows updated =
+    // unregistered path — fine; a real DB error is not.
     {
         let db = crate::db::shared();
         let conn = db.lock();
@@ -257,52 +237,9 @@ pub fn set_agent_display_name(project_path: &str, name: &str) -> Result<(), Stri
         .map_err(|e| format!("AGENT.md written, but projects.name update failed: {e}"))?;
     }
 
-    cache().lock().unwrap().remove(project_path);
+    invalidate_agent_display_name_cache(project_path);
 
     Ok(())
-}
-
-/// Host-local federated-handle collision check. Returns the **other**
-/// workspace's `projects.name` (or path basename) when `candidate` is
-/// already taken as a case-insensitive agent handle. Self is excluded
-/// by path so re-saving the same name is a no-op success.
-fn agent_handle_collision(project_path: &str, candidate: &str) -> Option<String> {
-    let want = candidate.trim().to_ascii_lowercase();
-    if want.is_empty() {
-        return None;
-    }
-    let self_path = std::path::Path::new(project_path);
-    let projects = crate::projects_ops::projects_list().ok()?;
-    for p in projects {
-        if std::path::Path::new(&p.path) == self_path {
-            continue;
-        }
-        // Persona technical name (what federation stamps).
-        if let Some(agent) = crate::workspace::agent_identity::resolve_agent_name(&p.path) {
-            if agent.trim().to_ascii_lowercase() == want {
-                return Some(if p.name.trim().is_empty() {
-                    p.path.clone()
-                } else {
-                    p.name.clone()
-                });
-            }
-        }
-        // Display override may differ from name: on older trees — still
-        // a handle someone might type.
-        let display = agent_display_name(&p.path);
-        if display.trim().to_ascii_lowercase() == want {
-            return Some(if p.name.trim().is_empty() {
-                p.path.clone()
-            } else {
-                p.name.clone()
-            });
-        }
-        // Local addressing name.
-        if p.name.trim().to_ascii_lowercase() == want {
-            return Some(p.name.clone());
-        }
-    }
-    None
 }
 
 /// Replace or insert a single `key: value` line in YAML-ish frontmatter.
@@ -331,7 +268,7 @@ fn agent_handle_collision(project_path: &str, candidate: &str) -> Option<String>
 /// 6. Returns the input unchanged on any malformation (no fence pair,
 ///    not enough lines, etc.) — caller should treat the no-op as the
 ///    safe failure mode.
-fn rewrite_frontmatter_field(content: &str, key: &str, value: &str) -> String {
+pub(crate) fn rewrite_frontmatter_field(content: &str, key: &str, value: &str) -> String {
     // `lines()` strips trailing `\n` and `\r\n` from each line, which
     // gives us a uniform comparison surface for fence detection.
     let lines: Vec<&str> = content.lines().collect();
@@ -492,20 +429,18 @@ mod tests {
 
         set_agent_display_name(&path, "QA Bot").expect("rename must succeed");
 
-        // Store 1: AGENT.md frontmatter (and the read path resolves it,
-        // spaces intact).
+        // Display + projects.name only (D12). name: / handle stay put.
         assert_eq!(agent_display_name(&path), "QA Bot");
-        // Technical name (federation / resolve_agent_name) stays in lockstep.
         let md = std::fs::read_to_string(workspace_agent_md_path(&path)).expect("AGENT.md");
         assert!(
-            md.lines().any(|l| l.trim() == "name: QA Bot"),
-            "technical name: must match rename so federation stamps name::host correctly; got:\n{md}"
+            !md.lines().any(|l| l.trim() == "name: QA Bot"),
+            "display rename must not rewrite name: (handle); got:\n{md}"
         );
         assert!(
             md.lines().any(|l| l.trim() == "display_name: QA Bot"),
             "display_name: must match rename; got:\n{md}"
         );
-        // Store 2: projects.name (addressing).
+        // projects.name (nav / display alias).
         let db_name: String = {
             let db = crate::db::shared();
             let conn = db.lock();
@@ -522,7 +457,8 @@ mod tests {
     }
 
     #[test]
-    fn set_display_name_rejects_host_local_handle_collision() {
+    fn set_display_name_allows_duplicate_display() {
+        // D15: uniqueness is handle-only. Two workspaces may share a display.
         let suffix = uuid::Uuid::new_v4();
         let dir_a = std::env::temp_dir().join(format!(
             "k2-display-collide-a-{}-{}",
@@ -552,15 +488,10 @@ mod tests {
             )
             .unwrap();
         }
-        set_agent_display_name(&path_a, "Scout").expect("first claim");
-        let err = set_agent_display_name(&path_b, "scout")
-            .expect_err("case-insensitive collision must reject");
-        assert!(
-            err.to_ascii_lowercase().contains("already used"),
-            "expected uniqueness error, got: {err}"
-        );
-        // Same workspace re-save is fine.
-        set_agent_display_name(&path_a, "Scout").expect("idempotent self rename");
+        set_agent_display_name(&path_a, "Scout").expect("first");
+        set_agent_display_name(&path_b, "scout").expect("duplicate display is allowed");
+        assert_eq!(agent_display_name(&path_a), "Scout");
+        assert_eq!(agent_display_name(&path_b), "scout");
 
         std::fs::remove_dir_all(&dir_a).ok();
         std::fs::remove_dir_all(&dir_b).ok();

@@ -455,3 +455,28 @@ describe('cliGet retry-on-network-error (via getPubkey)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('roster slug matcher (D9 / D20)', () => {
+  it('hits handle via alias/slug (sales team → sales-team)', async () => {
+    const { matchRosterAgents, rosterAgentMatches, slugifyAddressToken } = await import('./federation')
+    expect(slugifyAddressToken('Sales Team')).toBe('sales-team')
+    expect(slugifyAddressToken('scout_v3')).toBe('scout-v3')
+    expect(slugifyAddressToken('sales/1')).toBeNull()
+
+    const sales = {
+      workspace_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      workspace_name: 'Sales Team',
+      agent: 'sales-team',
+      address: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa::sales-team',
+      aliases: ['sales team', 'cortana'],
+    }
+    expect(rosterAgentMatches('sales team', sales)).toBe(true)
+    expect(rosterAgentMatches('Sales Team', sales)).toBe(true)
+    expect(rosterAgentMatches('sales-team', sales)).toBe(true)
+    expect(rosterAgentMatches('cortana', sales)).toBe(true)
+    expect(rosterAgentMatches('sales', sales)).toBe(false)
+    const hits = matchRosterAgents('sales team', [sales])
+    expect(hits).toHaveLength(1)
+    expect(hits[0].agent).toBe('sales-team')
+  })
+})

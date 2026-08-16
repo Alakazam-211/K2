@@ -113,6 +113,16 @@ fn grant_slugs(workspace_path: &str) -> Vec<String> {
             }
         }
     }
+    let extras: Vec<String> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        crate::workspace::handle::slug_candidates_for_path(&conn, workspace_path)
+    };
+    for s in extras {
+        if !s.contains('/') && s != ".." && !out.iter().any(|x| x == &s) {
+            out.push(s);
+        }
+    }
     out
 }
 

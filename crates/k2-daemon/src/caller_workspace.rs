@@ -241,20 +241,14 @@ pub fn stamp_principal(
     }
 }
 
-/// Chat/display `from` for a stamped principal.
-///
-/// Prefer the workspace's agent display name (`display_name:` → `name:`
-/// → `projects.name`). Fall back to `agent_address` only when it is a
-/// non-empty, non-UUID label (legacy / ad-hoc mints). Never prefer a
-/// bare UUID — that is the passport key, not the human name.
+/// Chat `[from]` for a stamped principal — the workspace **handle** (D18).
+/// Display names stay UI chrome. Fall back to `agent_address` only when
+/// it is a non-empty, non-UUID label. Never prefer a bare UUID.
 fn display_from_for_principal(
     principal: &HookPrincipal,
     path: Option<&str>,
     cell_session_id: Option<&str>,
 ) -> String {
-    let ws_name = path
-        .map(|p| k2_core::workspace::display::agent_display_name(p))
-        .filter(|n| !n.trim().is_empty());
     let primary = {
         let pid = principal.workspace_uuid.trim();
         if !pid.is_empty() {
@@ -263,7 +257,12 @@ fn display_from_for_principal(
             None
         }
     };
-    let label = primary.or(ws_name).unwrap_or_else(|| {
+    let ws_handle = path.and_then(|p| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::handle::project_handle_for_path(&conn, p)
+    });
+    let label = primary.or(ws_handle).unwrap_or_else(|| {
         let addr = principal.agent_address.trim();
         if !addr.is_empty() && !is_uuid_shape(addr) {
             addr.to_string()
@@ -604,8 +603,8 @@ mod tests {
 
         assert_eq!(
             params.get("from").map(String::as_str),
-            Some("ProposalWriter"),
-            "chat from must be display name, not passport uuid"
+            Some("proposalwriter"),
+            "chat from must be the handle, not passport uuid or pretty display"
         );
         assert_eq!(
             params.get("project_id").map(String::as_str),

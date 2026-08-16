@@ -130,6 +130,10 @@ pub struct Project {
     /// unwatched agent in this workspace finishes (AND the global toggle);
     /// 0 = mute this workspace. Default ON.
     pub completion_sound_enabled: i64,
+    /// Workspace address token (migration 0103). Empty when the row has
+    /// not been backfilled yet; writers always mint one.
+    #[serde(default)]
+    pub handle: String,
 }
 
 impl Project {
@@ -145,7 +149,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -177,6 +181,7 @@ impl Project {
                 default_agent: row.get(23).ok().flatten(),
                 hide_api_sessions: row.get(24).unwrap_or(0),
                 completion_sound_enabled: row.get(25).unwrap_or(1),
+                handle: row.get::<_, Option<String>>(26).ok().flatten().unwrap_or_default(),
             })
         })?;
         rows.collect()
@@ -187,7 +192,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -219,6 +224,7 @@ impl Project {
                     default_agent: row.get(23).ok().flatten(),
                     hide_api_sessions: row.get(24).unwrap_or(0),
                     completion_sound_enabled: row.get(25).unwrap_or(1),
+                    handle: row.get::<_, Option<String>>(26).ok().flatten().unwrap_or_default(),
                 })
             },
         )
@@ -235,10 +241,11 @@ impl Project {
         icon_url: Option<&str>,
         focus_group_id: Option<&str>,
     ) -> Result<()> {
+        let handle = crate::workspace::handle::mint_handle_for_create(conn, name);
         conn.execute(
-            "INSERT INTO projects (id, name, path, color, tab_order, worktree_mode, icon_url, focus_group_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, name, path, color, tab_order, worktree_mode, icon_url, focus_group_id],
+            "INSERT INTO projects (id, name, path, color, tab_order, worktree_mode, icon_url, focus_group_id, handle) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, name, path, color, tab_order, worktree_mode, icon_url, focus_group_id, handle],
         )?;
         Ok(())
     }
@@ -2667,14 +2674,20 @@ impl WorkspaceRemoteConnection {
     /// a case-insensitive string compare on `remote_addr`.
     pub fn exists(conn: &Connection, source_project_id: &str, remote_addr: &str) -> Result<bool> {
         if let Some((agent, host)) = split_remote_user_addr(remote_addr) {
-            return conn.query_row(
-                "SELECT COUNT(*) > 0 FROM workspace_remote_connections \
-                 WHERE source_project_id = ?1 \
-                   AND LOWER(agent) = LOWER(?2) \
-                   AND LOWER(host) = LOWER(?3)",
-                params![source_project_id, agent, host],
-                |row| row.get(0),
-            );
+            let mut stmt = conn.prepare(
+                "SELECT agent FROM workspace_remote_connections \
+                 WHERE source_project_id = ?1 AND LOWER(host) = LOWER(?2)",
+            )?;
+            let rows = stmt.query_map(params![source_project_id, host], |row| {
+                row.get::<_, String>(0)
+            })?;
+            for row in rows {
+                let stored = row?;
+                if crate::workspace_session_handles::address_tokens_match(&agent, &stored) {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
         }
         conn.query_row(
             "SELECT COUNT(*) > 0 FROM workspace_remote_connections \
@@ -2693,13 +2706,29 @@ impl WorkspaceRemoteConnection {
         remote_addr: &str,
     ) -> Result<usize> {
         if let Some((agent, host)) = split_remote_user_addr(remote_addr) {
-            return conn.execute(
-                "DELETE FROM workspace_remote_connections \
-                 WHERE source_project_id = ?1 \
-                   AND LOWER(agent) = LOWER(?2) \
-                   AND LOWER(host) = LOWER(?3)",
-                params![source_project_id, agent, host],
-            );
+            let mut stmt = conn.prepare(
+                "SELECT id, agent FROM workspace_remote_connections \
+                 WHERE source_project_id = ?1 AND LOWER(host) = LOWER(?2)",
+            )?;
+            let rows = stmt.query_map(params![source_project_id, host], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut ids = Vec::new();
+            for row in rows {
+                let (id, stored) = row?;
+                if crate::workspace_session_handles::address_tokens_match(&agent, &stored) {
+                    ids.push(id);
+                }
+            }
+            drop(stmt);
+            let mut n = 0usize;
+            for id in ids {
+                n += conn.execute(
+                    "DELETE FROM workspace_remote_connections WHERE id = ?1",
+                    params![id],
+                )?;
+            }
+            return Ok(n);
         }
         conn.execute(
             "DELETE FROM workspace_remote_connections \
@@ -4560,6 +4589,54 @@ mod unit_tests {
         assert_eq!(n, 1);
         assert!(WorkspaceRemoteConnection::list_for_source(&conn, &src).unwrap().is_empty());
         assert!(!WorkspaceRemoteConnection::exists(&conn, &src, "ai@rpm.k2.dev").unwrap());
+    }
+
+    #[test]
+    fn workspace_remote_connection_exists_slug_matches_not_d20() {
+        let conn = fresh();
+        let src = make_project_row(&conn, "/tmp/remote-slug");
+        WorkspaceRemoteConnection::create(
+            &conn,
+            "rc-slug",
+            &src,
+            "sales team::peer.k2.dev",
+            "peer.k2.dev",
+            "sales team",
+            None,
+        )
+        .unwrap();
+        assert!(
+            WorkspaceRemoteConnection::exists(&conn, &src, "sales-team::peer.k2.dev").unwrap(),
+            "stored spaced form must slug-match sales-team"
+        );
+        WorkspaceRemoteConnection::create(
+            &conn,
+            "rc-cortana",
+            &src,
+            "cortana::peer.k2.dev",
+            "peer.k2.dev",
+            "cortana",
+            None,
+        )
+        .unwrap();
+        assert!(
+            WorkspaceRemoteConnection::exists(&conn, &src, "cortana::peer.k2.dev").unwrap(),
+            "folder-basename reverse row matches want cortana"
+        );
+        WorkspaceRemoteConnection::create(
+            &conn,
+            "rc-d20",
+            &src,
+            "sales::other.k2.dev",
+            "other.k2.dev",
+            "sales",
+            None,
+        )
+        .unwrap();
+        assert!(
+            !WorkspaceRemoteConnection::exists(&conn, &src, "sales-team::other.k2.dev").unwrap(),
+            "D20: leftover sales must not match sales-team"
+        );
     }
 
     // ── AgentPreset seed ──────────────────────────────────────────

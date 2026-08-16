@@ -62,6 +62,9 @@ pub struct RosterAgent {
     /// `<workspace-uuid>::<agent>` — the peer prefixes its selector to address
     /// us as `<peer>::<workspace>::<agent>`.
     pub address: String,
+    /// Pre-slug / basename / previous-handle tokens (D8). Empty on old peers.
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 /// This daemon's roster projection (the body the GET returns to a peer).
@@ -102,14 +105,26 @@ pub fn build_local_roster() -> LocalRoster {
             if agent.is_empty() {
                 continue;
             }
-            // Agent label is lowercased so federated handles stay
-            // canonical (`argus::host`, never `Argus::host`).
-            let agent = agent.to_ascii_lowercase();
+            // Roster `agent` is the handle (D8). Prefer projects.handle;
+            // fall back to resolve_agent_name (AGENT.md `name:` after
+            // migrate, or basename for unmigrated test rows).
+            let handle = p.handle.trim();
+            let agent = if !handle.is_empty() {
+                handle.to_ascii_lowercase()
+            } else {
+                agent.to_ascii_lowercase()
+            };
+            let aliases = {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                crate::workspace::handle::aliases_for(&conn, &p.id)
+            };
             agents.push(RosterAgent {
                 address: format!("{}::{}", p.id, agent),
                 workspace_id: p.id,
                 workspace_name: p.name,
                 agent,
+                aliases,
             });
         }
     }
@@ -288,14 +303,25 @@ mod tests {
             .iter()
             .find(|a| a.workspace_id == conf_id)
             .expect("configured workspace must be exposed");
-        let expected_agent = std::path::Path::new(&conf_path)
+        let expected_basename = std::path::Path::new(&conf_path)
             .file_name()
             .unwrap()
             .to_string_lossy()
             .to_ascii_lowercase();
-        assert_eq!(conf.agent, expected_agent.to_ascii_lowercase());
-        assert_eq!(conf.address, format!("{conf_id}::{expected_agent}"));
+        // D8: roster agent is the handle when minted, else resolve_agent_name
+        // (folder basename for unmigrated test rows).
+        assert!(
+            conf.agent == expected_basename || conf.agent == "roster-conf",
+            "roster agent should be handle or basename, got {}",
+            conf.agent
+        );
+        assert_eq!(conf.address, format!("{}::{}", conf_id, conf.agent));
         assert_eq!(conf.workspace_name, "roster-conf");
+        assert!(
+            conf.agent.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            "roster agent must be a handle token: {}",
+            conf.agent
+        );
         // The unconfigured workspace is NOT exposed (opt-in by configuration).
         assert!(
             roster.agents.iter().all(|a| a.workspace_id != bare_id),

@@ -16,7 +16,7 @@ import {
   type FederationPeer,
   type RosterAgent,
 } from '@/lib/federation'
-import { agentDisplayName, setAgentDisplayName } from '@/lib/workspace-agent'
+import { agentDisplayName, agentHandle, setAgentDisplayName, setAgentHandle } from '@/lib/workspace-agent'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
@@ -1476,8 +1476,9 @@ function ProjectDetail({
               <div className="py-2 border-t border-[var(--color-border)]">
                 <AgentDisplayNameField
                   projectPath={project.path}
-                  helpText="Agent name for UI and federated addresses (name::host). Must be unique on this server. Does not move the workspace directory."
+                  helpText="Shown in the nav and Workspace tab. Does not change the handle or federated address."
                 />
+                <AgentHandleField projectPath={project.path} projectHandle={project.handle} />
               </div>
 
               {/* Focus Group */}
@@ -2590,6 +2591,7 @@ function AgentDisplayNameField({
     if (n.length > 64) return 'Display name must be at most 64 characters.'
     if (n !== n.trim()) return 'Display name must not start or end with whitespace.'
     if (n.includes('/')) return "Display name must not contain '/'."
+    if (n.includes(':')) return "Display name must not contain ':' (federated addresses use name::host)."
     // eslint-disable-next-line no-control-regex
     if (/[\u0000-\u001f\u007f-\u009f]/.test(n)) return 'Display name must not contain control characters.'
     return null
@@ -2622,7 +2624,7 @@ function AgentDisplayNameField({
       <div className="flex items-center gap-2">
         <div className="flex-1 min-w-0">
           <label className="block text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-            Agent display name
+            Agent Name
           </label>
           <input
             type="text"
@@ -2662,6 +2664,94 @@ function AgentDisplayNameField({
       )}
       {!error && helpText && (
         <p className="text-[9px] text-[var(--color-text-muted)] mt-1">{helpText}</p>
+      )}
+    </div>
+  )
+}
+
+function AgentHandleField({
+  projectPath,
+  projectHandle,
+}: {
+  projectPath: string
+  projectHandle?: string
+}): React.JSX.Element {
+  const [handle, setHandle] = useState(projectHandle ?? '')
+  const [draft, setDraft] = useState(projectHandle ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const confirm = useConfirmDialogStore((s) => s.confirm)
+
+  useEffect(() => {
+    let cancelled = false
+    agentHandle(projectPath)
+      .then((h) => {
+        if (!cancelled) {
+          setHandle(h)
+          setDraft(h)
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [projectPath, projectHandle])
+
+  const dirty = draft.trim() !== handle.trim() && draft.trim().length > 0
+
+  const onChange = async (): Promise<void> => {
+    const next = draft.trim()
+    if (!next || next === handle) return
+    const ok = await confirm({
+      title: 'Change handle?',
+      message:
+        `Changing the handle changes this agent's address (${handle || 'old'}::host → ${next}::host). Existing federated connections will break until the other side reconnects or updates the handle.`,
+      confirmLabel: 'Change handle',
+      destructive: true,
+    })
+    if (!ok) return
+    setBusy(true)
+    setError(null)
+    try {
+      const stored = await setAgentHandle(projectPath, next)
+      setHandle(stored)
+      setDraft(stored)
+      void emit('sync:projects').catch(() => {})
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      <label className="block text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+        Handle
+      </label>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); setError(null) }}
+          disabled={busy}
+          spellCheck={false}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          className="flex-1 min-w-0 px-2 py-1 text-xs font-mono bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
+        />
+        <button
+          onClick={() => { void onChange() }}
+          disabled={busy || !dirty}
+          className="px-3 py-1.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer disabled:opacity-50 flex-shrink-0"
+        >
+          {busy ? 'Saving…' : 'Change handle…'}
+        </button>
+      </div>
+      {handle && (
+        <p className="text-[9px] font-mono text-[var(--color-text-muted)] mt-1">{handle}::host</p>
+      )}
+      {error && (
+        <p className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</p>
       )}
     </div>
   )

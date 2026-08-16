@@ -18,7 +18,7 @@
 // GET that mutates, matching the old `cli_get` proxy). The display-name body
 // field is snake_case `display_name`; resume-chat-args is camelCase.
 
-import { daemonCliGet } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 
 /** Resolve the workspace's primary-agent display name. Total — the daemon
  *  always returns a string (display_name → name → project name fallback).
@@ -43,6 +43,26 @@ export async function setAgentDisplayName(
     project: projectPath,
     name,
   })
+}
+
+/** Current workspace handle (federated address token). */
+export async function agentHandle(projectPath: string): Promise<string> {
+  const r = await daemonCliGet<{ handle?: string }>('workspace/handle', {
+    project: projectPath,
+  })
+  return r?.handle ?? ''
+}
+
+/** D11: change the handle. Caller must have confirmed the federation break. */
+export async function setAgentHandle(
+  projectPath: string,
+  handle: string,
+): Promise<string> {
+  const r = await daemonCliPost<{ handle?: string }>('workspace/set-handle', {
+    project: projectPath,
+    handle,
+  })
+  return r?.handle ?? handle
 }
 
 /** #657 — persist the pinned chat tab's canonical session id to the

@@ -345,76 +345,16 @@ pub(crate) fn decode_and_validate_segment(raw: &str) -> Option<String> {
 pub fn resolve_workspace_slug(slug: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-
-    // Exact display-name match (the common case; slug == workspace name).
-    let exact: Vec<String> = conn
-        .prepare("SELECT path FROM projects WHERE name = ?1")
-        .ok()
-        .and_then(|mut stmt| {
-            stmt.query_map(rusqlite::params![slug], |r| r.get::<_, String>(0))
-                .ok()
-                .map(|rows| rows.flatten().collect())
-        })
-        .unwrap_or_default();
-    if exact.len() == 1 {
-        return Some(exact.into_iter().next().unwrap());
-    }
-    if exact.len() > 1 {
-        log_debug!(
-            "[v1] ambiguous workspace slug={slug:?}: {} exact name matches — refusing (no LIMIT 1 guess)",
-            exact.len()
-        );
-        return None;
-    }
-
-    // Case-insensitive name fallback (mirrors resolve_workspace #33 — LLM/human
-    // callers infer plausible casing). Exact-case still wins above.
-    let nocase: Vec<String> = conn
-        .prepare("SELECT path FROM projects WHERE name = ?1 COLLATE NOCASE")
-        .ok()
-        .and_then(|mut stmt| {
-            stmt.query_map(rusqlite::params![slug], |r| r.get::<_, String>(0))
-                .ok()
-                .map(|rows| rows.flatten().collect())
-        })
-        .unwrap_or_default();
-    if nocase.len() == 1 {
-        return Some(nocase.into_iter().next().unwrap());
-    }
-    if nocase.len() > 1 {
-        log_debug!(
-            "[v1] ambiguous workspace slug={slug:?}: {} NOCASE name matches — refusing",
-            nocase.len()
-        );
-        return None;
-    }
-
-    // Basename match: the slug equals a registered project's FOLDER basename
-    // (for workspaces whose display name was customized away from the folder).
-    // Collect ALL matches — never pick the first unordered row.
-    let mut stmt = conn.prepare("SELECT path FROM projects").ok()?;
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).ok()?;
-    let mut base_matches: Vec<String> = Vec::new();
-    for p in rows.flatten() {
-        let matches_base = std::path::Path::new(&p)
-            .file_name()
-            .map(|b| b.to_string_lossy().eq_ignore_ascii_case(slug))
-            .unwrap_or(false);
-        if matches_base {
-            base_matches.push(p);
+    match k2_core::workspace::handle::resolve_workspace_token(&conn, slug) {
+        k2_core::workspace::handle::WorkspaceTokenResolve::Found { path } => Some(path),
+        k2_core::workspace::handle::WorkspaceTokenResolve::Ambiguous { handles } => {
+            log_debug!(
+                "[v1] ambiguous workspace slug={slug:?}: handles {handles:?} — refusing"
+            );
+            None
         }
+        k2_core::workspace::handle::WorkspaceTokenResolve::Miss => None,
     }
-    if base_matches.len() == 1 {
-        return Some(base_matches.into_iter().next().unwrap());
-    }
-    if base_matches.len() > 1 {
-        log_debug!(
-            "[v1] ambiguous workspace slug={slug:?}: {} basename matches — refusing",
-            base_matches.len()
-        );
-        return None;
-    }
-    None
 }
 
 /// Resolve `slug` → an AUTHORIZED registered workspace path, or a uniform 404
@@ -1046,6 +986,36 @@ mod tests {
             allowed_workspaces: grant.map(str::to_string),
             capabilities: k2_core::api_keys::ApiCapabilities::all(),
         })
+    }
+
+    #[test]
+    fn resolve_workspace_slug_handle_and_pretty_name() {
+        k2_core::db::init_for_tests();
+        let uniq = uuid::Uuid::new_v4();
+        let path = format!("/tmp/k2-v1ws-slug-{uniq}");
+        let pretty = format!("V1 Slug Team {uniq}");
+        let _id = insert_project(&pretty, &path);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::workspace::handle::backfill_workspace_handles(&conn);
+        }
+        let handle = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::workspace::handle::project_handle_for_path(&conn, &path)
+                .expect("handle minted")
+        };
+        assert_eq!(
+            resolve_workspace_slug(&handle).as_deref(),
+            Some(path.as_str()),
+            "handle must resolve"
+        );
+        assert_eq!(
+            resolve_workspace_slug(&pretty).as_deref(),
+            Some(path.as_str()),
+            "pretty name must still resolve"
+        );
     }
 
     fn insert_project(name: &str, path: &str) -> String {

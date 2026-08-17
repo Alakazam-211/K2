@@ -16,6 +16,8 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { showContextMenu } from '../../lib/context-menu'
 import { pickWorkspaceFolder } from '../../lib/pick-workspace-folder'
 import { useConnectHostStore } from '../../stores/connect-host'
+import { useProjectGroupsStore } from '@/stores/project-groups'
+import { navTagsTooltip } from '@/lib/nav-project-tags'
 import { startCloneTo, startCloneToThisComputer } from '../../lib/start-clone-to'
 import ProjectAvatar from './ProjectAvatar'
 
@@ -49,10 +51,12 @@ function ProjectIcon({
     [roster, project.path]
   )
 
-  // Build tooltip: "WorkspaceName • branch • Alice, Bob" (or "5 here")
+  const projectTags = useProjectGroupsStore((s) => s.tagsByWorkspaceId[project.id] ?? [])
+
+  // Build tooltip: "WorkspaceName • Sales, Ops • Alice, Bob" (or "5 here")
   const tooltipParts = [project.name]
-  if (gitInfo?.isRepo && gitInfo.currentBranch) {
-    tooltipParts.push(gitInfo.currentBranch)
+  if (projectTags.length > 0) {
+    tooltipParts.push(navTagsTooltip(projectTags))
   }
   if (presenceSupported && usersHere.length > 0) {
     tooltipParts.push(

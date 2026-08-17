@@ -44,10 +44,12 @@ vi.mock('@/stores/session-events', () => ({
 
 const api = vi.hoisted(() => ({
   fetchProjectGroups: vi.fn(async () => [] as unknown[]),
+  fetchProjectGroupShow: vi.fn(async () => ({ members: [] as { workspaceId: string }[] })),
   fetchUnreadGroupIds: vi.fn(async () => [] as string[]),
 }))
 vi.mock('@/components/Projects/projects-api', () => ({
   fetchProjectGroups: api.fetchProjectGroups,
+  fetchProjectGroupShow: api.fetchProjectGroupShow,
   fetchUnreadGroupIds: api.fetchUnreadGroupIds,
 }))
 
@@ -80,6 +82,7 @@ describe('project-groups store event wiring', () => {
     usePageViewStore.setState({ page: 'agents' })
     useProjectGroupsStore.setState({
       groups: [],
+      tagsByWorkspaceId: {},
       selectedGroupId: null,
       unreadGroupIds: new Set<string>(),
       chatCollapsed: false,

@@ -28,9 +28,14 @@ import { onProjectGroupsChanged } from '@/stores/session-events'
 import { usePageViewStore } from '@/stores/page-view'
 import {
   fetchProjectGroups,
+  fetchProjectGroupShow,
   fetchUnreadGroupIds,
   type ProjectGroup,
 } from '@/components/Projects/projects-api'
+import {
+  buildTagsByWorkspaceId,
+  type ProjectNavTag,
+} from '@/lib/nav-project-tags'
 import { dropCachedGroupIcon } from '@/components/Projects/group-icon-cache'
 import {
   CHAT_PANEL_DEFAULT_WIDTH,
@@ -120,6 +125,8 @@ export interface MemberPaneRequest {
 interface ProjectGroupsState {
   /** null = not fetched yet (the page shows a loading state). */
   groups: ProjectGroup[] | null
+  /** workspace registry id → project-group chips for the main nav. */
+  tagsByWorkspaceId: Record<string, ProjectNavTag[]>
   /** The nav's selected project (drives the main area + member drawer). */
   selectedGroupId: string | null
   /** Groups with chat messages newer than their last-seen cursor —
@@ -172,6 +179,7 @@ interface ProjectGroupsState {
 
 export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   groups: null,
+  tagsByWorkspaceId: {},
   selectedGroupId: null,
   unreadGroupIds: new Set<string>(),
   revision: 0,
@@ -189,6 +197,19 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       const groups = await fetchProjectGroups()
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== hostKey) return
       set({ groups })
+      const membersByGroupId: Record<string, string[]> = {}
+      await Promise.all(
+        groups.map(async (g) => {
+          try {
+            const show = await fetchProjectGroupShow(g.id)
+            membersByGroupId[g.id] = show.members.map((m) => m.workspaceId)
+          } catch {
+            membersByGroupId[g.id] = []
+          }
+        }),
+      )
+      if (activeHostKey(useConnectHostStore.getState().activeHost) !== hostKey) return
+      set({ tagsByWorkspaceId: buildTagsByWorkspaceId(groups, membersByGroupId) })
       // Drop a selection whose group vanished (delete on another client).
       const sel = get().selectedGroupId
       if (sel && !groups.some((g) => g.id === sel)) set({ selectedGroupId: null })
@@ -287,6 +308,7 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
 onActiveHostChange(() => {
   useProjectGroupsStore.setState((s) => ({
     groups: null,
+    tagsByWorkspaceId: {},
     selectedGroupId: null,
     unreadGroupIds: new Set<string>(),
     revision: s.revision + 1,

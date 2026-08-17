@@ -28,6 +28,7 @@ import ProjectAvatar from './ProjectAvatar'
 import PresenceWorkspaceAvatars from '@/components/Presence/PresenceWorkspaceAvatars'
 import FocusGroupDropdown from './FocusGroupDropdown'
 import ActiveBar from './ActiveBar'
+import { NavProjectTags } from './NavProjectTags'
 import { KeyCombo } from '@/components/KeySymbol'
 
 // ── Nav-visible worktrees (DB-backed via workspace.navVisible field) ─────────
@@ -192,8 +193,6 @@ function SingleProjectItem({
   const setActiveWorkspace = useProjectsStore((s) => s.setActiveWorkspace)
   const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
   // Only poll git info for the active project to avoid hammering git on all repos
-  const { data: gitInfo } = useGitInfo(isActive ? project.path : undefined)
-
   const firstWorkspace = project.workspaces[0]
   const isItemActive = isActive && firstWorkspace && activeWorkspaceId === firstWorkspace.id
 
@@ -202,12 +201,6 @@ function SingleProjectItem({
     (project.workspaces ?? []).filter((ws) => ws.type === 'worktree' && ws.navVisible === 1),
     [project.workspaces]
   )
-
-  // Branch name for worktree-mode projects
-  const worktreeBranchName = useMemo(() => {
-    if (!project.worktreeMode) return null
-    return gitInfo?.isRepo ? gitInfo.currentBranch : null
-  }, [project.worktreeMode, gitInfo])
 
   const handleClick = useCallback(() => {
     if (firstWorkspace) {
@@ -245,15 +238,7 @@ function SingleProjectItem({
             <PresenceWorkspaceAvatars path={project.path} />
           </div>
           <div className="flex items-center gap-1">
-            {gitInfo?.isRepo && gitInfo.currentBranch && (
-              <span
-                className="text-[10px] font-mono text-[var(--color-text-muted)] truncate flex-1"
-                title={gitInfo.currentBranch}
-              >
-                {gitInfo.currentBranch}
-              </span>
-            )}
-            {!(gitInfo?.isRepo && gitInfo.currentBranch) && <span className="flex-1" />}
+            <NavProjectTags workspaceId={project.id} />
             <AgentSpinner projectId={project.id} />
             {shortcutIndex !== undefined && shortcutIndex < 9 && (
               <span className="text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0 py-0.5" style={{ paddingLeft: 8, paddingRight: 8 }}>
@@ -483,9 +468,6 @@ function ProjectItem({
 
   const workspaces = project.workspaces ?? []
 
-  // Only poll git info for the active project to avoid hammering git on all repos
-  const { data: gitInfo } = useGitInfo(isActive ? project.path : undefined)
-
   return (
     <div className="no-drag">
       <button
@@ -517,14 +499,7 @@ function ProjectItem({
               {(project.workspaces ?? []).length}
             </span>
           </div>
-          {gitInfo?.isRepo && gitInfo.currentBranch && (
-            <span
-              className="text-[10px] font-mono text-[var(--color-text-muted)] truncate"
-              title={gitInfo.currentBranch}
-            >
-              {gitInfo.currentBranch}
-            </span>
-          )}
+          <NavProjectTags workspaceId={project.id} />
         </div>
         {/* New worktree + expand/collapse controls */}
         <div className="flex flex-col items-center justify-center gap-0.5 flex-shrink-0">

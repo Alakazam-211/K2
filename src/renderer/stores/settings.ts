@@ -42,6 +42,7 @@ export type SettingsSection =
   | 'keybindings'
   | 'projects'
   | 'project-groups'
+  | 'context-catalog'
   | 'timer'
   /** @deprecated Help guide lives under General → Workspaces. Deep-links redirect. */
   | 'agent-skills'

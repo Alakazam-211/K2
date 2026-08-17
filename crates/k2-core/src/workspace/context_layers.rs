@@ -18,6 +18,9 @@ use uuid::Uuid;
 /// Soft size warning threshold for the composed AGENTS.md body (64 KiB).
 pub const SOFT_WARN_BYTES: u64 = 64 * 1024;
 
+/// Hard max for a host catalog pack `layer.md` (create + scan).
+pub const USER_PACK_LAYER_MAX_BYTES: u64 = 16 * 1024;
+
 // ── Wire / API types ──────────────────────────────────────────────────
 
 /// One optional context layer (DB row + disk existence/size).
@@ -93,6 +96,10 @@ pub struct ContextCatalogEntry {
     pub author: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Host pack directory for user packs (`~/.k2/context/catalog/packs/<slug>`).
+    /// Absent on builtins. Not a workspace path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
 }
 
 /// Full list response: pinned + optional layers + soft-size estimate.
@@ -113,6 +120,7 @@ pub enum ContextError {
     PathEscape(String),
     DuplicateLayer(String),
     CatalogUnknown(String),
+    PackTooLarge(String),
     Db(String),
 }
 
@@ -124,6 +132,7 @@ impl ContextError {
             ContextError::PathEscape(_) => "path_escape",
             ContextError::DuplicateLayer(_) => "duplicate_layer",
             ContextError::CatalogUnknown(_) => "catalog_unknown",
+            ContextError::PackTooLarge(_) => "pack_too_large",
             ContextError::Db(_) => "db_error",
         }
     }
@@ -135,6 +144,7 @@ impl ContextError {
             | ContextError::PathEscape(h)
             | ContextError::DuplicateLayer(h)
             | ContextError::CatalogUnknown(h)
+            | ContextError::PackTooLarge(h)
             | ContextError::Db(h) => h,
         }
     }
@@ -207,6 +217,7 @@ fn builtin_catalog_entry(
         author: Some("K2".into()),
         // Free-form discovery tags only — never put "recommended" here.
         tags: tags.iter().map(|t| (*t).into()).collect(),
+        dir: None,
     }
 }
 
@@ -214,7 +225,7 @@ fn builtin_catalog_entry(
 ///
 /// Live rosters (connections / heartbeats / skills / users) rebuild on every
 /// AGENTS.md compose so always-on context tracks a changing workspace.
-pub fn list_catalog() -> Vec<ContextCatalogEntry> {
+pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
     vec![
         builtin_catalog_entry(
             "wiki:index",
@@ -327,6 +338,526 @@ pub fn list_catalog() -> Vec<ContextCatalogEntry> {
             &["live", "roster", "users"],
         ),
     ]
+}
+
+/// Catalog SSOT: builtins (unchanged) ∪ scanned host user packs.
+///
+/// User packs live at `k2_home()/context/catalog/packs/<slug>/{pack.toml,layer.md}`.
+/// Invalid / `kind=live` / reserved-id collisions are skipped (logged).
+/// Creating a pack does **not** stack it on any workspace.
+pub fn list_catalog() -> Vec<ContextCatalogEntry> {
+    let mut out = list_builtin_catalog();
+    out.extend(scan_user_packs());
+    out
+}
+
+/// Created host catalog pack (library only — not stacked).
+#[derive(Debug, Clone)]
+pub struct CreatedUserPack {
+    pub entry: ContextCatalogEntry,
+    pub dir: PathBuf,
+}
+
+const RESERVED_ID_PREFIXES: &[&str] = &[
+    "wiki:",
+    "manager:",
+    "k2:",
+    "connections:",
+    "heartbeats:",
+    "skills:",
+    "users:",
+    "subagents:",
+    "catalog:",
+    "pinned:",
+    "preset:",
+];
+
+const RESERVED_ALIASES: &[&str] = &[
+    "roster",
+    "people",
+    "manager",
+    "k2",
+    "k2-agent",
+    "hygiene",
+    "subagents",
+    "connected-agents",
+    "workspace-manager",
+    "k2so-agent",
+    "connections",
+    "connections-roster",
+    "heartbeats",
+    "heartbeats-roster",
+    "skills",
+    "skills-roster",
+    "skills-index",
+    "users",
+    "users-roster",
+    "people-roster",
+    "user-roster",
+    "wiki-hygiene",
+    "always-use-subagents",
+    "use-subagents",
+    "wiki-index",
+    "wiki-home",
+    "catalog",
+    "pinned",
+    "preset",
+];
+
+const RESERVED_PATH_STEMS: &[&str] = &[
+    "manager",
+    "k2-agent",
+    "wiki-hygiene",
+    "always-use-subagents",
+    "connections-roster",
+    "heartbeats-roster",
+    "skills-roster",
+    "users-roster",
+];
+
+/// Host library root: `~/.k2/context/catalog/packs`.
+pub fn host_catalog_packs_dir() -> PathBuf {
+    crate::paths::k2_home().join("context").join("catalog").join("packs")
+}
+
+fn user_pack_source(slug: &str) -> String {
+    format!("catalog:user:{slug}")
+}
+
+fn user_pack_id(slug: &str) -> String {
+    format!("user:{slug}")
+}
+
+fn user_pack_workspace_path(slug: &str) -> String {
+    format!(".k2/context/catalog/{slug}.md")
+}
+
+fn slug_from_user_source(source: &str) -> Option<&str> {
+    source.strip_prefix("catalog:user:")
+}
+
+/// Parse `user:<slug>` or a bare filesystem-safe slug into `(id, slug)`.
+pub fn normalize_user_pack_id(raw: &str) -> Result<(String, String), ContextError> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(ContextError::BadUsage(
+            "pack id must not be empty (expected user:<slug>)".into(),
+        ));
+    }
+    let slug = if let Some(rest) = raw.strip_prefix("user:") {
+        rest
+    } else {
+        raw
+    };
+    validate_user_pack_identity(raw, slug)?;
+    Ok((user_pack_id(slug), slug.to_string()))
+}
+
+fn validate_user_pack_identity(raw_id: &str, slug: &str) -> Result<(), ContextError> {
+    let lower_raw = raw_id.trim().to_ascii_lowercase();
+    let lower_slug = slug.to_ascii_lowercase();
+
+    if RESERVED_ID_PREFIXES
+        .iter()
+        .any(|p| lower_raw.starts_with(p) || lower_slug.starts_with(p))
+    {
+        return Err(ContextError::BadUsage(format!(
+            "reserved catalog id prefix: {raw_id}"
+        )));
+    }
+    if RESERVED_ALIASES
+        .iter()
+        .any(|a| lower_raw == *a || lower_slug == *a)
+    {
+        return Err(ContextError::BadUsage(format!(
+            "reserved catalog id alias: {raw_id}"
+        )));
+    }
+    if RESERVED_PATH_STEMS.iter().any(|s| lower_slug == *s) {
+        return Err(ContextError::BadUsage(format!(
+            "reserved catalog path stem: {slug}"
+        )));
+    }
+    if !is_filesystem_safe_slug(slug) {
+        return Err(ContextError::BadUsage(format!(
+            "slug must be filesystem-safe [a-z0-9][a-z0-9_-]*: {slug}"
+        )));
+    }
+    Ok(())
+}
+
+fn is_filesystem_safe_slug(slug: &str) -> bool {
+    if slug.is_empty() || slug.len() > 64 {
+        return false;
+    }
+    let mut chars = slug.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn title_case_slug(slug: &str) -> String {
+    slug.split(|c| c == '-' || c == '_')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let mut cs = p.chars();
+            match cs.next() {
+                Some(first) => {
+                    let mut s = first.to_ascii_uppercase().to_string();
+                    s.push_str(&cs.as_str().to_ascii_lowercase());
+                    s
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn owner_author_label() -> String {
+    crate::app_settings::load()
+        .owner_display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("user")
+        .to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct PackToml {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+/// Parse pack.toml. `kind = "live"` is invalid. `recommended` is never honored.
+pub fn parse_user_pack_toml(raw: &str) -> Result<ParsedUserPack, ContextError> {
+    let parsed: PackToml = toml::from_str(raw).map_err(|e| {
+        ContextError::BadUsage(format!("invalid pack.toml: {e}"))
+    })?;
+    let kind = parsed
+        .kind
+        .as_deref()
+        .unwrap_or("static")
+        .trim()
+        .to_ascii_lowercase();
+    if kind == "live" {
+        return Err(ContextError::BadUsage(
+            "kind = \"live\" is invalid for user catalog packs".into(),
+        ));
+    }
+    if kind != "static" && kind != "path" {
+        return Err(ContextError::BadUsage(format!(
+            "unsupported pack kind '{kind}' (user packs must be static)"
+        )));
+    }
+    let tags: Vec<String> = parsed
+        .tags
+        .into_iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case("recommended"))
+        .collect();
+    Ok(ParsedUserPack {
+        id: parsed.id,
+        name: parsed.name,
+        description: parsed.description,
+        version: parsed.version.or_else(|| Some("1.0.0".into())),
+        kind,
+        author: parsed.author,
+        tags,
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedUserPack {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub version: Option<String>,
+    pub kind: String,
+    pub author: Option<String>,
+    pub tags: Vec<String>,
+}
+
+fn stub_layer_md() -> &'static str {
+    "Standing orders for this catalog pack. Keep this layer lean — prefer links over dumps.\n\
+     This pack is library-only until someone stacks it (`k2 agent context add <id>`).\n"
+}
+
+fn stub_pack_toml(id: &str, name: &str, author: &str, tags: &[String]) -> String {
+    let tags_lit = if tags.is_empty() {
+        "[]".to_string()
+    } else {
+        let inner = tags
+            .iter()
+            .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[{inner}]")
+    };
+    format!(
+        "id = \"{id}\"\n\
+         name = \"{name}\"\n\
+         description = \"\"\n\
+         version = \"1.0.0\"\n\
+         kind = \"static\"\n\
+         license = \"MIT\"\n\
+         author = \"{author}\"\n\
+         tags = {tags_lit}\n"
+    )
+}
+
+fn check_layer_size(bytes: u64, slug: &str) -> Result<(), ContextError> {
+    if bytes > USER_PACK_LAYER_MAX_BYTES {
+        return Err(ContextError::PackTooLarge(format!(
+            "layer.md for '{slug}' is {bytes} bytes (max {USER_PACK_LAYER_MAX_BYTES})"
+        )));
+    }
+    Ok(())
+}
+
+/// Stub a host user pack dir. Does **not** stack on any workspace.
+pub fn create_user_pack(
+    id: &str,
+    label: Option<&str>,
+    tags: &[String],
+) -> Result<CreatedUserPack, ContextError> {
+    create_user_pack_inner(id, label, tags, None, None)
+}
+
+/// Test/internal: allow injecting kind or layer body so create-time
+/// `kind=live` / `pack_too_large` can fail loud.
+pub fn create_user_pack_inner(
+    id: &str,
+    label: Option<&str>,
+    tags: &[String],
+    kind_override: Option<&str>,
+    layer_override: Option<&str>,
+) -> Result<CreatedUserPack, ContextError> {
+    let (canon_id, slug) = normalize_user_pack_id(id)?;
+    if let Some(kind) = kind_override {
+        if kind.eq_ignore_ascii_case("live") {
+            return Err(ContextError::BadUsage(
+                "kind = \"live\" is invalid for user catalog packs".into(),
+            ));
+        }
+    }
+    let layer = layer_override.unwrap_or_else(|| stub_layer_md());
+    check_layer_size(layer.len() as u64, &slug)?;
+
+    let dir = host_catalog_packs_dir().join(&slug);
+    if dir.exists() {
+        return Err(ContextError::BadUsage(format!(
+            "catalog pack already exists: {slug}"
+        )));
+    }
+    fs::create_dir_all(&dir).map_err(|e| {
+        ContextError::Db(format!(
+            "cannot create catalog pack dir {}: {e}",
+            dir.display()
+        ))
+    })?;
+
+    let name = label
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| title_case_slug(&slug));
+    let author = owner_author_label();
+    let toml_kind = kind_override.unwrap_or("static");
+    let mut toml_body = stub_pack_toml(&canon_id, &name, &author, tags);
+    if toml_kind != "static" {
+        toml_body = toml_body.replace("kind = \"static\"", &format!("kind = \"{toml_kind}\""));
+    }
+    // Re-validate the toml we are about to write (rejects kind=live if
+    // a caller rewrote the stub).
+    parse_user_pack_toml(&toml_body)?;
+
+    let toml_path = dir.join("pack.toml");
+    let layer_path = dir.join("layer.md");
+    fs::write(&toml_path, toml_body).map_err(|e| {
+        ContextError::Db(format!("cannot write {}: {e}", toml_path.display()))
+    })?;
+    fs::write(&layer_path, layer).map_err(|e| {
+        let _ = fs::remove_dir_all(&dir);
+        ContextError::Db(format!("cannot write {}: {e}", layer_path.display()))
+    })?;
+
+    let entry = match user_pack_entry_from_dir(&dir, &slug) {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+    };
+    Ok(CreatedUserPack { entry, dir })
+}
+
+/// Remove a host user pack dir. Does **not** touch stacked workspace copies.
+pub fn delete_user_pack(id: &str) -> Result<(), ContextError> {
+    let (_canon, slug) = normalize_user_pack_id(id)?;
+    let dir = host_catalog_packs_dir().join(&slug);
+    if !dir.is_dir() {
+        return Err(ContextError::NotFound(format!(
+            "catalog pack not found: {slug}"
+        )));
+    }
+    fs::remove_dir_all(&dir).map_err(|e| {
+        ContextError::Db(format!(
+            "cannot delete catalog pack {}: {e}",
+            dir.display()
+        ))
+    })
+}
+
+fn scan_user_packs() -> Vec<ContextCatalogEntry> {
+    let root = host_catalog_packs_dir();
+    let entries = match fs::read_dir(&root) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        let slug = match dir.file_name().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        match user_pack_entry_from_dir(&dir, &slug) {
+            Ok(entry) => out.push(entry),
+            Err(e) => {
+                crate::log_debug!(
+                    "[context-catalog] skip pack '{}': {}",
+                    slug,
+                    e.hint()
+                );
+            }
+        }
+    }
+    out
+}
+
+fn user_pack_entry_from_dir(dir: &Path, slug: &str) -> Result<ContextCatalogEntry, ContextError> {
+    if let Err(e) = validate_user_pack_identity(&user_pack_id(slug), slug) {
+        return Err(e);
+    }
+    let toml_path = dir.join("pack.toml");
+    if !toml_path.is_file() {
+        return Err(ContextError::BadUsage(format!(
+            "missing pack.toml in {}",
+            dir.display()
+        )));
+    }
+    let raw = fs::read_to_string(&toml_path).map_err(|e| {
+        ContextError::Db(format!("cannot read {}: {e}", toml_path.display()))
+    })?;
+    let parsed = parse_user_pack_toml(&raw)?;
+    if let Some(ref toml_id) = parsed.id {
+        let trimmed = toml_id.trim();
+        if !trimmed.is_empty() && trimmed != user_pack_id(slug) {
+            if let Err(e) = validate_user_pack_identity(trimmed, slug) {
+                return Err(e);
+            }
+            return Err(ContextError::BadUsage(format!(
+                "pack.toml id '{trimmed}' does not match directory slug '{slug}'"
+            )));
+        }
+    }
+
+    let layer_path = dir.join("layer.md");
+    if !layer_path.is_file() {
+        return Err(ContextError::BadUsage(format!(
+            "missing layer.md in {}",
+            dir.display()
+        )));
+    }
+    let layer_bytes = fs::metadata(&layer_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    check_layer_size(layer_bytes, slug)?;
+
+    let label = parsed
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| title_case_slug(slug));
+    let description = parsed
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    Ok(ContextCatalogEntry {
+        id: user_pack_id(slug),
+        path: user_pack_workspace_path(slug),
+        label,
+        source: user_pack_source(slug),
+        kind: parsed.kind,
+        recommended: false,
+        description,
+        version: parsed.version,
+        author: parsed.author.filter(|a| !a.trim().is_empty()),
+        tags: parsed.tags,
+        dir: Some(dir.to_string_lossy().into_owned()),
+    })
+}
+
+fn copy_host_user_pack_layer(
+    project_path: &str,
+    slug: &str,
+    rel_path: &str,
+) -> Result<(), ContextError> {
+    let dest = Path::new(project_path).join(rel_path);
+    if dest.is_file() {
+        return Ok(());
+    }
+    let src = host_catalog_packs_dir().join(slug).join("layer.md");
+    if !src.is_file() {
+        return Err(ContextError::NotFound(format!(
+            "host catalog layer missing: {}",
+            src.display()
+        )));
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            ContextError::Db(format!(
+                "cannot create context catalog directory {}: {e}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::copy(&src, &dest).map_err(|e| {
+        ContextError::Db(format!(
+            "cannot materialize {} from {}: {e}",
+            dest.display(),
+            src.display()
+        ))
+    })?;
+    Ok(())
 }
 
 fn live_kind_for_source(source: &str) -> Option<LiveKind> {
@@ -878,9 +1409,20 @@ fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextEr
         | "catalog:subagents" => SUBAGENTS_PACK_ID,
         other => other,
     };
-    list_catalog()
-        .into_iter()
-        .find(|p| p.id == canonical)
+    let catalog = list_catalog();
+    catalog
+        .iter()
+        .find(|p| p.id == canonical || p.source == canonical)
+        .cloned()
+        .or_else(|| {
+            // Host user packs: `user:<slug>` or `catalog:user:<slug>`.
+            let slug = canonical
+                .strip_prefix("catalog:user:")
+                .or_else(|| canonical.strip_prefix("user:"));
+            slug.and_then(|s| {
+                catalog.iter().find(|p| p.id == user_pack_id(s)).cloned()
+            })
+        })
         .ok_or_else(|| {
             ContextError::CatalogUnknown(format!(
                 "unknown catalog id '{catalog_id}'; known: {}",
@@ -890,6 +1432,9 @@ fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextEr
 }
 
 fn is_materializing_pack(entry: &ContextCatalogEntry) -> bool {
+    if slug_from_user_source(&entry.source).is_some() {
+        return true;
+    }
     matches!(
         entry.source.as_str(),
         "catalog:manager"
@@ -918,6 +1463,10 @@ fn materialize_pack_if_needed(
     if let Some(kind) = live_kind_for_source(&entry.source) {
         let _ = rel_path;
         return sync_live_kind_file(project_path, kind);
+    }
+
+    if let Some(slug) = slug_from_user_source(&entry.source) {
+        return copy_host_user_pack_layer(project_path, slug, rel_path);
     }
 
     let abs = Path::new(project_path).join(rel_path);
@@ -2017,7 +2566,14 @@ mod tests {
 
     #[test]
     fn list_catalog_has_wiki_entries() {
+        crate::tunnel::test_support::with_temp_home(|| {
         let catalog = list_catalog();
+        assert_eq!(
+            catalog.len(),
+            10,
+            "ten builtins only in an empty host catalog; got {:?}",
+            catalog.iter().map(|p| p.id.as_str()).collect::<Vec<_>>()
+        );
         assert!(catalog.iter().any(|p| p.id == "wiki:index"));
         assert!(catalog.iter().any(|p| p.id == "wiki:home"));
         assert!(catalog.iter().any(|p| p.id == WIKI_HYGIENE_ID));
@@ -2087,6 +2643,7 @@ mod tests {
         assert!(!recommended.contains(&USERS_ROSTER_ID));
         assert!(!recommended.contains(&"users:roster"));
         assert!(!recommended.contains(&"manager:pack"));
+        });
     }
 
     #[test]
@@ -2160,6 +2717,7 @@ mod tests {
 
     #[test]
     fn users_roster_catalog_is_live_not_recommended_and_roster_alias_stays_connections() {
+        crate::tunnel::test_support::with_temp_home(|| {
         let catalog = list_catalog();
         let users = catalog
             .iter()
@@ -2181,6 +2739,7 @@ mod tests {
         let people = add_layer(path, None, Some("people"), None).expect("people alias");
         assert_eq!(people.source, USERS_ROSTER_SOURCE);
         cleanup_project(path, &pid);
+        });
     }
 
     #[test]
@@ -2555,5 +3114,213 @@ mod tests {
         assert!(pin[0].exists);
 
         cleanup_project(path, &pid);
+    }
+
+    #[test]
+    fn create_user_pack_scans_as_static_not_recommended() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let created = create_user_pack("user:on-call", Some("On-call"), &["ops".into()])
+                .expect("create user pack");
+            assert_eq!(created.entry.id, "user:on-call");
+            assert_eq!(created.entry.source, "catalog:user:on-call");
+            assert_eq!(created.entry.kind, "static");
+            assert!(!created.entry.recommended);
+            assert_eq!(created.entry.tags, vec!["ops".to_string()]);
+            assert_eq!(created.entry.path, ".k2/context/catalog/on-call.md");
+            assert!(created.dir.join("pack.toml").is_file());
+            assert!(created.dir.join("layer.md").is_file());
+            let toml_body = fs::read_to_string(created.dir.join("pack.toml")).unwrap();
+            assert!(
+                !toml_body.contains("kind = \"live\""),
+                "create must never write kind=live: {toml_body}"
+            );
+            assert!(
+                !toml_body.to_ascii_lowercase().contains("recommended"),
+                "create must not write recommended: {toml_body}"
+            );
+            let layer = fs::read_to_string(created.dir.join("layer.md")).unwrap();
+            assert!(!layer.trim_start().starts_with("# "), "layer.md must have no H1");
+
+            let catalog = list_catalog();
+            let hit = catalog
+                .iter()
+                .find(|p| p.id == "user:on-call")
+                .expect("scan must include created pack");
+            assert_eq!(hit.kind, "static");
+            assert!(!hit.recommended);
+            assert_eq!(hit.source, "catalog:user:on-call");
+            assert_eq!(hit.tags, vec!["ops".to_string()]);
+            assert_eq!(catalog.iter().filter(|p| p.id.starts_with("wiki:") || p.id.ends_with(":roster") || p.id.ends_with(":pack")).count(), 10);
+        });
+    }
+
+    #[test]
+    fn create_user_pack_rejects_reserved_ids() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            for id in [
+                "connections:roster",
+                "roster",
+                "users:foo",
+                "people",
+                "manager",
+                "k2-agent",
+                "wiki-hygiene",
+                "users-roster",
+            ] {
+                let err = create_user_pack(id, None, &[]).expect_err(id);
+                assert_eq!(err.code(), "bad_usage", "{id} → {}", err);
+            }
+        });
+    }
+
+    #[test]
+    fn create_user_pack_rejects_kind_live() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let err = create_user_pack_inner("user:live-try", None, &[], Some("live"), None)
+                .expect_err("kind=live");
+            assert_eq!(err.code(), "bad_usage");
+            assert!(
+                err.hint().contains("live"),
+                "hint should mention live: {}",
+                err.hint()
+            );
+            let err = parse_user_pack_toml(
+                "id = \"user:x\"\nname = \"X\"\nkind = \"live\"\nlicense = \"MIT\"\nauthor = \"u\"\ntags = []\n",
+            )
+            .expect_err("parse live");
+            assert_eq!(err.code(), "bad_usage");
+        });
+    }
+
+    #[test]
+    fn create_user_pack_rejects_oversized_layer() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let huge = "x".repeat(USER_PACK_LAYER_MAX_BYTES as usize + 1);
+            let err = create_user_pack_inner("user:huge", None, &[], None, Some(&huge))
+                .expect_err("pack_too_large");
+            assert_eq!(err.code(), "pack_too_large");
+        });
+    }
+
+    #[test]
+    fn scan_skips_kind_live_and_oversized_layer() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let live_dir = host_catalog_packs_dir().join("sneaky-live");
+            fs::create_dir_all(&live_dir).unwrap();
+            fs::write(
+                live_dir.join("pack.toml"),
+                "id = \"user:sneaky-live\"\nname = \"Sneaky\"\nkind = \"live\"\nlicense = \"MIT\"\nauthor = \"u\"\ntags = []\n",
+            )
+            .unwrap();
+            fs::write(live_dir.join("layer.md"), "body\n").unwrap();
+
+            let big_dir = host_catalog_packs_dir().join("too-big");
+            fs::create_dir_all(&big_dir).unwrap();
+            fs::write(
+                big_dir.join("pack.toml"),
+                "id = \"user:too-big\"\nname = \"Big\"\nkind = \"static\"\nlicense = \"MIT\"\nauthor = \"u\"\ntags = []\n",
+            )
+            .unwrap();
+            fs::write(
+                big_dir.join("layer.md"),
+                "x".repeat(USER_PACK_LAYER_MAX_BYTES as usize + 2),
+            )
+            .unwrap();
+
+            let catalog = list_catalog();
+            assert!(
+                catalog.iter().all(|p| p.id != "user:sneaky-live" && p.id != "user:too-big"),
+                "scan must skip live + oversized; got {:?}",
+                catalog.iter().map(|p| p.id.as_str()).collect::<Vec<_>>()
+            );
+        });
+    }
+
+    #[test]
+    fn add_layer_user_pack_materializes_layer_md_not_pack_toml_and_does_not_overwrite() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let created = create_user_pack("user:on-call", Some("On-call"), &[])
+                .expect("create");
+            fs::write(
+                created.dir.join("layer.md"),
+                "Call the on-call rotation. See [[runbook]].\n",
+            )
+            .unwrap();
+
+            let root = unique_root("user-pack-mat");
+            let path = root.to_str().unwrap();
+            let pid = register_project(path);
+
+            let before = {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                conn.query_row(
+                    "SELECT COUNT(*) FROM project_context_layers",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+            };
+            let _ = before;
+
+            let layer = add_layer(path, None, Some("user:on-call"), None).expect("add");
+            assert_eq!(layer.source, "catalog:user:on-call");
+            assert_eq!(layer.path, ".k2/context/catalog/on-call.md");
+            let ws_file = root.join(".k2/context/catalog/on-call.md");
+            assert!(ws_file.is_file(), "must materialize workspace layer.md");
+            let body = fs::read_to_string(&ws_file).unwrap();
+            assert!(
+                body.contains("on-call rotation"),
+                "must copy host layer.md: {body}"
+            );
+            assert!(
+                !body.contains("kind = ") && !body.contains("license ="),
+                "must not inline pack.toml: {body}"
+            );
+
+            let composed = show_composed(path).expect("compose");
+            assert!(
+                composed.contains("on-call rotation") && composed.contains("On-call"),
+                "compose must inline layer.md body; first 600:\n{}",
+                &composed[..composed.len().min(600)]
+            );
+            assert!(
+                !composed.contains("license = \"MIT\"") && !composed.contains("kind = \"static\""),
+                "compose must not inline pack.toml; first 600:\n{}",
+                &composed[..composed.len().min(600)]
+            );
+
+            fs::write(&ws_file, "EDITED workspace copy\n").unwrap();
+            let err = add_layer(path, None, Some("user:on-call"), None).expect_err("dup");
+            assert_eq!(err.code(), "duplicate_layer");
+            materialize_pack_if_needed(path, &created.entry, &layer.path).expect("re-mat");
+            let after = fs::read_to_string(&ws_file).unwrap();
+            assert_eq!(
+                after, "EDITED workspace copy\n",
+                "re-materialize must not overwrite an edited workspace copy"
+            );
+
+            cleanup_project(path, &pid);
+        });
+    }
+
+    #[test]
+    fn create_user_pack_does_not_insert_project_context_layers() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let root = unique_root("no-auto-stack");
+            let path = root.to_str().unwrap();
+            let pid = register_project(path);
+            let before = list_layers(path).unwrap();
+            assert!(before.is_empty());
+
+            create_user_pack("user:on-call", None, &[]).expect("create");
+
+            let after = list_layers(path).unwrap();
+            assert!(
+                after.is_empty(),
+                "create must not stack on any project; got {after:?}"
+            );
+            cleanup_project(path, &pid);
+        });
     }
 }

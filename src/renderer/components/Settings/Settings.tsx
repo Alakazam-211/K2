@@ -28,6 +28,7 @@ import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSecti
 // confused with ProjectsSection above, the LEGACY workspaces section
 // (id 'projects', label "Workspaces").
 import ProjectGroupSettings from '../Projects/ProjectSettings'
+import { ContextCatalogSection, CONTEXT_CATALOG_MANIFEST } from './sections/ContextCatalogSection'
 import { AGENT_SKILLS_MANIFEST } from './sections/AgentSkillsSection'
 // HeartbeatsPanel is rendered inline inside ProjectsSection now; manifest
 // stays exported from HeartbeatsSection so searches still find it.
@@ -51,6 +52,7 @@ const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: 'agents', label: 'LLMs' },
   { id: 'projects', label: 'Workspaces / Agents' },
   { id: 'project-groups', label: 'Projects' },
+  { id: 'context-catalog', label: 'Context Catalog' },
   { id: 'k2-connect', label: 'K2 Connect' },
   { id: 'api-tokens', label: 'K2 API Tokens' },
   { id: 'companion', label: 'K2 Companion' },
@@ -97,6 +99,7 @@ export default function Settings(): React.JSX.Element {
       ...GENERAL_MANIFEST,
       ...STYLES_MANIFEST,
       ...PROJECTS_MANIFEST,
+      ...CONTEXT_CATALOG_MANIFEST,
       ...AGENT_SKILLS_MANIFEST,
       ...HEARTBEATS_MANIFEST,
       ...TERMINAL_MANIFEST,
@@ -258,6 +261,7 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'styles' ||
           activeSection === 'projects' ||
           activeSection === 'project-groups' ||
+          activeSection === 'context-catalog' ||
           activeSection === 'k2-connect' ||
           activeSection === 'connections' ||
           activeSection === 'agents' ||
@@ -333,6 +337,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'project-groups' && (
           <SectionErrorBoundary>
             <ProjectGroupSettings />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'context-catalog' && (
+          <SectionErrorBoundary>
+            <ContextCatalogSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'email-hosting' && (

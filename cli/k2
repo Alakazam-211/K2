@@ -10535,7 +10535,7 @@ cmd_schema() {
     {
       "name": "agent context catalog",
       "usage": "k2 agent context catalog [--json]",
-      "description": "List the local context catalog (built-in path seeds, static packs, live rosters). Includes wiki:index|home|hygiene, subagents:pack, manager:pack, k2:pack, connections:roster, heartbeats:roster, skills:roster, users:roster.",
+      "description": "List the host context catalog (built-in path seeds, static packs, live rosters, plus user packs under ~/.k2/context/catalog/packs). Library vs stack: this lists the library; `k2 agent context add <id>` stacks a pack on a workspace. Author new packs in Settings → Context Catalog.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (full metadata: kind, recommended, author, version, tags, description)."}]
     },
@@ -14190,6 +14190,9 @@ PYEOF
 cmd_help_agent_context() {
     cat <<'EOF'
 k2 agent context — manage the always-on AGENTS.md context management stack
+
+The host library is Settings → Context Catalog (pack.toml + layer.md). This
+command stacks those packs onto a workspace; it does not author the library.
 
 System (pinned) layers: Agent persona, PROJECT.md, Tooling footer — toggleable
 with on/off (ids pinned:agent|pinned:project|pinned:tooling, or short aliases

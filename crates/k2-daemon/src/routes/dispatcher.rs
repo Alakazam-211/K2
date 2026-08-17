@@ -760,6 +760,11 @@ async fn handle_one_request(
             | "/cli/context/set-enabled"
             | "/cli/context/move"
             | "/cli/context/regen"
+            // Host catalog library authoring (Settings → Context Catalog).
+            // Isolated POST arm + require_manage — do NOT ride the
+            // `/cli/context/` token_ok prefix (members would create).
+            | "/cli/context/catalog/create"
+            | "/cli/context/catalog/delete"
             // 0.40.24 S4 (agent CLI) — safe decommission (`k2 agent
             // retire`). JSON body {q, force, dryRun, archiveTo}; the
             // guards refuse (409 → CLI exit 3) instead of prompting.
@@ -3221,9 +3226,40 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // Host catalog library create/delete — isolated from the
+        // `/cli/context/` token_ok prefix so Member/Viewer cannot author
+        // packs. require_post + require_manage (owner token or Admin/Owner).
+        p if is_post
+            && post_allowed
+            && (p == "/cli/context/catalog/create" || p == "/cli/context/catalog/delete") =>
+        {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if super::http::require_manage(&mut *stream, &mut buf, &query, state.token.as_str())
+                .await
+                .is_none()
+            {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::context_routes::dispatch_post(&p_owned, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // Context management stack — `/cli/context/*` mutations (add / remove /
         // set-enabled / move / regen). JSON-bodied POSTs; token_ok +
         // require_post. Handlers run in spawn_blocking (SQLite + FS compose).
+        // Catalog create/delete are handled above (require_manage).
         p if is_post && post_allowed && p.starts_with("/cli/context/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;

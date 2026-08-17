@@ -12,9 +12,13 @@
 //! | GET    | `/cli/context/show?project=&outline=` |
 //! | POST   | `/cli/context/regen` |
 //! | GET    | `/cli/context/catalog` |
+//! | POST   | `/cli/context/catalog/create` |
+//! | POST   | `/cli/context/catalog/delete` |
 //!
-//! Auth: `token_ok` (owner or connect-user session) — same tier as other
-//! workspace mutates. POST-only mutations 405 on GET.
+//! Auth: `token_ok` (owner or connect-user session) for stack reads/mutates
+//! and `GET /cli/context/catalog`. Host library create/delete are isolated
+//! (`require_manage`) so Member/Viewer cannot author packs. POST-only
+//! mutations 405 on GET.
 
 use std::collections::HashMap;
 
@@ -75,7 +79,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/context/remove"
         | "/cli/context/set-enabled"
         | "/cli/context/move"
-        | "/cli/context/regen" => CliResponse::method_not_allowed(),
+        | "/cli/context/regen"
+        | "/cli/context/catalog/create"
+        | "/cli/context/catalog/delete" => CliResponse::method_not_allowed(),
         _ => return None,
     };
     Some(resp)
@@ -89,6 +95,8 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/context/set-enabled" => handle_set_enabled(body),
         "/cli/context/move" => handle_move(body),
         "/cli/context/regen" => handle_regen(body),
+        "/cli/context/catalog/create" => handle_catalog_create(body),
+        "/cli/context/catalog/delete" => handle_catalog_delete(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -166,6 +174,56 @@ fn handle_catalog() -> CliResponse {
         })
         .to_string(),
     )
+}
+
+#[derive(Deserialize)]
+struct CatalogCreateBody {
+    id: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+}
+
+fn handle_catalog_create(body: &[u8]) -> CliResponse {
+    let parsed: CatalogCreateBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return usage(format!("invalid JSON body: {e}")),
+    };
+    if parsed.id.trim().is_empty() {
+        return usage("missing id");
+    }
+    let tags = parsed.tags.unwrap_or_default();
+    match context_layers::create_user_pack(&parsed.id, parsed.label.as_deref(), &tags) {
+        Ok(created) => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "entry": created.entry,
+                "dir": created.dir.to_string_lossy(),
+            })
+            .to_string(),
+        ),
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct CatalogDeleteBody {
+    id: String,
+}
+
+fn handle_catalog_delete(body: &[u8]) -> CliResponse {
+    let parsed: CatalogDeleteBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return usage(format!("invalid JSON body: {e}")),
+    };
+    if parsed.id.trim().is_empty() {
+        return usage("missing id");
+    }
+    match context_layers::delete_user_pack(&parsed.id) {
+        Ok(()) => CliResponse::ok_json(r#"{"ok":true}"#.to_string()),
+        Err(e) => err_response(e),
+    }
 }
 
 #[derive(Deserialize)]
@@ -535,6 +593,43 @@ mod tests {
         assert_eq!(resp.status, "405 Method Not Allowed");
         let resp = dispatch("/cli/context/regen", &HashMap::new()).unwrap();
         assert_eq!(resp.status, "405 Method Not Allowed");
+        let resp = dispatch("/cli/context/catalog/create", &HashMap::new()).unwrap();
+        assert_eq!(resp.status, "405 Method Not Allowed");
+        let resp = dispatch("/cli/context/catalog/delete", &HashMap::new()).unwrap();
+        assert_eq!(resp.status, "405 Method Not Allowed");
+    }
+
+    #[test]
+    fn catalog_create_writes_host_pack_not_stack() {
+        crate::test_support::with_temp_home(|| {
+            let body = serde_json::json!({
+                "id": "user:on-call",
+                "label": "On-call",
+                "tags": ["ops"]
+            })
+            .to_string();
+            let resp = dispatch_post("/cli/context/catalog/create", body.as_bytes());
+            assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["ok"], true);
+            assert_eq!(v["entry"]["id"], "user:on-call");
+            assert_eq!(v["entry"]["source"], "catalog:user:on-call");
+            assert_eq!(v["entry"]["kind"], "static");
+            assert_eq!(v["entry"]["recommended"], false);
+            assert!(v["dir"].as_str().unwrap().ends_with("on-call"));
+
+            let catalog = dispatch("/cli/context/catalog", &HashMap::new()).unwrap();
+            let cv: serde_json::Value = serde_json::from_str(&catalog.body).unwrap();
+            let items = cv["catalog"].as_array().unwrap();
+            assert!(
+                items.iter().any(|p| p["id"] == "user:on-call"),
+                "GET catalog must include user pack"
+            );
+
+            let reserved = serde_json::json!({ "id": "connections:roster" }).to_string();
+            let resp = dispatch_post("/cli/context/catalog/create", reserved.as_bytes());
+            assert_eq!(resp.status, "400 Bad Request");
+        });
     }
 
     #[test]

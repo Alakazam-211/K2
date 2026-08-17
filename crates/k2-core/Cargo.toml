@@ -58,6 +58,10 @@ serde_json = "1"
 # launch-profile loader uses serde_yaml for full nested support.
 serde_yaml = "0.9"
 
+# Context catalog user packs (`~/.k2/context/catalog/packs/<slug>/pack.toml`).
+# Fail-loud parse of host library metadata; scan skips invalid files.
+toml = "0.8"
+
 # Time handling in the activity feed + heartbeat audit rows.
 chrono = { version = "0.4", features = ["serde"] }
 

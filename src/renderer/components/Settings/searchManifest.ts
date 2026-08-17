@@ -98,6 +98,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   styles: 'Styles',
   projects: 'Workspaces / Agents',
   'project-groups': 'Projects',
+  'context-catalog': 'Context Catalog',
   /** @deprecated — content under General → Workspaces */
   'agent-skills': 'General',
   terminal: 'Terminal',

@@ -3421,6 +3421,7 @@ dependencies = [
  "tar",
  "time",
  "tokio",
+ "toml 0.8.2",
  "trash",
  "tungstenite 0.24.0",
  "url",

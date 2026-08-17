@@ -57,6 +57,8 @@ export interface ContextCatalogEntry {
   author?: string
   /** Free-form discovery tags only (not used for recommendation). */
   tags?: string[]
+  /** Host pack directory for user packs (library authoring). */
+  dir?: string
 }
 
 /** Full list response: pinned + optional layers + soft-size estimate. */
@@ -131,6 +133,7 @@ function normalizeCatalog(raw: unknown): ContextCatalogEntry[] {
       tags?: string[]
       kind?: string
       recommended?: boolean
+      dir?: string
     }
     const description =
       r.description != null && String(r.description).trim().length > 0
@@ -154,6 +157,8 @@ function normalizeCatalog(raw: unknown): ContextCatalogEntry[] {
           .map((t) => String(t))
           .filter((t) => t.length > 0 && t.toLowerCase() !== 'recommended')
       : undefined
+    const dir =
+      r.dir != null && String(r.dir).trim().length > 0 ? String(r.dir) : undefined
     return {
       id: String(r.id ?? ''),
       path: String(r.path ?? ''),
@@ -165,6 +170,7 @@ function normalizeCatalog(raw: unknown): ContextCatalogEntry[] {
       ...(version ? { version } : {}),
       ...(author ? { author } : {}),
       ...(tags && tags.length > 0 ? { tags } : {}),
+      ...(dir ? { dir } : {}),
     }
   })
 }
@@ -236,6 +242,36 @@ export async function moveContextLayer(
 /** POST /cli/context/regen — force compose. */
 export async function regenContextStack(project: string): Promise<void> {
   await daemonCliPost('context/regen', { project })
+}
+
+export interface CreatedCatalogPack {
+  entry: ContextCatalogEntry
+  dir: string
+}
+
+/** POST /cli/context/catalog/create — host library stub (does not stack). */
+export async function createContextCatalogPack(args: {
+  id: string
+  label?: string
+  tags?: string[]
+}): Promise<CreatedCatalogPack> {
+  const raw = await daemonCliPost<unknown>('context/catalog/create', {
+    id: args.id,
+    label: args.label,
+    tags: args.tags,
+  })
+  const r = (raw ?? {}) as { entry?: ContextCatalogEntry; dir?: string }
+  const entry = normalizeCatalog({ catalog: [r.entry ?? raw] })[0]
+  const dir = typeof r.dir === 'string' ? r.dir : ''
+  if (!entry?.id || !dir) {
+    throw new Error('catalog create returned no pack dir')
+  }
+  return { entry, dir }
+}
+
+/** POST /cli/context/catalog/delete — remove host pack dir only. */
+export async function deleteContextCatalogPack(id: string): Promise<void> {
+  await daemonCliPost('context/catalog/delete', { id })
 }
 
 /** Display label for an optional layer. */

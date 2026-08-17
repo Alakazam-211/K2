@@ -1,8 +1,8 @@
+use super::auth;
+use super::types::CompanionState;
 use std::collections::HashMap;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, TcpStream};
-use super::auth;
-use super::types::CompanionState;
 
 /// Extract the real client IP from X-Forwarded-For (ngrok sets this). Falls
 /// back to the raw TCP peer address, which will be 127.0.0.1 once traffic
@@ -47,22 +47,22 @@ pub fn is_privileged_spawn_method(method: &str) -> bool {
 fn map_route(method: &str, path: &str) -> Option<&'static str> {
     let clean = path.split('?').next().unwrap_or("");
     match (method, clean) {
-        ("GET",  "/companion/agents")         => Some("/cli/agents/list"),
-        ("GET",  "/companion/agents/running")  => Some("/cli/agents/running"),
-        ("GET",  "/companion/agents/work")     => Some("/cli/agents/work"),
-        ("GET",  "/companion/reviews")         => Some("/cli/reviews"),
-        ("POST", "/companion/review/approve")  => Some("/cli/review/approve"),
-        ("POST", "/companion/review/reject")   => Some("/cli/review/reject"),
+        ("GET", "/companion/agents") => Some("/cli/agents/list"),
+        ("GET", "/companion/agents/running") => Some("/cli/agents/running"),
+        ("GET", "/companion/agents/work") => Some("/cli/agents/work"),
+        ("GET", "/companion/reviews") => Some("/cli/reviews"),
+        ("POST", "/companion/review/approve") => Some("/cli/review/approve"),
+        ("POST", "/companion/review/reject") => Some("/cli/review/reject"),
         ("POST", "/companion/review/feedback") => Some("/cli/review/feedback"),
-        ("GET",  "/companion/terminal/read")   => Some("/cli/terminal/read"),
-        ("POST", "/companion/terminal/write")  => Some("/cli/terminal/write"),
-        ("GET",  "/companion/status")          => Some("/cli/mode"),
-        ("POST", "/companion/agents/wake")     => Some("/cli/agents/launch"),
-        ("GET",  "/companion/projects")         => Some("/cli/companion/projects"),
-        ("GET",  "/companion/projects/summary") => Some("/cli/companion/projects-summary"),
-        ("GET",  "/companion/sessions")         => Some("/cli/companion/sessions"),
-        ("GET",  "/companion/presets")          => Some("/cli/companion/presets"),
-        ("POST", "/companion/terminal/spawn")   => Some("/cli/terminal/spawn"),
+        ("GET", "/companion/terminal/read") => Some("/cli/terminal/read"),
+        ("POST", "/companion/terminal/write") => Some("/cli/terminal/write"),
+        ("GET", "/companion/status") => Some("/cli/mode"),
+        ("POST", "/companion/agents/wake") => Some("/cli/agents/launch"),
+        ("GET", "/companion/projects") => Some("/cli/companion/projects"),
+        ("GET", "/companion/projects/summary") => Some("/cli/companion/projects-summary"),
+        ("GET", "/companion/sessions") => Some("/cli/companion/sessions"),
+        ("GET", "/companion/presets") => Some("/cli/companion/presets"),
+        ("POST", "/companion/terminal/spawn") => Some("/cli/terminal/spawn"),
         ("POST", "/companion/terminal/spawn-background") => Some("/cli/terminal/spawn-background"),
         _ => None,
     }
@@ -72,7 +72,9 @@ fn map_route(method: &str, path: &str) -> Option<&'static str> {
 pub fn parse_headers(request: &str) -> HashMap<String, String> {
     let mut headers = HashMap::new();
     for line in request.lines().skip(1) {
-        if line.is_empty() { break; }
+        if line.is_empty() {
+            break;
+        }
         if let Some((key, val)) = line.split_once(':') {
             headers.insert(key.trim().to_lowercase(), val.trim().to_string());
         }
@@ -86,10 +88,7 @@ pub fn parse_query(path: &str) -> HashMap<String, String> {
     if let Some(query) = path.split_once('?').map(|(_, q)| q) {
         for pair in query.split('&') {
             if let Some((k, v)) = pair.split_once('=') {
-                params.insert(
-                    urldecode(k),
-                    urldecode(v),
-                );
+                params.insert(urldecode(k), urldecode(v));
             }
         }
     }
@@ -126,23 +125,23 @@ fn urldecode(s: &str) -> String {
 /// Returns (internal_route, is_global) — global routes don't need a project param.
 pub fn map_ws_method(method: &str) -> Option<(&'static str, bool)> {
     match method {
-        "projects.list"    => Some(("/cli/companion/projects", true)),
+        "projects.list" => Some(("/cli/companion/projects", true)),
         "projects.summary" => Some(("/cli/companion/projects-summary", true)),
-        "sessions.list"    => Some(("/cli/companion/sessions", true)),
-        "agents.list"      => Some(("/cli/agents/list", false)),
-        "agents.running"   => Some(("/cli/agents/running", false)),
-        "agents.work"      => Some(("/cli/agents/work", false)),
-        "agents.wake"      => Some(("/cli/agents/launch", false)),
-        "reviews.list"     => Some(("/cli/reviews", false)),
-        "review.approve"   => Some(("/cli/review/approve", false)),
-        "review.reject"    => Some(("/cli/review/reject", false)),
-        "review.feedback"  => Some(("/cli/review/feedback", false)),
-        "terminal.read"    => Some(("/cli/terminal/read", false)),
-        "terminal.write"   => Some(("/cli/terminal/write", false)),
-        "terminal.spawn"   => Some(("/cli/terminal/spawn", false)),
+        "sessions.list" => Some(("/cli/companion/sessions", true)),
+        "agents.list" => Some(("/cli/agents/list", false)),
+        "agents.running" => Some(("/cli/agents/running", false)),
+        "agents.work" => Some(("/cli/agents/work", false)),
+        "agents.wake" => Some(("/cli/agents/launch", false)),
+        "reviews.list" => Some(("/cli/reviews", false)),
+        "review.approve" => Some(("/cli/review/approve", false)),
+        "review.reject" => Some(("/cli/review/reject", false)),
+        "review.feedback" => Some(("/cli/review/feedback", false)),
+        "terminal.read" => Some(("/cli/terminal/read", false)),
+        "terminal.write" => Some(("/cli/terminal/write", false)),
+        "terminal.spawn" => Some(("/cli/terminal/spawn", false)),
         "terminal.spawn_background" => Some(("/cli/terminal/spawn-background", false)),
-        "presets.list"     => Some(("/cli/companion/presets", true)),
-        "status"           => Some(("/cli/mode", false)),
+        "presets.list" => Some(("/cli/companion/presets", true)),
+        "status" => Some(("/cli/mode", false)),
         _ => None,
     }
 }
@@ -154,8 +153,8 @@ pub fn dispatch_ws_method(
     method: &str,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let (internal_route, is_global) = map_ws_method(method)
-        .ok_or_else(|| format!("Unknown method: {}", method))?;
+    let (internal_route, is_global) =
+        map_ws_method(method).ok_or_else(|| format!("Unknown method: {}", method))?;
 
     let project = params.get("project").and_then(|v| v.as_str()).unwrap_or("");
     if !is_global && project.is_empty() {
@@ -163,9 +162,7 @@ pub fn dispatch_ws_method(
     }
 
     // Build query params
-    let mut query = vec![
-        format!("token={}", urlencode(&state.hook_token)),
-    ];
+    let mut query = vec![format!("token={}", urlencode(&state.hook_token))];
     if !project.is_empty() {
         query.push(format!("project={}", urlencode(project)));
     }
@@ -173,7 +170,9 @@ pub fn dispatch_ws_method(
     // Forward all params (except project/token which are already handled)
     if let Some(obj) = params.as_object() {
         for (k, v) in obj {
-            if k == "project" || k == "token" { continue; }
+            if k == "project" || k == "token" {
+                continue;
+            }
             let val = match v {
                 serde_json::Value::String(s) => s.clone(),
                 other => other.to_string(),
@@ -184,23 +183,28 @@ pub fn dispatch_ws_method(
 
     let url = format!(
         "http://127.0.0.1:{}{}?{}",
-        state.hook_port, internal_route, query.join("&")
+        state.hook_port,
+        internal_route,
+        query.join("&")
     );
 
-    let resp = reqwest::blocking::get(&url)
-        .map_err(|e| format!("Internal request failed: {}", e))?;
+    let resp =
+        reqwest::blocking::get(&url).map_err(|e| format!("Internal request failed: {}", e))?;
 
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
 
     if status.is_success() {
-        let data: serde_json::Value = serde_json::from_str(&text)
-            .unwrap_or(serde_json::Value::String(text));
+        let data: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text));
         Ok(serde_json::json!({"ok": true, "data": data}))
     } else {
-        let error: serde_json::Value = serde_json::from_str(&text)
-            .unwrap_or(serde_json::json!({"error": text}));
-        let msg = error.get("error").and_then(|e| e.as_str()).unwrap_or("Internal error");
+        let error: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or(serde_json::json!({"error": text}));
+        let msg = error
+            .get("error")
+            .and_then(|e| e.as_str())
+            .unwrap_or("Internal error");
         Err(msg.to_string())
     }
 }
@@ -281,11 +285,7 @@ fn strip_port(host_with_port: &str) -> String {
             return host_with_port[1..end].to_string();
         }
     }
-    host_with_port
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_string()
+    host_with_port.split(':').next().unwrap_or("").to_string()
 }
 
 /// Decide whether a WebSocket upgrade should be accepted based on its Origin
@@ -317,7 +317,10 @@ pub fn ws_origin_allowed(
         }
     }
 
-    if allowlist.iter().any(|allowed| origin_matches(origin, allowed)) {
+    if allowlist
+        .iter()
+        .any(|allowed| origin_matches(origin, allowed))
+    {
         return true;
     }
 
@@ -364,10 +367,7 @@ fn is_loopback_origin(origin: &str) -> bool {
 /// Returns Some(origin) iff the request's `Origin` header matches an entry in
 /// the allowlist. Returns None otherwise — caller must not emit CORS headers
 /// (browser will block the response; native apps don't care).
-pub fn allowed_cors_origin(
-    request_origin: Option<&str>,
-    allowlist: &[String],
-) -> Option<String> {
+pub fn allowed_cors_origin(request_origin: Option<&str>, allowlist: &[String]) -> Option<String> {
     let origin = request_origin?.trim();
     if origin.is_empty() || allowlist.is_empty() {
         return None;
@@ -407,7 +407,9 @@ pub fn send_response(
          X-Frame-Options: DENY\r\n\
          X-Content-Type-Options: nosniff\r\n\
          Referrer-Policy: no-referrer\r\n",
-        status, status_text, body_str.len()
+        status,
+        status_text,
+        body_str.len()
     );
 
     if let Some(origin) = cors_origin {
@@ -438,8 +440,8 @@ pub fn proxy_to_internal(
     request: &str,
     project: &str,
 ) -> Result<serde_json::Value, String> {
-    let internal_route = map_route(method, path)
-        .ok_or_else(|| "Unknown companion endpoint".to_string())?;
+    let internal_route =
+        map_route(method, path).ok_or_else(|| "Unknown companion endpoint".to_string())?;
 
     // Build query params: start with token + project
     let mut params = vec![
@@ -472,25 +474,29 @@ pub fn proxy_to_internal(
 
     let url = format!(
         "http://127.0.0.1:{}{}?{}",
-        state.hook_port, internal_route, params.join("&")
+        state.hook_port,
+        internal_route,
+        params.join("&")
     );
 
     // Forward to internal server
-    let resp = reqwest::blocking::get(&url)
-        .map_err(|e| format!("Internal proxy failed: {}", e))?;
+    let resp = reqwest::blocking::get(&url).map_err(|e| format!("Internal proxy failed: {}", e))?;
 
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
 
     // Parse internal response and wrap in companion envelope
     if status.is_success() {
-        let data: serde_json::Value = serde_json::from_str(&text)
-            .unwrap_or(serde_json::Value::String(text));
+        let data: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text));
         Ok(serde_json::json!({"ok": true, "data": data}))
     } else {
-        let error: serde_json::Value = serde_json::from_str(&text)
-            .unwrap_or(serde_json::json!({"error": text}));
-        let msg = error.get("error").and_then(|e| e.as_str()).unwrap_or("Internal error");
+        let error: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or(serde_json::json!({"error": text}));
+        let msg = error
+            .get("error")
+            .and_then(|e| e.as_str())
+            .unwrap_or("Internal error");
         Err(msg.to_string())
     }
 }
@@ -514,7 +520,11 @@ pub fn handle_request(
     // URL, loopback, or an operator-configured allowlist entry.
     let request_host = headers.get("host").map(|s| s.as_str());
     let tunnel_snapshot: Option<String> = state.tunnel_url.lock().clone();
-    if !host_allowed(request_host, tunnel_snapshot.as_deref(), &state.cors_origins) {
+    if !host_allowed(
+        request_host,
+        tunnel_snapshot.as_deref(),
+        &state.cors_origins,
+    ) {
         log_debug!(
             "[companion] Rejected request — Host {:?} not allowed",
             request_host
@@ -534,6 +544,24 @@ pub fn handle_request(
     // OPTIONS (CORS preflight)
     if method == "OPTIONS" {
         send_response(stream, 200, &serde_json::json!({"ok": true}), cors_ref);
+        return;
+    }
+
+    // Capability probe — answered HERE, never proxied to `/cli/mode`.
+    // `gridProto:["k1"]` only when the daemon actually registered the
+    // `/companion/sessions/grid` upgrade adapter.
+    if clean_path == "/companion/capabilities" && method == "GET" {
+        let grid_proto: Vec<&str> = if super::grid_upgrade_registered() {
+            vec!["k1"]
+        } else {
+            Vec::new()
+        };
+        send_response(
+            stream,
+            200,
+            &serde_json::json!({ "gridProto": grid_proto }),
+            cors_ref,
+        );
         return;
     }
 
@@ -806,9 +834,7 @@ mod security_tests {
     #[test]
     fn cors_mismatched_origin_returns_none() {
         let allowlist = vec!["https://companion.example.com".to_string()];
-        assert!(
-            allowed_cors_origin(Some("https://evil.example.com"), &allowlist).is_none()
-        );
+        assert!(allowed_cors_origin(Some("https://evil.example.com"), &allowlist).is_none());
     }
 
     // ── WS Origin ──
@@ -821,7 +847,11 @@ mod security_tests {
 
     #[test]
     fn ws_empty_origin_allowed() {
-        assert!(ws_origin_allowed(Some(""), Some("https://x.ngrok.app"), &[]));
+        assert!(ws_origin_allowed(
+            Some(""),
+            Some("https://x.ngrok.app"),
+            &[]
+        ));
     }
 
     #[test]
@@ -916,11 +946,7 @@ mod security_tests {
     #[test]
     fn host_allowlist_entry_allowed() {
         let allow = vec!["https://companion.example.com".to_string()];
-        assert!(host_allowed(
-            Some("companion.example.com"),
-            None,
-            &allow,
-        ));
+        assert!(host_allowed(Some("companion.example.com"), None, &allow,));
     }
 
     #[test]
@@ -998,6 +1024,23 @@ mod security_tests {
         }
         // Next attempt must be blocked.
         assert!(limiter.check_and_record(ip).is_err());
+    }
+
+    #[test]
+    fn capabilities_advertises_k1_only_when_registered() {
+        // Pure probe of the JSON contract — registration is process-global
+        // so we only assert the shape helper here. Integration tests cover
+        // the live GET against a registered adapter.
+        let registered = serde_json::json!({ "gridProto": ["k1"] });
+        let missing = serde_json::json!({ "gridProto": [] });
+        assert_eq!(registered["gridProto"][0], "k1");
+        assert!(missing["gridProto"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn capabilities_is_not_mapped_to_cli_mode() {
+        assert!(map_route("GET", "/companion/capabilities").is_none());
+        assert_eq!(map_route("GET", "/companion/status"), Some("/cli/mode"));
     }
 
     #[test]

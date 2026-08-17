@@ -1,8 +1,8 @@
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::SaltString;
 use super::keychain;
 use super::types::{CompanionState, Session};
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 
 /// Hash a password using argon2id.
 pub fn hash_password(password: &str) -> Result<String, String> {
@@ -49,7 +49,9 @@ pub fn load_password_hash() -> Option<String> {
         super::settings_bridge::clear_password_hash_after_migration();
         crate::log_debug!("[companion] Migrated password hash from settings.json to Keychain");
     } else {
-        crate::log_debug!("[companion] Keychain unavailable — continuing to read from settings.json");
+        crate::log_debug!(
+            "[companion] Keychain unavailable — continuing to read from settings.json"
+        );
     }
     Some(legacy)
 }
@@ -122,7 +124,8 @@ pub fn validate_bearer(token: &str, state: &CompanionState) -> Result<String, &'
 /// Parse Basic Auth header: "Basic base64(username:password)"
 pub fn parse_basic_auth(header: &str) -> Option<(String, String)> {
     let encoded = header.strip_prefix("Basic ")?;
-    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()?;
+    let decoded =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()?;
     let text = String::from_utf8(decoded).ok()?;
     let (user, pass) = text.split_once(':')?;
     Some((user.to_string(), pass.to_string()))
@@ -131,4 +134,159 @@ pub fn parse_basic_auth(header: &str) -> Option<(String, String)> {
 /// Parse Bearer token header: "Bearer <token>"
 pub fn parse_bearer(header: &str) -> Option<String> {
     header.strip_prefix("Bearer ").map(|s| s.to_string())
+}
+
+/// Extract the public-grid credential. JS `WebSocket` cannot set
+/// `Authorization`, so query `token=` is the real client path.
+/// Bearer-on-upgrade is defense-in-depth for non-JS clients.
+pub fn extract_grid_token(
+    query_token: Option<&str>,
+    authorization_header: Option<&str>,
+) -> Option<String> {
+    if let Some(t) = query_token.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(t.to_string());
+    }
+    authorization_header.and_then(parse_bearer).and_then(|t| {
+        let t = t.trim().to_string();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    })
+}
+
+/// Public-tunnel auth for `/companion/sessions/grid`.
+///
+/// Accepts **only** a live companion session token from `/companion/auth`.
+/// Daemon hook/owner, stream (`k2st_…`), and Connect tokens are rejected
+/// even if they would authorize `/cli/sessions/grid`.
+pub fn authorize_grid_token(token: &str, state: &CompanionState) -> Result<String, &'static str> {
+    use subtle::ConstantTimeEq;
+
+    if token.is_empty() {
+        return Err("Invalid session token");
+    }
+    if !state.hook_token.is_empty() && token.as_bytes().ct_eq(state.hook_token.as_bytes()).into() {
+        return Err("Invalid session token");
+    }
+    // Stream tokens are never minted into CompanionState.sessions; reject
+    // the prefix so a leaked `k2st_` cannot be confused with a companion
+    // UUID even if someone stuffed it into the session map.
+    if token.starts_with("k2st_") {
+        return Err("Invalid session token");
+    }
+    validate_bearer(token, state)
+}
+
+/// Companion session still exists and is unexpired — used by the grid
+/// WS re-auth tick. Does **not** increment the HTTP rate-limit counter.
+pub fn session_alive(token: &str) -> bool {
+    let guard = super::STATE.lock();
+    match guard.as_ref() {
+        Some(state) => session_alive_in(token, state),
+        None => false,
+    }
+}
+
+/// Same as [`session_alive`] against an explicit state (tests).
+pub fn session_alive_in(token: &str, state: &CompanionState) -> bool {
+    use subtle::ConstantTimeEq;
+    if token.is_empty() {
+        return false;
+    }
+    let sessions = state.sessions.lock();
+    for (key, session) in sessions.iter() {
+        if key.as_bytes().ct_eq(token.as_bytes()).into() {
+            return !session.is_expired();
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod grid_auth_tests {
+    use super::*;
+    use crate::companion::types::CompanionState;
+
+    fn state_with_session(token: &str, hook_token: &str) -> CompanionState {
+        let state = CompanionState::new(0, hook_token.to_string());
+        state.sessions.lock().insert(
+            token.to_string(),
+            Session {
+                token: token.to_string(),
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+                last_active: chrono::Utc::now(),
+                remote_addr: "test".into(),
+                request_count: 0,
+                window_start: std::time::Instant::now(),
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn companion_session_token_is_accepted() {
+        let state = state_with_session("comp-session-aaa", "owner-hook-secret");
+        assert_eq!(
+            authorize_grid_token("comp-session-aaa", &state).unwrap(),
+            "comp-session-aaa"
+        );
+    }
+
+    #[test]
+    fn hook_owner_token_is_rejected() {
+        let state = state_with_session("comp-session-aaa", "owner-hook-secret");
+        assert!(authorize_grid_token("owner-hook-secret", &state).is_err());
+    }
+
+    #[test]
+    fn stream_token_prefix_is_rejected() {
+        let state = state_with_session("comp-session-aaa", "owner-hook-secret");
+        assert!(authorize_grid_token("k2st_deadbeef", &state).is_err());
+    }
+
+    #[test]
+    fn unknown_connect_looking_token_is_rejected() {
+        let state = state_with_session("comp-session-aaa", "owner-hook-secret");
+        assert!(authorize_grid_token("connect-user-session-xyz", &state).is_err());
+    }
+
+    #[test]
+    fn missing_and_empty_tokens_rejected() {
+        let state = state_with_session("comp-session-aaa", "owner-hook-secret");
+        assert!(authorize_grid_token("", &state).is_err());
+        assert!(extract_grid_token(None, None).is_none());
+        assert!(extract_grid_token(Some(""), Some("Bearer ")).is_none());
+    }
+
+    #[test]
+    fn query_token_wins_over_bearer() {
+        assert_eq!(
+            extract_grid_token(Some("from-query"), Some("Bearer from-header")).as_deref(),
+            Some("from-query")
+        );
+        assert_eq!(
+            extract_grid_token(None, Some("Bearer from-header")).as_deref(),
+            Some("from-header")
+        );
+    }
+
+    #[test]
+    fn session_alive_ignores_rate_limit_and_expiry() {
+        let state = state_with_session("comp-session-aaa", "owner-hook-secret");
+        assert!(session_alive_in("comp-session-aaa", &state));
+        assert!(!session_alive_in("missing", &state));
+        assert!(!session_alive_in("", &state));
+
+        // Force expiry — alive must go false without touching rate limit.
+        state
+            .sessions
+            .lock()
+            .get_mut("comp-session-aaa")
+            .unwrap()
+            .expires_at = chrono::Utc::now() - chrono::Duration::hours(1);
+        assert!(!session_alive_in("comp-session-aaa", &state));
+    }
 }

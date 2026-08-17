@@ -36,8 +36,64 @@ pub struct CompanionState {
     /// is newer: the old string is simply overwritten. Bounded in practice
     /// by active mobile client count (a handful per session).
     pub reflow_cache: Mutex<std::collections::HashMap<(String, (u16, u16)), (u64, String)>>,
+    /// Companion session tokens that currently hold a live k1 grid WS,
+    /// mapped to the terminal ids they are subscribed to. Used so
+    /// `terminal:scrollback` / CompactLine skip only THAT client — other
+    /// IPAs on the same terminal still get the poll payloads.
+    pub grid_ws_live: Mutex<HashMap<String, HashSet<String>>>,
     /// Keeps the ngrok runtime thread alive — drop this to stop the tunnel
     pub _tunnel_keepalive: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+}
+
+impl CompanionState {
+    pub fn new(hook_port: u16, hook_token: String) -> Self {
+        Self {
+            tunnel_url: Mutex::new(None),
+            sessions: Mutex::new(HashMap::new()),
+            ws_clients: Mutex::new(Vec::new()),
+            shutdown: AtomicBool::new(false),
+            hook_port,
+            hook_token,
+            cors_origins: Vec::new(),
+            allow_remote_spawn: false,
+            auth_limiter: Mutex::new(AuthRateLimiter::new()),
+            reflow_cache: Mutex::new(HashMap::new()),
+            grid_ws_live: Mutex::new(HashMap::new()),
+            _tunnel_keepalive: Mutex::new(None),
+        }
+    }
+
+    /// Record that `token`'s companion client opened a grid WS for `terminal_id`.
+    pub fn note_grid_ws_open(&self, token: &str, terminal_id: &str) {
+        if token.is_empty() || terminal_id.is_empty() {
+            return;
+        }
+        self.grid_ws_live
+            .lock()
+            .entry(token.to_string())
+            .or_default()
+            .insert(terminal_id.to_string());
+    }
+
+    /// Drop the live-grid mark for this client/terminal (any disconnect path).
+    pub fn note_grid_ws_closed(&self, token: &str, terminal_id: &str) {
+        let mut live = self.grid_ws_live.lock();
+        if let Some(ids) = live.get_mut(token) {
+            ids.remove(terminal_id);
+            if ids.is_empty() {
+                live.remove(token);
+            }
+        }
+    }
+
+    /// True iff THIS companion client (session token) has a live grid WS
+    /// for `terminal_id` and should skip poll scrollback / CompactLine.
+    pub fn client_skips_legacy_terminal(&self, token: &str, terminal_id: &str) -> bool {
+        self.grid_ws_live
+            .lock()
+            .get(token)
+            .is_some_and(|ids| ids.contains(terminal_id))
+    }
 }
 
 /// An authenticated companion session (24hr TTL).

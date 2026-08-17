@@ -75,12 +75,9 @@ impl CompanionEventSink for DaemonCompanionEventSink {
         // a future companion event surfaces in logs instead of
         // silently broadcasting.
         match event {
-            "companion:tunnel_activated"
-            | "companion:tunnel_deactivated" => {}
+            "companion:tunnel_activated" | "companion:tunnel_deactivated" => {}
             other => {
-                log_debug!(
-                    "[daemon/companion] dropping unknown companion event '{other}'"
-                );
+                log_debug!("[daemon/companion] dropping unknown companion event '{other}'");
                 return;
             }
         }
@@ -111,8 +108,7 @@ struct DaemonAppEventSource {
     handle: tokio::runtime::Handle,
 }
 
-static HANDLER_KEEPALIVE: StdMutex<Vec<Arc<AppEventHandler>>> =
-    StdMutex::new(Vec::new());
+static HANDLER_KEEPALIVE: StdMutex<Vec<Arc<AppEventHandler>>> = StdMutex::new(Vec::new());
 
 impl AppEventSource for DaemonAppEventSource {
     fn subscribe(&self, events: &[&'static str], handler: AppEventHandler) {
@@ -140,14 +136,11 @@ impl AppEventSource for DaemonAppEventSource {
                         // companion's handler signature expects a JSON
                         // string payload (matches the Tauri `event.payload()`
                         // form, which is a raw JSON-encoded string).
-                        let payload_str =
-                            serde_json::to_string(&frame.payload).unwrap_or_default();
+                        let payload_str = serde_json::to_string(&frame.payload).unwrap_or_default();
                         (handler_arc)(event_name, &payload_str);
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        log_debug!(
-                            "[daemon/companion] app-event subscriber lagged by {n} frames"
-                        );
+                        log_debug!("[daemon/companion] app-event subscriber lagged by {n} frames");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -174,9 +167,7 @@ impl CompanionSettingsProvider for DaemonCompanionSettingsProvider {
 
     fn clear_password_hash_after_migration(&self) {
         if let Err(e) = clear_companion_password_hash_on_disk() {
-            log_debug!(
-                "[daemon/companion] WARN: clear_password_hash_after_migration: {e}"
-            );
+            log_debug!("[daemon/companion] WARN: clear_password_hash_after_migration: {e}");
         }
     }
 }
@@ -252,10 +243,9 @@ fn read_companion_settings_from_disk() -> Option<CompanionSettingsSnapshot> {
 /// don't accidentally strip unrelated settings.
 fn clear_companion_password_hash_on_disk() -> Result<(), String> {
     let path = settings_path().ok_or_else(|| "no home dir".to_string())?;
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read {path:?}: {e}"))?;
-    let mut parsed: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("parse {path:?}: {e}"))?;
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("read {path:?}: {e}"))?;
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("parse {path:?}: {e}"))?;
     if let Some(obj) = parsed.as_object_mut() {
         if let Some(companion) = obj.get_mut("companion").and_then(|v| v.as_object_mut()) {
             companion.insert(
@@ -265,8 +255,7 @@ fn clear_companion_password_hash_on_disk() -> Result<(), String> {
             companion.insert("passwordSet".to_string(), serde_json::Value::Bool(true));
         }
     }
-    let json = serde_json::to_string_pretty(&parsed)
-        .map_err(|e| format!("serialize: {e}"))?;
+    let json = serde_json::to_string_pretty(&parsed).map_err(|e| format!("serialize: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| format!("write {tmp:?}: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("rename {tmp:?} -> {path:?}: {e}"))?;
@@ -300,12 +289,10 @@ pub fn persist_companion_password_fields(
     // fresh install where the user enters companion creds before any
     // other Tauri settings have been written.
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {parent:?}: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {parent:?}: {e}"))?;
     }
     let mut parsed: serde_json::Value = match std::fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw)
-            .unwrap_or_else(|_| serde_json::json!({})),
+        Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({})),
         Err(_) => serde_json::json!({}),
     };
     if !parsed.is_object() {
@@ -327,8 +314,7 @@ pub fn persist_companion_password_fields(
         "passwordSet".to_string(),
         serde_json::Value::Bool(password_set),
     );
-    let json = serde_json::to_string_pretty(&parsed)
-        .map_err(|e| format!("serialize: {e}"))?;
+    let json = serde_json::to_string_pretty(&parsed).map_err(|e| format!("serialize: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| format!("write {tmp:?}: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("rename {tmp:?} -> {path:?}: {e}"))?;
@@ -346,20 +332,55 @@ pub fn persist_companion_password_fields(
 /// reads settings or terminals for the first time.
 pub fn register(event_tx: broadcast::Sender<WireEvent>) {
     let handle = tokio::runtime::Handle::current();
-    k2_core::companion::settings_bridge::set_provider(Box::new(
-        DaemonCompanionSettingsProvider,
-    ));
+    k2_core::companion::settings_bridge::set_provider(Box::new(DaemonCompanionSettingsProvider));
     k2_core::companion::terminal_bridge::set_provider(Box::new(DaemonTerminalProvider));
     k2_core::companion::event_sink::set_sink(Box::new(DaemonCompanionEventSink {
         tx: event_tx.clone(),
     }));
     k2_core::companion::app_event_source::set_source(Box::new(DaemonAppEventSource {
         tx: event_tx,
-        handle,
+        handle: handle.clone(),
     }));
-    log_debug!(
-        "[daemon/companion] registered settings/terminal/event/app-event bridges"
-    );
+    register_grid_adapter(handle);
+    log_debug!("[daemon/companion] registered settings/terminal/event/app-event bridges");
+}
+
+/// Hand `/companion/sessions/grid` upgrades into the existing
+/// `sessions_grid_ws` loop as a viewer-default identity. The companion
+/// listener already authenticated a companion session token; we never
+/// inject the owner hook token.
+pub fn register_grid_adapter(handle: tokio::runtime::Handle) {
+    k2_core::companion::set_grid_upgrade_handler(std::sync::Arc::new(move |upgrade| {
+        let handle = handle.clone();
+        handle.spawn(async move {
+            let token = upgrade.companion_token;
+            let session_id = upgrade.session_id;
+            let proto = upgrade.proto;
+            if let Err(e) = upgrade.stream.set_nonblocking(true) {
+                log_debug!("[companion-grid] set_nonblocking failed: {e}");
+                k2_core::companion::note_grid_ws_closed(&token, &session_id);
+                return;
+            }
+            let mut stream = match tokio::net::TcpStream::from_std(upgrade.stream) {
+                Ok(s) => s,
+                Err(e) => {
+                    log_debug!("[companion-grid] adopt stream failed: {e}");
+                    k2_core::companion::note_grid_ws_closed(&token, &session_id);
+                    return;
+                }
+            };
+            let mut params = std::collections::HashMap::new();
+            params.insert("session".into(), session_id.clone());
+            // Companion session token — re-auth only. Never logged.
+            params.insert("token".into(), token.clone());
+            if let Some(p) = proto {
+                params.insert("proto".into(), p);
+            }
+            crate::sessions_grid_ws::serve_companion_session_grid_connection(&mut stream, params)
+                .await;
+            k2_core::companion::note_grid_ws_closed(&token, &session_id);
+        });
+    }));
 }
 
 /// First-boot autostart hook. Reads `companion.auto_start` from the

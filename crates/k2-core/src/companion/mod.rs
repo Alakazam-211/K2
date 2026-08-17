@@ -24,19 +24,65 @@ pub mod terminal_bridge;
 pub mod types;
 pub mod websocket;
 
+use ngrok::config::ForwarderBuilder;
+use ngrok::tunnel::EndpointInfo;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use ngrok::config::ForwarderBuilder;
-use ngrok::tunnel::EndpointInfo;
+use std::sync::Arc;
 
-use types::{AuthRateLimiter, CompanionState};
+use types::CompanionState;
 
 /// Module-level companion state. Mutex<Option> allows stop + restart
 /// (unlike OnceLock). `pub` so src-tauri's companion commands can read
 /// it — the previous pub(crate) was k2so-core-local which blocked
 /// downstream callers after the migration.
 pub static STATE: Mutex<Option<CompanionState>> = Mutex::new(None);
+
+/// Unread TCP stream for a companion-authenticated `/companion/sessions/grid`
+/// upgrade. The daemon adapter performs the WS handshake and runs
+/// `serve_session_grid_connection` as a viewer-default identity.
+/// `companion_token` is the already-validated session token (re-auth only);
+/// it must never be logged or forwarded to the client.
+pub struct CompanionGridUpgrade {
+    pub stream: std::net::TcpStream,
+    pub session_id: String,
+    pub proto: Option<String>,
+    pub companion_token: String,
+}
+
+/// Daemon-registered handoff. Takes ownership of the unread upgrade stream.
+pub type GridUpgradeHandler = Arc<dyn Fn(CompanionGridUpgrade) + Send + Sync>;
+
+static GRID_UPGRADE_HANDLER: Mutex<Option<GridUpgradeHandler>> = Mutex::new(None);
+
+/// Install (or replace) the daemon grid adapter. Called from
+/// `companion_host::register` so the tunnel never exposes `/cli/*`.
+pub fn set_grid_upgrade_handler(handler: GridUpgradeHandler) {
+    *GRID_UPGRADE_HANDLER.lock() = Some(handler);
+}
+
+/// True iff a grid adapter is live — `GET /companion/capabilities` uses this
+/// so we only advertise `gridProto:["k1"]` when the upgrade is registered.
+pub fn grid_upgrade_registered() -> bool {
+    GRID_UPGRADE_HANDLER.lock().is_some()
+}
+
+pub(crate) fn grid_upgrade_handler() -> Option<GridUpgradeHandler> {
+    GRID_UPGRADE_HANDLER.lock().clone()
+}
+
+/// Drop the per-client scrollback skip when a grid socket ends.
+pub fn note_grid_ws_closed(token: &str, terminal_id: &str) {
+    if let Some(state) = STATE.lock().as_ref() {
+        state.note_grid_ws_closed(token, terminal_id);
+    }
+}
+
+/// Exact companion grid path (query stripped). Must not match `/companion/ws`.
+pub fn is_companion_grid_path(path: &str) -> bool {
+    path.split('?').next().unwrap_or("") == "/companion/sessions/grid"
+}
 /// Flag indicating the companion is running.
 static RUNNING: AtomicBool = AtomicBool::new(false);
 /// Flag to cancel a pending auto-start attempt.
@@ -93,25 +139,21 @@ pub fn start_companion() -> Result<String, String> {
         return Err("Start cancelled".to_string());
     }
 
-    log_debug!("[companion] Tunnel: {} → localhost:{}", tunnel_url, local_port);
+    log_debug!(
+        "[companion] Tunnel: {} → localhost:{}",
+        tunnel_url,
+        local_port
+    );
 
     // Channel to keep the tunnel runtime alive
     let (keepalive_tx, _keepalive_rx) = std::sync::mpsc::channel::<()>();
 
     // Initialize state
-    let state = CompanionState {
-        tunnel_url: Mutex::new(Some(tunnel_url.clone())),
-        sessions: Mutex::new(HashMap::new()),
-        ws_clients: Mutex::new(Vec::new()),
-        shutdown: AtomicBool::new(false),
-        hook_port,
-        hook_token: hook_token.to_string(),
-        cors_origins: companion.cors_origins.clone(),
-        allow_remote_spawn: companion.allow_remote_spawn,
-        auth_limiter: Mutex::new(AuthRateLimiter::new()),
-        reflow_cache: Mutex::new(HashMap::new()),
-        _tunnel_keepalive: Mutex::new(Some(keepalive_tx)),
-    };
+    let mut state = CompanionState::new(hook_port, hook_token.to_string());
+    *state.tunnel_url.lock() = Some(tunnel_url.clone());
+    state.cors_origins = companion.cors_origins.clone();
+    state.allow_remote_spawn = companion.allow_remote_spawn;
+    *state._tunnel_keepalive.lock() = Some(keepalive_tx);
     *STATE.lock() = Some(state);
     RUNNING.store(true, Ordering::Relaxed);
 
@@ -130,14 +172,14 @@ pub fn start_companion() -> Result<String, String> {
     });
 
     // Spawn session cleanup thread (every 5 minutes, expire old sessions)
-    std::thread::spawn(|| {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(300));
-            if !RUNNING.load(Ordering::Relaxed) { break; }
-            if let Some(ref state) = *STATE.lock() {
-                let mut sessions = state.sessions.lock();
-                sessions.retain(|_, s| !s.is_expired());
-            }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(300));
+        if !RUNNING.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(ref state) = *STATE.lock() {
+            let mut sessions = state.sessions.lock();
+            sessions.retain(|_, s| !s.is_expired());
         }
     });
 
@@ -148,8 +190,16 @@ pub fn start_companion() -> Result<String, String> {
         "[companion] ⚠️  TUNNEL ACTIVE — {} is now reachable from the public internet. \
          remote_spawn={} cors_origins={} (toggle these in Settings → Companion)",
         tunnel_url,
-        if companion.allow_remote_spawn { "ENABLED (arbitrary shell commands permitted)" } else { "disabled" },
-        if companion.cors_origins.is_empty() { "none (browser access blocked)".to_string() } else { companion.cors_origins.join(", ") },
+        if companion.allow_remote_spawn {
+            "ENABLED (arbitrary shell commands permitted)"
+        } else {
+            "disabled"
+        },
+        if companion.cors_origins.is_empty() {
+            "none (browser access blocked)".to_string()
+        } else {
+            companion.cors_origins.join(", ")
+        },
     );
 
     // Notify the UI so it can show a banner / toast. Goes through the
@@ -181,7 +231,9 @@ pub fn start_companion() -> Result<String, String> {
         let mut consecutive_failures = 0u32;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(15));
-            if !RUNNING.load(Ordering::Relaxed) { break; }
+            if !RUNNING.load(Ordering::Relaxed) {
+                break;
+            }
 
             // Probe the LOCAL listener — this is ground truth (ngrok URL can return
             // HTML error pages that look like HTTP 200 even when the forwarder is dead)
@@ -196,7 +248,10 @@ pub fn start_companion() -> Result<String, String> {
                 }
                 Err(_) => {
                     consecutive_failures += 1;
-                    crate::log_debug!("[companion] Tunnel health check failed ({}/3)", consecutive_failures);
+                    crate::log_debug!(
+                        "[companion] Tunnel health check failed ({}/3)",
+                        consecutive_failures
+                    );
                     if consecutive_failures >= 3 {
                         crate::log_debug!("[companion] Tunnel dead — restarting companion");
                         // Stop and restart
@@ -268,6 +323,7 @@ pub fn invalidate_all_sessions(reason: &str) {
         sessions.clear();
         n
     };
+    state.grid_ws_live.lock().clear();
     let disconnected = {
         let mut clients = state.ws_clients.lock();
         let n = clients.len();
@@ -313,15 +369,22 @@ pub fn companion_status() -> serde_json::Value {
 
     if let Some(ref state) = *guard {
         let url = state.tunnel_url.try_lock().and_then(|u| u.clone());
-        let session_list: Vec<serde_json::Value> = state.sessions.try_lock()
-            .map(|sessions| sessions.values().map(|s| {
-                serde_json::json!({
-                    "token": format!("{}...", &s.token[..8.min(s.token.len())]),
-                    "remoteAddr": s.remote_addr,
-                    "createdAt": s.created_at.to_rfc3339(),
-                    "expiresAt": s.expires_at.to_rfc3339(),
-                })
-            }).collect())
+        let session_list: Vec<serde_json::Value> = state
+            .sessions
+            .try_lock()
+            .map(|sessions| {
+                sessions
+                    .values()
+                    .map(|s| {
+                        serde_json::json!({
+                            "token": format!("{}...", &s.token[..8.min(s.token.len())]),
+                            "remoteAddr": s.remote_addr,
+                            "createdAt": s.created_at.to_rfc3339(),
+                            "expiresAt": s.expires_at.to_rfc3339(),
+                        })
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         let session_count = session_list.len();
         let ws_count = state.ws_clients.try_lock().map(|c| c.len()).unwrap_or(0);
@@ -345,7 +408,11 @@ pub fn companion_status() -> serde_json::Value {
 /// We run it on a dedicated thread and wait with recv_timeout. If it times out,
 /// the thread keeps running (the runtime stays alive there) — next call will
 /// find the session in the static and reuse it.
-fn start_ngrok_tunnel(ngrok_token: &str, ngrok_domain: &str, local_port: u16) -> Result<(String, tokio::runtime::Runtime), String> {
+fn start_ngrok_tunnel(
+    ngrok_token: &str,
+    ngrok_domain: &str,
+    local_port: u16,
+) -> Result<(String, tokio::runtime::Runtime), String> {
     let token = ngrok_token.to_string();
     let domain = ngrok_domain.to_string();
     let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
@@ -397,7 +464,8 @@ fn start_ngrok_tunnel(ngrok_token: &str, ngrok_domain: &str, local_port: u16) ->
                 NGROK_FORWARDER.lock().replace(listener);
 
                 Ok(url)
-            }.await;
+            }
+            .await;
 
             // Send result back to caller
             let _ = tx.send(connect_result);
@@ -406,7 +474,9 @@ fn start_ngrok_tunnel(ngrok_token: &str, ngrok_domain: &str, local_port: u16) ->
             // The forwarder proxies connections as long as this block_on is active.
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-                if !RUNNING.load(Ordering::Relaxed) { break; }
+                if !RUNNING.load(Ordering::Relaxed) {
+                    break;
+                }
             }
         });
         crate::log_debug!("[companion] Tunnel runtime thread exiting");
@@ -424,12 +494,15 @@ fn start_ngrok_tunnel(ngrok_token: &str, ngrok_domain: &str, local_port: u16) ->
             Ok((url, rt))
         }
         Ok(Err(e)) => Err(e),
-        Err(_) => Err("ngrok connect timed out (20s) — old session may still be active".to_string()),
+        Err(_) => {
+            Err("ngrok connect timed out (20s) — old session may still be active".to_string())
+        }
     }
 }
 
 static NGROK_SESSION: Mutex<Option<ngrok::Session>> = Mutex::new(None);
-static NGROK_FORWARDER: Mutex<Option<ngrok::forwarder::Forwarder<ngrok::tunnel::HttpTunnel>>> = Mutex::new(None);
+static NGROK_FORWARDER: Mutex<Option<ngrok::forwarder::Forwarder<ngrok::tunnel::HttpTunnel>>> =
+    Mutex::new(None);
 
 /// Local companion HTTP server — accepts connections from ngrok (forwarded via listen_and_forward).
 /// Same blocking TCP pattern as agent_hooks.rs.
@@ -440,7 +513,10 @@ fn run_local_listener(listener: std::net::TcpListener) {
     // allows periodic shutdown checks even when no connections arrive.
     listener.set_nonblocking(false).ok();
 
-    log_debug!("[companion] Local listener started on port {}", listener.local_addr().map(|a| a.port()).unwrap_or(0));
+    log_debug!(
+        "[companion] Local listener started on port {}",
+        listener.local_addr().map(|a| a.port()).unwrap_or(0)
+    );
     let mut request_count = 0u64;
     for stream in listener.incoming() {
         request_count += 1;
@@ -451,7 +527,9 @@ fn run_local_listener(listener: std::net::TcpListener) {
             {
                 let guard = STATE.lock();
                 if let Some(ref state) = *guard {
-                    if state.shutdown.load(Ordering::Relaxed) { return false; }
+                    if state.shutdown.load(Ordering::Relaxed) {
+                        return false;
+                    }
                 }
             }
 
@@ -459,7 +537,8 @@ fn run_local_listener(listener: std::net::TcpListener) {
                 crate::log_debug!("[companion] Listener accept error — continuing");
                 return true;
             };
-            let remote_addr = stream.peer_addr()
+            let remote_addr = stream
+                .peer_addr()
                 .map(|a| a.to_string())
                 .unwrap_or_else(|_| "ngrok".to_string());
 
@@ -476,7 +555,9 @@ fn run_local_listener(listener: std::net::TcpListener) {
 
             if is_websocket {
                 // Extract path from the first line (before consuming)
-                let path = peek_str.lines().next()
+                let path = peek_str
+                    .lines()
+                    .next()
                     .and_then(|line| line.split_whitespace().nth(1))
                     .unwrap_or("/companion/ws");
                 let path = path.to_string();
@@ -499,11 +580,8 @@ fn run_local_listener(listener: std::net::TcpListener) {
                                 tunnel.as_deref(),
                                 &allowlist,
                             );
-                            let host_ok = proxy::host_allowed(
-                                request_host,
-                                tunnel.as_deref(),
-                                &allowlist,
-                            );
+                            let host_ok =
+                                proxy::host_allowed(request_host, tunnel.as_deref(), &allowlist);
                             (origin_ok && host_ok, tunnel, allowlist)
                         }
                         None => (false, None, Vec::new()),
@@ -532,12 +610,21 @@ fn run_local_listener(listener: std::net::TcpListener) {
                     return true;
                 }
 
-                // Pass unread stream to tungstenite — it reads the upgrade request itself
+                // Pass unread stream to tungstenite — it reads the upgrade request itself.
+                // Branch BEFORE handle_ws_upgrade: `/companion/sessions/grid` is
+                // the k1 adapter. Anything else stays JSON-RPC. `/cli/*` is
+                // never exposed on this listener.
                 let ws_guard = STATE.lock();
                 if let Some(ref ws_state) = *ws_guard {
                     let state_ptr = ws_state as *const CompanionState;
                     drop(ws_guard);
-                    websocket::handle_ws_upgrade(stream, &path, unsafe { &*state_ptr });
+                    if is_companion_grid_path(&path) {
+                        websocket::handle_grid_upgrade(stream, &path, &headers, unsafe {
+                            &*state_ptr
+                        });
+                    } else {
+                        websocket::handle_ws_upgrade(stream, &path, unsafe { &*state_ptr });
+                    }
                 }
                 return true;
             }
@@ -561,7 +648,15 @@ fn run_local_listener(listener: std::net::TcpListener) {
 
             let guard = STATE.lock();
             if let Some(ref state) = *guard {
-                proxy::handle_request(&mut stream, state, method, path, &headers, &request, &remote_addr);
+                proxy::handle_request(
+                    &mut stream,
+                    state,
+                    method,
+                    path,
+                    &headers,
+                    &request,
+                    &remote_addr,
+                );
             }
             true // continue loop
         }));
@@ -570,7 +665,8 @@ fn run_local_listener(listener: std::net::TcpListener) {
             Ok(false) => break, // shutdown requested
             Ok(true) => continue,
             Err(panic) => {
-                let msg = panic.downcast_ref::<String>()
+                let msg = panic
+                    .downcast_ref::<String>()
                     .map(|s| s.as_str())
                     .or_else(|| panic.downcast_ref::<&str>().copied())
                     .unwrap_or("unknown panic");
@@ -580,7 +676,10 @@ fn run_local_listener(listener: std::net::TcpListener) {
         }
     }
 
-    log_debug!("[companion] Local listener ended after {} requests", request_count);
+    log_debug!(
+        "[companion] Local listener ended after {} requests",
+        request_count
+    );
     RUNNING.store(false, Ordering::Relaxed);
 }
 
@@ -624,7 +723,9 @@ fn run_terminal_polling() {
         // 100ms interval = ~10fps (throttled for mobile bandwidth)
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        if !RUNNING.load(Ordering::Relaxed) { break; }
+        if !RUNNING.load(Ordering::Relaxed) {
+            break;
+        }
 
         let _poll_tick = crate::perf_hist!("terminal_poll_tick");
 
@@ -646,7 +747,9 @@ fn run_terminal_polling() {
             ids.into_iter().collect()
         };
 
-        if terminal_ids.is_empty() { continue; }
+        if terminal_ids.is_empty() {
+            continue;
+        }
 
         for tid in &terminal_ids {
             if let Ok(grid) = terminal_bridge::get_grid(tid) {
@@ -683,5 +786,78 @@ fn run_terminal_polling() {
                 // Companion App team was notified in the 0.32.12 memo.
             }
         }
+    }
+}
+
+/// Bind a companion HTTP/WS listener with no ngrok tunnel. For tests that
+/// need the public-path adapter (`/companion/sessions/grid`, capabilities)
+/// against a local daemon hook port.
+#[cfg(any(test, feature = "test-util"))]
+pub struct TestCompanionListener {
+    pub port: u16,
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl TestCompanionListener {
+    /// Replace process-global [`STATE`] with a fresh companion listener.
+    /// Tests that call this must serialize — `STATE` is process-wide.
+    pub fn start(hook_port: u16, hook_token: impl Into<String>) -> Self {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind companion test listener");
+        let port = listener.local_addr().expect("local_addr").port();
+        let state = CompanionState::new(hook_port, hook_token.into());
+        *STATE.lock() = Some(state);
+        std::thread::spawn(move || {
+            run_local_listener(listener);
+        });
+        Self { port }
+    }
+
+    /// Insert a live companion session token into the running listener.
+    pub fn insert_session(&self, token: &str) {
+        let now = chrono::Utc::now();
+        let session = types::Session {
+            token: token.to_string(),
+            created_at: now,
+            expires_at: now + chrono::Duration::hours(24),
+            last_active: now,
+            remote_addr: "test".into(),
+            request_count: 0,
+            window_start: std::time::Instant::now(),
+        };
+        let guard = STATE.lock();
+        if let Some(state) = guard.as_ref() {
+            state.sessions.lock().insert(token.to_string(), session);
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl Drop for TestCompanionListener {
+    fn drop(&mut self) {
+        if let Some(state) = STATE.lock().as_ref() {
+            state.shutdown.store(true, Ordering::Relaxed);
+        }
+        // Unblock `incoming()` so the listener thread can observe shutdown.
+        let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+        *STATE.lock() = None;
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn grid_path_is_exact_and_ignores_query() {
+        assert!(is_companion_grid_path("/companion/sessions/grid"));
+        assert!(is_companion_grid_path(
+            "/companion/sessions/grid?session=abc&token=xyz&proto=k1"
+        ));
+        assert!(!is_companion_grid_path("/companion/ws"));
+        assert!(!is_companion_grid_path("/companion/ws?token=xyz"));
+        assert!(!is_companion_grid_path("/cli/sessions/grid"));
+        assert!(!is_companion_grid_path("/companion/sessions/grid/extra"));
+        assert!(!is_companion_grid_path("/companion/sessions"));
     }
 }

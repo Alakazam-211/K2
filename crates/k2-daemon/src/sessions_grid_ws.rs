@@ -56,8 +56,7 @@ use tokio_tungstenite::tungstenite::Message;
 use k2_core::log_debug;
 use k2_core::session::SessionId;
 use k2_core::terminal::{
-    grid_wire, snapshot_term, AlacEvent, DaemonPtySession, TermGridDelta,
-    TermGridSnapshot,
+    grid_wire, snapshot_term, AlacEvent, DaemonPtySession, TermGridDelta, TermGridSnapshot,
 };
 
 use crate::v2_session_map;
@@ -108,7 +107,11 @@ pub(crate) enum Outbound<'a> {
     /// pinned (absence = unpinned, so an older client / unpinned
     /// session sees a byte-identical connect sequence). `set_by` is
     /// "owner" or the pinning connect-user's username.
-    PinInitial { cols: u16, rows: u16, set_by: Option<String> },
+    PinInitial {
+        cols: u16,
+        rows: u16,
+        set_by: Option<String>,
+    },
     /// S7a pin-to-size — pin state changed mid-session (the
     /// `LabelChanged` pattern, fed by the session's pin broadcast).
     /// Pinned: `{"cols":N,"rows":N,"cleared":false}`. Unpinned:
@@ -238,6 +241,40 @@ enum Inbound {
     Ack { version: u64 },
 }
 
+/// Coarse per-socket budget for companion-tunnel `resize` / `set_active` /
+/// `input`. Stolen 24h companion bearers already equal `terminal.write`;
+/// Drive adds SIGWINCH of a live TUI — this bounds a flood after upgrade.
+const COMPANION_ACTION_BUDGET_PER_SEC: u32 = 16;
+
+struct CompanionActionBudget {
+    window_start: std::time::Instant,
+    count: u32,
+}
+
+impl CompanionActionBudget {
+    fn new() -> Self {
+        Self {
+            window_start: std::time::Instant::now(),
+            count: 0,
+        }
+    }
+
+    fn allow(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.window_start) >= std::time::Duration::from_secs(1) {
+            self.window_start = now;
+            self.count = 1;
+            return true;
+        }
+        if self.count < COMPANION_ACTION_BUDGET_PER_SEC {
+            self.count += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// k1 pacing: stop forwarding frames to a connection once this many
 /// forwarded frames are unacknowledged...
 const UNACKED_FRAMES_MAX: usize = 32;
@@ -299,8 +336,7 @@ impl AttachSettleFence {
     /// (Re)arm after an applied claimer resize. Keeps any prior
     /// `dropped` bit so a mid-fence rearm still coalesces to one snap.
     fn rearm(&mut self, now: std::time::Instant) {
-        self.until =
-            Some(now + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS));
+        self.until = Some(now + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS));
     }
 
     /// Convert an in-progress pause into fence coalesce: clear pause
@@ -450,8 +486,7 @@ fn clipboard_frame(text: String) -> Option<Outbound<'static>> {
 /// Each WS accept claims the next value; the id is passed to the
 /// session's `active_subscriber` atomic on viewer-claim. Starts at
 /// 1 because 0 is the "no claim" sentinel value.
-static NEXT_SUBSCRIBER_ID: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(1);
+static NEXT_SUBSCRIBER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// S5 viewer/claimer — the auth CLASS this grid connection presented at
 /// accept. The class is fixed for the socket's lifetime; whether the
@@ -470,6 +505,10 @@ enum ConnIdentity {
     /// credential minted for external (/v1/sandboxes) drivers whose
     /// whole point is to drive exactly this session.
     StreamToken,
+    /// Companion tunnel client. Claimer-capable (the companion password
+    /// already equals drive-this-Mac) but **starts as viewer** so Watch
+    /// cannot `set_active` / resize / input until Drive (`set_mode:claimer`).
+    CompanionViewer,
     /// No credential class resolved (a session can be revoked between
     /// the dispatcher gate and identity resolution). Never
     /// claimer-capable; the 5s re-auth tick tears the socket down.
@@ -484,7 +523,7 @@ enum ConnIdentity {
 /// at human rates, so the per-frame store read is cheap.
 fn connection_claimer_capable(identity: &ConnIdentity) -> bool {
     match identity {
-        ConnIdentity::Owner | ConnIdentity::StreamToken => true,
+        ConnIdentity::Owner | ConnIdentity::StreamToken | ConnIdentity::CompanionViewer => true,
         ConnIdentity::ConnectUser { username } => {
             match k2_core::connect_users::role_for_user(username) {
                 // User removed / store unreadable mid-session — fail
@@ -588,10 +627,9 @@ fn apply_set_active(
     let outcome = decide_set_active(prev, subscriber_id, active);
     match outcome {
         SetActiveOutcome::Claim => {
-            session.active_subscriber.store(
-                subscriber_id,
-                std::sync::atomic::Ordering::Relaxed,
-            );
+            session
+                .active_subscriber
+                .store(subscriber_id, std::sync::atomic::Ordering::Relaxed);
             if let (Some(c), Some(r)) = (cols, rows) {
                 session
                     .active_cols
@@ -665,6 +703,7 @@ fn pin_attribution(identity: &ConnIdentity) -> String {
         ConnIdentity::Owner => "owner".to_string(),
         ConnIdentity::ConnectUser { username } => username.clone(),
         ConnIdentity::StreamToken => "stream".to_string(),
+        ConnIdentity::CompanionViewer => "companion".to_string(),
         // Unreachable through the gate (Unknown is never
         // claimer-capable); neutral fallback mirrors the HTTP arm.
         ConnIdentity::Unknown => "user".to_string(),
@@ -686,9 +725,7 @@ fn apply_claim_pin(
     rows: u16,
     set_by: String,
 ) -> bool {
-    use crate::terminal_routes::{
-        PIN_COLS_MAX, PIN_COLS_MIN, PIN_ROWS_MAX, PIN_ROWS_MIN,
-    };
+    use crate::terminal_routes::{PIN_COLS_MAX, PIN_COLS_MIN, PIN_ROWS_MAX, PIN_ROWS_MIN};
     if !(PIN_COLS_MIN..=PIN_COLS_MAX).contains(&cols)
         || !(PIN_ROWS_MIN..=PIN_ROWS_MAX).contains(&rows)
     {
@@ -709,13 +746,7 @@ fn apply_claim_pin(
     session
         .active_rows
         .store(rows, std::sync::atomic::Ordering::Relaxed);
-    DaemonPtySession::set_pinned_ephemeral(
-        session,
-        cols,
-        rows,
-        Some(set_by),
-        subscriber_id,
-    );
+    DaemonPtySession::set_pinned_ephemeral(session, cols, rows, Some(set_by), subscriber_id);
     true
 }
 
@@ -723,6 +754,26 @@ pub async fn serve_session_grid_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
     owner_token: String,
+) {
+    serve_session_grid_connection_inner(stream, params, owner_token, false).await;
+}
+
+/// Companion-tunnel entry: same loop as [`serve_session_grid_connection`],
+/// but identity is viewer-default (`mode_claimer = false`) and never
+/// derived from the owner hook token. `params["token"]` is the already-
+/// validated companion session token (re-auth only).
+pub async fn serve_companion_session_grid_connection(
+    stream: &mut TcpStream,
+    params: HashMap<String, String>,
+) {
+    serve_session_grid_connection_inner(stream, params, String::new(), true).await;
+}
+
+async fn serve_session_grid_connection_inner(
+    stream: &mut TcpStream,
+    params: HashMap<String, String>,
+    owner_token: String,
+    companion_viewer: bool,
 ) {
     // The token that authorized this connection. Re-validated on a timer
     // inside the loop so a revoked connect-user (disabled / removed /
@@ -734,11 +785,7 @@ pub async fn serve_session_grid_connection(
     let session_id = match params.get("session").and_then(|s| SessionId::parse(s)) {
         Some(id) => id,
         None => {
-            send_error_then_close(
-                stream,
-                "missing or malformed 'session' query param",
-            )
-            .await;
+            send_error_then_close(stream, "missing or malformed 'session' query param").await;
             return;
         }
     };
@@ -758,9 +805,9 @@ pub async fn serve_session_grid_connection(
     // Capability is deliberately NOT computed here — the gates call
     // `connection_claimer_capable` per frame so role changes / grant
     // revokes apply to live sockets.
-    let identity: ConnIdentity = if !token.is_empty()
-        && crate::routes::http::ct_eq_token(&token, &owner_token)
-    {
+    let identity: ConnIdentity = if companion_viewer {
+        ConnIdentity::CompanionViewer
+    } else if !token.is_empty() && crate::routes::http::ct_eq_token(&token, &owner_token) {
         ConnIdentity::Owner
     } else if let Some(username) = k2_core::connect_users::validate_session(&token) {
         ConnIdentity::ConnectUser { username }
@@ -777,11 +824,13 @@ pub async fn serve_session_grid_connection(
     // session's PTY, so making it viewer-by-default just forced every
     // machine client through a `set_mode` handshake for the only thing the
     // token exists to do. Connect users of ANY role still start as viewers
-    // until they opt in with `set_mode`. The connection ACTS as a claimer
-    // only while mode==claimer AND capable, and a `set_mode` to viewer
-    // still works for a stream-token watcher that wants read-only.
-    let mut mode_claimer =
-        matches!(identity, ConnIdentity::Owner | ConnIdentity::StreamToken);
+    // until they opt in with `set_mode`. Companion tunnel sockets also
+    // start as viewers — Watch is server-enforced; Drive is an explicit
+    // `set_mode:claimer`. The connection ACTS as a claimer only while
+    // mode==claimer AND capable, and a `set_mode` to viewer still works
+    // for a stream-token watcher that wants read-only.
+    let mut mode_claimer = matches!(identity, ConnIdentity::Owner | ConnIdentity::StreamToken);
+    let mut action_budget = CompanionActionBudget::new();
     // One-time (per connection) `input_denied` hint — repeats drop
     // silently so a key-mashing viewer can't flood the socket.
     let mut input_denied_sent = false;
@@ -790,10 +839,7 @@ pub async fn serve_session_grid_connection(
     // The id stays stable for the WS's lifetime; the renderer's
     // `SetActive` frame stamps this value into the session's
     // `active_subscriber`. `Resize` frames check against it.
-    let subscriber_id = NEXT_SUBSCRIBER_ID.fetch_add(
-        1,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    let subscriber_id = NEXT_SUBSCRIBER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     // k1 binary wire opt-in. Anything other than an exact `proto=k1`
     // (absent, empty, unknown value) keeps the JSON default — an
@@ -934,7 +980,9 @@ pub async fn serve_session_grid_connection(
     let initial_label = session.label();
     if send_outbound(
         &mut write,
-        &Outbound::LabelInitial { label: initial_label },
+        &Outbound::LabelInitial {
+            label: initial_label,
+        },
     )
     .await
     .is_err()
@@ -1003,8 +1051,7 @@ pub async fn serve_session_grid_connection(
     // disconnect. This timer closes that hole: a revoked token fails
     // `token_still_valid` and we tear the socket down. The owner token is
     // never revoked, so owner connections sail through the compare.
-    let mut auth_recheck =
-        tokio::time::interval(std::time::Duration::from_secs(5));
+    let mut auth_recheck = tokio::time::interval(std::time::Duration::from_secs(5));
     // Burn the immediate first tick so we don't re-validate the instant
     // after the dispatcher already authorized us.
     auth_recheck.tick().await;
@@ -1112,8 +1159,15 @@ pub async fn serve_session_grid_connection(
                 // stream token bound to THIS session (revoked on teardown +
                 // TTL-bounded), so an external /v1/sandboxes viewer isn't torn
                 // off a still-live stream.
-                let still_ok = crate::routes::http::token_still_valid(&token, &owner_token)
-                    || crate::stream_token::authorizes_session(&token, &session.session_id);
+                let still_ok = if companion_viewer {
+                    k2_core::companion::auth::session_alive(&token)
+                } else {
+                    crate::routes::http::token_still_valid(&token, &owner_token)
+                        || crate::stream_token::authorizes_session(
+                            &token,
+                            &session.session_id,
+                        )
+                };
                 if !still_ok {
                     log_debug!(
                         "[daemon/sessions_grid_ws] token revoked mid-session; \
@@ -1557,6 +1611,14 @@ pub async fn serve_session_grid_connection(
                         let parsed: Result<Inbound, _> = serde_json::from_str(&text);
                         match parsed {
                             Ok(Inbound::Input { text }) => {
+                                if companion_viewer && !action_budget.allow() {
+                                    log_debug!(
+                                        "[daemon/sessions_grid_ws] companion \
+                                         input budget exceeded session={}",
+                                        session.session_id
+                                    );
+                                    continue;
+                                }
                                 // S5 — viewer gate: a non-claimer's input is
                                 // dropped WHOLE, including the claim-steal +
                                 // snap-resize below (a viewer must not be able
@@ -1654,6 +1716,14 @@ pub async fn serve_session_grid_connection(
                                 session.write(text.into_bytes());
                             }
                             Ok(Inbound::Resize { cols, rows }) => {
+                                if companion_viewer && !action_budget.allow() {
+                                    log_debug!(
+                                        "[daemon/sessions_grid_ws] companion \
+                                         resize budget exceeded session={}",
+                                        session.session_id
+                                    );
+                                    continue;
+                                }
                                 // Remember our own requested dims even when the
                                 // resize is dropped below (non-active) — an
                                 // Input claim (above) snaps the PTY to these,
@@ -1733,6 +1803,14 @@ pub async fn serve_session_grid_connection(
                                 }
                             }
                             Ok(Inbound::SetActive { active, cols, rows }) => {
+                                if companion_viewer && !action_budget.allow() {
+                                    log_debug!(
+                                        "[daemon/sessions_grid_ws] companion \
+                                         set_active budget exceeded session={}",
+                                        session.session_id
+                                    );
+                                    continue;
+                                }
                                 // Issue #8 backstop: make the claim/release
                                 // handler idempotent. A long-lived window
                                 // with many mounted-but-hidden panes used
@@ -2012,11 +2090,7 @@ pub async fn serve_session_grid_connection(
 /// k1 → one binary `grid_wire` message, default → the standard JSON
 /// text frame. Used by the attach snapshot and both resync paths
 /// (broadcast `Lagged`, ack-backlog recovery).
-async fn send_snapshot<W>(
-    write: &mut W,
-    snap: &TermGridSnapshot,
-    k1: bool,
-) -> Result<(), ()>
+async fn send_snapshot<W>(write: &mut W, snap: &TermGridSnapshot, k1: bool) -> Result<(), ()>
 where
     W: futures_util::SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
@@ -2039,9 +2113,7 @@ where
     let text = match serde_json::to_string(msg) {
         Ok(s) => s,
         Err(e) => {
-            log_debug!(
-                "[daemon/sessions_grid_ws] serialize outbound failed: {e}"
-            );
+            log_debug!("[daemon/sessions_grid_ws] serialize outbound failed: {e}");
             return Err(());
         }
     };
@@ -2112,10 +2184,7 @@ mod tests {
         let t0 = std::time::Instant::now();
         let mut fence = AttachSettleFence::arm(t0);
         let end = t0 + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS);
-        assert!(
-            !fence.on_deadline(end),
-            "no drops → no coalesce snapshot"
-        );
+        assert!(!fence.on_deadline(end), "no drops → no coalesce snapshot");
     }
 
     #[test]
@@ -2125,9 +2194,7 @@ mod tests {
         fence.note_dropped();
         let mid = t0 + std::time::Duration::from_millis(200);
         fence.rearm(mid);
-        assert!(
-            fence.is_active(mid + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS - 1))
-        );
+        assert!(fence.is_active(mid + std::time::Duration::from_millis(ATTACH_SETTLE_FENCE_MS - 1)));
         assert!(fence.has_dropped(), "rearm must not clear dropped");
     }
 
@@ -2252,7 +2319,10 @@ mod tests {
             resyncs <= 1,
             "expected ≤1 coalesce resync during fence, got {resyncs}"
         );
-        assert_eq!(resyncs, 1, "50 frames under W=8 must drop and coalesce once");
+        assert_eq!(
+            resyncs, 1,
+            "50 frames under W=8 must drop and coalesce once"
+        );
     }
 
     #[test]
@@ -2266,7 +2336,10 @@ mod tests {
             resyncs <= 1,
             "expected ≤1 coalesce resync during fence, got {resyncs}"
         );
-        assert_eq!(resyncs, 1, "80 frames under W=32 must drop and coalesce once");
+        assert_eq!(
+            resyncs, 1,
+            "80 frames under W=32 must drop and coalesce once"
+        );
     }
 
     #[test]
@@ -2426,7 +2499,11 @@ mod tests {
 
         // Same claimer re-asserts with a measured pane fit.
         let outcome = apply_set_active(&s, 7, true, Some(194), Some(62));
-        assert_eq!(outcome, SetActiveOutcome::NoOp, "same claimer reassert is NoOp");
+        assert_eq!(
+            outcome,
+            SetActiveOutcome::NoOp,
+            "same claimer reassert is NoOp"
+        );
         assert_eq!(s.active_subscriber.load(Relaxed), 7);
         assert_eq!(s.active_cols.load(Relaxed), 194);
         assert_eq!(s.active_rows.load(Relaxed), 62);
@@ -2496,7 +2573,11 @@ mod tests {
         {
             let tm = s.term();
             let t = tm.lock();
-            assert_eq!(t.columns() as u16, 80, "PTY size unchanged on dimless claim");
+            assert_eq!(
+                t.columns() as u16,
+                80,
+                "PTY size unchanged on dimless claim"
+            );
             assert_eq!(t.screen_lines() as u16, 24);
         }
     }
@@ -2596,10 +2677,8 @@ mod tests {
     /// Frozen inbound wire shape: `{"action":"claim_pin","cols":N,"rows":N}`.
     #[test]
     fn claim_pin_inbound_parses_frozen_contract() {
-        let parsed: Inbound = serde_json::from_str(
-            r#"{"action":"claim_pin","cols":40,"rows":18}"#,
-        )
-        .expect("claim_pin frame must parse");
+        let parsed: Inbound = serde_json::from_str(r#"{"action":"claim_pin","cols":40,"rows":18}"#)
+            .expect("claim_pin frame must parse");
         match parsed {
             Inbound::ClaimPin { cols, rows } => {
                 assert_eq!((cols, rows), (40, 18));
@@ -2663,8 +2742,7 @@ mod tests {
         assert_eq!(s.pinned(), None, "ephemeral pin cleared on detach");
         assert_eq!(s.active_subscriber.load(Relaxed), 7, "survivor promoted");
         assert_dims_settle(&s, (120, 40), "survivor dims restored");
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             match pins.try_recv() {
                 Ok(ev) => {
@@ -2697,7 +2775,8 @@ mod tests {
         assert_eq!(s.ephemeral_pin_owner(), 9, "still the same owner");
         assert_dims_settle(&s, (40, 18), "PTY follows the re-claim");
         assert_eq!(
-            pins.try_recv().expect("one pin_changed for the dims change"),
+            pins.try_recv()
+                .expect("one pin_changed for the dims change"),
             Some((40, 18))
         );
 
@@ -2788,7 +2867,11 @@ mod tests {
         // `active:false` from the holder releases the claim.
         let outcome = apply_set_active(&s, 7, false, None, None);
         assert_eq!(outcome, SetActiveOutcome::Release);
-        assert_eq!(s.active_subscriber.load(Relaxed), 0, "claim cleared on release");
+        assert_eq!(
+            s.active_subscriber.load(Relaxed),
+            0,
+            "claim cleared on release"
+        );
     }
 
     // OSC 52 clipboard egress (copy direction only). Pins the wire
@@ -2799,8 +2882,7 @@ mod tests {
 
     #[test]
     fn clipboard_frame_serializes_to_the_clipboard_event() {
-        let frame = clipboard_frame("hello-osc52".to_string())
-            .expect("small payload must forward");
+        let frame = clipboard_frame("hello-osc52".to_string()).expect("small payload must forward");
         let json = serde_json::to_string(&frame).expect("serialize");
         assert_eq!(
             json,
@@ -2857,13 +2939,22 @@ mod tests {
         assert!(should_forward_clipboard(active, 9));
 
         // Sub 7 claims (the selection-making client) → only 7 forwards.
-        assert_eq!(apply_set_active(&s, 7, true, None, None), SetActiveOutcome::Claim);
+        assert_eq!(
+            apply_set_active(&s, 7, true, None, None),
+            SetActiveOutcome::Claim
+        );
         let active = s.active_subscriber.load(Relaxed);
         assert!(should_forward_clipboard(active, 7), "selector receives");
-        assert!(!should_forward_clipboard(active, 9), "passive viewer skipped");
+        assert!(
+            !should_forward_clipboard(active, 9),
+            "passive viewer skipped"
+        );
 
         // Release → back to the everyone fallback.
-        assert_eq!(apply_set_active(&s, 7, false, None, None), SetActiveOutcome::Release);
+        assert_eq!(
+            apply_set_active(&s, 7, false, None, None),
+            SetActiveOutcome::Release
+        );
         let active = s.active_subscriber.load(Relaxed);
         assert!(should_forward_clipboard(active, 9));
     }
@@ -2883,8 +2974,7 @@ mod tests {
         // (`^[`), so only cat's verbatim output carries a real ESC
         // byte the parser can dispatch.
         s.write(b"\x1b]52;c;aGVsbG8tb3NjNTI=\x07\n".to_vec());
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             match rx.try_recv() {
                 Ok(AlacEvent::ClipboardStore(_, text)) => {
@@ -2925,8 +3015,7 @@ mod tests {
             r#"{"event":"mode","payload":{"mode":"claimer","capable":true}}"#
         );
         assert_eq!(
-            serde_json::to_string(&Outbound::InputDenied { reason: "viewer" })
-                .expect("serialize"),
+            serde_json::to_string(&Outbound::InputDenied { reason: "viewer" }).expect("serialize"),
             r#"{"event":"input_denied","payload":{"reason":"viewer"}}"#
         );
     }
@@ -2934,16 +3023,14 @@ mod tests {
     /// S5 — the inbound `set_mode` shape the renderer emits.
     #[test]
     fn set_mode_deserializes_both_modes() {
-        let parsed: Inbound =
-            serde_json::from_str(r#"{"action":"set_mode","mode":"claimer"}"#)
-                .expect("set_mode claimer must parse");
+        let parsed: Inbound = serde_json::from_str(r#"{"action":"set_mode","mode":"claimer"}"#)
+            .expect("set_mode claimer must parse");
         match parsed {
             Inbound::SetMode { mode } => assert_eq!(mode, "claimer"),
             other => panic!("expected SetMode, got {other:?}"),
         }
-        let parsed: Inbound =
-            serde_json::from_str(r#"{"action":"set_mode","mode":"viewer"}"#)
-                .expect("set_mode viewer must parse");
+        let parsed: Inbound = serde_json::from_str(r#"{"action":"set_mode","mode":"viewer"}"#)
+            .expect("set_mode viewer must parse");
         match parsed {
             Inbound::SetMode { mode } => assert_eq!(mode, "viewer"),
             other => panic!("expected SetMode, got {other:?}"),
@@ -2957,7 +3044,30 @@ mod tests {
     fn owner_and_stream_token_are_always_claimer_capable() {
         assert!(connection_claimer_capable(&ConnIdentity::Owner));
         assert!(connection_claimer_capable(&ConnIdentity::StreamToken));
+        assert!(connection_claimer_capable(&ConnIdentity::CompanionViewer));
         assert!(!connection_claimer_capable(&ConnIdentity::Unknown));
+    }
+
+    #[test]
+    fn companion_viewer_starts_as_viewer_but_is_capable() {
+        // Watch-default: capable so Drive can `set_mode:claimer`, but
+        // the stored mode is viewer until that explicit flip.
+        assert!(connection_claimer_capable(&ConnIdentity::CompanionViewer));
+        assert_eq!(pin_attribution(&ConnIdentity::CompanionViewer), "companion");
+    }
+
+    #[test]
+    fn companion_action_budget_caps_per_second() {
+        let mut budget = CompanionActionBudget {
+            window_start: std::time::Instant::now(),
+            count: 0,
+        };
+        for _ in 0..COMPANION_ACTION_BUDGET_PER_SEC {
+            assert!(budget.allow(), "under the cap must pass");
+        }
+        assert!(!budget.allow(), "over the cap must drop");
+        budget.window_start = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        assert!(budget.allow(), "a new window must refill");
     }
 
     #[cfg(unix)]
@@ -2965,9 +3075,8 @@ mod tests {
     fn back_compat_deserialize_set_active_without_dims() {
         // An older client sends `{action:'set_active', active:true}`
         // with no cols/rows — must deserialize with None dims.
-        let parsed: Inbound =
-            serde_json::from_str(r#"{"action":"set_active","active":true}"#)
-                .expect("legacy set_active must still parse");
+        let parsed: Inbound = serde_json::from_str(r#"{"action":"set_active","active":true}"#)
+            .expect("legacy set_active must still parse");
         match parsed {
             Inbound::SetActive { active, cols, rows } => {
                 assert!(active);
@@ -2977,10 +3086,9 @@ mod tests {
             other => panic!("expected SetActive, got {other:?}"),
         }
         // New client with dims parses them.
-        let parsed: Inbound = serde_json::from_str(
-            r#"{"action":"set_active","active":true,"cols":120,"rows":40}"#,
-        )
-        .expect("set_active with dims must parse");
+        let parsed: Inbound =
+            serde_json::from_str(r#"{"action":"set_active","active":true,"cols":120,"rows":40}"#)
+                .expect("set_active with dims must parse");
         match parsed {
             Inbound::SetActive { active, cols, rows } => {
                 assert!(active);

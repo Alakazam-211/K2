@@ -1413,6 +1413,7 @@ mod tests {
             allow_remote_spawn: false,
             auth_limiter: PlMutex::new(AuthRateLimiter::new()),
             reflow_cache: PlMutex::new(HashMap::new()),
+            grid_ws_live: PlMutex::new(HashMap::new()),
             _tunnel_keepalive: PlMutex::new(None),
         };
         // Install the fake state in the live companion module.

@@ -2194,7 +2194,7 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
       <div>
         <span className="text-xs text-[var(--color-text-secondary)]">Default Agent</span>
         <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
-          The agent ⇧⌘T and AI helpers launch for this workspace.
+          The agent ⇧⌘T launches for this workspace. Edit-with-AI uses Settings → Default AI Agent.
         </p>
       </div>
       <SettingDropdown
@@ -2241,7 +2241,7 @@ function ContextLayerFileEditor({
   const [previewMode, setPreviewMode] = useState<'preview' | 'edit'>('preview')
   const [previewScale, setPreviewScale] = useState(100)
   const cssScale = Math.round(previewScale * 0.7)
-  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath, scope: 'global' })
   const watchDir = filePath.includes('/')
     ? filePath.slice(0, filePath.lastIndexOf('/'))
     : projectPath
@@ -2383,7 +2383,7 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
 
   // Default agent resolved through the one seam (id-first, legacy-token
   // tolerant, first-enabled fallback), scoped to this project.
-  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath, scope: 'global' })
 
   useEffect(() => {
     daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })

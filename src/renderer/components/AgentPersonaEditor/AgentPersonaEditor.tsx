@@ -67,7 +67,7 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
 
   // Default agent resolved through the one seam (id-first, legacy-token
   // tolerant, first-enabled fallback), scoped to this project.
-  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath, scope: 'global' })
 
   // Initialize: fetch agent context + CLAUDE.md preview
   useEffect(() => {

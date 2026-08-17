@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { terminalKill } from '@/lib/terminal-daemon'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { commandBaseName } from '@/lib/editor-agent-args'
 
 // ── Session file helpers ────────────────────────────────────────────
 
@@ -236,6 +237,7 @@ export function AIFileEditor({
       terminalId: terminalIdRef.current,
       cwd,
       command: command ?? null,
+      commandBase: command ? commandBaseName(command) : null,
       args: logged,
       disableSessionResume,
     })
@@ -390,6 +392,14 @@ export function AIFileEditor({
         <span className="text-[10px] font-mono text-[var(--color-text-muted)] ml-auto truncate max-w-[40%]">
           {activeFilePath}
         </span>
+        {command && (
+          <span
+            className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0"
+            title={`${command} ${(resolvedArgs ?? args ?? []).join(' ')}`.trim()}
+          >
+            {commandBaseName(command)}
+          </span>
+        )}
         {/* Save / Discard appear only when the parent supplies the
             handlers — keeps existing AIFileEditor consumers
             (CustomThemeCreator, AgentPersonaEditor) untouched. */}

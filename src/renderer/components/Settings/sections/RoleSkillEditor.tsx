@@ -43,7 +43,7 @@ export function RoleSkillEditor({
 
   // Default agent resolved through the one seam (id-first, legacy-token
   // tolerant, first-enabled fallback), scoped to this project.
-  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath, scope: 'global' })
 
   // Ensure the role SKILL.md exists before the agent runs (PRD §8.1
   // "Enable"). Idempotent + upgrade-tracked in core.

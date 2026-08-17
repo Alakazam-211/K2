@@ -467,7 +467,7 @@ export function WakeupEditor({ projectPath, agentName, heartbeat, otherHeartbeat
 
   // Default agent resolved through the one seam (id-first, legacy-token
   // tolerant, first-enabled fallback), scoped to this project.
-  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath, scope: 'global' })
 
   // AI context: persona (AGENT.md) full + summaries of OTHER heartbeats
   // so the AI can catch conflicts/duplication without ballooning prompt size.

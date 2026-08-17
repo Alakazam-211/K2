@@ -115,7 +115,7 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
 
   // Default agent resolved through the one seam (id-first, legacy-token
   // tolerant, first-enabled fallback). Themes are global — no project scope.
-  const agentCommand = useResolvedAgentCommand()
+  const agentCommand = useResolvedAgentCommand(undefined, { scope: 'global' })
 
   const [error, setError] = useState<string | null>(null)
 

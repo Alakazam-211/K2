@@ -78,7 +78,7 @@ export function CanonicalAgentModal({
 
   // Default agent resolved through the one seam (id-first, legacy-token
   // tolerant, first-enabled fallback), scoped to this project.
-  const agentCommand = useResolvedAgentCommand(undefined, { projectPath })
+  const agentCommand = useResolvedAgentCommand(undefined, { projectPath, scope: 'global' })
 
   // Detect per-harness state up front (and on manual refresh).
   const refreshState = useCallback(async () => {

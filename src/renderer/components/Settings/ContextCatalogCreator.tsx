@@ -35,7 +35,7 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
   const [ready, setReady] = useState(false)
 
   // Library authoring is host-global — no workspace projectPath.
-  const agentCommand = useResolvedAgentCommand()
+  const agentCommand = useResolvedAgentCommand(undefined, { scope: 'global' })
 
   useEffect(() => {
     let cancelled = false

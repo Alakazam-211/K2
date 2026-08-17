@@ -29,6 +29,7 @@ import { executeBrowserFileDrop, executeRemoteDrop } from '@/lib/handle-remote-d
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
+import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import {
   type ComposeHistoryItem,
   type MsgResponse,
@@ -158,7 +159,11 @@ export function TerminalComposeBar({
   useEffect(() => {
     if (useSettingsStore.getState().workspaceSwitchFocus !== 'composer') return
     const id = requestAnimationFrame(() => {
-      textareaRef.current?.focus()
+      const el = textareaRef.current
+      // Hidden tabs stay mounted (`display:none` + aria-hidden). Focusing
+      // those sends typing to the wrong session.
+      if (!el || isEffectivelyHidden(el)) return
+      el.focus()
     })
     return () => cancelAnimationFrame(id)
   }, [sessionId])

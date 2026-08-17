@@ -18,6 +18,7 @@ vi.mock('@/stores/page-view', () => ({
 
 import {
   applyWorkspaceSwitchFocus,
+  findVisibleComposeTextarea,
   __resetWorkspaceSwitchFocusForTests,
 } from './workspace-switch-focus'
 
@@ -108,6 +109,35 @@ describe('applyWorkspaceSwitchFocus', () => {
     const { textarea } = mountPair({ compose: true })
     applyWorkspaceSwitchFocus()
     expect(document.activeElement).toBe(textarea)
+  })
+
+  it('ignores a compose bar parked in a hidden tab (display:none + aria-hidden)', () => {
+    workspaceSwitchFocus = 'composer'
+    document.body.innerHTML = ''
+
+    const hiddenWrap = document.createElement('div')
+    hiddenWrap.style.display = 'none'
+    hiddenWrap.setAttribute('aria-hidden', 'true')
+    const hiddenBar = document.createElement('div')
+    hiddenBar.setAttribute('data-compose-bar', '')
+    const hiddenTa = document.createElement('textarea')
+    hiddenTa.setAttribute('data-test', 'hidden')
+    hiddenBar.appendChild(hiddenTa)
+    hiddenWrap.appendChild(hiddenBar)
+    document.body.appendChild(hiddenWrap)
+
+    const visibleBar = document.createElement('div')
+    visibleBar.setAttribute('data-compose-bar', '')
+    const visibleTa = document.createElement('textarea')
+    visibleTa.setAttribute('data-test', 'visible')
+    visibleBar.appendChild(visibleTa)
+    document.body.appendChild(visibleBar)
+
+    expect(findVisibleComposeTextarea()).toBe(visibleTa)
+
+    applyWorkspaceSwitchFocus()
+    expect(document.activeElement).toBe(visibleTa)
+    expect(document.activeElement).not.toBe(hiddenTa)
   })
 
   it('is a no-op when Settings is open', () => {

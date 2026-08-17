@@ -14,32 +14,45 @@ import { useSettingsStore } from '@/stores/settings'
 let applyGen = 0
 let observer: MutationObserver | null = null
 
-function isHidden(el: Element | null): boolean {
-  if (!(el instanceof HTMLElement)) return true
-  if (el.style.display === 'none') return true
-  const style = window.getComputedStyle(el)
-  return style.display === 'none' || style.visibility === 'hidden'
+/** Walk ancestors. Inactive tabs stay mounted under `display:none` /
+ *  `aria-hidden` (TerminalArea). getComputedStyle on the textarea itself
+ *  is still `inline`/`block` — you have to look up. Focusing those bars
+ *  sends keystrokes to a hidden session (looks like “another workspace”). */
+export function isEffectivelyHidden(el: Element | null): boolean {
+  let node: HTMLElement | null = el instanceof HTMLElement ? el : null
+  while (node) {
+    if (node.getAttribute('aria-hidden') === 'true') return true
+    if (node.hidden || node.style.display === 'none') return true
+    try {
+      const style = window.getComputedStyle(node)
+      if (style.display === 'none' || style.visibility === 'hidden') return true
+    } catch {
+      /* jsdom / detached */
+    }
+    node = node.parentElement
+  }
+  return false
 }
 
 export function findVisibleComposeTextarea(): HTMLTextAreaElement | null {
   const nodes = document.querySelectorAll('[data-compose-bar] textarea')
   for (const el of nodes) {
     if (!(el instanceof HTMLTextAreaElement)) continue
-    if (isHidden(el)) continue
-    const bar = el.closest('[data-compose-bar]')
-    if (bar && isHidden(bar)) continue
+    if (isEffectivelyHidden(el)) continue
     return el
   }
   return null
 }
 
 function focusVisibleTerminal(): boolean {
-  const terminal = document.querySelector(
-    '[data-terminal-container][data-terminal-visible="true"]',
-  ) as HTMLElement | null
-  if (!terminal || isHidden(terminal)) return false
-  terminal.focus()
-  return true
+  const terminals = document.querySelectorAll('[data-terminal-container]')
+  for (const el of terminals) {
+    if (!(el instanceof HTMLElement)) continue
+    if (isEffectivelyHidden(el)) continue
+    el.focus()
+    return true
+  }
+  return false
 }
 
 function shouldApply(): boolean {

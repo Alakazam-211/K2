@@ -4,7 +4,7 @@
 // Both must fail loud — no silent fallthrough that renders a failure as
 // "delivered".
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import {
   type MsgResponse,
   applyComposeHistoryNav,
@@ -150,7 +150,39 @@ describe('composerPermitted', () => {
   })
 })
 
+import {
+  clampComposeCaret,
+  clearComposeCaret,
+  composeCaretStorageKey,
+  readComposeCaret,
+  writeComposeCaret,
+} from './terminalCompose'
 import { insertIntoDraft } from './TerminalComposeBar'
+
+describe('compose caret persistence', () => {
+  const sid = 'sess-caret-test'
+
+  beforeEach(() => {
+    clearComposeCaret(sid)
+  })
+
+  it('defaults to the end of the draft when nothing is stored', () => {
+    expect(readComposeCaret(sid, 8)).toEqual({ start: 8, end: 8 })
+  })
+
+  it('round-trips a mid-draft caret and clamps past the end', () => {
+    writeComposeCaret(sid, 3, 5, 10)
+    expect(localStorage.getItem(composeCaretStorageKey(sid))).toContain('3')
+    expect(readComposeCaret(sid, 10)).toEqual({ start: 3, end: 5 })
+    expect(readComposeCaret(sid, 4)).toEqual({ start: 3, end: 4 })
+  })
+
+  it('clamps negative / NaN offsets', () => {
+    expect(clampComposeCaret(-2, 5)).toBe(0)
+    expect(clampComposeCaret(99, 5)).toBe(5)
+    expect(clampComposeCaret(Number.NaN, 5)).toBe(5)
+  })
+})
 
 describe('insertIntoDraft', () => {
   it('appends with a separating space', () => {

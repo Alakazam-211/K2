@@ -34,11 +34,14 @@ import {
   type ComposeHistoryItem,
   type MsgResponse,
   applyComposeHistoryNav,
+  clearComposeCaret,
   composeHistoryKeyAction,
   composeInterruptSequence,
   composerPermitted,
   mapMsgResponseToStatus,
+  readComposeCaret,
   shouldSendOnKey,
+  writeComposeCaret,
 } from './terminalCompose'
 
 const MAX_TEXTAREA_HEIGHT = 160 // px — auto-grow cap before internal scroll
@@ -133,7 +136,10 @@ export function TerminalComposeBar({
   useEffect(() => {
     try {
       if (draft) localStorage.setItem(draftKey, draft)
-      else localStorage.removeItem(draftKey)
+      else {
+        localStorage.removeItem(draftKey)
+        clearComposeCaret(sessionId)
+      }
     } catch {
       /* storage disabled/full — draft just won't persist */
     }
@@ -153,6 +159,19 @@ export function TerminalComposeBar({
     autoGrow()
   }, [draft, autoGrow])
 
+  const persistCaret = useCallback(() => {
+    const el = textareaRef.current
+    if (!el) return
+    writeComposeCaret(sessionId, el.selectionStart, el.selectionEnd, el.value.length)
+  }, [sessionId])
+
+  const restoreCaret = useCallback(() => {
+    const el = textareaRef.current
+    if (!el) return
+    const { start, end } = readComposeCaret(sessionId, el.value.length)
+    el.setSelectionRange(start, end)
+  }, [sessionId])
+
   // Workspace-switch "Message agent" pref: take the caret when this bar
   // mounts (or its session changes) so we win the race against the
   // terminal-grid remount. Terminal-mode users are left alone.
@@ -164,9 +183,10 @@ export function TerminalComposeBar({
       // those sends typing to the wrong session.
       if (!el || isEffectivelyHidden(el)) return
       el.focus()
+      restoreCaret()
     })
     return () => cancelAnimationFrame(id)
-  }, [sessionId])
+  }, [sessionId, restoreCaret])
 
   // Workspace-shared send history (daemon). Drafts stay localStorage.
   useEffect(() => {
@@ -385,11 +405,22 @@ export function TerminalComposeBar({
         value={draft}
         onChange={(e) => {
           setDraft(e.target.value)
+          writeComposeCaret(
+            sessionId,
+            e.target.selectionStart,
+            e.target.selectionEnd,
+            e.target.value.length,
+          )
           if (historyIndex !== -1) {
             setHistoryIndex(-1)
             historyDraftRef.current = ''
           }
         }}
+        onSelect={persistCaret}
+        onClick={persistCaret}
+        onKeyUp={persistCaret}
+        onBlur={persistCaret}
+        onFocus={restoreCaret}
         onKeyDown={handleKeyDown}
         onDragOver={handleDragOver}
         onDrop={handleDrop}

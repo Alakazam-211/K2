@@ -148,6 +148,63 @@ export interface ComposeHistoryItem {
  * move. ArrowDown always reports `newer`; the caller no-ops at draft
  * index `-1` (does not preventDefault).
  */
+/** localStorage key for the compose-bar caret (per PTY session). */
+export function composeCaretStorageKey(sessionId: string): string {
+  return `k2:composer:caret:${sessionId}`
+}
+
+export function clampComposeCaret(offset: number, textLen: number): number {
+  if (!Number.isFinite(offset)) return textLen
+  return Math.max(0, Math.min(textLen, Math.floor(offset)))
+}
+
+/** Missing/invalid caret → end of text (keep typing). Always clamped. */
+export function readComposeCaret(
+  sessionId: string,
+  textLen: number,
+): { start: number; end: number } {
+  const fallback = { start: textLen, end: textLen }
+  if (!sessionId) return fallback
+  try {
+    const raw = localStorage.getItem(composeCaretStorageKey(sessionId))
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw) as { start?: unknown; end?: unknown }
+    const start = clampComposeCaret(Number(parsed.start), textLen)
+    const end = clampComposeCaret(Number(parsed.end), textLen)
+    return { start, end: Math.max(start, end) }
+  } catch {
+    return fallback
+  }
+}
+
+export function writeComposeCaret(
+  sessionId: string,
+  start: number,
+  end: number,
+  textLen: number,
+): void {
+  if (!sessionId) return
+  try {
+    const s = clampComposeCaret(start, textLen)
+    const e = clampComposeCaret(end, textLen)
+    localStorage.setItem(
+      composeCaretStorageKey(sessionId),
+      JSON.stringify({ start: s, end: Math.max(s, e) }),
+    )
+  } catch {
+    /* storage disabled */
+  }
+}
+
+export function clearComposeCaret(sessionId: string): void {
+  if (!sessionId) return
+  try {
+    localStorage.removeItem(composeCaretStorageKey(sessionId))
+  } catch {
+    /* storage disabled */
+  }
+}
+
 export function composeHistoryKeyAction(input: {
   key: string
   selectionStart: number | null

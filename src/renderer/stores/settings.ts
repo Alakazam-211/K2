@@ -150,6 +150,7 @@ interface SettingsState {
 
   // When switching workspaces, which input to auto-focus. `"terminal"`
   // (default; today's behavior) | `"composer"` (the compose bar).
+  // Thin-client view state — localStorage on THIS install, not the daemon.
   workspaceSwitchFocus: 'terminal' | 'composer'
 
   // Editor settings
@@ -231,10 +232,34 @@ export function clampActiveWindowHours(h: number): number {
 
 export type WorkspaceSwitchFocus = 'terminal' | 'composer'
 
-/** Coerce daemon / disk values to the two legal targets. Blank, missing,
+/** Per-install caret target after a workspace switch. Not daemon SSOT. */
+export const LS_WORKSPACE_SWITCH_FOCUS = 'k2.workspaceSwitchFocus'
+
+/** Coerce any stored / UI value to the two legal targets. Blank, missing,
  *  or garbage → `'terminal'` (today's default). */
 export function normalizeWorkspaceSwitchFocus(value: unknown): WorkspaceSwitchFocus {
   return value === 'composer' ? 'composer' : 'terminal'
+}
+
+export function readWorkspaceSwitchFocus(): WorkspaceSwitchFocus {
+  try {
+    return normalizeWorkspaceSwitchFocus(
+      typeof localStorage !== 'undefined'
+        ? localStorage.getItem(LS_WORKSPACE_SWITCH_FOCUS)
+        : null,
+    )
+  } catch {
+    return 'terminal'
+  }
+}
+
+export function writeWorkspaceSwitchFocus(value: WorkspaceSwitchFocus): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(LS_WORKSPACE_SWITCH_FOCUS, value)
+  } catch {
+    // Private mode / blocked storage — in-memory store still works this session.
+  }
 }
 
 /** "Your display name" — max length, mirrors the daemon's 64-char cap
@@ -335,7 +360,8 @@ async function persistAndApply(
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
-      workspaceSwitchFocus: normalizeWorkspaceSwitchFocus(result.workspaceSwitchFocus),
+      // Caret target is per-install localStorage — never adopt the daemon echo.
+      workspaceSwitchFocus: readWorkspaceSwitchFocus(),
       editor: mergeEditorDefaults(result.editor),
       // Style is client-local SSOT — never adopt the daemon echo here.
       style: styleFromLocalStore(),
@@ -377,7 +403,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   apiEnabled: false,
   useLlmHitlDetection: false,
   completionSoundEnabled: true,
-  workspaceSwitchFocus: 'terminal',
+  workspaceSwitchFocus: readWorkspaceSwitchFocus(),
   editor: { ...DEFAULT_EDITOR },
   style: { ...DEFAULT_STYLE },
   defaultAgent: 'claude',
@@ -633,17 +659,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
-  setWorkspaceSwitchFocus: async (value: 'terminal' | 'composer') => {
+  setWorkspaceSwitchFocus: (value: 'terminal' | 'composer') => {
     const next = normalizeWorkspaceSwitchFocus(value)
-    const prev = get().workspaceSwitchFocus
-    set({ workspaceSwitchFocus: next }) // optimistic
-    try {
-      // Partial update — the daemon deep-merges `workspaceSwitchFocus`.
-      await persistAndApply(set, { workspaceSwitchFocus: next })
-    } catch (err) {
-      console.error('[settings] Failed to persist workspace-switch-focus:', err)
-      set({ workspaceSwitchFocus: prev })
-    }
+    writeWorkspaceSwitchFocus(next)
+    set({ workspaceSwitchFocus: next })
   },
 
   updateEditorSettings: async (partial: Partial<EditorSettingsBackend>) => {
@@ -702,9 +721,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
-      workspaceSwitchFocus: normalizeWorkspaceSwitchFocus(result.workspaceSwitchFocus),
       editor: mergeEditorDefaults(result.editor),
-      // Style stays client-local — reset-all does not adopt daemon defaults.
+      // Style + workspace-switch focus stay client-local — reset-all
+      // does not adopt daemon defaults for those.
       style: styleFromLocalStore(),
     })
   },
@@ -748,7 +767,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
-      workspaceSwitchFocus: normalizeWorkspaceSwitchFocus(result.workspaceSwitchFocus),
+      workspaceSwitchFocus: readWorkspaceSwitchFocus(),
       editor: mergeEditorDefaults(result.editor),
       // Always reflect the live local selection — never the daemon echo.
       style: styleFromLocalStore(),

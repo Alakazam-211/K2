@@ -489,8 +489,8 @@ function CompletionSoundRow(): React.JSX.Element {
 // ── Workspace-switch focus target ──────────────────────────────────────
 // When the user switches workspaces (icon rail / Active bar / workspace
 // tab), focus the terminal or the compose bar so they can type immediately.
-// Backed by `settings.workspaceSwitchFocus` (daemon settings.json
-// deep-merge). `"terminal"` is today's default.
+// Thin-client only (`k2.workspaceSwitchFocus` in localStorage) — not a
+// daemon setting. `"terminal"` is today's default.
 function WorkspaceSwitchFocusRow(): React.JSX.Element {
   const value = useSettingsStore((s) => s.workspaceSwitchFocus)
   const setWorkspaceSwitchFocus = useSettingsStore((s) => s.setWorkspaceSwitchFocus)
@@ -515,7 +515,7 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
           { value: 'terminal', label: 'Terminal' },
           { value: 'composer', label: 'Message agent' },
         ]}
-        onChange={(v) => void setWorkspaceSwitchFocus(v === 'composer' ? 'composer' : 'terminal')}
+        onChange={(v) => setWorkspaceSwitchFocus(v === 'composer' ? 'composer' : 'terminal')}
       />
     </div>
   )

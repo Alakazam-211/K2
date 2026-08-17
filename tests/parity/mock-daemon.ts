@@ -106,8 +106,6 @@ export const DEFAULT_SETTINGS = {
   style: { id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '' },
   // F4 — typed AppSettings.completion_sound_enabled (default ON).
   completionSoundEnabled: true,
-  // Workspace-switch focus target (default: terminal).
-  workspaceSwitchFocus: 'terminal',
 }
 
 /** One-level-nested deep merge matching the daemon's `deep_merge`

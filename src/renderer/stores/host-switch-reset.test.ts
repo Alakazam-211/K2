@@ -279,6 +279,7 @@ describe('#625 host-switch re-fetches all remaining daemon-backed stores', () =>
   it('projects.fetchProjects re-fires + active selection clears so restore re-runs', () => {
     // Seed an OLD-host active selection as if it survived the App remount.
     useProjectsStore.setState({
+      projects: [{ id: 'local-project-A', name: 'cortana', path: '/tmp/cortana', workspaces: [] } as never],
       activeProjectId: 'local-project-A',
       activeWorkspaceId: 'local-ws-1',
     })
@@ -289,9 +290,11 @@ describe('#625 host-switch re-fetches all remaining daemon-backed stores', () =>
     expect(spy).not.toHaveBeenCalled()
 
     useConnectHostStore.getState().selectHost(makeRemoteHost())
-    // Active selection cleared so the restore branch inside fetchProjects
-    // re-runs against the NEW host, and the loader re-fired.
+    // Roster + selection cleared so the restore branch inside fetchProjects
+    // re-runs against the NEW host, and the loader re-fired. The list must
+    // not keep LOCAL agents while the top-bar already says REMOTE.
     expect(spy).toHaveBeenCalledTimes(1)
+    expect(useProjectsStore.getState().projects).toEqual([])
     expect(useProjectsStore.getState().activeProjectId).toBeNull()
     expect(useProjectsStore.getState().activeWorkspaceId).toBeNull()
 

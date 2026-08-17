@@ -343,6 +343,7 @@ describe('host switch while Settings is open (owner repro, healthy remote)', () 
     // overlay-agnosticism structural: the reset lives in module-level
     // subscriptions, not in any component lifecycle.
     expect(useProjectsStore.getState().activeProjectId).toBeNull()
+    expect(useProjectsStore.getState().projects).toEqual([])
     expect(useTabsStore.getState().backgroundWorkspaces).toEqual({})
     expect(useTabsStore.getState().activeWorkspaceKey).toBeNull()
   })
@@ -361,10 +362,11 @@ describe('host switch onto a DEAD remote session (the reproducible desync)', () 
     // Let the doomed switch burst reject and settle.
     await new Promise((r) => setTimeout(r, 20))
 
-    // The desync precondition: top bar targets the remote, but the burst
-    // died — the dashboard still holds LOCAL data.
+    // Top bar targets the remote; the doomed burst must NOT keep LOCAL
+    // agents painted. Empty until a mint/replay lands the remote list.
     expect(useConnectHostStore.getState().activeHost).not.toBe('local')
-    expect(useProjectsStore.getState().projects.map((p) => p.id)).toEqual(['local-p1'])
+    expect(useProjectsStore.getState().projects).toEqual([])
+    expect(useProjectsStore.getState().activeProjectId).toBeNull()
 
     // Gate's first-connect whoami probe finds the session dead → expire →
     // RemoteSignIn. Then the user signs in: loginToHost mints a fresh

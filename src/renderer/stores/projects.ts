@@ -432,6 +432,13 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       if (hostUnchanged()) hasLoadedFromDaemon = true
     } catch (err) {
       console.error('[projects] fetchProjects failed:', err)
+      // Never keep another host's list. A failed remote N+1 (timeout,
+      // GH#57 flap, 403) used to leave LOCAL agents painted under a
+      // REMOTE top-bar. If this host has never landed a baseline, show
+      // empty — not the previous box.
+      if (hostUnchanged() && !hasLoadedFromDaemon) {
+        set({ projects: [], activeProjectId: null, activeWorkspaceId: null })
+      }
     }
   },
 
@@ -938,6 +945,13 @@ onActiveHostChange(() => {
   // re-POSTs projects/activate for the landed-on workspace (a different
   // daemon must see the activation fresh).
   resetActivateDedup()
-  useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null })
+  // Drop the previous host's roster immediately (Agents / IconRail /
+  // FILES+WORKSPACE). A failed fetch must not leave LOCAL names under
+  // a REMOTE top-bar.
+  useProjectsStore.setState({
+    projects: [],
+    activeProjectId: null,
+    activeWorkspaceId: null,
+  })
   void useProjectsStore.getState().fetchProjects()
 })

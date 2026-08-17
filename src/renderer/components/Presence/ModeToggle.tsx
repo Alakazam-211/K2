@@ -9,7 +9,6 @@ import {
 } from '@/stores/window-mode'
 
 const noDrag = {
-  // @ts-expect-error -- Electron-specific CSS property
   WebkitAppRegion: 'no-drag',
 } as React.CSSProperties
 

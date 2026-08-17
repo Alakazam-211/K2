@@ -1026,15 +1026,68 @@ mod security_tests {
         assert!(limiter.check_and_record(ip).is_err());
     }
 
+    fn get_capabilities_body() -> serde_json::Value {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let mut client = std::net::TcpStream::connect(addr).expect("connect");
+        let (mut server, _) = listener.accept().expect("accept");
+        let state = CompanionState::new(0, "hook".into());
+        let mut headers = HashMap::new();
+        headers.insert("host".to_string(), "127.0.0.1".to_string());
+        handle_request(
+            &mut server,
+            &state,
+            "GET",
+            "/companion/capabilities",
+            &headers,
+            "",
+            "127.0.0.1:1",
+        );
+        drop(server);
+        let mut raw = Vec::new();
+        client.read_to_end(&mut raw).expect("read");
+        let text = String::from_utf8_lossy(&raw);
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b)
+            .unwrap_or_else(|| panic!("no body in {text:?}"));
+        serde_json::from_str(body).unwrap_or_else(|e| panic!("body JSON ({e}): {body}"))
+    }
+
     #[test]
     fn capabilities_advertises_k1_only_when_registered() {
-        // Pure probe of the JSON contract — registration is process-global
-        // so we only assert the shape helper here. Integration tests cover
-        // the live GET against a registered adapter.
-        let registered = serde_json::json!({ "gridProto": ["k1"] });
-        let missing = serde_json::json!({ "gridProto": [] });
-        assert_eq!(registered["gridProto"][0], "k1");
-        assert!(missing["gridProto"].as_array().unwrap().is_empty());
+        use crate::companion::{
+            clear_grid_upgrade_handler, set_grid_upgrade_handler, GridUpgradeHandler,
+        };
+        use std::sync::{Arc, Mutex};
+
+        // Process-global handler slot — serialize so we can restore.
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = clear_grid_upgrade_handler();
+
+        let empty = get_capabilities_body();
+        assert_eq!(
+            empty["gridProto"],
+            serde_json::json!([]),
+            "unregistered adapter must not advertise k1: {empty}"
+        );
+
+        let noop: GridUpgradeHandler = Arc::new(|_| {});
+        set_grid_upgrade_handler(noop);
+        let advertised = get_capabilities_body();
+        assert_eq!(
+            advertised["gridProto"],
+            serde_json::json!(["k1"]),
+            "registered adapter must advertise k1: {advertised}"
+        );
+
+        if let Some(h) = prev {
+            set_grid_upgrade_handler(h);
+        } else {
+            let _ = clear_grid_upgrade_handler();
+        }
     }
 
     #[test]

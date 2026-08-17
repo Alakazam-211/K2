@@ -242,8 +242,10 @@ enum Inbound {
 }
 
 /// Coarse per-socket budget for companion-tunnel `resize` / `set_active` /
-/// `input`. Stolen 24h companion bearers already equal `terminal.write`;
-/// Drive adds SIGWINCH of a live TUI — this bounds a flood after upgrade.
+/// `input` / `claim_pin`. Stolen 24h companion bearers already equal
+/// `terminal.write`; Drive adds SIGWINCH of a live TUI — this bounds a
+/// flood after upgrade. Charged only after the viewer gate so Watch
+/// chatter cannot starve a subsequent Drive frame.
 const COMPANION_ACTION_BUDGET_PER_SEC: u32 = 16;
 
 struct CompanionActionBudget {
@@ -273,6 +275,21 @@ impl CompanionActionBudget {
             false
         }
     }
+}
+
+/// Charge the companion SIGWINCH/input budget. No-op for desktop
+/// identities. Caller must already have passed the viewer gate.
+fn companion_action_allowed(
+    companion_viewer: bool,
+    budget: &mut CompanionActionBudget,
+    session_id: impl std::fmt::Display,
+    action: &str,
+) -> bool {
+    if !companion_viewer || budget.allow() {
+        return true;
+    }
+    log_debug!("[daemon/sessions_grid_ws] companion {action} budget exceeded session={session_id}");
+    false
 }
 
 /// k1 pacing: stop forwarding frames to a connection once this many
@@ -1611,14 +1628,6 @@ async fn serve_session_grid_connection_inner(
                         let parsed: Result<Inbound, _> = serde_json::from_str(&text);
                         match parsed {
                             Ok(Inbound::Input { text }) => {
-                                if companion_viewer && !action_budget.allow() {
-                                    log_debug!(
-                                        "[daemon/sessions_grid_ws] companion \
-                                         input budget exceeded session={}",
-                                        session.session_id
-                                    );
-                                    continue;
-                                }
                                 // S5 — viewer gate: a non-claimer's input is
                                 // dropped WHOLE, including the claim-steal +
                                 // snap-resize below (a viewer must not be able
@@ -1648,6 +1657,14 @@ async fn serve_session_grid_connection_inner(
                                         session.session_id,
                                         subscriber_id,
                                     );
+                                    continue;
+                                }
+                                if !companion_action_allowed(
+                                    companion_viewer,
+                                    &mut action_budget,
+                                    session.session_id,
+                                    "input",
+                                ) {
                                     continue;
                                 }
                                 // PRD §6.4 — typing IS an active-viewer claim.
@@ -1716,14 +1733,6 @@ async fn serve_session_grid_connection_inner(
                                 session.write(text.into_bytes());
                             }
                             Ok(Inbound::Resize { cols, rows }) => {
-                                if companion_viewer && !action_budget.allow() {
-                                    log_debug!(
-                                        "[daemon/sessions_grid_ws] companion \
-                                         resize budget exceeded session={}",
-                                        session.session_id
-                                    );
-                                    continue;
-                                }
                                 // Remember our own requested dims even when the
                                 // resize is dropped below (non-active) — an
                                 // Input claim (above) snaps the PTY to these,
@@ -1747,6 +1756,14 @@ async fn serve_session_grid_connection_inner(
                                         session.session_id,
                                         subscriber_id,
                                     );
+                                    continue;
+                                }
+                                if !companion_action_allowed(
+                                    companion_viewer,
+                                    &mut action_budget,
+                                    session.session_id,
+                                    "resize",
+                                ) {
                                     continue;
                                 }
                                 // 0.37.11 — only the active subscriber
@@ -1803,14 +1820,6 @@ async fn serve_session_grid_connection_inner(
                                 }
                             }
                             Ok(Inbound::SetActive { active, cols, rows }) => {
-                                if companion_viewer && !action_budget.allow() {
-                                    log_debug!(
-                                        "[daemon/sessions_grid_ws] companion \
-                                         set_active budget exceeded session={}",
-                                        session.session_id
-                                    );
-                                    continue;
-                                }
                                 // Issue #8 backstop: make the claim/release
                                 // handler idempotent. A long-lived window
                                 // with many mounted-but-hidden panes used
@@ -1846,6 +1855,14 @@ async fn serve_session_grid_connection_inner(
                                         session.session_id,
                                         subscriber_id,
                                     );
+                                    continue;
+                                }
+                                if !companion_action_allowed(
+                                    companion_viewer,
+                                    &mut action_budget,
+                                    session.session_id,
+                                    "set_active",
+                                ) {
                                     continue;
                                 }
                                 let sa_outcome = apply_set_active(
@@ -1936,6 +1953,14 @@ async fn serve_session_grid_connection_inner(
                                         session.session_id,
                                         subscriber_id,
                                     );
+                                    continue;
+                                }
+                                if !companion_action_allowed(
+                                    companion_viewer,
+                                    &mut action_budget,
+                                    session.session_id,
+                                    "claim_pin",
+                                ) {
                                     continue;
                                 }
                                 // Track our declared dims like a Resize

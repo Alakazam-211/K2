@@ -36,11 +36,11 @@ pub struct CompanionState {
     /// is newer: the old string is simply overwritten. Bounded in practice
     /// by active mobile client count (a handful per session).
     pub reflow_cache: Mutex<std::collections::HashMap<(String, (u16, u16)), (u64, String)>>,
-    /// Companion session tokens that currently hold a live k1 grid WS,
-    /// mapped to the terminal ids they are subscribed to. Used so
-    /// `terminal:scrollback` / CompactLine skip only THAT client — other
-    /// IPAs on the same terminal still get the poll payloads.
-    pub grid_ws_live: Mutex<HashMap<String, HashSet<String>>>,
+    /// Live k1 grid WS sockets, keyed by `(companion_token, terminal_id)`
+    /// with a refcount. Skip `terminal:scrollback` / CompactLine only for
+    /// that client; a reconnecting second socket must not drop the skip
+    /// when the first half-open TCP closes.
+    pub grid_ws_live: Mutex<HashMap<(String, String), usize>>,
     /// Keeps the ngrok runtime thread alive — drop this to stop the tunnel
     pub _tunnel_keepalive: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
@@ -68,21 +68,24 @@ impl CompanionState {
         if token.is_empty() || terminal_id.is_empty() {
             return;
         }
-        self.grid_ws_live
+        *self
+            .grid_ws_live
             .lock()
-            .entry(token.to_string())
-            .or_default()
-            .insert(terminal_id.to_string());
+            .entry((token.to_string(), terminal_id.to_string()))
+            .or_insert(0) += 1;
     }
 
-    /// Drop the live-grid mark for this client/terminal (any disconnect path).
+    /// Drop one live-grid mark for this client/terminal. Skip stays until
+    /// the last socket for the pair closes.
     pub fn note_grid_ws_closed(&self, token: &str, terminal_id: &str) {
         let mut live = self.grid_ws_live.lock();
-        if let Some(ids) = live.get_mut(token) {
-            ids.remove(terminal_id);
-            if ids.is_empty() {
-                live.remove(token);
+        let key = (token.to_string(), terminal_id.to_string());
+        match live.get_mut(&key) {
+            Some(n) if *n > 1 => *n -= 1,
+            Some(_) => {
+                live.remove(&key);
             }
+            None => {}
         }
     }
 
@@ -91,8 +94,28 @@ impl CompanionState {
     pub fn client_skips_legacy_terminal(&self, token: &str, terminal_id: &str) -> bool {
         self.grid_ws_live
             .lock()
-            .get(token)
-            .is_some_and(|ids| ids.contains(terminal_id))
+            .get(&(token.to_string(), terminal_id.to_string()))
+            .is_some_and(|n| *n > 0)
+    }
+}
+
+#[cfg(test)]
+mod grid_ws_live_tests {
+    use super::*;
+
+    #[test]
+    fn skip_stays_until_last_grid_socket_closes() {
+        let state = CompanionState::new(0, "hook".into());
+        state.note_grid_ws_open("tok", "term");
+        state.note_grid_ws_open("tok", "term");
+        assert!(state.client_skips_legacy_terminal("tok", "term"));
+        state.note_grid_ws_closed("tok", "term");
+        assert!(
+            state.client_skips_legacy_terminal("tok", "term"),
+            "first close of a pair must leave skip in place"
+        );
+        state.note_grid_ws_closed("tok", "term");
+        assert!(!state.client_skips_legacy_terminal("tok", "term"));
     }
 }
 

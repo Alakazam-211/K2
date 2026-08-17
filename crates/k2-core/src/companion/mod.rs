@@ -62,6 +62,12 @@ pub fn set_grid_upgrade_handler(handler: GridUpgradeHandler) {
     *GRID_UPGRADE_HANDLER.lock() = Some(handler);
 }
 
+/// Drop the adapter (tests). Production never unregisters.
+/// Returns the previous handler so a test can restore it.
+pub fn clear_grid_upgrade_handler() -> Option<GridUpgradeHandler> {
+    GRID_UPGRADE_HANDLER.lock().take()
+}
+
 /// True iff a grid adapter is live — `GET /companion/capabilities` uses this
 /// so we only advertise `gridProto:["k1"]` when the upgrade is registered.
 pub fn grid_upgrade_registered() -> bool {

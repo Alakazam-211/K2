@@ -3,12 +3,13 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { usePageViewStore } from '@/stores/page-view'
 import {
   EMPTY_NAV_TAGS,
-  NAV_TAG_BLUE,
-  NAV_TAG_INK,
   navTagsTooltip,
   packNavTags,
   type ProjectNavTag,
 } from '@/lib/nav-project-tags'
+
+const tagBox =
+  'max-w-[6.5rem] truncate px-1 py-px text-[9px] font-medium leading-4 border border-[var(--color-accent)] text-[var(--color-accent)] bg-transparent'
 
 function TagChip({
   tag,
@@ -20,11 +21,7 @@ function TagChip({
   return (
     <button
       type="button"
-      className="max-w-[6.5rem] truncate px-1 py-px text-[9px] font-medium leading-4 no-drag cursor-pointer"
-      style={{
-        color: NAV_TAG_INK,
-        background: NAV_TAG_BLUE,
-      }}
+      className={`${tagBox} no-drag cursor-pointer hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)]`}
       title={tag.name}
       onClick={(e) => {
         e.stopPropagation()
@@ -61,11 +58,7 @@ export function NavProjectTags({ workspaceId }: { workspaceId: string }): JSX.El
       ))}
       {overflow.length > 0 && (
         <span
-          className="flex-shrink-0 px-1 py-px text-[9px] font-medium leading-4"
-          style={{
-            color: NAV_TAG_INK,
-            background: NAV_TAG_BLUE,
-          }}
+          className={`flex-shrink-0 ${tagBox}`}
           title={navTagsTooltip(overflow)}
         >
           +{overflow.length}

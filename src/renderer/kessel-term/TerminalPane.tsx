@@ -91,14 +91,20 @@ import {
 } from '@/lib/handle-remote-drop'
 import { filesFromDataTransfer } from '@/lib/external-drop-router'
 import {
-  anchorScrollPx,
   clampScrollPx,
   computeScrollbarThumb,
   computeStripLayout,
   scrollPxFromThumbTopFrac,
 } from './scrollMath'
 import { decodeGridFrame, type WireFrame } from './gridWire'
-import { computeResyncScrollPx } from './resyncAnchor'
+import {
+  applyFrameBatch as applyGridFrames,
+  isGridEmpty,
+  type CellRun,
+  type PendingFrame,
+  type TermGridDelta,
+  type TermGridSnapshot,
+} from './gridState'
 import { colToTextIndex, runColSpan } from './runCols'
 import { hexToCss, TerminalRow } from './rowRender'
 import { createWebglPainter } from './webgl/webglPainter'
@@ -170,85 +176,7 @@ function focusTerminalShadowIfSafe(
   el.focus({ preventScroll: true })
 }
 
-// ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
-
-interface CellRun {
-  text: string
-  fg: number | null
-  bg: number | null
-  bold: boolean
-  italic: boolean
-  underline: boolean
-  inverse: boolean
-  dim: boolean
-  strikeout: boolean
-  /** Present (true) on a row's LAST run when the row soft-wraps into
-   *  the next one. Daemons that predate the field never send it —
-   *  the copy handler then treats every row as unwrapped, which
-   *  matches the old behavior. */
-  wrapped?: boolean
-  /** Terminal-column span, present only when it differs from the
-   *  run's char count (double-width CJK/emoji, zero-width combining
-   *  chars). Drives (a) an explicit rendered width so grid alignment
-   *  doesn't depend on the webfont's CJK advance and (b) pixel-col ↔
-   *  text-offset mapping (runCols.ts). Absent ⇒ one column per char
-   *  — daemons that predate the field behave exactly as before. */
-  cols?: number
-}
-
-interface CursorSnapshot {
-  row: number
-  col: number
-  visible: boolean
-}
-
-interface TermGridSnapshot {
-  paneId: string
-  cols: number
-  rows: number
-  grid: CellRun[][]
-  scrollback: CellRun[][]
-  cursor: CursorSnapshot
-  version: number
-  displayOffset: number
-  /** True when the child app has any mouse-reporting mode active
-   *  (?1000h / ?1002h / ?1003h). When set, the wheel handler must
-   *  forward wheel ticks to the PTY as encoded mouse events instead
-   *  of doing local-viewport scroll (TUIs on the alt screen have no
-   *  scrollback to move). Only present on full snapshots — deltas
-   *  carry it forward from the previous snapshot. */
-  mouseReport?: boolean
-  /** True when the child requested SGR extended mouse encoding
-   *  (?1006h) → emit `\x1b[<…M` rather than legacy X10 `\x1b[M`. */
-  sgrMouse?: boolean
-  /** True when the child is on the alternate screen (?1049h / ?47h). */
-  altScreen?: boolean
-}
-
-interface DamagedRow {
-  row: number
-  runs: CellRun[]
-}
-
-interface TermGridDelta {
-  paneId: string
-  cols: number
-  rows: number
-  damagedRows: DamagedRow[]
-  scrollbackAppended: CellRun[][]
-  cursor: CursorSnapshot
-  version: number
-  displayOffset: number
-}
-
-/** One snapshot/delta WS message queued for the next animation-frame
- *  flush. Applying frames per-rAF instead of per-message coalesces a
- *  burst (e.g. `cat` of a big file → hundreds of deltas) into one
- *  React render per display refresh. Legacy v1 had the same batching
- *  (`scheduleRender`); v2 dropped it and re-rendered per message. */
-type PendingFrame =
-  | { kind: 'snapshot'; payload: TermGridSnapshot }
-  | { kind: 'delta'; payload: TermGridDelta }
+// Grid model types live in gridState.ts (merge / apply / ack).
 
 type OutboundMsg =
   | { event: 'snapshot'; payload: TermGridSnapshot }
@@ -335,58 +263,6 @@ function buildDropPayload(paths: string[]): string {
   const formatted = paths.map(formatPathForTerminal).join(' ')
   const trailing = formatted + ' '
   return paths.some(isImagePath) ? bracketPaste(trailing) : trailing
-}
-
-/** Whether a snapshot's visible grid contains any non-blank cell.
- *  Used by the [v2-perf] instrumentation to detect when the child
- *  process actually paints something (e.g. shell prompt). Empty
- *  initial snapshots are expected on cold spawn — the daemon's Term
- *  has no content until the child writes its first bytes. */
-function isGridEmpty(snap: TermGridSnapshot): boolean {
-  for (const row of snap.grid) {
-    for (const run of row) {
-      if (run.text && run.text.trim().length > 0) return false
-    }
-  }
-  return true
-}
-
-/** Merge a delta into a prior snapshot. Pure. Returns `prev`
- *  unchanged if no prior snapshot exists yet (delta arrived
- *  before the initial snapshot — shouldn't happen per protocol,
- *  but guard anyway). */
-function mergeDelta(
-  prev: TermGridSnapshot | null,
-  delta: TermGridDelta,
-): TermGridSnapshot | null {
-  if (!prev) return prev
-  const nextGrid: CellRun[][] = prev.grid.slice()
-  while (nextGrid.length < delta.rows) nextGrid.push([])
-  if (nextGrid.length > delta.rows) nextGrid.length = delta.rows
-  for (const dr of delta.damagedRows) {
-    if (dr.row < 0 || dr.row >= delta.rows) continue
-    nextGrid[dr.row] = dr.runs
-  }
-  const nextScrollback =
-    delta.scrollbackAppended.length > 0
-      ? prev.scrollback.concat(delta.scrollbackAppended)
-      : prev.scrollback
-  return {
-    paneId: prev.paneId,
-    cols: delta.cols,
-    rows: delta.rows,
-    grid: nextGrid,
-    scrollback: nextScrollback,
-    cursor: delta.cursor,
-    version: delta.version,
-    displayOffset: delta.displayOffset,
-    // Mouse-mode bits are sticky state the daemon only re-sends on
-    // full snapshots; carry the last-known values forward so the
-    // wheel handler keeps routing correctly across delta ticks.
-    mouseReport: prev.mouseReport,
-    sgrMouse: prev.sgrMouse,
-    altScreen: prev.altScreen,
-  }
 }
 
 // ── Component ─────────────────────────────────────────────────────
@@ -782,106 +658,30 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       webglSelectionRef.current = null
       setSelectionVersion((v) => v + 1)
     }
-    // Single-writer grid model: `liveGridRef` is the authoritative
-    // merged grid (every frame applies here, always); the rendered
-    // `snapshot` state normally mirrors it. The two diverge in
-    // exactly one case — the resize hold below — so merges never run
-    // inside the state updater (a StrictMode double-invoke would
-    // re-apply deltas onto an already-merged base).
-    let next: TermGridSnapshot | null = liveGridRef.current
-    // Scroll-anchoring input: rows appended below the view in this
-    // batch. Deltas carry the exact count (scrollbackAppended —
-    // immune to cap-trim); a full snapshot (including the k1 resync
-    // the daemon sends when our acks lag, i.e. exactly during fast
-    // scrolling) contributes its total-row growth.
-    const prevSnap = next
-    const prevTotal =
-      (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
-    let appendedRows = 0
-    let sawSnapshot = false
-    for (const f of pending) {
-      if (f.kind === 'snapshot') {
-        sawSnapshot = true
-        next = f.payload
-      } else {
-        appendedRows += f.payload.scrollbackAppended.length
-        next = mergeDelta(next, f.payload)
-      }
+    // Single-writer: liveGridRef always advances. Rendered `snapshot`
+    // mirrors it except while a resize hold parks a blank intermediate.
+    const result = applyGridFrames({
+      pending,
+      live: liveGridRef.current,
+      rendered: snapshotRef.current,
+      scrollPx: scrollPxRef.current,
+      cellHeight: cellMetricsRef.current.height || 20,
+      resizeHoldActive: resizeHoldActiveRef.current,
+    })
+    liveGridRef.current = result.live
+    if (result.scrollPx !== scrollPxRef.current) {
+      commitScrollPx(result.scrollPx)
     }
-    if (sawSnapshot) {
-      const nextTotal =
-        (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
-      appendedRows = Math.max(appendedRows, nextTotal - prevTotal)
-      // Content seam-match (audit fix): once the daemon's scrollback
-      // ring is at cap, resync totals stop growing while content
-      // shifts — the growth heuristic above reads 0 and the view
-      // yanks. Re-derive scrollPx by finding the VIEWED rows in the
-      // new snapshot; exact whenever a confident match exists, with
-      // the growth heuristic as fallback (appendedRows path below).
-      if (scrollPxRef.current > 0 && prevSnap && next) {
-        const ch = cellMetricsRef.current.height || 20
-        const re = computeResyncScrollPx(
-          prevSnap,
-          next,
-          scrollPxRef.current,
-          ch,
-        )
-        if (re !== null) {
-          commitScrollPx(clampScrollPx(re, next.scrollback.length, ch))
-          appendedRows = 0
-        }
-      }
+    if (!result.suppressRender) {
+      setSnapshot(result.live)
     }
-    liveGridRef.current = next
-    // SCROLL ANCHORING: pin the viewed content while scrolled up.
-    // Without this, every appended row shifted the bottom-anchored
-    // window ("text crawls while reading"), and a resync snapshot
-    // yanked it by the whole backlog — the "jumps like it's catching
-    // up" during fast scroll. scrollPx === 0 (at bottom) still
-    // follows live output; see anchorScrollPx.
-    if (appendedRows > 0 && scrollPxRef.current > 0) {
-      const ch = cellMetricsRef.current.height || 20
-      const sbLen = next?.scrollback.length ?? 0
-      commitScrollPx((px) => anchorScrollPx(px, appendedRows, sbLen, ch))
-    }
-    // Resize hold, content half: a resize's clear-then-repaint gap can
-    // arrive as a BLANK grid (an old daemon broadcasts the cleared
-    // intermediate; a new daemon's settle timeout can still fire
-    // before a slow child repaints). Painting it would black-flash —
-    // so while a resize we sent is in flight, a blank merge result
-    // stays off-screen: the last non-blank frame keeps rendering
-    // (stretched by the hold-and-scale layout) and the true grid
-    // advances in `liveGridRef` until it has content again or the
-    // hold times out (which promotes whatever is live).
-    const rendered = snapshotRef.current
-    if (
-      resizeHoldActiveRef.current &&
-      rendered &&
-      !isGridEmpty(rendered) &&
-      next &&
-      isGridEmpty(next)
-    ) {
-      // Keep showing `rendered`; nothing to commit this flush.
-    } else {
-      setSnapshot(next)
-    }
-    // k1 flow control: one ack per APPLIED batch, carrying the
-    // highest applied version — sent from the rAF flush, never per
-    // WS message, so ack volume tracks render cadence. The daemon
-    // uses it to bound this connection's unacked backlog; while we
-    // fall behind it stops forwarding deltas and resyncs us with a
-    // fresh full snapshot on our next ack. Gated on the daemon
-    // actually speaking k1 (see k1WireActiveRef).
+    // k1 flow control: one ack per APPLIED batch, from the rAF flush.
     if (k1WireActiveRef.current) {
-      let maxVersion = 0
-      for (const f of pending) {
-        if (f.payload.version > maxVersion) maxVersion = f.payload.version
-      }
       const ws = wsRef.current
-      if (maxVersion > 0 && ws && ws.readyState === WebSocket.OPEN) {
-        lastAckVersionRef.current = maxVersion
+      if (result.ackVersion > 0 && ws && ws.readyState === WebSocket.OPEN) {
+        lastAckVersionRef.current = result.ackVersion
         lastAckAtRef.current = performance.now()
-        ws.send(JSON.stringify({ action: 'ack', version: maxVersion }))
+        ws.send(JSON.stringify({ action: 'ack', version: result.ackVersion }))
       }
     }
   }, [])

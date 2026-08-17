@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Composer Phase 1b — unit tests for the two load-bearing pure helpers:
 //   1. Enter-vs-Shift+Enter send keybinding (`shouldSendOnKey`).
 //   2. MsgResponse → status-lane mapping (`mapMsgResponseToStatus`).

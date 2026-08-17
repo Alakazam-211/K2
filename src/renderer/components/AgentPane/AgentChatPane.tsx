@@ -216,6 +216,7 @@ function ChatHeader({
     ])
       .then(([rows, names]) => {
         if (cancelled) return
+        const nameMap = names ?? {}
         // Resume picker: hide user-archived sessions (restore first).
         const sorted = rows
           .filter((r) => !r.archived)
@@ -224,7 +225,7 @@ function ChatHeader({
             return {
               ...r,
               provider,
-              customName: r.customName || names[`${provider}:${r.sessionId}`] || null,
+              customName: r.customName || nameMap[`${provider}:${r.sessionId}`] || null,
             }
           })
           .sort((a, b) => b.timestamp - a.timestamp)

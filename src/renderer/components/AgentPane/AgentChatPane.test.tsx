@@ -44,6 +44,7 @@ const h = vi.hoisted(() => {
   const daemonCliGet = vi.fn<(route: string, params?: unknown) => Promise<unknown>>(
     async (route: string) => {
       if (route === 'chat/list') return []
+      if (route === 'chat/custom-names') return {}
       if (route === 'workspace/resume-chat-args') {
         return { command: 'claude', args: ['--resume', 'claude-legacy'], cwd: '/ws', resumeSession: 'claude-legacy', resumedExisting: true }
       }
@@ -94,6 +95,7 @@ vi.mock('@/stores/session-events', () => ({
     h.sessionHandlers.current = handlers as never
     return h.unsubscribe
   },
+  onChatHistoryChanged: () => () => {},
 }))
 
 vi.mock('@/kessel-term/TerminalPane', () => ({
@@ -301,6 +303,7 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
   it('lists ALL providers’ sessions with a provider icon per row (no claude filter)', async () => {
     h.daemonCliGet.mockImplementation(async (route: string): Promise<unknown> => {
       if (route === 'chat/list') return MIXED_ROWS
+      if (route === 'chat/custom-names') return {}
       return undefined
     })
     render(<AgentChatPane agentName="agent" projectPath="/ws" />)
@@ -323,6 +326,7 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
   it('picking a NON-claude row persists its provider via set-chat-session then respawns', async () => {
     h.daemonCliGet.mockImplementation(async (route: string): Promise<unknown> => {
       if (route === 'chat/list') return MIXED_ROWS
+      if (route === 'chat/custom-names') return {}
       return undefined
     })
     render(<AgentChatPane agentName="agent" projectPath="/ws" />)
@@ -348,6 +352,7 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
       if (route === 'chat/list') {
         return [{ sessionId: 'legacy-sess', title: 'Legacy chat', timestamp: 1, messageCount: 1 }]
       }
+      if (route === 'chat/custom-names') return {}
       return undefined
     })
     render(<AgentChatPane agentName="agent" projectPath="/ws" />)

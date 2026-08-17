@@ -457,7 +457,6 @@ export function AIFileEditor({
               cwd={cwd}
               command={command}
               args={resolvedArgs}
-              showComposeBar={false}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-xs text-[var(--color-text-muted)]">

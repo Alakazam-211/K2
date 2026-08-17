@@ -3,6 +3,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { AIFileEditor } from '../AIFileEditor/AIFileEditor'
 import { CodeEditor } from '../FileViewerPane/CodeEditor'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
+import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -83,16 +84,13 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
   const terminalCommand = agentCommand?.command
   const terminalArgs = useMemo(() => {
     if (!agentCommand) return undefined
-    const baseArgs = [...agentCommand.args]
-    if (agentCommand.command === 'claude') {
-      return [
-        ...baseArgs,
-        '--append-system-prompt',
-        agentPrompt,
+    return buildEditorAgentArgs({
+      command: agentCommand.command,
+      baseArgs: agentCommand.args,
+      systemBrief: agentPrompt,
+      userMessage:
         'Open pack.toml and layer.md in the current directory. You are authoring a K2 context catalog pack (library). Ask what standing orders this pack should encode, then edit those two files only.',
-      ]
-    }
-    return baseArgs
+    })
   }, [agentCommand, agentPrompt])
 
   if (error) {

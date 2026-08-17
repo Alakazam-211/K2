@@ -3,6 +3,28 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.102 — Readable Project and Feedback chat, no sliver window
+
+**Projects** and **Feedback** now render markdown the same way the rest of
+K2 chat does: headings, lists, code, and links, with text you can
+select. Your own messages stay a wash; everyone else stays inset.
+Spacing is tighter so a long thread is easier to scan.
+
+If the last saved window was only a title-bar sliver on the edge of
+the screen, relaunch no longer treats that as usable. K2 now requires
+a real visible rectangle (at least 400×300 on screen). Anything
+smaller, or only a sliver peeking onto a display, centers a normal
+1400×900.
+
+### What to try
+
+1. Open a Project chat or Feedback and send a list or a code block —
+   it should render, and you can select the text.
+2. If a previous update left you with a razor-thin window, quit and
+   reopen: you should get a centered 1400×900.
+
+---
+
 ## 0.40.101 — Project tags in the nav, honest host switch
 
 The Agents list now shows **which projects** a workspace belongs to

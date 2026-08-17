@@ -76,6 +76,7 @@ pub fn wanted_watch_dirs() -> HashMap<PathBuf, HashSet<String>> {
 }
 
 /// True when `project_path` is in the wanted charter-watch set.
+#[cfg(test)]
 pub fn project_in_wanted_watch_set(project_path: &str) -> bool {
     wanted_watch_dirs()
         .values()

@@ -15,6 +15,7 @@ import {
   mapMsgResponseToStatus,
   shouldSendOnKey,
   shouldShowTerminalComposeBar,
+  composeTextareaHeight,
 } from './terminalCompose'
 
 // ── Enter = send, Shift+Enter = newline ──────────────────────────────
@@ -202,6 +203,22 @@ describe('insertIntoDraft', () => {
 // ── Soft-resync: keep compose bar mounted while sessionId is known ───
 // Soft-resync flips phase ready → connecting briefly. Unmounting the bar
 // would drop focus even though the draft is localStorage-backed.
+
+describe('composeTextareaHeight', () => {
+  it('keeps an empty draft at one line even if placeholder scrollHeight is huge', () => {
+    expect(composeTextareaHeight({ value: '', scrollHeight: 160, fontSize: 12 })).toBe(
+      Math.round(12 * 1.4 + 8),
+    )
+    expect(composeTextareaHeight({ value: '', scrollHeight: 400, fontSize: 15 })).toBe(
+      Math.round(15 * 1.4 + 8),
+    )
+  })
+
+  it('grows with real content up to the cap', () => {
+    expect(composeTextareaHeight({ value: 'hi', scrollHeight: 40, fontSize: 12 })).toBe(40)
+    expect(composeTextareaHeight({ value: 'hi\n\n\n', scrollHeight: 400, fontSize: 12 })).toBe(160)
+  })
+})
 
 describe('shouldShowTerminalComposeBar', () => {
   it('shows on ready with sessionId', () => {

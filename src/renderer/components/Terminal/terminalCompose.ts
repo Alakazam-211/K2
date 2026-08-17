@@ -246,3 +246,24 @@ export function applyComposeHistoryNav(input: {
   const next = index - 1
   return { index: next, text: items[next] ?? draft, preventDefault: true }
 }
+
+/** Cap before the compose textarea scrolls internally. */
+export const COMPOSE_TEXTAREA_MAX_HEIGHT = 160
+
+/**
+ * Pixel height for the compose textarea. Empty draft stays one line —
+ * never let the placeholder wrap drive `scrollHeight` (cold start /
+ * hidden tabs / narrow first layout inflate to the max cap).
+ */
+export function composeTextareaHeight(opts: {
+  value: string
+  scrollHeight: number
+  fontSize: number
+  maxHeight?: number
+}): number {
+  const font = opts.fontSize > 0 ? opts.fontSize : 12
+  const singleLine = Math.round(font * 1.4 + 8)
+  const cap = opts.maxHeight ?? COMPOSE_TEXTAREA_MAX_HEIGHT
+  if (!opts.value) return singleLine
+  return Math.min(Math.max(opts.scrollHeight, singleLine), cap)
+}

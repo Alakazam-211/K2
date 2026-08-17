@@ -35,16 +35,16 @@ import {
   type MsgResponse,
   applyComposeHistoryNav,
   clearComposeCaret,
+  COMPOSE_TEXTAREA_MAX_HEIGHT,
   composeHistoryKeyAction,
   composeInterruptSequence,
+  composeTextareaHeight,
   composerPermitted,
   mapMsgResponseToStatus,
   readComposeCaret,
   shouldSendOnKey,
   writeComposeCaret,
 } from './terminalCompose'
-
-const MAX_TEXTAREA_HEIGHT = 160 // px — auto-grow cap before internal scroll
 
 interface TerminalComposeBarProps {
   /** Resolved PTY SessionId for this pane — the pane's `terminalId`. */
@@ -145,19 +145,39 @@ export function TerminalComposeBar({
     }
   }, [draft, draftKey])
 
-  // Auto-grow with content — same approach as ticket / project chat:
-  // measure from `height: auto` so the resting size does not collapse when
-  // the first character is typed (height: 0px was shrinking the field).
+  // Auto-grow with real draft text only. Empty boxes stay one line —
+  // the long placeholder used to wrap (especially before width settled
+  // or on a hidden tab) and pin every bar at the 160px cap until typed.
   const autoGrow = useCallback(() => {
     const el = textareaRef.current
-    if (!el) return
+    if (!el || isEffectivelyHidden(el)) return
+    if (!el.value) {
+      el.style.height = `${composeTextareaHeight({
+        value: '',
+        scrollHeight: 0,
+        fontSize: editorFontSize,
+      })}px`
+      return
+    }
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`
-  }, [])
+    el.style.height = `${composeTextareaHeight({
+      value: el.value,
+      scrollHeight: el.scrollHeight,
+      fontSize: editorFontSize,
+    })}px`
+  }, [editorFontSize])
 
   useEffect(() => {
     autoGrow()
   }, [draft, autoGrow])
+
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => autoGrow())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [autoGrow])
 
   const persistCaret = useCallback(() => {
     const el = textareaRef.current
@@ -426,7 +446,8 @@ export function TerminalComposeBar({
         onDrop={handleDrop}
         rows={1}
         spellCheck={false}
-        placeholder="Message the agent — Enter to send, Shift+Enter for newline · drop files for paths"
+        placeholder="Message the agent"
+        title="Enter to send, Shift+Enter for newline. Drop files for paths."
         className="min-w-0 w-full flex-1 resize-none overflow-x-hidden bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         style={{
           fontFamily:
@@ -436,7 +457,7 @@ export function TerminalComposeBar({
           border: '1px solid var(--color-border)',
           borderRadius: 0,
           padding: '4px 6px',
-          maxHeight: MAX_TEXTAREA_HEIGHT,
+          maxHeight: COMPOSE_TEXTAREA_MAX_HEIGHT,
           overflowY: 'auto',
           overflowX: 'hidden',
           // Break long tokens so zoom never forces a horizontal scrollbar.

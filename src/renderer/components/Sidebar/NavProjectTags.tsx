@@ -1,9 +1,9 @@
 import type { JSX } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { usePageViewStore } from '@/stores/page-view'
-import { groupAvatarColor } from '@/components/Projects/ProjectGroupAvatar'
 import {
   EMPTY_NAV_TAGS,
+  NAV_TAG_BLUE,
   navTagsTooltip,
   packNavTags,
   type ProjectNavTag,
@@ -16,13 +16,12 @@ function TagChip({
   tag: ProjectNavTag
   onOpen: (id: string) => void
 }): JSX.Element {
-  const color = tag.color || groupAvatarColor(tag.id)
   return (
     <button
       type="button"
       className="max-w-[6.5rem] truncate px-1 py-px text-[9px] leading-4 text-[var(--color-text-secondary)] no-drag cursor-pointer hover:text-[var(--color-text-primary)]"
       style={{
-        background: `color-mix(in srgb, ${color} 22%, transparent)`,
+        background: `color-mix(in srgb, ${NAV_TAG_BLUE} 28%, transparent)`,
       }}
       title={tag.name}
       onClick={(e) => {

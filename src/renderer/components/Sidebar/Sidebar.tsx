@@ -241,7 +241,7 @@ function SingleProjectItem({
             <NavProjectTags workspaceId={project.id} />
             <AgentSpinner projectId={project.id} />
             {shortcutIndex !== undefined && shortcutIndex < 9 && (
-              <span className="text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0 py-0.5" style={{ paddingLeft: 8, paddingRight: 8 }}>
+              <span className="ml-auto text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0 py-0.5" style={{ paddingLeft: 8, paddingRight: 8 }}>
                 {shortcutIndex + 1}
               </span>
             )}

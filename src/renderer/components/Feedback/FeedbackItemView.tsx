@@ -40,10 +40,10 @@ import {
 } from './feedback-api'
 import { KindBadge, PriorityBadge, StatusBadge } from './badges'
 import {
-  SelectableText,
   SelectableRegion,
   clearStuckBodyUserSelect,
 } from '@/components/common/SelectableText'
+import { ChatMessage, ChatMessageBody } from '@/components/common/ChatMessage'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import {
   clearTicketDraft,
@@ -325,8 +325,8 @@ function ThreadTab({
       <SelectableRegion className="flex-1 overflow-y-auto min-h-0 px-4 py-3">
         <div ref={scrollRef} className="min-h-full" data-ticket-thread={ticketId}>
           {item.body && (
-            <div className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)]">
-              <SelectableText text={item.body} />
+            <div className="mb-3 px-3 py-2 bg-white/[0.03] border border-[var(--color-border)]">
+              <ChatMessageBody text={item.body} style={{ fontSize: editorFontSize }} />
             </div>
           )}
 
@@ -362,25 +362,18 @@ function ThreadTab({
             </div>
           )}
 
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2.5">
             {item.comments.map((c, i) => {
               const isOwner = c.author === 'owner'
               return (
-                <div key={`${c.at}-${i}`} className="flex flex-col">
-                  <div className="flex items-baseline gap-2">
-                    <span className={`text-[10px] font-semibold ${isOwner ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-secondary)]'}`}>
-                      {isOwner ? 'You' : c.author}
-                    </span>
-                    <span className="text-[9px] text-[var(--color-text-muted)] tabular-nums">
-                      {formatRelativeTime(c.at, nowSec)}
-                    </span>
-                  </div>
-                  <SelectableText
-                    text={c.body}
-                    className="text-[var(--color-text-primary)] mt-0.5"
-                    style={{ fontSize: editorFontSize }}
-                  />
-                </div>
+                <ChatMessage
+                  key={`${c.at}-${i}`}
+                  author={isOwner ? 'You' : c.author}
+                  isOwner={isOwner}
+                  timeLabel={formatRelativeTime(c.at, nowSec)}
+                  body={c.body}
+                  fontSize={editorFontSize}
+                />
               )
             })}
           </div>

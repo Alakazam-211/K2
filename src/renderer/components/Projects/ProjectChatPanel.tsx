@@ -52,10 +52,10 @@ import {
   type ConnectRole,
 } from './project-chat'
 import {
-  SelectableText,
   SelectableRegion,
   clearStuckBodyUserSelect,
 } from '@/components/common/SelectableText'
+import { ChatMessage } from '@/components/common/ChatMessage'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import {
   clearProjectChatDraft,
@@ -362,7 +362,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                   Showing the latest 500 messages — earlier history isn&rsquo;t shown.
                 </div>
               )}
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2.5">
                 {messages.map((m) => {
                   const isOwner = m.author === 'owner'
                   const delivery =
@@ -370,32 +370,21 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                       ? deliveredLine(lastPost.delivered, lastPost.deliveryReason, poc)
                       : null
                   return (
-                    <div key={m.id} className="flex flex-col">
-                      <div className="flex items-baseline gap-2">
-                        <span
-                          className={`text-[10px] font-semibold ${
-                            isOwner
-                              ? 'text-[var(--color-accent)]'
-                              : 'text-[var(--color-text-secondary)]'
-                          }`}
-                        >
-                          {isOwner ? 'You' : m.author}
-                        </span>
-                        <span className="text-[9px] text-[var(--color-text-muted)] tabular-nums">
-                          {formatRelativeTime(m.createdAt, nowSec)}
-                        </span>
-                      </div>
-                      <SelectableText
-                        text={m.body}
-                        className="text-[var(--color-text-primary)] mt-0.5"
-                        style={{ fontSize: editorFontSize }}
-                      />
-                      {delivery && (
-                        <div className="mt-0.5 text-[9px] text-[var(--color-text-muted)] opacity-80 italic">
-                          {delivery}
-                        </div>
-                      )}
-                    </div>
+                    <ChatMessage
+                      key={m.id}
+                      author={isOwner ? 'You' : m.author}
+                      isOwner={isOwner}
+                      timeLabel={formatRelativeTime(m.createdAt, nowSec)}
+                      body={m.body}
+                      fontSize={editorFontSize}
+                      footer={
+                        delivery ? (
+                          <div className="text-[9px] text-[var(--color-text-muted)] opacity-80 italic">
+                            {delivery}
+                          </div>
+                        ) : null
+                      }
+                    />
                   )
                 })}
               </div>

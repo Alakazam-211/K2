@@ -632,6 +632,63 @@ a,
   padding-left: 4px;
 }
 
+/* Compact markdown for Project / Feedback chat — same tokens, tighter
+   rhythm and UI type so threads scan. Code stays mono. */
+.chat-markdown {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4 {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 0 0 6px 0;
+  padding: 0;
+  border: none;
+}
+
+.chat-markdown p {
+  margin: 0 0 6px 0;
+  color: var(--color-text-primary);
+}
+
+.chat-markdown p:last-child,
+.chat-markdown ul:last-child,
+.chat-markdown ol:last-child,
+.chat-markdown pre:last-child,
+.chat-markdown blockquote:last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0 0 6px 0;
+  padding-left: 1.2em;
+  color: var(--color-text-primary);
+}
+
+.chat-markdown li {
+  margin: 2px 0;
+}
+
+.chat-markdown pre {
+  padding: 8px;
+  margin: 0 0 6px 0;
+}
+
+.chat-markdown pre code {
+  font-size: 0.9em;
+}
+
+.chat-markdown blockquote {
+  margin: 0 0 6px 0;
+  padding: 4px 10px;
+}
+
 /* Markdown pane scrollbar */
 .markdown-content::-webkit-scrollbar {
   width: 6px;

@@ -235,7 +235,9 @@ function SingleProjectItem({
         <div className="flex flex-col justify-center min-w-0 flex-1">
           <div className="flex items-center gap-2 w-full">
             <span className="truncate flex-1">{project.name}</span>
-            <PresenceWorkspaceAvatars path={project.path} />
+            <span className="-mr-1 flex items-center">
+              <PresenceWorkspaceAvatars path={project.path} />
+            </span>
           </div>
           <div className="flex items-center gap-1">
             <NavProjectTags workspaceId={project.id} />

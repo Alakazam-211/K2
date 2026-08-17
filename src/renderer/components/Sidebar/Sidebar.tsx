@@ -239,7 +239,7 @@ function SingleProjectItem({
               <PresenceWorkspaceAvatars path={project.path} />
             </span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="-mt-px flex items-center gap-1">
             <NavProjectTags workspaceId={project.id} />
             <AgentSpinner projectId={project.id} />
             {shortcutIndex !== undefined && shortcutIndex < 9 && (

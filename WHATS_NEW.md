@@ -3,6 +3,33 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.101 — Project tags in the nav, honest host switch
+
+The Agents list now shows **which projects** a workspace belongs to
+instead of the git branch. Two chips fit the row; the rest collapse
+to **+N**. Click a chip to open that project. The outline uses the
+same accent as buttons, with the theme's primary text.
+
+Switching to another host (for example RPMAVS) no longer leaves the
+previous box's agents painted under the new name. If the remote list
+is slow or fails, the roster is empty until that host answers.
+
+The window reopens at its last good size and position. If that frame
+is tiny, off-screen, or on a display that is gone, K2 centers a
+normal 1400×900. Quit (including ⌘Q) saves the frame.
+
+The **Message the agent** bar stays one line when empty — it no
+longer grows to fit the placeholder on launch.
+
+### What to try
+
+1. Agents list: project chips under each name; 1–9 still on the right.
+2. Switch host: old names vanish immediately; new roster fills in.
+3. Quit and reopen: same window, or a centered default if the last
+   frame was unusable.
+
+---
+
 ## 0.40.100 — Sidecars, catalog, and workspace polish
 
 ### Sidecars — extra chats in a workspace are not a second agent

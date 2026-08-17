@@ -9,6 +9,9 @@ export interface ProjectNavTag {
 /** How many named chips sit in the row before the rest collapse to +N. */
 export const NAV_TAG_VISIBLE_MAX = 2
 
+/** Stable empty list — `?? []` in a zustand selector re-renders forever. */
+export const EMPTY_NAV_TAGS: ProjectNavTag[] = []
+
 /**
  * Invert group → member workspace ids into workspace → tags
  * (name order, de-duped). Pure so the nav can stay a view.

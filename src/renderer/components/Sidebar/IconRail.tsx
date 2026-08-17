@@ -17,7 +17,7 @@ import { showContextMenu } from '../../lib/context-menu'
 import { pickWorkspaceFolder } from '../../lib/pick-workspace-folder'
 import { useConnectHostStore } from '../../stores/connect-host'
 import { useProjectGroupsStore } from '@/stores/project-groups'
-import { navTagsTooltip } from '@/lib/nav-project-tags'
+import { EMPTY_NAV_TAGS, navTagsTooltip } from '@/lib/nav-project-tags'
 import { startCloneTo, startCloneToThisComputer } from '../../lib/start-clone-to'
 import ProjectAvatar from './ProjectAvatar'
 
@@ -51,7 +51,7 @@ function ProjectIcon({
     [roster, project.path]
   )
 
-  const projectTags = useProjectGroupsStore((s) => s.tagsByWorkspaceId[project.id] ?? [])
+  const projectTags = useProjectGroupsStore((s) => s.tagsByWorkspaceId[project.id] ?? EMPTY_NAV_TAGS)
 
   // Build tooltip: "WorkspaceName • Sales, Ops • Alice, Bob" (or "5 here")
   const tooltipParts = [project.name]

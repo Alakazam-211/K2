@@ -3,6 +3,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { usePageViewStore } from '@/stores/page-view'
 import { groupAvatarColor } from '@/components/Projects/ProjectGroupAvatar'
 import {
+  EMPTY_NAV_TAGS,
   navTagsTooltip,
   packNavTags,
   type ProjectNavTag,
@@ -36,7 +37,7 @@ function TagChip({
 
 /** Second-line chips: project groups this agent belongs to. Overflow is +N. */
 export function NavProjectTags({ workspaceId }: { workspaceId: string }): JSX.Element | null {
-  const tags = useProjectGroupsStore((s) => s.tagsByWorkspaceId[workspaceId] ?? [])
+  const tags = useProjectGroupsStore((s) => s.tagsByWorkspaceId[workspaceId] ?? EMPTY_NAV_TAGS)
   if (tags.length === 0) return null
 
   const { visible, overflow } = packNavTags(tags)

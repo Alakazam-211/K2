@@ -4,6 +4,7 @@ import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { AIFileEditor } from '@/components/AIFileEditor/AIFileEditor'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
+import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { CANONICAL_SETUP_SEED, CANONICAL_MANAGE_SEED } from './canonicalAgentSeeds'
 import type { HarnessProbe } from './canonicalState'
@@ -147,16 +148,12 @@ export function CanonicalAgentModal({
 
   const terminalArgs = useMemo(() => {
     if (!agentCommand) return undefined
-    const baseArgs = [...agentCommand.args]
-    if (agentCommand.command === 'claude') {
-      return [
-        ...baseArgs,
-        '--append-system-prompt',
-        seedSystemPrompt,
-        mode === 'setup' ? CANONICAL_SETUP_SEED : CANONICAL_MANAGE_SEED,
-      ]
-    }
-    return baseArgs
+    return buildEditorAgentArgs({
+      command: agentCommand.command,
+      baseArgs: agentCommand.args,
+      systemBrief: seedSystemPrompt,
+      userMessage: mode === 'setup' ? CANONICAL_SETUP_SEED : CANONICAL_MANAGE_SEED,
+    })
   }, [agentCommand, seedSystemPrompt, mode])
 
   // Plan rows preferred from the live manifest (richer + structured); the

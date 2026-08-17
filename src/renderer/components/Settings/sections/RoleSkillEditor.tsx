@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { AIFileEditor } from '@/components/AIFileEditor/AIFileEditor'
 import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
+import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
   type RoleSkill,
@@ -62,18 +63,12 @@ export function RoleSkillEditor({
 
   const terminalArgs = useMemo(() => {
     if (!agentCommand) return undefined
-    const baseArgs = [...agentCommand.args]
-    if (agentCommand.command === 'claude') {
-      // Exact shape from the ProjectContextEditor exemplar (PRD §9.1):
-      //   [...presetArgs, '--append-system-prompt', <role briefing>, <final positional message>]
-      return [
-        ...baseArgs,
-        '--append-system-prompt',
-        roleSeedSystemPrompt(role),
-        roleSeedMessage(role, projectName),
-      ]
-    }
-    return baseArgs
+    return buildEditorAgentArgs({
+      command: agentCommand.command,
+      baseArgs: agentCommand.args,
+      systemBrief: roleSeedSystemPrompt(role),
+      userMessage: roleSeedMessage(role, projectName),
+    })
   }, [agentCommand, role, projectName])
 
   return (

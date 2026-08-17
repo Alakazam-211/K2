@@ -10,6 +10,7 @@ import type { SettingEntry } from '../searchManifest'
 import { AIFileEditor } from '@/components/AIFileEditor/AIFileEditor'
 import { FileViewerPane, type FileViewerHandle } from '@/components/FileViewerPane/FileViewerPane'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
+import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import { SettingDropdown } from '../controls/SettingControls'
 import { HeartbeatSessionPicker, openHeartbeatTarget } from '@/components/common/HeartbeatSessionPicker'
 import {
@@ -518,17 +519,12 @@ export function WakeupEditor({ projectPath, agentName, heartbeat, otherHeartbeat
 
   const terminalArgs = useMemo(() => {
     if (!agentCommand) return undefined
-    const baseArgs = [...agentCommand.args]
-    const isClaude = agentCommand.command === 'claude'
-    if (isClaude) {
-      return [
-        ...baseArgs,
-        '--append-system-prompt',
-        systemPrompt,
-        `Read ${wakeupAbs} and ask me what I want this heartbeat to do.`,
-      ]
-    }
-    return baseArgs
+    return buildEditorAgentArgs({
+      command: agentCommand.command,
+      baseArgs: agentCommand.args,
+      systemBrief: systemPrompt,
+      userMessage: `Read ${wakeupAbs} and ask me what I want this heartbeat to do.`,
+    })
   }, [agentCommand, systemPrompt, wakeupAbs])
 
   // Bridge between FileViewerPane (which owns the editor's dirty

@@ -7,6 +7,7 @@ import { CodeEditor } from '../FileViewerPane/CodeEditor'
 import { parseCustomThemeJson, serializeThemeToJson, DEFAULT_COLORS, DEFAULT_SYNTAX } from '@/lib/editor-themes'
 import { useCustomThemesStore } from '@/stores/custom-themes'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
+import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import type { ThemeColors } from '@/lib/editor-themes'
 import type { HighlightStyle } from '@codemirror/language'
 
@@ -227,17 +228,13 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
   const terminalCommand = agentCommand?.command
   const terminalArgs = useMemo(() => {
     if (!agentCommand) return undefined
-    const baseArgs = [...agentCommand.args]
-    const isClaude = agentCommand.command === 'claude'
-    if (isClaude) {
-      const fileName = themePath?.split('/').pop() || 'custom-theme.json'
-      return [
-        ...baseArgs,
-        '--append-system-prompt', agentPrompt,
-        `Open and read the file ${fileName} in the current directory. This is a K2 editor theme JSON file. The user can see a live preview on the right that updates each time you save. Start by asking them what they'd like to name their theme and what style they're going for (dark, light, warm, cool, vibrant, muted, etc.), then start editing the colors.`,
-      ]
-    }
-    return baseArgs
+    const fileName = themePath?.split('/').pop() || 'custom-theme.json'
+    return buildEditorAgentArgs({
+      command: agentCommand.command,
+      baseArgs: agentCommand.args,
+      systemBrief: agentPrompt,
+      userMessage: `Open and read the file ${fileName} in the current directory. This is a K2 editor theme JSON file. The user can see a live preview on the right that updates each time you save. Start by asking them what they'd like to name their theme and what style they're going for (dark, light, warm, cool, vibrant, muted, etc.), then start editing the colors.`,
+    })
   }, [agentCommand, agentPrompt, themePath])
 
   // ── Conditional returns (after all hooks) ──────────────────────────

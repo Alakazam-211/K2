@@ -31,6 +31,7 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { AgentPersonaEditor } from '@/components/AgentPersonaEditor/AgentPersonaEditor'
 import { AIFileEditor } from '@/components/AIFileEditor/AIFileEditor'
+import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
@@ -2275,15 +2276,12 @@ function ContextLayerFileEditor({
 
   const terminalArgs = useMemo(() => {
     if (!agentCommand) return undefined
-    const baseArgs = [...agentCommand.args]
-    if (agentCommand.command === 'claude') {
-      return [
-        ...baseArgs,
-        '--append-system-prompt', systemPrompt,
-        `Read ${filePath}. Help the user refine this context-stack file (${label}).`,
-      ]
-    }
-    return baseArgs
+    return buildEditorAgentArgs({
+      command: agentCommand.command,
+      baseArgs: agentCommand.args,
+      systemBrief: systemPrompt,
+      userMessage: `Read ${filePath}. Help the user refine this context-stack file (${label}).`,
+    })
   }, [agentCommand, systemPrompt, filePath, label])
 
   return (
@@ -2437,15 +2435,12 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
   const terminalCommand = agentCommand?.command
   const terminalArgs = useMemo(() => {
     if (!agentCommand) return undefined
-    const baseArgs = [...agentCommand.args]
-    if (agentCommand.command === 'claude') {
-      return [
-        ...baseArgs,
-        '--append-system-prompt', systemPrompt,
-        `Read ${filePath}. Help the user define their workspace knowledge for "${projectName}". Start by asking about their tech stack and project structure.`,
-      ]
-    }
-    return baseArgs
+    return buildEditorAgentArgs({
+      command: agentCommand.command,
+      baseArgs: agentCommand.args,
+      systemBrief: systemPrompt,
+      userMessage: `Read ${filePath}. Help the user define their workspace knowledge for "${projectName}". Start by asking about their tech stack and project structure.`,
+    })
   }, [agentCommand, systemPrompt, projectName, filePath])
 
   return (

@@ -194,6 +194,7 @@ export function AIFileEditor({
       // command=undefined creates a bare shell, and the later claude
       // spawn is reused as that same empty session (blank "ready" grid).
       if (!command) {
+        console.info('[ai-editor] waiting for agent command', { cwd })
         setArgsReady(false)
         return
       }
@@ -222,9 +223,23 @@ export function AIFileEditor({
       }
       setArgsReady(true)
     }
-    resolve()
+    void resolve()
     return () => { cancelled = true }
   }, [command, args, cwd, disableSessionResume])
+
+  useEffect(() => {
+    if (!argsReady) return
+    const logged = (resolvedArgs ?? []).map((a) =>
+      a.length > 160 ? `${a.slice(0, 160)}…` : a,
+    )
+    console.info('[ai-editor] mount', {
+      terminalId: terminalIdRef.current,
+      cwd,
+      command: command ?? null,
+      args: logged,
+      disableSessionResume,
+    })
+  }, [argsReady, cwd, command, resolvedArgs, disableSessionResume])
 
   // ── File watching + polling fallback ─────────────────────────────────
   // We watch every file the parent declared (via `files`) — not just the

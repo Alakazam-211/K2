@@ -1469,6 +1469,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             return
           }
           spawn = (await spawnRes.json()) as SpawnResponse
+          const loggedArgs = (args ?? []).map((a) =>
+            a.length > 160 ? `${a.slice(0, 160)}…` : a,
+          )
+          console.info('[kessel-spawn]', {
+            terminalId,
+            cwd,
+            command: command ?? null,
+            args: loggedArgs,
+            cols: spawn.cols,
+            rows: spawn.rows,
+            reused: spawn.reused,
+            sessionId: spawn.sessionId.slice(0, 8),
+            sandbox: spawn.sandbox ?? null,
+          })
           perfLog('spawn_fetch_end', {
             elapsed_ms: (performance.now() - __t_spawn_fetch).toFixed(1),
             reused: String(spawn!.reused),

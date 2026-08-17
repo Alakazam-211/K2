@@ -31,6 +31,11 @@ describe('buildEditorAgentArgs', () => {
         systemBrief: 'BRIEF',
         userMessage: 'DO IT',
       }),
-    ).toEqual(['--always-approve', '--fullscreen', 'BRIEF\n\nDO IT'])
+    ).toEqual([
+      '--always-approve',
+      '--no-alt-screen',
+      '--fullscreen',
+      'BRIEF\n\nDO IT',
+    ])
   })
 })

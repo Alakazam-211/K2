@@ -1,9 +1,9 @@
 /** Launch argv for an AI File Editor session (catalog, theme, persona).
  *
  *  Claude gets `--append-system-prompt`. Grok takes a positional initial
- *  prompt and often defaults to `[ui] screen_mode = "minimal"` (empty
- *  scrollback + a tiny pinned prompt) — `--fullscreen` forces the normal
- *  TUI so the editor pane is not a blank grid. */
+ *  prompt. Grok's default `[ui] screen_mode = "minimal"` plus alt-screen
+ *  looks like a blank Kessel pane (`--fullscreen` still uses alt-screen).
+ *  `--no-alt-screen` draws on the primary screen Kessel actually shows. */
 
 export function commandBaseName(command: string): string {
   const trimmed = command.trim()
@@ -29,9 +29,12 @@ export function buildEditorAgentArgs(opts: {
   }
   if (name === 'grok') {
     const args = opts.baseArgs.filter(
-      (a) => a !== '--minimal' && a !== '--fullscreen',
+      (a) =>
+        a !== '--minimal' &&
+        a !== '--fullscreen' &&
+        a !== '--no-alt-screen',
     )
-    return [...args, '--fullscreen', brief]
+    return [...args, '--no-alt-screen', '--fullscreen', brief]
   }
   return [...opts.baseArgs, brief]
 }

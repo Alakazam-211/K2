@@ -4,6 +4,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { AIFileEditor } from '../AIFileEditor/AIFileEditor'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
+import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '../FileViewerPane/CodeEditor'
@@ -222,16 +223,12 @@ export function AgentPersonaEditor({ agentName, projectPath, onClose }: AgentPer
   const terminalCommand = agentCommand?.command
   const terminalArgs = useMemo(() => {
     if (!agentCommand || !context) return undefined
-    const baseArgs = [...agentCommand.args]
-    const isClaude = agentCommand.command === 'claude'
-    if (isClaude) {
-      return [
-        ...baseArgs,
-        '--append-system-prompt', agentPrompt,
-        `Open and read AGENT.md in the current directory. This single file defines the agent "${context.agentName}" (${context.role}). The compiled SKILL.md and all harness files are regenerated from it on close — do not edit them directly. Start by asking what the user wants this agent to do.`,
-      ]
-    }
-    return baseArgs
+    return buildEditorAgentArgs({
+      command: agentCommand.command,
+      baseArgs: agentCommand.args,
+      systemBrief: agentPrompt,
+      userMessage: `Open and read AGENT.md in the current directory. This single file defines the agent "${context.agentName}" (${context.role}). The compiled SKILL.md and all harness files are regenerated from it on close — do not edit them directly. Start by asking what the user wants this agent to do.`,
+    })
   }, [agentCommand, agentPrompt, context])
 
   // ── Conditional returns (after all hooks) ────────────────────────────

@@ -148,6 +148,10 @@ interface SettingsState {
   // dot always shows; this gates only the sound. DEFAULTS ON.
   completionSoundEnabled: boolean
 
+  // When switching workspaces, which input to auto-focus. `"terminal"`
+  // (default; today's behavior) | `"composer"` (the compose bar).
+  workspaceSwitchFocus: 'terminal' | 'composer'
+
   // Editor settings
   editor: EditorSettingsBackend
 
@@ -209,6 +213,7 @@ interface SettingsState {
   setApiEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
   setCompletionSoundEnabled: (enabled: boolean) => void
+  setWorkspaceSwitchFocus: (value: 'terminal' | 'composer') => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   updateStyleSettings: (partial: Partial<StyleSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
@@ -222,6 +227,14 @@ export const DEFAULT_ACTIVE_WINDOW_HOURS = 24
 export function clampActiveWindowHours(h: number): number {
   if (!Number.isFinite(h)) return DEFAULT_ACTIVE_WINDOW_HOURS
   return Math.max(1, Math.floor(h))
+}
+
+export type WorkspaceSwitchFocus = 'terminal' | 'composer'
+
+/** Coerce daemon / disk values to the two legal targets. Blank, missing,
+ *  or garbage → `'terminal'` (today's default). */
+export function normalizeWorkspaceSwitchFocus(value: unknown): WorkspaceSwitchFocus {
+  return value === 'composer' ? 'composer' : 'terminal'
 }
 
 /** "Your display name" — max length, mirrors the daemon's 64-char cap
@@ -322,6 +335,7 @@ async function persistAndApply(
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
+      workspaceSwitchFocus: normalizeWorkspaceSwitchFocus(result.workspaceSwitchFocus),
       editor: mergeEditorDefaults(result.editor),
       // Style is client-local SSOT — never adopt the daemon echo here.
       style: styleFromLocalStore(),
@@ -363,6 +377,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   apiEnabled: false,
   useLlmHitlDetection: false,
   completionSoundEnabled: true,
+  workspaceSwitchFocus: 'terminal',
   editor: { ...DEFAULT_EDITOR },
   style: { ...DEFAULT_STYLE },
   defaultAgent: 'claude',
@@ -618,6 +633,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setWorkspaceSwitchFocus: async (value: 'terminal' | 'composer') => {
+    const next = normalizeWorkspaceSwitchFocus(value)
+    const prev = get().workspaceSwitchFocus
+    set({ workspaceSwitchFocus: next }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `workspaceSwitchFocus`.
+      await persistAndApply(set, { workspaceSwitchFocus: next })
+    } catch (err) {
+      console.error('[settings] Failed to persist workspace-switch-focus:', err)
+      set({ workspaceSwitchFocus: prev })
+    }
+  },
+
   updateEditorSettings: async (partial: Partial<EditorSettingsBackend>) => {
     const prev = get().editor
     const merged = { ...prev, ...partial }
@@ -674,6 +702,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
+      workspaceSwitchFocus: normalizeWorkspaceSwitchFocus(result.workspaceSwitchFocus),
       editor: mergeEditorDefaults(result.editor),
       // Style stays client-local — reset-all does not adopt daemon defaults.
       style: styleFromLocalStore(),
@@ -719,6 +748,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
+      workspaceSwitchFocus: normalizeWorkspaceSwitchFocus(result.workspaceSwitchFocus),
       editor: mergeEditorDefaults(result.editor),
       // Always reflect the live local selection — never the daemon echo.
       style: styleFromLocalStore(),

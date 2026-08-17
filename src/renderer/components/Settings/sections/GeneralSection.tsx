@@ -41,6 +41,7 @@ import { jittered } from '@/lib/backoff'
 // daemon-settings client instead so the toggle works against any daemon.
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 import { useSettingsStore, sanitizeOwnerDisplayName, OWNER_DISPLAY_NAME_MAX } from '@/stores/settings'
+import { SettingDropdown } from '../controls/SettingControls'
 import { useUpdateStore } from '@/stores/update'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
 import { LocalLLMSettings } from '../shared/LocalLLMSettings'
@@ -58,6 +59,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
   { id: 'general.active-window-hours', section: 'general', group: 'Workspaces', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
   { id: 'general.completion-sound', section: 'general', group: 'Workspaces', label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
+  { id: 'general.workspace-switch-focus', section: 'general', group: 'Workspaces', label: 'When moving between workspaces, auto-select', description: 'Switching workspaces focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input'] },
   { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
   { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
@@ -340,6 +342,7 @@ export function GeneralSection(): React.JSX.Element {
             </p>
             <ActiveWindowHoursRow />
             <CompletionSoundRow />
+            <WorkspaceSwitchFocusRow />
           </div>
           {/* Full column for Canonical Agent Flow diagram + guide */}
           <div className="border-t border-[var(--color-border)] pt-5 w-full">
@@ -461,7 +464,7 @@ function CompletionSoundRow(): React.JSX.Element {
 
   return (
     <div
-      className="flex items-center justify-between py-2"
+      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
       data-settings-id="general.completion-sound"
     >
       <div className="flex-1 min-w-0 mr-3">
@@ -478,6 +481,41 @@ function CompletionSoundRow(): React.JSX.Element {
         checked={enabled}
         onChange={(next) => void setCompletionSoundEnabled(next)}
         aria-label="Play a sound when an agent finishes unwatched"
+      />
+    </div>
+  )
+}
+
+// ── Workspace-switch focus target ──────────────────────────────────────
+// When the user switches workspaces (icon rail / Active bar / workspace
+// tab), focus the terminal or the compose bar so they can type immediately.
+// Backed by `settings.workspaceSwitchFocus` (daemon settings.json
+// deep-merge). `"terminal"` is today's default.
+function WorkspaceSwitchFocusRow(): React.JSX.Element {
+  const value = useSettingsStore((s) => s.workspaceSwitchFocus)
+  const setWorkspaceSwitchFocus = useSettingsStore((s) => s.setWorkspaceSwitchFocus)
+
+  return (
+    <div
+      className="flex items-center justify-between py-2"
+      data-settings-id="general.workspace-switch-focus"
+    >
+      <div className="flex-1 min-w-0 mr-3">
+        <span className="text-xs text-[var(--color-text-secondary)]">
+          When moving between workspaces, auto-select
+        </span>
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          Switching workspaces focuses the terminal or the agent message
+          box so you can type immediately.
+        </p>
+      </div>
+      <SettingDropdown
+        value={value}
+        options={[
+          { value: 'terminal', label: 'Terminal' },
+          { value: 'composer', label: 'Message agent' },
+        ]}
+        onChange={(v) => void setWorkspaceSwitchFocus(v === 'composer' ? 'composer' : 'terminal')}
       />
     </div>
   )

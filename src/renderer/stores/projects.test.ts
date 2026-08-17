@@ -104,6 +104,9 @@ vi.mock('./settings', () => ({
     getState: () => ({ loaded: true, lastActiveProjectId: null, lastActiveWorkspaceId: null }),
   },
 }))
+vi.mock('@/lib/workspace-switch-focus', () => ({
+  applyWorkspaceSwitchFocus: vi.fn(),
+}))
 
 import {
   useProjectsStore,

@@ -140,6 +140,11 @@ export interface AppSettingsResponse {
   // Backed by typed `AppSettings.completion_sound_enabled`. Optional:
   // older snapshots omit it → readers treat absent as true (default ON).
   completionSoundEnabled?: boolean
+  // When switching workspaces, which input to focus. Wire:
+  // `workspaceSwitchFocus`. `"terminal"` (default) | `"composer"`.
+  // Backed by typed `AppSettings.workspace_switch_focus`. Optional:
+  // older snapshots omit it → readers treat absent as `"terminal"`.
+  workspaceSwitchFocus?: string
   // Style System P3 — the persisted Style selection. Backed by the typed
   // Rust `StyleSettings` struct in k2-core/app_settings.rs (a typed field
   // is REQUIRED there: AppSettings round-trips through serde and drops

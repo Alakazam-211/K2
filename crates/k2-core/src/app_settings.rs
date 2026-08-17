@@ -142,6 +142,26 @@ fn default_true() -> bool {
     true
 }
 
+fn default_workspace_switch_focus() -> String {
+    "terminal".to_string()
+}
+
+fn normalize_workspace_switch_focus(s: &str) -> String {
+    if s == "composer" {
+        "composer".to_string()
+    } else {
+        "terminal".to_string()
+    }
+}
+
+fn deserialize_workspace_switch_focus<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(normalize_workspace_switch_focus(&s))
+}
+
 fn default_countdown_theme() -> String {
     "rocket".to_string()
 }
@@ -360,6 +380,13 @@ pub struct AppSettings {
     /// the renderer AND-gates both.
     #[serde(default = "default_true")]
     pub completion_sound_enabled: bool,
+    /// When switching workspaces, which input to focus. Wire: `workspaceSwitchFocus`.
+    /// `"terminal"` (default) | `"composer"`.
+    #[serde(
+        default = "default_workspace_switch_focus",
+        deserialize_with = "deserialize_workspace_switch_focus"
+    )]
+    pub workspace_switch_focus: String,
     /// Companion C4 (prd-companion-v2 §4) — the mobile-push relay
     /// gateway base URL (e.g. `https://push.k2.dev`). Env override:
     /// `K2_PUSH_GATEWAY_URL`. **`None`/blank = push is DORMANT**: the
@@ -674,6 +701,7 @@ impl Default for AppSettings {
             web_client_enabled: true,
             use_llm_hitl_detection: false,
             completion_sound_enabled: true,
+            workspace_switch_focus: default_workspace_switch_focus(),
             push_gateway_url: None,
             push_gateway_token: None,
             mail_agent_send: default_mail_agent_send(),
@@ -1165,6 +1193,44 @@ mod tests {
         let after = reset().expect("reset");
         assert!(after.completion_sound_enabled);
         assert!(load().completion_sound_enabled);
+    }
+
+    /// Workspace-switch focus target: default `"terminal"`, persist
+    /// `"composer"` through save→load / update(), and coerce blank or
+    /// garbage values back to `"terminal"` (typed field is required:
+    /// AppSettings round-trips through serde and drops unknown keys).
+    #[test]
+    fn workspace_switch_focus_persists_composer_and_rejects_garbage() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        assert_eq!(load().workspace_switch_focus, "terminal");
+        assert_eq!(AppSettings::default().workspace_switch_focus, "terminal");
+
+        let mut s = AppSettings::default();
+        s.workspace_switch_focus = "composer".into();
+        save(&s).expect("save");
+        assert_eq!(load().workspace_switch_focus, "composer");
+
+        let merged = update(serde_json::json!({
+            "workspaceSwitchFocus": "composer"
+        }))
+        .expect("update");
+        assert_eq!(merged.workspace_switch_focus, "composer");
+        assert_eq!(load().workspace_switch_focus, "composer");
+
+        let blank = update(serde_json::json!({ "workspaceSwitchFocus": "" })).expect("blank");
+        assert_eq!(blank.workspace_switch_focus, "terminal");
+        assert_eq!(load().workspace_switch_focus, "terminal");
+
+        let _ = update(serde_json::json!({ "workspaceSwitchFocus": "composer" })).expect("composer");
+        let garbage = update(serde_json::json!({ "workspaceSwitchFocus": "nope" })).expect("garbage");
+        assert_eq!(garbage.workspace_switch_focus, "terminal");
+        assert_eq!(load().workspace_switch_focus, "terminal");
+
+        let after = reset().expect("reset");
+        assert_eq!(after.workspace_switch_focus, "terminal");
+        assert_eq!(load().workspace_switch_focus, "terminal");
     }
 
     /// DNS K1 — the dns-manage opt-in must default OFF on a fresh settings

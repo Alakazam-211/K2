@@ -29,6 +29,7 @@ import { useSettingsStore } from './settings'
 // [ws-switch] — dev-only t0 mark for the pinned-chat retention
 // show→painted metric (read by TerminalPane's [v2-perf] line).
 import { markWorkspaceSwitch } from '@/lib/ws-switch-mark'
+import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
 
 // #657 — hand tabs.ts a lazy reader for `activeProjectId` so the
 // dismiss-reap path can honor "never reap the foreground workspace"
@@ -682,7 +683,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         // signature doesn't change for callers.
         void tabsStore.restoreWorkspace(newKey, cwd).then(() => {
           ensurePinnedAgentTabForMode(project.agentMode, project.path)
+          applyWorkspaceSwitchFocus()
         })
+        applyWorkspaceSwitchFocus()
       }
 
       // P1.B — clicking a project in the icon rail is a real interaction:
@@ -772,7 +775,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       if (project) {
         ensurePinnedAgentTabForMode(project.agentMode, project.path)
       }
+      applyWorkspaceSwitchFocus()
     })
+    applyWorkspaceSwitchFocus()
   },
 
   reorderProjects: async (ids: string[]) => {

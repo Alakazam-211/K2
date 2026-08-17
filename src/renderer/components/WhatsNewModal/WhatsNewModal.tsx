@@ -364,7 +364,11 @@ export default function WhatsNewModal({
           style={{
             padding: '16px 22px 18px',
             overflowY: 'auto',
-            flex: 1
+            overflowX: 'hidden',
+            flex: 1,
+            minHeight: 0,
+            overscrollBehavior: 'contain',
+            WebkitOverflowScrolling: 'touch',
           }}
         >
           <div className="wn-title">{currentPage.title}</div>

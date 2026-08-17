@@ -3,10 +3,7 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.100 — Sidecars, compose memory, quieter API tabs (in progress)
-
-Not released yet. This is the running log of everything landed on `main`
-after **0.40.99**. More QoL is still coming before we cut the build.
+## 0.40.100 — Sidecars, catalog, and workspace polish
 
 ### Sidecars — extra chats in a workspace are not a second agent
 
@@ -94,7 +91,29 @@ Settings gear is gone from the top bar — **GateChrome** + the
 existing page tabs / server switcher own that chrome. Heartbeat
 and Projects settings match the new delivery + sound fields.
 
-### What to try (dev / next build)
+Switching workspaces can auto-focus **Terminal** or **Message
+agent** (thin-client only — not a daemon setting). Compose stays
+on the visible workspace and keeps your caret.
+
+**Edit with AI** (catalog, persona, theme, PROJECT.md, heartbeats)
+follows **Settings → Default AI Agent**. A workspace Default Agent
+still applies to ⇧⌘T / new tabs.
+
+### Context, ROLE.md, and who is human
+
+Authored persona is **ROLE.md** (was AGENT.md). AGENTS.md generate
+and leftover harness fan-out are separate toggles — generate is on
+by default; fan-out is off until you opt in.
+
+`k2 connections list --users` lists humans on this box, not just
+agents. An optional **User roster** catalog layer can put that
+table in context.
+
+**Settings → Context Catalog** (after Projects) is a host library of
+packs (`pack.toml` + `layer.md`). It does not auto-stack into a
+workspace — you add a pack to a stack when you want it.
+
+### What to try
 
 1. Open a second Claude (or Grok / Pi) tab in a workspace → run
    `k2 whoami` there → `role: sidecar`, `address: <ws>/1`.
@@ -104,6 +123,8 @@ and Projects settings match the new delivery + sound fields.
    turn without leaving the box.
 4. Workspace drawer: bell mutes that workspace’s completion chime;
    Hide API sessions keeps `/v1` tabs out of the strip.
+5. Settings → Context Catalog: create a pack and edit it with AI.
+6. This What's New page scrolls if the notes run long.
 
 ---
 

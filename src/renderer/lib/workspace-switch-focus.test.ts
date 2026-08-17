@@ -79,23 +79,35 @@ describe('applyWorkspaceSwitchFocus', () => {
     expect(document.activeElement).toBe(terminal)
   })
 
-  it('falls back to the terminal when the compose bar is missing', () => {
+  it('does not steal to the terminal while the compose bar is still missing', () => {
     const { terminal } = mountPair({ compose: false })
     workspaceSwitchFocus = 'composer'
+    document.body.focus?.()
+    terminal.blur()
 
     applyWorkspaceSwitchFocus()
 
-    expect(document.activeElement).toBe(terminal)
+    expect(document.activeElement).not.toBe(terminal)
   })
 
-  it('falls back to the terminal when the compose bar is hidden', () => {
+  it('does not steal to the terminal while the compose bar is hidden', () => {
     const { textarea, terminal } = mountPair({ compose: true, composeHidden: true })
     workspaceSwitchFocus = 'composer'
 
     applyWorkspaceSwitchFocus()
 
-    expect(document.activeElement).toBe(terminal)
+    expect(document.activeElement).not.toBe(terminal)
     expect(document.activeElement).not.toBe(textarea)
+  })
+
+  it('focuses the compose bar when it appears after apply', () => {
+    workspaceSwitchFocus = 'composer'
+    mountPair({ compose: false })
+    applyWorkspaceSwitchFocus()
+
+    const { textarea } = mountPair({ compose: true })
+    applyWorkspaceSwitchFocus()
+    expect(document.activeElement).toBe(textarea)
   })
 
   it('is a no-op when Settings is open', () => {

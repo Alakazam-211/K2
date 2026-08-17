@@ -152,6 +152,17 @@ export function TerminalComposeBar({
     autoGrow()
   }, [draft, autoGrow])
 
+  // Workspace-switch "Message agent" pref: take the caret when this bar
+  // mounts (or its session changes) so we win the race against the
+  // terminal-grid remount. Terminal-mode users are left alone.
+  useEffect(() => {
+    if (useSettingsStore.getState().workspaceSwitchFocus !== 'composer') return
+    const id = requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+    })
+    return () => cancelAnimationFrame(id)
+  }, [sessionId])
+
   // Workspace-shared send history (daemon). Drafts stay localStorage.
   useEffect(() => {
     setHistoryIndex(-1)

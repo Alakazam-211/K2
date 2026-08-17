@@ -31,6 +31,7 @@ import Toast from './components/Toast/Toast'
 import TransferProgress from './components/TransferProgress/TransferProgress'
 import AssistantBar from './components/WorkspaceAssistant/AssistantBar'
 import { useProjectsStore } from './stores/projects'
+import { preferredWorkspaceSwitchFocus, tryFocusPreferredWorkspaceInput } from './lib/workspace-switch-focus'
 // Pinned-chat retention — per-window host that keeps exempt workspaces'
 // pinned chats mounted (attached + rendering) while hidden. Rendered as
 // the FIRST child of every top-level layout branch below so React's
@@ -491,6 +492,12 @@ function AppRoot(): React.JSX.Element {
         // and steal the focus back.
         if (activeEl && activeEl.dataset && activeEl.dataset.terminalContainer !== undefined) return
 
+        // Honor "auto-select Message agent" — do not yank to the grid.
+        if (preferredWorkspaceSwitchFocus() === 'composer') {
+          tryFocusPreferredWorkspaceInput()
+          return
+        }
+
         // Find the visible terminal container in the active tab
         const terminalContainer = document.querySelector('[data-terminal-container][data-terminal-visible="true"]') as HTMLElement
         if (terminalContainer) {
@@ -523,6 +530,11 @@ function AppRoot(): React.JSX.Element {
       // Full-page overlays (Tickets / Projects / Wiki) sit above terminals;
       // stealing focus under them collapses in-overlay text selection.
       if (usePageViewStore.getState().page !== 'agents') return
+      // Composer pref: recover the message box, never steal to the grid.
+      if (preferredWorkspaceSwitchFocus() === 'composer') {
+        tryFocusPreferredWorkspaceInput()
+        return
+      }
       // Find and focus the visible terminal
       const terminalContainer = document.querySelector('[data-terminal-container][data-terminal-visible="true"]') as HTMLElement
       if (terminalContainer) {

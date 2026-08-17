@@ -189,7 +189,15 @@ export function AIFileEditor({
   useEffect(() => {
     let cancelled = false
     const resolve = async () => {
-      if (!command || command !== 'claude' || disableSessionResume) {
+      // Do not mount TerminalPane until the parent has resolved an
+      // agent. Spawn is idempotent on terminalId — a first paint with
+      // command=undefined creates a bare shell, and the later claude
+      // spawn is reused as that same empty session (blank "ready" grid).
+      if (!command) {
+        setArgsReady(false)
+        return
+      }
+      if (command !== 'claude' || disableSessionResume) {
         // Non-Claude commands, or callers that opt out of resume (the
         // canonical modal): use args as-is, never resume a prior session.
         setResolvedArgs(args)
@@ -449,6 +457,7 @@ export function AIFileEditor({
               cwd={cwd}
               command={command}
               args={resolvedArgs}
+              showComposeBar={false}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-xs text-[var(--color-text-muted)]">

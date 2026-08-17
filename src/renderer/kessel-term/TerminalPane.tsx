@@ -451,6 +451,13 @@ export interface TerminalPaneProps {
    *  STOP auto-respawning instead of piling up `claude` processes.
    *  Optional — most consumers don't need it. */
   onChildExit?: (exitCode: number | null) => void
+  /**
+   * Show the docked “Message the agent” compose bar. Default true for
+   * workspace terminals. System-driven mounts (AI File Editor) pass
+   * false — that bar is for injecting into a workspace agent, not the
+   * editor's own Claude/Grok TUI.
+   */
+  showComposeBar?: boolean
   /** Pinned-chat background retention — hold the grid-WS while HIDDEN.
    *  Set only by the pinned canonical Chat pane (AgentChatPane,
    *  daemon-owned path) when its workspace is in the Active section, so
@@ -519,6 +526,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     lockLabel,
     sandbox,
     retainWhileHidden,
+    showComposeBar = true,
   } = props
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
@@ -5608,7 +5616,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
        *  Keep mounted during soft-resync (`ready` → `connecting` with the
        *  same daemon sessionId) so focus/draft UX is not interrupted.
        *  Still requires a resolved daemon sessionId (never terminalId). */}
-      {shouldShowTerminalComposeBar(phase) && 'sessionId' in phase && phase.sessionId && (
+      {showComposeBar && shouldShowTerminalComposeBar(phase) && 'sessionId' in phase && phase.sessionId && (
         <TerminalComposeBar
           sessionId={phase.sessionId}
           workspacePath={cwd}

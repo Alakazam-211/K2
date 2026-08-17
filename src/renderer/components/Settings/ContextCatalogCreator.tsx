@@ -110,10 +110,10 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
     )
   }
 
-  if (!ready) {
+  if (!ready || !agentCommand) {
     return (
       <div className="flex items-center justify-center h-64 text-xs text-[var(--color-text-muted)]">
-        Opening pack editor…
+        {error ? null : !agentCommand ? 'Resolving agent…' : 'Opening pack editor…'}
       </div>
     )
   }

@@ -4,6 +4,7 @@ import { usePageViewStore } from '@/stores/page-view'
 import {
   EMPTY_NAV_TAGS,
   NAV_TAG_BLUE,
+  NAV_TAG_INK,
   navTagsTooltip,
   packNavTags,
   type ProjectNavTag,
@@ -21,8 +22,8 @@ function TagChip({
       type="button"
       className="max-w-[6.5rem] truncate px-1 py-px text-[9px] font-medium leading-4 no-drag cursor-pointer"
       style={{
-        color: '#e8f3fa',
-        background: `color-mix(in srgb, ${NAV_TAG_BLUE} 38%, transparent)`,
+        color: NAV_TAG_INK,
+        background: NAV_TAG_BLUE,
       }}
       title={tag.name}
       onClick={(e) => {
@@ -62,8 +63,8 @@ export function NavProjectTags({ workspaceId }: { workspaceId: string }): JSX.El
         <span
           className="flex-shrink-0 px-1 py-px text-[9px] font-medium leading-4"
           style={{
-            color: '#e8f3fa',
-            background: `color-mix(in srgb, ${NAV_TAG_BLUE} 38%, transparent)`,
+            color: NAV_TAG_INK,
+            background: NAV_TAG_BLUE,
           }}
           title={navTagsTooltip(overflow)}
         >

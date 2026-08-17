@@ -9,8 +9,10 @@ export interface ProjectNavTag {
 /** How many named chips sit in the row before the rest collapse to +N. */
 export const NAV_TAG_VISIBLE_MAX = 2
 
-/** Nav chip fill — soft steel-blue, not the group’s hashed amber/orange. */
-export const NAV_TAG_BLUE = '#7eabd0'
+/** Solid chip fill — dusty sky, readable as blue on the dark nav. */
+export const NAV_TAG_BLUE = '#3b6f94'
+/** Chip type on that fill. */
+export const NAV_TAG_INK = '#eef6fb'
 
 /** Stable empty list — `?? []` in a zustand selector re-renders forever. */
 export const EMPTY_NAV_TAGS: ProjectNavTag[] = []

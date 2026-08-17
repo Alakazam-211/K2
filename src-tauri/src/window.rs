@@ -171,7 +171,12 @@ fn monitor_to_rect(mon: &tauri::Monitor) -> MonitorRect {
     }
 }
 
-fn rects_intersect(
+/// Minimum on-screen slice — a title-bar peek at the bezel is a sliver,
+/// not a usable restore.
+const MIN_VISIBLE_WIDTH: u32 = 400;
+const MIN_VISIBLE_HEIGHT: u32 = 300;
+
+fn intersection_size(
     ax: i32,
     ay: i32,
     aw: u32,
@@ -180,20 +185,23 @@ fn rects_intersect(
     by: i32,
     bw: u32,
     bh: u32,
-) -> bool {
-    let aw = aw as i64;
-    let ah = ah as i64;
-    let bw = bw as i64;
-    let bh = bh as i64;
-    let ax = ax as i64;
-    let ay = ay as i64;
-    let bx = bx as i64;
-    let by = by as i64;
-    ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
+) -> (u32, u32) {
+    let ax2 = ax as i64 + aw as i64;
+    let ay2 = ay as i64 + ah as i64;
+    let bx2 = bx as i64 + bw as i64;
+    let by2 = by as i64 + bh as i64;
+    let x1 = (ax as i64).max(bx as i64);
+    let y1 = (ay as i64).max(by as i64);
+    let x2 = ax2.min(bx2);
+    let y2 = ay2.min(by2);
+    if x2 <= x1 || y2 <= y1 {
+        return (0, 0);
+    }
+    ((x2 - x1) as u32, (y2 - y1) as u32)
 }
 
-/// True when the window is large enough and its title bar can be grabbed
-/// on at least one current display.
+/// True when the window is large enough and a real chunk of it sits on
+/// a current display (not a few pixels of chrome at the screen edge).
 pub fn frame_is_usable(x: i32, y: i32, width: u32, height: u32, monitors: &[MonitorRect]) -> bool {
     if width < MIN_WIDTH || height < MIN_HEIGHT {
         return false;
@@ -201,10 +209,9 @@ pub fn frame_is_usable(x: i32, y: i32, width: u32, height: u32, monitors: &[Moni
     if monitors.is_empty() {
         return true;
     }
-    let bar_w = width.min(160);
-    let bar_h = height.min(40);
     monitors.iter().any(|m| {
-        rects_intersect(x, y, bar_w, bar_h, m.x, m.y, m.width, m.height)
+        let (vw, vh) = intersection_size(x, y, width, height, m.x, m.y, m.width, m.height);
+        vw >= MIN_VISIBLE_WIDTH && vh >= MIN_VISIBLE_HEIGHT
     })
 }
 
@@ -357,5 +364,16 @@ mod tests {
         assert!(!frame_is_usable(10, 10, 200, 100, &m));
         assert!(!frame_is_usable(9000, 10, 1200, 800, &m));
         assert!(frame_is_usable(40, 40, 1200, 800, &m));
+    }
+
+    #[test]
+    fn sliver_on_the_right_edge_recenters() {
+        // 32px of a 1200-wide window on a 1512 display — the old
+        // title-bar-peek check treated this as usable.
+        let s = saved(1480, 80, 1200, 800);
+        let f = resolve_window_frame(Some(&s), &[laptop()]);
+        assert!(f.x + 400 < 1512);
+        assert!(f.x >= 0);
+        assert!(f.width >= MIN_WIDTH);
     }
 }

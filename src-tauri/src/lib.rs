@@ -1248,17 +1248,20 @@ pub fn run() {
             // value is harmless — the writers don't touch disk if the
             // file already matches. Block deleted; daemon owns the pass.
 
-            // Apply saved window state on startup
-            if let Some(saved) = window::load_window_state(app.handle()) {
-                if let Some(win) = app.get_webview_window("main") {
-                    use tauri::PhysicalPosition;
-                    use tauri::PhysicalSize;
-                    let _ = win.set_position(PhysicalPosition::new(saved.x, saved.y));
-                    let _ = win.set_size(PhysicalSize::new(saved.width, saved.height));
-                    if saved.is_maximized {
-                        let _ = win.maximize();
+            // Restore last good frame, or center a default 1400×900 if
+            // the saved rect is missing / tiny / off every current display.
+            window::apply_restored_frame(app.handle());
+            if window::load_window_state(app.handle()).is_none() {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    for _ in 0..10 {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        if window::load_window_state(&handle).is_some() {
+                            window::apply_restored_frame(&handle);
+                            return;
+                        }
                     }
-                }
+                });
             }
             // Native WebKit zoom is disabled via zoomHotkeysEnabled:false in tauri.conf.json.
             // App zoom is handled by transform:scale() in the frontend (App.tsx).
@@ -1268,7 +1271,12 @@ pub fn run() {
             if let Some(win) = app.get_webview_window("main") {
                 let win_for_hide = win.clone();
                 win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    match event {
+                        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                            window::schedule_save_window_state(&app_handle);
+                            return;
+                        }
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
                         // Red close-button behavior is controlled by
                         // the "Keep Agent & Companion server running
                         // when K2SO quits" preference:
@@ -1356,6 +1364,8 @@ pub fn run() {
                             #[cfg(not(unix))]
                             std::process::exit(0);
                         }
+                        }
+                        _ => {}
                     }
                 });
             }
@@ -1954,6 +1964,7 @@ pub fn run() {
                 // installed), then let exit proceed. The in-app
                 // companion server dies with the Tauri process.
                 tauri::RunEvent::ExitRequested { .. } => {
+                    window::save_window_state(app);
                     #[cfg(target_os = "macos")]
                     {
                         let plist = k2_core::wake::DaemonPlist::canonical(

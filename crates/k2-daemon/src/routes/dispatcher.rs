@@ -3757,8 +3757,15 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
+            let session_author = if super::http::token_is_owner(&query, state.token.as_str()) {
+                "owner".to_string()
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .unwrap_or_else(|| "owner".to_string())
+            };
             let result = tokio::task::spawn_blocking(move || {
-                crate::feedback_routes::dispatch_post(&p_owned, &body_bytes)
+                crate::feedback_routes::dispatch_post_as(&p_owned, &body_bytes, &session_author)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

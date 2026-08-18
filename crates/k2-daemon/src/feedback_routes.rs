@@ -105,10 +105,19 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 
 /// Dispatch a `/cli/feedback/*` POST body to its handler. Exact-match
 /// paths; unknown paths 404 (mirrors `dispatch_unit6_post`).
+///
+/// `session_author` is the daemon-resolved actor from the request
+/// token (`"owner"` or a Connect username). Human comments that omit
+/// `author` store and inject as that identity (D3) so a Connect user
+/// is not framed as the host owner.
 pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
+    dispatch_post_as(path, body, "owner")
+}
+
+pub fn dispatch_post_as(path: &str, body: &[u8], session_author: &str) -> CliResponse {
     match path {
         "/cli/feedback/create" => handle_create(body),
-        "/cli/feedback/comment" => handle_comment(body),
+        "/cli/feedback/comment" => handle_comment_as(body, session_author),
         "/cli/feedback/answer" => handle_answer(body),
         "/cli/feedback/resolve" => handle_resolve(body),
         "/cli/feedback/assign" => handle_assign(body),
@@ -483,6 +492,10 @@ struct CommentBody {
 /// - AGENT-authored: store only (thread bump), no injection back into
 ///   its own session, no auto-answer, no delivery fields.
 pub fn handle_comment(body: &[u8]) -> CliResponse {
+    handle_comment_as(body, "owner")
+}
+
+pub fn handle_comment_as(body: &[u8], session_author: &str) -> CliResponse {
     let b: CommentBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -497,9 +510,13 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
         Ok(f) => f,
         Err(e) => return prefix_error_response(&b.id, e),
     };
+    // Body `author` is the agent-CLI path. UI human posts omit it —
+    // use the token identity so a Connect user is stored/injected as
+    // themselves, not `resolve_owner_from()`.
     let author_given = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let author = author_given.unwrap_or("owner");
-    let is_human = author == "owner";
+    let session = session_author.trim();
+    let author = author_given.unwrap_or(if session.is_empty() { "owner" } else { session });
+    let is_human = author_given.is_none() || author == "owner";
 
     // Agent comment — store only, current shape (no delivery fields).
     if !is_human {
@@ -567,10 +584,13 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
     emit_commented(&item.id, &comment.author);
     crate::push_routes::notify_feedback_commented(&item.id, &item.assignees);
 
-    // Shared F3 delivery — the comment lands in the asking session,
-    // framed with the owner's display name (same server-side
-    // resolution as the composer, D3).
-    let from = crate::workspace_msg::resolve_owner_from();
+    // Shared F3 delivery. Owner token → server display name. Connect
+    // user → their username. Matches project-group/msg framing.
+    let from = if author == "owner" {
+        crate::workspace_msg::resolve_owner_from()
+    } else {
+        author.to_string()
+    };
     let (delivered, delivery_reason, delivered_session) =
         deliver_to_asker(&item, &from, &comment.body);
 
@@ -1381,6 +1401,33 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
             assert_eq!(v["error"]["code"], "usage", "status '{bad}'");
         }
+    }
+
+    #[test]
+    fn feedback_comment_session_author_is_connect_user() {
+        let (name, path) = unique("comment-session-author");
+        insert_project(&name, &path);
+        let created = create_via_route(
+            &path,
+            "Which color?",
+            serde_json::json!({
+                "sessionId": uuid::Uuid::new_v4().to_string(),
+                "sessionKind": "sandbox",
+            }),
+        );
+        let id = created["id"].as_str().expect("id").to_string();
+        let resp = handle_comment_as(
+            serde_json::json!({ "id": id, "body": "navy" })
+                .to_string()
+                .as_bytes(),
+            "alice",
+        );
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let c: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(c["author"], "alice");
+        assert_eq!(c["answered"], true);
+        let item = k2_core::feedback::get_item(&id).expect("item");
+        assert_eq!(item.answer.as_deref(), Some("navy"));
     }
 
     /// `feedback:commented` fires for every STORED comment on the

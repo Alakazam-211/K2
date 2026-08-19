@@ -1,6 +1,6 @@
 [package]
 name = "k2-core"
-version = "0.40.102"
+version = "0.40.103"
 edition = "2021"
 license = "FSL-1.1-Apache-2.0"
 description = "K2 device-local core library: db, llm, terminal, companion, scheduler, agent_hooks, push_adapter. Linked by both src-tauri (Tauri app, thin client) and k2-daemon (persistent-agent runtime)."

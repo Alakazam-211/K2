@@ -720,6 +720,10 @@ pub fn detect_interrupted_regen(project_path: &str) -> bool {
 ///
 /// Gated with `.k2so/.harvest-0.32.7-done` so a user who later runs
 /// `generate-md` isn't re-harvested on the next boot. First-run only.
+///
+/// A workspace that never had the pre-0.32.7 `agents/` tree (hire/add
+/// today) is a no-op and must **not** plant the sentinel — that file is
+/// leftover migration receipt, not part of a new workspace.
 pub fn harvest_per_agent_claude_md_files(project_path: &str) {
     let sentinel = crate::workspace_dot_dir(project_path).join(".harvest-0.32.7-done");
     if sentinel.exists() {
@@ -727,6 +731,9 @@ pub fn harvest_per_agent_claude_md_files(project_path: &str) {
     }
 
     let agents_root = crate::workspace_dot_dir(project_path).join("agents");
+    if !agents_root.is_dir() {
+        return;
+    }
     let mut archived_paths: Vec<PathBuf> = Vec::new();
     let mut any_failure = false;
     if let Ok(read_dir) = fs::read_dir(&agents_root) {
@@ -1007,6 +1014,20 @@ mod migration_safety_tests {
             archive.starts_with(proj.join(".k2so").join("migration")),
             "archive path must land under .k2so/migration/, got {}",
             archive.display(),
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn harvest_does_not_stamp_fresh_workspace_without_agents_tree() {
+        let proj = std::env::temp_dir()
+            .join("k2so-migration-test")
+            .join(format!("fresh-{}", Uuid::new_v4()));
+        fs::create_dir_all(proj.join(".k2/agent")).unwrap();
+        harvest_per_agent_claude_md_files(proj.to_str().unwrap());
+        assert!(
+            !proj.join(".k2/.harvest-0.32.7-done").exists(),
+            "new workspaces must not get a 0.32.7 harvest receipt"
         );
         fs::remove_dir_all(&proj).ok();
     }

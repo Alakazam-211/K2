@@ -87,6 +87,15 @@ pub fn run_unification(
         });
     }
 
+    // Fresh hire/add never had `.k2/agents/`. Don't scaffold
+    // agent-templates / migration/legacy or plant a 0.37 receipt.
+    if !agents_dir(project_path).is_dir() {
+        return Ok(UnificationOutcome {
+            already_done: true,
+            ..Default::default()
+        });
+    }
+
     let mut outcome = UnificationOutcome::default();
     // Anchor on the resolver so a (rare) un-unified workspace that the cutover
     // renamed to `.k2/` scaffolds there, never recreating a stray `.k2so/`.
@@ -660,6 +669,27 @@ mod tests {
             );
         }
 
+        fs::remove_dir_all(&p).ok();
+    }
+
+    #[test]
+    fn unification_does_not_stamp_fresh_workspace_without_agents_tree() {
+        let p = std::env::temp_dir().join(format!(
+            "k2so-unification-fresh-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(p.join(".k2/agent")).unwrap();
+        let path = p.to_string_lossy().to_string();
+        let outcome = run_unification(&path, "agent").unwrap();
+        assert!(outcome.already_done);
+        assert!(
+            !p.join(".k2/.unification-0.37.0-done").exists(),
+            "new workspaces must not get a 0.37 unification receipt"
+        );
+        assert!(
+            !p.join(".k2/migration/legacy").exists(),
+            "must not scaffold migration/legacy on a fresh workspace"
+        );
         fs::remove_dir_all(&p).ok();
     }
 

@@ -52,6 +52,7 @@ import {
   type FrameCoalescer,
 } from './frameCoalescer'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, daemonWsBase, type DaemonWsAvailable } from '../kessel/daemon-ws'
+import { logRemotePath } from '@/lib/remote-path-log'
 import {
   gridDialBackoffRemainingMs,
   openQueuedGridWebSocket,
@@ -2293,6 +2294,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // doesn't spin forever, but the first reconnect after a
         // single-shot drop is fast (~500ms) so the user barely sees it.
         const delayMs = Math.min(500 * 2 ** Math.min(reconnectAttempt, 4), 5000)
+        logRemotePath('grid-close', {
+          pane: terminalId.slice(0, 8),
+          code: ev.code,
+          wasClean: ev.wasClean,
+          reason: ev.reason || undefined,
+          reconnectInMs: delayMs,
+          attempt: reconnectAttempt + 1,
+        })
         if (import.meta.env.DEV) {
           // eslint-disable-next-line no-console
           console.warn(

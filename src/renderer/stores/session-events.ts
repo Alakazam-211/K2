@@ -27,6 +27,7 @@ import { useActiveStore } from '@/stores/active'
 import { serverSupports } from '@/lib/server-capabilities'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { jittered } from '@/lib/backoff'
+import { logRemotePath } from '@/lib/remote-path-log'
 import {
   noteRemoteEventsClosed,
   noteRemoteEventsOpened,
@@ -663,6 +664,12 @@ export function subscribeToWorkspaceSessionEvents(
       console.debug(
         `[session-events] WS closed (code=${ev.code}, reason="${ev.reason ?? ''}") — scheduling reconnect`,
       )
+      logRemotePath('events-close', {
+        bus: 'session-events',
+        code: ev.code,
+        wasClean: ev.wasClean,
+        reason: ev.reason || undefined,
+      })
       triggerReconnect()
     }
   }
@@ -1166,6 +1173,12 @@ export function subscribeToActiveState(): UnsubscribeFn {
       console.debug(
         `[active-state] WS closed (code=${ev.code}, reason="${ev.reason ?? ''}") — scheduling reconnect`,
       )
+      logRemotePath('events-close', {
+        bus: 'active-state',
+        code: ev.code,
+        wasClean: ev.wasClean,
+        reason: ev.reason || undefined,
+      })
       triggerReconnect()
     }
   }
@@ -1367,6 +1380,12 @@ export function subscribeToWorkspaceTabEvents(
       console.debug(
         `[tab-events] WS closed (code=${ev.code}, reason="${ev.reason ?? ''}") — scheduling reconnect`,
       )
+      logRemotePath('events-close', {
+        bus: 'tab-events',
+        code: ev.code,
+        wasClean: ev.wasClean,
+        reason: ev.reason || undefined,
+      })
       triggerReconnect()
     }
   }

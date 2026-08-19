@@ -58,6 +58,12 @@ import {
   registerRemoteHealthControls,
   wasR1FlapStampedThisEpisode,
 } from '@/lib/connection-gate-probe'
+import {
+  classifyRemoteFetchError,
+  logRemotePath,
+  msSinceRemoteBootOk,
+  noteRemoteBootOk,
+} from '@/lib/remote-path-log'
 import { RemoteSignIn } from './RemoteSignIn'
 import { AppErrorBoundary } from './AppErrorBoundary'
 import GateChrome from './TopBar/GateChrome'
@@ -320,14 +326,28 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
       // pool's tunnel-edge 404. Re-read the port file next poll in case a
       // kickstart moved it.
       invalidateDaemonWs()
+      logRemotePath('boot-status', {
+        kind: 'http',
+        httpStatus: resp.status,
+        msSinceOk: msSinceRemoteBootOk(),
+        host: creds.host,
+      })
       return { kind: 'http', httpStatus: resp.status }
     }
-    return { kind: 'ok', status: (await resp.json()) as DaemonBootStatus }
-  } catch {
+    const status = (await resp.json()) as DaemonBootStatus
+    noteRemoteBootOk()
+    return { kind: 'ok', status }
+  } catch (err) {
     // Network error, timeout, port file missing, unparseable body — daemon
     // isn't reachable yet. Invalidate cached port so the next poll re-reads
     // ~/.k2so/daemon.port (covers a kickstart-assigned port change).
     invalidateDaemonWs()
+    logRemotePath('boot-status', {
+      kind: 'network',
+      class: classifyRemoteFetchError(err),
+      err: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      msSinceOk: msSinceRemoteBootOk(),
+    })
     return { kind: 'network' }
   }
 }
@@ -833,6 +853,14 @@ export function ConnectionGate(): React.ReactElement {
           const verdict = await arbiterBootProbe(active)
           if (cancelled) return
           if (arbiterProvesHostReady(verdict)) {
+            logRemotePath('arbiter-ready-webview-fail', {
+              webview: probe.kind,
+              httpStatus: probe.kind === 'http' ? probe.httpStatus : undefined,
+              arbiterStatus: verdict?.status,
+              flapFail,
+              sustainedFail,
+              acceptedOnce,
+            })
             // PROVEN: a fresh OS-level socket reaches the daemon and it's
             // 'ready', while the webview path is failing or flapping. The
             // webview connection layer is poisoned / thrashing. Escalate.

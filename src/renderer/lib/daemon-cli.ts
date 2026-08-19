@@ -17,6 +17,11 @@
 import { getDaemonWs, getLocalDaemonWs, invalidateDaemonWs, daemonHttpBase, type DaemonWsAvailable } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { forceSoftHealthProbe } from '@/lib/connection-gate-probe'
+import {
+  classifyRemoteFetchError,
+  logRemotePath,
+  redactRemoteUrl,
+} from '@/lib/remote-path-log'
 import { isConnectionLevelError, withRemoteRetry } from '@/lib/remote-retry'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
@@ -97,11 +102,13 @@ async function cliFetch(
   // construction (revival just proved the host reachable + re-authed).
   const gate = recoveryGateAllows()
   if (!gate.ok) throw new RecoveringError(gate.label, gate.kind)
+  let lastUrl = ''
   try {
     return await withConnRetry(async () => {
       const attempt = async (): Promise<CliHttpResult> => {
         const creds = await getDaemonWs()
         const { url, init } = build(creds)
+        lastUrl = url
         // Hosted web: credentials:include (send/store k2_session) + X-K2-Client.
         // Desktop: withDaemonFetch is a no-op — init is unchanged.
         const res = await fetch(url, withDaemonFetch(init ?? {}))
@@ -129,6 +136,11 @@ async function cliFetch(
       isConnectionLevelError(err) &&
       useConnectHostStore.getState().activeHost !== 'local'
     ) {
+      logRemotePath('cli-fail', {
+        url: lastUrl ? redactRemoteUrl(lastUrl) : undefined,
+        class: classifyRemoteFetchError(err),
+        err: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      })
       forceSoftHealthProbe()
     }
     throw err

@@ -53,6 +53,7 @@ fn session_kind_and_handle(
     agent_name: &str,
     cwd: &str,
     command: Option<&str>,
+    conversation_id: Option<&str>,
 ) -> (String, String) {
     let project_id = {
         let db = k2_core::db::shared();
@@ -70,6 +71,11 @@ fn session_kind_and_handle(
                 .unwrap_or_default()
         });
     if k2_core::workspace_session_handles::is_canonical_agent_name(agent_name, &project_id) {
+        return ("canonical".to_string(), primary);
+    }
+    if conversation_id.is_some_and(|sid| {
+        k2_core::workspace_session_handles::conversation_is_canonical_shared(&project_id, sid)
+    }) {
         return ("canonical".to_string(), primary);
     }
     if k2_core::workspace_session_handles::is_api_agent_name(agent_name) {
@@ -1035,12 +1041,17 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     if !matches {
                         continue;
                     }
-                    let (kind, handle) = session_kind_and_handle(&agent_name, &cwd, session.command().as_deref());
                     let conversation_id = crate::v2_spawn::conversation_id_for_agent(
                         &agent_name,
                         &cwd,
                         session.command().as_deref(),
                         &session.args(),
+                    );
+                    let (kind, handle) = session_kind_and_handle(
+                        &agent_name,
+                        &cwd,
+                        session.command().as_deref(),
+                        conversation_id.as_deref(),
                     );
                     let mut row = serde_json::json!({
                         "sessionId": session.session_id().to_string(),

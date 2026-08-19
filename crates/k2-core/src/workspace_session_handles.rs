@@ -194,6 +194,38 @@ pub fn is_sidecar_harness(agent_name: &str, project_id: &str, command: Option<&s
     is_harness_command(command)
 }
 
+/// True when `session_id` is this workspace's pinned conversation
+/// (`workspace_sessions.session_id`). That row is the SSOT for
+/// `k2 msg <workspace>` — it must not be addressed as `ws/N` even if
+/// a `tab-*` harness also holds the same provider id (postal-bot
+/// whoami vs K2_CELL, 2026-08-19).
+pub fn conversation_is_canonical(
+    conn: &Connection,
+    project_id: &str,
+    session_id: &str,
+) -> bool {
+    let sid = session_id.trim();
+    if project_id.trim().is_empty() || sid.is_empty() {
+        return false;
+    }
+    match crate::db::schema::WorkspaceSession::get(conn, project_id) {
+        Ok(Some(row)) => {
+            row.session_id
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|saved| saved == sid)
+        }
+        _ => false,
+    }
+}
+
+/// Shared-DB wrapper for [`conversation_is_canonical`].
+pub fn conversation_is_canonical_shared(project_id: &str, session_id: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conversation_is_canonical(&conn, project_id, session_id)
+}
+
 /// Strip the `tab-` map-key prefix so spawn and wake share one pane key.
 pub fn normalize_pane_key(pane_or_tab_key: &str) -> &str {
     let trimmed = pane_or_tab_key.trim();
@@ -699,7 +731,15 @@ pub fn ensure_sidecar_handle(
     if !is_sidecar_harness(agent_name, project_id, command) {
         return Ok(None);
     }
+    if let Some(sid) = provider_session_id.map(str::trim).filter(|s| !s.is_empty()) {
+        if conversation_is_canonical(conn, project_id, sid) {
+            return Ok(None);
+        }
+    }
     let key = conversation_key_for(provider_session_id, pane_or_tab_key);
+    if conversation_is_canonical(conn, project_id, &key) {
+        return Ok(None);
+    }
     if key.is_empty() {
         return Err("ensure_sidecar_handle: empty conversation_key".to_string());
     }
@@ -936,6 +976,53 @@ mod tests {
             "API host-sessions are relations, not sidecars (D16)"
         );
         assert!(!is_sidecar_harness("daily-review", pid, Some("claude")));
+    }
+
+    #[test]
+    fn canonical_workspace_session_is_not_a_sidecar_handle() {
+        let project_id = seed_project("postal-bot");
+        let grok = "7b2ae8f7-547b-42f3-8284-527742a36cc0";
+        let claude_tab = "ab42f7df-0000-4000-8000-000000000001";
+        {
+            let dbh = conn();
+            let c = dbh.lock();
+            crate::db::schema::WorkspaceSession::upsert(
+                &c,
+                "ws-row",
+                &project_id,
+                None,
+                Some(grok),
+                "grok",
+                "system",
+                "running",
+            )
+            .expect("stamp canonical");
+            assert!(conversation_is_canonical(&c, &project_id, grok));
+            assert!(!conversation_is_canonical(&c, &project_id, claude_tab));
+            let skipped = ensure_sidecar_handle(
+                &c,
+                &project_id,
+                "tab-grok-pane",
+                Some("grok"),
+                Some(grok),
+                "grok-pane",
+            )
+            .expect("ensure");
+            assert!(
+                skipped.is_none(),
+                "canonical conversation must not mint ws/N, got {skipped:?}"
+            );
+            let extra = ensure_sidecar_handle(
+                &c,
+                &project_id,
+                "tab-claude-pane",
+                Some("claude"),
+                Some(claude_tab),
+                "claude-pane",
+            )
+            .expect("extra");
+            assert_eq!(extra.as_deref(), Some("1"));
+        }
     }
 
     #[test]

@@ -348,7 +348,26 @@ fn resolve_whoami(params: &HashMap<String, String>) -> Result<WhoamiInfo, String
     let is_sidecar = is_sidecar_harness(&agent_name, &project_id, command.as_deref())
         || env_cell == Some("sidecar");
 
-    let (role, sidecar_handle) = if is_sidecar {
+    // workspace_sessions.session_id is who `k2 msg <ws>` hits. A tab-*
+    // map key / leftover handle ordinal must not override that (or
+    // K2_CELL=canonical) — otherwise whoami prints postal-bot/2 for
+    // the pinned Grok cell.
+    let stamped_canonical = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        [provider_sid.as_deref(), cell_sid.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|s| {
+                k2_core::workspace_session_handles::conversation_is_canonical(
+                    &conn, &project_id, s,
+                )
+            })
+    };
+
+    let (role, sidecar_handle) = if stamped_canonical {
+        ("canonical", None)
+    } else if is_sidecar {
         let key = conversation_key_for(
             provider_sid.as_deref(),
             tab.as_ref()
@@ -524,6 +543,57 @@ mod tests {
         assert_eq!(info2.address, "sales/reviewer");
         assert_eq!(info2.primary, "sales");
         assert_eq!(info2.session, "sess-side");
+    }
+
+    #[test]
+    fn whoami_prefers_workspace_sessions_over_tab_ordinal() {
+        k2_core::db::init_for_tests();
+        let grok = "7b2ae8f7-547b-42f3-8284-527742a36cc0";
+        let claude = "ab42f7df-1111-4111-8111-111111111111";
+        let project_id = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let id = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, "postal-bot", format!("/tmp/whoami-postal-{id}")],
+            )
+            .expect("seed project");
+            k2_core::db::schema::WorkspaceSession::upsert(
+                &conn,
+                "ws-row",
+                &id,
+                None,
+                Some(grok),
+                "grok",
+                "system",
+                "running",
+            )
+            .expect("stamp canonical grok");
+            conn.execute(
+                "INSERT INTO workspace_tab_sessions \
+                 (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+                 VALUES (?1, 'claude-pane', 'tab-claude-pane', ?2, 'claude', unixepoch()), \
+                        (?1, 'grok-pane', 'tab-grok-pane', ?3, 'grok', unixepoch())",
+                rusqlite::params![id, claude, grok],
+            )
+            .expect("seed tabs");
+            k2_core::workspace_session_handles::allocate_ordinal(&conn, &id, claude)
+                .expect("claude /1");
+            k2_core::workspace_session_handles::allocate_ordinal(&conn, &id, grok)
+                .expect("leftover grok /2");
+            id
+        };
+
+        let mut p = HashMap::new();
+        p.insert("project_id".into(), project_id);
+        p.insert("session".into(), grok.into());
+        p.insert("cell".into(), "canonical".into());
+        let info = resolve_whoami(&p).expect("stamped canonical");
+        assert_eq!(info.role, "canonical", "must not report sidecar /2");
+        assert_eq!(info.address, "postal-bot");
+        assert_eq!(info.workspace, "postal-bot");
+        assert_eq!(info.session, grok);
     }
 
     #[test]

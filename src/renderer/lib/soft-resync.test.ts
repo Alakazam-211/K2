@@ -18,6 +18,7 @@ import {
 } from './remote-ws-drop'
 import {
   forceSoftHealthProbe,
+  __resetForceProbeLatchForTests,
   registerRemoteHealthControls,
   stampRemoteReconnectFlap,
   wasR1FlapStampedThisEpisode,
@@ -147,10 +148,12 @@ describe('soft-resync bus', () => {
 describe('connection-gate-probe registration', () => {
   beforeEach(() => {
     clearR1FlapEpisode()
+    __resetForceProbeLatchForTests()
     registerRemoteHealthControls(null)
   })
   afterEach(() => {
     clearR1FlapEpisode()
+    __resetForceProbeLatchForTests()
     registerRemoteHealthControls(null)
   })
 
@@ -158,6 +161,15 @@ describe('connection-gate-probe registration', () => {
     expect(() => forceSoftHealthProbe()).not.toThrow()
     const forceProbe = vi.fn()
     registerRemoteHealthControls({ forceProbe, stampFlap: vi.fn() })
+    forceSoftHealthProbe()
+    expect(forceProbe).toHaveBeenCalledTimes(1)
+  })
+
+  it('forceSoftHealthProbe coalesces same-turn storms to one tick', () => {
+    const forceProbe = vi.fn()
+    registerRemoteHealthControls({ forceProbe, stampFlap: vi.fn() })
+    forceSoftHealthProbe()
+    forceSoftHealthProbe()
     forceSoftHealthProbe()
     expect(forceProbe).toHaveBeenCalledTimes(1)
   })

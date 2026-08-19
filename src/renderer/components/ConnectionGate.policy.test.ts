@@ -20,6 +20,7 @@ import {
   advanceWedgeFailureClock,
   isFlapPatternEstablished,
   pruneFlapTimestamps,
+  shouldConsultArbiter,
   WEDGE_PATTERN_MS,
   WEDGE_CLEAR_OK_STREAK,
   WEDGE_FLAP_THRESHOLD,
@@ -298,6 +299,60 @@ describe('isFlapPatternEstablished (0.40.68 / GH#57 thrash)', () => {
     expect(
       pruneFlapTimestamps([t0 - WEDGE_FLAP_WINDOW_MS - 1, t0 - 1000, t0], t0),
     ).toEqual([t0 - 1000, t0])
+  })
+})
+
+describe('shouldConsultArbiter (post-accept poisoned pool)', () => {
+  it('first-connect miss does not consult (slow clocks still own that path)', () => {
+    expect(
+      shouldConsultArbiter({
+        acceptedOnce: false,
+        probeOk: false,
+        sustainedFail: false,
+        flapFail: false,
+      }),
+    ).toBe(false)
+  })
+
+  it('post-accept webview miss consults immediately', () => {
+    expect(
+      shouldConsultArbiter({
+        acceptedOnce: true,
+        probeOk: false,
+        sustainedFail: false,
+        flapFail: false,
+      }),
+    ).toBe(true)
+  })
+
+  it('healthy post-accept probe does not consult', () => {
+    expect(
+      shouldConsultArbiter({
+        acceptedOnce: true,
+        probeOk: true,
+        sustainedFail: false,
+        flapFail: false,
+      }),
+    ).toBe(false)
+  })
+
+  it('sustained fail or flap still consult even before first accept', () => {
+    expect(
+      shouldConsultArbiter({
+        acceptedOnce: false,
+        probeOk: false,
+        sustainedFail: true,
+        flapFail: false,
+      }),
+    ).toBe(true)
+    expect(
+      shouldConsultArbiter({
+        acceptedOnce: false,
+        probeOk: true,
+        sustainedFail: false,
+        flapFail: true,
+      }),
+    ).toBe(true)
   })
 })
 

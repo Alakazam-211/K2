@@ -31,13 +31,26 @@ export function registerRemoteHealthControls(
   }
 }
 
-/** Cancel pending health timeout and run ConnectionGate soft `tick()` now. */
+/** Cancel pending health timeout and run ConnectionGate soft `tick()` now.
+ *  Coalesces to one tick per turn so a compose/cliFetch CORS storm does
+ *  not fan out N arbiter probes. */
+let forceProbeQueued = false
+
+export function __resetForceProbeLatchForTests(): void {
+  forceProbeQueued = false
+}
+
 export function forceSoftHealthProbe(): void {
+  if (!controls || forceProbeQueued) return
+  forceProbeQueued = true
+  queueMicrotask(() => {
+    forceProbeQueued = false
+  })
   if (import.meta.env.DEV) {
     // eslint-disable-next-line no-console
     console.debug('[recovery] forceSoftHealthProbe')
   }
-  controls?.forceProbe()
+  controls.forceProbe()
 }
 
 /**

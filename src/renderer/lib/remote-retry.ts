@@ -44,6 +44,9 @@ export function isConnectionLevelError(err: unknown): boolean {
     m.includes('failed to fetch') ||
     m.includes('load failed') ||
     m.includes('networkerror') ||
+    // Safari logs edge 404 (no ACAO) as this TypeError; JS never sees status.
+    m.includes('access-control-allow-origin') ||
+    m.includes('not allowed by access-control') ||
     m.includes('connection refused') ||
     m.includes('ecconnrefused') ||
     m.includes('econnrefused') ||

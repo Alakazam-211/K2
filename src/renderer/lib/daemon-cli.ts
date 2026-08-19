@@ -16,7 +16,8 @@
 
 import { getDaemonWs, getLocalDaemonWs, invalidateDaemonWs, daemonHttpBase, type DaemonWsAvailable } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { withRemoteRetry } from '@/lib/remote-retry'
+import { forceSoftHealthProbe } from '@/lib/connection-gate-probe'
+import { isConnectionLevelError, withRemoteRetry } from '@/lib/remote-retry'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
 
@@ -96,29 +97,42 @@ async function cliFetch(
   // construction (revival just proved the host reachable + re-authed).
   const gate = recoveryGateAllows()
   if (!gate.ok) throw new RecoveringError(gate.label, gate.kind)
-  return withConnRetry(async () => {
-    const attempt = async (): Promise<CliHttpResult> => {
-      const creds = await getDaemonWs()
-      const { url, init } = build(creds)
-      // Hosted web: credentials:include (send/store k2_session) + X-K2-Client.
-      // Desktop: withDaemonFetch is a no-op — init is unchanged.
-      const res = await fetch(url, withDaemonFetch(init ?? {}))
-      return { res, text: await res.text() }
-    }
-    let out = await attempt()
-    if (isPossibleAuthFailure(out.res.status, out.text)) {
-      const active = useConnectHostStore.getState().activeHost
-      if (active !== 'local') {
-        const outcome = await reviveRemoteSession(active.id)
-        // 'revived' means the store now carries a NEW token — replay once so
-        // the caller never sees the transient stale-session rejection. Any
-        // other outcome (still-valid role denial, sign-in required, network,
-        // cooldown) keeps the original response.
-        if (outcome === 'revived') out = await attempt()
+  try {
+    return await withConnRetry(async () => {
+      const attempt = async (): Promise<CliHttpResult> => {
+        const creds = await getDaemonWs()
+        const { url, init } = build(creds)
+        // Hosted web: credentials:include (send/store k2_session) + X-K2-Client.
+        // Desktop: withDaemonFetch is a no-op — init is unchanged.
+        const res = await fetch(url, withDaemonFetch(init ?? {}))
+        return { res, text: await res.text() }
       }
+      let out = await attempt()
+      if (isPossibleAuthFailure(out.res.status, out.text)) {
+        const active = useConnectHostStore.getState().activeHost
+        if (active !== 'local') {
+          const outcome = await reviveRemoteSession(active.id)
+          // 'revived' means the store now carries a NEW token — replay once so
+          // the caller never sees the transient stale-session rejection. Any
+          // other outcome (still-valid role denial, sign-in required, network,
+          // cooldown) keeps the original response.
+          if (outcome === 'revived') out = await attempt()
+        }
+      }
+      return out
+    })
+  } catch (err) {
+    // Compose send and other /cli/* rides this path. Edge 404/CORS throws
+    // here; kick a health tick so the arbiter can reload the poisoned pool
+    // instead of waiting 25s (or for Local → remote).
+    if (
+      isConnectionLevelError(err) &&
+      useConnectHostStore.getState().activeHost !== 'local'
+    ) {
+      forceSoftHealthProbe()
     }
-    return out
-  })
+    throw err
+  }
 }
 
 /**

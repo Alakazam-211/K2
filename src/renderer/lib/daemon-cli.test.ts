@@ -70,6 +70,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError } from './daemon-cli'
+import * as connectionGateProbe from './connection-gate-probe'
 import {
   useConnectHostStore,
   __resetConnectHostStoreForTests,
@@ -354,6 +355,35 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
       expect(invalidateDaemonWsMock).toHaveBeenCalledTimes(4)
     } finally {
       vi.useRealTimers()
+    }
+  })
+
+  it('exhausted REMOTE connection failure kicks a health probe; LOCAL does not', async () => {
+    const probe = vi.spyOn(connectionGateProbe, 'forceSoftHealthProbe').mockImplementation(() => {})
+    try {
+      vi.useFakeTimers()
+      const host = makeRemoteHost()
+      useConnectHostStore.getState().addHost(host)
+      useConnectHostStore.getState().selectHost(host)
+      getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Load failed')))
+      const remote = daemonCliGet('terminal/send-message')
+      const remoteDone = expect(remote).rejects.toThrow('Load failed')
+      await vi.runAllTimersAsync()
+      await remoteDone
+      expect(probe).toHaveBeenCalled()
+
+      probe.mockClear()
+      __resetConnectHostStoreForTests()
+      getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+      const local = daemonCliGet('projects/list')
+      const localDone = expect(local).rejects.toThrow('Load failed')
+      await vi.runAllTimersAsync()
+      await localDone
+      expect(probe).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+      probe.mockRestore()
     }
   })
 

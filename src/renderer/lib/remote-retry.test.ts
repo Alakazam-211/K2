@@ -23,6 +23,7 @@ describe('isConnectionLevelError', () => {
       'connection refused',
       'daemon_ws_url invoke failed: not ready',
       'daemon not reachable',
+      'Origin tauri://localhost is not allowed by Access-Control-Allow-Origin. Status code: 404',
     ]) {
       expect(isConnectionLevelError(new Error(msg))).toBe(true)
     }

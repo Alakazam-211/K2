@@ -387,6 +387,26 @@ function wedgeReloadFlagKey(hostKey: string): string {
   return `k2.wedge-reloaded:${hostKey}`
 }
 
+/**
+ * When to ask the out-of-webview arbiter whether the host is actually up.
+ *
+ * Sustained 60s fail and GH#57 flap still qualify. After first accept, a
+ * single webview `/boot-status` miss also qualifies: the 25s health poll
+ * can never hit 4 reconnect banners in 45s, and "Message the agent"
+ * (`POST /cli/terminal/send-message`) keeps a poisoned WKWebView pool
+ * warm. If the arbiter then sees `phase: ready`, reload (same as
+ * Local → remote). First-connect stays on the slow clocks.
+ */
+export function shouldConsultArbiter(opts: {
+  acceptedOnce: boolean
+  probeOk: boolean
+  sustainedFail: boolean
+  flapFail: boolean
+}): boolean {
+  if (opts.sustainedFail || opts.flapFail) return true
+  return opts.acceptedOnce && !opts.probeOk
+}
+
 /** Pure rule: has the consecutive webview-failure run lasted long enough to
  *  consult the arbiter? `failingSince` is the timestamp of the FIRST probe
  *  in the current uninterrupted non-ok run (null = no run).
@@ -795,8 +815,16 @@ export function ConnectionGate(): React.ReactElement {
         isRemote &&
         !wedgeConfirmed &&
         isFlapPatternEstablished({ reconnectSurfacedAt, now: nowMs })
+      const consultArbiter = shouldConsultArbiter({
+        acceptedOnce,
+        probeOk: probe.kind === 'ok',
+        sustainedFail,
+        flapFail,
+      })
       if (
-        (sustainedFail || flapFail) &&
+        isRemote &&
+        !wedgeConfirmed &&
+        consultArbiter &&
         nowMs - lastArbiterAt >= WEDGE_ARBITER_MIN_INTERVAL_MS
       ) {
         lastArbiterAt = nowMs
@@ -815,7 +843,11 @@ export function ConnectionGate(): React.ReactElement {
               console.warn(
                 '[connection-gate] webview connection path is wedged/flapping for',
                 active.hostname,
-                flapFail ? '(flap pattern)' : '(sustained fail)',
+                flapFail
+                  ? '(flap pattern)'
+                  : sustainedFail
+                    ? '(sustained fail)'
+                    : '(post-accept probe fail)',
                 '— arbiter reached the daemon; auto-reloading to clear it',
               )
               sessionStorage.setItem(flagKey, '1')

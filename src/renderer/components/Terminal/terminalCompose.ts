@@ -133,6 +133,33 @@ export function shouldShowTerminalComposeBar(phase: {
   return phase.kind !== 'exited'
 }
 
+/** Placeholder for the docked compose bar. Uses the workspace agent name
+ *  when we have one; otherwise the generic "the agent". */
+export function composeMessagePlaceholder(agentName: string | undefined | null): string {
+  const name = (agentName ?? '').trim()
+  return name ? `Message ${name}` : 'Message the agent'
+}
+
+/** Resolve the Agents-list name for this pane's workspace path. */
+export function composeAgentNameFromProjects(
+  projects: Array<{
+    path: string
+    name: string
+    workspaces?: Array<{ worktreePath: string | null }>
+  }>,
+  workspacePath: string,
+): string {
+  if (!workspacePath) return ''
+  const exact = projects.find((p) => p.path === workspacePath)
+  if (exact?.name?.trim()) return exact.name.trim()
+  for (const p of projects) {
+    if (p.workspaces?.some((w) => w.worktreePath === workspacePath) && p.name?.trim()) {
+      return p.name.trim()
+    }
+  }
+  return ''
+}
+
 /** Wire shape of `GET /cli/terminal/compose-history`. */
 export interface ComposeHistoryItem {
   id: string

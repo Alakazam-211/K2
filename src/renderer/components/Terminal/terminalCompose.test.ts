@@ -16,6 +16,8 @@ import {
   shouldSendOnKey,
   shouldShowTerminalComposeBar,
   composeTextareaHeight,
+  composeMessagePlaceholder,
+  composeAgentNameFromProjects,
 } from './terminalCompose'
 
 // ── Enter = send, Shift+Enter = newline ──────────────────────────────
@@ -244,6 +246,47 @@ describe('shouldShowTerminalComposeBar', () => {
     expect(
       shouldShowTerminalComposeBar({ kind: 'exited', sessionId: 'sess-abc' }),
     ).toBe(false)
+  })
+})
+
+describe('composeMessagePlaceholder', () => {
+  it('uses the workspace agent name', () => {
+    expect(composeMessagePlaceholder('sales')).toBe('Message sales')
+  })
+
+  it('trims whitespace', () => {
+    expect(composeMessagePlaceholder('  K2  ')).toBe('Message K2')
+  })
+
+  it('falls back when the name is missing', () => {
+    expect(composeMessagePlaceholder('')).toBe('Message the agent')
+    expect(composeMessagePlaceholder('   ')).toBe('Message the agent')
+    expect(composeMessagePlaceholder(null)).toBe('Message the agent')
+    expect(composeMessagePlaceholder(undefined)).toBe('Message the agent')
+  })
+})
+
+describe('composeAgentNameFromProjects', () => {
+  const projects = [
+    {
+      path: '/ws/sales',
+      name: 'sales',
+      workspaces: [{ worktreePath: '/ws/sales-wt' }],
+    },
+    { path: '/ws/k2', name: 'K2' },
+  ]
+
+  it('matches the project path', () => {
+    expect(composeAgentNameFromProjects(projects, '/ws/sales')).toBe('sales')
+  })
+
+  it('matches a worktree path to the parent workspace name', () => {
+    expect(composeAgentNameFromProjects(projects, '/ws/sales-wt')).toBe('sales')
+  })
+
+  it('returns empty when the path is unknown', () => {
+    expect(composeAgentNameFromProjects(projects, '/ws/nope')).toBe('')
+    expect(composeAgentNameFromProjects(projects, '')).toBe('')
   })
 })
 

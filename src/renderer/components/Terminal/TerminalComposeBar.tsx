@@ -39,6 +39,8 @@ import {
   composeHistoryKeyAction,
   composeInterruptSequence,
   composeTextareaHeight,
+  composeAgentNameFromProjects,
+  composeMessagePlaceholder,
   composerPermitted,
   mapMsgResponseToStatus,
   readComposeCaret,
@@ -98,6 +100,10 @@ export function TerminalComposeBar({
   const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
   // Match Code Editor → Appearance → Font Size (default 12).
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
+  const agentName = useProjectsStore((s) =>
+    composeAgentNameFromProjects(s.projects, workspacePath),
+  )
+  const messagePlaceholder = composeMessagePlaceholder(agentName)
 
   // Draft persistence (thin client): key the draft by this pane's PTY session
   // and back it with localStorage so switching workspaces/tabs restores each
@@ -453,7 +459,7 @@ export function TerminalComposeBar({
         onDrop={handleDrop}
         rows={1}
         spellCheck={false}
-        placeholder="Message the agent"
+        placeholder={messagePlaceholder}
         title="Enter to send, Shift+Enter for newline. Drop files for paths."
         className="min-w-0 w-full flex-1 resize-none overflow-x-hidden bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         style={{

@@ -3,6 +3,48 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.103 — Your name on Feedback, remotes recover, shared size
+
+A Feedback reply from your phone or another Connect login is stored
+and injected as **you**, not the box owner. The owner still frames
+with the server name; Alice's comment is `[from alice]`.
+
+If a remote host (for example RPMAVS) starts returning 404s on
+**Message the agent** or `/cli/*`, K2 reloads the webview as soon as
+the OS still says the host is up — same reset as switching Local and
+back, without the bounce. DevTools: filter `[remote-path]`.
+
+**Projects** and **Agents** no longer stack live terminals on top of
+each other. The first visit to Projects still opens the dashboard;
+coming back is instant. Quiet terminals stay quiet — they do not
+tear down and redraw every twenty seconds. Remote dashboards
+handshake two panes at once instead of one-by-one.
+
+Two people on the same workspace: opening **Projects** always sizes
+those panes. Coming back to **Agents** only takes the size if you
+are the only viewer. If someone else is on the agent, this client
+does not steal their columns. The viewing pill can say **project
+viewer** when you last sized from a dashboard.
+
+The **Message the agent** bar is on screen before the first spawn, so
+the terminal is not measured full-height and then shrunk. WebGL in
+terminal settings is no longer labeled Experimental.
+
+### What to try
+
+1. From a Connect user (not the host owner), comment on Feedback —
+   the thread and the agent's inject should say that user.
+2. On a remote host, send from **Message the agent**. If it 404s,
+   it should recover without switching to Local and back.
+3. Open Projects, leave, come back — dashboards should still be
+   there, no serial spawn. Leave a quiet terminal up; it should
+   not flicker on a ~20s clock.
+4. Two clients on one workspace: open Projects on yours — it
+   sizes. Stay on Agents while the other person is on that
+   workspace — yours should not reclaim columns.
+
+---
+
 ## 0.40.102 — Readable Project and Feedback chat, no sliver window
 
 **Projects** and **Feedback** now render markdown the same way the rest of

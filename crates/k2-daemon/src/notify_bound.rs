@@ -30,6 +30,7 @@ impl DroppingHandler {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn dropped(&self) -> usize {
         self.dropped.load(Ordering::Relaxed)
     }

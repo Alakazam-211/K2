@@ -122,6 +122,12 @@ export function TerminalComposeBar({
   // Reload the saved draft when the pane's session changes — this component can
   // be reused with a new sessionId on a workspace/tab switch without remounting.
   useEffect(() => {
+    if (!sessionId) {
+      setDraft('')
+      setHistoryIndex(-1)
+      historyDraftRef.current = ''
+      return
+    }
     try {
       setDraft(localStorage.getItem(draftKey) ?? '')
     } catch {
@@ -129,11 +135,12 @@ export function TerminalComposeBar({
     }
     setHistoryIndex(-1)
     historyDraftRef.current = ''
-  }, [draftKey])
+  }, [draftKey, sessionId])
 
   // Persist on every change (localStorage writes are cheap + synchronous — this
   // is the crash-durable store). An empty draft clears the key.
   useEffect(() => {
+    if (!sessionId) return
     try {
       if (draft) localStorage.setItem(draftKey, draft)
       else {
@@ -143,7 +150,7 @@ export function TerminalComposeBar({
     } catch {
       /* storage disabled/full — draft just won't persist */
     }
-  }, [draft, draftKey])
+  }, [draft, draftKey, sessionId])
 
   // Auto-grow with real draft text only. Empty boxes stay one line —
   // the long placeholder used to wrap (especially before width settled
@@ -181,7 +188,7 @@ export function TerminalComposeBar({
 
   const persistCaret = useCallback(() => {
     const el = textareaRef.current
-    if (!el) return
+    if (!el || !sessionId) return
     writeComposeCaret(sessionId, el.selectionStart, el.selectionEnd, el.value.length)
   }, [sessionId])
 
@@ -323,7 +330,7 @@ export function TerminalComposeBar({
 
   const send = useCallback(async () => {
     const text = draft.trim()
-    if (!text || sending) return
+    if (!text || sending || !sessionId) return
 
     setSending(true)
     setDraft('') // optimistic clear (PRD 1b); restored below only on failure

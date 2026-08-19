@@ -5636,13 +5636,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       )}
     </div>
 
-      {/* Composer 1b — message bar docked beneath the live pane.
-       *  Keep mounted during soft-resync (`ready` → `connecting` with the
-       *  same daemon sessionId) so focus/draft UX is not interrupted.
-       *  Still requires a resolved daemon sessionId (never terminalId). */}
-      {showComposeBar && shouldShowTerminalComposeBar(phase) && 'sessionId' in phase && phase.sessionId && (
+      {/* Composer — mount on first paint so measure-first spawn sees the
+       *  bar's live height (font size is not a constant). Hide on exited.
+       *  Send no-ops until the daemon sessionId exists. */}
+      {showComposeBar && shouldShowTerminalComposeBar(phase) && (
         <TerminalComposeBar
-          sessionId={phase.sessionId}
+          sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
           workspacePath={cwd}
           onInjectInput={sendInput}
         />

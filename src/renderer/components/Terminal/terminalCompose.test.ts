@@ -227,6 +227,13 @@ describe('shouldShowTerminalComposeBar', () => {
     ).toBe(true)
   })
 
+  it('shows on idle / spawning so first paint reserves bar height', () => {
+    expect(shouldShowTerminalComposeBar({ kind: 'idle' })).toBe(true)
+    expect(shouldShowTerminalComposeBar({ kind: 'spawning' })).toBe(true)
+    expect(shouldShowTerminalComposeBar({ kind: 'connecting' })).toBe(true)
+    expect(shouldShowTerminalComposeBar({ kind: 'error' })).toBe(true)
+  })
+
   it('shows on connecting with sessionId (soft-resync reconnect)', () => {
     expect(
       shouldShowTerminalComposeBar({ kind: 'connecting', sessionId: 'sess-abc' }),
@@ -236,15 +243,6 @@ describe('shouldShowTerminalComposeBar', () => {
   it('hides on exited even when sessionId is present', () => {
     expect(
       shouldShowTerminalComposeBar({ kind: 'exited', sessionId: 'sess-abc' }),
-    ).toBe(false)
-  })
-
-  it('hides on idle / error / connecting without sessionId', () => {
-    expect(shouldShowTerminalComposeBar({ kind: 'idle' })).toBe(false)
-    expect(shouldShowTerminalComposeBar({ kind: 'error' })).toBe(false)
-    expect(shouldShowTerminalComposeBar({ kind: 'connecting' })).toBe(false)
-    expect(
-      shouldShowTerminalComposeBar({ kind: 'ready', sessionId: '' }),
     ).toBe(false)
   })
 })

@@ -117,21 +117,20 @@ export function composerPermitted(_input: {
 }
 
 /**
- * Whether TerminalPane should mount the agent compose bar for the current
- * phase. Show while we still have a resolved daemon `sessionId` on ready
- * OR connecting (soft-resync flips ready → connecting briefly; unmounting
- * the bar drops focus / feels like a draft interruption even though draft
- * text itself is localStorage-backed per sessionId).
+ * Whether TerminalPane should mount the agent compose bar.
  *
- * Do NOT show on idle / error without a session, or on exited (session is
- * gone for compose purposes).
+ * Mount on the first paint (idle / spawning / connecting / ready / error)
+ * so measure-first spawn sees the bar's real height — it is not a fixed
+ * px (editor font size changes the row). Hide only on exited: the PTY
+ * is gone. Send stays disabled until `sessionId` exists (the bar chrome
+ * is still there). Soft-resync keeps the bar mounted (`ready` →
+ * `connecting`) so focus/draft are not interrupted.
  */
 export function shouldShowTerminalComposeBar(phase: {
   kind: string
   sessionId?: string
 }): boolean {
-  if (phase.kind !== 'ready' && phase.kind !== 'connecting') return false
-  return typeof phase.sessionId === 'string' && phase.sessionId.length > 0
+  return phase.kind !== 'exited'
 }
 
 /** Wire shape of `GET /cli/terminal/compose-history`. */

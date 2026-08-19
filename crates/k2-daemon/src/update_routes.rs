@@ -1349,11 +1349,14 @@ fn manifest_url() -> String {
 }
 
 /// Blocking HTTP GET returning the body bytes. Reuses the daemon's
-/// existing `reqwest` blocking client (already a dep for Claude Auth). A
-/// 30s timeout bounds a hung connection.
+/// existing `reqwest` blocking client (already a dep for Claude Auth).
+/// Connect is bounded at 15s; the full request (body) is budgeted at
+/// 5 minutes so a large daemon binary can finish without a hung TCP
+/// handshake holding the job forever.
 fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(300))
         // GitHub release assets 302 → a CDN host; follow redirects so the
         // .sig / binary URLs resolve to their final location.
         .redirect(reqwest::redirect::Policy::limited(10))

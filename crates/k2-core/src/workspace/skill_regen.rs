@@ -121,8 +121,10 @@ pub fn compose_agents_md_public(project_path: &str) -> String {
 /// Banner-excluding hash skip: a no-op when only the GENERATED timestamp
 /// would change.
 pub fn recompose_agents_md(project_path: &str) {
-    let _ = publish_canonical_agents_md(project_path);
-    apply_agents_md_after_publish(project_path);
+    let wrote = publish_canonical_agents_md(project_path);
+    if wrote {
+        apply_agents_md_after_publish(project_path);
+    }
 }
 
 /// Compose `.k2/AGENTS.md` only when the canonical file is missing.
@@ -182,13 +184,26 @@ pub fn is_compose_source_path(project_path: &str, path: &Path) -> bool {
             }
         }
     }
-    let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    // Match path / file name first. Only canonicalize a source when the
+    // names already match — otherwise a `.AGENTS.md.k2-tmp.*` event
+    // would lstat ROLE.md / every source and feed inotify OPEN back
+    // into the watcher.
+    let path_name = path.file_name();
+    let mut path_canon: Option<PathBuf> = None;
     for src in compose_source_paths(project_path) {
-        if src == path || src == canon {
+        if src == path {
+            return true;
+        }
+        if src.file_name() != path_name {
+            continue;
+        }
+        let canon = path_canon
+            .get_or_insert_with(|| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+        if src == *canon {
             return true;
         }
         if let Ok(sc) = src.canonicalize() {
-            if sc == canon {
+            if sc == *canon {
                 return true;
             }
         }
@@ -506,30 +521,8 @@ for leftover harness names — it is not how you get `AGENTS.md`.
     .to_string()
 }
 
-/// Write the canonical `.k2/AGENTS.md` + the two loadable skills (`k2-cli`,
-/// `k2-canonical-agents`). Returns the canonical AGENTS.md path so callers can
-/// point the harness mirrors at it. Additive + idempotent.
-fn publish_canonical_agents_md(project_path: &str) -> PathBuf {
+fn ensure_compose_sidecar_skills(dot: &Path) {
     use crate::skills::version::{ensure_skill_up_to_date, SKILL_VERSION_CANONICAL_AGENT};
-    let dot = crate::workspace_dot_dir(project_path);
-
-    // Refresh live-generated context packs (e.g. connections roster) so
-    // on-disk FileViewer / wiki mirrors match what compose inlines.
-    crate::workspace::context_layers::sync_live_generated_layers(project_path);
-
-    let canonical = dot.join("AGENTS.md");
-    let new_body = compose_agents_md(project_path);
-    let skip_write = fs::read_to_string(&canonical).ok().is_some_and(|existing| {
-        strip_agents_md_compose_banner(&existing) == strip_agents_md_compose_banner(&new_body)
-    });
-    if !skip_write {
-        log_if_err(
-            "write canonical AGENTS.md",
-            &canonical,
-            atomic_write_str(&canonical, &new_body),
-        );
-    }
-
     let cli = dot.join("skills/k2-cli/SKILL.md");
     let _ = ensure_skill_up_to_date(
         &cli,
@@ -547,8 +540,34 @@ fn publish_canonical_agents_md(project_path: &str) -> PathBuf {
         &generate_k2_canonical_agents_skill(),
         Some("name: k2-canonical-agents\ndescription: Set up or refresh the canonical AGENTS.md from existing harness files (run with an AI assistant)"),
     );
+}
 
-    canonical
+/// Write the canonical `.k2/AGENTS.md` + the two loadable skills (`k2-cli`,
+/// `k2-canonical-agents`). Returns whether the canonical file was written
+/// (`false` = banner-stripped body already matched; skills are left
+/// untouched). Additive + idempotent.
+fn publish_canonical_agents_md(project_path: &str) -> bool {
+    let dot = crate::workspace_dot_dir(project_path);
+
+    // Refresh live-generated context packs (e.g. connections roster) so
+    // on-disk FileViewer / wiki mirrors match what compose inlines.
+    crate::workspace::context_layers::sync_live_generated_layers(project_path);
+
+    let canonical = dot.join("AGENTS.md");
+    let new_body = compose_agents_md(project_path);
+    let skip_write = fs::read_to_string(&canonical).ok().is_some_and(|existing| {
+        strip_agents_md_compose_banner(&existing) == strip_agents_md_compose_banner(&new_body)
+    });
+    if skip_write {
+        return false;
+    }
+    log_if_err(
+        "write canonical AGENTS.md",
+        &canonical,
+        atomic_write_str(&canonical, &new_body),
+    );
+    ensure_compose_sidecar_skills(&dot);
+    true
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -880,9 +899,13 @@ pub fn write_workspace_skill_file_with_body(project_path: &str, _base_body: Opti
     reap_old_workspace_skill_shape(project_path);
 
     // Step 2: Compose the canonical `.k2/AGENTS.md` + the two loadable
-    // skills. Always runs. Generate plant + leftover fan-out are gated
-    // independently after publish.
-    let _canonical = publish_canonical_agents_md(project_path);
+    // skills. Full regen always plants + leftover fan-out and still
+    // refreshes sidecar skills even when the banner-stripped body
+    // matched (watcher skip does not apply here).
+    let wrote = publish_canonical_agents_md(project_path);
+    if !wrote {
+        ensure_compose_sidecar_skills(&crate::workspace_dot_dir(project_path));
+    }
     apply_agents_md_after_publish(project_path);
 
     // Step 3: Stamp last-regen hashes (drift baseline for the next regen).
@@ -1931,6 +1954,23 @@ mod tests {
         assert!(
             !is_compose_source_path(path, &proj.join("ROLE.md")),
             "cwd ROLE.md is never a leftover/source"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn is_compose_source_path_excludes_agents_md_k2_tmp() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        let agent_dir = proj.join(".k2/agent");
+        fs::create_dir_all(&agent_dir).unwrap();
+        fs::write(agent_dir.join("AGENT.md"), "# a\n").unwrap();
+        fs::write(proj.join(".k2/PROJECT.md"), "# p\n").unwrap();
+        let tmp = proj.join(".k2/.AGENTS.md.k2-tmp.1");
+        fs::write(&tmp, "tmp").unwrap();
+        assert!(
+            !is_compose_source_path(path, &tmp),
+            ".AGENTS.md.k2-tmp.1 must not be a compose source"
         );
         fs::remove_dir_all(&proj).ok();
     }

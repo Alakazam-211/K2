@@ -20,6 +20,10 @@ use k2_core::workspace::skill_regen::{
     compose_source_paths, is_compose_source_path, recompose_agents_md,
 };
 
+use crate::notify_bound::{DroppingHandler, NOTIFY_CHANNEL_BOUND};
+
+pub(crate) use crate::notify_bound::should_observe;
+
 static RESYNC_REQUESTED: AtomicBool = AtomicBool::new(false);
 static STARTED: OnceLock<()> = OnceLock::new();
 
@@ -84,9 +88,9 @@ pub fn project_in_wanted_watch_set(project_path: &str) -> bool {
 }
 
 fn run_loop() -> Result<(), String> {
-    let (tx, rx) = mpsc::channel::<Result<Event, notify::Error>>();
+    let (tx, rx) = mpsc::sync_channel::<notify::Result<Event>>(NOTIFY_CHANNEL_BOUND);
     let mut watcher = RecommendedWatcher::new(
-        tx,
+        DroppingHandler::new(tx),
         Config::default().with_poll_interval(Duration::from_millis(250)),
     )
     .map_err(|e| format!("create watcher: {e}"))?;
@@ -99,13 +103,7 @@ fn run_loop() -> Result<(), String> {
     loop {
         match rx.recv_timeout(RECV_TIMEOUT) {
             Ok(Ok(ev)) => {
-                for p in ev.paths {
-                    if let Some(proj) = project_for_event(&p, &dir_to_projects) {
-                        if is_compose_source_path(&proj, &p) {
-                            pending.insert(proj, Instant::now());
-                        }
-                    }
-                }
+                consider_event(ev, &dir_to_projects, &mut pending);
             }
             Ok(Err(e)) => {
                 log_debug!("[daemon/charter-watch] notify error: {e}");
@@ -130,6 +128,26 @@ fn run_loop() -> Result<(), String> {
 
         if RESYNC_REQUESTED.swap(false, Ordering::Relaxed) {
             sync_watches(&mut watcher, &mut dir_to_projects);
+        }
+    }
+}
+
+/// Apply one notify event to the debounce map. Access/Other kinds
+/// return before touching `ev.paths` so a canonicalize of ROLE.md
+/// cannot be fed back as an OPEN storm.
+fn consider_event(
+    ev: Event,
+    dir_to_projects: &HashMap<PathBuf, HashSet<String>>,
+    pending: &mut HashMap<String, Instant>,
+) {
+    if !should_observe(ev.kind) {
+        return;
+    }
+    for p in ev.paths {
+        if let Some(proj) = project_for_event(&p, dir_to_projects) {
+            if is_compose_source_path(&proj, &p) {
+                pending.insert(proj, Instant::now());
+            }
         }
     }
 }
@@ -238,6 +256,88 @@ mod tests {
             "persona dir must be in the watch set (helper, not hardcoded AGENT.md)"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn should_observe_drops_access_keeps_mutations() {
+        use notify::event::{
+            AccessKind, AccessMode, CreateKind, DataChange, MetadataKind, ModifyKind, RemoveKind,
+            RenameMode,
+        };
+        use notify::EventKind;
+
+        assert!(
+            !should_observe(EventKind::Access(AccessKind::Open(AccessMode::Any))),
+            "Access/Open must be ignored"
+        );
+        assert!(
+            !should_observe(EventKind::Access(AccessKind::Close(AccessMode::Write))),
+            "Access/Close(Write) must be ignored"
+        );
+        assert!(
+            should_observe(EventKind::Modify(ModifyKind::Data(DataChange::Content))),
+            "Modify(Data) must be observed"
+        );
+        assert!(
+            should_observe(EventKind::Modify(ModifyKind::Name(RenameMode::Any))),
+            "Modify(Name) must be observed"
+        );
+        assert!(
+            should_observe(EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any))),
+            "Modify(Metadata) must be observed"
+        );
+        assert!(
+            should_observe(EventKind::Create(CreateKind::File)),
+            "Create must be observed"
+        );
+        assert!(
+            should_observe(EventKind::Remove(RemoveKind::File)),
+            "Remove must be observed"
+        );
+        assert!(
+            should_observe(EventKind::Any),
+            "Any must be observed (FSEvents imprecise saves)"
+        );
+        assert!(!should_observe(EventKind::Other), "Other must be ignored");
+    }
+
+    #[test]
+    fn dropping_handler_drops_on_full() {
+        use crate::notify_bound::DroppingHandler;
+        use notify::event::ModifyKind;
+        use notify::EventKind;
+
+        let (tx, _rx) = mpsc::sync_channel(2);
+        let mut handler = DroppingHandler::new(tx);
+        let ev = Event::new(EventKind::Modify(ModifyKind::Any));
+        for _ in 0..5 {
+            notify::EventHandler::handle_event(&mut handler, Ok(ev.clone()));
+        }
+        let dropped = handler.dropped();
+        assert!(
+            dropped >= 3,
+            "expected at least 3 drops after filling sync_channel(2) with 5 sends, got {dropped}"
+        );
+    }
+
+    #[test]
+    fn consider_event_ignores_access_without_touching_pending() {
+        use notify::event::{AccessKind, AccessMode};
+        use notify::EventKind;
+
+        let dir = unique_dir("access");
+        let proj = dir.to_string_lossy().into_owned();
+        let mut map = HashMap::new();
+        map.insert(dir.clone(), HashSet::from([proj]));
+        let mut pending = HashMap::new();
+        let ev = Event::new(EventKind::Access(AccessKind::Open(AccessMode::Any)))
+            .add_path(dir.join("ROLE.md"));
+        consider_event(ev, &map, &mut pending);
+        assert!(
+            pending.is_empty(),
+            "Access must not enqueue recompose, pending={pending:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

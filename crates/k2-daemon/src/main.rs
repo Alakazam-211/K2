@@ -70,6 +70,7 @@ mod feedback_routes;
 mod fs_routes;
 mod fs_live;
 mod charter_compose_watch;
+mod notify_bound;
 mod grid_emitter;
 mod git_routes;
 mod heartbeat_launch;

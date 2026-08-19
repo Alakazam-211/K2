@@ -51,6 +51,7 @@ pub mod federation_routes;
 pub mod fs_routes;
 pub mod fs_live;
 pub mod charter_compose_watch;
+pub mod notify_bound;
 pub mod grid_emitter;
 pub mod git_routes;
 pub mod heartbeat_launch;

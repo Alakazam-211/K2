@@ -1184,6 +1184,9 @@ fn sync_live_kind_file(project_path: &str, kind: LiveKind) -> Result<(), Context
         })?;
     }
     let body = render_live_file(project_path, kind);
+    if fs::read(&abs).ok().as_deref() == Some(body.as_bytes()) {
+        return Ok(());
+    }
     fs::write(&abs, body).map_err(|e| {
         ContextError::Db(format!(
             "cannot write live context pack {}: {e}",

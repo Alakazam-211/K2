@@ -22,6 +22,7 @@ use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use k2_core::log_debug;
 
+use crate::notify_bound::{should_observe, DroppingHandler, NOTIFY_CHANNEL_BOUND};
 use crate::session_events;
 
 /// Request a re-sync of the watched project roots (e.g. after
@@ -62,9 +63,9 @@ pub fn resync_watches() {
 }
 
 fn run_loop() -> Result<(), String> {
-    let (tx, rx) = mpsc::channel::<Result<Event, notify::Error>>();
+    let (tx, rx) = mpsc::sync_channel::<notify::Result<Event>>(NOTIFY_CHANNEL_BOUND);
     let mut watcher = RecommendedWatcher::new(
-        tx,
+        DroppingHandler::new(tx),
         Config::default().with_poll_interval(Duration::from_millis(200)),
     )
     .map_err(|e| format!("create watcher: {e}"))?;
@@ -80,9 +81,7 @@ fn run_loop() -> Result<(), String> {
 
     loop {
         // Periodic + explicit resync of the project-root set.
-        if RESYNC_REQUESTED.swap(false, Ordering::Relaxed)
-            || last_resync.elapsed() >= RESYNC_POLL
-        {
+        if RESYNC_REQUESTED.swap(false, Ordering::Relaxed) || last_resync.elapsed() >= RESYNC_POLL {
             sync_watches(&mut watcher, &mut watched);
             last_resync = Instant::now();
         }
@@ -127,6 +126,9 @@ fn run_loop() -> Result<(), String> {
 }
 
 fn collect_paths(event: &Event, out: &mut HashSet<String>) {
+    if !should_observe(event.kind) {
+        return;
+    }
     for p in &event.paths {
         let s = p.to_string_lossy().to_string();
         if s.is_empty() || is_noisy(&s) {
@@ -294,9 +296,7 @@ mod tests {
             "/tmp/k2-fs-live-group-b/x".into(),
         ]);
         // Both files under the same parent fallback group together.
-        let a = map
-            .get("/tmp/k2-fs-live-group-a")
-            .expect("group a parent");
+        let a = map.get("/tmp/k2-fs-live-group-a").expect("group a parent");
         assert_eq!(a.len(), 2);
         assert!(map.contains_key("/tmp/k2-fs-live-group-b"));
     }
@@ -316,8 +316,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).expect("mkdir");
         let (tx, rx) = mpsc::channel::<Result<Event, notify::Error>>();
-        let mut watcher = RecommendedWatcher::new(tx, Config::default())
-            .expect("watcher");
+        let mut watcher = RecommendedWatcher::new(tx, Config::default()).expect("watcher");
         watcher
             .watch(&root, RecursiveMode::Recursive)
             .expect("watch");

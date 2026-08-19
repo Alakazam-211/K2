@@ -59,6 +59,7 @@ import {
   shouldShowRoster,
   workspacePathsOverlap,
   usersForWorkspace,
+  isSoleWorkspaceViewer,
   MAX_ROSTER_AVATARS,
   MAX_WORKSPACE_AVATARS,
   type RosterUser,
@@ -376,6 +377,15 @@ describe('presence S6 — usersForWorkspace selector', () => {
 
   it('an empty row path selects nobody (never match-all)', () => {
     expect(usersForWorkspace(roster, '')).toEqual([])
+  })
+
+  it('isSoleWorkspaceViewer is true when unsupported or at most one subscriber', () => {
+    expect(isSoleWorkspaceViewer(roster, '/x/foo', false)).toBe(true)
+    expect(isSoleWorkspaceViewer(roster, '/z/unrelated', true)).toBe(true)
+    expect(isSoleWorkspaceViewer([row('owner', { workspaces: ['/x/foo'] })], '/x/foo', true)).toBe(
+      true,
+    )
+    expect(isSoleWorkspaceViewer(roster, '/x/foo', true)).toBe(false)
   })
 
   it('nav clusters cap at 3 avatars before the +N chip (rosterDisplay reuse)', () => {

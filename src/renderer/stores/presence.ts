@@ -132,6 +132,18 @@ export function workspacePathsOverlap(a: string, b: string): boolean {
   return pathCovers(a, b) || pathCovers(b, a)
 }
 
+/** True when at most one human is subscribed to this workspace path
+ *  (or presence is unsupported — treat as single-player). */
+export function isSoleWorkspaceViewer(
+  roster: RosterUser[],
+  path: string,
+  supported: boolean,
+): boolean {
+  if (!supported) return true
+  if (!path) return true
+  return usersForWorkspace(roster, path).length <= 1
+}
+
 /** The roster rows to show on a nav row for `path` (daemon ordering
  *  preserved). A user with multiple windows carries every subscribed
  *  workspace in one row, so they appear on EVERY matching nav row. An

@@ -86,6 +86,11 @@ import {
   quotePathForImageDrop,
 } from '@/lib/file-drag'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { isSoleWorkspaceViewer, usePresenceStore } from '@/stores/presence'
+import {
+  noteSessionClaimSurface,
+  useSessionClaimSurface,
+} from '@/lib/session-claim-surface'
 import { isWebClient } from '@/lib/is-web'
 import {
   executeBrowserFileDrop,
@@ -1048,6 +1053,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     syncSizeOnShowRef.current = syncSizeOnShow
   }, [syncSizeOnShow])
+  const soleViewer = usePresenceStore((s) =>
+    isSoleWorkspaceViewer(s.roster, cwd, s.supported),
+  )
+  const soleViewerRef = useRef(soleViewer)
+  useEffect(() => {
+    soleViewerRef.current = soleViewer
+  }, [soleViewer])
+  const claimSurface = useSessionClaimSurface(
+    'sessionId' in phase && phase.sessionId ? phase.sessionId : knownSessionId,
+  )
 
   // ── A7.5 perf instrumentation (DEV-only) ─────────────────────
   // mountT0 is captured once via lazy useRef init so re-renders
@@ -1878,7 +1893,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // will recover on the next focus/visibility change via the
         // dedup-guarded path.
       }
-      if (syncSizeOnShowRef.current) {
+      if (syncSizeOnShowRef.current || soleViewerRef.current) {
         const content = contentBoxSize(containerRef.current)
         const cw = cellMetricsRef.current.width
         const ch = cellMetricsRef.current.height
@@ -3298,9 +3313,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         cols?: number
         rows?: number
       } = { action: 'set_active', active }
-      if (active && lastResizeRef.current) {
+      if (
+        active &&
+        lastResizeRef.current &&
+        (syncSizeOnShowRef.current || soleViewerRef.current)
+      ) {
         payload.cols = lastResizeRef.current.cols
         payload.rows = lastResizeRef.current.rows
+        if (sessionId) {
+          noteSessionClaimSurface(
+            sessionId,
+            syncSizeOnShowRef.current ? 'project' : 'agent',
+          )
+        }
       }
       ws.send(JSON.stringify(payload))
       lastSentActiveRef.current = active
@@ -3513,31 +3538,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // With an unchanged window this is a no-op (recorded == sent): the
   // zero-resize foreground path the retention feature promises.
   //
-  // Projects dashboards (`syncSizeOnShow`): always remasure. The same
-  // PTY may have been sized by Agents or another viewer while parked.
-  // Agents panes do NOT do that — resurfacing must not steal the PTY.
+  // Projects dashboards always remasure. Agents remasure only when
+  // this client is the sole workspace viewer (leave-Projects reclaim).
+  // If someone else is on the agent, do not steal PTY size.
   useEffect(() => {
     if (!isTabVisible) return
-    if (syncSizeOnShow) {
-      const id = requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const content = contentBoxSize(containerRef.current)
-          const cw = cellMetricsRef.current.width
-          const ch = cellMetricsRef.current.height
-          const fit = measurePaneFit(content, cw, ch)
-          if (fit) sendResize(fit.cols, fit.rows)
-        })
+    if (!syncSizeOnShow && !soleViewer) return
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const content = contentBoxSize(containerRef.current)
+        const cw = cellMetricsRef.current.width
+        const ch = cellMetricsRef.current.height
+        const fit = measurePaneFit(content, cw, ch)
+        if (fit) sendResize(fit.cols, fit.rows)
       })
-      return () => cancelAnimationFrame(id)
-    }
-    const measured = lastResizeRef.current
-    if (!measured) return
-    const sent = lastSentResizeRef.current
-    if (sent && sent.cols === measured.cols && sent.rows === measured.rows) {
-      return
-    }
-    sendResize(measured.cols, measured.rows)
-  }, [isTabVisible, sendResize, syncSizeOnShow])
+    })
+    return () => cancelAnimationFrame(id)
+  }, [isTabVisible, sendResize, syncSizeOnShow, soleViewer])
 
   // ── Keyboard input ────────────────────────────────────────────
   // 0.37.9 — handlers attach to the shadow <textarea> instead of the
@@ -5534,6 +5551,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }}
         >
           viewing at {snapshot.cols}×{snapshot.rows}
+          {claimSurface === 'project' ? ' · project viewer' : ''}
         </div>
       )}
       {/* S7b pin badge: the session is pinned to a fixed size for

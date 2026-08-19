@@ -209,6 +209,9 @@ export default function ProjectsPage(): React.JSX.Element | null {
   const [show, setShow] = useState<ProjectGroupShow | null>(null)
   const [showError, setShowError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  // Stay mounted after the first visit so a remote dashboard does not
+  // re-pay spawn + grid handshake on every Agents ↔ Projects switch.
+  const [everOpened, setEverOpened] = useState(false)
 
   // Fetch the group list while open: on open and on every project-group
   // event (revision) — the store also coalesce-refetches on events, so
@@ -230,14 +233,15 @@ export default function ProjectsPage(): React.JSX.Element | null {
     if (first) useProjectGroupsStore.getState().selectGroup(first.id)
   }, [isOpen, groups, selectedGroupId])
 
-  // Fetch the selected group's show view (members + dashboards) on
-  // selection change and on events.
   useEffect(() => {
-    if (!isOpen || !selectedGroupId) {
-      setShow(null)
-      setShowError(null)
-      return
-    }
+    if (isOpen) setEverOpened(true)
+  }, [isOpen])
+
+  // Fetch the selected group's show view (members + dashboards) on
+  // selection change and on events. Do not clear `show` when the page
+  // hides — that would unmount the dashboard terminals we just kept.
+  useEffect(() => {
+    if (!isOpen || !selectedGroupId) return
     let cancelled = false
     fetchProjectGroupShow(selectedGroupId)
       .then((data) => {
@@ -292,11 +296,15 @@ export default function ProjectsPage(): React.JSX.Element | null {
     [groups, selectedGroupId],
   )
 
-  if (!isOpen) return null
+  if (!everOpened) return null
 
   return (
-    <PageLiveContext.Provider value={true}>
-    <div className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]">
+    <PageLiveContext.Provider value={isOpen}>
+    <div
+      className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]"
+      style={isOpen ? undefined : { display: 'none' }}
+      aria-hidden={!isOpen}
+    >
       {/* Top bar — mirrors the workspace TopBar's left cluster: traffic-
           light spacer + wordmark + SERVER DROPDOWN + the page switcher
           (§6.0: both visible on every page), draggable. */}

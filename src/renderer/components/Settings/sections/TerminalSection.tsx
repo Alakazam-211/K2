@@ -283,7 +283,7 @@ export function TerminalSection(): React.JSX.Element {
             value={painter}
             options={[
               { value: 'dom', label: 'DOM' },
-              { value: 'webgl', label: 'WebGL (Experimental)' },
+              { value: 'webgl', label: 'WebGL' },
             ]}
             onChange={(v) => setPainter(v as TerminalPainterKind)}
           />

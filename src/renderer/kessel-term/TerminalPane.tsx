@@ -473,6 +473,14 @@ export interface TerminalPaneProps {
    *  ignores its resizes. Omitted/false ⇒ byte-identical park-on-hidden
    *  behavior for every other consumer. */
   retainWhileHidden?: boolean
+  /**
+   * On show, remasure this pane and send resize even if our last
+   * sent dims match. For Projects dashboards: the same PTY may have
+   * been sized by Agents (or another viewer) while we were parked.
+   * Agents panes omit this so returning from Projects does not
+   * steal the PTY size (multiplayer).
+   */
+  syncSizeOnShow?: boolean
 }
 
 type Phase =
@@ -529,6 +537,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     sandbox,
     retainWhileHidden,
     showComposeBar = true,
+    syncSizeOnShow = false,
   } = props
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
@@ -1035,6 +1044,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     retainWhileHiddenRef.current = retainWhileHidden === true && pageLive
   }, [retainWhileHidden, pageLive])
+  const syncSizeOnShowRef = useRef(false)
+  useEffect(() => {
+    syncSizeOnShowRef.current = syncSizeOnShow
+  }, [syncSizeOnShow])
 
   // ── A7.5 perf instrumentation (DEV-only) ─────────────────────
   // mountT0 is captured once via lazy useRef init so re-renders
@@ -1864,6 +1877,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // The set_active effect's focus subscriber + recompute effect
         // will recover on the next focus/visibility change via the
         // dedup-guarded path.
+      }
+      if (syncSizeOnShowRef.current) {
+        const content = contentBoxSize(containerRef.current)
+        const cw = cellMetricsRef.current.width
+        const ch = cellMetricsRef.current.height
+        const fit = measurePaneFit(content, cw, ch)
+        if (fit) sendResize(fit.cols, fit.rows)
       }
       // Note: ws.onopen is intentionally NOT set here — the connect
       // retry loop above handled the open path and logged perf.
@@ -3492,8 +3512,24 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // already matched the slot. Flush the recorded dims once on show.
   // With an unchanged window this is a no-op (recorded == sent): the
   // zero-resize foreground path the retention feature promises.
+  //
+  // Projects dashboards (`syncSizeOnShow`): always remasure. The same
+  // PTY may have been sized by Agents or another viewer while parked.
+  // Agents panes do NOT do that — resurfacing must not steal the PTY.
   useEffect(() => {
     if (!isTabVisible) return
+    if (syncSizeOnShow) {
+      const id = requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const content = contentBoxSize(containerRef.current)
+          const cw = cellMetricsRef.current.width
+          const ch = cellMetricsRef.current.height
+          const fit = measurePaneFit(content, cw, ch)
+          if (fit) sendResize(fit.cols, fit.rows)
+        })
+      })
+      return () => cancelAnimationFrame(id)
+    }
     const measured = lastResizeRef.current
     if (!measured) return
     const sent = lastSentResizeRef.current
@@ -3501,7 +3537,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       return
     }
     sendResize(measured.cols, measured.rows)
-  }, [isTabVisible, sendResize])
+  }, [isTabVisible, sendResize, syncSizeOnShow])
 
   // ── Keyboard input ────────────────────────────────────────────
   // 0.37.9 — handlers attach to the shadow <textarea> instead of the

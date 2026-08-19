@@ -354,6 +354,7 @@ function DashboardTerminalPane({
       cwd={projectPath}
       attachAgentName={workspaceId}
       sessionId={phase.sessionId}
+      syncSizeOnShow
     />
   )
 }

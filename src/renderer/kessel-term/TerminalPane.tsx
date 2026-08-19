@@ -2622,7 +2622,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         reconnectTimerRef.current = null
       }
       const ws = wsRef.current
-      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close()
+      if (ws && ws.readyState !== WebSocket.CLOSED) {
+        logRemotePath('grid-park', { pane: terminalId.slice(0, 8), why: 'unmount' })
+        ws.close(1000, 'unmount')
+      }
       wsRef.current = null
       frameCoalescerRef.current?.clear()
     }

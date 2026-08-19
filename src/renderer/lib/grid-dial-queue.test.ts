@@ -6,6 +6,7 @@ import {
   noteGridDialFailure,
   openQueuedGridWebSocket,
   resetGridDialQueueForTests,
+  setGridDialMaxForTests,
 } from './grid-dial-queue'
 
 class FakeWebSocket {
@@ -72,6 +73,7 @@ describe('grid-dial-queue', () => {
   })
 
   it('constructs at most one WebSocket until a handshake settles', async () => {
+    setGridDialMaxForTests(1)
     const prev = globalThis.WebSocket
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
     try {
@@ -92,6 +94,29 @@ describe('grid-dial-queue', () => {
       expect(FakeWebSocket.pending).toHaveLength(3)
 
       FakeWebSocket.pending[2]!.open()
+      await expect(p3).resolves.toBe(FakeWebSocket.pending[2])
+    } finally {
+      globalThis.WebSocket = prev
+    }
+  })
+
+  it('remote cap of 2 starts two handshakes at once', async () => {
+    setGridDialMaxForTests(2)
+    const prev = globalThis.WebSocket
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+    try {
+      const p1 = openQueuedGridWebSocket('wss://a/grid')
+      const p2 = openQueuedGridWebSocket('wss://b/grid')
+      const p3 = openQueuedGridWebSocket('wss://c/grid')
+      await Promise.resolve()
+      expect(FakeWebSocket.pending).toHaveLength(2)
+      FakeWebSocket.pending[0]!.open()
+      await expect(p1).resolves.toBe(FakeWebSocket.pending[0])
+      await Promise.resolve()
+      expect(FakeWebSocket.pending).toHaveLength(3)
+      FakeWebSocket.pending[1]!.open()
+      FakeWebSocket.pending[2]!.open()
+      await expect(p2).resolves.toBe(FakeWebSocket.pending[1])
       await expect(p3).resolves.toBe(FakeWebSocket.pending[2])
     } finally {
       globalThis.WebSocket = prev
@@ -156,6 +181,7 @@ describe('grid-dial-queue', () => {
   })
 
   it('times out a hung handshake and releases the slot', async () => {
+    setGridDialMaxForTests(1)
     vi.useFakeTimers()
     const prev = globalThis.WebSocket
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
@@ -229,6 +255,7 @@ describe('grid-dial-queue', () => {
   })
 
   it('aborts a queued waiter without constructing or counting a failure', async () => {
+    setGridDialMaxForTests(1)
     const prev = globalThis.WebSocket
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
     try {

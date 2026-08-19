@@ -1,9 +1,16 @@
 /**
  * Cap concurrent grid WS *handshakes* (CONNECTING only).
  * Burst-fail backs off every pane so heal timers cannot thrash.
+ *
+ * Remote WSS through the tunnel used to die if we fan out (WKWebView
+ * "Insufficient resources", 0.40.97). Max 1 made two Projects panes
+ * paint in series (~800ms + ~800ms). Two at a time is enough for a
+ * dashboard and still far under the old 4+ storm. Local loopback is
+ * cheap — allow more so a split layout looks simultaneous.
  */
 
-export const MAX_CONCURRENT_DIALS = 1
+export const MAX_CONCURRENT_DIALS = 2
+export const MAX_CONCURRENT_DIALS_LOCAL = 4
 export const FAIL_BURST_WINDOW_MS = 3_000
 export const FAIL_BURST_COUNT = 3
 export const BACKOFF_MS = 8_000
@@ -14,12 +21,18 @@ let inflight = 0
 const waiters: Array<() => void> = []
 let backoffUntil = 0
 const recentFails: number[] = []
+let maxOverrideForTests: number | null = null
 
 export function resetGridDialQueueForTests(): void {
   inflight = 0
   waiters.length = 0
   backoffUntil = 0
   recentFails.length = 0
+  maxOverrideForTests = null
+}
+
+export function setGridDialMaxForTests(n: number | null): void {
+  maxOverrideForTests = n
 }
 
 export function gridDialBackoffRemainingMs(now = Date.now()): number {
@@ -35,6 +48,15 @@ export function noteGridDialFailure(now = Date.now()): void {
     backoffUntil = now + BACKOFF_MS
     recentFails.length = 0
   }
+}
+
+import { useConnectHostStore } from '@/stores/connect-host'
+
+function maxConcurrentDials(): number {
+  if (maxOverrideForTests != null) return maxOverrideForTests
+  return useConnectHostStore.getState().activeHost === 'local'
+    ? MAX_CONCURRENT_DIALS_LOCAL
+    : MAX_CONCURRENT_DIALS
 }
 
 function isAborted(signal?: AbortSignal): boolean {
@@ -68,7 +90,7 @@ async function acquireDialSlot(signal?: AbortSignal): Promise<void> {
       continue
     }
     if (isAborted(signal)) throw new Error('grid-dial-aborted')
-    if (inflight < MAX_CONCURRENT_DIALS) {
+    if (inflight < maxConcurrentDials()) {
       inflight += 1
       return
     }

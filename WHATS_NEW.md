@@ -3,6 +3,36 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.104 — Linux hosts stay up, Message &lt;name&gt;
+
+Headless Linux boxes (for example RPMAVS) were growing to tens of
+gigabytes and the kernel killed the daemon about every three hours.
+The desktop Mac on the same version did not. Linux file-watch was
+treating every *open* of `ROLE.md` as an edit, queuing path strings
+without bound. K2 now ignores open/close, only reacts to real
+creates/writes/renames, and caps that queue. Remote **Download** of
+the daemon also waits up to five minutes for the file instead of
+failing at 30 seconds.
+
+The compose bar placeholder is **Message &lt;name&gt;** — the workspace
+name from the Agents list — instead of “Message the agent.”
+
+New workspaces no longer get leftover `.harvest-0.32.7-done` and
+`.unification-0.37.0-done` receipts. Those were migration stamps for
+old layouts, not part of hire/add.
+
+### What to try
+
+1. On a Linux host that used to fall over every few hours: after
+   this update, RSS should stay in the same order of magnitude as a
+   few minutes after start, not walk toward 60 GB.
+2. Open a workspace terminal: the empty compose bar should say
+   **Message sales** (or whatever that agent is named).
+3. Hire or add a workspace: no `.harvest-0.32.7-done` /
+   `.unification-0.37.0-done` in `.k2/`.
+
+---
+
 ## 0.40.103 — Your name on Feedback, remotes recover, shared size
 
 A Feedback reply from your phone or another Connect login is stored

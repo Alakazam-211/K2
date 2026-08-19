@@ -2564,7 +2564,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       shouldHoldGridWs({
         visible,
         exited: phaseRef.current.kind === 'exited',
-        retainWhileHidden,
+        retainWhileHidden: retainWhileHidden && pageLive,
       })
 
     appliedVisibleRef.current = visible
@@ -2589,7 +2589,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         // reconnect scheduler (`wsRef.current !== ws` would also catch
         // it, but null the ref explicitly to be unambiguous).
         wsRef.current = null
-        if (ws.readyState !== WebSocket.CLOSED) ws.close()
+        if (ws.readyState !== WebSocket.CLOSED) {
+          logRemotePath('grid-park', { pane: terminalId.slice(0, 8), why: 'page-hide' })
+          ws.close(1000, 'page-hide')
+        }
         // A pane that is still visible but lost its session (shouldn't
         // happen) stays in its current phase; a hidden pane with a known
         // session parks so the UI reflects "warm, not streaming".
@@ -2604,7 +2607,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // No cleanup that closes the socket: closing is driven by the
     // reconcile above (on a real hide) and by the unmount effect below.
     // Closing in cleanup would tear the WS down on every benign re-run.
-  }, [spawnGeneration, isTabVisible, retainWhileHidden])
+  }, [spawnGeneration, isTabVisible, retainWhileHidden, pageLive])
 
   // ── Grid-WS unmount teardown (0.39.13) ────────────────────────
   // Real unmount only ([] deps): close the WS (PTY survives — never

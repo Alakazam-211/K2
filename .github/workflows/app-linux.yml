@@ -2,8 +2,9 @@
 #
 # release.sh (maintainer macOS box) builds + signs + notarizes the macOS
 # app; daemon-binaries.yml builds the standalone Linux daemon. This
-# workflow produces the Linux APP bundles (deb / rpm / AppImage) on a
-# native ubuntu runner and uploads them to the SAME GitHub release.
+# workflow produces the Linux APP bundles (deb / rpm / AppImage) on the
+# AX41 self-hosted runner (`k2-linux`) and uploads them to the SAME
+# GitHub release. Not GitHub-hosted ubuntu-latest.
 #
 # Trigger: a pushed release tag (v<x.y.z>), same convention as
 # daemon-binaries.yml. x86_64 only for now — aarch64 app bundles need a
@@ -33,10 +34,18 @@ on:
 permissions:
   contents: write # upload assets to the GitHub release
 
+# Shared with daemon-binaries.yml — one AX41 runner, no parallel pile-up.
+concurrency:
+  group: k2-linux-ship
+  cancel-in-progress: false
+
+env:
+  CARGO_TARGET_DIR: /home/k2-ci/cargo-target
+
 jobs:
   build-linux-app:
     name: Build K2 app bundles (x86_64 deb/rpm/AppImage)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, k2-linux]
     steps:
       - name: Checkout (at the release tag)
         uses: actions/checkout@v4
@@ -55,13 +64,19 @@ jobs:
 
       # webkit2gtk/gtk stack for the Tauri app + the same C/C++ toolchain
       # daemon-binaries.yml uses for ggml/libgit2/sqlite build scripts.
+      # AX41 already has these once; skip apt when k2-ci has no sudo.
       - name: Install build dependencies
         run: |
-          # The ubuntu-latest runner image ships third-party apt repos
-          # (packages.microsoft.com / azure-cli) whose mirror intermittently
-          # serves a corrupt InRelease ("NOSPLIT"), failing `apt-get update`
-          # with exit 100 — a transient infra failure unrelated to our build
-          # (hit on the v0.40.34 tag, 2026-07-07). We don't install anything
+          if ! sudo -n true 2>/dev/null; then
+            echo "no passwordless sudo — using preinstalled AX41 toolchain"
+            command -v cmake
+            command -v pkg-config
+            pkg-config --exists webkit2gtk-4.1
+            exit 0
+          fi
+          # Leftover ubuntu-latest third-party apt repos (microsoft/azure-cli)
+          # whose mirror intermittently serves a corrupt InRelease ("NOSPLIT"),
+          # failing `apt-get update` with exit 100. We don't install anything
           # from those repos, so drop them before updating.
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
                      /etc/apt/sources.list.d/azure-cli.list \
@@ -86,9 +101,11 @@ jobs:
       - name: Collect + checksum artifacts
         run: |
           mkdir -p dist-linux
-          cp target/release/bundle/deb/*.deb dist-linux/
-          cp target/release/bundle/rpm/*.rpm dist-linux/
-          cp target/release/bundle/appimage/*.AppImage dist-linux/
+          # Runner .env sets CARGO_TARGET_DIR=/home/k2-ci/cargo-target
+          TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+          cp "$TARGET_DIR/release/bundle/deb/"*.deb dist-linux/
+          cp "$TARGET_DIR/release/bundle/rpm/"*.rpm dist-linux/
+          cp "$TARGET_DIR/release/bundle/appimage/"*.AppImage dist-linux/
           (cd dist-linux && sha256sum * | tee SHA256SUMS-linux-x86_64.txt)
 
       - name: Upload to release

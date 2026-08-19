@@ -3,8 +3,9 @@
 # release.sh (run on the maintainer's macOS box) builds + signs the NATIVE
 # macos-aarch64 standalone daemon and emits daemon-latest.json. macOS is the
 # wrong tool for cross-compiling the daemon's C/C++ deps (ggml, sqlite,
-# libgit2) for Linux, so the Linux artifacts are produced HERE on native
-# ubuntu runners and uploaded to the SAME GitHub release.
+# libgit2) for Linux, so the Linux artifacts are produced HERE on the
+# AX41 self-hosted runner (`k2-linux` / k2-sandbox-01) and uploaded to
+# the SAME GitHub release. Not GitHub-hosted ubuntu-latest.
 #
 # Trigger: a pushed release tag (v<x.y.z>). The matrix builds
 # x86_64-unknown-linux-gnu (native) and aarch64-unknown-linux-gnu (via the
@@ -47,10 +48,18 @@ on:
 permissions:
   contents: write # needed to upload assets to the GitHub release
 
+# One AX41 runner — do not stack x86 + aarch64 + app-linux on the DEV daemon.
+concurrency:
+  group: k2-linux-ship
+  cancel-in-progress: false
+
+env:
+  CARGO_TARGET_DIR: /home/k2-ci/cargo-target
+
 jobs:
   build-linux-daemon:
     name: Build k2-daemon (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, k2-linux]
     strategy:
       fail-fast: false
       matrix:
@@ -81,9 +90,19 @@ jobs:
       # Native x86_64 build deps + (for aarch64) the gnu cross toolchain that
       # provides the aarch64-linux-gnu-gcc linker cargo needs. cmake/clang
       # cover the daemon's C/C++ deps (ggml/llama-cpp-2, libgit2, sqlite).
+      # AX41 already has these once; skip apt when k2-ci has no sudo.
       - name: Install build dependencies
         run: |
-          # Drop the runner's flaky third-party apt repos (microsoft/azure-cli)
+          if ! sudo -n true 2>/dev/null; then
+            echo "no passwordless sudo — using preinstalled AX41 toolchain"
+            command -v cmake
+            command -v clang
+            if [ "${{ matrix.cross }}" = "true" ]; then
+              command -v aarch64-linux-gnu-gcc
+            fi
+            exit 0
+          fi
+          # Drop leftover ubuntu-latest third-party apt repos (microsoft/azure-cli)
           # whose mirror intermittently 500s `apt-get update` with a corrupt
           # InRelease — transient infra, unrelated to our build. We install
           # nothing from them. (See app-linux.yml for the v0.40.34 incident.)
@@ -124,7 +143,9 @@ jobs:
           cargo build --release \
             --target ${{ matrix.target }} \
             --bin k2-daemon
-          cp "target/${{ matrix.target }}/release/k2-daemon" \
+          # Runner .env sets CARGO_TARGET_DIR=/home/k2-ci/cargo-target
+          TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+          cp "$TARGET_DIR/${{ matrix.target }}/release/k2-daemon" \
              "${{ matrix.asset }}"
           file "${{ matrix.asset }}"
           assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
@@ -182,7 +203,7 @@ jobs:
   merge-daemon-manifest:
     name: Merge linux artifacts into daemon-latest.json
     needs: build-linux-daemon
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, k2-linux]
     steps:
       - name: Merge + re-upload manifest
         env:

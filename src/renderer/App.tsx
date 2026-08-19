@@ -49,6 +49,7 @@ import FeedbackPage from './components/Feedback/FeedbackPage'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
 import { usePageViewStore } from './stores/page-view'
+import { PageLiveContext } from './contexts/TabVisibilityContext'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
 import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs } from './stores/tabs'
@@ -292,6 +293,7 @@ export default function App(): React.JSX.Element {
 
 function AppRoot(): React.JSX.Element {
   const settingsLoaded = useSettingsStore((s) => s.loaded)
+  const page = usePageViewStore((s) => s.page)
   const focusProjectId = useMemo(() => parseFocusProjectId(), [])
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
@@ -879,7 +881,7 @@ function AppRoot(): React.JSX.Element {
   // Settings is a full-viewport overlay on top; terminals keep their
   // WebGL contexts and re-paint when style-store.textGamma changes.
   return (
-    <>
+    <PageLiveContext.Provider value={page === 'agents'}>
       <PinnedChatRetainer />
 
       {/* Focus mode: workspace header above sidebar tabs, no primary sidebar */}
@@ -962,6 +964,6 @@ function AppRoot(): React.JSX.Element {
           onCancel={() => setShowQuitDialog(false)}
         />
       )}
-    </>
+    </PageLiveContext.Provider>
   )
 }

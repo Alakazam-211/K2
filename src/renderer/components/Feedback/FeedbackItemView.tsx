@@ -22,6 +22,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
+import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { KeyCombo } from '@/components/KeySymbol'
 import { activateProject } from '@/stores/projects'
@@ -787,6 +788,7 @@ function TerminalTab({
   // idempotent v2/spawn to the EXISTING daemon session (reused:true), so
   // this never mints a duplicate PTY.
   return (
+    <PageLiveContext.Provider value={true}>
     <div className="flex-1 min-h-0">
       <TerminalPane
         terminalId={`feedback-term:${feedbackId}`}
@@ -795,6 +797,7 @@ function TerminalTab({
         sessionId={phase.sessionId}
       />
     </div>
+    </PageLiveContext.Provider>
   )
 }
 

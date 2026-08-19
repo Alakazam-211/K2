@@ -18,18 +18,26 @@ function TagChip({
   tag: ProjectNavTag
   onOpen: (id: string) => void
 }): JSX.Element {
+  // Span, not button: the chip sits inside the workspace row <button>.
   return (
-    <button
-      type="button"
+    <span
+      role="button"
+      tabIndex={0}
       className={`${tagBox} no-drag cursor-pointer hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)]`}
       title={tag.name}
       onClick={(e) => {
         e.stopPropagation()
         onOpen(tag.id)
       }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        e.stopPropagation()
+        onOpen(tag.id)
+      }}
     >
       {tag.name}
-    </button>
+    </span>
   )
 }
 

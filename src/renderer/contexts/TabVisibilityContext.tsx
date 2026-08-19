@@ -12,6 +12,22 @@ import { createContext, useContext } from 'react'
  */
 export const TabVisibilityContext = createContext<boolean>(true)
 
+/**
+ * False when a full-page overlay (Projects / Feedback / Wiki) covers the
+ * Agents shell. Default true so dashboard / feedback terminals stay live.
+ * Agents TerminalArea + pinned-chat retainer sit under a provider that
+ * follows `page === 'agents'` so those sockets drop while Projects is
+ * open — leaving Projects then redials one-at-a-time instead of stacking
+ * Agents + dashboard grids and ripping the dashboard sockets out at once.
+ */
+export const PageLiveContext = createContext<boolean>(true)
+
+export function usePageLive(): boolean {
+  return useContext(PageLiveContext)
+}
+
 export function useIsTabVisible(): boolean {
-  return useContext(TabVisibilityContext)
+  const tab = useContext(TabVisibilityContext)
+  const page = useContext(PageLiveContext)
+  return tab && page
 }

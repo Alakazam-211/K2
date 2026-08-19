@@ -53,6 +53,7 @@ import {
 } from './frameCoalescer'
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase, daemonWsBase, type DaemonWsAvailable } from '../kessel/daemon-ws'
 import { logRemotePath } from '@/lib/remote-path-log'
+import { usePageLive } from '@/contexts/TabVisibilityContext'
 import {
   gridDialBackoffRemainingMs,
   openQueuedGridWebSocket,
@@ -993,6 +994,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // non-active must not poison the baseline.
   const lastOsc52AppliedRef = useRef<string | null>(null)
   const isTabVisible = useIsTabVisible()
+  const pageLive = usePageLive()
 
   // Issue #8 — mirror the two render-derived inputs to the
   // active-viewer predicate (`isFocused` pane-focus state, `isTabVisible`
@@ -1031,8 +1033,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // read the LATEST retention flag without re-subscribing the socket.
   const retainWhileHiddenRef = useRef(false)
   useEffect(() => {
-    retainWhileHiddenRef.current = retainWhileHidden === true
-  }, [retainWhileHidden])
+    retainWhileHiddenRef.current = retainWhileHidden === true && pageLive
+  }, [retainWhileHidden, pageLive])
 
   // ── A7.5 perf instrumentation (DEV-only) ─────────────────────
   // mountT0 is captured once via lazy useRef init so re-renders

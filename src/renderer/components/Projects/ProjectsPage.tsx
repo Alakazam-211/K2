@@ -26,6 +26,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { usePageViewStore } from '@/stores/page-view'
+import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
@@ -294,6 +295,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
   if (!isOpen) return null
 
   return (
+    <PageLiveContext.Provider value={true}>
     <div className="fixed inset-[var(--inset-window)] z-50 flex flex-col bg-[var(--color-bg)]">
       {/* Top bar — mirrors the workspace TopBar's left cluster: traffic-
           light spacer + wordmark + SERVER DROPDOWN + the page switcher
@@ -459,5 +461,6 @@ export default function ProjectsPage(): React.JSX.Element | null {
         </div>
       </div>
     </div>
+    </PageLiveContext.Provider>
   )
 }

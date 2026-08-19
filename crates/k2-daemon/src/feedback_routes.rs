@@ -110,6 +110,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 /// token (`"owner"` or a Connect username). Human comments that omit
 /// `author` store and inject as that identity (D3) so a Connect user
 /// is not framed as the host owner.
+#[cfg(test)]
 pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
     dispatch_post_as(path, body, "owner")
 }
@@ -491,6 +492,7 @@ struct CommentBody {
 ///     `deliveredSessionId`, plus `answered` for the auto-answer).
 /// - AGENT-authored: store only (thread bump), no injection back into
 ///   its own session, no auto-answer, no delivery fields.
+#[cfg(test)]
 pub fn handle_comment(body: &[u8]) -> CliResponse {
     handle_comment_as(body, "owner")
 }

@@ -2434,11 +2434,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   //    ready-ws-not-open poll already force-reattaches.
   // 2. OPEN + silence:
   //    - ≥15s: re-send last k1 ack (daemon pause unblock; keep forever).
-  //    - ≥20s + had a frame + not healed this episode: rich enter log
-  //      once + one forceGridResync('grid-stall-no-frame') — OPEN-zombie
-  //      heal. Phase may flip ready→connecting→ready; focus must NOT
-  //      steal (focusTerminalShadowIfSafe). 0.40.87 bug was unconditional
-  //      el.focus() after that heal, not the heal itself.
+  //    - ≥20s with no paint is NORMAL while idle. Do NOT tear down —
+  //      that was a 24s redial loop (close → "network connection was
+  //      lost" → snapshot → recovered → idle → stall). True zombies
+  //      leave OPEN via onclose / ready-ws-not-open. Log once.
   // 3. Any frame clears stall+healed and logs `[grid-stall] recovered`.
   //
   // Do NOT reintroduce input-no-frame thrash.
@@ -2513,22 +2512,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }
         }
 
-        // OPEN no-frame ≥20s (had a frame) → enter stall once + heal once.
-        // Focus is NOT taken here — shadow effect uses focusTerminalShadowIfSafe.
+        // Idle terminals do not emit deltas. Closing an OPEN socket here
+        // is what produced the 24s rpmavs loop.
         if (
           lastFrame > 0 &&
           ageMs !== null &&
-          ageMs >= OPEN_NO_FRAME_MS
+          ageMs >= OPEN_NO_FRAME_MS &&
+          !gridStallActiveRef.current
         ) {
-          if (!gridStallActiveRef.current) {
-            gridStallActiveRef.current = true
-            // eslint-disable-next-line no-console
-            console.warn('[grid-stall]', stallPayload('no-frame'))
-          }
-          if (!gridStallHealedRef.current) {
-            gridStallHealedRef.current = true
-            forceGridResyncRef.current('grid-stall-no-frame')
-          }
+          gridStallActiveRef.current = true
+          logRemotePath('open-silent', stallPayload('no-frame-idle'))
         }
         return
       }

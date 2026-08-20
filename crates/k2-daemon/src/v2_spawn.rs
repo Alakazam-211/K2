@@ -332,6 +332,13 @@ pub fn can_sandbox() -> bool {
 pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, Vec<String>)> {
     use k2_core::workspace::provider_resume::provider_resume_for_command;
 
+    // API host-sessions are dead-resumed only via POST /v1 host-sessions
+    // (capped). GUI restart-recovery must not relaunch every leftover
+    // from_api row after a reboot (Scout interview tabs, 2026-08-21).
+    if k2_core::workspace_session_handles::is_api_agent_name(agent_name) {
+        return None;
+    }
+
     // Scoped lock: the resolver below takes its own DB lock, so every
     // read happens in this block and the lock is dropped before it runs.
     let (project_id, tab_cmd, tab_args_json, tab_session_id) = {
@@ -692,6 +699,25 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             command = Some(saved_cmd);
             args = saved_args;
         }
+    }
+
+    // Do not mint a bare shell under an api-* key when the cell is not
+    // live. Integrator dead-resume is POST /v1/w/<ws>/host-sessions.
+    if command.is_none()
+        && k2_core::workspace_session_handles::is_api_agent_name(&req.agent_name)
+    {
+        log_debug!(
+            "[v2-spawn] refusing empty-command recover for api cell agent={}",
+            req.agent_name
+        );
+        return HandlerResult {
+            status: "409 Conflict",
+            body: serde_json::json!({
+                "error": "api_session_not_live",
+                "agent_name": req.agent_name,
+            })
+            .to_string(),
+        };
     }
 
     // 0.38.8 — Cmd+T session continuity, Slice-3b generalized to every
@@ -1400,6 +1426,10 @@ pub fn handle_v2_close(body: &[u8]) -> HandlerResult {
         agent_name: String,
         #[serde(default)]
         force: bool,
+        /// Delete the durable workspace_tab_sessions row so reboot
+        /// restart-recovery cannot revive this cell.
+        #[serde(default)]
+        clear_index: bool,
     }
 
     let req: CloseRequest = match serde_json::from_slice(body) {
@@ -1439,9 +1469,32 @@ pub fn handle_v2_close(body: &[u8]) -> HandlerResult {
     }
 
     let removed = v2_session_map::unregister(&req.agent_name).is_some();
+    if req.clear_index {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match conn.execute(
+            "DELETE FROM workspace_tab_sessions WHERE agent_name = ?1",
+            rusqlite::params![req.agent_name],
+        ) {
+            Ok(n) if n > 0 => {
+                log_debug!(
+                    "[daemon/v2-close] cleared {n} tab-index row(s) for agent={}",
+                    req.agent_name
+                );
+            }
+            Err(e) => {
+                log_debug!(
+                    "[daemon/v2-close] clear_index failed agent={}: {e}",
+                    req.agent_name
+                );
+            }
+            _ => {}
+        }
+    }
     HandlerResult {
         status: "200 OK",
-        body: serde_json::json!({ "closed": removed }).to_string(),
+        body: serde_json::json!({ "closed": removed, "indexCleared": req.clear_index })
+            .to_string(),
     }
 }
 
@@ -1880,6 +1933,40 @@ mod tests {
         let result = handle_v2_close(&body);
         assert_eq!(result.status, "200 OK");
         assert!(result.body.contains(r#""closed":false"#));
+    }
+
+    #[test]
+    fn recovered_launch_skips_api_host_sessions() {
+        k2_core::db::init_for_tests();
+        assert!(
+            recovered_launch(
+                "api-ec8ba43a-637c-45c6-806d-9325a7069bef-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "/tmp/sales-interview",
+            )
+            .is_none(),
+            "api-* must not restart-recover after reboot"
+        );
+    }
+
+    #[test]
+    fn empty_command_api_spawn_is_conflict_not_bare_shell() {
+        k2_core::db::init_for_tests();
+        let agent = "api-principal-00000000-0000-0000-0000-000000000001";
+        let body = format!(
+            r#"{{"agent_name":"{agent}","cwd":"/tmp/sales-interview"}}"#
+        )
+        .into_bytes();
+        let result = handle_v2_spawn(&body);
+        assert_eq!(result.status, "409 Conflict", "body={}", result.body);
+        assert!(
+            result.body.contains("api_session_not_live"),
+            "body={}",
+            result.body
+        );
+        assert!(
+            crate::v2_session_map::lookup_by_agent_name(agent).is_none(),
+            "must not register a bare api-* shell"
+        );
     }
 
     // GH#22 close-guard decision table (pure logic; no PTY needed).

@@ -383,7 +383,10 @@ if (typeof window !== 'undefined') {
  * Fire-and-forget: close failures are logged but don't block the
  * UI, matching the pattern already used for terminal_kill.
  */
-function closeTerminalForRenderer(data: TerminalItemData): void {
+function closeTerminalForRenderer(
+  data: TerminalItemData,
+  opts?: { forceReap?: boolean },
+): void {
   // Heartbeat tabs are "minimize, don't kill" — the daemon-owned PTY
   // keeps running in the background after the tab closes so the
   // heartbeat continues to fire on schedule. We still flip the
@@ -403,7 +406,16 @@ function closeTerminalForRenderer(data: TerminalItemData): void {
   // API host-session / sandbox cockpit tabs (`api-…`) — minimize, don't
   // kill. Same contract as heartbeats: PTY stays in v2_session_map so
   // Chat history → API can re-surface the session.
+  // forceReap: operator "forcefully reap" — kill PTY + drop durable
+  // index so a daemon reboot cannot recovered_launch the cell.
   if (isApiOriginTerminal(data)) {
+    if (opts?.forceReap) {
+      const name = data.attachAgentName
+      if (name) {
+        closeV2Session(name, { clearIndex: true })
+      }
+      return
+    }
     console.info(
       '[tabs] api-session tab close — leaving PTY alive (agent=%s, terminalId=%s)',
       data.attachAgentName ?? '(none)',
@@ -519,7 +531,10 @@ async function liveSubscriberCountForProject(projectId: string): Promise<number>
   }
 }
 
-async function closeV2Session(agentName: string): Promise<void> {
+async function closeV2Session(
+  agentName: string,
+  opts?: { clearIndex?: boolean },
+): Promise<void> {
   try {
     const creds = await getDaemonWs()
     const url = withCliTokenQuery(
@@ -535,7 +550,11 @@ async function closeV2Session(agentName: string): Promise<void> {
         // client close-guard (GH#22 reaper defense). The user closing the tab
         // IS the attached client; the guard only exists to stop the daemon
         // reaper, which never routes through here.
-        body: JSON.stringify({ agent_name: agentName, force: true }),
+        body: JSON.stringify({
+          agent_name: agentName,
+          force: true,
+          ...(opts?.clearIndex ? { clear_index: true } : {}),
+        }),
       }),
     )
     if (!res.ok) {
@@ -1100,7 +1119,10 @@ interface TabsState {
   unsplitTerminalArea: () => void              // remove rightmost column
   setActiveGroup: (index: number) => void
   addTabToGroup: (groupIndex: number, cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }) => string
-  removeTabFromGroup: (groupIndex: number, tabId: string) => void
+  removeTabFromGroup: (groupIndex: number, tabId: string, opts?: { forceReap?: boolean }) => void
+  /** Kill every non-system tab in the strip, including API host-sessions
+   *  (does not minimize). Drops the durable index so reboot cannot revive. */
+  forceReapAllTabsInGroup: (groupIndex: number) => void
   setActiveTabInGroup: (groupIndex: number, tabId: string) => void
   moveTabToGroup: (fromGroup: number, toGroup: number, tabId: string) => void
   getGroupTabs: (groupIndex: number) => { tabs: Tab[], activeTabId: string | null }
@@ -1834,7 +1856,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     return paneGroupId
   },
 
-  removeTab: (tabId: string) => {
+  removeTab: (tabId: string, opts?: { forceReap?: boolean }) => {
     // Never close the pinned system agent tab
     const tab = get().tabs.find((t) => t.id === tabId)
     if (tab?.isSystemAgent) return
@@ -1856,7 +1878,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         for (const item of pg.items) {
           if (item.type === 'terminal') {
             const data = item.data as TerminalItemData
-            closeTerminalForRenderer(data)
+            closeTerminalForRenderer(data, opts)
           }
         }
       }
@@ -3476,9 +3498,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     return pgId
   },
 
-  removeTabFromGroup: (groupIndex: number, tabId: string) => {
+  removeTabFromGroup: (groupIndex: number, tabId: string, opts?: { forceReap?: boolean }) => {
     if (groupIndex === 0) {
-      get().removeTab(tabId)
+      get().removeTab(tabId, opts)
       return
     }
 
@@ -3493,7 +3515,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       for (const [, pg] of tab.paneGroups) {
         for (const item of pg.items) {
           if (item.type === 'terminal') {
-            closeTerminalForRenderer(item.data as TerminalItemData)
+            closeTerminalForRenderer(item.data as TerminalItemData, opts)
           }
         }
       }
@@ -3509,6 +3531,14 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     const newGroups = [...state.extraGroups]
     newGroups[gi] = { tabs: newTabs, activeTabId: newActiveId }
     set({ extraGroups: newGroups })
+  },
+
+  forceReapAllTabsInGroup: (groupIndex: number) => {
+    const { tabs } = get().getGroupTabs(groupIndex)
+    for (const tab of tabs) {
+      if (tab.isSystemAgent) continue
+      get().removeTabFromGroup(groupIndex, tab.id, { forceReap: true })
+    }
   },
 
   setActiveTabInGroup: (groupIndex: number, tabId: string) => {
@@ -3693,6 +3723,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                 projectPath: t.projectPath,
                 surfacedAgentName: t.surfacedAgentName,
                 attachAgentName: t.attachAgentName,
+                fromApi:
+                  typeof t.attachAgentName === 'string' &&
+                  t.attachAgentName.startsWith('api-'),
                 // D9 — restore the sandbox request intent (default-OFF
                 // for legacy layouts where the field is absent).
                 sandbox: t.sandbox,
@@ -3844,6 +3877,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                       projectPath: t.projectPath,
                       surfacedAgentName: t.surfacedAgentName,
                       attachAgentName: t.attachAgentName,
+                      fromApi:
+                        typeof t.attachAgentName === 'string' &&
+                        t.attachAgentName.startsWith('api-'),
                       // D9 — restore the sandbox request intent
                       // (default-OFF for legacy layouts).
                       sandbox: t.sandbox,

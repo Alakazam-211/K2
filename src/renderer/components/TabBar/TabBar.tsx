@@ -432,6 +432,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         { id: 'close-others', label: 'Close Other Tabs' },
         { id: 'close-all', label: 'Close All Tabs' },
       ] : []),
+      { id: 'force-reap-all', label: 'Forcefully reap all tabs' },
       // Pin-to-size — only when the tab resolves to a live Kessel
       // session. "Pin Dimensions…" opens the modal; while pinned the
       // entry flips to an instant Unpin.
@@ -470,6 +471,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       for (const tab of allTabs) {
         removeTabFromGroup(groupIndex, tab.id)
       }
+    } else if (clickedId === 'force-reap-all') {
+      useTabsStore.getState().forceReapAllTabsInGroup(groupIndex)
     } else if (clickedId === 'show-in-finder' && fileViewerPath) {
       daemonCliPost('fs/open-finder', { target: fileViewerPath }).catch((err) => console.warn('[tab-bar] show-in-finder', err))
     } else if (clickedId === 'copy-file-path' && fileViewerPath) {

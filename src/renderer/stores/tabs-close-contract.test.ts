@@ -82,10 +82,10 @@ vi.stubGlobal(
 import { useTabsStore, type Tab, type TerminalItemData } from './tabs'
 
 /** Every recorded /cli/sessions/v2/close call, parsed. */
-function v2Closes(): Array<{ agent_name: string; force: boolean }> {
+function v2Closes(): Array<{ agent_name: string; force: boolean; clear_index?: boolean }> {
   return fetches.calls
     .filter((c) => c.url.includes('/cli/sessions/v2/close'))
-    .map((c) => JSON.parse(c.body) as { agent_name: string; force: boolean })
+    .map((c) => JSON.parse(c.body) as { agent_name: string; force: boolean; clear_index?: boolean })
 }
 
 /** Let the fire-and-forget closeV2Session promise chain settle. */
@@ -283,5 +283,33 @@ describe('A6 close contract — view-lifecycle paths never close sessions', () =
     expect(useTabsStore.getState().tabs).toHaveLength(0)
     expect(v2Closes()).toEqual([])
     expect(killed.ids).toEqual([])
+  })
+
+  it('forceReapAllTabsInGroup kills api-origin tabs and asks to clear the index', async () => {
+    useTabsStore.setState({
+      tabs: [
+        terminalTab('tab-sys', 'pg-sys', { sessionId: 'sess-sys' }),
+        terminalTab('tab-api', 'pg-api', {
+          attachAgentName: 'api-scout-bbbb',
+          fromApi: true,
+          sessionId: 'sess-api-2',
+        }),
+      ],
+      activeTabId: 'tab-api',
+    })
+    // Mark first tab system so it is kept.
+    const tabs = useTabsStore.getState().tabs
+    tabs[0] = { ...tabs[0], isSystemAgent: true, title: 'Chat' }
+    useTabsStore.setState({ tabs })
+
+    useTabsStore.getState().forceReapAllTabsInGroup(0)
+    await flushAsync()
+
+    const left = useTabsStore.getState().tabs
+    expect(left).toHaveLength(1)
+    expect(left[0].isSystemAgent).toBe(true)
+    expect(v2Closes()).toEqual([
+      { agent_name: 'api-scout-bbbb', force: true, clear_index: true },
+    ])
   })
 })

@@ -993,7 +993,7 @@ interface TabsState {
 
   // Existing actions (signatures preserved)
   addTab: (cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }) => string
-  removeTab: (tabId: string) => void
+  removeTab: (tabId: string, opts?: { forceReap?: boolean }) => void
   setActiveTab: (tabId: string) => void
   splitPane: (
     tabId: string,

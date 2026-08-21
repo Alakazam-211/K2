@@ -31,6 +31,7 @@ import Toast from './components/Toast/Toast'
 import TransferProgress from './components/TransferProgress/TransferProgress'
 import AssistantBar from './components/WorkspaceAssistant/AssistantBar'
 import { useProjectsStore } from './stores/projects'
+import GateChrome from './components/TopBar/GateChrome'
 import { preferredWorkspaceSwitchFocus, tryFocusPreferredWorkspaceInput } from './lib/workspace-switch-focus'
 // Pinned-chat retention — per-window host that keeps exempt workspaces'
 // pinned chats mounted (attached + rendering) while hidden. Rendered as
@@ -281,6 +282,60 @@ function StyledKesselProvider({ children }: { children: React.ReactNode }): Reac
     return palette ? { colors: toKesselColors(palette.terminal) } : undefined
   }, [styleId, resolvedPaletteId])
   return <KesselConfigProvider overrides={overrides}>{children}</KesselConfigProvider>
+}
+
+function BootSplash(): React.JSX.Element {
+  const [showReload, setShowReload] = useState(false)
+  useEffect(() => {
+    const t = window.setTimeout(() => setShowReload(true), 15_000)
+    return () => window.clearTimeout(t)
+  }, [])
+  return (
+    <div
+      style={{
+        width: '100vw',
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--color-bg, #0a0a0a)',
+        color: 'var(--color-text-primary, #e0e0e0)',
+        userSelect: 'none',
+      }}
+    >
+      <GateChrome />
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexDirection: 'column',
+          gap: '1.25rem',
+          fontFamily: 'var(--font-ui)',
+        }}
+      >
+        <div style={{ fontSize: '1rem', fontWeight: 500 }}>Setting up K2…</div>
+        <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>Applying updates…</div>
+        {showReload && (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{
+              fontSize: '0.85rem',
+              padding: '0.4rem 0.9rem',
+              borderRadius: 6,
+              border: '1px solid var(--color-border, #333)',
+              background: 'transparent',
+              color: 'inherit',
+              cursor: 'pointer',
+            }}
+          >
+            Reload
+          </button>
+        )}
+      </div>
+    </div>
+  )
 }
 
 export default function App(): React.JSX.Element {
@@ -869,9 +924,11 @@ function AppRoot(): React.JSX.Element {
     }
   }, [])
 
-  // Wait for stores to initialize before rendering to prevent flicker
+  // Wait for stores to initialize. Never paint an empty bg shell —
+  // that's the 0.40.105 post-update black screen (settings_get 503
+  // migrating, loaded stays false until reload).
   if (!settingsLoaded) {
-    return <div className="h-full w-full bg-[var(--color-bg)]" />
+    return <BootSplash />
   }
 
   // Workspace shell stays MOUNTED while Settings is open (display:none).

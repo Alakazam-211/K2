@@ -26,6 +26,7 @@ import {
 // client is a pure view of the active host's daemon. Style is NOT part
 // of that view — host switch must not change appearance.
 import { onActiveHostChange } from '@/stores/connect-host'
+import { onDaemonConnected } from '@/lib/daemon-reconnect'
 
 // NOTE the naming collision: 'projects' is the LEGACY workspaces section
 // (label "Workspaces" — ProjectsSection.tsx); 'project-groups' is the
@@ -730,19 +731,36 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   fetchSettings: async () => {
     const seqBefore = _writeSeq
-    let result: Awaited<ReturnType<typeof settingsGet>>
+    let result: Awaited<ReturnType<typeof settingsGet>> | undefined
+    const delays = [250, 500, 1000, 2000, 2000]
     try {
       result = await settingsGet()
-    } catch (e) {
-      // Daemon unreachable, or the remote session is dead (settingsGet
-      // throws on non-2xx). Keep the current snapshot; the recovery seams
-      // (onDaemonConnected, the host-change/session-mint re-fire) retry.
-      // Without this, the host-switch burst against a dead remote session
-      // escaped as an unhandled rejection (the onActiveHostChange caller
-      // is fire-and-forget).
-      console.warn('[settings] fetchSettings failed:', e)
-      return
+    } catch (first) {
+      // 103→105 update: App imported on /boot-status ready, then
+      // settings_get 503 migrating once and never retried → black
+      // empty shell until the user reloaded.
+      if (!isMigratingSettingsError(first)) {
+        console.warn('[settings] fetchSettings failed:', first)
+        return
+      }
+      let last = first
+      for (const delay of delays) {
+        await new Promise((r) => setTimeout(r, delay))
+        try {
+          result = await settingsGet()
+          last = null
+          break
+        } catch (e) {
+          last = e
+          if (!isMigratingSettingsError(e)) break
+        }
+      }
+      if (last != null) {
+        console.warn('[settings] fetchSettings failed:', last)
+        return
+      }
     }
+    if (!result) return
     // If a write happened while we were fetching, skip — the write's result is fresher
     if (_writeSeq !== seqBefore) return
     // One-shot migration: seed local from daemon style only when this
@@ -791,8 +809,18 @@ export function getEffectiveKeybinding(
   return defaults[id] ?? ''
 }
 
+export function isMigratingSettingsError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return msg.includes('503') && msg.includes('migrating')
+}
+
 // Initialize on import
 useSettingsStore.getState().fetchSettings()
+
+onDaemonConnected(() => {
+  if (useSettingsStore.getState().loaded) return
+  void useSettingsStore.getState().fetchSettings()
+})
 
 // #625 — on a real active-host CHANGE, re-fetch ALL app settings from the
 // NEW host's daemon. `fetchSettings()` does its own host-aware

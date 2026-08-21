@@ -172,6 +172,19 @@ export function shouldShowReloadButton(opts: {
   return opts.migrating ? opts.attempts >= 120 : opts.attempts >= 20
 }
 
+/** After /boot-status says ready, real /cli/* can still 503 migrating
+ *  for a beat (upgrade 103→105: App mounted, settings_get 503, empty
+ *  bg shell). Hold accept until an authenticated route succeeds. */
+export function holdAcceptIfCliNotReady(
+  decision: GateDecision,
+  cliReady: boolean,
+): GateDecision {
+  if (decision.kind === 'accept' && !cliReady) {
+    return { kind: 'migrating', detail: 'Applying updates…' }
+  }
+  return decision
+}
+
 /** The gate's verdict for a single poll. */
 type GateDecision =
   | { kind: 'accept' }
@@ -349,6 +362,31 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
       msSinceOk: msSinceRemoteBootOk(),
     })
     return { kind: 'network' }
+  }
+}
+
+/** Authenticated /cli/settings/get — 200 means real routes are open.
+ *  503 migrating / network / 401 → not ready. */
+export async function probeCliReady(timeoutMs = 2000): Promise<boolean> {
+  try {
+    const creds = await getDaemonWs()
+    const url = withCliTokenQuery(
+      `${daemonHttpBase(creds)}/cli/settings/get`,
+      creds.token,
+    )
+    const resp = await fetch(
+      url,
+      withDaemonFetch({ method: 'GET', signal: AbortSignal.timeout(timeoutMs) }),
+    )
+    if (resp.status === 503) return false
+    if (!resp.ok) {
+      invalidateDaemonWs()
+      return false
+    }
+    return true
+  } catch {
+    invalidateDaemonWs()
+    return false
   }
 }
 
@@ -896,6 +934,13 @@ export function ConnectionGate(): React.ReactElement {
         }
       }
       let next = policy.decide(status)
+      // Local: boot-status `ready` is not enough — /cli/* 503s until
+      // migrations finish. Probe a real route before importing App.
+      if (next.kind === 'accept' && !isRemote) {
+        const cliReady = await probeCliReady()
+        if (cancelled) return
+        next = holdAcceptIfCliNotReady(next, cliReady)
+      }
       // 0.39.36: a REMOTE host's /boot-status accepting only proves the
       // daemon is up + the right protocol — NOT that this client's
       // in-memory connect-session survived the daemon's last restart. On

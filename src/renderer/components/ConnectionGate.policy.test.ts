@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest'
 import {
   localPairedPolicy,
   remoteHostPolicy,
+  holdAcceptIfCliNotReady,
   shouldSurfaceRemoteDrop,
   classifyWhoamiStatus,
   shouldRefreshCredsOnAccept,
@@ -33,6 +34,24 @@ const status = (over: Partial<{ version: string; protocol: number; phase: string
   phase: 'ready',
   detail: '',
   ...over,
+})
+
+describe('holdAcceptIfCliNotReady', () => {
+  it('holds a ready accept until /cli/* is open', () => {
+    const d = holdAcceptIfCliNotReady({ kind: 'accept' }, false)
+    expect(d.kind).toBe('migrating')
+  })
+
+  it('passes through once a real route succeeds', () => {
+    expect(holdAcceptIfCliNotReady({ kind: 'accept' }, true).kind).toBe('accept')
+  })
+
+  it('does not upgrade wait/migrating', () => {
+    expect(holdAcceptIfCliNotReady({ kind: 'wait', reason: 'x' }, false).kind).toBe('wait')
+    expect(
+      holdAcceptIfCliNotReady({ kind: 'migrating', detail: 'x' }, true).kind,
+    ).toBe('migrating')
+  })
 })
 
 describe('localPairedPolicy', () => {

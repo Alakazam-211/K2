@@ -3,6 +3,30 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.105 — Whoami tells the truth; API tabs stay dead
+
+A sidecar that gets moved into the pinned Chat is the workspace agent.
+`k2 whoami` now says **canonical** and the workspace address (`sales`),
+not `sales/2`, matching `k2 msg sales` and `K2_CELL`.
+
+API host-session tabs that were already reaped no longer come back as
+open Claudes after a server reboot or daemon update. The live cap still
+applies to new API calls; restart was skipping it. Closing those tabs
+still **hides** them (the session can resume). Right-click a tab →
+**Forcefully reap all tabs** kills them and clears the index so they
+cannot revive.
+
+### What to try
+
+1. Pin a sidecar conversation as Chat, then `k2 whoami`: `role:
+   canonical`, `address:` the workspace name.
+2. After a host reboot, interview / API workspaces should not refill
+   with old host-session tabs.
+3. Right-click a tab: **Forcefully reap all tabs** is in the menu.
+   Chat and Inbox stay.
+
+---
+
 ## 0.40.104 — Linux hosts stay up, Message &lt;name&gt;
 
 Headless Linux boxes (for example RPMAVS) were growing to tens of

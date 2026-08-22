@@ -1657,14 +1657,30 @@ fn wake_sidecar_and_fire(
         }
     }
 
-    let (spawn_command, spawn_args, wake_timeout) =
+    let payload = format_message(from, text, command);
+    let (spawn_command, spawn_args, wake_timeout, inject_profile, launch_prompt) =
         match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
             Ok(c) if !c.is_empty() => (
                 c,
                 Vec::new(),
                 wake_timeout.min(Duration::from_millis(1500)),
+                k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
+                None,
             ),
-            _ => (spawn_command, spawn_args, wake_timeout),
+            _ => {
+                let provider = k2_core::workspace::provider_resume::provider_resume_for_command(
+                    &spawn_command,
+                )
+                .map(|p| p.provider)
+                .unwrap_or("");
+                (
+                    spawn_command,
+                    spawn_args,
+                    wake_timeout,
+                    k2_core::workspace::provider_resume::injection_profile_for_provider(provider),
+                    Some(payload.clone()),
+                )
+            }
         };
 
     let cwd = tab
@@ -1684,6 +1700,7 @@ fn wake_sidecar_and_fire(
         // Register under the tab/API map key — never the canonical slot.
         canonical_key: Some(tab.agent_name.clone()),
         env: HashMap::new(),
+        launch_prompt,
     }) {
         Ok(o) => o,
         Err(e) => {
@@ -1701,12 +1718,20 @@ fn wake_sidecar_and_fire(
             return MsgResponse::fail(MsgReason::SpawnFailed);
         }
     };
-    let payload = format_message(from, text, command);
+    if outcome.launch_prompt_attached && !outcome.reused {
+        log_debug!("[msg/wake] launch-param attached; skipping post-spawn inject");
+        crate::active_reaper::note_workspace_need(project_id);
+        return MsgResponse::ok_woke(
+            target_id,
+            "sidecar_wake",
+            wake_start.elapsed().as_millis() as u64,
+        );
+    }
     match deliver_post_wake(
         &live,
         &payload,
         wake_timeout,
-        &k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
+        &inject_profile,
     ) {
         InjectOutcome::Delivered => {
             MsgResponse::ok_woke(target_id, "sidecar_wake", wake_start.elapsed().as_millis() as u64)
@@ -2037,13 +2062,15 @@ fn wake_and_fire(
     // speak the resolved provider's readiness dialect; the test
     // override keeps the claude-shaped default (it spawns `cat`, not
     // the provider).
-    let (spawn_command, spawn_args, wake_timeout, inject_profile) =
+    let payload = format_message(from, text, command);
+    let (spawn_command, spawn_args, wake_timeout, inject_profile, launch_prompt) =
         match std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND") {
             Ok(c) if !c.is_empty() => (
                 c,
                 Vec::new(),
                 wake_timeout.min(Duration::from_millis(1500)),
                 k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
+                None,
             ),
             _ => (
                 resolved.command.clone(),
@@ -2057,6 +2084,7 @@ fn wake_and_fire(
                     resolved.readiness.as_deref(),
                     &resolved.provider,
                 ),
+                Some(payload.clone()),
             ),
         };
 
@@ -2077,6 +2105,7 @@ fn wake_and_fire(
             .clone()
             .map(|m| m.into_iter().collect())
             .unwrap_or_default(),
+        launch_prompt,
     }) {
         Ok(o) => o,
         Err(e) => {
@@ -2159,7 +2188,13 @@ fn wake_and_fire(
     // half-built): detection needs a live-grok validation pass; the
     // permission GATE (rule a, the dangerous one) is enforced above in
     // the injection chokepoint.
-    let payload = format_message(from, text, command);
+    if outcome.launch_prompt_attached && !outcome.reused {
+        let wake_ms = wake_start.elapsed().as_millis() as u64;
+        log_debug!("[msg/wake] launch-param attached; skipping post-spawn inject");
+        crate::active_reaper::note_workspace_need(project_id);
+        return MsgResponse::ok_woke(target_id, branch, wake_ms);
+    }
+
     let _ = Path::new(project_path);
     match deliver_post_wake(&live, &payload, wake_timeout, &inject_profile) {
         InjectOutcome::Delivered => {

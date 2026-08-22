@@ -799,6 +799,7 @@ fn run_resume_and_fire(
             canonical_key: canonical_key_override,
             // W2: the resolved preset's migration-0070 env.
             env: resolved.env_map(),
+            launch_prompt: None,
         },
     );
 

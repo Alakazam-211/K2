@@ -72,6 +72,10 @@ pub struct SpawnWorkspaceSessionRequest {
     /// set, and UNDER any K2-internal injections. Values must never be
     /// logged. Empty = no overrides (byte-identical legacy spawn).
     pub env: HashMap<String, String>,
+    /// Fire-once trailing interactive user message (k2 msg wake / same
+    /// grammar as host-session launch-param). Applied AFTER identity splice
+    /// onto ephemeral exec argv only. Never logged. None = today's spawn.
+    pub launch_prompt: Option<String>,
 }
 
 /// Output shape returned by the spawn helper. The caller needs the
@@ -94,6 +98,10 @@ pub struct SpawnWorkspaceSessionOutcome {
     pub agent_name: String,
     pub pending_drained: usize,
     pub reused: bool,
+    /// True when `launch_prompt` was appended to ephemeral exec argv.
+    /// False on reuse (session already live — caller injects) and when
+    /// the provider/ARG_MAX path cannot attach (caller paste-falls-back).
+    pub launch_prompt_attached: bool,
 }
 
 /// Kessel spawn helper. Takes a `SpawnWorkspaceSessionRequest`
@@ -176,6 +184,7 @@ pub fn spawn_agent_session_v2_blocking(
                 agent_name: req.agent_name,
                 pending_drained: 0,
                 reused: true,
+                launch_prompt_attached: false,
             });
         }
         // Stale entry — child has exited but the unregister hadn't
@@ -283,14 +292,47 @@ pub fn spawn_agent_session_v2_blocking(
         }
     }
 
+    // Fire-once launch-param AFTER identity splice so the positional
+    // user prompt stays last (Claude argv). Durable args stay identity-only.
+    let identity = spawn_args;
+    let (exec, attached) = match req
+        .launch_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(prompt) => {
+            match k2_core::workspace::provider_launch_prompt::append_interactive_prompt(
+                req.command.as_deref().unwrap_or(""),
+                &identity,
+                prompt,
+            ) {
+                Some(exec) => (exec, true),
+                None => (identity.clone(), false),
+            }
+        }
+        None => (identity.clone(), false),
+    };
+    let log_args = k2_core::workspace::provider_launch_prompt::redact_launch_prompt_args(
+        &exec,
+        req.launch_prompt.as_deref().unwrap_or(""),
+    );
+    log_debug!(
+        "[daemon/spawn] v2 exec canonical_key={} command={:?} args={:?} launch_prompt_attached={}",
+        canonical_key,
+        req.command,
+        log_args,
+        attached,
+    );
+
     let cfg = DaemonPtyConfig {
         session_id,
         cols: req.cols,
         rows: req.rows,
         cwd: Some(PathBuf::from(&req.cwd)),
         program: req.command.clone(),
-        args: spawn_args,
-        durable_args: None,
+        args: exec,
+        durable_args: if attached { Some(identity) } else { None },
         env,
         drain_on_exit: true,
         label: label_seed,
@@ -368,6 +410,7 @@ pub fn spawn_agent_session_v2_blocking(
         agent_name: req.agent_name,
         pending_drained,
         reused: false,
+        launch_prompt_attached: attached,
     })
 }
 

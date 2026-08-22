@@ -249,6 +249,7 @@ pub fn ensure_pinned_chat(
             .clone()
             .map(|m| m.into_iter().collect())
             .unwrap_or_default(),
+        launch_prompt: None,
     };
     let spawn_outcome =
         spawn_agent_session_v2_blocking(req).map_err(|e| format!("spawn failed: {e}"))?;

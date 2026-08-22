@@ -190,6 +190,7 @@ pub fn spawn_wake_headless(
         // W2: the resolved preset's migration-0070 env (empty for the
         // test override / metadata-less presets). Values never logged.
         env: resolved.env_map(),
+        launch_prompt: None,
     })?;
 
     let terminal_id = outcome.session_id.to_string();

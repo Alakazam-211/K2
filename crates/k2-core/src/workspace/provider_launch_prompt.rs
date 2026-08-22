@@ -193,6 +193,32 @@ mod tests {
     }
 
     #[test]
+    fn prompt_stays_last_after_identity_splice_shape() {
+        // spawn.rs splices `--append-system-prompt <brief>` onto identity
+        // args, then appends the user prompt. The user text must stay last
+        // (Claude treats a later flag as part of the prompt and would
+        // mis-parse trailing flags).
+        let identity = args(&[
+            "--resume",
+            "SID",
+            "--append-system-prompt",
+            "You are cell X",
+        ]);
+        let out = append_interactive_prompt("claude", &identity, "wake me").unwrap();
+        assert_eq!(out.last().map(String::as_str), Some("wake me"));
+        assert_eq!(
+            out,
+            args(&[
+                "--resume",
+                "SID",
+                "--append-system-prompt",
+                "You are cell X",
+                "wake me",
+            ])
+        );
+    }
+
+    #[test]
     fn empty_prompt_returns_none() {
         assert!(append_interactive_prompt("claude", &[], "").is_none());
         assert!(append_interactive_prompt("claude", &[], "   ").is_none());

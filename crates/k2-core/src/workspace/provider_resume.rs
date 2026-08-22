@@ -416,10 +416,9 @@ pub struct InjectionProfile {
     /// `wake_headless`). For polling providers `deliver_post_wake` no
     /// longer uses this as a pre-poll floor — it polls `?2004h` from
     /// t=0, waits 1s after a 0→1 flip, then quiescence; this field is
-    /// still the wait `wake_headless` applies. Study-derived: hermes
-    /// needs ~7s before its first message lands (prompt ~3.6s + ~3s
-    /// agent init); codex/gemini get 2s headroom past their dialog
-    /// storms; **claude uses ~1.5s** (matches wake_headless: TUI needs
+    /// still the wait `wake_headless` applies. Liar providers
+    /// (codex/gemini/pi/hermes) share a flat **7s** paste-fallback
+    /// floor; **claude uses ~1.5s** (matches wake_headless: TUI needs
     /// ~1s before clean input); grok uses ~1.5s (≥ ~1.1s ?2004h mount
     /// + first-frame headroom).
     pub post_spawn_settle: Duration,
@@ -458,16 +457,8 @@ pub fn injection_profile_for_provider(provider: &str) -> InjectionProfile {
             ready_via_bracketed_paste: true,
             post_spawn_settle: Duration::from_millis(1000),
         },
-        // ?2004h liars — readiness is the settle floor alone.
-        "codex" | "gemini" => InjectionProfile {
-            ready_via_bracketed_paste: false,
-            post_spawn_settle: Duration::from_millis(2000),
-        },
-        "pi" => InjectionProfile {
-            ready_via_bracketed_paste: false,
-            post_spawn_settle: Duration::from_millis(1500),
-        },
-        "hermes" => InjectionProfile {
+        // ?2004h liars — readiness is the settle floor alone (flat 7s).
+        "codex" | "gemini" | "pi" | "hermes" => InjectionProfile {
             ready_via_bracketed_paste: false,
             post_spawn_settle: Duration::from_millis(7000),
         },
@@ -1340,24 +1331,14 @@ mod tests {
 
     #[test]
     fn injection_profile_settles_are_study_derived() {
-        // hermes: ~7s first-message (prompt ~3.6s + ~3s agent init).
-        assert_eq!(
-            injection_profile_for_provider("hermes").post_spawn_settle,
-            Duration::from_millis(7000)
-        );
-        // codex/gemini: 2s headroom past their dialog storms.
-        assert_eq!(
-            injection_profile_for_provider("codex").post_spawn_settle,
-            Duration::from_millis(2000)
-        );
-        assert_eq!(
-            injection_profile_for_provider("gemini").post_spawn_settle,
-            Duration::from_millis(2000)
-        );
-        assert_eq!(
-            injection_profile_for_provider("pi").post_spawn_settle,
-            Duration::from_millis(1500)
-        );
+        // Liar paste-fallback: flat 7s (hermes study was the slowest).
+        for provider in ["hermes", "codex", "gemini", "pi"] {
+            assert_eq!(
+                injection_profile_for_provider(provider).post_spawn_settle,
+                Duration::from_millis(7000),
+                "{provider} liar settle must be 7s"
+            );
+        }
         assert_eq!(
             injection_profile_for_provider("cursor").post_spawn_settle,
             Duration::from_millis(1000)

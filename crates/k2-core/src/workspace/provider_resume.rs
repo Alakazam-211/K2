@@ -389,15 +389,14 @@ fn parsed_session_exists(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InjectionProfile {
     /// `true` — the provider's `ESC[?2004h` (bracketed paste) flip is a
-    /// trustworthy "input box mounted" signal, so the injector may poll
-    /// `bracketed_paste_active()` (with the settle floor below) and
-    /// inject as soon as it flips:
+    /// trustworthy "input box mounted" signal, so `deliver_post_wake`
+    /// polls `bracketed_paste_active()` from t=0 (no pre-poll settle)
+    /// and waits 1s after a 0→1 flip, then quiescence:
     ///   - claude: ?2004h genuinely follows input-box mount (original
     ///     activity study) — the shipping poll works; DO NOT regress.
-    ///   - grok: ?2004h at ~1.1s, trustworthy for "UI mounted" — but
-    ///     the settle floor must still clear that mount window (see
-    ///     [`injection_profile_for_provider`]); paste alone is not enough
-    ///     without quiescence (dormant-wake / host-session first inject).
+    ///   - grok: ?2004h at ~1.1s, trustworthy for "UI mounted"; paste
+    ///     alone is not enough without the post-flip 1s + quiescence
+    ///     (dormant-wake / host-session first inject).
     ///   - cursor-agent: ?2004h is set only once the composer exists
     ///     (a TRUSTED dir; in an untrusted dir it never flips — the
     ///     poll correctly waits, then times out to best-effort).
@@ -412,20 +411,25 @@ pub struct InjectionProfile {
     ///   - hermes: prompt_toolkit toggles ?2004h per repaint and holds
     ///     it ON during the model wait — useless as a ready signal.
     pub ready_via_bracketed_paste: bool,
-    /// Conservative minimum post-spawn settle before the first
-    /// injection (the floor for polling providers; the whole wait for
-    /// non-polling ones). Study-derived: hermes needs ~7s before its
-    /// first message lands (prompt ~3.6s + ~3s agent init); codex/
-    /// gemini get 2s headroom past their dialog storms; **claude uses
-    /// ~1.5s** (matches wake_headless: TUI needs ~1s before clean input;
-    /// 400ms host-spawn floor caused Scout never-born typed-not-sent);
-    /// grok uses ~1.5s (≥ ~1.1s ?2004h mount + first-frame headroom).
+    /// Conservative minimum post-spawn settle. For non-polling
+    /// providers this is the whole wait (`deliver_post_wake` and
+    /// `wake_headless`). For polling providers `deliver_post_wake` no
+    /// longer uses this as a pre-poll floor — it polls `?2004h` from
+    /// t=0, waits 1s after a 0→1 flip, then quiescence; this field is
+    /// still the wait `wake_headless` applies. Study-derived: hermes
+    /// needs ~7s before its first message lands (prompt ~3.6s + ~3s
+    /// agent init); codex/gemini get 2s headroom past their dialog
+    /// storms; **claude uses ~1.5s** (matches wake_headless: TUI needs
+    /// ~1s before clean input); grok uses ~1.5s (≥ ~1.1s ?2004h mount
+    /// + first-frame headroom).
     pub post_spawn_settle: Duration,
 }
 
-/// Unknown-provider default: poll bracketed paste with a short settle.
-/// Pre-fix this matched claude's 400ms; **claude itself is now 1500ms**
-/// (see match arm). Unknown agents keep the short floor.
+/// Unknown-provider default: poll bracketed paste. `deliver_post_wake`
+/// ignores `post_spawn_settle` here (poll from t=0; 1s only after a
+/// 0→1 flip). `wake_headless` still uses this short floor. Pre-fix this
+/// matched claude's 400ms; **claude itself is now 1500ms** (see match
+/// arm). Unknown agents keep the short floor.
 pub const DEFAULT_INJECTION_PROFILE: InjectionProfile = InjectionProfile {
     ready_via_bracketed_paste: true,
     post_spawn_settle: Duration::from_millis(400),
@@ -482,8 +486,9 @@ const MAX_DECLARED_SETTLE_MS: u64 = 60_000;
 /// Parse one migration-0070 `agent_presets.readiness` value into a
 /// profile. The declared vocabulary (see `0070_agent_preset_metadata.sql`):
 ///
-/// - `bracketed-paste` — the ?2004h flip is trustworthy; poll it with
-///   the default 400ms floor (claude's shipping behavior).
+/// - `bracketed-paste` — the ?2004h flip is trustworthy; `deliver_post_wake`
+///   polls from t=0 (1s after a 0→1 flip). `wake_headless` still uses
+///   the default 400ms floor.
 /// - `settle:<ms>` — ?2004h lies; wait `<ms>` (capped by
 ///   [`MAX_DECLARED_SETTLE_MS`]) instead of polling.
 ///
@@ -1370,9 +1375,9 @@ mod tests {
 
     #[test]
     fn injection_profile_unknown_provider_degrades_to_claude_shaped_default() {
-        // Safe degradation: an unstudied agent keeps exactly the
-        // pre-slice-5 behavior (poll + 400ms floor, bounded by the
-        // caller's wake timeout).
+        // Safe degradation: an unstudied agent keeps the poll-paste
+        // default (deliver_post_wake polls from t=0; wake_headless still
+        // uses the 400ms floor).
         for provider in ["aider", "goose", "", "not-a-real-agent"] {
             assert_eq!(
                 injection_profile_for_provider(provider),

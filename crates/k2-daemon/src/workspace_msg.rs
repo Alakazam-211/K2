@@ -632,10 +632,14 @@ fn wake_lock_for(project_id: &str) -> Arc<PlMutex<()>> {
 /// best-effort anyway. Overridable per call via `--wake-timeout`.
 pub const DEFAULT_WAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Issue #9 — minimum settle before the post-wake inject, even if the
-/// readiness signal flips early. Guards against injecting into a
-/// half-drawn first frame.
+/// Floor for the liar / non-polling path only (`ready_via_bracketed_paste
+/// == false`). Polling providers do not pre-sleep this before the
+/// `?2004h` poll.
 const WAKE_MIN_SETTLE: Duration = Duration::from_millis(400);
+
+/// Post-mount headroom after a trustworthy `?2004h` 0→1; not used when
+/// paste was already on, not used for liar profiles.
+const POST_READY_SETTLE: Duration = Duration::from_millis(1000);
 
 /// Issue #9 — poll cadence while waiting for the woken session to become
 /// ready.
@@ -1348,9 +1352,9 @@ pub fn inject_raw_into_session(
 ///
 /// **Same shape as `k2 msg` dormant-wake** ([`deliver_post_wake`]): when
 /// `wait_ready > 0` this is a thin lookup + call into that path —
-/// min settle → readiness dialect → **screen quiescence** → locked
-/// inject. Do not re-implement readiness here; wake-path fixes (e.g.
-/// quiescence for early `?2004h`) must land once.
+/// poll `?2004h` from t=0 (1s after a 0→1 flip) or liar settle, then
+/// **screen quiescence** → locked inject. Do not re-implement readiness
+/// here; wake-path fixes must land once.
 ///
 /// `wait_ready == 0` injects immediately (legacy "already interactive"
 /// shortcut). Prefer a non-zero ceiling for host-session follow-ups so
@@ -1791,23 +1795,23 @@ fn relookup_live(project_id: &str, saved_session: Option<&str>) -> Option<sessio
 /// Issue #9 — wait until a freshly woken session is READY, then inject the
 /// body through the SHARED per-session lock (D7).
 ///
-/// Slice 5: readiness is now PER-PROVIDER via
+/// Slice 5: readiness is PER-PROVIDER via
 /// [`k2_core::workspace::provider_resume::InjectionProfile`]:
 /// - `ready_via_bracketed_paste == true` (claude/grok/cursor + the
-///   unknown-provider default — claude's shipping behavior, unchanged):
-///   poll `bracketed_paste_active()` after the settle floor, up to
-///   `wake_timeout`, then inject best-effort. For claude the ?2004h
-///   flip genuinely follows input-box mount (original study) — this
-///   path is byte-identical to pre-slice-5.
+///   unknown-provider default): poll `bracketed_paste_active()` from
+///   t=0 (no pre-poll `post_spawn_settle`). Extra [`POST_READY_SETTLE`]
+///   (1s) only after a real 0→1 `?2004h` flip (fresh spawn / dormant
+///   wake). Already-on (live follow-up) skips the 1s. Timeout without
+///   a flip: best-effort inject, no extra 1s.
 /// - `ready_via_bracketed_paste == false` (codex/gemini/pi/hermes):
 ///   ?2004h LIES for these providers (set before real readiness, or
 ///   toggled per repaint), so readiness is the profile's conservative
-///   settle floor alone — the WAKE_MIN_SETTLE pattern with a
-///   study-derived, per-provider duration (hermes ~7s first-message;
-///   codex/gemini 2s; pi 1.5s).
+///   settle floor alone — [`WAKE_MIN_SETTLE`] is the floor (hermes ~7s
+///   first-message; codex/gemini 2s; pi 1.5s). Do not poll `?2004h`.
 ///
-/// Returns the [`InjectOutcome`] so the caller maps it to the
-/// canonical response.
+/// Both paths then wait for screen quiescence before
+/// [`inject_and_submit`]. Returns the [`InjectOutcome`] so the caller
+/// maps it to the canonical response.
 fn deliver_post_wake(
     live: &session_lookup::LiveSession,
     payload: &str,
@@ -1815,36 +1819,51 @@ fn deliver_post_wake(
     profile: &k2_core::workspace::provider_resume::InjectionProfile,
 ) -> InjectOutcome {
     let start = std::time::Instant::now();
-    // Minimum settle even if paste mode flips immediately. Never below
-    // the historical 400ms floor.
-    std::thread::sleep(profile.post_spawn_settle.max(WAKE_MIN_SETTLE));
     if profile.ready_via_bracketed_paste {
-        loop {
-            if !live.is_child_alive() {
-                return InjectOutcome::PtyDied;
+        // Honest / polling: poll from t=0. Extra 1s only on a real 0→1
+        // `?2004h` flip (fresh spawn / dormant wake). Already-on skips
+        // it so live API follow-ups are not taxed. Ceiling without a
+        // flip: no extra 1s, best-effort inject.
+        let already_on = live.bracketed_paste_active();
+        if !already_on {
+            let mut saw_flip = false;
+            loop {
+                if !live.is_child_alive() {
+                    return InjectOutcome::PtyDied;
+                }
+                // Ready once the TUI advertises bracketed-paste (claude/grok/
+                // cursor set it once the input box is drawn). This is the same
+                // signal the injector relies on for framing.
+                if live.bracketed_paste_active() {
+                    saw_flip = true;
+                    break;
+                }
+                if start.elapsed() >= wake_timeout {
+                    // Best-effort: timed out waiting for the ready signal —
+                    // inject anyway (bounded, never blocks forever) rather
+                    // than dropping the message.
+                    log_debug!(
+                        "[msg/wake] session={} readiness wait hit {}ms ceiling — injecting best-effort",
+                        live.session_id(),
+                        wake_timeout.as_millis()
+                    );
+                    break;
+                }
+                std::thread::sleep(WAKE_POLL_INTERVAL);
             }
-            // Ready once the TUI advertises bracketed-paste (claude/grok/
-            // cursor set it once the input box is drawn). This is the same
-            // signal the injector relies on for framing.
-            if live.bracketed_paste_active() {
-                break;
+            if saw_flip {
+                std::thread::sleep(POST_READY_SETTLE);
+                if !live.is_child_alive() {
+                    return InjectOutcome::PtyDied;
+                }
             }
-            if start.elapsed() >= wake_timeout {
-                // Best-effort: timed out waiting for the ready signal — inject
-                // anyway (bounded, never blocks forever) rather than dropping
-                // the message. Matches the pre-#9 "sleep then send" intent.
-                log_debug!(
-                    "[msg/wake] session={} readiness wait hit {}ms ceiling — injecting best-effort",
-                    live.session_id(),
-                    wake_timeout.as_millis()
-                );
-                break;
-            }
-            std::thread::sleep(WAKE_POLL_INTERVAL);
         }
-    } else if !live.is_child_alive() {
-        // Non-polling provider: the settle above WAS the readiness wait.
-        return InjectOutcome::PtyDied;
+    } else {
+        // Liar / non-polling: the settle floor IS the readiness wait.
+        std::thread::sleep(profile.post_spawn_settle.max(WAKE_MIN_SETTLE));
+        if !live.is_child_alive() {
+            return InjectOutcome::PtyDied;
+        }
     }
 
     // Quiescence gate. The bracketed-paste ready signal (`?2004h`) is set
@@ -3420,9 +3439,10 @@ mod tests {
         // Proof: hold the session's shared inject lock, then run
         // deliver_post_wake in a thread. If it takes the shared lock it
         // BLOCKS until we release; a private/un-locked path would deliver
-        // immediately. `cat` advertises no bracketed-paste, so the
-        // readiness wait runs to the (short) timeout, then the inject
-        // blocks on the held lock.
+        // immediately. DEFAULT (polling) + `cat` (never `?2004h`) + 150ms
+        // timeout hits the poll ceiling with no 400ms pre-sleep and no
+        // extra 1s, then the quiescence ceiling, then blocks on the held
+        // lock.
         let live = spawn_cat_live();
         let sid = live.session_id();
         let lock = lock_for(&sid);
@@ -3438,8 +3458,8 @@ mod tests {
             )
         });
 
-        // Past the readiness settle (WAKE_MIN_SETTLE=400ms) it has reached
-        // the inject and is blocked on the held shared lock.
+        // Past the poll+quiescence ceilings (~150ms) it has reached the
+        // inject and is blocked on the held shared lock.
         std::thread::sleep(Duration::from_millis(900));
         assert!(
             !handle.is_finished(),
@@ -3485,6 +3505,29 @@ mod tests {
             t0.elapsed() < Duration::from_secs(5),
             "non-polling profile must inject after the settle floor, not the 30s poll ceiling (took {:?})",
             t0.elapsed()
+        );
+        live.0.kill();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deliver_post_wake_poll_timeout_without_flip_skips_post_ready_settle() {
+        // `cat` never advertises `?2004h`. A polling profile must hit the
+        // short wake_timeout ceiling and inject best-effort WITHOUT the
+        // extra POST_READY_SETTLE (1s) that only follows a real 0→1 flip.
+        let live = spawn_cat_live();
+        let t0 = std::time::Instant::now();
+        let out = deliver_post_wake(
+            &live,
+            "[from owner] hi",
+            Duration::from_millis(150),
+            &k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
+        );
+        let elapsed = t0.elapsed();
+        assert_eq!(out, InjectOutcome::Delivered);
+        assert!(
+            elapsed < Duration::from_millis(800),
+            "timeout without a ?2004h flip must not add POST_READY_SETTLE (took {elapsed:?})"
         );
         live.0.kill();
     }

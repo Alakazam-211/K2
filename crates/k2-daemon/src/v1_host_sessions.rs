@@ -86,8 +86,9 @@ const SPAWN_PROMPT_READY_TIMEOUT_SECS: u64 = 20;
 
 /// Follow-up inject into an already-live host session: same readiness shape
 /// as post-wake (`deliver_post_wake` via `inject_raw_…_with_profile`) but a
-/// shorter ceiling so an idle composer still settles quickly (~settle +
-/// quiescence) without blocking chat for a full cold-start window.
+/// shorter ceiling so an idle composer still settles quickly (paste already
+/// on → skip the post-flip 1s, then quiescence) without blocking chat for
+/// a full cold-start window.
 const HOST_FOLLOWUP_INJECT_TIMEOUT_SECS: u64 = 10;
 
 fn spawn_prompt_ready_timeout() -> Duration {
@@ -346,9 +347,9 @@ fn host_session_resumable(ws_path: &str, session_id: &str) -> bool {
 /// the request body. Empty prompt = reaper re-arm only (no inject).
 ///
 /// Inject shape matches `k2 msg` post-wake ([`workspace_msg::deliver_post_wake`]
-/// via profile-aware inject): settle → readiness dialect → screen
-/// quiescence → paste. `wait_ready = 0` was a mid-turn black hole (paste
-/// into a still-streaming Grok/Claude frame).
+/// via profile-aware inject): poll `?2004h` from t=0 (1s after a 0→1 flip)
+/// or liar settle → screen quiescence → paste. `wait_ready = 0` was a
+/// mid-turn black hole (paste into a still-streaming Grok/Claude frame).
 /// Live inject / live-resume. Optionally re-mints capability JWTs to the
 /// session cap **file** when `capabilities` is present (process env is
 /// immutable — file is multi-turn SSOT; agent re-reads each turn).
@@ -779,8 +780,9 @@ pub(crate) fn spawn_host_session_after_acquire(
         let ready_timeout = spawn_prompt_ready_timeout();
         // W4: the spawned agent's readiness dialect via the ONE shared
         // precedence chain (preset-declared `readiness` metadata → static
-        // provider table → poll default). ?2004h LIES for codex/gemini/
-        // pi/hermes — polling bracketed paste would inject into their
+        // provider table → poll default). Polling providers poll `?2004h`
+        // from t=0 and wait 1s after a 0→1 flip; ?2004h LIES for
+        // codex/gemini/pi/hermes — polling would inject into their
         // startup dialogs (which EAT text); those profiles wait their
         // settle floor instead, still capped by the ceiling above.
         let inject_profile = policy::resolve_host_injection_profile(ws_path);

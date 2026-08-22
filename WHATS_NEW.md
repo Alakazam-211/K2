@@ -11,6 +11,8 @@ Heartbeat **fires** keep a workspace warm; having a schedule is not immortality.
 
 Dragging workspaces around in **Settings → Workspaces / Agents** no longer floods the remote tunnel (eat-echo + a Tickets badge count instead of one list per workspace). A current daemon also returns workspaces **inside** `projects/list`, so boot / host-switch / a peer's color change is one GET, not one per workspace. Rename paints immediately like color.
 
+Waking a sleeping chat (`k2 msg`) is less likely to type-not-send: we wait 1s after the TUI says the input box is up, not 1.5s from process start.
+
 If a remote `/cli` call fails while the host still looks connected (`Failed to fetch` / handshake eof), the app tries **once more immediately** (to evict a dead WKWebView socket) and then probes — not five times over ~3.6s. Login and host restart/update still use the longer retry window.
 
 ### What to try

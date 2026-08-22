@@ -528,6 +528,7 @@ fn run_fresh_fire(
 
     match result {
         Ok(terminal_id) => {
+            crate::active_reaper::note_workspace_need(project_id);
             stamp_fired_and_release(project_id, &hb.name);
             let decision = write_fired_audit(project_id, agent_name, hb,
                 "smart_launch: no saved session — fresh fire", catchup_of);
@@ -586,6 +587,7 @@ fn run_workspace_session_delivery(
     );
 
     if result.success {
+        crate::active_reaper::note_workspace_need(project_id);
         let branch = result
             .branch
             .clone()
@@ -659,6 +661,7 @@ fn run_inject(
     std::thread::sleep(std::time::Duration::from_millis(150));
     let _ = live.write(b"\r");
 
+    crate::active_reaper::note_workspace_need(project_id);
     stamp_fired_and_release(project_id, &hb.name);
     let target_id = live.session_id().to_string();
 
@@ -861,6 +864,7 @@ fn run_resume_and_fire(
                     "heartbeatName": hb.name,
                 }),
             );
+            crate::active_reaper::note_workspace_need(project_id);
             stamp_fired_and_release(&project_id, &hb.name);
             let decision = write_fired_audit(project_id, agent_name, hb,
                 "smart_launch: resumed session, fired wakeup", catchup_of);

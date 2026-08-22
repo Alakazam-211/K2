@@ -161,6 +161,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             {
                                 match crate::canonical_session::ensure_canonical_session(&p) {
                                     Ok(out) => {
+                                        crate::active_reaper::note_workspace_need(&out.project_id);
                                         ensure_summary = serde_json::json!({
                                             "session_id": out.session_id,
                                             "agent": out.agent_name,

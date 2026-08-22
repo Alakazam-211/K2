@@ -59,10 +59,10 @@ fn shared() -> AgentMap {
 /// terminal-id-shaped keys; nothing depends on a bare-name slot.
 pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
     register_inner(agent_name.into(), session);
-    // Active membership derives from live-session PRESENCE — a session
-    // appearing changes the canonical Active set, so broadcast. Must run
-    // AFTER register_inner: the inner body holds the shared DB lock and
-    // the recompute re-takes it.
+    // Active membership is window/pin only. A spawn without a need
+    // does not join the set; recompute still broadcasts so a concurrent
+    // need's touch is visible. Must run AFTER register_inner: the inner
+    // body holds the shared DB lock and the recompute re-takes it.
     crate::active_reaper::recompute_and_broadcast_active();
 }
 
@@ -372,10 +372,10 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
         session.kill();
     }
     if removed.is_some() {
-        // Presence-based Active membership: a session going away can
-        // drop its workspace from the canonical Active set (once no
-        // other live session resolves to it). The db lock is released
-        // above (drop(conn)); the recompute re-takes it safely.
+        // Window/pin Active membership: a session going away does not
+        // itself drop the workspace, but recompute keeps the snapshot
+        // current. The db lock is released above (drop(conn)); the
+        // recompute re-takes it safely.
         crate::active_reaper::recompute_and_broadcast_active();
     }
     removed

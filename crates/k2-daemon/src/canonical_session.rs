@@ -60,10 +60,9 @@
 //!   `agents launch <name>` workaround with a more semantically
 //!   correct call that returns the canonical IDs the caller can
 //!   use for follow-up inject/wake operations.
-//! - Daemon boot sweep: at startup, walks every workspace whose
-//!   `agent_mode` is set to a bot mode and calls ensure for each
-//!   that doesn't have a live canonical session. Recovers cleanly
-//!   from a daemon restart.
+//! - Daemon boot sweep: **does not spawn**. Canonical chats stay
+//!   dead until a need. The function remains as a no-op chokepoint
+//!   so boot and tests share one entry.
 //! - `DaemonWakeProvider::wake` auto-launch path: refactored to
 //!   call this helper rather than duplicating the spawn-and-register
 //!   logic. Wake and proactive ensure converge on the same code.
@@ -377,91 +376,13 @@ fn stamp_active_terminal_id(project_id: &str, terminal_id: &str) {
     );
 }
 
-/// Boot-time sweep: walk every workspace whose `agent_mode` is set
-/// to a bot mode (`custom`, `manager`, `k2so`) and AGENT.md exists,
-/// and ensure each has a canonical session. Recovers cleanly from
-/// a daemon restart that wiped `v2_session_map`.
-///
-/// 0.40.24 (S5): the sweep honors `projects.agent_enabled` — a paused
-/// agent (`k2 agent set <name> --enabled false`) must STAY paused
-/// across a daemon restart, so disabled rows are skipped (and logged).
-/// The column is `NOT NULL DEFAULT 0` (drizzle 0012) and every
-/// supported mode-setting path syncs it to 1 for bot modes, so
-/// enabled == 1 is the only resurrectable state.
-///
-/// Best-effort per workspace: a failure on one workspace doesn't
-/// stop the sweep from continuing to the next.
+/// Boot-time sweep — **no-op**. Daemon start does not spawn the
+/// bot-mode fleet. Canonical chats stay dead until a need (`/cli/mode`
+/// bot, explicit HTTP ensure-canonical, `deliver_live`, heartbeat fire,
+/// `POST /cli/projects/activate`). Kept as a named entry so boot and
+/// tests still call a single chokepoint.
 pub fn boot_sweep_ensure_canonical_sessions() {
-    let projects: Vec<(String, String, bool)> = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let mut stmt = match conn.prepare(
-            // Stage A dual-read: include CLI-canonical `k2` alongside
-            // the still-stored legacy `k2so` spelling.
-            "SELECT id, path, COALESCE(agent_enabled, 0) FROM projects \
-             WHERE agent_mode IN ('custom', 'manager', 'k2so', 'k2')",
-        ) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)? == 1,
-            ))
-        });
-        match rows {
-            Ok(it) => it.flatten().collect(),
-            Err(_) => return,
-        }
-    };
-
-    if projects.is_empty() {
-        return;
-    }
-
-    let mut ensured = 0usize;
-    let mut reused = 0usize;
-    let mut errors = 0usize;
-    for (_pid, path, enabled) in &projects {
-        // Resurrect gate (0.40.24 S5): a disabled agent stays down.
-        // `k2 agent set <name> --enabled false` pauses the agent
-        // without changing its mode — before this gate, a daemon
-        // restart silently un-paused it.
-        if !enabled {
-            log_debug!(
-                "[daemon/canonical] boot sweep skipped workspace {path}: agent_enabled=0 (paused)"
-            );
-            continue;
-        }
-        // Skip workspaces whose filesystem dir is gone (deleted on
-        // disk but still in the DB).
-        if !std::path::Path::new(path).exists() {
-            continue;
-        }
-        // Skip workspaces without an AGENT.md (mode set but agent
-        // not yet authored). The boot sweep should not implicitly
-        // synthesize an agent.
-        let agent_home = k2_core::workspace_dot_dir(path).join("agent");
-        if !k2_core::workspace::agent_identity::persona_present_in(&agent_home) {
-            continue;
-        }
-        match ensure_canonical_session(path) {
-            Ok(out) if out.reused => reused += 1,
-            Ok(_) => ensured += 1,
-            Err(e) => {
-                log_debug!(
-                    "[daemon/canonical] boot sweep skipped workspace {path}: {e}"
-                );
-                errors += 1;
-            }
-        }
-    }
-
-    if ensured + reused + errors > 0 {
-        log_debug!(
-            "[daemon/canonical] boot sweep complete: ensured={ensured} reused={reused} errors={errors}"
-        );
-    }
+    log_debug!(
+        "[daemon/canonical] boot sweep skipped — no fleet spawn until a workspace need"
+    );
 }

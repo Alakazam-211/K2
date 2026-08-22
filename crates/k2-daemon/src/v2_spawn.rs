@@ -306,26 +306,13 @@ pub fn can_sandbox() -> bool {
 /// items) after a daemon restart, substitute the persisted launch so we re-run
 /// e.g. `claude --resume <id>` instead of dropping the user into a bare shell:
 ///
-/// - **Ad-hoc tabs** (`agent_name == tab-<...>`) recover command + args from
-///   `workspace_tab_sessions`, splicing the row's argv-derived session id back
-///   in — now via the ProviderResume adapter's grammar (flag style appends
-///   `--resume <id>`, byte-identical for claude; subcommand style rebuilds
-///   `resume <id>` for codex). A command UNKNOWN to the adapter table gets NO
-///   splice (never invent flags for unknown providers) and replays its saved
-///   args bare.
-/// - **The pinned chat** (`agent_name == project_id`, no tab row after Phase 3)
-///   routes through the canonical resume resolver
-///   (`resume_chat::resolve_resume_chat_args`) — the pinned-chat identity SSOT
-///   (`workspace_sessions.session_id` + `harness`) picks the agent AND the
-///   argv, so a grok-harness pinned chat recovers as `grok --resume <sid>`,
-///   claude recovers byte-identically
-///   (`--dangerously-skip-permissions --resume <sid>` / `--session-id <mint>`),
-///   and self-minting providers recover bare with post-hoc id adoption.
-///   Pre-3b the non-claude case recovered bare with NO resume (the Slice-2
-///   gate); the claude case spliced the SSOT id without an exists-check —
-///   the resolver now also converges a ghost id to the newest real on-disk
-///   session (GH#24 semantics) instead of resuming a conversation that no
-///   longer exists.
+/// - **API host-sessions** (`api-*`) never recover here (0.40.105).
+/// - **Canonical chat** (`agent_name == project_id`) stays dead until a
+///   need — empty-command leftover argv must not revive it.
+/// - **Extra GUI tabs** (`tab-*`) are not mass-revived on restart.
+/// - Other leftover tab-rows (non-canonical, non-tab, non-api keys)
+///   still replay saved command + splice the session id via the
+///   ProviderResume adapter when one exists.
 ///
 /// Returns `None` for an unregistered cwd or when nothing is recoverable
 /// (spawn falls through to a bare shell, as before).
@@ -336,6 +323,11 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
     // (capped). GUI restart-recovery must not relaunch every leftover
     // from_api row after a reboot (Scout interview tabs, 2026-08-21).
     if k2_core::workspace_session_handles::is_api_agent_name(agent_name) {
+        return None;
+    }
+    // Extra GUI tabs stay dead across reboot until a need — do not
+    // mass-revive leftover `tab-*` empty-command argv.
+    if k2_core::workspace_session_handles::is_tab_agent_name(agent_name) {
         return None;
     }
 
@@ -360,36 +352,27 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
             tab_row.as_ref().and_then(|r| r.session_id.clone()),
         )
     };
-    // pinned-chat-identity-ssot PRD §4.3.1 (GH#24): the canonical pinned
-    // chat (`agent_name == project_id`) sources its resume id from the
-    // SSOT — `workspace_sessions.session_id` — NOT from
-    // `workspace_tab_sessions`. Ad-hoc Cmd+T tabs have no
-    // workspace_sessions row and legitimately recover from the tab table.
-    let is_pinned = agent_name == project_id;
+    // Canonical chat stays dead until a need (deliver_live / heartbeat
+    // / activate / ensure-canonical). Empty-command leftover argv must
+    // not revive it on GUI restart-recovery.
+    if agent_name == project_id {
+        log_debug!(
+            "[v2-spawn] restart-recovery: skip canonical chat project={project_id} (dead until need)"
+        );
+        return None;
+    }
 
-    // Tab-row path (legacy/pre-Phase-3 rows; ad-hoc tabs): replay the
-    // saved command, splice the session id in the command's own grammar.
+    // Tab-row path for leftover non-canonical, non-tab, non-api keys
+    // (e.g. a named sidecar that isn't `tab-*`). Replay the saved
+    // command, splice the session id in the command's own grammar.
     if let Some(saved_cmd) = tab_cmd {
         let mut saved_args: Vec<String> = tab_args_json
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_else(|| {
-                // Tab row without args: the standard pinned-chat base
-                // flags so a recovered claude still runs headlessly.
                 vec!["--dangerously-skip-permissions".to_string()]
             });
-        let resume_id: Option<String> = if is_pinned {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            k2_core::db::schema::WorkspaceSession::get(&conn, &project_id)
-                .ok()
-                .flatten()
-                .and_then(|row| row.session_id)
-                .filter(|s| !s.is_empty())
-        } else {
-            tab_session_id
-        };
-        if let Some(sid) = resume_id.as_deref() {
+        if let Some(sid) = tab_session_id.as_deref() {
             match provider_resume_for_command(&saved_cmd) {
                 Some(adapter) => {
                     // Drop any persisted premint pair (`--session-id <v>`
@@ -411,10 +394,6 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
                     }
                 }
                 None => {
-                    // Unknown provider: replay the saved args verbatim —
-                    // splicing `--resume` into an unknown CLI could be
-                    // anything from a no-op to a crash (never invent
-                    // flags for unknown providers).
                     log_debug!(
                         "[v2-spawn] restart-recovery: command {:?} maps to no resume adapter; \
                          replaying saved args without a resume splice",
@@ -424,50 +403,13 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
             }
         }
         log_debug!(
-            "[v2-spawn] restart-recovery: project={} agent={} pinned={} resume_source={} replayed command={} args={:?}",
+            "[v2-spawn] restart-recovery: project={} agent={} resume_source=workspace_tab_sessions replayed command={} args={:?}",
             project_id,
             agent_name,
-            is_pinned,
-            if is_pinned { "workspace_sessions(SSOT)" } else { "workspace_tab_sessions" },
             saved_cmd,
             saved_args
         );
         return Some((saved_cmd, saved_args));
-    }
-
-    // Pinned no-tab-row (Phase 3): the canonical resume resolver owns
-    // command + argv + identity (harness wins; converge/premint/pending
-    // discovery — see fn doc).
-    if is_pinned {
-        match k2_core::workspace::resume_chat::resolve_resume_chat_args(cwd) {
-            Ok(resolved) => {
-                if resolved.pending_session_discovery {
-                    k2_core::workspace::provider_resume::defer_adopt_discovered_session(
-                        resolved.provider.clone(),
-                        cwd.to_string(),
-                    );
-                }
-                log_debug!(
-                    "[v2-spawn] restart-recovery: project={} agent={} pinned=true \
-                     resume_source=resume_resolver provider={} replayed command={} args={:?}",
-                    project_id,
-                    agent_name,
-                    resolved.provider,
-                    resolved.command,
-                    resolved.args
-                );
-                return Some((resolved.command, resolved.args));
-            }
-            Err(e) => {
-                log_debug!(
-                    "[v2-spawn] restart-recovery: resume resolve failed for {} — \
-                     falling through to a bare spawn: {}",
-                    cwd,
-                    e
-                );
-                return None;
-            }
-        }
     }
     None
 }
@@ -1945,6 +1887,39 @@ mod tests {
             )
             .is_none(),
             "api-* must not restart-recover after reboot"
+        );
+    }
+
+    #[test]
+    fn recovered_launch_skips_canonical_chat() {
+        k2_core::db::init_for_tests();
+        let pid = "canonical-dead-until-need";
+        let cwd = "/tmp/canonical-dead-until-need";
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                rusqlite::params![pid, cwd, "dead"],
+            )
+            .expect("seed canonical project");
+        }
+        assert!(
+            recovered_launch(pid, cwd).is_none(),
+            "canonical chat must stay dead until a need"
+        );
+    }
+
+    #[test]
+    fn recovered_launch_skips_tab_sessions() {
+        k2_core::db::init_for_tests();
+        assert!(
+            recovered_launch(
+                "tab-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "/tmp/any",
+            )
+            .is_none(),
+            "must not mass-revive tab-* on restart recovery"
         );
     }
 

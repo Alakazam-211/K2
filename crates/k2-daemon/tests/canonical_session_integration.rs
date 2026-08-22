@@ -452,47 +452,40 @@ async fn ensure_canonical_session_errors_when_no_agent_md() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Boot sweep: walks bot-mode workspaces and ensures each
+// Boot sweep: daemon start does not spawn the canonical fleet
 // ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn boot_sweep_ensures_bot_mode_workspaces_with_agent_md() {
+async fn boot_sweep_does_not_spawn_canonical_chats() {
     let _g = lock();
     init_for_tests();
     v2_session_map::clear_for_tests();
 
-    // Three workspaces in three different states — sweep must
-    // ensure exactly the one that's both bot-mode AND has AGENT.md.
+    // Bot-mode + AGENT.md is exactly the fleet the old sweep spawned.
     let bot_with_agent = setup_project("sweep-bot-agent", "bot+agent", "custom");
     write_test_agent_md(&bot_with_agent, "scout", "custom");
 
     let _bot_without_agent = setup_project("sweep-bot-no-agent", "bot-only", "custom");
-    // No AGENT.md — sweep should skip.
-
     let _off_workspace = setup_project("sweep-off", "off", "off");
     write_test_agent_md(&_off_workspace, "scout", "custom");
-    // Mode 'off' — sweep should skip even though AGENT.md exists.
 
     boot_sweep_ensure_canonical_sessions();
 
-    // Only the bot+agent workspace should have a canonical session.
-    // **0.37.5:** canonical key is bare workspace_id.
     assert!(
-        v2_session_map::lookup_by_agent_name("sweep-bot-agent").is_some(),
-        "boot sweep must ensure a session for bot-mode + AGENT.md workspaces"
+        v2_session_map::lookup_by_agent_name("sweep-bot-agent").is_none(),
+        "boot sweep must not spawn canonical chats — daemon start is zero until a need"
     );
     assert!(
         v2_session_map::lookup_by_agent_name("sweep-bot-no-agent").is_none(),
-        "boot sweep must skip bot-mode workspaces without AGENT.md"
+        "boot sweep must not spawn for bot-mode without AGENT.md"
     );
-    // Regression guard: legacy `<pid>:<agent>` shape MUST NOT exist.
     assert!(
         v2_session_map::lookup_by_agent_name("sweep-bot-agent:scout").is_none(),
         "0.37.5 regression: legacy `sweep-bot-agent:scout` must NOT be registered"
     );
     assert!(
         v2_session_map::lookup_by_agent_name("sweep-off:scout").is_none(),
-        "boot sweep must skip mode='off' workspaces"
+        "boot sweep must not spawn mode='off' workspaces"
     );
 
     v2_session_map::clear_for_tests();
@@ -509,43 +502,42 @@ async fn boot_sweep_ensures_bot_mode_workspaces_with_agent_md() {
 /// pause silently didn't survive a daemon restart. The sweep must now
 /// skip disabled agents — and still resurrect enabled ones.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn boot_sweep_skips_disabled_agents_and_resurrects_enabled_ones() {
+async fn boot_sweep_does_not_resurrect_enabled_or_disabled_agents() {
     let _g = lock();
     init_for_tests();
     v2_session_map::clear_for_tests();
 
-    // Both workspaces are fully resurrectable EXCEPT for the enabled
-    // bit: bot mode + AGENT.md on disk.
     let enabled_ws = setup_project("sweep-gate-enabled", "gate-enabled", "custom");
     write_test_agent_md(&enabled_ws, "scout", "custom");
 
     let disabled_ws = setup_project("sweep-gate-disabled", "gate-disabled", "custom");
     write_test_agent_md(&disabled_ws, "scout", "custom");
-    // The pause: what `k2 agent set gate-disabled --enabled false`
-    // stores (agent_mode stays 'custom').
     set_agent_enabled("sweep-gate-disabled", false);
 
-    // Simulate the post-restart boot sweep (v2_session_map is empty —
-    // cleared above — exactly like a fresh daemon process).
     boot_sweep_ensure_canonical_sessions();
 
     assert!(
-        v2_session_map::lookup_by_agent_name("sweep-gate-enabled").is_some(),
-        "boot sweep must still resurrect an ENABLED bot-mode agent"
+        v2_session_map::lookup_by_agent_name("sweep-gate-enabled").is_none(),
+        "boot sweep must not resurrect even an ENABLED bot-mode agent"
     );
     assert!(
         v2_session_map::lookup_by_agent_name("sweep-gate-disabled").is_none(),
-        "boot sweep must NOT resurrect an agent paused with agent_enabled=0 — \
-         `k2 agent set --enabled false` must survive a daemon restart"
+        "boot sweep must not resurrect a paused agent"
     );
 
-    // Re-enable + re-sweep: the agent is resurrectable again (the gate
-    // pauses, it doesn't retire).
     set_agent_enabled("sweep-gate-disabled", true);
     boot_sweep_ensure_canonical_sessions();
     assert!(
+        v2_session_map::lookup_by_agent_name("sweep-gate-disabled").is_none(),
+        "re-enabling + boot sweep still must not spawn — need-driven ensure does"
+    );
+
+    let path = disabled_ws.to_string_lossy().into_owned();
+    let ensured = ensure_canonical_session(&path).expect("explicit ensure is a need");
+    assert!(!ensured.reused, "explicit ensure must spawn the dead canonical chat");
+    assert!(
         v2_session_map::lookup_by_agent_name("sweep-gate-disabled").is_some(),
-        "re-enabling the agent must make the boot sweep resurrect it again"
+        "explicit ensure_canonical_session must spawn after boot left it dead"
     );
 
     v2_session_map::clear_for_tests();

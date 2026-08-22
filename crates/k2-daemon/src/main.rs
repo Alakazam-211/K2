@@ -1508,16 +1508,13 @@ fn run_workspace_unification_sweep() {
     // canonical shape land. Defensive — no-op on cold boot since
     // the map starts empty; meaningful when the daemon binary is
     // upgraded without a restart and old in-memory entries linger.
-    // MUST run before `boot_sweep_ensure_canonical_sessions` so the
-    // sweep's idempotency check sees the post-migration shape.
+    // MUST run before any later canonical-key lookup so post-upgrade
+    // lookups under the new canonical shape land.
     crate::v2_session_map::migrate_legacy_keys_to_bare_pid();
 
-    // 0.37.2: proactively ensure each bot-mode workspace has a
-    // canonical session registered. Closes the SMS-bridge race
-    // window where a webhook's `--wake` arrives before any caller
-    // has spawned the canonical PTY. Best-effort per workspace; a
-    // failure on one workspace doesn't stop the sweep. See
-    // `canonical_session::boot_sweep_ensure_canonical_sessions`.
+    // Need-clock Active: this is a no-op (does not spawn the bot-mode
+    // fleet). Canonical chats stay dead until a need (activate, msg,
+    // heartbeat fire, /cli/mode, explicit ensure-canonical).
     crate::canonical_session::boot_sweep_ensure_canonical_sessions();
 }
 

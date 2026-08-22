@@ -1749,6 +1749,7 @@ fn inject_live(
         let _ = WorkspaceSession::save_active_terminal_id(&conn, project_id, &target_id);
     }
 
+    crate::active_reaper::note_workspace_need(project_id);
     MsgResponse::ok(target_id, branch)
 }
 
@@ -1981,6 +1982,7 @@ fn wake_and_fire(
         let payload = format_message(from, text, command);
         return match inject_and_submit(&live, &payload) {
             InjectOutcome::Delivered => {
+                crate::active_reaper::note_workspace_need(project_id);
                 MsgResponse::ok(live.session_id().to_string(), "wake_coalesced")
             }
             InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
@@ -2090,19 +2092,6 @@ fn wake_and_fire(
         }
     }
 
-    // The wake IS an activation (#672 invariant: opening/attaching a
-    // workspace chat activates it). Bar membership itself derives from
-    // live-session PRESENCE (the broadcast unions live sessions in),
-    // so the spawn above already re-adds the workspace on the next
-    // broadcast — the interaction bump here is for the REAPER's aging
-    // window, so it doesn't close the freshly-woken session
-    // mid-conversation (pre-fix it armed grace on the next tick), and
-    // the suppression clear lifts a pending dismiss (a wake means the
-    // workspace is wanted back).
-    let _ = k2_core::projects_ops::projects_touch_interaction(project_id);
-    crate::active_reaper::clear_dismiss_suppression(project_id);
-    crate::active_reaper::recompute_and_broadcast_active();
-
     // Self-minting provider (pi/codex/gemini/cursor): adopt the session
     // id the agent creates on disk a beat after spawn, stamping
     // `workspace_sessions.session_id` + `harness` (Slice 3b).
@@ -2164,6 +2153,7 @@ fn wake_and_fire(
                 agent_name,
                 from
             );
+            crate::active_reaper::note_workspace_need(project_id);
             MsgResponse::ok_woke(target_id, branch, wake_ms)
         }
         InjectOutcome::PtyDied => {

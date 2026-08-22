@@ -9,28 +9,22 @@
 //! two connected clients can no longer disagree about what's Active and
 //! reap a session another client is using — the GH#22 root cause.
 //!
-//! ## Gates (ACTIVE-ONLY — load-bearing design decision)
+//! ## Gates (need-clock — load-bearing design decision)
 //! A chat PTY is reap-eligible iff:
-//!   1. `!in_active_set(projectId)` — aged out of the window AND not
-//!      `manually_active`, and
-//!   2. `!heartbeat_enabled(projectId)` — a heartbeat keeps it warm, and
-//!   3. **either** no live PTY remains, **or** an explicit `dismiss`
-//!      force-armed the grace (see below).
+//!   1. `!in_active_set(projectId)` — aged out of the interaction
+//!      window AND not `manually_active` (pin), **or** an explicit
+//!      `dismiss` force-armed the grace, and
+//!   2. the mapped PTY is a reap candidate (canonical
+//!      `agent_name == project_id` or `{project_id}:hb:*`). Extra
+//!      `tab-*`, `api-*`, and `from_api` sessions are never closed.
 //!
-//! ### Live PTY spares age-out reaps (P0 — control-plane blip)
-//! Opening/attaching a workspace chat IS an activation
-//! (`POST /cli/projects/activate` bumps `last_interaction_at`). That
-//! works while a client can reach the daemon. A transient loss of
-//! `connect.k2.dev` / events-WS (client-side blip) stops those
-//! activations even though **agent PTYs are still healthy on-box**. If
-//! we aged solely on `last_interaction_at`, every live agent would look
-//! "dormant" and the reaper would `[v2-kill]` them in a batch — silent
-//! loss of real work (2026-07-22 forensics / GH#22 class).
-//!
-//! **Rule:** age-out reaping never kills a workspace that still has a
-//! live mapped PTY. Only **explicit dismiss** (forced grace) may
-//! force-close a live chat. Heartbeat-warm still always spares.
-//! `subscriberCount` stays data, not a reap input.
+//! The need clock (`projects.last_interaction_at`) wins even if the
+//! agent is Working. A live PTY does **not** spare age-out — only pin
+//! or a fresh need (activate / deliver_live / heartbeat fire /
+//! ensure-canonical) keeps the window open. Heartbeat *enablement* is
+//! not a spare bit; a heartbeat **fire** is a need (it bumps the
+//! clock via [`note_workspace_need`]). Forced dismiss still fires
+//! against a live PTY.
 //!
 //! ## Grace
 //! When a workspace first becomes reap-eligible — either the window-tick
@@ -90,13 +84,10 @@ struct ReaperSignal {
     /// Drained by the reaper on each pass; an entry persists in the
     /// armed-timer map until it fires or the workspace re-activates.
     pending_dismiss: Mutex<HashSet<String>>,
-    /// Project ids whose live session is under an armed dismiss-grace.
-    /// The broadcast's live-session union skips these so a dismissed
-    /// tile leaves the Active Bar immediately instead of lingering the
-    /// 15s until the reap fires. Maintained by `arm_dismiss_grace`
-    /// (insert) and each reconcile pass (rebuilt from the forced
-    /// timers); a wake/re-activation clears it eagerly via
-    /// [`clear_dismiss_suppression`].
+    /// Project ids under an armed dismiss-grace. A wake/re-activation
+    /// clears this eagerly via [`clear_dismiss_suppression`] so a
+    /// visit-after-dismiss un-suppresses without waiting for the next
+    /// reaper tick.
     dismiss_suppressed: Mutex<HashSet<String>>,
     notify: Notify,
 }
@@ -114,19 +105,17 @@ fn signal() -> &'static ReaperSignal {
 /// Arm the grace-reap for `project_id` IMMEDIATELY (called from
 /// `POST /cli/projects/dismiss`). The workspace is treated as
 /// reap-eligible right away — the reaper won't wait for the interaction
-/// window to expire — but the `!heartbeat` gate + the 15s grace + the
-/// fire-time Active re-check still apply, and re-activating within the
-/// grace cancels it. Wakes the reaper task so the grace clock starts now.
+/// window to expire — but the 15s grace + the fire-time Active re-check
+/// still apply, and re-activating within the grace cancels it. Wakes
+/// the reaper task so the grace clock starts now. Heartbeat enablement
+/// does not spare; a later heartbeat *fire* is a need and cancels via
+/// [`note_workspace_need`].
 pub fn arm_dismiss_grace(project_id: &str) {
     let sig = signal();
     sig.pending_dismiss
         .lock()
         .unwrap()
         .insert(project_id.to_string());
-    // Suppress the live-session union for this workspace so the tile
-    // leaves the bar on the very next broadcast (the dismiss handler
-    // recomputes immediately after this call) rather than lingering
-    // until the grace fires.
     sig.dismiss_suppressed
         .lock()
         .unwrap()
@@ -134,11 +123,25 @@ pub fn arm_dismiss_grace(project_id: &str) {
     sig.notify.notify_one();
 }
 
+/// Record a workspace need: bump `last_interaction_at`, lift any
+/// pending dismiss, and broadcast the window/pin Active set.
+/// Activate, successful `deliver_live`, heartbeat fire, and
+/// need-driven `ensure_canonical_session` all funnel here so visit
+/// after dismiss un-suppresses immediately (no reaper-tick wait).
+pub fn note_workspace_need(project_id: &str) {
+    if project_id.is_empty() {
+        return;
+    }
+    let _ = k2_core::projects_ops::projects_touch_interaction(project_id);
+    clear_dismiss_suppression(project_id);
+    recompute_and_broadcast_active();
+}
+
 /// Eagerly lift a dismiss: a wake/re-activation of the workspace means
 /// the user (or a peer's message) wants it back — un-queue a pending
-/// dismiss and un-suppress the live-session union so the workspace
-/// re-enters the broadcast immediately (the reaper's own pass also
-/// cancels the armed forced timer via the interaction-advanced check).
+/// dismiss so the workspace re-enters the window/pin broadcast
+/// immediately (the reaper's own pass also cancels the armed forced
+/// timer via the interaction-advanced check).
 pub fn clear_dismiss_suppression(project_id: &str) {
     let sig = signal();
     sig.pending_dismiss.lock().unwrap().remove(project_id);
@@ -182,17 +185,14 @@ pub fn recompute_and_broadcast_active() {
     let now_ms = unix_now_ms();
     match k2_core::projects_ops::compute_active_project_ids(now_ms, window) {
         Ok(ids) => {
-            // Membership rule: a workspace with a LIVE terminal session
-            // IS Active — presence is the detection method, not message
-            // or interaction bookkeeping. Union the live-session
-            // workspaces into the window/pin set, minus any workspace
-            // under an armed dismiss-grace (an explicit Dismiss must
-            // leave the bar NOW, not 15s later when the reap fires).
-            // The interaction window remains the REAPER's aging input —
-            // once it closes an idle session, presence naturally drops
-            // the workspace from this broadcast.
+            // Membership rule: window/pin ONLY — must match
+            // `GET /cli/projects/active`. Live PTYs are not Active
+            // membership; the need clock (`last_interaction_at`) and
+            // `manually_active` are. Dismiss already clears both, so
+            // a dismissed id is absent here without a live-union
+            // filter; we still drop `dismiss_suppressed` so a race
+            // with a concurrent touch cannot flash the tile back.
             let mut set: HashSet<String> = ids.into_iter().collect();
-            set.extend(live_session_project_ids());
             {
                 let suppressed = signal().dismiss_suppressed.lock().unwrap();
                 set.retain(|pid| !suppressed.contains(pid));
@@ -206,24 +206,6 @@ pub fn recompute_and_broadcast_active() {
             log_debug!("[active-reaper] recompute_and_broadcast failed: {e}");
         }
     }
-}
-
-/// Project ids owning at least one live v2 PTY, resolved by cwd — the
-/// same resolution [`collect_snapshot`] uses for the reaper's own view.
-fn live_session_project_ids() -> HashSet<String> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let mut out = HashSet::new();
-    for (_agent, session) in v2_session_map::snapshot() {
-        let cwd = match session.cwd.as_ref() {
-            Some(p) => p.to_string_lossy().into_owned(),
-            None => continue,
-        };
-        if let Some(id) = k2_core::workspace::agent_identity::resolve_project_id(&conn, &cwd) {
-            out.insert(id);
-        }
-    }
-    out
 }
 
 /// Did the workspace's `last_interaction_at` advance since the timer
@@ -253,8 +235,8 @@ struct ArmState {
     deadline: Instant,
     /// `true` when armed by an explicit `dismiss` (force-eligible even
     /// if still within the interaction window). A forced timer ignores
-    /// the window-Active gate; only `!heartbeat` + "no re-activation
-    /// since arm" keep it alive.
+    /// the window-Active gate; only "no re-activation since arm"
+    /// keeps it alive.
     forced: bool,
     /// `last_interaction_at` (unix secs) observed when the timer armed.
     /// A later interaction (value advances) signals re-activation → the
@@ -265,6 +247,7 @@ struct ArmState {
 
 /// A live v2 chat PTY resolved to its owning workspace. Built per pass
 /// from `v2_session_map::snapshot()` joined with the `projects` table.
+#[derive(Debug, Clone)]
 struct LiveChat {
     /// `v2_session_map` key (the close target for `unregister`).
     agent_name: String,
@@ -322,8 +305,8 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
     let window = k2_core::app_settings::load().active_window_hours;
     let now_ms = unix_now_ms();
 
-    // Snapshot: canonical Active set + heartbeat-enabled set + live
-    // chat PTYs. Done on a blocking thread — DB lock + map lock.
+    // Snapshot: canonical Active set (window/pin) + reap-candidate
+    // live chats. Done on a blocking thread — DB lock + map lock.
     let snapshot = tokio::task::spawn_blocking(move || collect_snapshot(now_ms, window))
         .await
         .unwrap_or_else(|e| {
@@ -342,13 +325,12 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
 
     let now = Instant::now();
     // (chat, forced) — `forced` = armed by an explicit dismiss, so the
-    // fire-time re-check skips the window-Active gate (only `!heartbeat`
-    // + no-reactivation keep it alive).
+    // fire-time re-check skips the window-Active gate (only
+    // re-activation / pin-via-window keeps a non-forced timer alive).
     let mut to_fire: Vec<(LiveChat, bool)> = Vec::new();
 
     for chat in &snapshot.live_chats {
         let pid = &chat.project_id;
-        let heartbeat = snapshot.heartbeat_ids.contains(pid);
         let active = snapshot.active_ids.contains(pid);
         let dismissed_this_pass = dismissed.contains(pid);
         let existing = armed.get(pid).cloned();
@@ -357,21 +339,10 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
         // still within its interaction window.
         let forced_already = existing.as_ref().map(|s| s.forced).unwrap_or(false);
 
-        // (1) Heartbeat-warm ⇒ never reaped. The keep-warm gate wins
-        //     over everything, including a dismiss. Cancel any timer.
-        if heartbeat {
-            if existing.is_some() {
-                log_debug!("[active-reaper] cancel grace for project={pid} (heartbeat warm)");
-            }
-            armed.remove(pid);
-            continue;
-        }
-
-        // (2) Re-activation cancels a forced (dismiss) timer: if the
+        // (1) Re-activation cancels a forced (dismiss) timer: if the
         //     workspace's interaction advanced past the value captured
-        //     when the timer armed (a fresh activate/touch), OR it got
-        //     pinned (active via manually_active) AFTER the dismiss, the
-        //     user clearly wants it back — cancel.
+        //     when the timer armed (a fresh activate/touch / need), the
+        //     user (or a peer/heartbeat) wants it back — cancel.
         if let Some(state) = existing.as_ref() {
             if state.forced && !dismissed_this_pass {
                 let reactivated = interaction_advanced(
@@ -388,9 +359,10 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
             }
         }
 
-        // (3) Active (within-window or pinned) AND not under a forced
-        //     timer AND not dismissed this pass ⇒ not eligible. Cancel
-        //     any aged-out timer (it re-entered the window).
+        // (2) Active (within-window or pinned) AND not under a forced
+        //     timer AND not dismissed this pass ⇒ not eligible. Pin
+        //     (`manually_active`) still spares age-out. A live PTY
+        //     alone does not.
         if active && !forced_already && !dismissed_this_pass {
             if existing.is_some() {
                 log_debug!("[active-reaper] cancel grace for project={pid} (re-entered Active set)");
@@ -399,35 +371,14 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
             continue;
         }
 
-        // (3b) P0 — live PTY present (we only iterate live chats) AND not
-        //      force-dismissed: spare age-out. Control-plane / client
-        //      blips must never look like "all agents idle → mass reap."
-        //      Explicit dismiss still arms forced grace below.
-        if !forced_already && !dismissed_this_pass {
-            if existing.is_some() {
-                log_debug!(
-                    "[active-reaper] cancel grace for project={pid} (live PTY — age-out spare)"
-                );
-            }
-            armed.remove(pid);
-            continue;
-        }
-
-        // Eligible: explicitly dismissed (forced), OR a still-running
-        // forced timer. (Age-out alone no longer arms while a PTY lives.)
+        // Eligible: aged out of the window (need clock) without a pin,
+        // or explicitly dismissed (forced). Heartbeat enablement is
+        // not a spare — a fire is a need that bumps the clock.
         match armed.get(pid) {
             Some(state) if now >= state.deadline => {
                 // Grace elapsed → fire (after a fresh re-check below).
                 let forced = state.forced;
-                to_fire.push((
-                    LiveChat {
-                        agent_name: chat.agent_name.clone(),
-                        project_id: chat.project_id.clone(),
-                        session_id: chat.session_id.clone(),
-                        last_interaction_secs: chat.last_interaction_secs,
-                    },
-                    forced,
-                ));
+                to_fire.push((chat.clone(), forced));
             }
             Some(_) => { /* still within grace — wait */ }
             None => {
@@ -485,25 +436,20 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
             let window = k2_core::app_settings::load().active_window_hours;
             let now = unix_now_ms();
             let rows = k2_core::projects_ops::active_project_rows().unwrap_or_default();
-            let active = k2_core::active::is_in_active_set(now, &rows, window, &pid);
-            let heartbeat = heartbeat_enabled_ids().contains(&pid);
-            (active, heartbeat)
+            k2_core::active::is_in_active_set(now, &rows, window, &pid)
         })
         .await
-        .unwrap_or((true, true)); // fail closed: skip the reap on join error
+        .unwrap_or(true); // fail closed: skip the reap on join error
 
-        let (active, heartbeat) = recheck;
-        // Heartbeat-warm ALWAYS spares (even over dismiss).
-        // Non-forced timers: spare if window-Active again OR if a live
-        // PTY is still mapped (P0 — age-out never kills live work).
-        // Forced (dismiss) ignores window + live PTY: user asked to
-        // remove it; arming already cancelled on re-activation.
-        let live_pty = v2_session_map::lookup_by_agent_name(&chat.agent_name).is_some()
-            || live_session_project_ids().contains(&chat.project_id);
-        let spare = heartbeat || (!forced && (active || live_pty));
+        let active = recheck;
+        // Non-forced: spare only if window-Active or pinned again.
+        // Live PTY and heartbeat enablement do not spare. Forced
+        // (dismiss) ignores window: user asked to remove it; arming
+        // already cancelled on re-activation.
+        let spare = !forced && active;
         if spare {
             log_debug!(
-                "[active-reaper] skip fire for project={} (re-check: active={active} heartbeat={heartbeat} forced={forced} live_pty={live_pty})",
+                "[active-reaper] skip fire for project={} (re-check: active={active} forced={forced})",
                 chat.project_id,
             );
             armed.remove(&chat.project_id);
@@ -544,12 +490,11 @@ async fn reconcile_pass(armed: &mut HashMap<String, ArmState>, grace_dur: Durati
 #[derive(Default)]
 struct Snapshot {
     active_ids: HashSet<String>,
-    heartbeat_ids: HashSet<String>,
     live_chats: Vec<LiveChat>,
 }
 
-/// Build the per-pass snapshot: Active set, heartbeat-enabled set, and
-/// the live chat PTYs resolved to their owning project. Runs on a
+/// Build the per-pass snapshot: window/pin Active set and the
+/// reap-candidate live chats (canonical + `{pid}:hb:*`). Runs on a
 /// blocking thread (DB lock + map lock).
 fn collect_snapshot(now_ms: i64, window: u32) -> Snapshot {
     let rows = k2_core::projects_ops::active_project_rows().unwrap_or_default();
@@ -562,18 +507,12 @@ fn collect_snapshot(now_ms: i64, window: u32) -> Snapshot {
         .iter()
         .map(|r| (r.id.clone(), r.last_interaction_at_secs))
         .collect();
-    let heartbeat_ids = heartbeat_enabled_ids();
-
-    // Resolve each live v2 PTY to a project via its cwd. A "chat" PTY is
-    // the canonical pinned workspace chat (key == bare project_id) — but
-    // we resolve ALL live PTYs by cwd so any workspace-owned session
-    // counts toward keeping the workspace from being reaped while it has
-    // a live session that maps to a dormant workspace. The Active gate,
-    // not the session kind, is the authority.
+    // Reap candidates: canonical `agent_name == project_id` AND
+    // `{project_id}:hb:*` only. NEVER `api-*` / `from_api` / extra
+    // `tab-*` — those stay until their own close path.
     let db = k2_core::db::shared();
     let conn = db.lock();
     let mut live_chats = Vec::new();
-    let mut seen_pids: HashSet<String> = HashSet::new();
     for (agent_name, session) in v2_session_map::snapshot() {
         let cwd = match session.cwd.as_ref() {
             Some(p) => p.to_string_lossy().into_owned(),
@@ -584,55 +523,42 @@ fn collect_snapshot(now_ms: i64, window: u32) -> Snapshot {
                 Some(id) => id,
                 None => continue,
             };
-        // One reap-candidate per workspace: the chat keyed on the bare
-        // project_id is the canonical workspace chat. If present, prefer
-        // it; otherwise the first resolved session for the workspace.
-        let is_canonical_chat = agent_name == project_id;
-        if is_canonical_chat || !seen_pids.contains(&project_id) {
-            seen_pids.insert(project_id.clone());
-            // Replace any earlier non-canonical entry for this pid with
-            // the canonical chat when we find it.
-            live_chats.retain(|c: &LiveChat| c.project_id != project_id);
-            let last_interaction_secs = interaction_by_pid
-                .get(&project_id)
-                .copied()
-                .flatten();
-            live_chats.push(LiveChat {
-                agent_name,
-                project_id,
-                session_id: session.session_id.to_string(),
-                last_interaction_secs,
-            });
+        if !is_reap_candidate(&agent_name, &project_id) {
+            continue;
         }
+        let last_interaction_secs = interaction_by_pid
+            .get(&project_id)
+            .copied()
+            .flatten();
+        live_chats.push(LiveChat {
+            agent_name,
+            project_id,
+            session_id: session.session_id.to_string(),
+            last_interaction_secs,
+        });
     }
     drop(conn);
 
     Snapshot {
         active_ids,
-        heartbeat_ids,
         live_chats,
     }
 }
 
-/// The set of project ids with at least one enabled, non-archived
-/// heartbeat — the same "keep warm" predicate `Project::list` computes
-/// live. Read directly so the reaper doesn't depend on the (stale)
-/// legacy `projects.heartbeat_enabled` column.
-fn heartbeat_enabled_ids() -> HashSet<String> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let mut out = HashSet::new();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT DISTINCT project_id FROM workspace_heartbeats \
-         WHERE enabled = 1 AND archived_at IS NULL",
-    ) {
-        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
-            for id in rows.flatten() {
-                out.insert(id);
-            }
-        }
+/// Canonical workspace chat (`agent_name == project_id`) or a dedicated
+/// heartbeat PTY (`{project_id}:hb:*`). Extra tabs, API host-sessions,
+/// and anything else stay out of the reaper.
+fn is_reap_candidate(agent_name: &str, project_id: &str) -> bool {
+    if k2_core::workspace_session_handles::is_api_agent_name(agent_name)
+        || k2_core::workspace_session_handles::is_tab_agent_name(agent_name)
+    {
+        return false;
     }
-    out
+    if k2_core::workspace_session_handles::is_canonical_agent_name(agent_name, project_id) {
+        return true;
+    }
+    let prefix = format!("{project_id}:hb:");
+    agent_name.starts_with(&prefix) && agent_name.len() > prefix.len()
 }
 
 /// Persist the chat PTY's `sessionId` onto the workspace's tab-session
@@ -722,5 +648,19 @@ mod tests {
         // Default when unset.
         std::env::remove_var("K2SO_ACTIVE_REAPER_TICK_SECS");
         assert_eq!(tick_interval(), Duration::from_secs(TICK_INTERVAL_SECS));
+    }
+
+    #[test]
+    fn reap_candidates_are_canonical_and_heartbeat_only() {
+        let pid = "ws-abc";
+        assert!(is_reap_candidate(pid, pid));
+        assert!(is_reap_candidate("ws-abc:hb:daily", pid));
+        assert!(!is_reap_candidate("tab-1", pid));
+        assert!(!is_reap_candidate(
+            "api-ec8ba43a-637c-45c6-806d-9325a7069bef-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            pid
+        ));
+        assert!(!is_reap_candidate("ws-abc:hb:", pid));
+        assert!(!is_reap_candidate("other:hb:daily", pid));
     }
 }

@@ -276,17 +276,20 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // doc for the full flow + the race it solves.
         "/cli/workspace/ensure-canonical-session" => match need_project(params) {
             Ok(p) => match crate::canonical_session::ensure_canonical_session(&p) {
-                Ok(out) => CliResponse::ok_json(
-                    serde_json::json!({
-                        "success": true,
-                        "session_id": out.session_id,
-                        "agent": out.agent_name,
-                        "project_id": out.project_id,
-                        "reused": out.reused,
-                        "pending_drained": out.pending_drained,
-                    })
-                    .to_string(),
-                ),
+                Ok(out) => {
+                    crate::active_reaper::note_workspace_need(&out.project_id);
+                    CliResponse::ok_json(
+                        serde_json::json!({
+                            "success": true,
+                            "session_id": out.session_id,
+                            "agent": out.agent_name,
+                            "project_id": out.project_id,
+                            "reused": out.reused,
+                            "pending_drained": out.pending_drained,
+                        })
+                        .to_string(),
+                    )
+                }
                 Err(e) => CliResponse::bad_request(e),
             },
             Err(r) => r,

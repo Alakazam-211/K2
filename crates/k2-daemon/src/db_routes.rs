@@ -965,10 +965,9 @@ pub fn handle_projects_activate(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(e) = pops::projects_touch_interaction(&b.project_id) {
-        return CliResponse::bad_request(e);
-    }
-    crate::active_reaper::recompute_and_broadcast_active();
+    // Need clock + un-suppress dismiss immediately (visit-after-dismiss
+    // must not wait for the next reaper tick).
+    crate::active_reaper::note_workspace_need(&b.project_id);
     CliResponse::ok_json(r#"{"ok":true}"#.to_string())
 }
 
@@ -1016,8 +1015,9 @@ pub fn handle_projects_dismiss(body: &[u8]) -> CliResponse {
         return CliResponse::bad_request(e);
     }
     // Arm the daemon reaper's grace immediately (PRD §4.2) — the chat is
-    // reap-eligible now, gated only by `!heartbeat` + the 15s grace +
-    // the fire-time re-check; re-activating within the grace cancels it.
+    // reap-eligible now, gated by the 15s grace + the fire-time
+    // re-check; re-activating within the grace cancels it. Heartbeat
+    // enablement is not a spare.
     crate::active_reaper::arm_dismiss_grace(&b.project_id);
     crate::active_reaper::recompute_and_broadcast_active();
     CliResponse::ok_json(r#"{"ok":true}"#.to_string())

@@ -21,7 +21,7 @@
 // follow-up read.
 
 import { getDaemonWs, invalidateDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
-import { withRemoteRetry } from '@/lib/remote-retry'
+import { CLI_CONNECTED_RETRY_DELAYS_MS, withRemoteRetry } from '@/lib/remote-retry'
 import type { AppSettingsResponse } from '@shared/types'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 
@@ -104,5 +104,5 @@ export async function settingsReset(): Promise<AppSettingsResponse> {
  *  socket) without an app relaunch. The `invalidateDaemonWs` hook fires before
  *  each retry so a rotated port/token is re-read. */
 function withConnRetry<T>(op: () => Promise<T>): Promise<T> {
-  return withRemoteRetry(op, { onRetry: invalidateDaemonWs })
+  return withRemoteRetry(op, { onRetry: invalidateDaemonWs, delaysMs: CLI_CONNECTED_RETRY_DELAYS_MS })
 }

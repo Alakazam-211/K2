@@ -19,7 +19,7 @@
 // (the local daemon dials the peer's signed roster GET).
 
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { withRemoteRetry } from '@/lib/remote-retry'
+import { CLI_CONNECTED_RETRY_DELAYS_MS, withRemoteRetry } from '@/lib/remote-retry'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 
@@ -285,8 +285,8 @@ async function cliGet<T>(
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
 ): Promise<T> {
-  // Retry-on-network-error so a remote restart (dead pooled WKWebView socket)
-  // self-heals without an app relaunch. Non-2xx (404 federation-off / 403
+  // Connected `/cli/*` one-shot: delay-0 eviction retry; CORS/ACAO rethrows
+  // immediately inside withRemoteRetry. Non-2xx (404 federation-off / 403
   // not-owner) is authoritative and surfaces immediately.
   return withRemoteRetry(async () => {
     const search = new URLSearchParams()
@@ -298,7 +298,7 @@ async function cliGet<T>(
     search.set('token', creds.token)
     const res = await fetch(`${creds.base}/cli/${route}?${search.toString()}`, { method: 'GET' })
     return parse<T>(res)
-  })
+  }, { delaysMs: CLI_CONNECTED_RETRY_DELAYS_MS })
 }
 
 /** POST `<base>/cli/<route>` (JSON body) against an explicit daemon. */
@@ -310,7 +310,7 @@ async function cliPost<T>(creds: DaemonCreds, route: string, body?: unknown): Pr
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
     return parse<T>(res)
-  })
+  }, { delaysMs: CLI_CONNECTED_RETRY_DELAYS_MS })
 }
 
 /** Read a daemon's federation identity. Throws if federation is off there

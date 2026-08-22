@@ -37,6 +37,15 @@ import { jittered } from '@/lib/backoff'
  * are authoritative application errors the daemon explicitly returned and must
  * surface immediately (never retried).
  */
+export function isCorsAccessControlError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const m = err.message.toLowerCase()
+  return (
+    m.includes('access-control-allow-origin') ||
+    m.includes('not allowed by access-control')
+  )
+}
+
 export function isConnectionLevelError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
   const m = err.message.toLowerCase()
@@ -45,8 +54,7 @@ export function isConnectionLevelError(err: unknown): boolean {
     m.includes('load failed') ||
     m.includes('networkerror') ||
     // Safari logs edge 404 (no ACAO) as this TypeError; JS never sees status.
-    m.includes('access-control-allow-origin') ||
-    m.includes('not allowed by access-control') ||
+    isCorsAccessControlError(err) ||
     m.includes('connection refused') ||
     m.includes('ecconnrefused') ||
     m.includes('econnrefused') ||
@@ -62,7 +70,7 @@ export interface RemoteRetryOptions {
   /**
    * The pause (ms) BEFORE each retry attempt that follows the first try.
    * `delaysMs.length` therefore equals the number of RETRIES; total attempts
-   * = `delaysMs.length + 1`. The default `[0, 400, 1200, 2000]` is 4 attempts
+   * = `delaysMs.length + 1`. The default `[0, 400, 1200, 2000]` is 5 attempts
    * over ~3.6s: the first retry is immediate (to evict the dead socket and
    * reopen a fresh one), later retries ride out the restart window.
    */
@@ -78,6 +86,10 @@ export interface RemoteRetryOptions {
 /** The default backoff: immediate first retry to evict+reopen the dead socket,
  *  then widening pauses to ride out the remote restart/update window. */
 export const DEFAULT_REMOTE_RETRY_DELAYS_MS = [0, 400, 1200, 2000]
+
+/** Connected `/cli/*` schedule: original + delay-0 eviction retry (2 attempts).
+ *  CORS/ACAO is short-circuited inside {@link withRemoteRetry} (0 extra retries). */
+export const CLI_CONNECTED_RETRY_DELAYS_MS = [0]
 
 /**
  * Run `op`, retrying ONLY on a connection-level error (a dead pooled socket /
@@ -115,6 +127,10 @@ export async function withRemoteRetry<T>(
       // Non-connection errors (non-2xx, 401, bad-request) are authoritative —
       // surface them immediately without burning the retry budget.
       if (!isConnectionLevelError(err)) throw err
+      // True CORS/ACAO (message contains access-control-allow-origin / not
+      // allowed by access-control) does not evict a pooled socket — rethrow
+      // without consuming remaining delays, even if delaysMs is `[0]` or longer.
+      if (isCorsAccessControlError(err)) throw err
       lastErr = err
     }
   }

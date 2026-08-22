@@ -9,8 +9,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   isConnectionLevelError,
+  isCorsAccessControlError,
   withRemoteRetry,
   DEFAULT_REMOTE_RETRY_DELAYS_MS,
+  CLI_CONNECTED_RETRY_DELAYS_MS,
 } from './remote-retry'
 
 describe('isConnectionLevelError', () => {
@@ -52,6 +54,24 @@ describe('isConnectionLevelError', () => {
     expect(isConnectionLevelError(null)).toBe(false)
     expect(isConnectionLevelError(undefined)).toBe(false)
     expect(isConnectionLevelError({ message: 'Load failed' })).toBe(false)
+  })
+})
+
+describe('isCorsAccessControlError', () => {
+  it('matches ACAO / not-allowed-by-access-control messages', () => {
+    expect(
+      isCorsAccessControlError(
+        new TypeError(
+          'Origin tauri://localhost is not allowed by Access-Control-Allow-Origin. Status code: 404',
+        ),
+      ),
+    ).toBe(true)
+    expect(
+      isCorsAccessControlError(new Error('not allowed by Access-Control-Allow-Origin')),
+    ).toBe(true)
+    expect(isCorsAccessControlError(new Error('Failed to fetch'))).toBe(false)
+    expect(isCorsAccessControlError(new Error('Load failed'))).toBe(false)
+    expect(isCorsAccessControlError('access-control-allow-origin')).toBe(false)
   })
 })
 
@@ -98,7 +118,8 @@ describe('withRemoteRetry', () => {
     const assertion = expect(p).rejects.toThrow('Failed to fetch')
     await vi.runAllTimersAsync()
     await assertion
-    // 1 initial try + DEFAULT_REMOTE_RETRY_DELAYS_MS.length retries.
+    // Library contract: default stays 5-shot ([0, 400, 1200, 2000] = 1 try + 4 retries).
+    expect(DEFAULT_REMOTE_RETRY_DELAYS_MS).toEqual([0, 400, 1200, 2000])
     expect(op).toHaveBeenCalledTimes(DEFAULT_REMOTE_RETRY_DELAYS_MS.length + 1)
   })
 
@@ -125,5 +146,25 @@ describe('withRemoteRetry', () => {
     await vi.runAllTimersAsync()
     await assertion
     expect(op).toHaveBeenCalledTimes(3) // 1 try + 2 retries
+  })
+
+  it('{ delaysMs: [0] } Failed to fetch is 2 attempts (original + delay-0 eviction)', async () => {
+    const op = vi.fn().mockRejectedValue(new Error('Failed to fetch'))
+    await expect(withRemoteRetry(op, { delaysMs: CLI_CONNECTED_RETRY_DELAYS_MS })).rejects.toThrow(
+      'Failed to fetch',
+    )
+    expect(op).toHaveBeenCalledTimes(2)
+  })
+
+  it('CORS/ACAO error is 1 attempt even when delaysMs is the default 5-shot', async () => {
+    const op = vi.fn().mockRejectedValue(
+      new TypeError(
+        'Origin tauri://localhost is not allowed by Access-Control-Allow-Origin. Status code: 404',
+      ),
+    )
+    await expect(
+      withRemoteRetry(op, { delaysMs: [0, 400, 1200, 2000] }),
+    ).rejects.toThrow(/access-control-allow-origin/i)
+    expect(op).toHaveBeenCalledTimes(1)
   })
 })

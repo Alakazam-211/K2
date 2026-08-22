@@ -337,52 +337,63 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
     expect(invalidateDaemonWsMock).toHaveBeenCalledTimes(1)
   })
 
-  it('a connection error that fails every attempt rejects after the full backoff', async () => {
-    // The shared withRemoteRetry backoff is [0, 400, 1200, 2000] → 1 initial
-    // try + 4 retries = 5 attempts; fake timers drive the delayed retries.
-    vi.useFakeTimers()
-    try {
-      getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
-      const fetchMock = vi.fn().mockRejectedValue(new Error('Failed to fetch'))
-      vi.stubGlobal('fetch', fetchMock)
+  it('a connection error that fails every attempt rejects after the connected one-shot', async () => {
+    // Connected `/cli/*` uses delaysMs [0] → 1 initial try + 1 eviction retry.
+    getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+    const fetchMock = vi.fn().mockRejectedValue(new Error('Failed to fetch'))
+    vi.stubGlobal('fetch', fetchMock)
 
-      const p = daemonCliGet('projects/list')
-      const assertion = expect(p).rejects.toThrow('Failed to fetch')
-      await vi.runAllTimersAsync()
-      await assertion
-      expect(fetchMock).toHaveBeenCalledTimes(5)
-      // invalidateDaemonWs fired before each of the 4 retries.
-      expect(invalidateDaemonWsMock).toHaveBeenCalledTimes(4)
-    } finally {
-      vi.useRealTimers()
-    }
+    await expect(daemonCliGet('projects/list')).rejects.toThrow('Failed to fetch')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // invalidateDaemonWs fired before the delay-0 retry.
+    expect(invalidateDaemonWsMock).toHaveBeenCalledTimes(1)
   })
 
   it('exhausted REMOTE connection failure kicks a health probe; LOCAL does not', async () => {
     const probe = vi.spyOn(connectionGateProbe, 'forceSoftHealthProbe').mockImplementation(() => {})
     try {
-      vi.useFakeTimers()
       const host = makeRemoteHost()
       useConnectHostStore.getState().addHost(host)
       useConnectHostStore.getState().selectHost(host)
       getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
-      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Load failed')))
-      const remote = daemonCliGet('terminal/send-message')
-      const remoteDone = expect(remote).rejects.toThrow('Load failed')
-      await vi.runAllTimersAsync()
-      await remoteDone
-      expect(probe).toHaveBeenCalled()
+      const remoteFetch = vi.fn().mockRejectedValue(new Error('Load failed'))
+      vi.stubGlobal('fetch', remoteFetch)
+      await expect(daemonCliGet('terminal/send-message')).rejects.toThrow('Load failed')
+      expect(remoteFetch).toHaveBeenCalledTimes(2)
+      expect(probe).toHaveBeenCalledTimes(1)
 
       probe.mockClear()
       __resetConnectHostStoreForTests()
       getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
-      const local = daemonCliGet('projects/list')
-      const localDone = expect(local).rejects.toThrow('Load failed')
-      await vi.runAllTimersAsync()
-      await localDone
+      const localFetch = vi.fn().mockRejectedValue(new Error('Load failed'))
+      vi.stubGlobal('fetch', localFetch)
+      await expect(daemonCliGet('projects/list')).rejects.toThrow('Load failed')
+      expect(localFetch).toHaveBeenCalledTimes(2)
       expect(probe).not.toHaveBeenCalled()
     } finally {
-      vi.useRealTimers()
+      probe.mockRestore()
+    }
+  })
+
+  it('remote ACAO TypeError is 1 fetch then probe once', async () => {
+    const probe = vi.spyOn(connectionGateProbe, 'forceSoftHealthProbe').mockImplementation(() => {})
+    try {
+      const host = makeRemoteHost()
+      useConnectHostStore.getState().addHost(host)
+      useConnectHostStore.getState().selectHost(host)
+      getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
+      const fetchMock = vi.fn().mockRejectedValue(
+        new TypeError(
+          'Origin tauri://localhost is not allowed by Access-Control-Allow-Origin. Status code: 404',
+        ),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+
+      await expect(daemonCliGet('projects/list')).rejects.toThrow(/access-control-allow-origin/i)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(invalidateDaemonWsMock).not.toHaveBeenCalled()
+      expect(probe).toHaveBeenCalledTimes(1)
+    } finally {
       probe.mockRestore()
     }
   })

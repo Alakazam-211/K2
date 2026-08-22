@@ -454,6 +454,26 @@ describe('cliGet retry-on-network-error (via getPubkey)', () => {
     await expect(getPubkey()).rejects.toThrow(/federation disabled/i)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it('exhausted Failed to fetch is 2 attempts (connected one-shot)', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('Failed to fetch'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getPubkey()).rejects.toThrow('Failed to fetch')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('CORS/ACAO TypeError is 1 attempt', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(
+      new TypeError(
+        'Origin tauri://localhost is not allowed by Access-Control-Allow-Origin. Status code: 404',
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getPubkey()).rejects.toThrow(/access-control-allow-origin/i)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('roster slug matcher (D9 / D20)', () => {

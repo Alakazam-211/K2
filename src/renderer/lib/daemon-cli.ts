@@ -22,7 +22,7 @@ import {
   logRemotePath,
   redactRemoteUrl,
 } from '@/lib/remote-path-log'
-import { isConnectionLevelError, withRemoteRetry } from '@/lib/remote-retry'
+import { CLI_CONNECTED_RETRY_DELAYS_MS, isConnectionLevelError, withRemoteRetry } from '@/lib/remote-retry'
 import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
 
@@ -296,11 +296,10 @@ export async function localDaemonCliPost<T = unknown>(
 
 /**
  * Run `op`, retrying on a connection-level error (a caught `fetch` failure —
- * distinct from a non-2xx response). The shared {@link withRemoteRetry}
- * backoff evicts a dead pooled WKWebView socket on the first (immediate) retry
- * and rides out a remote restart over the rest of the schedule; the
- * `invalidateDaemonWs` hook fires before each retry so the daemon's
- * (possibly rotated) port/token is re-read.
+ * distinct from a non-2xx response). Connected `/cli/*` uses delay-0 only
+ * (original + immediate eviction retry); CORS/ACAO rethrows immediately
+ * inside {@link withRemoteRetry}. `invalidateDaemonWs` fires before each retry
+ * so the daemon's (possibly rotated) port/token is re-read.
  *
  * Non-2xx responses are NOT retried here — those are application errors the
  * route handler explicitly returned. The one exception lives in `cliFetch`:
@@ -308,7 +307,7 @@ export async function localDaemonCliPost<T = unknown>(
  * and is replayed once IFF a fresh token was minted.
  */
 function withConnRetry<T>(op: () => Promise<T>): Promise<T> {
-  return withRemoteRetry(op, { onRetry: invalidateDaemonWs })
+  return withRemoteRetry(op, { onRetry: invalidateDaemonWs, delaysMs: CLI_CONNECTED_RETRY_DELAYS_MS })
 }
 
 async function parseDaemonResponse<T>(res: Response, text: string): Promise<T> {

@@ -63,6 +63,31 @@ export function hasEnabledHeartbeat(heartbeatEnabled: number): boolean {
 }
 
 /**
+ * Context for whether an Active-bar row offers a working Dismiss action.
+ * Live PTY / focused-running-agent / heartbeat are status, not a lock.
+ */
+export interface ActiveBarDismissContext {
+  /** This row is the currently focused (foreground) workspace. */
+  isFocused: boolean
+  /** Some agent on this workspace reports status === 'active'. */
+  agentRunning: boolean
+  /** Workspace has ≥1 enabled heartbeat (EKG). */
+  heartbeatEnabled: boolean
+}
+
+/**
+ * Dismiss is always available. A running agent on the focused tile used
+ * to replace it with "Dismiss (agent running)"; heartbeat used to mean
+ * "cannot dismiss" on the daemon side. Neither is a UI lock
+ * (prd-active-window-wake-and-reap-v1 §3.6). Background tiles already
+ * dismissed. Membership is the canonical window/pin Active set; the
+ * green square is live-session presence, not extra membership.
+ */
+export function isActiveBarDismissEnabled(_ctx: ActiveBarDismissContext): boolean {
+  return true
+}
+
+/**
  * In-memory map of project IDs → unix-second timestamp at which they
  * were first observed in the Active bar. Prevents flicker during
  * workspace switches when background/DB state is temporarily
@@ -206,6 +231,8 @@ function useActiveBarItems(): ProjectWithWorkspaces[] {
     // no _activeBarMemory / _dismissedProjects heuristics — those existed
     // to paper over the renderer-derived set; the daemon's set is exact.
     if (canonicalActive) {
+      // Window/pin only. Live PTY is the green square on the tile
+      // (`hasLiveSession`), never extra membership.
       const result = projects.filter((p) => canonicalActiveIds.has(p.id))
       return sortPinnedFirst(result)
     }
@@ -433,10 +460,13 @@ export default function ActiveBar(): React.JSX.Element | null {
   const handleContextMenu = useCallback(async (e: React.MouseEvent, project: ProjectWithWorkspaces) => {
     e.preventDefault()
 
-    // Check if project has running agents (only possible if it's the active project)
-    const hasRunningAgent = project.id === activeProjectId && Array.from(agentMap.values()).some(
-      (a) => a.status === 'active'
-    )
+    const dismissEnabled = isActiveBarDismissEnabled({
+      isFocused: project.id === activeProjectId,
+      agentRunning:
+        project.id === activeProjectId &&
+        Array.from(agentMap.values()).some((a) => a.status === 'active'),
+      heartbeatEnabled: hasEnabledHeartbeat(project.heartbeatEnabled),
+    })
 
     const menuItems: Array<{ id: string; label: string; type?: string }> = []
 
@@ -448,10 +478,10 @@ export default function ActiveBar(): React.JSX.Element | null {
 
     menuItems.push({ id: 'sep', label: '', type: 'separator' })
 
-    if (hasRunningAgent) {
-      menuItems.push({ id: 'dismiss-blocked', label: 'Dismiss (agent running)' })
-    } else {
+    if (dismissEnabled) {
       menuItems.push({ id: 'dismiss', label: 'Dismiss' })
+    } else {
+      menuItems.push({ id: 'dismiss-blocked', label: 'Dismiss (agent running)' })
     }
 
     const clickedId = await showContextMenu(menuItems)
@@ -468,7 +498,7 @@ export default function ActiveBar(): React.JSX.Element | null {
       // renderer no longer cancels a local reap — there is none.
       _dismissedProjects.delete(project.id)
       await setManuallyActive(project.id, true)
-    } else if (clickedId === 'dismiss' && !hasRunningAgent) {
+    } else if (clickedId === 'dismiss' && dismissEnabled) {
       // #672 — explicit remove-from-Active. On a canonical-active daemon,
       // POST projects/dismiss: the daemon clears manually_active, marks the
       // chat eligible for the grace-reap NOW (no window wait), and emits the

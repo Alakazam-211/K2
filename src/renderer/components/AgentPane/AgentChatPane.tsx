@@ -548,9 +548,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     [projectPath, restoredSessionId],
   )
 
-  // Mount → ensure (find-or-spawn; daemon resolves resume vs fresh). Cold
-  // boot / relaunch-revive is just this call: the daemon reads
-  // workspace_sessions canonically (#679 preserved).
+  // Visit → ensure (find-or-spawn; daemon resolves resume vs fresh).
+  // Mounting this pane is a visit or other need — seedBoot / Active-list
+  // warming must NOT mount it (retainer is display-only until visit).
+  // Cold boot / relaunch-revive of a visited pane is just this call:
+  // the daemon reads workspace_sessions canonically (#679 preserved).
   useEffect(() => {
     void ensure(false)
     // Only on (re)mount per workspace. `ensure` is stable across

@@ -53,14 +53,21 @@ describe('recordVisit', () => {
 })
 
 describe('seedBoot', () => {
-  it('seeds behind real visits, bounded by cap, and flips bootSeeded', () => {
+  it('records display order behind real visits, bounded by cap, and flips bootSeeded', () => {
     const s = useRetainedChatStore.getState()
     s.recordVisit(entry('fg'))
     s.seedBoot([entry('p1'), entry('p2'), entry('p3'), entry('p4'), entry('p5')], 5)
     const st = useRetainedChatStore.getState()
     expect(st.bootSeeded).toBe(true)
     expect(st.mruOrder).toEqual(['fg', 'p1', 'p2', 'p3', 'p4'])
-    expect(st.entries.get('p1')?.agentName).toBe('agent-p1')
+  })
+
+  it('does NOT upsert pane entries (no AgentChatPane / ensure-pinned-chat)', () => {
+    const s = useRetainedChatStore.getState()
+    s.seedBoot([entry('p1'), entry('p2')], 5)
+    const st = useRetainedChatStore.getState()
+    expect(st.entries.size).toBe(0)
+    expect(st.entries.has('p1')).toBe(false)
   })
 
   it('is one-shot per host session', () => {

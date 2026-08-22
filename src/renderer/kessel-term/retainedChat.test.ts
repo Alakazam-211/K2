@@ -148,7 +148,7 @@ describe('computeRetainedSet — Active-gated, MRU-first, capped', () => {
   })
 })
 
-describe('seedBootOrder — eager-boot seeding behind real visits', () => {
+describe('seedBootOrder — display-order only (does not spawn)', () => {
   it('seeds Active-list order into an empty session, bounded by cap', () => {
     expect(seedBootOrder([], ['p1', 'p2', 'p3'], 5)).toEqual(['p1', 'p2', 'p3'])
     expect(seedBootOrder([], ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'], 5)).toEqual([
@@ -198,7 +198,7 @@ describe('pruneOrderToActive — Active-leave drops the visit', () => {
   it('a pruned workspace re-joining Active does NOT reappear (no auto-attach)', () => {
     const pruned = pruneOrderToActive(['a', 'b'], activeSet('a'))
     expect(pruned).toEqual(['a'])
-    // Re-join: 'b' is Active again, but only a visit/boot-seed re-adds it.
+    // Re-join: 'b' is Active again, but only a visit re-adds it.
     expect(
       computeRetainedSet({
         mruOrder: pruned,

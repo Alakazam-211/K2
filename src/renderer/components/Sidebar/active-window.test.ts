@@ -24,7 +24,7 @@ vi.mock('@/lib/daemon-settings', () => ({
   settingsReset: vi.fn(async () => ({})),
 }))
 
-import { isWithinActiveWindow, hasEnabledHeartbeat } from './ActiveBar'
+import { isWithinActiveWindow, hasEnabledHeartbeat, isActiveBarDismissEnabled } from './ActiveBar'
 
 describe('P1.C — isWithinActiveWindow (Active-Bar rule 2)', () => {
   // All values in unix SECONDS (matching ActiveBar's clock).
@@ -76,5 +76,51 @@ describe('EKG badge — hasEnabledHeartbeat (config-flag semantics)', () => {
     // No window/lastInteractionAt input at all: a stale-but-enabled
     // workspace still reads as "can self-drive".
     expect(hasEnabledHeartbeat(1)).toBe(true)
+  })
+})
+
+describe('Active-bar Dismiss — never blocked by running agent or heartbeat', () => {
+  // prd-active-window-wake-and-reap-v1 §3.6: unlock Dismiss on the
+  // focused tile while the agent is running. Heartbeat is a need event,
+  // not a "cannot dismiss" flag. Background tiles already dismissed.
+
+  it('unlocks Dismiss on the focused tile while the agent is running', () => {
+    expect(
+      isActiveBarDismissEnabled({
+        isFocused: true,
+        agentRunning: true,
+        heartbeatEnabled: false,
+      }),
+    ).toBe(true)
+  })
+
+  it('heartbeat enabled does not lock Dismiss', () => {
+    expect(
+      isActiveBarDismissEnabled({
+        isFocused: true,
+        agentRunning: false,
+        heartbeatEnabled: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('focused + running + heartbeat is still dismissable', () => {
+    expect(
+      isActiveBarDismissEnabled({
+        isFocused: true,
+        agentRunning: true,
+        heartbeatEnabled: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('background tiles stay dismissable (already were)', () => {
+    expect(
+      isActiveBarDismissEnabled({
+        isFocused: false,
+        agentRunning: true,
+        heartbeatEnabled: true,
+      }),
+    ).toBe(true)
   })
 })

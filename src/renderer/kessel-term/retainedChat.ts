@@ -81,11 +81,16 @@ export function computeRetainedSet(inputs: RetainedSetInputs): string[] {
 }
 
 /**
- * Boot seeding (eager attach): append `bootOrder` (the Active-section
- * list order — pinned-to-top first) behind any visits already recorded,
- * bounding the TOTAL order to `cap` so boot never pre-attaches more
- * than the cap allows. Real visits always outrank seeds — a seed never
- * displaces or reorders an existing entry.
+ * Boot seeding (display-order only). Append `bootOrder` (the
+ * Active-section list order — pinned-to-top first) behind any visits
+ * already recorded, bounding the TOTAL order to `cap`. Real visits
+ * always outrank seeds — a seed never displaces or reorders an existing
+ * entry.
+ *
+ * Does NOT spawn. Callers must not treat a seed as a visit: no
+ * AgentChatPane mount, no `ensure-pinned-chat`. Active rows are
+ * display-only until a visit or other need. Warm-last-N attach is a
+ * later slice.
  */
 export function seedBootOrder(
   existing: readonly string[],
@@ -104,8 +109,8 @@ export function seedBootOrder(
  * Active-section membership tracking: a workspace that LEAVES the
  * Active section is dropped from the visit order entirely, so a later
  * re-JOIN does not auto-attach it (owner decision: joining only
- * attaches on boot seeding or a fresh visit). Relative order of the
- * survivors is preserved.
+ * attaches on a fresh visit — seedBoot does not spawn). Relative order
+ * of the survivors is preserved.
  */
 export function pruneOrderToActive(
   mruOrder: readonly string[],

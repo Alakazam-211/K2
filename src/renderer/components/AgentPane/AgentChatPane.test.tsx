@@ -202,6 +202,9 @@ function lastEnsureCall(): Record<string, unknown> | null {
 }
 
 describe('#683 daemon-owned path — mount → ensure-pinned-chat → attach', () => {
+  // A workspace visit mounts this pane; seedBoot / Active-list warming
+  // must not. Visit still POSTs ensure-pinned-chat
+  // (prd-active-window-wake-and-reap-v1 §3.4 / test 8).
   it('calls ensure-pinned-chat on mount (no forceRespawn) and attaches TerminalPane with NO command/args', async () => {
     render(<AgentChatPane agentName="agent" projectPath="/ws" />)
 

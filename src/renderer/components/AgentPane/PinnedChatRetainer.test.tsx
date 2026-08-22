@@ -10,7 +10,7 @@
 // falls back to the inline pane when the workspace isn't exempt.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, cleanup, act, waitFor } from '@testing-library/react'
+import { render, cleanup, act } from '@testing-library/react'
 import { useEffect, useRef } from 'react'
 
 const h = vi.hoisted(() => ({
@@ -20,6 +20,9 @@ const h = vi.hoisted(() => ({
   nextInstanceId: { value: 0 },
   mounts: { value: 0 },
   unmounts: { value: 0 },
+  // Real AgentChatPane POSTs ensure-pinned-chat on mount. The mock
+  // increments this so seedBoot/boot tests can assert no spawn.
+  ensures: { value: 0 },
 }))
 
 vi.mock('@/lib/server-capabilities', () => ({
@@ -42,11 +45,6 @@ vi.mock('@/stores/projects', async () => {
   return { useProjectsStore }
 })
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
-// Eager-boot seeding resolves agent display names through the daemon
-// helper; keep it inert + deterministic here.
-vi.mock('@/lib/workspace-agent', () => ({
-  agentDisplayName: vi.fn(async (path: string) => `resolved-${path.split('/').pop()}`),
-}))
 
 // AgentChatPane probe. Reads the real TabVisibilityContext so the
 // visibility-through-portal contract is exercised, not mocked.
@@ -59,6 +57,7 @@ vi.mock('./AgentChatPane', async () => {
       // eslint-disable-next-line react-hooks/rules-of-hooks
       useEffect(() => {
         h.mounts.value += 1
+        h.ensures.value += 1
         return () => {
           h.unmounts.value += 1
         }
@@ -166,6 +165,7 @@ beforeEach(() => {
   h.nextInstanceId.value = 0
   h.mounts.value = 0
   h.unmounts.value = 0
+  h.ensures.value = 0
   FakeResizeObserver.instances = []
   vi.stubGlobal('ResizeObserver', FakeResizeObserver)
 })
@@ -352,34 +352,56 @@ describe('MRU cap + pinned growth', () => {
   })
 })
 
-describe('eager boot attach + Active-membership tracking (slice 3)', () => {
-  it('boot-seeds Active workspaces into the hidden host, pinned-to-top first, bounded by the cap', async () => {
+describe('seedBoot must not spawn — Active-list warming is display-only', () => {
+  it('retainer mount with an Active list does NOT seedBoot or ensure-pinned-chat', async () => {
     const ids = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']
     setActive(...ids)
-    // p6 is pinned to the top of the Active section — it must be seeded
-    // ahead of the list order even though it comes later in projects.
     setProjects(
       ids.map((id) => ({ id, path: `/ws/${id}`, manuallyActive: id === 'p6' ? 1 : 0 })),
     )
     render(<PinnedChatRetainer />)
 
-    await waitFor(() => expect(paneFor('p6')).not.toBeNull())
+    // Let any leftover async seed effect (if reintroduced) flush.
+    await act(async () => {
+      await Promise.resolve()
+    })
+
     const st = useRetainedChatStore.getState()
-    expect(st.bootSeeded).toBe(true)
-    // Cap 5 (1 pin ≤ base): pinned-first order p6,p1,p2,p3,p4 — never all 7.
-    expect(st.mruOrder).toEqual(['p6', 'p1', 'p2', 'p3', 'p4'])
-    for (const id of ['p6', 'p1', 'p2', 'p3', 'p4']) {
-      const pane = paneFor(id)
-      expect(pane).not.toBeNull()
-      expect(hiddenHost().contains(pane)).toBe(true)
+    expect(st.bootSeeded).toBe(false)
+    expect(st.mruOrder).toEqual([])
+    expect(st.entries.size).toBe(0)
+    expect(h.mounts.value).toBe(0)
+    expect(h.ensures.value).toBe(0)
+    for (const id of ids) {
+      expect(paneFor(id)).toBeNull()
     }
-    expect(paneFor('p5')).toBeNull()
-    expect(paneFor('p7')).toBeNull()
-    // Seeded entries carry the daemon-resolved agent name.
-    expect(st.entries.get('p6')?.agentName).toBe('resolved-p6')
   })
 
-  it('a real visit recorded before the seed lands stays in front of the seeds', async () => {
+  it('calling seedBoot still does not mount panes (no entries → no ensure)', () => {
+    setActive('p1', 'p2', 'p3')
+    setProjects([
+      { id: 'p1', path: '/ws/p1', manuallyActive: 0 },
+      { id: 'p2', path: '/ws/p2', manuallyActive: 0 },
+      { id: 'p3', path: '/ws/p3', manuallyActive: 0 },
+    ])
+    render(<PinnedChatRetainer />)
+    act(() => {
+      useRetainedChatStore.getState().seedBoot(
+        [
+          { projectId: 'p1', projectPath: '/ws/p1', agentName: 'agent-p1' },
+          { projectId: 'p2', projectPath: '/ws/p2', agentName: 'agent-p2' },
+          { projectId: 'p3', projectPath: '/ws/p3', agentName: 'agent-p3' },
+        ],
+        5,
+      )
+    })
+    expect(useRetainedChatStore.getState().mruOrder).toEqual(['p1', 'p2', 'p3'])
+    expect(useRetainedChatStore.getState().entries.size).toBe(0)
+    expect(h.ensures.value).toBe(0)
+    expect(paneFor('p1')).toBeNull()
+  })
+
+  it('a real visit still mounts the pane (visit → ensure)', () => {
     setActive('fg', 'p1', 'p2')
     setProjects([
       { id: 'fg', path: '/ws/fg', manuallyActive: 0 },
@@ -387,21 +409,23 @@ describe('eager boot attach + Active-membership tracking (slice 3)', () => {
       { id: 'p2', path: '/ws/p2', manuallyActive: 0 },
     ])
     render(<PinnedChatRetainer />)
+    expect(h.ensures.value).toBe(0)
     act(() => visit('fg'))
-    await waitFor(() =>
-      expect(useRetainedChatStore.getState().bootSeeded).toBe(true),
-    )
-    expect(useRetainedChatStore.getState().mruOrder).toEqual(['fg', 'p1', 'p2'])
+    expect(paneFor('fg')).not.toBeNull()
+    expect(h.ensures.value).toBe(1)
+    expect(paneFor('p1')).toBeNull()
+    expect(useRetainedChatStore.getState().mruOrder).toEqual(['fg'])
   })
 
-  it('a workspace re-JOINING Active does not auto-attach (only boot/visit do)', async () => {
+  it('a workspace re-JOINING Active does not auto-attach (only a visit does)', () => {
     setActive('a', 'b')
     setProjects([
       { id: 'a', path: '/ws/a', manuallyActive: 0 },
       { id: 'b', path: '/ws/b', manuallyActive: 0 },
     ])
     render(<PinnedChatRetainer />)
-    await waitFor(() => expect(paneFor('a')).not.toBeNull())
+    act(() => visit('a'))
+    expect(paneFor('a')).not.toBeNull()
 
     act(() => setActive('b')) // 'a' leaves — pruned + detached
     expect(paneFor('a')).toBeNull()
@@ -409,9 +433,11 @@ describe('eager boot attach + Active-membership tracking (slice 3)', () => {
     act(() => setActive('a', 'b')) // 'a' re-joins — must stay detached
     expect(paneFor('a')).toBeNull()
     expect(useRetainedChatStore.getState().mruOrder).not.toContain('a')
+    expect(h.ensures.value).toBe(1)
 
     act(() => visit('a')) // a fresh visit re-attaches
     expect(paneFor('a')).not.toBeNull()
+    expect(h.ensures.value).toBe(2)
   })
 })
 

@@ -4,10 +4,12 @@
 // Holds the three inputs the per-window PinnedChatRetainer derives its
 // render from:
 //   - `mruOrder`   — visit order (most-recently-foregrounded first),
-//                    fed by PinnedChatSlot mounts + boot seeding, pruned
-//                    on Active-section leave. The retained set itself is
-//                    NEVER stored — it's `computeRetainedSet(...)` over
-//                    this order (kessel-term/retainedChat.ts).
+//                    fed by PinnedChatSlot mounts (real visits), pruned
+//                    on Active-section leave. seedBoot may record
+//                    display order but does NOT attach panes. The
+//                    retained set itself is NEVER stored — it's
+//                    `computeRetainedSet(...)` over this order
+//                    (kessel-term/retainedChat.ts).
 //   - `entries`    — the AgentChatPane props for each visited workspace
 //                    (projectPath/agentName/restoredSessionId), so the
 //                    retainer can render an instance for a workspace
@@ -52,19 +54,20 @@ interface RetainedChatState {
   entries: ReadonlyMap<string, RetainedChatEntry>
   mruOrder: readonly string[]
   slots: ReadonlyMap<string, RetainedChatSlot>
-  /** Eager-boot seeding ran for this host session (one-shot). */
+  /** Display-only boot seeding ran for this host session (one-shot). */
   bootSeeded: boolean
 
   /** A workspace's pinned chat was foregrounded (its slot mounted).
    *  Upserts the entry props and moves the workspace to MRU front. */
   recordVisit: (entry: RetainedChatEntry) => void
-  /** One-shot eager-boot seeding: append Active-list-ordered entries
-   *  behind any real visits, bounded by `cap` (retainedCap at the call
-   *  site). No-ops after the first call for this host session. */
+  /** One-shot display-only boot seeding: records Active-list order
+   *  behind any real visits, bounded by `cap`. Does NOT upsert pane
+   *  entries — those would mount AgentChatPane → ensure-pinned-chat.
+   *  No-ops after the first call for this host session. */
   seedBoot: (entries: RetainedChatEntry[], cap: number) => void
   /** Active-section membership tracking: drop visits for workspaces no
    *  longer in the canonical Active set (leave ⇒ evict; a later re-join
-   *  does not auto-attach). */
+   *  does not auto-attach — only a fresh visit does). */
   pruneToActive: (activeProjectIds: ReadonlySet<string>) => void
   /** Hard-evict one workspace (daemon session removed while
    *  backgrounded). Re-visiting re-attaches fresh. */
@@ -106,22 +109,17 @@ export const useRetainedChatStore = create<RetainedChatState>((set, get) => ({
 
   seedBoot: (entries, cap) => {
     if (get().bootSeeded) return
-    set((s) => {
-      const nextEntries = new Map(s.entries)
-      for (const e of entries) {
-        // Seeds never overwrite a real visit's entry props.
-        if (!nextEntries.has(e.projectId)) nextEntries.set(e.projectId, e)
-      }
-      return {
-        bootSeeded: true,
-        entries: nextEntries,
-        mruOrder: seedBootOrder(
-          s.mruOrder,
-          entries.map((e) => e.projectId),
-          cap,
-        ),
-      }
-    })
+    set((s) => ({
+      bootSeeded: true,
+      // Display-only: do not upsert entries. Entries are what the
+      // retainer mounts as AgentChatPane → ensure-pinned-chat. A seed
+      // is not a visit (prd-active-window-wake-and-reap-v1 §3.4).
+      mruOrder: seedBootOrder(
+        s.mruOrder,
+        entries.map((e) => e.projectId),
+        cap,
+      ),
+    }))
   },
 
   pruneToActive: (activeProjectIds) => {

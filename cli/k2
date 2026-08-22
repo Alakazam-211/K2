@@ -10349,15 +10349,43 @@ EOF
 
 cmd_help_msg() {
     cat <<'EOF'
-k2 msg <workspace|workspace/handle|sessionId|agent::host> "text" [--from <name>] [--command "<text>"] [--no-wake]
+k2 msg — talk to another workspace agent (live chat OR a file package)
 
-Deliver a message to a workspace's agent, live. By DEFAULT msg AUTO-WAKES
-a dormant session: if the agent's session is asleep, msg
-resumes/spawns it, waits until READY, then delivers (the legacy
-wake-on-message behavior). Pass `--no-wake` for a blind live-only send
-(returns `dormant_no_wake` instead of waking). A workspace with no
-configured agent returns `no_agent_mode` and is never spawned. Returns
-success only when the message has landed in the agent's session.
+THREE TOOLS (do not mix)
+  k2 msg     SEND to another agent: live "text" OR --inbox-wake/--inbox-silent files
+  k2 inbox   YOUR tray (receive/triage). Cannot send a file.
+  k2 mail    real email (humans / SMTP). Not agents.
+
+LIVE CHAT (short, one line)
+  k2 msg <handle> "ready when you are"
+
+SEND A FILE
+  k2 msg <handle> --inbox-wake ./brief.md [--title "..."]
+      Copy into their .k2/inbox/ and ping them: Open: k2 inbox read <id>
+      Preferred. Prints the id. Multiple paths → ONE package, one id.
+  k2 msg <handle> --inbox-silent ./data.csv [--title "..."]
+      Copy only. Does NOT notify. They need k2 inbox list.
+
+  Bare --inbox is an error. Do not paste file contents into live msg text.
+
+RECEIVE
+  k2 inbox list
+  k2 inbox read <id>
+
+<handle> from `k2 connections list`. Sidecar sales/reviewer shares that
+workspace tray.
+
+USAGE
+  k2 msg <handle|handle/sidecar|sessionId|agent::host> "text" [--from <name>] [--command "<text>"] [--no-wake]
+  k2 msg <handle|agent::host> --inbox-wake|--inbox-silent <path> [path...] [--title "..."]
+
+Live `msg` AUTO-WAKES a dormant session by default: if the agent's
+session is asleep, msg resumes/spawns it, waits until READY, then
+delivers (the legacy wake-on-message behavior). Pass `--no-wake` for a
+blind live-only send (returns `dormant_no_wake` instead of waking). A
+workspace with no configured agent returns `no_agent_mode` and is never
+spawned. Returns success only when the live message has landed in the
+agent's session.
 
 ARGUMENTS
   <workspace>    Local workspace name (preferred — see `k2 connections
@@ -10423,8 +10451,8 @@ LENGTH LIMIT — IMPORTANT
   input widget (Claude Code / Codex / Gemini all treat fast-arriving
   bytes as a paste with input-buffer limits). For anything longer than a
   sentence or two — task briefs, file contents, structured packages —
-  use tray delivery (`--inbox-silent` / `--inbox-wake`), which lands a
-  durable package under the peer's `.k2/inbox/` with no length limit:
+  use `--inbox-wake` (preferred) or `--inbox-silent`, which copies a
+  durable package into the peer's `.k2/inbox/` with no length limit:
 
       k2 msg <workspace> --inbox-wake ./brief.md
       k2 msg <workspace> --inbox-silent ./report.pdf
@@ -10452,7 +10480,7 @@ TRAY DELIVERY (work packages)
 
 RELATED VERBS
   k2 inbox list | read <id> | move | archive
-      Manage YOUR workspace's tray (receive/triage). Unchanged.
+      YOUR tray (receive/triage). Cannot send a file. Not email.
 
   k2 read <workspace> [--lines N] [--agent <name>]
       Read the recipient's live terminal (peek before you inject, or
@@ -10483,8 +10511,9 @@ k2 read <workspace> [--lines N] [--agent <name>]
 
 Read another workspace's LIVE terminal — the last N lines of plain
 text from its running session. The "read" complement to the messaging
-verbs: `msg` talks live, `inbox` is mail, `read` looks over their
-shoulder. Addresses by workspace NAME exactly like `msg`.
+verbs: `msg` talks live or sends a tray package; `inbox` is YOUR tray;
+`read` peeks their terminal. Not mail. Addresses by workspace NAME
+exactly like `msg`.
 
 Use it to PEEK BEFORE YOU INJECT (human-in-the-loop: see what an agent
 is doing / waiting on before sending it a message), or to diagnose a
@@ -10687,7 +10716,7 @@ cmd_schema() {
     {
       "name": "msg",
       "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace|agent::host> --inbox-silent|--inbox-wake <path> [path…]",
-      "description": "Deliberate blind live send to a workspace's agent (spawns it if needed). For SHORT single-line messages; for long content or files use --inbox-wake / --inbox-silent. Live federated peers: agent::host over federation. Tray agent::host needs a K2 Connect host token (not federation). Wire form fp::ws::agent is k2 fed send only — never mail.",
+      "description": "Send to another workspace agent. For files use --inbox-wake (copy + knock, preferred) or --inbox-silent (copy only). Live text is SHORT, one line. Not k2 mail. Spawns the agent if needed. Federated live: agent::host over federation. Tray agent::host needs a K2 Connect host token (not federation). Wire form fp::ws::agent is k2 fed send only.",
       "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or agent::host (live=federation; tray=Connect host)"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
       "flags": [
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
@@ -10757,7 +10786,7 @@ cmd_schema() {
     {
       "name": "inbox",
       "usage": "k2 inbox [list|compose|move|archive] ...",
-      "description": "Email-style work primitive. Default shows new arrivals; compose/move/archive manage items.",
+      "description": "YOUR tray (receive/triage). Others send files with k2 msg --inbox-wake. Cannot send a file. Default shows new arrivals; compose/move/archive manage items. Not email, not live chat.",
       "args": [],
       "flags": []
     },
@@ -12386,9 +12415,14 @@ cmd_help_inbox() {
     cat <<'EOF'
 k2 inbox [<subcommand>] [options]
 
-The workspace's email-like communication channel. Items arrive from
-other workspaces (via `k2 msg --inbox-wake|--inbox-silent`) or are
-composed by your own agent (via `k2 inbox compose`). Read, triage, file into folders.
+YOUR tray. Not email. Not live chat.
+Others SEND a file with:
+  k2 msg <your-handle> --inbox-wake ./file.md
+You cannot send a file with `k2 inbox`. Use `k2 msg <handle> --inbox-wake`.
+
+Items arrive from other workspaces (via `k2 msg --inbox-wake|--inbox-silent`)
+or are composed as self-notes (`k2 inbox compose`). Read, triage, file
+into folders.
 
 SUBCOMMANDS
   (none)                    Show inbox items (= `inbox list`)
@@ -12406,8 +12440,8 @@ SUBCOMMANDS
   folders                   List folders this workspace has created
 
 ORGANIZING YOUR INBOX
-  K2 doesn't impose a folder taxonomy. Organize your inbox the way
-  you'd organize email — create folders that fit your workflow:
+  K2 doesn't impose a folder taxonomy. Organize your tray the way
+  you'd file notes — create folders that fit your workflow:
     inbox move <id> projects/    # active work items
     inbox move <id> reference/   # things to remember
     inbox move <id> issues/      # problems to address
@@ -15883,8 +15917,8 @@ TALK TO OTHERS
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
   msg <workspace>/<handle> "text"       Sidecar (`sales/1`, `sales/reviewer`; slash not hyphen)
   msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)
-  msg <workspace> --inbox-wake <path> [path…]   Package + short live notify (tray; multi-file → one package)
-  msg <workspace> --inbox-silent <path> [path…] Package only (no notify; multi-file → one package)
+  msg <workspace> --inbox-wake <path> [path…]   Send file + knock (copy into their tray; multi-file → one package)
+  msg <workspace> --inbox-silent <path> [path…] Send file, no notify (they need `inbox list`)
   msg <workspace> --signal <kind> ...   Emit a typed signal (advanced)
   read <workspace> [--lines N]          Read their live terminal (peek before you inject)
   connections list [--json] [--users]   Connected workspaces (bidirectional); --users lists humans on this box
@@ -15892,7 +15926,7 @@ TALK TO OTHERS
   connections remove <name>             Disconnect (same agent create/remove gate)
 
 YOUR INBOX
-  inbox                                 Show inbox items (default)
+  inbox                                 YOUR tray — receive/triage (others send with `msg --inbox-wake`)
   inbox list [<folder>]                 List items in inbox or a folder
   inbox read <id>                       Full text of one item
   inbox compose --title "..." --body    Write your own item (self-note / task)

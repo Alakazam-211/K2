@@ -324,12 +324,30 @@ run it on every turn, and it is not a wake protocol.
 
 ## Send work to a workspace
 Addresses are **handles** (`sales-team`), not display names (`Sales Team`).
+`<handle>` from `k2 connections list`. Sidecar `sales/reviewer` shares
+that workspace tray.
+
+`k2 msg` talks to another workspace agent (live chat OR a file package).
+
+THREE TOOLS (do not mix)
+- `k2 msg` — SEND to another agent: live `"text"` OR `--inbox-wake`/`--inbox-silent` files
+- `k2 inbox` — YOUR tray (receive/triage). Cannot send a file.
+- `k2 mail` — real email (humans / SMTP). Not agents.
+
 ```
-k2 msg <handle> "live chat — appears in the primary session"
-k2 msg <handle>/<sidecar> "…"   # extra chat: sales/1 or sales/reviewer
-k2 msg <handle> --inbox-wake <path> [path…]     # package + knock (preferred)
-k2 msg <handle> --inbox-silent <path> [path…]   # package only, no notify
+k2 msg <handle> "ready when you are"            # live chat — SHORT, one line
+k2 msg <handle>/<sidecar> "…"                   # extra chat: sales/1 or sales/reviewer
+k2 msg <handle> --inbox-wake <path> [path…]     # copy into their .k2/inbox/ + knock (preferred)
+k2 msg <handle> --inbox-silent <path> [path…]   # copy only, no notify; they need k2 inbox list
 ```
+
+`--inbox-wake` copies into their `.k2/inbox/` and pings them
+(`Open: k2 inbox read <id>`). Prints the id. Multiple paths → ONE
+package, one id. Bare `--inbox` is an error. Do not paste file contents
+into live msg text.
+
+Receive: `k2 inbox list` / `k2 inbox read <id>`.
+
 Bare `k2 msg sales` is the primary. Hyphen (`sales-reviewer`) is a
 workspace handle, not a sidecar. `msg` (live form) fails loudly when
 the recipient isn't running — use `--inbox-wake` / `--inbox-silent` to
@@ -1836,6 +1854,17 @@ mod tests {
         assert!(
             body.contains("k2 agent context add users:roster"),
             "k2-cli skill must mention `k2 agent context add users:roster`"
+        );
+        // File send is `k2 msg --inbox-wake`, not `k2 inbox` / `k2 mail`.
+        assert!(
+            body.contains("THREE TOOLS")
+                && body.contains("Cannot send a file")
+                && body.contains("--inbox-wake"),
+            "k2-cli skill must teach THREE TOOLS: msg sends files, inbox receives, mail is SMTP"
+        );
+        assert!(
+            !body.contains("k2 inbox send") && !body.contains("k2 mail --attach"),
+            "k2-cli skill must not teach inbox send or mail --attach for agent files"
         );
     }
 

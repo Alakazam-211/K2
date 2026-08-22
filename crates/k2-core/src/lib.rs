@@ -135,6 +135,8 @@ pub mod project_config;
 // shared dashboards.
 pub mod project_groups;
 pub mod projects_ops;
+/// Daemon-owned published services (`published_services` / migration 0104).
+pub mod published_services;
 pub mod push;
 // Companion C4 (prd-companion-v2 §4) — the daemon-held mobile
 // push-device registry (`push_devices`): upsert-by-device-id

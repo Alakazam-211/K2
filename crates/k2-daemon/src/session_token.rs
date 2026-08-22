@@ -552,6 +552,9 @@ pub fn is_agent_verb(path: &str) -> bool {
         // workspace schedules). OS tick install + fleet list are DENY above.
         // Identity forced from HookPrincipal → only the caller's workspace.
         "/cli/heartbeat/",
+        // Published services (prd-k2-publish-hosted-services-v1). NOT
+        // under `/cli/tunnel/` which is owner-only (DENY_PREFIXES).
+        "/cli/publish/",
         // Sandbox P1 (Finding-1 follow-on): `/cli/review-checklist/` was
         // DROPPED from the scoped allowlist. Its handlers take the raw `body`
         // (not the params map) and so are NOT reached by the principal-pin in
@@ -1221,6 +1224,15 @@ mod tests {
         assert!(
             is_agent_verb("/cli/whoami"),
             "scoped tokens must reach GET /cli/whoami"
+        );
+        assert!(
+            is_agent_verb("/cli/publish/list"),
+            "published services are agent verbs (not under /cli/tunnel/)"
+        );
+        assert!(is_agent_verb("/cli/publish/run"));
+        assert!(
+            !is_agent_verb("/cli/tunnel/publish/run"),
+            "must not hang publish under owner-only /cli/tunnel/"
         );
         assert!(
             !is_agent_verb("/cli/auth/whoami"),

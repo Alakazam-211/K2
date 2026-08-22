@@ -814,6 +814,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0103_workspace_agent_handle",
             include_str!("../../drizzle_sql/0103_workspace_agent_handle.sql"),
         ),
+        // 0104 — daemon-owned published services (process + desired state).
+        (
+            "0104_published_services",
+            include_str!("../../drizzle_sql/0104_published_services.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1240,6 +1245,7 @@ mod tests {
             "activity_feed",
             "workspace_relations",
             "focus_groups",
+            "published_services",
         ] {
             let count: i64 = conn
                 .query_row(
@@ -1282,11 +1288,10 @@ mod tests {
             .unwrap();
         assert!(n >= 30, "expected >=30 applied migrations, got {}", n);
 
-        // Name ordering: the last applied migration's name should be
-        // 0029_heartbeat_fires_schedule_name (the highest-numbered
-        // one shipped to date). If this breaks after adding a new
-        // migration, updating the expected name here is a deliberate
-        // signal to update migration docs.
+        // Name ordering: the last applied migration's name is the
+        // highest-numbered one shipped. If this breaks after adding a
+        // new migration, updating the expected name here is a
+        // deliberate signal to update migration docs.
         let last_name: String = conn
             .query_row(
                 "SELECT name FROM _migrations ORDER BY id DESC LIMIT 1",
@@ -1294,10 +1299,9 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(
-            last_name.starts_with("00"),
-            "unexpected last migration name: {}",
-            last_name
+        assert_eq!(
+            last_name, "0104_published_services",
+            "unexpected last migration name: {last_name}"
         );
     }
 
@@ -1891,6 +1895,7 @@ mod tests {
             "activity_feed",
             "workspace_relations",
             "focus_groups",
+            "published_services",
         ] {
             let exists: i64 = conn
                 .query_row(

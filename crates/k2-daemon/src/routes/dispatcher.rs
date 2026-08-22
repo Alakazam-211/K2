@@ -700,6 +700,13 @@ async fn handle_one_request(
             | "/cli/wiki/chat"
             | "/cli/wiki/chat/on"
             | "/cli/wiki/chat/off"
+            // Published services — daemon-owned process + optional nested
+            // hostname. POST-only mutating; GET list/logs via cli::dispatch.
+            // Not under /cli/tunnel/ (owner-only deny).
+            | "/cli/publish/run"
+            | "/cli/publish/start"
+            | "/cli/publish/stop"
+            | "/cli/publish/rm"
             // K2 Connect host-awareness GAP — workspace skill / agent /
             // session / relations / heartbeat-flag / onboarding writes.
             // The renderer previously fired these via LOCAL Tauri
@@ -4079,6 +4086,59 @@ async fn handle_one_request(
         // token_ok (owner OR connect-user), same tier as fs/inbox reads.
         // spawn_blocking so serve start can Handle::block_on bind without
         // pinning an async worker; the accept loop is then tokio::spawn'd.
+        p if is_post && post_allowed && p.starts_with("/cli/publish/") => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut params = super::http::parse_params(&path, &query);
+            for (k, v) in super::http::parse_form_body(&body_bytes) {
+                params.insert(k, v);
+            }
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                if let Some(obj) = v.as_object() {
+                    for (k, val) in obj {
+                        let s = match val {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            _ => continue,
+                        };
+                        if !s.is_empty() {
+                            params.insert(k.clone(), s);
+                        }
+                    }
+                }
+            }
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::publish_routes::dispatch_post(&p_owned, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(
+                &mut *stream,
+                result.status,
+                result.content_type,
+                &result.body,
+            )
+            .await;
+        }
         p if is_post && post_allowed && p.starts_with("/cli/wiki/") => {
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let _ = stream.read(&mut buf).await;

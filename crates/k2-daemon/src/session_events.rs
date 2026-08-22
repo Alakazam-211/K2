@@ -298,6 +298,15 @@ pub enum SessionEvent {
         targets: HashMap<String, SubdomainTargetWire>,
     },
 
+    /// Published-service inventory changed for a workspace (spawn, stop,
+    /// exit, hostname fail, rm). APP-LEVEL — one daemon, many workspaces;
+    /// the drawer filters by `projectId`. Wire: `{ "kind":
+    /// "publish_services_changed", "projectId": "<uuid>" }`.
+    PublishServicesChanged {
+        #[serde(rename = "projectId")]
+        project_id: String,
+    },
+
     /// #676 — a tab title was set daemon-side. WORKSPACE-SCOPED.
     /// Push counterpart to the new `POST /cli/workspace/set-tab-title`
     /// route + the daemon-canonical `tab_titles` store. Replaces the
@@ -986,6 +995,19 @@ mod tests {
         });
         assert_eq!(json2["primary"], "");
         assert!(json2["targets"].as_object().unwrap().is_empty());
+    }
+
+    /// FROZEN WIRE CONTRACT: `{ "kind": "publish_services_changed",
+    /// "projectId": string }`.
+    #[test]
+    fn publish_services_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::PublishServicesChanged {
+            project_id: "proj-uuid".into(),
+        });
+        assert_eq!(json["kind"], "publish_services_changed");
+        assert_eq!(json["projectId"], "proj-uuid");
+        assert_keys(&json, &["kind", "projectId"]);
+        assert!(json.get("project_id").is_none());
     }
 
     /// [`tunnel_subdomains_snapshot`] is the ONE builder both the GET

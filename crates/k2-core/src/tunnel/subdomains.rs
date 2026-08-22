@@ -83,15 +83,26 @@ pub enum Route {
 }
 
 /// One subdomain row from the control plane's `GET /subdomains` response.
-/// Only the fields the daemon's routing needs are pulled; the rest
-/// (cert_status, status, …) are ignored here — the control plane owns them.
-#[derive(Debug, Clone, Deserialize)]
+/// Routing still uses only `label`/`target`/`primary` ([`fetch_map`] drops
+/// the rest). Plan checks for nested `k2 publish run` read `tier` from
+/// the connected row — the live CLI does the same.
+#[derive(Debug, Clone, Default, Deserialize)]
 struct SubdomainRow {
+    #[serde(default)]
     label: String,
     #[serde(default)]
     target: Option<String>,
     #[serde(default)]
     primary: bool,
+    /// `"pro"` | `"single"` | `"free"` — present on the connected row.
+    #[serde(default)]
+    tier: Option<String>,
+    #[serde(default)]
+    connected: bool,
+    #[serde(default)]
+    current: bool,
+    #[serde(default)]
+    is_current: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -246,6 +257,73 @@ fn swap_and_changed(map: SubdomainMap) -> bool {
 
 // ── Control-plane fetch (the daemon's "learn the map" call) ───────────────
 
+fn http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()
+        .map_err(|e| format!("http client build failed: {e}"))
+}
+
+fn bearer(token: &str) -> Result<String, String> {
+    let t = token.trim();
+    if t.is_empty() {
+        return Err("no tunnel bearer token (cannot fetch subdomains)".to_string());
+    }
+    Ok(format!("Bearer {t}"))
+}
+
+/// GET `/subdomains` (same Bearer as [`fetch_map`]). Shared by the routing
+/// map fetch and the Pro-plan check so we don't double-dial.
+fn get_subdomains(token: &str) -> Result<SubdomainsResponse, String> {
+    let auth = bearer(token)?;
+    let url = format!("{}/subdomains", control_plane_base());
+    let resp = http_client()?
+        .get(&url)
+        .header("Authorization", auth)
+        .send()
+        .map_err(|e| format!("GET {url}: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .map_err(|e| format!("read /subdomains response: {e}"))?;
+    if !status.is_success() {
+        return Err(map_cp_error(status.as_u16(), &text));
+    }
+    serde_json::from_str(&text)
+        .map_err(|e| format!("parse /subdomains response: {e} (body: {})", truncate(&text, 200)))
+}
+
+/// Plan tier of the connected row (token match), else the row whose
+/// label equals `primary`. Live CLI reads the same per-row `tier`.
+fn tier_of_connected(rows: &[SubdomainRow], primary: &str) -> Option<String> {
+    let primary = primary.trim().to_ascii_lowercase();
+    let connected = rows.iter().find(|r| r.connected || r.current || r.is_current);
+    let row = connected.or_else(|| {
+        if primary.is_empty() {
+            None
+        } else {
+            rows.iter()
+                .find(|r| r.label.trim().eq_ignore_ascii_case(&primary))
+        }
+    })?;
+    let t = row.tier.as_deref().unwrap_or("").trim().to_ascii_lowercase();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+/// Routing map + the connected row's plan tier. Nested `k2 publish run`
+/// uses `tier == "pro"` as the Pro gate. [`fetch_map`] still returns only
+/// the routing table (drops `tier`) so existing callers stay unchanged.
+#[derive(Debug, Clone)]
+pub struct AccountSubdomains {
+    pub map: SubdomainMap,
+    /// `"pro"` | `"single"` | `"free"` when the control plane sent it.
+    pub tier: Option<String>,
+}
+
 /// Fetch the account's subdomains from the control plane and return the
 /// routing map. `primary` is the user's primary subdomain label (from the
 /// tunnel config) used to classify the primary vs. nested rows; `token` is
@@ -255,29 +333,132 @@ fn swap_and_changed(map: SubdomainMap) -> bool {
 /// the next tick (it keeps serving the cached map meanwhile — never silently
 /// drops nested routing).
 pub fn fetch_map(primary: &str, token: &str) -> Result<SubdomainMap, String> {
-    if token.trim().is_empty() {
-        return Err("no tunnel bearer token (cannot fetch subdomains)".to_string());
+    Ok(fetch_account(primary, token)?.map)
+}
+
+/// GET `/subdomains` and return the routing map PLUS the connected row's
+/// `tier`. `--no-tunnel` must never call this (no GET, no POST).
+pub fn fetch_account(primary: &str, token: &str) -> Result<AccountSubdomains, String> {
+    let parsed = get_subdomains(token)?;
+    let tier = tier_of_connected(&parsed.subdomains, primary);
+    Ok(AccountSubdomains {
+        map: SubdomainMap::from_rows(primary, parsed.subdomains),
+        tier,
+    })
+}
+
+/// Map control-plane `{ "error": "…" }` codes the CLI already dresses
+/// (`pro_required` / `bad_label` / `label_taken` / `primary_undeletable`).
+pub fn map_cp_error(status: u16, body: &str) -> String {
+    let err = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("error")
+                .and_then(|e| e.as_str())
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_default();
+    let detail = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("detail")
+                .and_then(|e| e.as_str())
+                .map(|s| s.trim().to_string())
+        })
+        .filter(|s| !s.is_empty());
+    match err.as_str() {
+        "pro_required" => {
+            "pro_required: nested subdomains need a Pro plan (https://k2.dev/dashboard)".into()
+        }
+        "bad_label" => {
+            "bad_label: Invalid label (use lowercase letters, digits, and dashes).".into()
+        }
+        "label_taken" => "label_taken: That label is already taken.".into(),
+        "primary_undeletable" | "label_is_primary" => {
+            "primary_undeletable: Your primary subdomain cannot be removed.".into()
+        }
+        "" => format!(
+            "/subdomains rejected (HTTP {status}): {}",
+            truncate(body, 200)
+        ),
+        other => {
+            if let Some(d) = detail {
+                format!("{other}: {d}")
+            } else {
+                format!("/subdomains rejected (HTTP {status}): {other}")
+            }
+        }
     }
-    let url = format!("{}/subdomains", control_plane_base());
-    let client = reqwest::blocking::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()
-        .map_err(|e| format!("http client build failed: {e}"))?;
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", token.trim()))
-        .send()
-        .map_err(|e| format!("GET {url}: {e}"))?;
+}
+
+fn send_write(
+    method: &str,
+    path: &str,
+    token: &str,
+    json_body: Option<&str>,
+) -> Result<String, String> {
+    let auth = bearer(token)?;
+    let url = format!("{}{path}", control_plane_base());
+    let mut req = match method {
+        "POST" => http_client()?.post(&url),
+        "PUT" => http_client()?.put(&url),
+        "DELETE" => http_client()?.delete(&url),
+        other => return Err(format!("unsupported method {other}")),
+    };
+    req = req.header("Authorization", auth);
+    if let Some(body) = json_body {
+        req = req
+            .header("Content-Type", "application/json")
+            .body(body.to_string());
+    }
+    let resp = req.send().map_err(|e| format!("{method} {url}: {e}"))?;
     let status = resp.status();
     let text = resp
         .text()
-        .map_err(|e| format!("read /subdomains response: {e}"))?;
+        .map_err(|e| format!("read {path} response: {e}"))?;
     if !status.is_success() {
-        return Err(format!("/subdomains rejected (HTTP {status}): {}", truncate(&text, 200)));
+        return Err(map_cp_error(status.as_u16(), &text));
     }
-    let parsed: SubdomainsResponse = serde_json::from_str(&text)
-        .map_err(|e| format!("parse /subdomains response: {e} (body: {})", truncate(&text, 200)))?;
-    Ok(SubdomainMap::from_rows(primary, parsed.subdomains))
+    Ok(text)
+}
+
+/// POST `/subdomains` `{ label, target }` — create a nested hostname.
+pub fn create_subdomain(token: &str, label: &str, target: &str) -> Result<(), String> {
+    let body = serde_json::json!({ "label": label, "target": target }).to_string();
+    send_write("POST", "/subdomains", token, Some(&body)).map(|_| ())
+}
+
+/// PUT `/subdomains/<label>` `{ target }` — repoint an existing hostname.
+pub fn point_subdomain(token: &str, label: &str, target: &str) -> Result<(), String> {
+    let path = format!(
+        "/subdomains/{}",
+        urlencoding_label(label)
+    );
+    let body = serde_json::json!({ "target": target }).to_string();
+    send_write("PUT", &path, token, Some(&body)).map(|_| ())
+}
+
+/// DELETE `/subdomains/<label>` — drop the nested hostname. Does not
+/// kill a published process (`k2 publish subdomain rm` stays hostname-only).
+pub fn delete_subdomain(token: &str, label: &str) -> Result<(), String> {
+    let path = format!(
+        "/subdomains/{}",
+        urlencoding_label(label)
+    );
+    send_write("DELETE", &path, token, None).map(|_| ())
+}
+
+fn urlencoding_label(label: &str) -> String {
+    let mut out = String::new();
+    for b in label.trim().as_bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                out.push(*b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// Serializes concurrent [`refresh_once`] callers — the connector's periodic
@@ -321,6 +502,7 @@ mod tests {
             label: label.to_string(),
             target: target.map(str::to_string),
             primary,
+            ..SubdomainRow::default()
         }
     }
 
@@ -553,7 +735,10 @@ mod tests {
             Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
             None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
         }
-        assert!(err.contains("HTTP 403"), "got: {err}");
+        assert!(
+            err.contains("pro_required") || err.contains("HTTP 403"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -638,5 +823,169 @@ mod tests {
         );
         // Reset so we don't bleed into other tests in this binary.
         let _ = swap_and_changed(SubdomainMap::default());
+    }
+
+    #[test]
+    fn fetch_account_reads_connected_row_tier() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mock");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf);
+                let body = r#"{"subdomains":[
+                    {"label":"rosson","primary":true,"connected":true,"tier":"pro"},
+                    {"label":"staging","target":"localhost:3000","primary":false,"tier":"pro"}
+                ]}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+
+        let _g = crate::themes::HOME_LOCK.lock();
+        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
+        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let acct = fetch_account("rosson", "tok");
+        match prev {
+            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
+            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
+        }
+        let acct = acct.expect("fetch_account");
+        assert_eq!(acct.tier.as_deref(), Some("pro"));
+        assert_eq!(
+            acct.map.route_for_host("staging.rosson.k2.dev"),
+            Route::Internal("localhost:3000".to_string())
+        );
+    }
+
+    #[test]
+    fn map_cp_error_dresses_known_codes() {
+        assert!(map_cp_error(403, r#"{"error":"pro_required"}"#).starts_with("pro_required"));
+        assert!(map_cp_error(400, r#"{"error":"bad_label"}"#).contains("lowercase"));
+        assert!(map_cp_error(409, r#"{"error":"label_taken"}"#).starts_with("label_taken"));
+        assert!(map_cp_error(400, r#"{"error":"primary_undeletable"}"#)
+            .starts_with("primary_undeletable"));
+        assert!(map_cp_error(403, r#"{"error":"nope"}"#).contains("HTTP 403"));
+    }
+
+    #[test]
+    fn create_subdomain_posts_json_with_bearer() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mock");
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let _ = tx.send(req);
+                let body = r#"{"label":"web","host":"web.rosson.k2.dev"}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+
+        let _g = crate::themes::HOME_LOCK.lock();
+        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
+        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        create_subdomain("tok_write", "web", "127.0.0.1:3000").expect("create");
+        match prev {
+            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
+            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
+        }
+        let req = rx.recv_timeout(Duration::from_secs(5)).expect("saw POST");
+        assert!(req.starts_with("POST /subdomains "), "must POST /subdomains:\n{req}");
+        assert!(
+            req.to_ascii_lowercase()
+                .contains("authorization: bearer tok_write"),
+            "must send bearer:\n{req}"
+        );
+        assert!(req.contains(r#""label":"web""#), "body:\n{req}");
+        assert!(req.contains(r#""target":"127.0.0.1:3000""#), "body:\n{req}");
+    }
+
+    #[test]
+    fn point_and_delete_hit_label_path() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mock");
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for _ in 0..2 {
+                let Ok((mut sock, _)) = listener.accept() else { return };
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let _ = tx.send(req);
+                let body = "{}";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+
+        let _g = crate::themes::HOME_LOCK.lock();
+        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
+        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        point_subdomain("tok", "web", "127.0.0.1:4000").expect("point");
+        delete_subdomain("tok", "web").expect("delete");
+        match prev {
+            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
+            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
+        }
+        let put = rx.recv_timeout(Duration::from_secs(5)).expect("PUT");
+        let del = rx.recv_timeout(Duration::from_secs(5)).expect("DELETE");
+        assert!(put.starts_with("PUT /subdomains/web "), "got:\n{put}");
+        assert!(del.starts_with("DELETE /subdomains/web "), "got:\n{del}");
+    }
+
+    #[test]
+    fn create_maps_pro_required() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mock");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf);
+                let body = r#"{"error":"pro_required"}"#;
+                let resp = format!(
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+
+        let _g = crate::themes::HOME_LOCK.lock();
+        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
+        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let err = create_subdomain("tok", "web", "127.0.0.1:1").expect_err("403");
+        match prev {
+            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
+            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
+        }
+        assert!(err.contains("pro_required"), "got: {err}");
+        assert!(err.contains("k2.dev/dashboard"), "got: {err}");
     }
 }

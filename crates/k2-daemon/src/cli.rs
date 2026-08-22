@@ -161,6 +161,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::dns_routes::dispatch(path, params) {
         return resp;
     }
+    // Published services — GET list/logs + 405 twins for POST-only verbs.
+    if let Some(resp) = crate::publish_routes::dispatch(path, params) {
+        return resp;
+    }
     // 0.40.34 — `/cli/browser/open-url` 405 guard for the POST-only
     // mutation reached via the GET chain (no browser GET reads).
     if let Some(resp) = crate::browser_routes::dispatch(path, params) {

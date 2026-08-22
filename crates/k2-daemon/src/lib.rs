@@ -82,6 +82,8 @@ pub mod presence;
 pub mod project_config_routes;
 pub mod project_group_routes;
 pub mod providers;
+pub mod publish_routes;
+pub mod publish_runtime;
 // Companion C4 (prd-companion-v2 §4) — `/cli/push/*` device
 // registration + the mobile-push dispatch triggers (dormant until a
 // gateway URL + token is configured).

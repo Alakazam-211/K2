@@ -98,6 +98,8 @@ mod presence;
 mod project_config_routes;
 mod project_group_routes;
 mod providers;
+mod publish_routes;
+mod publish_runtime;
 // Companion C4 — `/cli/push/*` device registration + mobile-push
 // dispatch triggers (dormant until a gateway URL + token is
 // configured).
@@ -1130,6 +1132,11 @@ async fn async_main() {
     // readiness gate opens so it operates against fully-migrated state.
     let _active_reaper_handle = active_reaper::spawn();
 
+    // Published services: boot reattach/respawn of desired=running
+    // rows. Own process group / Job Object — stop_tunnel / Active
+    // reaper must not reap them (they are not in v2_session_map).
+    let _publish_runtime_handle = publish_runtime::spawn();
+
     // K2 Connect #4 — daemon-canonical connect-session reaper. A single
     // long-lived task that evicts EXPIRED persisted login sessions from
     // `connect-sessions.json`, independent of any client (GH#22 lesson: a
@@ -1227,6 +1234,8 @@ async fn async_main() {
     // 0.40.48-connection-resilience §13.4). `stop_tunnel` kills+waits the
     // child synchronously, so run it on the blocking pool; "not running"
     // is a normal outcome, logged and ignored.
+    // Published-service pids are NOT in the frpc `pkill -f` pattern and
+    // must not be reaped here (boot respawn honors desired=running).
     match tokio::task::spawn_blocking(k2_core::tunnel::stop_tunnel).await {
         Ok(Ok(())) => log_debug!("[daemon] tunnel released for shutdown"),
         Ok(Err(e)) => log_debug!("[daemon] tunnel stop on shutdown: {e}"),

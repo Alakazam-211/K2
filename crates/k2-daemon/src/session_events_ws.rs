@@ -323,6 +323,7 @@ fn event_matches_workspace(event: &SessionEvent, workspace_path: &str) -> bool {
         SessionEvent::LlmStatusChanged { .. }
         | SessionEvent::TunnelStatusChanged { .. }
         | SessionEvent::TunnelSubdomainsChanged { .. }
+        | SessionEvent::PublishServicesChanged { .. }
         | SessionEvent::AgentStatusChanged { .. } => return true,
 
         // 0.39.45 (GH #18/#26) APP-LEVEL — the registered project set
@@ -530,6 +531,9 @@ mod tests {
             workspace_path: "/x/foo".into(),
             paths: vec!["/x/foo/a.rs".into()],
         };
+        let publish_changed = SessionEvent::PublishServicesChanged {
+            project_id: "proj-uuid".into(),
+        };
         for ev in [
             &llm,
             &tunnel,
@@ -542,6 +546,7 @@ mod tests {
             &mail,
             &remote_denied,
             &fs_changed,
+            &publish_changed,
         ] {
             assert!(event_matches_workspace(ev, "/x/foo"));
             assert!(event_matches_workspace(ev, "/totally/unrelated"));

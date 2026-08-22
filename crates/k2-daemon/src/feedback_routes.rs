@@ -53,6 +53,14 @@ use k2_core::feedback::{self, ListFilter, PrefixError};
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
     let resp = match path {
         // ── Reads ───────────────────────────────────────────────────
+        // GET /cli/feedback/waiting-count — host-wide Tickets badge.
+        "/cli/feedback/waiting-count" => match feedback::count_waiting() {
+            Ok(count) => CliResponse::ok_json(
+                serde_json::json!({ "ok": true, "count": count }).to_string(),
+            ),
+            Err(e) => usage_error(e),
+        },
+
         // GET /cli/feedback/list?project=<path>[&all=1][&status=<s>]
         // Default shows open items (waiting + answered + needs_discussion), newest first.
         "/cli/feedback/list" => match need_project(params) {
@@ -1545,6 +1553,22 @@ mod tests {
         let resp = dispatch("/cli/feedback/list", &list_params(&path, &[("status", "bogus")]))
             .expect("claimed");
         assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+
+        let before = dispatch("/cli/feedback/waiting-count", &HashMap::new())
+            .expect("waiting-count claimed");
+        assert_eq!(before.status, "200 OK", "body={}", before.body);
+        let before_n = serde_json::from_str::<serde_json::Value>(&before.body)
+            .expect("json")["count"]
+            .as_i64()
+            .expect("count");
+        create_via_route(&path, "another waiting", serde_json::json!({}));
+        let after = dispatch("/cli/feedback/waiting-count", &HashMap::new())
+            .expect("waiting-count claimed");
+        let after_n = serde_json::from_str::<serde_json::Value>(&after.body)
+            .expect("json")["count"]
+            .as_i64()
+            .expect("count");
+        assert_eq!(after_n, before_n + 1, "host-wide waiting count ticks");
 
         // Missing project param → 400; unregistered project → 404.
         let resp = dispatch("/cli/feedback/list", &HashMap::new()).expect("claimed");

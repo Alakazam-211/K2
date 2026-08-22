@@ -64,6 +64,9 @@ export default function PageTabs(): React.JSX.Element {
   const waitingCount = useFeedbackStore((s) => s.waitingCount)
   const projectsUnread = useProjectGroupsStore((s) => s.unreadGroupIds.size)
   const projects = useProjectsStore((s) => s.projects)
+  // Membership only — reorder/color must not re-fan-out waiting-count
+  // (that N+1 over E2E is the Settings-drag disconnect on large remotes).
+  const projectIdsKey = projects.map((p) => p.id).join('\0')
 
   // Moved verbatim from the absorbed FeedbackTopBarButton: wire the
   // feedback:created/answered listeners once (idempotent) and (re)count
@@ -80,7 +83,7 @@ export default function PageTabs(): React.JSX.Element {
     }
     initFeedbackEvents(isMain)
     void useFeedbackStore.getState().refreshWaitingCount()
-  }, [projects])
+  }, [projectIdsKey])
 
   // Project-group events (nav liveness + the unread badge). Idempotent,
   // same survival contract as initFeedbackEvents.

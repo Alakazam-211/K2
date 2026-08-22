@@ -188,16 +188,27 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
   },
 
   assignProjectToGroup: async (projectId: string, focusGroupId: string | null) => {
+    const previous = useProjectsStore.getState().projects
+    useProjectsStore.setState({
+      projects: previous.map((p) =>
+        p.id === projectId ? { ...p, focusGroupId } : p,
+      ),
+    })
     try {
       await daemonCliPost('focus-groups/assign', { projectId, focusGroupId })
       // The old Tauri `focus_groups_assign_project` emitted BOTH
       // `sync:focus-groups` and `sync:projects` (the project's
-      // focusGroupId changed). Mirror both.
+      // focusGroupId changed). Mirror both. Eat the actor's
+      // ProjectsChanged echo — do not fetchProjects (N+1 over E2E).
+      // Dynamic import: projects.ts already imports this store.
+      const { noteOptimisticProjectsMutationSuccess } = await import('./projects')
+      noteOptimisticProjectsMutationSuccess()
       emitFocusGroupsChanged()
       void emit('sync:projects').catch((e) =>
         console.warn('[focus-groups] sync:projects emit failed:', e),
       )
     } catch (err) {
+      useProjectsStore.setState({ projects: previous })
       console.error('[focus-groups] assignProjectToGroup failed:', err)
     }
   },

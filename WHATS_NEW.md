@@ -3,17 +3,20 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.106 — Idle agents sleep
+## 0.40.106 — Idle agents sleep; Settings drag stays connected
 
 Workspaces stay **Active for N hours** after something actually needed them (you visited, a Project or ticket woke them, a heartbeat fired, or another agent messaged them). After that they sleep and free RAM; the next need `--resume`s. A daemon reboot does **not** respawn the whole fleet. The Active bar Dismiss works even if that agent is running.
 
 Heartbeat **fires** keep a workspace warm; having a schedule is not immortality. API host-session tabs still use their own completion reaper.
+
+Dragging workspaces around in **Settings → Workspaces / Agents** no longer floods the remote tunnel (one request per workspace for lists and the Tickets badge). That was kicking the desktop client off large hosts.
 
 ### What to try
 
 1. Lower **Keep workspaces Active for** (Settings → General → Workspaces) on a busy host; unused chats should disappear after N hours + ~15s.
 2. Restart a headless daemon: agents should stay down until a visit, message, heartbeat, or ticket reply.
 3. Active bar → Dismiss on the workspace you are looking at, even while it is working.
+4. On a busy remote host, drag-reorder workspaces in Settings without losing the connection.
 
 ---
 

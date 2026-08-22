@@ -85,7 +85,7 @@ let _pendingProjectsChanged = false
 /** Mark that this client just completed an optimistic projects mutation so
  *  a trailing ProjectsChanged / sync:projects echo does not force an
  *  immediate full graph refetch. */
-function noteOptimisticProjectsMutationSuccess(): void {
+export function noteOptimisticProjectsMutationSuccess(): void {
   _suppressProjectsChangedUntil = Date.now() + OPTIMISTIC_SELF_ECHO_SUPPRESS_MS
 }
 
@@ -104,10 +104,12 @@ export function scheduleProjectsRefreshFromSync(): void {
     _projectsChangedTimer = null
     const now = Date.now()
     if (now < _suppressProjectsChangedUntil) {
-      // Still in the self-echo suppress window — reschedule once it ends
-      // so a peer mutation that arrived during the window is not dropped.
-      const wait = _suppressProjectsChangedUntil - now
-      _projectsChangedTimer = setTimeout(fire, wait)
+      // Actor just painted optimistically (reorder/color/assign). Eating
+      // this echo is load-bearing on large remotes: rescheduling after
+      // 500ms still ran fetchProjects (N+1 workspaces/list + badge fan-out)
+      // and collapsed E2E. Peer mutations after the window still schedule
+      // a fresh call with suppress expired.
+      _pendingProjectsChanged = false
       return
     }
     if (!_pendingProjectsChanged) return
@@ -886,8 +888,15 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       } else {
         await daemonCliPost('projects/update', { id: projectId, manuallyActive: active ? 1 : 0 })
       }
+      noteOptimisticProjectsMutationSuccess()
       emitProjectsChanged()
-      await get().fetchProjects()
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === projectId
+            ? { ...p, pinned: active ? 1 : 0, manuallyActive: active ? 1 : 0 }
+            : p,
+        ),
+      }))
     } catch (err) {
       console.error('[projects] setManuallyActive failed:', err)
     }

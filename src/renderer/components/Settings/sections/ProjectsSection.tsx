@@ -272,6 +272,7 @@ export function ProjectsSection(): React.JSX.Element {
   const pinnedProjects = useMemo(() => projects.filter((p) => p.pinned && matchesSearch(p)), [projects, matchesSearch])
   const ungroupedProjects = projects.filter((p) => !p.focusGroupId && !p.pinned && matchesSearch(p))
   const reorderProjects = useProjectsStore((s) => s.reorderProjects)
+  const setManuallyActive = useProjectsStore((s) => s.setManuallyActive)
 
   const handleReorderMouseDown = useCallback((
     e: React.MouseEvent,
@@ -334,10 +335,8 @@ export function ProjectsSection(): React.JSX.Element {
         const hoveredGroupId = dragOverGroupRef.current
         if (hoveredGroupId && hoveredGroupId !== '__ungrouped__') {
           await assignProjectToGroup(projectId, hoveredGroupId)
-          await fetchProjects()
         } else if (hoveredGroupId === '__ungrouped__') {
           await assignProjectToGroup(projectId, null)
-          await fetchProjects()
         } else {
           // Within-zone reorder
           const currentProjects = useProjectsStore.getState().projects
@@ -377,7 +376,7 @@ export function ProjectsSection(): React.JSX.Element {
 
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [reorderProjects, assignProjectToGroup, fetchProjects])
+  }, [reorderProjects, assignProjectToGroup])
 
 
   // Build flat list of all visible projects for keyboard navigation
@@ -447,15 +446,12 @@ export function ProjectsSection(): React.JSX.Element {
     if (!clickedId) return
 
     if (clickedId === 'pin') {
-      await daemonCliPost('projects/update', { id: p.id, pinned: p.pinned ? 0 : 1 })
-      emitProjectsChanged()
-      await fetchProjects()
+      await setManuallyActive(p.id, !p.pinned)
     } else if (clickedId.startsWith('move:')) {
       const groupId = clickedId.replace('move:', '')
       await assignProjectToGroup(p.id, groupId === '__none__' ? null : groupId)
-      await fetchProjects()
     }
-  }, [focusGroupsEnabled, focusGroups, fetchProjects, assignProjectToGroup])
+  }, [focusGroupsEnabled, focusGroups, assignProjectToGroup, setManuallyActive])
 
   // Workspace row renderer (called as function, NOT as <Component/>, to avoid unmount/remount flicker)
   const renderProjectRow = (p: typeof projects[number], zone: string, containerSelector: string) => {

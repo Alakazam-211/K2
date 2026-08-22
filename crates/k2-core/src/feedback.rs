@@ -355,6 +355,19 @@ pub fn list_for_project(project_id: &str, filter: &ListFilter) -> Result<Vec<Fee
     Ok(items)
 }
 
+/// Host-wide waiting-ticket count (Tickets badge). One query instead of
+/// N per-workspace `list` GETs over a remote tunnel.
+pub fn count_waiting() -> Result<i64, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT COUNT(*) FROM feedback WHERE status = 'waiting'",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("count waiting: {e}"))
+}
+
 /// Fetch one item by FULL id. `None` when it doesn't exist.
 pub fn get_item(id: &str) -> Option<FeedbackItem> {
     let db = crate::db::shared();

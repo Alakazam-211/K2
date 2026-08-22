@@ -93,6 +93,32 @@ function recoveryGateAllows(): { ok: true } | { ok: false; label: string; kind: 
  * creds. Every other failure surfaces unchanged; a 401/403 rejected a
  * request before doing work, so the single replay is side-effect-safe.
  */
+/** Cap concurrent `/cli/*` fetches against a REMOTE host. Reorder/move
+ *  in Settings used to fire N workspaces/list + N feedback/list at once
+ *  and collapse E2E (WKWebView CORS / handshake eof). Local is uncapped. */
+const REMOTE_CLI_MAX_INFLIGHT = 4
+let remoteCliInflight = 0
+const remoteCliWaiters: Array<() => void> = []
+
+async function acquireRemoteCliSlot(): Promise<boolean> {
+  if (useConnectHostStore.getState().activeHost === 'local') return false
+  for (;;) {
+    if (remoteCliInflight < REMOTE_CLI_MAX_INFLIGHT) {
+      remoteCliInflight += 1
+      return true
+    }
+    await new Promise<void>((resolve) => {
+      remoteCliWaiters.push(resolve)
+    })
+  }
+}
+
+function releaseRemoteCliSlot(): void {
+  remoteCliInflight = Math.max(0, remoteCliInflight - 1)
+  const next = remoteCliWaiters.shift()
+  if (next) next()
+}
+
 async function cliFetch(
   build: (creds: DaemonWsAvailable) => { url: string; init?: RequestInit },
 ): Promise<CliHttpResult> {
@@ -102,6 +128,7 @@ async function cliFetch(
   // construction (revival just proved the host reachable + re-authed).
   const gate = recoveryGateAllows()
   if (!gate.ok) throw new RecoveringError(gate.label, gate.kind)
+  const heldRemoteSlot = await acquireRemoteCliSlot()
   let lastUrl = ''
   try {
     return await withConnRetry(async () => {
@@ -144,6 +171,8 @@ async function cliFetch(
       forceSoftHealthProbe()
     }
     throw err
+  } finally {
+    if (heldRemoteSlot) releaseRemoteCliSlot()
   }
 }
 

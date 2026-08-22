@@ -353,10 +353,10 @@ describe('projects store — Plan B host-aware migration', () => {
     // Still inside the 500ms suppress window — no refetch
     expect(fetchSpy).not.toHaveBeenCalled()
 
-    // After suppress window (+ debounce residue), the pending event may fire once
+    // Self-echo is eaten, not deferred: a trailing fetchProjects after
+    // reorder is the NSI Settings-drag disconnect (N+1 over E2E).
     await vi.advanceTimersByTimeAsync(500)
-    // Peer reconcile: at most one fetch after the suppress window ends
-    expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(1)
+    expect(fetchSpy).not.toHaveBeenCalled()
     fetchSpy.mockRestore()
   })
 

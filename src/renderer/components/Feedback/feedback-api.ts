@@ -106,10 +106,19 @@ export async function fetchAllFeedback(
   return sortNewestFirst(results.flat())
 }
 
-/** Waiting-count fan-out for the top-bar badge (status=waiting only). */
+/** Waiting-count for the top-bar badge. Prefers one host-wide GET;
+ *  falls back to per-workspace list on older daemons. */
 export async function fetchWaitingCount(
   projects: FeedbackProjectRef[],
 ): Promise<number> {
+  try {
+    const res = await daemonCliGet<{ ok: boolean; count: number }>(
+      'feedback/waiting-count',
+    )
+    if (typeof res.count === 'number') return res.count
+  } catch {
+    // Pre-waiting-count daemon — fall through.
+  }
   const counts = await Promise.all(
     projects.map(async (p) => {
       try {

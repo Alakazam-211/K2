@@ -8,7 +8,7 @@ import {
   type HeartbeatEntry,
 } from '@/stores/heartbeat-sessions'
 import { serverSupports } from '@/lib/server-capabilities'
-import { IconHeartEKG } from '@/components/icons/IconHeartEKG'
+import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { HeartbeatEntryRow } from './HeartbeatEntry'
 import { SectionManageCog } from '@/components/WorkspacePanel/SectionManageCog'
 
@@ -23,7 +23,8 @@ import { SectionManageCog } from '@/components/WorkspacePanel/SectionManageCog'
  *   - Scheduled : configured but never fired (hollow dot)
  *   - Archived  : collapsed by default, persisted per-workspace
  *
- * Header carries the heart-with-EKG icon and a settings cog that
+ * Header carries the same EKG pulse as the Active-bar autonomous
+ * badge (`IconAutonomous`) and a settings cog that
  * opens Settings → Heartbeats for full CRUD. Empty / off-mode state
  * shows guidance text rather than disappearing entirely so the
  * section never looks broken.
@@ -151,7 +152,7 @@ export function HeartbeatsPanel(): React.JSX.Element {
           >
             <path d="M2 1 L6 4 L2 7" />
           </svg>
-          <IconHeartEKG className="w-3 h-3 text-[var(--color-accent)]" />
+          <IconAutonomous className="w-3 h-3 text-[var(--color-accent)]" />
           Heartbeats
           {/* Count badge — active (non-archived) only, matching the
               Worktrees count next to the Worktrees header below.

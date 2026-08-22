@@ -230,7 +230,7 @@ export default function WorkspacePanel(): React.JSX.Element {
           </svg>
           {/* Same branch-fork glyph used on each worktree row below
               (line ~466). Tinted blue (accent) here so the section
-              header matches the Heartbeats heart-EKG icon's visual
+              header matches the Heartbeats EKG-pulse icon's visual
               weight. Items in the list keep the muted variant. */}
           <svg
             className="w-3 h-3 text-[var(--color-accent)] flex-shrink-0"

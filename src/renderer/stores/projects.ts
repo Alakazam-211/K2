@@ -257,6 +257,14 @@ export interface ProjectWithWorkspaces extends Project {
   workspaces: Workspace[]
 }
 
+/** Old daemons omit `workspaces` or send a non-array. Nested embed is used
+ *  only when EVERY row has an array — never half-hydrate. */
+function projectsListEmbedsWorkspaces(
+  rows: Array<Project & { workspaces?: unknown }>,
+): rows is ProjectWithWorkspaces[] {
+  return rows.every((row) => row != null && Array.isArray(row.workspaces))
+}
+
 interface ProjectsState {
   projects: ProjectWithWorkspaces[]
   activeProjectId: string | null
@@ -277,6 +285,8 @@ interface ProjectsState {
   /** Optimistic color change: patches the store immediately, POSTs
    *  `projects/update`, rolls back on failure. Does NOT full-refetch on success. */
   setProjectColor: (id: string, color: string) => Promise<void>
+  /** Optimistic rename: patches the store immediately, POSTs
+   *  `projects/update`, rolls back on failure. Does NOT full-refetch on success. */
   renameProject: (id: string, name: string) => Promise<void>
   touchInteraction: (projectId: string) => void
   setManuallyActive: (projectId: string, active: boolean) => Promise<void>
@@ -301,7 +311,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // GET query params are snake_case (the daemon reads `project_id`);
       // the camelCase Project/Workspace response shapes match the
       // Rust structs' `#[serde(rename_all = "camelCase")]` so no remap.
-      const projectListRaw = await daemonCliGet<Project[]>('projects/list')
+      const projectListRaw = await daemonCliGet<Array<Project & { workspaces?: unknown }>>('projects/list')
       // Daemon data is host-aware: a host swap (or an older/odd remote) can
       // return a non-array body (null, an error envelope, a {…}-wrapper). The
       // rest of the renderer treats `projects` / `workspaces` as arrays
@@ -309,18 +319,25 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // store. (`?.` at consumers can't save a truthy non-array.)
       const projectList = Array.isArray(projectListRaw) ? projectListRaw : []
 
-      // Fetch workspaces for each project. (Workspace "sections" UI was
-      // removed — we no longer call sections/list.)
-      const projectsWithWorkspaces: ProjectWithWorkspaces[] = await Promise.all(
-        projectList.map(async (project: Project) => {
-          const wsRaw = await daemonCliGet<Workspace[]>('workspaces/list', { project_id: project.id })
-          const ws: Workspace[] = Array.isArray(wsRaw) ? wsRaw : []
-          return {
-            ...project,
-            workspaces: ws,
-          }
-        })
-      )
+      // New daemons embed `workspaces` on every projects/list row. Old
+      // daemons omit the key or send a non-array — then fall back to
+      // today's per-id workspaces/list for ALL rows (never half-hydrate).
+      // (Workspace "sections" UI was removed — we no longer call sections/list.)
+      let projectsWithWorkspaces: ProjectWithWorkspaces[]
+      if (projectsListEmbedsWorkspaces(projectList)) {
+        projectsWithWorkspaces = projectList
+      } else {
+        projectsWithWorkspaces = await Promise.all(
+          projectList.map(async (project) => {
+            const wsRaw = await daemonCliGet<Workspace[]>('workspaces/list', { project_id: project.id })
+            const ws: Workspace[] = Array.isArray(wsRaw) ? wsRaw : []
+            return {
+              ...project,
+              workspaces: ws,
+            }
+          }),
+        )
+      }
 
       // The awaits above may have spanned a host switch — drop this
       // (now-stale) response on the floor; the switch already fired a
@@ -843,11 +860,24 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   renameProject: async (id: string, name: string) => {
+    const existing = get().projects.find((p) => p.id === id)
+    if (!existing) return
+    const previousName = existing.name
+    // Optimistic paint — sidebar + settings titles read projects[].name.
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? { ...p, name } : p)),
+    }))
     try {
       await daemonCliPost('projects/update', { id, name })
+      noteOptimisticProjectsMutationSuccess()
       emitProjectsChanged()
-      await get().fetchProjects()
+      // Success: trust the local patch. Do not full-refetch the project graph.
     } catch (err) {
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === id ? { ...p, name: previousName } : p,
+        ),
+      }))
       console.error('[projects] renameProject failed:', err)
     }
   },

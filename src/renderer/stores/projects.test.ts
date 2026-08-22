@@ -3,9 +3,11 @@
 // proxy ONTO the host-aware `daemonCli*` HTTP layer.
 //
 // What this asserts:
-//   - fetchProjects   → GET `projects/list` + per-project `workspaces/list`
-//                       with snake_case `project_id`
-//   - renameProject   → POST `projects/update`  + emits sync:projects
+//   - fetchProjects   → GET `projects/list`; uses nested `workspaces` when
+//                       EVERY row has an array; otherwise falls back to
+//                       per-project `workspaces/list` with snake_case `project_id`
+//   - renameProject   → optimistic name patch + POST `projects/update`;
+//                       success path does NOT refetch; failure rolls back
 //   - reorderProjects → optimistic local reorder + POST `projects/reorder`
 //                       + emits sync:projects; success path does NOT refetch
 //   - setProjectColor → optimistic color patch + POST `projects/update`;
@@ -140,6 +142,21 @@ function mkProject(id: string): Record<string, unknown> {
   }
 }
 
+function mkWorkspace(id: string, projectId: string): Record<string, unknown> {
+  return {
+    id,
+    projectId,
+    sectionId: null,
+    type: 'main',
+    branch: null,
+    name: 'main',
+    tabOrder: 0,
+    worktreePath: null,
+    navVisible: 1,
+    createdAt: 1,
+  }
+}
+
 function resetStore(): void {
   useProjectsStore.setState({ projects: [], activeProjectId: null, activeWorkspaceId: null })
 }
@@ -162,12 +179,34 @@ describe('projects store — Plan B host-aware migration', () => {
     _resetProjectsChangedSyncForTests()
   })
 
-  it('fetchProjects GETs projects/list then workspaces/list per project (snake_case)', async () => {
+  it('fetchProjects uses nested workspaces from projects/list and NEVER calls workspaces/list', async () => {
+    const w1 = mkWorkspace('w1', 'p1')
+    daemonCliGet.mockImplementation((route: string) => {
+      if (route === 'projects/list') {
+        return Promise.resolve([{ ...mkProject('p1'), workspaces: [w1] }])
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+
+    await useProjectsStore.getState().fetchProjects()
+
+    expect(daemonCliGet).toHaveBeenCalledTimes(1)
+    expect(daemonCliGet).toHaveBeenCalledWith('projects/list')
+    expect(daemonCliGet).not.toHaveBeenCalledWith('workspaces/list', expect.anything())
+
+    const projects = useProjectsStore.getState().projects as ProjectWithWorkspaces[]
+    expect(projects).toHaveLength(1)
+    expect(projects[0].id).toBe('p1')
+    expect(projects[0].workspaces).toHaveLength(1)
+    expect(projects[0].workspaces[0].id).toBe('w1')
+  })
+
+  it('fetchProjects falls back to workspaces/list per project when list rows omit workspaces', async () => {
     daemonCliGet.mockImplementation((route: string, params?: Record<string, unknown>) => {
       if (route === 'projects/list') return Promise.resolve([mkProject('p1')])
       if (route === 'workspaces/list') {
         expect(params).toEqual({ project_id: 'p1' })
-        return Promise.resolve([{ id: 'w1', projectId: 'p1', sectionId: null, type: 'main', branch: null, name: 'main', tabOrder: 0, worktreePath: null, navVisible: 1, createdAt: 1 }])
+        return Promise.resolve([mkWorkspace('w1', 'p1')])
       }
       throw new Error(`unexpected GET ${route}`)
     })
@@ -184,14 +223,78 @@ describe('projects store — Plan B host-aware migration', () => {
     expect(projects[0].workspaces).toHaveLength(1)
   })
 
-  it('renameProject POSTs projects/update (camelCase) and emits sync:projects', async () => {
-    daemonCliPost.mockResolvedValueOnce({ success: true })
-    daemonCliGet.mockResolvedValue([]) // the refetch
+  it('fetchProjects falls back for ALL rows when any row is missing a workspaces array', async () => {
+    const w1 = mkWorkspace('w1', 'p1')
+    const w2 = mkWorkspace('w2', 'p2')
+    daemonCliGet.mockImplementation((route: string, params?: Record<string, unknown>) => {
+      if (route === 'projects/list') {
+        return Promise.resolve([
+          { ...mkProject('p1'), workspaces: [w1] },
+          mkProject('p2'),
+        ])
+      }
+      if (route === 'workspaces/list') {
+        if (params?.project_id === 'p1') return Promise.resolve([w1])
+        if (params?.project_id === 'p2') return Promise.resolve([w2])
+        throw new Error(`unexpected project_id ${String(params?.project_id)}`)
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
 
-    await useProjectsStore.getState().renameProject('p1', 'New Name')
+    await useProjectsStore.getState().fetchProjects()
+
+    expect(daemonCliGet).toHaveBeenCalledWith('projects/list')
+    expect(daemonCliGet).toHaveBeenCalledWith('workspaces/list', { project_id: 'p1' })
+    expect(daemonCliGet).toHaveBeenCalledWith('workspaces/list', { project_id: 'p2' })
+
+    const projects = useProjectsStore.getState().projects as ProjectWithWorkspaces[]
+    expect(projects).toHaveLength(2)
+    expect(projects.find((p) => p.id === 'p1')?.workspaces.map((w) => w.id)).toEqual(['w1'])
+    expect(projects.find((p) => p.id === 'p2')?.workspaces.map((w) => w.id)).toEqual(['w2'])
+  })
+
+  it('renameProject optimistically patches name and does NOT fetchProjects on success', async () => {
+    const p = mkProject('p1') as unknown as ProjectWithWorkspaces
+    p.name = 'Old'
+    p.workspaces = []
+    useProjectsStore.setState({ projects: [p] })
+
+    let resolvePost!: (v: unknown) => void
+    daemonCliPost.mockImplementationOnce(
+      () => new Promise((resolve) => { resolvePost = resolve }),
+    )
+    const fetchSpy = vi.spyOn(useProjectsStore.getState(), 'fetchProjects')
+
+    const pending = useProjectsStore.getState().renameProject('p1', 'New Name')
+
+    expect((useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0].name).toBe('New Name')
+
+    resolvePost({ success: true })
+    await pending
 
     expect(daemonCliPost).toHaveBeenCalledWith('projects/update', { id: 'p1', name: 'New Name' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(daemonCliGet).not.toHaveBeenCalledWith('projects/list')
     expect(emitMock).toHaveBeenCalledWith('sync:projects')
+    expect((useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0].name).toBe('New Name')
+    fetchSpy.mockRestore()
+  })
+
+  it('renameProject rolls back previous name when POST fails', async () => {
+    const p = mkProject('p-rename-fail') as unknown as ProjectWithWorkspaces
+    p.name = 'Keep Me'
+    p.workspaces = []
+    useProjectsStore.setState({ projects: [p] })
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    daemonCliPost.mockRejectedValueOnce(new Error('rename boom'))
+
+    await useProjectsStore.getState().renameProject('p-rename-fail', 'Nope')
+
+    expect((useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0].name).toBe('Keep Me')
+    expect(emitMock).not.toHaveBeenCalledWith('sync:projects')
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
   })
 
   it('reorderProjects POSTs projects/reorder and emits sync:projects', async () => {
@@ -473,11 +576,16 @@ describe('projects store — Plan B host-aware migration', () => {
   })
 
   it('a failed mutation does NOT emit sync', async () => {
+    const p = mkProject('p1') as unknown as ProjectWithWorkspaces
+    p.workspaces = []
+    useProjectsStore.setState({ projects: [p] })
     daemonCliPost.mockRejectedValueOnce(new Error('daemon down'))
     daemonCliGet.mockResolvedValue([])
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await useProjectsStore.getState().renameProject('p1', 'X')
 
     expect(emitMock).not.toHaveBeenCalledWith('sync:projects')
+    errSpy.mockRestore()
   })
 })

@@ -257,7 +257,7 @@ pub fn handle_window_state_get() -> CliResponse {
 // ── Projects ──────────────────────────────────────────────────────────
 
 pub fn handle_projects_list() -> CliResponse {
-    serialized(pops::projects_list())
+    serialized(pops::projects_list_with_workspaces())
 }
 
 pub fn handle_projects_get_icon(params: &HashMap<String, String>) -> CliResponse {

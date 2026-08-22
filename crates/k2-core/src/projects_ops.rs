@@ -292,6 +292,39 @@ pub fn projects_list() -> Result<Vec<Project>, String> {
     Ok(projects)
 }
 
+/// `GET /cli/projects/list` DTO: a `Project` plus nested workspaces.
+/// Flattened so JSON is `{...projectFields, workspaces: [...]}`. Empty
+/// vec still emits `"workspaces":[]` — never `skip_serializing_if`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectWithWorkspaces {
+    #[serde(flatten)]
+    pub project: Project,
+    pub workspaces: Vec<Workspace>,
+}
+
+/// Same sentinel filter as [`projects_list`], plus a nested `workspaces`
+/// array per row. One `db.lock()` covers the project+workspace join so
+/// the HTTP handler does not N+1. Internal callers keep using the flat
+/// [`projects_list`].
+pub fn projects_list_with_workspaces() -> Result<Vec<ProjectWithWorkspaces>, String> {
+    let db = db::shared();
+    let conn = db.lock();
+    let projects = Project::list(&conn).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(projects.len());
+    for project in projects {
+        if db::AUDIT_SENTINEL_IDS.contains(&project.id.as_str()) {
+            continue;
+        }
+        let workspaces = Workspace::list(&conn, &project.id).map_err(|e| e.to_string())?;
+        out.push(ProjectWithWorkspaces {
+            project,
+            workspaces,
+        });
+    }
+    Ok(out)
+}
+
 /// Agent de-generalization S1 (migration 0063) — stamp a freshly
 /// CREATED `projects` row with the CURRENT global default agent
 /// (`AppSettings.default_agent`). Non-retroactive by design: only the
@@ -1084,6 +1117,111 @@ mod tests {
         );
 
         delete_project("real-ws-projects-ops");
+    }
+
+    fn ensure_workspace(id: &str, project_id: &str, name: &str) {
+        let db = db::shared();
+        let conn = db.lock();
+        Workspace::create(
+            &conn,
+            id,
+            project_id,
+            None,
+            "branch",
+            Some("main"),
+            name,
+            0,
+            None,
+        )
+        .expect("workspace create");
+    }
+
+    fn delete_workspace(id: &str) {
+        let db = db::shared();
+        let conn = db.lock();
+        let _ = conn.execute("DELETE FROM workspaces WHERE id = ?1", rusqlite::params![id]);
+    }
+
+    /// Nested DTO for `GET /cli/projects/list`: each visible project has a
+    /// `workspaces` array (empty vec still serializes as `"workspaces":[]`,
+    /// never omitted). Audit sentinels stay hidden the same way
+    /// `projects_list()` hides them.
+    #[test]
+    fn projects_list_with_workspaces_embeds_arrays_hides_sentinels() {
+        db::init_for_tests();
+        ensure_project(
+            "embed-ws-proj",
+            "/tmp/k2-embed-ws-proj",
+            "WithWs",
+        );
+        ensure_project(
+            "embed-empty-proj",
+            "/tmp/k2-embed-empty-proj",
+            "NoWs",
+        );
+        ensure_workspace("embed-w1", "embed-ws-proj", "main");
+
+        let listed = projects_list_with_workspaces().expect("list ok");
+        let ids: Vec<&str> = listed.iter().map(|p| p.project.id.as_str()).collect();
+        assert!(
+            !ids.contains(&"_orphan"),
+            "projects_list_with_workspaces() must not leak _orphan: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"_broadcast"),
+            "projects_list_with_workspaces() must not leak _broadcast: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"embed-ws-proj"),
+            "fixture project must appear: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"embed-empty-proj"),
+            "empty-workspace fixture must appear: {ids:?}"
+        );
+
+        let with_ws = listed
+            .iter()
+            .find(|p| p.project.id == "embed-ws-proj")
+            .expect("with-ws project");
+        assert_eq!(with_ws.workspaces.len(), 1);
+        assert_eq!(with_ws.workspaces[0].id, "embed-w1");
+
+        let empty = listed
+            .iter()
+            .find(|p| p.project.id == "embed-empty-proj")
+            .expect("empty project");
+        assert!(
+            empty.workspaces.is_empty(),
+            "project with no workspace rows must still have an empty vec"
+        );
+
+        let json = serde_json::to_value(&listed).expect("serialize");
+        let arr = json.as_array().expect("json array");
+        for row in arr {
+            let obj = row.as_object().expect("project object");
+            assert!(
+                obj.contains_key("workspaces"),
+                "workspaces key must always be present (including []): {obj:?}"
+            );
+            assert!(
+                obj["workspaces"].is_array(),
+                "workspaces must be a JSON array: {obj:?}"
+            );
+        }
+        let empty_row = arr
+            .iter()
+            .find(|r| r["id"] == "embed-empty-proj")
+            .expect("empty json row");
+        assert_eq!(
+            empty_row["workspaces"],
+            serde_json::json!([]),
+            "empty workspaces must serialize as [] not omit the key"
+        );
+
+        delete_workspace("embed-w1");
+        delete_project("embed-ws-proj");
+        delete_project("embed-empty-proj");
     }
 
     /// 0063 stamp-on-create: a project row CREATED through the public

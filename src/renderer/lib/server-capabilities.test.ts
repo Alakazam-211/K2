@@ -261,3 +261,26 @@ describe('serverSupports — remote, viewer-role gating (min 0.40.27, presence S
     expect(serverSupports('viewer-role')).toBe(true)
   })
 })
+
+describe('serverSupports — remote, publish-services gating (min 0.40.106)', () => {
+  it('maps to 0.40.106', () => {
+    expect(featureMinVersion('publish-services')).toBe('0.40.106')
+    expect(FEATURES['publish-services']).toBe('0.40.106')
+  })
+  it('false below min (older remote hides Start/Stop; nested URLs still render)', () => {
+    setActiveRemote('0.40.105')
+    expect(serverSupports('publish-services')).toBe(false)
+  })
+  it('true at exactly min', () => {
+    setActiveRemote('0.40.106')
+    expect(serverSupports('publish-services')).toBe(true)
+  })
+  it('true above min', () => {
+    setActiveRemote('0.41.0')
+    expect(serverSupports('publish-services')).toBe(true)
+  })
+  it('always true for the local daemon (byte-paired with this app)', () => {
+    useConnectHostStore.setState({ activeHost: 'local', serverVersion: null })
+    expect(serverSupports('publish-services')).toBe(true)
+  })
+})

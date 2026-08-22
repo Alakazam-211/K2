@@ -176,6 +176,16 @@ export interface TunnelSubdomainsChangedEvent {
   targets: Record<string, { target: string; projectId: string | null } | string>
 }
 
+/** APP-LEVEL — a daemon-owned published service changed (spawn / stop /
+ *  exit / boot respawn). Carries `projectId` so the workspace Published
+ *  drawer can refetch `GET /cli/publish/list` only when it matches (or
+ *  refetch anyway — that list is already project-scoped). Same routing
+ *  class as `tunnel_subdomains_changed`. */
+export interface PublishServicesChangedEvent {
+  kind: 'publish_services_changed'
+  projectId: string
+}
+
 // NOTE (0.40.31): the WORKSPACE-SCOPED review events (`review_queue_changed`,
 // `review_changed`) are still broadcast by the daemon (the `k2 review` system
 // lives on), but this app no longer consumes them — the Review Queue modal +
@@ -353,6 +363,7 @@ export type SessionEventMessage =
   | SessionActivityChangedEvent
   | TunnelStatusChangedEvent
   | TunnelSubdomainsChangedEvent
+  | PublishServicesChangedEvent
   | TabTitleChangedEvent
   | TabOrderChangedEvent
   | HeartbeatStateChangedEvent
@@ -609,12 +620,13 @@ export function subscribeToWorkspaceSessionEvents(
         case 'feedback_changed':
         case 'chat_history_changed':
         case 'session_activity_changed':
+        case 'publish_services_changed':
           // App-level concerns (#672 / presence S2 / browser-pane 0.40.34
-          // / remote live-update fix) — the per-workspace subscriber
-          // ignores them; `subscribeToActiveState` consumes them. Swallow
-          // here so they don't hit the unknown-kind warning (the daemon
-          // forwards every app-level event to every subscriber regardless
-          // of `?path=`).
+          // / remote live-update fix / published services) — the
+          // per-workspace subscriber ignores them; `subscribeToActiveState`
+          // consumes them. Swallow here so they don't hit the unknown-kind
+          // warning (the daemon forwards every app-level event to every
+          // subscriber regardless of `?path=`).
           break
         case 'tab_title_changed':
         case 'tab_order_changed':
@@ -757,6 +769,7 @@ type TunnelStatusHandler = (e: TunnelStatusChangedEvent) => void
 // URLs & Ports drawer — the nested-subdomain map (whole-map replace, the
 // ActiveChanged convention). `UrlsPortsSection.tsx` is the consumer.
 type TunnelSubdomainsHandler = (e: TunnelSubdomainsChangedEvent) => void
+type PublishServicesHandler = (e: PublishServicesChangedEvent) => void
 type AppHelloHandler = () => void
 // #688 — app-level session add/remove. The per-workspace
 // `subscribeToWorkspaceSessionEvents` only sees its OWN cwd; the
@@ -800,6 +813,7 @@ const _projectsChangedHandlers = new Set<ProjectsChangedHandler>()
 const _agentStatusHandlers = new Set<AgentStatusHandler>()
 const _tunnelStatusHandlers = new Set<TunnelStatusHandler>()
 const _tunnelSubdomainsHandlers = new Set<TunnelSubdomainsHandler>()
+const _publishServicesHandlers = new Set<PublishServicesHandler>()
 const _appHelloHandlers = new Set<AppHelloHandler>()
 const _appSessionAddedHandlers = new Set<SessionAddedHandler>()
 const _appSessionRemovedHandlers = new Set<SessionRemovedHandler>()
@@ -851,6 +865,15 @@ export function onTunnelStatusChanged(fn: TunnelStatusHandler): UnsubscribeFn {
 export function onTunnelSubdomainsChanged(fn: TunnelSubdomainsHandler): UnsubscribeFn {
   _tunnelSubdomainsHandlers.add(fn)
   return () => void _tunnelSubdomainsHandlers.delete(fn)
+}
+
+/** Subscribe to APP-LEVEL `publish_services_changed` (Published drawer —
+ *  daemon-owned hosted services for a workspace). Carries `projectId`;
+ *  consumers refetch `GET /cli/publish/list` when it matches. Returns an
+ *  unsubscribe fn. */
+export function onPublishServicesChanged(fn: PublishServicesHandler): UnsubscribeFn {
+  _publishServicesHandlers.add(fn)
+  return () => void _publishServicesHandlers.delete(fn)
 }
 
 /** Fires on every app-level WS (re)connect — use it to re-snapshot truth
@@ -953,6 +976,9 @@ function dispatchAppEvent(msg: SessionEventMessage): void {
       break
     case 'tunnel_subdomains_changed':
       for (const h of _tunnelSubdomainsHandlers) h(msg)
+      break
+    case 'publish_services_changed':
+      for (const h of _publishServicesHandlers) h(msg)
       break
     case 'session_added':
       for (const h of _appSessionAddedHandlers) h(msg)
@@ -1132,6 +1158,8 @@ export function subscribeToActiveState(): UnsubscribeFn {
         msg.kind === 'agent_status_changed' ||
         msg.kind === 'session_activity_changed' ||
         msg.kind === 'tunnel_status_changed' ||
+        msg.kind === 'tunnel_subdomains_changed' ||
+        msg.kind === 'publish_services_changed' ||
         msg.kind === 'presence_changed' ||
         msg.kind === 'open_url' ||
         // Remote live-update fix — the project-group / feedback refetch

@@ -90,6 +90,12 @@ export const FEATURES = {
    *  daemonPaneStatuses; an older/remote daemon never emits it, so the
    *  merge rule transparently falls back to client-side detection. */
   'session-activity': '0.40.39',
+  /** Daemon-owned published services (`GET /cli/publish/list`,
+   *  `POST /cli/publish/{start,stop}`, `publish_services_changed`).
+   *  Gates Start/Stop in the workspace Published drawer. Older remotes
+   *  hide the buttons; attributed nested URLs still render. Local is
+   *  always true via serverSupports. */
+  'publish-services': '0.40.106',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

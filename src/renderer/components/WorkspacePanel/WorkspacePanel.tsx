@@ -202,8 +202,8 @@ export default function WorkspacePanel(): React.JSX.Element {
       {/* ── Connected Agents (present connections only) ── */}
       <ConnectedAgentsSection projectId={activeProject.id} />
 
-      {/* ── URLs & Ports ── (collapsible; K2 Connect tunnel surface +
-          nested subdomain map, live via tunnel_status_changed /
+      {/* ── Published ── (collapsible; daemon-owned hosted services +
+          leftover BYO nested URLs, live via publish_services_changed /
           tunnel_subdomains_changed) */}
       <UrlsPortsSection projectId={activeProject.id} />
 

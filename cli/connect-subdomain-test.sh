@@ -111,11 +111,11 @@ echo "$out" | grep -q "k2 publish subdomain claim staging" && [ $rc -eq 0 ] \
     || bad "create stamp warning: $out (rc=$rc)"
 
 # create — 403 pro_required -> FRIENDLY upsell (not a raw 403), points at
-# `k2 publish upgrade`. Server may name the gated subdomain in `detail`.
+# the dashboard. Server may name the gated subdomain in `detail`.
 set_resp 403 '{"error":"pro_required","detail":"staging.rosson.k2.dev"}'
 out="$(run create staging --target localhost:3000)"; rc=$?
 echo "$out" | grep -qi "needs the Pro plan" && [ $rc -ne 0 ] && ok "403 pro_required -> friendly upsell (rc!=0)" || bad "pro_required upsell: $out (rc=$rc)"
-echo "$out" | grep -q "k2 publish upgrade" && ok "pro_required upsell names 'k2 publish upgrade'" || bad "pro_required missing upgrade hint: $out"
+echo "$out" | grep -q "k2.dev/dashboard" && ok "pro_required upsell names the dashboard" || bad "pro_required missing dashboard hint: $out"
 echo "$out" | grep -q "staging.rosson.k2.dev" && ok "pro_required upsell names the subdomain (from detail)" || bad "pro_required missing subdomain: $out"
 
 # create — 409 label_taken
@@ -175,13 +175,15 @@ echo "$out" | grep -q "k2 publish subdomain unclaim staging" && [ $rc -eq 0 ] \
 # untouched — asserted via a sentinel).
 echo "SENTINEL" > "$REQ_FILE"
 out="$(run claim staging)"; rc=$?
-echo "$out" | grep -qi "records attribution on the local K2 daemon" && [ $rc -ne 0 ] \
+# P15: claim/unclaim do not skip the conn gate — fail loud without PORT
+# (generic gate, or the older in-handler message if PORT is set but empty).
+echo "$out" | grep -qiE "Cannot connect to K2|records attribution on the local K2 daemon" && [ $rc -ne 0 ] \
     && ok "claim without daemon fails loud" || bad "claim no-daemon: $out (rc=$rc)"
 out="$(run unclaim staging)"; rc=$?
-echo "$out" | grep -qi "records attribution on the local K2 daemon" && [ $rc -ne 0 ] \
+echo "$out" | grep -qiE "Cannot connect to K2|records attribution on the local K2 daemon" && [ $rc -ne 0 ] \
     && ok "unclaim without daemon fails loud" || bad "unclaim no-daemon: $out (rc=$rc)"
 [ "$(req_line)" = "SENTINEL" ] && ok "claim/unclaim never call the control plane" || bad "claim hit control plane: $(req_line)"
-out="$(run claim)"; rc=$?
+out="$(HOME="$TEST_HOME" K2_PORT=9 K2_HOOK_TOKEN=fake "$K2_BIN" publish subdomain claim 2>&1)"; rc=$?
 echo "$out" | grep -qi "Usage: k2 publish subdomain claim" && [ $rc -ne 0 ] \
     && ok "claim without label -> usage" || bad "claim no-label: $out (rc=$rc)"
 
@@ -214,7 +216,7 @@ echo "$out" | grep -qi "Plan: Pro" && echo "$out" | grep -qi "nested subdomains 
 set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"single","primary":true}]}'
 out="$(runc status)"; rc=$?
 echo "$out" | grep -qi "Plan: Single" && echo "$out" | grep -qi "upgrade to Pro" && ok "status shows Single + upgrade prompt" || bad "status single: $out"
-echo "$out" | grep -q "k2 publish upgrade" && ok "status single names 'k2 publish upgrade'" || bad "status single upgrade hint: $out"
+echo "$out" | grep -q "k2.dev/dashboard" && ok "status single names the dashboard" || bad "status single dashboard hint: $out"
 
 # Free plan.
 set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"free","primary":true}]}'
@@ -226,22 +228,27 @@ set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"fr
 out="$(runc status)"; rc=$?
 echo "$out" | grep -q "Connected: other.k2.dev" && echo "$out" | grep -qi "Plan: Pro" && ok "status honours server 'connected' flag" || bad "status connected-flag: $out"
 
-# ── publish upgrade (checkout) ────────────────────────────────────────────
-set_resp 200 '{"url":"https://checkout.stripe.com/c/pay/test_123"}'
-out="$(runc upgrade)"; rc=$?
-[ "$(req_line)" = "POST /billing/checkout" ] && ok "upgrade -> POST /billing/checkout" || bad "upgrade method/path: $(req_line)"
-echo "$(req_body)" | grep -q '"subdomain": "rosson"' && ok "upgrade defaults subdomain to tunnel.json (rosson)" || bad "upgrade body subdomain: $(req_body)"
-echo "$(req_body)" | grep -q '"plan": "pro"' && ok "upgrade requests plan=pro" || bad "upgrade body plan: $(req_body)"
-echo "$out" | grep -q "checkout.stripe.com" && [ $rc -eq 0 ] && ok "upgrade prints checkout URL" || bad "upgrade output: $out (rc=$rc)"
-
-# upgrade with explicit subdomain arg.
-set_resp 200 '{"checkout_url":"https://checkout.stripe.com/c/pay/test_staging"}'
-out="$(runc upgrade staging)"; rc=$?
-echo "$(req_body)" | grep -q '"subdomain": "staging"' && ok "upgrade <subdomain> overrides default" || bad "upgrade explicit subdomain: $(req_body)"
-echo "$out" | grep -q "test_staging" && ok "upgrade reads checkout_url alias" || bad "upgrade checkout_url alias: $out"
+# `k2 publish upgrade` is dead (dashboard-only). Do not re-add.
 
 # ── base override default (sanity: env var is honoured) ──────────────────
 echo "$K2_CONNECT_BASE" | grep -q "127.0.0.1" && ok "K2_CONNECT_BASE override honoured" || bad "base override"
+
+# ── hosted-service CLI surface (prd-k2-publish-hosted-services-v1) ─────
+# Do not re-add `k2 publish upgrade`. Family help + run usage only.
+out="$(runc --help)"; rc=$?
+echo "$out" | grep -q "TWO DIFFERENT LISTS" && echo "$out" | grep -q -- "--no-tunnel" && [ $rc -eq 0 ] \
+    && ok "publish --help names TWO DIFFERENT LISTS and --no-tunnel" \
+    || bad "publish --help: $out (rc=$rc)"
+# Hosting verbs do not skip the conn gate (P15). Fake PORT/TOKEN lets
+# argv parsing / --help run without a live daemon.
+out="$(HOME="$TEST_HOME" K2_PORT=9 K2_HOOK_TOKEN=fake "$K2_BIN" publish run --help 2>&1)"; rc=$?
+echo "$out" | grep -q "TWO DIFFERENT LISTS" && echo "$out" | grep -q -- "--no-tunnel" && [ $rc -eq 0 ] \
+    && ok "publish run --help uses canonical wording" \
+    || bad "publish run --help: $out (rc=$rc)"
+out="$(HOME="$TEST_HOME" K2_PORT=9 K2_HOOK_TOKEN=fake "$K2_BIN" publish run 2>&1)"; rc=$?
+echo "$out" | grep -qi "usage: k2 publish run" && [ $rc -eq 2 ] \
+    && ok "publish run without args -> usage exit 2" \
+    || bad "publish run no-args: $out (rc=$rc)"
 
 echo
 echo "connect-subdomain: ${PASS} passed, ${FAIL} failed"

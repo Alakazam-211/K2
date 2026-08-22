@@ -226,13 +226,27 @@ _cli_apply_auth_for_verb() {
 # cmd_daemon_install (which is defined before the router runs).
 _skip_conn_gate=0
 [ "${1:-}" = "daemon" ] && [ "${2:-}" = "install" ] && _skip_conn_gate=1
-# `k2 publish ...` (Pro-subdomain mgmt) talks to the hosted control
-# plane + reads ~/.k2/tunnel.json, so it must not be blocked by the
-# no-daemon gate. (Its 0074 attribution seams — claim/unclaim + the
-# create/point/rm stamps — DO talk to the local daemon, but check
-# PORT/TOKEN themselves: stamps degrade to a warning, claim/unclaim
-# fail loud.)
-[ "${1:-}" = "publish" ] && _skip_conn_gate=1
+# `k2 publish` P15 — split the connection gate.
+# Skip only plan/CP verbs that talk to connect.k2.dev + tunnel.json
+# (or print help) and do not need the workspace daemon:
+#   publish (no sub / help), publish status, publish subdomain
+#   {create,list,point,rm} (empty action = list).
+# Never skip hosting verbs: run | ps | start | stop | rm | logs.
+# claim/unclaim already POST the local daemon — leave the gate on
+# so they fail loud without PORT/TOKEN.
+if [ "${1:-}" = "publish" ]; then
+    case "${2:-}" in
+        ""|help|--help|-h|status)
+            _skip_conn_gate=1
+            ;;
+        subdomain)
+            case "${3:-}" in
+                claim|unclaim) ;;
+                *) _skip_conn_gate=1 ;;
+            esac
+            ;;
+    esac
+fi
 # Headless Connect account commands: login talks to Supabase first
 # (no daemon needed for the account step); status/logout can run from
 # disk alone. Daemon-touching steps (tunnel/config + start) check
@@ -372,6 +386,8 @@ _uds_eligible() {
         /cli/inbox/*|/cli/review-checklist/*) return 0 ;;
         # DNS K1 — cell_server serves /cli/dns/* POSTs + is_agent_verb GETs.
         /cli/dns/*) return 0 ;;
+        # Publish hosted services — /cli/publish/* (agent verb, not /cli/tunnel/).
+        /cli/publish/*) return 0 ;;
         # C1 — connections list/add/remove (mutate toggle-gated server-side).
         /cli/connections) return 0 ;;
         # PR1 federation dual-auth — peers/peer-roster/send under passport.
@@ -7130,40 +7146,57 @@ _connect_curl() {
 
 _publish_usage() {
     cat <<'EOF' >&2
-k2 publish — K2 Connect nested subdomains + connected plan (control plane)
+k2 publish — host a process on this machine, optionally on a nested URL
 
-PRODUCT BOUNDARY
-  Nested label.user.k2.dev + local target   → k2 publish subdomain (this family)
-  Device tunnel to primary *.k2.dev         → k2 tunnel
-  Custom zone records (A/TXT/MX/…)          → k2 dns (zone must already exist)
-  Hosted mail domain / MX                   → k2 hostmail domain (owner)
+TWO DIFFERENT LISTS
+  k2 publish ps                 processes this workspace is hosting
+  k2 publish status             your Connect host + plan (not processes)
+  k2 publish subdomain list     nested hostnames (DNS), whether or not you host the process
+
+k2 tunnel is the device pipe to your primary *.k2.dev. Nested names ride that
+same pipe. This command does not start k2 tunnel.
 
 USAGE
-  k2 publish status [--json]
+  k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]
+  k2 publish start|stop|logs <name>
+  k2 publish rm <name> [--keep-hostname]
+  k2 publish ps|status [--json]
   k2 publish subdomain <create|list|point|rm|claim|unclaim> ...
 
-COMMANDS
-  status [--json]                           Connected subdomain + plan
-  subdomain list [--json]                   Your subdomains (HOST/TARGET/PLAN)
-  subdomain create <label> --target <e>     Create nested subdomain (Pro)
-  subdomain point <label> --target <e>      Repoint (Pro)
-  subdomain rm <label>                      Remove (Pro)
-  subdomain claim|unclaim <label>           Workspace attribution (local daemon)
+run
+  Starts <name> from --cmd, listening on --port.
+  Default (Pro): also creates nested https://<name>.<host>.k2.dev → localhost:<port>.
+  <host> is the Connected host from `k2 publish status`.
+  Not Pro / no tunnel: run FAILS, nothing starts. Use --no-tunnel or upgrade:
+    https://k2.dev/dashboard
+  --no-tunnel: process only, no public URL, no Pro required.
+  Same <name> already running: error — stop first. Does not overwrite.
 
-FLAGS
-  --json                                    Machine-readable success output
+start / stop
+  start <name>: uses the saved --cmd/--port/--cwd. Do not pass them again.
+  stop <name>:  kill the process. Nested URL stays (it will miss until start).
 
-OUTPUT CONTRACT
-  Success is human by default; --json → single JSON object on stdout
-  (status + subdomain list). ERRORS are always on stderr; with --json
-  they use {"error":{"code","hint"}} when the renderer supports it.
+rm
+  stop + forget the service. Also removes the nested URL unless --keep-hostname
+  (--keep-hostname: process gone, https://<name>.<host>.k2.dev still exists).
 
-EXIT CODES
-  0 ok
-  1 error (no token, control plane, not found, …)
-  2 bad usage (missing args)
+  <name> on run is the subdomain label. It cannot differ.
 
-Subscription/plan changes: https://k2.dev/dashboard (not in the CLI).
+ps     hosted processes for THIS workspace (running/stopped, port, URL if any)
+logs   that process's log file (--tail follows)
+status Connect plan + primary host. Not "is my app up" — use ps.
+
+subdomain  (Pro) hostname for a port that is ALREADY listening.
+  Does not start/stop a process. ps/stop/logs will not see it.
+  create <label> --target localhost:<port>   new name → that port
+  point  <label> --target localhost:<port>   existing name → a different port
+  rm     <label>                             delete the name (not the process)
+  claim / unclaim <label>                    show or hide that name on THIS
+                                             workspace's Published list
+
+logs <name> [--tail]   dump the log file; --tail follows
+
+If Connect/tunnel is down, default run FAILS (nothing starts). --no-tunnel still works.
 EOF
 }
 
@@ -7178,10 +7211,189 @@ _publish_err() {
     fi
 }
 
+# Render a /cli/publish/* daemon body. Env: RESP, AS_JSON, P_MODE (service|list|logs), P_VERB.
+# Errors stderr (human, or _publish_err JSON). Not-Pro copy from the daemon is
+# printed as-is — do not invent a second dashboard / --no-tunnel story.
+_publish_handle_resp() {
+    RESP="${RESP:-}" AS_JSON="${AS_JSON:-false}" P_MODE="${P_MODE:-service}" \
+    P_VERB="${P_VERB:-}" python3 - <<'PY'
+import json, os, sys
+
+raw = os.environ.get("RESP") or ""
+as_json = os.environ.get("AS_JSON", "false") == "true"
+mode = os.environ.get("P_MODE") or "service"
+verb = os.environ.get("P_VERB") or ""
+
+def fail(code, hint, exit_code=1):
+    hint = hint if isinstance(hint, str) else str(hint)
+    text = hint.rstrip("\n")
+    if as_json:
+        sys.stderr.write(json.dumps(
+            {"error": {"code": str(code), "hint": text}},
+            separators=(",", ":"),
+        ) + "\n")
+    else:
+        # Daemon Not-Pro bodies already name dashboard + --no-tunnel.
+        if text.startswith("Error:"):
+            sys.stderr.write(text + "\n")
+        else:
+            sys.stderr.write("Error: %s\n" % text)
+    sys.exit(exit_code)
+
+if not raw.strip():
+    fail("unreachable", "no response from the daemon")
+
+d = None
+try:
+    d = json.loads(raw)
+except Exception:
+    d = None
+
+if mode == "logs" and not isinstance(d, dict):
+    sys.stdout.write(raw)
+    if not raw.endswith("\n"):
+        sys.stdout.write("\n")
+    sys.exit(0)
+
+if d is None:
+    # Non-JSON error body (e.g. Not Pro copy): print it; do not wrap a second story.
+    fail("error", raw.strip()[:2000] if raw.strip() else "daemon returned an unparseable response")
+
+if not isinstance(d, dict):
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+        sys.exit(0)
+    fail("bad_response", "unexpected response from /cli/publish")
+
+err = d.get("error")
+if err is not None and err != "" and err is not False:
+    if isinstance(err, dict):
+        code = err.get("code") or "error"
+        hint = err.get("hint") or err.get("message") or err.get("detail") or code
+    else:
+        code = str(err) if str(err).replace("_", "").isalnum() and len(str(err)) < 48 else "error"
+        hint = str(err)
+        if d.get("hint"):
+            hint = str(d.get("hint"))
+        elif d.get("detail"):
+            hint = str(d.get("detail"))
+        elif d.get("message") and hint in ("error", "pro_required"):
+            hint = str(d.get("message"))
+    fail(code, hint)
+
+if d.get("success") is False:
+    fail("error", d.get("hint") or d.get("message") or "request failed")
+
+if mode == "logs":
+    text = d.get("log")
+    if text is None:
+        text = d.get("text")
+    if text is None:
+        text = d.get("body")
+    if text is None and isinstance(d.get("lines"), list):
+        text = "\n".join(str(x) for x in d["lines"])
+    if text is None:
+        text = raw
+    sys.stdout.write(str(text))
+    if not str(text).endswith("\n"):
+        sys.stdout.write("\n")
+    sys.exit(0)
+
+if as_json:
+    print(json.dumps(d, separators=(",", ":")))
+    sys.exit(0)
+
+def url_or_target(s):
+    if not isinstance(s, dict):
+        return "-"
+    u = (s.get("url") or "").strip()
+    if u:
+        return u
+    t = (s.get("target") or "").strip()
+    if t:
+        return t
+    port = s.get("port")
+    if port is not None and str(port) != "":
+        return "localhost:%s" % port
+    return "-"
+
+if mode == "list":
+    services = d.get("services")
+    if not isinstance(services, list):
+        services = []
+    rows = []
+    for s in services:
+        if not isinstance(s, dict):
+            continue
+        port = s.get("port")
+        port_s = "-" if port is None or str(port) == "" else str(port)
+        rows.append((
+            str(s.get("name") or "?"),
+            str(s.get("status") or s.get("desired") or "-"),
+            port_s,
+            url_or_target(s),
+        ))
+    if not rows:
+        print("No published services.")
+        sys.exit(0)
+    nw = max([len(r[0]) for r in rows] + [len("NAME")])
+    sw = max([len(r[1]) for r in rows] + [len("STATUS")])
+    pw = max([len(r[2]) for r in rows] + [len("PORT")])
+    print("%-*s  %-*s  %-*s  %s" % (nw, "NAME", sw, "STATUS", pw, "PORT", "URL/TARGET"))
+    for n, st, p, u in rows:
+        print("%-*s  %-*s  %-*s  %s" % (nw, n, sw, st, pw, p, u))
+    sys.exit(0)
+
+svc = d.get("service") if isinstance(d.get("service"), dict) else d
+name = str(svc.get("name") or "?") if isinstance(svc, dict) else "?"
+status = str(svc.get("status") or svc.get("desired") or "") if isinstance(svc, dict) else ""
+port = svc.get("port") if isinstance(svc, dict) else None
+url = url_or_target(svc) if isinstance(svc, dict) else "-"
+past = {"run": "Started", "start": "Started", "stop": "Stopped", "rm": "Removed"}.get(verb, "ok")
+line = "%s %s" % (past, name)
+if status:
+    line += " · %s" % status
+if port is not None and str(port) != "":
+    line += " · port %s" % port
+print(line)
+if url and url != "-":
+    print("  %s" % url)
+if isinstance(svc, dict) and svc.get("error"):
+    print("  error: %s" % svc.get("error"))
+sys.exit(0)
+PY
+}
+
+_publish_is_port() {
+    case "${1:-}" in
+        ''|*[!0-9]*) return 1 ;;
+        0) return 1 ;;
+    esac
+    [ "$1" -le 65535 ]
+}
+
 cmd_publish() {
     local sub="${1:-}"
     shift || true
     case "$sub" in
+        run)
+            cmd_publish_run "$@"
+            ;;
+        start)
+            cmd_publish_start "$@"
+            ;;
+        stop)
+            cmd_publish_stop "$@"
+            ;;
+        rm)
+            cmd_publish_rm "$@"
+            ;;
+        ps)
+            cmd_publish_ps "$@"
+            ;;
+        logs)
+            cmd_publish_logs "$@"
+            ;;
         status)
             cmd_publish_status "$@"
             ;;
@@ -7198,6 +7410,212 @@ cmd_publish() {
             exit 1
             ;;
     esac
+}
+
+# `k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]`
+cmd_publish_run() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --cmd)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--cmd needs a shell string"; exit 2; }
+                cmd="$2"; shift 2 ;;
+            --cmd=*)
+                cmd="${1#--cmd=}"; shift ;;
+            --port)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--port needs a number"; exit 2; }
+                port="$2"; shift 2 ;;
+            --port=*)
+                port="${1#--port=}"; shift ;;
+            --cwd)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--cwd needs a path"; exit 2; }
+                cwd="$2"; shift 2 ;;
+            --cwd=*)
+                cwd="${1#--cwd=}"; shift ;;
+            --no-tunnel) no_tunnel=1; shift ;;
+            --json) as_json=true; shift ;;
+            --help|-h) _publish_usage; exit 0 ;;
+            -*)
+                as_json="$as_json" _publish_err "usage" \
+                    "unknown flag '$1' — usage: k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"; shift
+                else
+                    as_json="$as_json" _publish_err "usage" "unexpected argument '$1'"
+                    exit 2
+                fi ;;
+        esac
+    done
+    if [ -z "$name" ] || [ -z "$cmd" ] || [ -z "$port" ]; then
+        as_json="$as_json" _publish_err "usage" \
+            "usage: k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]"
+        exit 2
+    fi
+    if ! _publish_is_port "$port"; then
+        as_json="$as_json" _publish_err "usage" "--port must be an integer 1-65535"
+        exit 2
+    fi
+    [ -z "$cwd" ] && cwd="$PROJECT"
+    local body RESP
+    body=$(P_NAME="$name" P_CMD="$cmd" P_PORT="$port" P_CWD="$cwd" \
+           P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" python3 -c '
+import json, os
+b = {
+    "name": os.environ["P_NAME"],
+    "cmd": os.environ["P_CMD"],
+    "port": int(os.environ["P_PORT"]),
+    "cwd": os.environ["P_CWD"],
+    "project": os.environ["P_PROJECT"],
+}
+if os.environ.get("P_NO_TUNNEL") == "1":
+    b["noTunnel"] = True
+print(json.dumps(b))
+')
+    RESP=$(cli_send cli_post_json "/cli/publish/run" "$body") || RESP=""
+    local AS_JSON="$as_json" P_MODE="service" P_VERB="run"
+    _publish_handle_resp
+}
+
+# `k2 publish start <name>` / `stop <name>`
+_publish_named_post() {
+    local verb="$1" endpoint="$2"
+    shift 2
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local name="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --help|-h) _publish_usage; exit 0 ;;
+            -*)
+                as_json="$as_json" _publish_err "usage" \
+                    "unknown flag '$1' — usage: k2 publish $verb <name>"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"; shift
+                else
+                    as_json="$as_json" _publish_err "usage" "unexpected argument '$1'"
+                    exit 2
+                fi ;;
+        esac
+    done
+    if [ -z "$name" ]; then
+        as_json="$as_json" _publish_err "usage" "usage: k2 publish $verb <name>"
+        exit 2
+    fi
+    local body RESP
+    body=$(P_NAME="$name" P_PROJECT="$PROJECT" python3 -c '
+import json, os
+print(json.dumps({"name": os.environ["P_NAME"], "project": os.environ["P_PROJECT"]}))
+')
+    RESP=$(cli_send cli_post_json "$endpoint" "$body") || RESP=""
+    local AS_JSON="$as_json" P_MODE="service" P_VERB="$verb"
+    _publish_handle_resp
+}
+
+cmd_publish_start() { _publish_named_post start "/cli/publish/start" "$@"; }
+cmd_publish_stop()  { _publish_named_post stop  "/cli/publish/stop"  "$@"; }
+
+# `k2 publish rm <name> [--keep-hostname]`  — stop + drop the service row.
+# Distinct from `k2 publish subdomain rm <label>` (hostname only).
+cmd_publish_rm() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local name="" keep=0 as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --keep-hostname) keep=1; shift ;;
+            --json) as_json=true; shift ;;
+            --help|-h) _publish_usage; exit 0 ;;
+            -*)
+                as_json="$as_json" _publish_err "usage" \
+                    "unknown flag '$1' — usage: k2 publish rm <name> [--keep-hostname]  (not: k2 publish subdomain rm)"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"; shift
+                else
+                    as_json="$as_json" _publish_err "usage" "unexpected argument '$1'"
+                    exit 2
+                fi ;;
+        esac
+    done
+    if [ -z "$name" ]; then
+        as_json="$as_json" _publish_err "usage" \
+            "usage: k2 publish rm <name> [--keep-hostname]  (service; for a hostname use: k2 publish subdomain rm <label>)"
+        exit 2
+    fi
+    local body RESP
+    body=$(P_NAME="$name" P_PROJECT="$PROJECT" P_KEEP="$keep" python3 -c '
+import json, os
+b = {"name": os.environ["P_NAME"], "project": os.environ["P_PROJECT"]}
+if os.environ.get("P_KEEP") == "1":
+    b["keepHostname"] = True
+print(json.dumps(b))
+')
+    RESP=$(cli_send cli_post_json "/cli/publish/rm" "$body") || RESP=""
+    local AS_JSON="$as_json" P_MODE="service" P_VERB="rm"
+    _publish_handle_resp
+}
+
+# `k2 publish ps [--json]` — this workspace's hosted processes (not Connect plan).
+cmd_publish_ps() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --help|-h) _publish_usage; exit 0 ;;
+            -*)
+                as_json="$as_json" _publish_err "usage" "unknown flag '$1' — usage: k2 publish ps [--json]"
+                exit 2 ;;
+            *)
+                as_json="$as_json" _publish_err "usage" "unexpected argument '$1' — usage: k2 publish ps [--json]"
+                exit 2 ;;
+        esac
+    done
+    local RESP
+    RESP=$(cli_send cli_request "/cli/publish/list") || RESP=""
+    local AS_JSON="$as_json" P_MODE="list" P_VERB="ps"
+    _publish_handle_resp
+}
+
+# `k2 publish logs <name> [--tail]` — last N lines on GET (P17: not a live WS).
+cmd_publish_logs() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local name="" follow=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --tail) follow=1; shift ;;
+            --help|-h) _publish_usage; exit 0 ;;
+            -*)
+                _publish_err "usage" "unknown flag '$1' — usage: k2 publish logs <name> [--tail]"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"; shift
+                else
+                    _publish_err "usage" "unexpected argument '$1'"
+                    exit 2
+                fi ;;
+        esac
+    done
+    if [ -z "$name" ]; then
+        _publish_err "usage" "usage: k2 publish logs <name> [--tail]"
+        exit 2
+    fi
+    local RESP
+    if [ "$follow" = 1 ]; then
+        RESP=$(cli_send cli_request "/cli/publish/logs" \
+            "name=$(urlencode "$name")" "tail=1") || RESP=""
+    else
+        RESP=$(cli_send cli_request "/cli/publish/logs" \
+            "name=$(urlencode "$name")") || RESP=""
+    fi
+    local AS_JSON=false P_MODE="logs" P_VERB="logs"
+    _publish_handle_resp
 }
 
 # `k2 publish status` — show the CONNECTED subdomain and its plan.
@@ -11156,10 +11574,58 @@ cmd_schema() {
     },
     {
       "name": "publish",
-      "usage": "k2 publish <status|subdomain> ...",
-      "description": "K2 Connect Pro subdomains + plan (talks to the hosted control plane): status, subdomain create/list/point/rm/claim/unclaim.",
+      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|subdomain> ...",
+      "description": "Host a daemon-owned process for this workspace (run/start/stop/rm/ps/logs) and manage nested Connect subdomains (status, subdomain create/list/point/rm/claim/unclaim). Default run creates a nested URL; --no-tunnel is local only. status is Connect plan, not process inventory (use ps).",
       "args": [],
-      "flags": []
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output where supported (ps/run/start/stop/status)."}]
+    },
+    {
+      "name": "publish run",
+      "usage": "k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>] [--json]",
+      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--cmd", "arg": "shell", "description": "Shell command to run (sh -c / cmd.exe /c)."},
+        {"name": "--port", "arg": "n", "description": "Required listen port."},
+        {"name": "--no-tunnel", "arg": null, "description": "Do not create/point a nested hostname (local only)."},
+        {"name": "--cwd", "arg": "path", "description": "Working directory (default: this workspace)."},
+        {"name": "--json", "arg": null, "description": "JSON service object on stdout."}
+      ]
+    },
+    {
+      "name": "publish start",
+      "usage": "k2 publish start <name> [--json]",
+      "description": "Start a saved published service (uses stored --cmd/--port/--cwd). Do not pass them again.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON service object on stdout."}]
+    },
+    {
+      "name": "publish stop",
+      "usage": "k2 publish stop <name> [--json]",
+      "description": "Stop a published service (kill the process). Nested URL stays until start or rm.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON service object on stdout."}]
+    },
+    {
+      "name": "publish rm",
+      "usage": "k2 publish rm <name> [--keep-hostname]",
+      "description": "Stop and forget a published service. Also removes the nested URL unless --keep-hostname. Distinct from 'k2 publish subdomain rm' (hostname only; does not kill a process).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--keep-hostname", "arg": null, "description": "Leave the nested URL in place after forgetting the process."}]
+    },
+    {
+      "name": "publish ps",
+      "usage": "k2 publish ps [--json]",
+      "description": "List hosted processes for THIS workspace (running/stopped, port, URL if any). Not Connect plan — that is 'k2 publish status'.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON {services:[...]} on stdout."}]
+    },
+    {
+      "name": "publish logs",
+      "usage": "k2 publish logs <name> [--tail]",
+      "description": "Dump that process's log file (last N lines on GET). --tail follows.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [{"name": "--tail", "arg": null, "description": "Follow the log file."}]
     },
     {
       "name": "publish subdomain claim",
@@ -15561,15 +16027,21 @@ TUNNEL (device → primary *.k2.dev; not custom DNS zones)
   tunnel subdomains [--json]                    Daemon-cached nested map (label -> target + workspace)
   tunnel --help                                 Product boundary vs publish/dns
 
-PUBLISH (nested label.user.k2.dev; control plane — not zone DNS)
-  publish status [--json]                       Connected subdomain + plan (GH#33)
-  publish subdomain list [--json]               Your subdomains + plan/status
-  publish subdomain create <label> --target <e> Create a nested subdomain (Pro; attributed to this workspace)
+PUBLISH (host a process on this machine, optionally a nested URL)
+  publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]
+                                                Daemon-owned process; default nested URL (Pro)
+  publish start|stop <name>                     Start/stop a saved service
+  publish rm <name> [--keep-hostname]           Stop + forget (not: subdomain rm)
+  publish ps [--json]                           Hosted processes for THIS workspace
+  publish logs <name> [--tail]                  That process's log file
+  publish status [--json]                       Connected subdomain + plan (not processes)
+  publish subdomain list [--json]               Nested hostnames (DNS) + plan/status
+  publish subdomain create <label> --target <e> Hostname for an ALREADY-listening port (Pro)
   publish subdomain point <label> --target <e>  Repoint a subdomain (Pro)
-  publish subdomain rm <label>                  Remove a subdomain (Pro)
+  publish subdomain rm <label>                  Remove a hostname (not the process)
   publish subdomain claim <label>               Adopt an existing label for THIS workspace (daemon-local)
   publish subdomain unclaim <label>             Drop a label's workspace attribution (daemon-local)
-  publish --help                                OUTPUT CONTRACT + product boundary
+  publish --help                                TWO DIFFERENT LISTS + product boundary
   (manage your subscription/plan on the dashboard: https://k2.dev/dashboard)
 
 CONNECT (pair purchased k2.dev subdomain — headless account login)
@@ -23257,8 +23729,8 @@ EOF
         shift; cmd_api_key "$@"
         ;;
     publish)
-        # K2 Connect Pro nested-subdomain management (calls the hosted
-        # control plane directly, not the local daemon).
+        # Hosted services (run/ps/start/stop/rm/logs → /cli/publish/*) plus
+        # nested-subdomain CP (status + subdomain *). P6: status stays plan.
         shift; cmd_publish "$@"
         ;;
     users)

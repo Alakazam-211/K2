@@ -1,7 +1,7 @@
 # Roadmap — PRDs, feedback, polish
 
 **Canonical mini-index for unfinished work.**  
-**Created:** 2026-08-08 · **Updated:** 2026-08-08 (Scout asks ticket ecf2bea9 + Rosson keep-list)  
+**Created:** 2026-08-08 · **Updated:** 2026-08-22 (remote E2E storm mini-PRDs)  
 **Sources:** `0.40.x-to-1.0-weekend-roadmap.md`, wiki `_Index`, host-session / Connect / polish PRDs, model-override PRD, **Julie/Scout K2-ASKS-2026-08-08**
 
 **How to use**
@@ -81,6 +81,7 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 | **Tab session messaging** (inject/wake by sessionId) | Locked · implement with sidecar PRD | `.k2/prds/prd-session-addressed-msg-read-talk-v1.md` · wiki Feature - Tab Session Messaging |
 | **Sidecar identity + addressing** (`K2_CELL`, `sales/reviewer`, `k2 whoami`, no spawn prompt) | Ready for review | `.k2/prds/prd-sidecar-identity-and-addressing-v1.md` · wiki Feature - Sidecar Identity and Addressing |
 | **Workspace Agent Name vs Handle** (display free; handle slugged/unique; federated rename break) | Locked for implement | `.k2/prds/prd-workspace-display-name-and-handle-v1.md` · wiki Feature - Workspace Agent Name and Handle |
+| **Active window: need wakes, idle sleeps** (80-ws RAM; 0.40.57 undo; heartbeat/ticket/msg = N-hour clock) | On main `04232894`+`968acaf0` · unreleased | `.k2/prds/prd-active-window-wake-and-reap-v1.md` · wiki Feature - Active Reaper RAM Revival |
 | **Code knowledge graph CLI** | Parked | `.k2/prds/prd-code-knowledge-graph-cli-v1.md` |
 | **Workspace KB / Brain map + publish** | Open PRD | `.k2/prds/prd-workspace-kb-brain-map-and-publish.md` |
 | **HTML dashboard** (pinned HTML across workspaces) | Open PRD | `.k2/prds/prd-html-dashboard.md` |
@@ -113,7 +114,8 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 | **Connection resilience** | PRD | `.k2/prds/0.40.48-connection-resilience.md` · wiki Ops - Client Connect Flap GH57 |
 | **Connect page version update** | PRD | `.k2/prds/prd-connect-page-version-update.md` |
 | **Remote drop no duplicate copies** | PRD | `.k2/prds/prd-remote-drop-no-duplicate-copies-v1.md` |
-| **Remote projects mutate latency** | PRD | `.k2/prds/prd-remote-projects-mutate-latency-v1.md` |
+| **Remote projects mutate latency** | PRD · Phase 1–2 landed; Phase 3 → embed PRD | `.k2/prds/prd-remote-projects-mutate-latency-v1.md` |
+| **Remote E2E storms (remaining)** | CORS + embed **on main** for 0.40.106; one-WS + hello next train | `.k2/prds/prd-remote-e2e-storm-audit-v1.md` · CORS `3c958f9c` `.k2/prds/prd-cors-oneshot-while-connected-v1.md` · embed `d14aaa95` `.k2/prds/prd-projects-list-embed-workspaces-v1.md` · one events-WS `.k2/prds/prd-one-session-events-ws-per-path-v1.md` · Hello coalesce `.k2/prds/prd-hello-snapshot-coalesce-v1.md` |
 | **Hosted web / edge delivery residual** | PRD | `.k2/prds/prd-hosted-web-client-and-edge-delivery-v1.md` |
 
 ### B4 · Platform / naming / migrations
@@ -121,6 +123,8 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 | Item | Status | PRD / wiki |
 |------|--------|------------|
 | **K2SO naming Endgame Stage B** (`k2so.db` → `k2.db` writer flip) | NEXT | wiki Convention - K2SO Naming Cleanup · `.k2/prds/prd-k2so-endgame-v1.md`, `.k2/prds/prd-k2so-cleanup-v1.md` |
+| **Linux ship CI on AX41** | **Locked for 0.40.104** | `.k2/prds/prd-linux-ci-on-ax41-v1.md` · wiki [[CI - Linux Ship on AX41]] — tag `daemon-binaries` + `app-linux` on `k2-sandbox-01` (`k2-linux`); checks stay on GitHub |
+| **Linux daemon RSS / charter-watch OPEN** | **Locked for 0.40.104** | `.k2/prds/prd-linux-daemon-rss-charter-watch-v1.md` · wiki [[Bug - Linux Daemon RSS Charter Watch]] — RPMAVS 59 GB OOM; ignore inotify OPEN; bound channel; update fetch timeout |
 | **Linux headless / self-update / tunnel** | PRD family | `.k2/prds/prd-linux-headless-daemon.md`, `.k2/prds/prd-linux-remote-self-update-and-tunnel-v1.md` |
 | **Server migration** | PRD | `.k2/prds/prd-server-migration-v1.md` |
 | **FS unzip / files drawer backlog** | PRDs | `.k2/prds/prd-fs-unzip-v1.md`, `.k2/prds/prd-fs-files-drawer-backlog-v1.md` |

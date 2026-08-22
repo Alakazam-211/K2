@@ -9,14 +9,16 @@ Workspaces stay **Active for N hours** after something actually needed them (you
 
 Heartbeat **fires** keep a workspace warm; having a schedule is not immortality. API host-session tabs still use their own completion reaper.
 
-Dragging workspaces around in **Settings → Workspaces / Agents** no longer floods the remote tunnel (one request per workspace for lists and the Tickets badge). That was kicking the desktop client off large hosts.
+Dragging workspaces around in **Settings → Workspaces / Agents** no longer floods the remote tunnel (eat-echo + a Tickets badge count instead of one list per workspace). A current daemon also returns workspaces **inside** `projects/list`, so boot / host-switch / a peer's color change is one GET, not one per workspace. Rename paints immediately like color.
+
+If a remote `/cli` call fails while the host still looks connected (`Failed to fetch` / handshake eof), the app tries **once more immediately** (to evict a dead WKWebView socket) and then probes — not five times over ~3.6s. Login and host restart/update still use the longer retry window.
 
 ### What to try
 
 1. Lower **Keep workspaces Active for** (Settings → General → Workspaces) on a busy host; unused chats should disappear after N hours + ~15s.
 2. Restart a headless daemon: agents should stay down until a visit, message, heartbeat, or ticket reply.
 3. Active bar → Dismiss on the workspace you are looking at, even while it is working.
-4. On a busy remote host, drag-reorder workspaces in Settings without losing the connection.
+4. On a busy remote host, drag-reorder workspaces in Settings without losing the connection. DevTools: one `projects/list`, not N `workspaces/list`.
 
 ---
 

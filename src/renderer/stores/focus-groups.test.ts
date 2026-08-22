@@ -61,7 +61,11 @@ let mockProjects: Array<{
 vi.mock('./projects', () => ({
   useProjectsStore: {
     getState: () => ({ projects: mockProjects, setActiveWorkspace: setActiveWorkspaceSpy }),
+    setState: (partial: { projects?: typeof mockProjects }) => {
+      if (partial.projects) mockProjects = partial.projects
+    },
   },
+  noteOptimisticProjectsMutationSuccess: vi.fn(),
 }))
 
 import { useFocusGroupsStore, type FocusGroup } from './focus-groups'

@@ -646,7 +646,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
   // ── Env files section ──────────────────────────────────────────────
   const [envFiles, setEnvFiles] = useState<FileEntry[]>([])
-  const [envCollapsed, setEnvCollapsed] = useState(false)
+  const [envCollapsed, setEnvCollapsed] = useState(true)
 
   const loadEnvFiles = useCallback(async () => {
     try {

@@ -819,6 +819,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0104_published_services",
             include_str!("../../drizzle_sql/0104_published_services.sql"),
         ),
+        // 0105 — daemon-owned workspace resources (explicit file list).
+        (
+            "0105_workspace_resources",
+            include_str!("../../drizzle_sql/0105_workspace_resources.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1300,7 +1305,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0104_published_services",
+            last_name, "0105_workspace_resources",
             "unexpected last migration name: {last_name}"
         );
     }

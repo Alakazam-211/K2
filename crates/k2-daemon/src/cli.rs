@@ -128,6 +128,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::workspace_routes::dispatch(path, params) {
         return resp;
     }
+    if let Some(resp) = crate::workspace_resources_routes::dispatch(path, params) {
+        return resp;
+    }
     // Context management stack — `/cli/context/*` reads (layers/show/catalog) +
     // 405 guards for POST-only mutations reached via the GET chain.
     if let Some(resp) = crate::context_routes::dispatch(path, params) {

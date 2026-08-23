@@ -307,6 +307,15 @@ pub enum SessionEvent {
         project_id: String,
     },
 
+    /// Workspace resource list changed (add / remove). APP-LEVEL so the
+    /// Projects page sees it (do not workspace-scope-filter). Wire:
+    /// `{ "kind": "workspace_resources_changed", "workspaceId":
+    /// "<projects.id>" }`.
+    WorkspaceResourcesChanged {
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+    },
+
     /// #676 — a tab title was set daemon-side. WORKSPACE-SCOPED.
     /// Push counterpart to the new `POST /cli/workspace/set-tab-title`
     /// route + the daemon-canonical `tab_titles` store. Replaces the
@@ -1008,6 +1017,19 @@ mod tests {
         assert_eq!(json["projectId"], "proj-uuid");
         assert_keys(&json, &["kind", "projectId"]);
         assert!(json.get("project_id").is_none());
+    }
+
+    /// FROZEN WIRE CONTRACT: `{ "kind": "workspace_resources_changed",
+    /// "workspaceId": string }` (`projects.id`).
+    #[test]
+    fn workspace_resources_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::WorkspaceResourcesChanged {
+            workspace_id: "proj-uuid".into(),
+        });
+        assert_eq!(json["kind"], "workspace_resources_changed");
+        assert_eq!(json["workspaceId"], "proj-uuid");
+        assert_keys(&json, &["kind", "workspaceId"]);
+        assert!(json.get("workspace_id").is_none());
     }
 
     /// [`tunnel_subdomains_snapshot`] is the ONE builder both the GET

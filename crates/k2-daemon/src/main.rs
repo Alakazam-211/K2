@@ -164,6 +164,8 @@ mod wake_headless;
 mod watchdog;
 mod workspace_layouts_dedup;
 mod workspace_msg;
+mod workspace_resources_migrate;
+mod workspace_resources_routes;
 mod workspace_routes;
 
 #[cfg(test)]
@@ -1044,6 +1046,11 @@ async fn async_main() {
     // re-run independently in future versions. Renderer also performs
     // the same migration on read (`tabs.ts::migrateLayoutToV2`).
     workspace_layouts_dedup::run_v2_emit_once();
+
+    // Workspace Resources — one-shot INSERT OR IGNORE of every
+    // isPinnedFile file-viewer path from workspace_layouts
+    // (prd-workspace-resources-v1 R8). Never unpins tabs.
+    workspace_resources_migrate::run_once();
 
     // daemon-run may have queued signals for offline agents that
     // never got injected (daemon crashed before the session came

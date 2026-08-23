@@ -758,6 +758,10 @@ async fn handle_one_request(
             // require_post in the dedicated arm below.
             | "/cli/workspace/set"
             | "/cli/workspace/set-handle"
+            // Workspace Resources (prd-workspace-resources-v1) — POST-only
+            // add/remove. GET twins 405 via workspace_resources_routes.
+            | "/cli/workspace/resources/add"
+            | "/cli/workspace/resources/remove"
             // Context management stack (prd-context-hamburger-v1) — optional
             // AGENTS.md layer stack mutations. JSON-bodied POSTs;
             // token_ok + require_post in the dedicated arm below.
@@ -3357,6 +3361,62 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
+        }
+        p if is_post
+            && post_allowed
+            && (p == "/cli/workspace/resources/add" || p == "/cli/workspace/resources/remove") =>
+        {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut params = super::http::parse_params(&path, &query);
+            for (k, v) in super::http::parse_form_body(&body_bytes) {
+                params.insert(k, v);
+            }
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                if let Some(obj) = v.as_object() {
+                    for (k, val) in obj {
+                        let s = match val {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            _ => continue,
+                        };
+                        if !s.is_empty() {
+                            params.insert(k.clone(), s);
+                        }
+                    }
+                }
+            }
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::workspace_resources_routes::dispatch_post(&p_owned, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(
+                &mut *stream,
+                result.status,
+                result.content_type,
+                &result.body,
+            )
+            .await;
         }
         // POST /cli/agent/retire — 0.40.24 S4 (agent CLI safe
         // decommission). Body (JSON): `{"q": "<name|path|uuid>",

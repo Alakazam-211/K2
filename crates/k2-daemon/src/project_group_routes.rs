@@ -155,13 +155,13 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
         }
 
-        // GET /cli/project-group/html-docs?group=<id|name|prefix>
-        // P8 (§4.1/§6.5) — the pinned-HTML browser: every `isPinnedFile`
-        // file-viewer item read out of the MEMBER workspaces'
-        // `workspace_layouts` blobs (member workspaces only in V1 —
-        // resolved Q3), enriched with the workspace's registry name +
-        // agent display name for the Settings picker.
-        "/cli/project-group/html-docs" => {
+        // GET /cli/project-group/resources?group=<id|name|prefix>
+        // Workspace Resources union across MEMBER workspaces (prd-workspace-
+        // resources-v1). Wire shape kept identical to the old html-docs
+        // scrape so Settings + old clients keep parsing.
+        // GET /cli/project-group/html-docs — COMPAT ALIAS of the same list
+        // (never an empty forced array, never layout scrape).
+        "/cli/project-group/resources" | "/cli/project-group/html-docs" => {
             let selector = str_param(params, "group");
             if selector.is_empty() {
                 return Some(usage_error("missing group (a project name, id, or unique prefix)"));
@@ -170,7 +170,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 Ok(id) => id,
                 Err(e) => return Some(resolve_error_response(&selector, e)),
             };
-            match build_html_docs_json(&group_id) {
+            match build_resources_json(&group_id) {
                 Ok(v) => CliResponse::ok_json(v.to_string()),
                 Err(resp) => resp,
             }
@@ -388,7 +388,7 @@ fn build_show_json(group_id: &str) -> Result<serde_json::Value, CliResponse> {
 /// plus every `extraGroups[].tabs` (split-view groups persist there).
 /// Unparseable/foreign blobs yield nothing — the browser is advisory
 /// and must never error a Settings read over one bad layout row.
-fn pinned_html_paths(layout_json: &str) -> Vec<String> {
+pub(crate) fn pinned_html_paths(layout_json: &str) -> Vec<String> {
     let Ok(layout) = serde_json::from_str::<serde_json::Value>(layout_json) else {
         return Vec::new();
     };
@@ -431,54 +431,40 @@ fn pinned_html_paths(layout_json: &str) -> Vec<String> {
     paths
 }
 
-/// The `html-docs` wire shape (P8): one row per DISTINCT
-/// (member workspace, filePath) pinned-HTML doc across the member's
-/// `workspace_layouts` rows, member order preserved —
-/// `{workspaceId, workspaceName, agentName, filePath, fileName}`.
-fn build_html_docs_json(group_id: &str) -> Result<serde_json::Value, CliResponse> {
+/// The `resources` / html-docs-compat wire shape: one row per
+/// (member workspace, filePath) from `workspace_resources`, member
+/// order preserved — `{workspaceId, workspaceName, agentName, filePath,
+/// fileName}` (+ optional `missing`).
+fn build_resources_json(group_id: &str) -> Result<serde_json::Value, CliResponse> {
     let members = project_groups::list_members(group_id).map_err(core_error)?;
     let mut docs: Vec<serde_json::Value> = Vec::new();
-    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     for m in &members {
         let (name, path) = workspace_name_path(&m.workspace_id);
         let agent_name = path
             .as_deref()
             .map(k2_core::workspace::display::agent_display_name);
-        // Every layout row for the member workspace (one per
-        // per-project workspace/worktree row) — scoped lock, loud on
-        // DB failure (test discipline: never a silent empty browser).
-        let blobs: Vec<String> = {
+        let rows = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            let mut stmt = conn
-                .prepare(
-                    "SELECT layout_json FROM workspace_layouts \
-                     WHERE project_id = ?1 ORDER BY rowid ASC",
-                )
-                .map_err(|e| {
-                    CliResponse::internal_error(format!("workspace_layouts prepare: {e}"))
-                })?;
-            let rows = stmt
-                .query_map(rusqlite::params![m.workspace_id], |r| r.get::<_, String>(0))
-                .map_err(|e| {
-                    CliResponse::internal_error(format!("workspace_layouts query: {e}"))
-                })?;
-            rows.filter_map(Result::ok).collect()
+            k2_core::workspace_resources::list(&conn, &m.workspace_id).map_err(|e| {
+                CliResponse::internal_error(format!("workspace_resources list: {e}"))
+            })?
         };
-        for blob in &blobs {
-            for file_path in pinned_html_paths(blob) {
-                if !seen.insert((m.workspace_id.clone(), file_path.clone())) {
-                    continue;
-                }
-                let file_name = file_path.rsplit('/').next().unwrap_or(&file_path).to_string();
-                docs.push(serde_json::json!({
-                    "workspaceId": m.workspace_id,
-                    "workspaceName": name,
-                    "agentName": agent_name,
-                    "filePath": file_path,
-                    "fileName": file_name,
-                }));
-            }
+        for row in rows {
+            let file_name = row
+                .file_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&row.file_path)
+                .to_string();
+            docs.push(serde_json::json!({
+                "workspaceId": m.workspace_id,
+                "workspaceName": name,
+                "agentName": agent_name,
+                "filePath": row.file_path,
+                "fileName": file_name,
+                "missing": k2_core::workspace_resources::file_missing(&row.file_path),
+            }));
         }
     }
     Ok(serde_json::json!({ "ok": true, "groupId": group_id, "docs": docs }))
@@ -2471,109 +2457,86 @@ mod tests {
         assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
     }
 
-    /// P8 §4.1 — the html-docs read: `isPinnedFile` file-viewer items
-    /// out of MEMBER workspaces' layout blobs only, deduped per
-    /// (workspace, path), split-view extraGroups included, non-pinned
-    /// and non-member docs excluded, bad blobs skipped.
+    /// Project GET unions Workspace Resources from MEMBER workspaces
+    /// only. html-docs is a compat alias of the same payload.
     #[test]
-    fn project_group_html_docs_route() {
-        let g = create_group_via_route(&gname("htmldocs"));
+    fn project_group_resources_unions_members_only() {
+        let g = create_group_via_route(&gname("resources"));
         let gid = g["id"].as_str().expect("id").to_string();
-        let (member_id, member_name, _) = insert_workspace("docs-member");
-        let (outsider_id, ..) = insert_workspace("docs-outsider");
+        let (member_id, member_name, _) = insert_workspace("res-member");
+        let (outsider_id, ..) = insert_workspace("res-outsider");
         ok_json(post_json(
             "/cli/project-group/add-member",
             serde_json::json!({ "group": gid, "workspace": member_id }),
         ));
-
-        let pinned_tab = |path: &str| {
-            serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "isPinnedFile": true,
-                "paneGroups": { "pg": { "id": "pg", "items": [
-                    { "id": "i", "type": "file-viewer", "filePath": path }
-                ], "activeItemIndex": 0 } } })
-        };
-        // A REGULAR (unpinned) file-viewer tab — must not surface.
-        let plain_tab = serde_json::json!({ "id": "tab-plain",
-            "paneGroups": { "pg2": { "id": "pg2", "items": [
-                { "id": "i2", "type": "file-viewer", "filePath": "/tmp/unpinned.html" }
-            ], "activeItemIndex": 0 } } });
-        let member_layout = serde_json::json!({
-            "version": 2,
-            "tabs": [pinned_tab("/tmp/status.html"), plain_tab],
-            "extraGroups": [{ "tabs": [pinned_tab("/tmp/split.html")] }],
-        });
-        // A second layout row (another worktree workspace) repeating
-        // status.html — the dedupe case — plus one more doc.
-        let member_layout_2 = serde_json::json!({
-            "version": 2,
-            "tabs": [pinned_tab("/tmp/status.html"), pinned_tab("/tmp/burndown.html")],
-        });
-        let outsider_layout =
-            serde_json::json!({ "version": 2, "tabs": [pinned_tab("/tmp/outsider.html")] });
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            // workspace_layouts FKs both columns (0009): workspace_id →
-            // the legacy per-project `workspaces` rows — seed one per
-            // layout row.
-            let insert = |project_id: &str, blob: String| {
-                let ws_id = uuid::Uuid::new_v4().to_string();
-                conn.execute(
-                    "INSERT INTO workspaces (id, project_id, name) VALUES (?1, ?2, 'main')",
-                    rusqlite::params![ws_id, project_id],
-                )
-                .expect("insert workspaces row");
-                conn.execute(
-                    "INSERT INTO workspace_layouts (id, project_id, workspace_id, \
-                     layout_json, updated_at) VALUES (?1, ?2, ?3, ?4, 1000)",
-                    rusqlite::params![uuid::Uuid::new_v4().to_string(), project_id, ws_id, blob],
-                )
-                .expect("insert layout row");
-            };
-            insert(&member_id, member_layout.to_string());
-            insert(&member_id, member_layout_2.to_string());
-            insert(&member_id, "{not json".to_string());
-            insert(&outsider_id, outsider_layout.to_string());
+            k2_core::workspace_resources::insert_ignore(&conn, &member_id, "/tmp/status.csv")
+                .expect("member resource");
+            k2_core::workspace_resources::insert_ignore(&conn, &member_id, "/tmp/split.html")
+                .expect("member resource 2");
+            k2_core::workspace_resources::insert_ignore(&conn, &outsider_id, "/tmp/outsider.html")
+                .expect("outsider resource");
         }
 
-        let resp = dispatch("/cli/project-group/html-docs", &get_params(&[("group", &gid)]))
-            .expect("html-docs route claimed");
+        let resp = dispatch(
+            "/cli/project-group/resources",
+            &get_params(&[("group", &gid)]),
+        )
+        .expect("resources route claimed");
         let v = ok_json(resp);
         assert_eq!(v["groupId"], gid.as_str());
         let docs = v["docs"].as_array().expect("docs");
-        let paths: Vec<&str> = docs
+        let mut paths: Vec<&str> = docs
             .iter()
             .map(|d| d["filePath"].as_str().expect("filePath"))
             .collect();
+        paths.sort();
         assert_eq!(
             paths,
-            vec!["/tmp/status.html", "/tmp/split.html", "/tmp/burndown.html"],
-            "member docs only, deduped, layout-row order: {docs:?}"
+            vec!["/tmp/split.html", "/tmp/status.csv"],
+            "member docs only: {docs:?}"
         );
         assert!(docs.iter().all(|d| d["workspaceId"] == member_id.as_str()));
         assert_eq!(docs[0]["workspaceName"], member_name.as_str());
-        assert_eq!(docs[0]["fileName"], "status.html");
+        assert!(
+            docs.iter().any(|d| d["fileName"] == "status.csv"),
+            "status.csv present: {docs:?}"
+        );
         assert!(
             docs[0]["agentName"].as_str().is_some_and(|s| !s.is_empty()),
             "agentName enriched: {}",
             docs[0]
         );
 
-        // Addressing misses are the shared shapes.
-        let resp = dispatch("/cli/project-group/html-docs", &get_params(&[]))
-            .expect("route claimed");
+        let alias = ok_json(
+            dispatch(
+                "/cli/project-group/html-docs",
+                &get_params(&[("group", &gid)]),
+            )
+            .expect("html-docs alias claimed"),
+        );
+        assert_eq!(alias["docs"], v["docs"], "html-docs is a compat alias");
+
+        let resp = dispatch("/cli/project-group/resources", &get_params(&[])).expect("claimed");
         assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
         let unknown = format!("zzz-no-such-{}", uuid::Uuid::new_v4());
-        let resp = dispatch("/cli/project-group/html-docs", &get_params(&[("group", &unknown)]))
-            .expect("route claimed");
+        let resp = dispatch(
+            "/cli/project-group/resources",
+            &get_params(&[("group", &unknown)]),
+        )
+        .expect("claimed");
         assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
 
-        // A memberless group answers ok with an empty list.
-        let empty = create_group_via_route(&gname("htmldocs-empty"));
+        let empty = create_group_via_route(&gname("resources-empty"));
         let empty_id = empty["id"].as_str().expect("id");
         let v = ok_json(
-            dispatch("/cli/project-group/html-docs", &get_params(&[("group", empty_id)]))
-                .expect("route claimed"),
+            dispatch(
+                "/cli/project-group/resources",
+                &get_params(&[("group", empty_id)]),
+            )
+            .expect("claimed"),
         );
         assert_eq!(v["docs"].as_array().expect("docs").len(), 0);
     }

@@ -232,25 +232,58 @@ export async function reorderProjectGroupDashboards(
   return res.dashboards ?? []
 }
 
-/** One pinned-HTML doc from `GET /cli/project-group/html-docs` — an
- *  `isPinnedFile` file-viewer item out of a MEMBER workspace's
- *  `workspace_layouts` blob (§4.1/§6.5, member-only per resolved Q3). */
+/** One resource from `GET /cli/project-group/resources` (html-docs is a
+ *  compat alias). Wire kept so Settings + old clients keep parsing. */
 export interface ProjectGroupHtmlDoc {
   workspaceId: string
   workspaceName: string | null
   agentName: string | null
   filePath: string
   fileName: string
+  missing?: boolean
 }
 
-/** GET /cli/project-group/html-docs?group= — the §6.5 pinned-HTML
- *  browser's rows, deduped per (workspace, path), member order. */
-export async function fetchProjectGroupHtmlDocs(group: string): Promise<ProjectGroupHtmlDoc[]> {
+/** One row from `GET /cli/workspace/resources`. */
+export interface WorkspaceResource {
+  filePath: string
+  fileName: string
+  addedAt?: number
+  missing?: boolean
+}
+
+/** GET /cli/workspace/resources?workspace= name|path|UUID. */
+export async function fetchWorkspaceResources(workspace: string): Promise<WorkspaceResource[]> {
+  const res = await daemonCliGet<{ ok: boolean; docs: WorkspaceResource[] }>(
+    'workspace/resources',
+    { workspace },
+  )
+  return res.docs ?? []
+}
+
+/** POST /cli/workspace/resources/add — `{workspace, path}`. Idempotent. */
+export async function addWorkspaceResource(workspace: string, path: string): Promise<void> {
+  await daemonCliPost('workspace/resources/add', { workspace, path })
+}
+
+/** POST /cli/workspace/resources/remove — `{workspace, path}`. 404 if missing. */
+export async function removeWorkspaceResource(workspace: string, path: string): Promise<void> {
+  await daemonCliPost('workspace/resources/remove', { workspace, path })
+}
+
+/** GET /cli/project-group/resources?group= — union of member Workspace
+ *  Resources. Prefer this over the html-docs alias. */
+export async function fetchProjectGroupResources(group: string): Promise<ProjectGroupHtmlDoc[]> {
   const res = await daemonCliGet<{ ok: boolean; docs: ProjectGroupHtmlDoc[] }>(
-    'project-group/html-docs',
+    'project-group/resources',
     { group },
   )
   return res.docs ?? []
+}
+
+/** GET /cli/project-group/html-docs?group= — compat alias of
+ *  {@link fetchProjectGroupResources}. */
+export async function fetchProjectGroupHtmlDocs(group: string): Promise<ProjectGroupHtmlDoc[]> {
+  return fetchProjectGroupResources(group)
 }
 
 /** POST /cli/project-group/dashboard/save-layout — canonical

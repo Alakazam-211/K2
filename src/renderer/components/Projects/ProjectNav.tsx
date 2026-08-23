@@ -15,8 +15,11 @@ import { useProjectsStore } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
+import { useTabsStore } from '@/stores/tabs'
+import { usePageViewStore } from '@/stores/page-view'
 import { useWindowModeStore, noteViewerInteractionBlocked } from '@/stores/window-mode'
 import { showContextMenu } from '@/lib/context-menu'
+import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { KeyCombo } from '@/components/KeySymbol'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ProjectGroupAvatar from './ProjectGroupAvatar'
@@ -24,13 +27,15 @@ import { completeDashDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
   createProjectGroup,
   createErrorMessage,
-  fetchProjectGroupHtmlDocs,
+  fetchProjectGroupResources,
   partitionPinned,
   pinProjectGroup,
+  removeWorkspaceResource,
   type ProjectGroup,
   type ProjectGroupHtmlDoc,
   type ProjectGroupMemberInfo,
 } from './projects-api'
+import { onWorkspaceResourcesChanged } from '@/stores/session-events'
 import {
   loadPinnedMemberIds,
   loadPinnedResourceKeys,
@@ -324,36 +329,66 @@ function MemberRow({
   )
 }
 
-// ── Resources drawer (pinned HTML docs from member workspaces — §6.5) ───
+// ── Resources drawer (Workspace Resources union from member workspaces) ─
 
-/** Drop an htmlDoc onto the open dashboard (center of the panes surface).
- *  Same bridge as a completed drag; no-op if no dashboard is mounted. */
-function dropHtmlDocOnDashboard(doc: ProjectGroupHtmlDoc): void {
-  const el = document.querySelector('[data-projects-dashboard-panes]') as HTMLElement | null
-  const rect = el?.getBoundingClientRect()
-  const x = rect ? rect.left + rect.width / 2 : window.innerWidth / 2
-  const y = rect ? rect.top + rect.height / 2 : window.innerHeight / 2
-  completeDashDrag(
-    { type: 'htmlDoc', workspaceId: doc.workspaceId, filePath: doc.filePath },
-    x,
-    y,
-  )
+function isHtmlFilePath(filePath: string): boolean {
+  return /\.html?$/i.test(filePath)
+}
+
+/** Switch to the member workspace and open the file as a tab (R9). */
+function openResourceInWorkspace(doc: ProjectGroupHtmlDoc): void {
+  usePageViewStore.getState().setPage('agents')
+  const projects = useProjectsStore.getState()
+  const project = projects.projects.find((p) => p.id === doc.workspaceId)
+  if (!project) {
+    useToastStore.getState().addToast('Workspace not found', 'error')
+    return
+  }
+  const ws = project.workspaces[0]
+  const already =
+    projects.activeProjectId === project.id &&
+    (!ws || projects.activeWorkspaceId === ws.id)
+  const open = (): void => {
+    useTabsStore.getState().openFileAsTab(doc.filePath)
+  }
+  if (already) {
+    open()
+    return
+  }
+  if (ws) {
+    projects.setActiveWorkspace(project.id, ws.id)
+  } else {
+    projects.setActiveProject(project.id)
+  }
+  const key = ws ? `${project.id}:${ws.id}` : null
+  const started = Date.now()
+  const tick = (): void => {
+    const tabs = useTabsStore.getState()
+    if (!key || tabs.activeWorkspaceKey === key || Date.now() - started > 4000) {
+      open()
+      return
+    }
+    window.setTimeout(tick, 50)
+  }
+  window.setTimeout(tick, 0)
 }
 
 function ResourceRow({
   doc,
   isPinned,
-  groupId,
   onTogglePin,
+  onRemoved,
 }: {
   doc: ProjectGroupHtmlDoc
   isPinned: boolean
   groupId: string
   onTogglePin: (doc: ProjectGroupHtmlDoc) => void
+  onRemoved: () => void
 }): React.JSX.Element {
   const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const suppressClickRef = useRef(false)
   const owner = doc.agentName ?? doc.workspaceName ?? ''
+  const html = isHtmlFilePath(doc.filePath)
 
   const handleClick = (): void => {
     if (suppressClickRef.current) {
@@ -361,12 +396,13 @@ function ResourceRow({
       return
     }
     if (noteViewerInteractionBlocked()) return
-    dropHtmlDocOnDashboard(doc)
+    openResourceInWorkspace(doc)
   }
 
   const handleMouseDown = (e: React.MouseEvent): void => {
     if (e.button !== 0) return
     if (noteViewerInteractionBlocked()) return
+    if (!html) return
     const startX = e.clientX
     const startY = e.clientY
     let started = false
@@ -412,8 +448,20 @@ function ResourceRow({
         id: 'toggle-pin',
         label: isPinned ? 'Unpin from Top' : 'Pin to Top',
       },
+      { id: 'remove', label: 'Remove' },
     ])
     if (clickedId === 'toggle-pin') onTogglePin(doc)
+    if (clickedId === 'remove') {
+      try {
+        await removeWorkspaceResource(doc.workspaceId, doc.filePath)
+        onRemoved()
+      } catch (err) {
+        useToastStore.getState().addToast(
+          `Remove failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        )
+      }
+    }
   }
 
   return (
@@ -428,14 +476,10 @@ function ResourceRow({
       title={doc.filePath}
     >
       <span
-        className="flex-shrink-0 w-[18px] h-[18px] flex items-center justify-center text-[10px] font-mono font-semibold text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/25"
+        className="flex-shrink-0 w-[18px] h-[18px] flex items-center justify-center"
         aria-hidden
-        title="HTML resource"
       >
-        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M4 2h6l3 3v9H4V2z" />
-          <path d="M10 2v3h3" />
-        </svg>
+        <SetiFileIcon name={doc.fileName} className="w-4 h-4" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="text-[11px] truncate leading-tight">{doc.fileName}</div>
@@ -445,6 +489,11 @@ function ResourceRow({
           </div>
         ) : null}
       </div>
+      {doc.missing ? (
+        <span className="flex-shrink-0 text-[9px] uppercase tracking-wide text-[var(--color-status-warn-soft)]">
+          missing
+        </span>
+      ) : null}
       {isPinned && (
         <span
           className="flex-shrink-0 text-[var(--color-text-muted)] opacity-70"
@@ -469,16 +518,21 @@ function ResourcesDrawer({ groupId }: { groupId: string }): React.JSX.Element | 
 
   React.useEffect(() => {
     let cancelled = false
+    const load = (): void => {
+      fetchProjectGroupResources(groupId)
+        .then((d) => {
+          if (!cancelled) setDocs(d)
+        })
+        .catch(() => {
+          if (!cancelled) setDocs([])
+        })
+    }
     setDocs(null)
-    fetchProjectGroupHtmlDocs(groupId)
-      .then((d) => {
-        if (!cancelled) setDocs(d)
-      })
-      .catch(() => {
-        if (!cancelled) setDocs([])
-      })
+    load()
+    const off = onWorkspaceResourcesChanged(() => load())
     return () => {
       cancelled = true
+      off()
     }
   }, [groupId, revision])
 
@@ -544,6 +598,13 @@ function ResourcesDrawer({ groupId }: { groupId: string }): React.JSX.Element | 
                   isPinned={pinnedKeys.includes(resourceDocKey(doc))}
                   groupId={groupId}
                   onTogglePin={onTogglePin}
+                  onRemoved={() =>
+                    setDocs((prev) =>
+                      (prev ?? []).filter(
+                        (d) => !(d.workspaceId === doc.workspaceId && d.filePath === doc.filePath),
+                      ),
+                    )
+                  }
                 />
               </React.Fragment>
             ))
@@ -965,7 +1026,7 @@ export function ProjectNavRail({
     setPinnedMemberIds(togglePinnedMember(selectedGroupId, workspaceId))
   }
 
-  // Pinned HTML resources (same GET as Settings → Pinned HTML pages).
+  // Workspace Resources (same GET as Settings picker).
   const [resourceDocs, setResourceDocs] = useState<ProjectGroupHtmlDoc[] | null>(null)
   const [pinnedResourceKeys, setPinnedResourceKeys] = useState<string[]>(() =>
     selectedGroupId ? loadPinnedResourceKeys(selectedGroupId) : [],
@@ -981,15 +1042,20 @@ export function ProjectNavRail({
     }
     let cancelled = false
     setResourceDocs(null)
-    fetchProjectGroupHtmlDocs(selectedGroupId)
-      .then((d) => {
-        if (!cancelled) setResourceDocs(d)
-      })
-      .catch(() => {
-        if (!cancelled) setResourceDocs([])
-      })
+    const load = (): void => {
+      fetchProjectGroupResources(selectedGroupId)
+        .then((d) => {
+          if (!cancelled) setResourceDocs(d)
+        })
+        .catch(() => {
+          if (!cancelled) setResourceDocs([])
+        })
+    }
+    load()
+    const off = onWorkspaceResourcesChanged(() => load())
     return () => {
       cancelled = true
+      off()
     }
   }, [selectedGroupId, revision])
 
@@ -1050,6 +1116,13 @@ export function ProjectNavRail({
                 isPinned={pinnedResourceKeys.includes(resourceDocKey(doc))}
                 groupId={selectedGroupId}
                 onTogglePin={onToggleResourcePin}
+                onRemoved={() =>
+                  setResourceDocs((prev) =>
+                    (prev ?? []).filter(
+                      (d) => !(d.workspaceId === doc.workspaceId && d.filePath === doc.filePath),
+                    ),
+                  )
+                }
               />
             ))}
           </div>
@@ -1083,17 +1156,19 @@ export function ProjectNavRail({
 function RailResource({
   doc,
   isPinned,
-  groupId,
   onTogglePin,
+  onRemoved,
 }: {
   doc: ProjectGroupHtmlDoc
   isPinned: boolean
   groupId: string
   onTogglePin: (doc: ProjectGroupHtmlDoc) => void
+  onRemoved: () => void
 }): React.JSX.Element {
   const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const suppressClickRef = useRef(false)
-  const label = doc.fileName || doc.filePath.split('/').pop() || 'html'
+  const label = doc.fileName || doc.filePath.split('/').pop() || 'file'
+  const html = isHtmlFilePath(doc.filePath)
 
   const handleClick = (): void => {
     if (suppressClickRef.current) {
@@ -1101,12 +1176,13 @@ function RailResource({
       return
     }
     if (noteViewerInteractionBlocked()) return
-    dropHtmlDocOnDashboard(doc)
+    openResourceInWorkspace(doc)
   }
 
   const handleMouseDown = (e: React.MouseEvent): void => {
     if (e.button !== 0) return
     if (noteViewerInteractionBlocked()) return
+    if (!html) return
     const startX = e.clientX
     const startY = e.clientY
     let started = false
@@ -1152,8 +1228,20 @@ function RailResource({
         id: 'toggle-pin',
         label: isPinned ? 'Unpin from Top' : 'Pin to Top',
       },
+      { id: 'remove', label: 'Remove' },
     ])
     if (clickedId === 'toggle-pin') onTogglePin(doc)
+    if (clickedId === 'remove') {
+      try {
+        await removeWorkspaceResource(doc.workspaceId, doc.filePath)
+        onRemoved()
+      } catch (err) {
+        useToastStore.getState().addToast(
+          `Remove failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        )
+      }
+    }
   }
 
   return (
@@ -1165,16 +1253,14 @@ function RailResource({
       onClick={handleClick}
       onMouseDown={handleMouseDown}
       onContextMenu={(e) => void handleContextMenu(e)}
-      title={`${label}${doc.agentName ? ` · ${doc.agentName}` : ''}${isPinned ? ' (pinned)' : ''}`}
+      title={`${label}${doc.agentName ? ` · ${doc.agentName}` : ''}${isPinned ? ' (pinned)' : ''}${doc.missing ? ' (missing)' : ''}`}
     >
       {isPinned && (
         <span className="absolute top-0 left-0.5 text-[var(--color-text-muted)] opacity-80 pointer-events-none">
           <PinGlyph filled />
         </span>
       )}
-      <span className="text-[8px] font-mono font-semibold text-[var(--color-accent)] leading-none">
-        .html
-      </span>
+      <SetiFileIcon name={doc.fileName} className="w-4 h-4" />
     </button>
   )
 }

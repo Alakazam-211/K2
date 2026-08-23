@@ -56,7 +56,7 @@ import {
   daemonErrorInfo,
   deleteProjectGroup,
   deleteProjectGroupDashboard,
-  fetchProjectGroupHtmlDocs,
+  fetchProjectGroupResources,
   fetchProjectGroupIcon,
   fetchProjectGroupShow,
   normalizeHexColor,
@@ -73,6 +73,7 @@ import {
   type ProjectGroupHtmlDoc,
   type ProjectGroupShow,
 } from './projects-api'
+import { onWorkspaceResourcesChanged } from '@/stores/session-events'
 import { pickIconImage } from '@/lib/pick-remote-image'
 import { GROUP_AVATAR_COLORS, groupAvatarColor } from './ProjectGroupAvatar'
 import IconCropDialog from '@/components/Settings/IconCropDialog'
@@ -468,24 +469,24 @@ function DashboardsBlock({
             </span>
           </div>
 
-          {/* ── Pinned HTML pages → THIS dashboard (§6.7.6) ── */}
+          {/* ── Workspace Resources → THIS dashboard (HTML-only add) ── */}
           <div className="px-3 py-2 space-y-1.5">
             <p className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-              Pinned HTML pages
+              Resources
             </p>
             {docsError ? (
-              <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load pinned pages: {docsError}</p>
+              <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load resources: {docsError}</p>
             ) : docs === null ? (
               <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
             ) : docs.length === 0 ? (
               <p className="text-[11px] text-[var(--color-text-muted)] opacity-70">
-                No pinned HTML pages — members pin .html files as tabs in their workspaces,
-                and they show up here.
+                No resources yet — add files from a member workspace&apos;s Files tree.
               </p>
             ) : (
               <div className="divide-y divide-[var(--color-border)]">
                 {docs.map((doc) => {
                   const key = `${doc.workspaceId}:${doc.filePath}`
+                  const html = /\.html?$/i.test(doc.filePath)
                   return (
                     <div key={key} className="flex items-center gap-2 py-1.5 min-w-0">
                       <div className="flex-1 min-w-0">
@@ -496,6 +497,11 @@ function DashboardsBlock({
                           <span className="text-[10px] text-[var(--color-text-muted)] truncate">
                             {doc.agentName ?? doc.workspaceName ?? ''}
                           </span>
+                          {doc.missing ? (
+                            <span className="text-[9px] uppercase tracking-wide text-[var(--color-status-warn-soft)] flex-shrink-0">
+                              missing
+                            </span>
+                          ) : null}
                         </div>
                         <p
                           className="text-[10px] text-[var(--color-text-muted)] truncate"
@@ -509,7 +515,7 @@ function DashboardsBlock({
                           {docNote.note}
                         </span>
                       )}
-                      {!readOnly && (
+                      {!readOnly && html && (
                         <button
                           type="button"
                           onClick={() => void addDocToDashboard(doc, active)}
@@ -570,23 +576,28 @@ function ProjectSettingsDetail({
   const registered = useProjectsStore((s) => s.projects)
   const revision = useProjectGroupsStore((s) => s.revision)
 
-  // ── Pinned-HTML browser data (the new html-docs route) ──────────────
+  // ── Workspace Resources picker (Add to dashboard is HTML-only) ─────
   const [docs, setDocs] = useState<ProjectGroupHtmlDoc[] | null>(null)
   const [docsError, setDocsError] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
-    fetchProjectGroupHtmlDocs(detail.id)
-      .then((d) => {
-        if (cancelled) return
-        setDocs(d)
-        setDocsError(null)
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setDocsError(errorMessage(e))
-      })
+    const load = (): void => {
+      fetchProjectGroupResources(detail.id)
+        .then((d) => {
+          if (cancelled) return
+          setDocs(d)
+          setDocsError(null)
+        })
+        .catch((e) => {
+          if (cancelled) return
+          setDocsError(errorMessage(e))
+        })
+    }
+    load()
+    const off = onWorkspaceResourcesChanged(() => load())
     return () => {
       cancelled = true
+      off()
     }
   }, [detail.id, revision])
 

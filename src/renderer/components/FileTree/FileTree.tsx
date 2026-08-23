@@ -19,8 +19,15 @@ import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
 import { isWebClient } from '@/lib/is-web'
 import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
-import { onFsChanged } from '@/stores/session-events'
+import { onFsChanged, onWorkspaceResourcesChanged } from '@/stores/session-events'
 import { useStyleStore } from '@/stores/style'
+import { useProjectsStore } from '@/stores/projects'
+import {
+  addWorkspaceResource,
+  fetchWorkspaceResources,
+  removeWorkspaceResource,
+  type WorkspaceResource,
+} from '@/components/Projects/projects-api'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -701,7 +708,36 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   ]
 
   const [aiConfigEntries, setAiConfigEntries] = useState<FileEntry[]>([])
-  const [aiConfigCollapsed, setAiConfigCollapsed] = useState(false)
+  const [aiConfigCollapsed, setAiConfigCollapsed] = useState(true)
+
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
+  const [workspaceResources, setWorkspaceResources] = useState<WorkspaceResource[]>([])
+  const [resourcesCollapsed, setResourcesCollapsed] = useState(true)
+
+  const loadWorkspaceResources = useCallback(async () => {
+    if (!activeProjectId) {
+      setWorkspaceResources([])
+      return
+    }
+    try {
+      const rows = await fetchWorkspaceResources(activeProjectId)
+      setWorkspaceResources(rows)
+    } catch {
+      setWorkspaceResources([])
+    }
+  }, [activeProjectId])
+
+  useEffect(() => {
+    void loadWorkspaceResources()
+  }, [loadWorkspaceResources])
+
+  useEffect(() => {
+    return onWorkspaceResourcesChanged((e) => {
+      if (!activeProjectId || e.workspaceId === activeProjectId) {
+        void loadWorkspaceResources()
+      }
+    })
+  }, [activeProjectId, loadWorkspaceResources])
 
   const loadAiConfig = useCallback(async () => {
     try {
@@ -1465,6 +1501,12 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       isWebClient() || useConnectHostStore.getState().activeHost !== 'local'
 
     const items = [
+      ...(!isDir && isSingle
+        ? [
+            { id: 'add-resource', label: 'Add to Resources' },
+            { id: 'separator-resource', label: '', type: 'separator' },
+          ]
+        : []),
       ...(isDir && isSingle
         ? [
             { id: 'new-file', label: 'New File' },
@@ -1502,7 +1544,27 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
     const clickedId = await showContextMenu(items)
 
-    if (clickedId === 'open-finder') {
+    if (clickedId === 'add-resource') {
+      const workspace = activeProjectId
+      if (!workspace) {
+        useToastStore.getState().addToast('No active workspace', 'error')
+        return
+      }
+      const fileName = entry.name
+      setWorkspaceResources((prev) => {
+        if (prev.some((r) => r.filePath === entry.path)) return prev
+        return [...prev, { filePath: entry.path, fileName, missing: false }]
+      })
+      try {
+        await addWorkspaceResource(workspace, entry.path)
+      } catch (err) {
+        void loadWorkspaceResources()
+        useToastStore.getState().addToast(
+          `Add to Resources failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        )
+      }
+    } else if (clickedId === 'open-finder') {
       await daemonCliPost('fs/open-finder', { target: entry.path })
     } else if (clickedId === 'copy-path') {
       await navigator.clipboard.writeText(entry.path).catch((err) => console.warn('[file-tree] clipboard write', err))
@@ -1559,7 +1621,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       await loadDir(entry.path)
       setNewEntryState({ parentPath: entry.path, isDirectory: true })
     }
-  }, [handleDelete, handleDuplicate, handlePaste, loadDir])
+  }, [handleDelete, handleDuplicate, handlePaste, loadDir, activeProjectId, loadWorkspaceResources])
 
   // Load root on first expand
   const rootEntries = cache.get(rootPath)
@@ -1771,6 +1833,78 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
           )}
         </div>
       )}
+
+      {/* Workspace Resources — always show the header (even when empty). */}
+      <div className="border-b border-[var(--color-border)]">
+        <button
+          className="w-full h-9 px-3 flex items-center gap-1.5 text-left text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+          onClick={() => setResourcesCollapsed((prev) => !prev)}
+        >
+          <svg
+            className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${resourcesCollapsed ? '' : 'rotate-90'}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+          <span className="flex-1">Workspace Resources</span>
+          {workspaceResources.length > 0 && (
+            <span className="text-[10px] font-mono tabular-nums normal-case tracking-normal">
+              {workspaceResources.length}
+            </span>
+          )}
+        </button>
+        {!resourcesCollapsed && (
+          <div className="px-1 pb-2">
+            {workspaceResources.length === 0 ? (
+              <p className="px-2 py-1 text-[11px] text-[var(--color-text-muted)]">
+                Right-click a file → Add to Resources
+              </p>
+            ) : (
+              workspaceResources.map((row) => (
+                <button
+                  key={row.filePath}
+                  className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] text-left text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)] transition-colors"
+                  onClick={() => {
+                    useFileSelectionStore.getState().select(row.filePath)
+                    useTabsStore.getState().openFileAsTab(row.filePath)
+                  }}
+                  onContextMenu={async (e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    const id = await showContextMenu([{ id: 'remove', label: 'Remove' }])
+                    if (id !== 'remove') return
+                    setWorkspaceResources((prev) => prev.filter((r) => r.filePath !== row.filePath))
+                    if (!activeProjectId) return
+                    try {
+                      await removeWorkspaceResource(activeProjectId, row.filePath)
+                    } catch (err) {
+                      void loadWorkspaceResources()
+                      useToastStore.getState().addToast(
+                        `Remove failed: ${err instanceof Error ? err.message : String(err)}`,
+                        'error',
+                      )
+                    }
+                  }}
+                  title={row.filePath}
+                >
+                  <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
+                    <FileIcon name={row.fileName} />
+                  </span>
+                  <span className="truncate flex-1">{row.fileName}</span>
+                  {row.missing ? (
+                    <span className="flex-shrink-0 text-[9px] uppercase tracking-wide text-[var(--color-status-warn-soft)]">
+                      missing
+                    </span>
+                  ) : null}
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </div>
 
       {/* AI Config section */}
       {aiConfigEntries.length > 0 && (

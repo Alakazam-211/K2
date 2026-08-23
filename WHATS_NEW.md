@@ -3,6 +3,21 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.107 — Workspace Resources; pinned-chat icon stays put
+
+**Resources** are files you pick, not whatever HTML tab happens to be pinned. In the Files tree, right-click a file → **Add to Resources**. The Files drawer has **Workspace Resources** at the top (Environment and AI Config stay, all three start collapsed). Those same files show in the project **Resources** drawer. Click or drag one onto the project dashboard: HTML still uses the sandboxed page; CSV/PDF/and the rest open in the file viewer **on the dashboard**, not as a new Agents tab. Right-click → **Remove** in either drawer. Existing pinned HTML is copied into Resources once so nothing vanishes; pinning a tab no longer *defines* the list.
+
+The closed pinned-chat session control shows the same provider icon as the dropdown rows, next to the name.
+
+### What to try
+
+1. Files tree → right-click a CSV → Add to Resources. Expand **Workspace Resources**; AI Config and Environment start collapsed.
+2. Open a project: that file is in **Resources**. Click it — it should land as a dashboard pane, not jump to Agents. Drag to split.
+3. Pin an HTML tab: the tab pins; it should **not** appear as a new Resource. Pins from before this update should already be in the list.
+4. Switch the pinned chat to another agent: after the list closes, the icon next to the title should still match that agent.
+
+---
+
 ## 0.40.106 — Idle agents sleep; Settings drag stays connected
 
 Workspaces stay **Active for N hours** after something actually needed them (you visited, a Project or ticket woke them, a heartbeat fired, or another agent messaged them). After that they sleep and free RAM; the next need `--resume`s. A daemon reboot does **not** respawn the whole fleet. The Active bar Dismiss works even if that agent is running.

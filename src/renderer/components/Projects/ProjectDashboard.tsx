@@ -66,7 +66,11 @@ import {
   wakeCanonicalMemberSession,
   type MemberSessionPhase,
 } from './wake-member-session'
-import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
+import {
+  FileViewerPane,
+  getFileCategory,
+  hasSelectionWithin,
+} from '@/components/FileViewerPane/FileViewerPane'
 import { Surface } from '@/components/ui'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 import {
@@ -81,6 +85,7 @@ import {
   insertEdge,
   isHtmlDocPane,
   isTerminalPane,
+  paneKey,
   observeOwnSave,
   observeRevision,
   readingOrder,
@@ -398,7 +403,25 @@ type DocPhase =
   | { kind: 'ready'; content: string }
   | { kind: 'missing' }
 
-function HtmlDocPane({ filePath }: { filePath: string }): React.JSX.Element {
+function HtmlDocPane({
+  filePath,
+  workspaceId,
+}: {
+  filePath: string
+  workspaceId: string
+}): React.JSX.Element {
+  if (getFileCategory(filePath) !== 'html') {
+    const id = `dash-fv:${workspaceId}:${filePath}`
+    return (
+      <div className="h-full min-h-0 overflow-hidden">
+        <FileViewerPane filePath={filePath} paneId={id} tabId={id} />
+      </div>
+    )
+  }
+  return <HtmlIframePane filePath={filePath} />
+}
+
+function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null)
   const [phase, setPhase] = useState<DocPhase>({ kind: 'loading' })
   const fileName = filePath.split('/').pop() || filePath
@@ -611,6 +634,25 @@ export default function ProjectDashboard({
   useEffect(() => {
     if (!paneRequest) return
     useProjectGroupsStore.getState().clearPaneRequest()
+    if (paneRequest.filePath) {
+      const spec = {
+        kind: 'htmlDoc' as const,
+        workspaceId: paneRequest.workspaceId,
+        filePath: paneRequest.filePath,
+      }
+      const existing = paneKey(spec)
+      const already = readingOrder(rootRef.current).some(
+        (p) => isHtmlDocPane(p) && p.workspaceId === spec.workspaceId && p.filePath === spec.filePath,
+      )
+      if (already) {
+        flashFocus(existing)
+        return
+      }
+      if (noteViewerInteractionBlocked()) return
+      applyRoot(insertEdge(rootRef.current, 'right', spec), true)
+      flashFocus(existing)
+      return
+    }
     const existing = findTerminalPaneId(rootRef.current, paneRequest.workspaceId)
     if (existing !== null) {
       flashFocus(existing)
@@ -1010,7 +1052,7 @@ export default function ProjectDashboard({
                       }
                     />
                   ) : isHtmlDocPane(pane) ? (
-                    <HtmlDocPane filePath={pane.filePath} />
+                    <HtmlDocPane filePath={pane.filePath} workspaceId={pane.workspaceId} />
                   ) : (
                     /* §6.3 forward-compat: inert placeholder; the
                        pane object round-trips untouched on save. */

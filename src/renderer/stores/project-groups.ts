@@ -120,6 +120,8 @@ function readNavCollapsed(): boolean {
 export interface MemberPaneRequest {
   workspaceId: string
   nonce: number
+  /** When set, open/focus an `htmlDoc` resource pane instead of the member terminal. */
+  filePath?: string
 }
 
 interface ProjectGroupsState {
@@ -174,6 +176,8 @@ interface ProjectGroupsState {
   setDashPaneNumbers: (numbers: Record<string, number>) => void
   /** Member-row click → the dashboard opens/focuses that pane. */
   requestMemberPane: (workspaceId: string) => void
+  /** Open or focus a resource file pane on the mounted project dashboard. */
+  requestFileDocPane: (workspaceId: string, filePath: string) => void
   clearPaneRequest: () => void
 }
 
@@ -297,6 +301,15 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   },
   requestMemberPane: (workspaceId) => {
     set((s) => ({ paneRequest: { workspaceId, nonce: (s.paneRequest?.nonce ?? 0) + 1 } }))
+  },
+  requestFileDocPane: (workspaceId, filePath) => {
+    set((s) => ({
+      paneRequest: {
+        workspaceId,
+        filePath,
+        nonce: (s.paneRequest?.nonce ?? 0) + 1,
+      },
+    }))
   },
   clearPaneRequest: () => set({ paneRequest: null }),
 }))

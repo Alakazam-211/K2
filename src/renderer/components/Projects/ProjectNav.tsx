@@ -15,8 +15,6 @@ import { useProjectsStore } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
-import { useTabsStore } from '@/stores/tabs'
-import { usePageViewStore } from '@/stores/page-view'
 import { useWindowModeStore, noteViewerInteractionBlocked } from '@/stores/window-mode'
 import { showContextMenu } from '@/lib/context-menu'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
@@ -331,46 +329,9 @@ function MemberRow({
 
 // ── Resources drawer (Workspace Resources union from member workspaces) ─
 
-function isHtmlFilePath(filePath: string): boolean {
-  return /\.html?$/i.test(filePath)
-}
-
-/** Switch to the member workspace and open the file as a tab (R9). */
-function openResourceInWorkspace(doc: ProjectGroupHtmlDoc): void {
-  usePageViewStore.getState().setPage('agents')
-  const projects = useProjectsStore.getState()
-  const project = projects.projects.find((p) => p.id === doc.workspaceId)
-  if (!project) {
-    useToastStore.getState().addToast('Workspace not found', 'error')
-    return
-  }
-  const ws = project.workspaces[0]
-  const already =
-    projects.activeProjectId === project.id &&
-    (!ws || projects.activeWorkspaceId === ws.id)
-  const open = (): void => {
-    useTabsStore.getState().openFileAsTab(doc.filePath)
-  }
-  if (already) {
-    open()
-    return
-  }
-  if (ws) {
-    projects.setActiveWorkspace(project.id, ws.id)
-  } else {
-    projects.setActiveProject(project.id)
-  }
-  const key = ws ? `${project.id}:${ws.id}` : null
-  const started = Date.now()
-  const tick = (): void => {
-    const tabs = useTabsStore.getState()
-    if (!key || tabs.activeWorkspaceKey === key || Date.now() - started > 4000) {
-      open()
-      return
-    }
-    window.setTimeout(tick, 50)
-  }
-  window.setTimeout(tick, 0)
+/** Click a resource → open/focus it on the mounted project dashboard. */
+function openResourceOnDashboard(doc: ProjectGroupHtmlDoc): void {
+  useProjectGroupsStore.getState().requestFileDocPane(doc.workspaceId, doc.filePath)
 }
 
 function ResourceRow({
@@ -388,7 +349,6 @@ function ResourceRow({
   const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const suppressClickRef = useRef(false)
   const owner = doc.agentName ?? doc.workspaceName ?? ''
-  const html = isHtmlFilePath(doc.filePath)
 
   const handleClick = (): void => {
     if (suppressClickRef.current) {
@@ -396,13 +356,12 @@ function ResourceRow({
       return
     }
     if (noteViewerInteractionBlocked()) return
-    openResourceInWorkspace(doc)
+    openResourceOnDashboard(doc)
   }
 
   const handleMouseDown = (e: React.MouseEvent): void => {
     if (e.button !== 0) return
     if (noteViewerInteractionBlocked()) return
-    if (!html) return
     const startX = e.clientX
     const startY = e.clientY
     let started = false
@@ -1168,7 +1127,6 @@ function RailResource({
   const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const suppressClickRef = useRef(false)
   const label = doc.fileName || doc.filePath.split('/').pop() || 'file'
-  const html = isHtmlFilePath(doc.filePath)
 
   const handleClick = (): void => {
     if (suppressClickRef.current) {
@@ -1176,13 +1134,12 @@ function RailResource({
       return
     }
     if (noteViewerInteractionBlocked()) return
-    openResourceInWorkspace(doc)
+    openResourceOnDashboard(doc)
   }
 
   const handleMouseDown = (e: React.MouseEvent): void => {
     if (e.button !== 0) return
     if (noteViewerInteractionBlocked()) return
-    if (!html) return
     const startX = e.clientX
     const startY = e.clientY
     let started = false

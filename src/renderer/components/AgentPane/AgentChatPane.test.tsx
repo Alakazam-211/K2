@@ -326,6 +326,28 @@ describe('Slice 4 — multi-agent canonical-session dropdown', () => {
     ])
   })
 
+  it('shows the current session’s provider icon on the closed dropdown trigger', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string): Promise<unknown> => {
+      if (route === 'chat/list') {
+        return [
+          { sessionId: 'claude-1', title: 'Current', timestamp: 9, messageCount: 3, provider: 'pi' },
+          ...MIXED_ROWS,
+        ]
+      }
+      if (route === 'chat/custom-names') return {}
+      return undefined
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+
+    const trigger = screen.getByLabelText('Switch pinned chat session')
+    await waitFor(() => {
+      const icon = trigger.querySelector('[data-testid="provider-icon"]')
+      expect(icon).not.toBeNull()
+      expect(icon?.getAttribute('data-provider')).toBe('pi')
+    })
+  })
+
   it('picking a NON-claude row persists its provider via set-chat-session then respawns', async () => {
     h.daemonCliGet.mockImplementation(async (route: string): Promise<unknown> => {
       if (route === 'chat/list') return MIXED_ROWS

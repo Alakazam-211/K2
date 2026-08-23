@@ -237,12 +237,16 @@ function ChatHeader({
     return () => { cancelled = true }
   }, [projectPath, currentSessionId, historyOpen, historyEpoch])
 
-  const currentChatTitle = useMemo<string>(() => {
-    if (!currentSessionId) return 'New chat'
-    const found = historySessions.find((s) => s.sessionId === currentSessionId)
-    if (found) return chatDisplayName(found) || 'New chat'
-    return 'New chat'
-  }, [historySessions, currentSessionId])
+  const currentSession = useMemo(
+    () =>
+      currentSessionId
+        ? historySessions.find((s) => s.sessionId === currentSessionId)
+        : undefined,
+    [historySessions, currentSessionId],
+  )
+  const currentChatTitle = currentSession
+    ? chatDisplayName(currentSession) || 'New chat'
+    : 'New chat'
 
   return (
     <div className="px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0 flex items-center gap-3 relative">
@@ -263,6 +267,9 @@ function ChatHeader({
         aria-expanded={historyOpen}
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer min-w-0"
       >
+        {currentSession && (
+          <ProviderIcon provider={currentSession.provider} size={12} />
+        )}
         <span className="truncate max-w-[28ch]">{currentChatTitle}</span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">
           <path d={historyOpen ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />

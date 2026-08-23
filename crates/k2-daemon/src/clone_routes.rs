@@ -360,6 +360,8 @@ pub fn unpack_and_register(
             None,                          // heartbeat_mode
             None,                          // heartbeat_schedule
             None,                          // default_agent — the pulled row keeps its stamp-on-register value
+            None,                          // default_model
+            None,                          // force_model_on_resume
         )
         .map_err(|e| format!("apply settings: {e}"))?
     } else {

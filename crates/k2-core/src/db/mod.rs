@@ -824,6 +824,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0105_workspace_resources",
             include_str!("../../drizzle_sql/0105_workspace_resources.sql"),
         ),
+        // 0106 — per-workspace default model + force-on-resume + spawn-queue model.
+        (
+            "0106_workspace_default_model",
+            include_str!("../../drizzle_sql/0106_workspace_default_model.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1305,7 +1310,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0105_workspace_resources",
+            last_name, "0106_workspace_default_model",
             "unexpected last migration name: {last_name}"
         );
     }

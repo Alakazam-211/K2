@@ -26,6 +26,26 @@ precedence (`crates/k2-core/src/workspace/agent_resolve.rs`):
 3. The global default agent (Settings).
 4. The literal fallback: `claude --dangerously-skip-permissions`.
 
+**Which model** is a separate axis (`crates/k2-core/src/workspace/model_splice.rs`).
+Precedence: API request `model` (non-empty) → workspace `default_model` → the
+preset command / harness config (today). Empty both = **byte-identical** argv.
+
+| Binary | Flag |
+|---|---|
+| `claude` | `--model <id>` |
+| `codex` | `-m <id>` (existing `-c model_reasoning_effort=…` is not a pin) |
+| `grok` | `-m <id>` |
+| `gemini` | `-m <id>` |
+| `cursor-agent` / `agent` | `--model <id>` |
+| `pi` | `--model <id>` |
+| `hermes` | `--model <id>` after `chat`; bare `hermes` is ignored |
+
+Unknown binaries get no invented flags. A preset that already pins `--model` /
+`-m` / `-c model=` wins over the workspace default; an API `model` still replaces.
+Dead resume does **not** re-apply the workspace default unless **Force this model
+when resuming a session** is checked; API `model` on resume still applies. Live
+follow-up inject never rewrites argv.
+
 Levels 2–3 resolve against **enabled** presets. This is the classic footgun:
 "hire a codex agent" without setting the workspace default silently launches
 Claude at level 4. Fix it at hire time:

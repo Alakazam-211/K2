@@ -397,6 +397,8 @@ pub fn projects_update(
     heartbeat_mode: Option<String>,
     heartbeat_schedule: Option<Option<&str>>,
     default_agent: Option<Option<&str>>,
+    default_model: Option<Option<&str>>,
+    force_model_on_resume: Option<i64>,
 ) -> Result<Project, String> {
     // Pre-update: if agent_mode is changing, archive orphan agents for
     // the project's path BEFORE applying the swap. Uses the same in-
@@ -440,6 +442,8 @@ pub fn projects_update(
         heartbeat_mode,
         heartbeat_schedule,
         default_agent,
+        default_model,
+        force_model_on_resume,
     )
     .map_err(|e| e.to_string())?;
     Project::get(&conn, id).map_err(|e| e.to_string())
@@ -474,7 +478,7 @@ pub fn projects_reorder(ids: &[String]) -> Result<(), String> {
         Project::update(
             &conn,
             id,
-            None, None, None, Some(i as i64), None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, Some(i as i64), None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         )
         .map_err(|e| e.to_string())?;
     }
@@ -705,7 +709,7 @@ fn reconcile_focus_group(
         project_id,
         None, None, None, None, None, None,
         Some(Some(group_id.as_str())),
-        None, None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None, None, None, None,
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -863,7 +867,7 @@ pub fn projects_enable_worktrees(project_id: &str) -> Result<Project, String> {
     with_transaction(&conn, || {
         Project::update(
             &conn, project_id, None, None, None, None, Some(1), None, None, None, None, None, None,
-            None, None, None, None, None,
+            None, None, None, None, None, None, None,
         )
         .map_err(|e| e.to_string())?;
 
@@ -950,7 +954,7 @@ pub fn projects_get_icon(path: &str, project_id: Option<&str>) -> Result<IconRes
                 pid,
                 None, None, None, None, None,
                 Some(Some(data_url.as_str())),
-                None, None, None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None, None, None, None, None,
             )
             .ok();
         }
@@ -976,7 +980,7 @@ pub fn projects_detect_icon(project_id: &str) -> Result<IconResult, String> {
             project_id,
             None, None, None, None, None,
             Some(Some(data_url.as_str())),
-            None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None,
         )
         .map_err(|e| e.to_string())?;
         Ok(IconResult {
@@ -1000,7 +1004,7 @@ pub fn projects_set_icon(project_id: &str, data_url: &str) -> Result<IconResult,
         project_id,
         None, None, None, None, None,
         Some(Some(data_url)),
-        None, None, None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None, None, None, None, None,
     )
     .map_err(|e| e.to_string())?;
     Ok(IconResult {
@@ -1017,7 +1021,7 @@ pub fn projects_clear_icon(project_id: &str) -> Result<(), String> {
         project_id,
         None, None, None, None, None,
         Some(None),
-        None, None, None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None, None, None, None, None,
     )
     .map_err(|e| e.to_string())
 }
@@ -1272,7 +1276,7 @@ mod tests {
                 &created.id,
                 Some("StampMe Renamed"),
                 None, None, None, None, None, None, None, None, None, None, None, None,
-                None,
+                None, None, None,
             )
             .expect("projects_update ok");
             assert_eq!(updated.name, "StampMe Renamed");
@@ -1288,6 +1292,7 @@ mod tests {
                 &created.id,
                 None, None, None, None, None, None, None, None, None, None, None, None, None,
                 Some(Some("claude")),
+                None, None,
             )
             .expect("projects_update set override ok");
             assert_eq!(
@@ -1299,12 +1304,32 @@ mod tests {
                 &created.id,
                 None, None, None, None, None, None, None, None, None, None, None, None, None,
                 Some(None),
+                None, None,
             )
             .expect("projects_update clear ok");
             assert_eq!(
                 cleared.default_agent, None,
                 "Some(None) must clear back to NULL = inherit global"
             );
+
+            let with_model = projects_update(
+                &created.id,
+                None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+                Some(Some("opus")),
+                Some(1),
+            )
+            .expect("projects_update set default_model ok");
+            assert_eq!(with_model.default_model.as_deref(), Some("opus"));
+            assert_eq!(with_model.force_model_on_resume, 1);
+            let cleared_model = projects_update(
+                &created.id,
+                None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+                Some(Some("")),
+                Some(0),
+            )
+            .expect("projects_update clear default_model ok");
+            assert_eq!(cleared_model.default_model, None);
+            assert_eq!(cleared_model.force_model_on_resume, 0);
             created
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));

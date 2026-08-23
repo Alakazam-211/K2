@@ -134,6 +134,15 @@ pub struct Project {
     /// not been backfilled yet; writers always mint one.
     #[serde(default)]
     pub handle: String,
+    /// Per-workspace default model id (migration 0106). Opaque string
+    /// passed to the harness (`opus`, `gpt-5.3-codex`, …). `None` / empty
+    /// = unset → no workspace model splice.
+    #[serde(default)]
+    pub default_model: Option<String>,
+    /// When 1, K2-direct dead resume also splices `default_model`.
+    /// Default 0 (harness keeps the transcript's model).
+    #[serde(default)]
+    pub force_model_on_resume: i64,
 }
 
 impl Project {
@@ -149,7 +158,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -182,6 +191,11 @@ impl Project {
                 hide_api_sessions: row.get(24).unwrap_or(0),
                 completion_sound_enabled: row.get(25).unwrap_or(1),
                 handle: row.get::<_, Option<String>>(26).ok().flatten().unwrap_or_default(),
+                default_model: row.get::<_, Option<String>>(27).ok().flatten().and_then(|s| {
+                    let t = s.trim();
+                    if t.is_empty() { None } else { Some(t.to_string()) }
+                }),
+                force_model_on_resume: row.get::<_, i64>(28).unwrap_or(0),
             })
         })?;
         rows.collect()
@@ -192,7 +206,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -225,6 +239,11 @@ impl Project {
                     hide_api_sessions: row.get(24).unwrap_or(0),
                     completion_sound_enabled: row.get(25).unwrap_or(1),
                     handle: row.get::<_, Option<String>>(26).ok().flatten().unwrap_or_default(),
+                    default_model: row.get::<_, Option<String>>(27).ok().flatten().and_then(|s| {
+                        let t = s.trim();
+                        if t.is_empty() { None } else { Some(t.to_string()) }
+                    }),
+                    force_model_on_resume: row.get::<_, i64>(28).unwrap_or(0),
                 })
             },
         )
@@ -269,6 +288,8 @@ impl Project {
         heartbeat_mode: Option<String>,
         heartbeat_schedule: Option<Option<&str>>,
         default_agent: Option<Option<&str>>,
+        default_model: Option<Option<&str>>,
+        force_model_on_resume: Option<i64>,
     ) -> Result<()> {
         // Wrap in transaction so all field updates succeed or fail atomically.
         // Without this, agent_mode and agent_enabled can diverge if the process crashes mid-update.
@@ -333,6 +354,18 @@ impl Project {
         // global default.
         if let Some(v) = default_agent {
             tx.execute("UPDATE projects SET default_agent = ?1 WHERE id = ?2", params![v, id])?;
+        }
+        // 0106 — per-workspace default model. `Some(Some(v))` sets it
+        // (empty/whitespace clears to NULL); `Some(None)` clears.
+        if let Some(v) = default_model {
+            let stored = v.map(str::trim).filter(|s| !s.is_empty());
+            tx.execute("UPDATE projects SET default_model = ?1 WHERE id = ?2", params![stored, id])?;
+        }
+        if let Some(v) = force_model_on_resume {
+            tx.execute(
+                "UPDATE projects SET force_model_on_resume = ?1 WHERE id = ?2",
+                params![v, id],
+            )?;
         }
         tx.commit()?;
         Ok(())
@@ -3793,6 +3826,7 @@ mod unit_tests {
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
             None,
             Some(Some(preset_id)),
+            None, None,
         )
         .unwrap();
         assert_eq!(
@@ -3809,6 +3843,7 @@ mod unit_tests {
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
             None,
             Some(Some("claude")),
+            None, None,
         )
         .unwrap();
         assert_eq!(
@@ -3824,6 +3859,7 @@ mod unit_tests {
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
             None,
             Some(None),
+            None, None,
         )
         .unwrap();
         assert_eq!(
@@ -3839,6 +3875,7 @@ mod unit_tests {
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
             None,
             Some(Some(preset_id)),
+            None, None,
         )
         .unwrap();
         Project::update(
@@ -3846,7 +3883,7 @@ mod unit_tests {
             &id,
             Some("renamed"),
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None,
+            None, None, None,
         )
         .unwrap();
         let p = Project::get(&conn, &id).unwrap();
@@ -3856,6 +3893,50 @@ mod unit_tests {
             Some(preset_id),
             "an unrelated update must not touch default_agent"
         );
+    }
+
+    #[test]
+    fn project_default_model_update_roundtrip_set_and_clear() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-dm-rt");
+
+        Project::update(
+            &conn,
+            &id,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None,
+            Some(Some("opus")),
+            Some(1),
+        )
+        .unwrap();
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.default_model.as_deref(), Some("opus"));
+        assert_eq!(p.force_model_on_resume, 1);
+
+        Project::update(
+            &conn,
+            &id,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None,
+            Some(Some("  ")),
+            None,
+        )
+        .unwrap();
+        assert_eq!(Project::get(&conn, &id).unwrap().default_model, None);
+        assert_eq!(Project::get(&conn, &id).unwrap().force_model_on_resume, 1);
+
+        Project::update(
+            &conn,
+            &id,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None,
+            Some(None),
+            Some(0),
+        )
+        .unwrap();
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.default_model, None);
+        assert_eq!(p.force_model_on_resume, 0);
     }
 
     #[test]

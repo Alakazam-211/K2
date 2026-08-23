@@ -207,6 +207,8 @@ pub struct EnqueueRequest {
     pub cols: Option<u16>,
     pub rows: Option<u16>,
     pub client_request_id: Option<String>,
+    /// API model override persisted across enqueue → drain (D8).
+    pub model: Option<String>,
 }
 
 #[derive(Debug)]
@@ -243,6 +245,7 @@ struct SpawnJob {
     capabilities: Option<serde_json::Value>,
     cols: Option<u16>,
     rows: Option<u16>,
+    model: Option<String>,
 }
 
 // ── Public API ───────────────────────────────────────────────────────
@@ -307,8 +310,8 @@ pub fn enqueue(req: EnqueueRequest) -> Result<(String, usize), EnqueueError> {
         "INSERT INTO host_session_spawn_queue \
          (job_id, workspace_path, workspace_slug, principal_id, kind, session_id, \
           prompt, timeout_secs, capabilities_json, cols, rows, client_request_id, \
-          status, created_at, updated_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'queued',?13,?13)",
+          status, created_at, updated_at, model) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'queued',?13,?13,?14)",
         rusqlite::params![
             job_id,
             req.workspace_path,
@@ -323,6 +326,7 @@ pub fn enqueue(req: EnqueueRequest) -> Result<(String, usize), EnqueueError> {
             req.rows.map(|r| r as i64),
             req.client_request_id,
             now,
+            req.model,
         ],
     )
     .expect("spawn queue insert");
@@ -577,6 +581,7 @@ fn run_spawn(principal: &V1Principal, job: &SpawnJob) -> Result<String, (String,
         capabilities: job.capabilities.clone(),
         queue: None,
         client_request_id: None,
+        model: job.model.clone(),
     };
     let is_resume = job.kind == JobKind::DeadResume;
     let resume_target = job.session_id.clone();
@@ -707,7 +712,7 @@ fn peek_head(workspace_path: &str) -> Option<SpawnJob> {
     let conn = db.lock();
     conn.query_row(
         "SELECT job_id, workspace_path, workspace_slug, principal_id, kind, session_id, \
-                prompt, timeout_secs, capabilities_json, cols, rows \
+                prompt, timeout_secs, capabilities_json, cols, rows, model \
          FROM host_session_spawn_queue \
          WHERE workspace_path = ?1 AND status = 'queued' \
          ORDER BY rowid ASC LIMIT 1",
@@ -731,6 +736,7 @@ fn peek_head(workspace_path: &str) -> Option<SpawnJob> {
                 capabilities: caps,
                 cols: cols.map(|c| c as u16),
                 rows: rows.map(|r| r as u16),
+                model: r.get(11)?,
             })
         },
     )
@@ -944,6 +950,7 @@ mod tests {
             cols: None,
             rows: None,
             client_request_id: None,
+            model: None,
         }
     }
 
@@ -992,6 +999,25 @@ mod tests {
         for j in [&j1, &j2, &j3] {
             mark_terminal(j, JobStatus::Cancelled, None, None, None);
         }
+        disable_feature();
+    }
+
+    #[test]
+    fn enqueue_persists_model_through_peek_head() {
+        ensure_table();
+        enable_feature();
+        let (path, slug) = unique_ws("model");
+        let mut req = base_req(&path, &slug, "p-model");
+        req.model = Some("sonnet".into());
+        let (job_id, _) = enqueue(req).expect("enqueue with model");
+        let head = peek_head(&path).expect("queued head");
+        assert_eq!(head.job_id, job_id);
+        assert_eq!(
+            head.model.as_deref(),
+            Some("sonnet"),
+            "drain reconstruction must keep API model"
+        );
+        mark_terminal(&job_id, JobStatus::Cancelled, None, None, None);
         disable_feature();
     }
 

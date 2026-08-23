@@ -823,6 +823,11 @@ struct ProjectsUpdateBody {
     /// Some("...") sets it, Some("") clears to NULL (= inherit the global
     /// default), None leaves unchanged.
     default_agent: Option<String>,
+    /// 0106 — per-workspace default model (opaque harness id).
+    /// Some("...") sets it, Some("") clears to NULL, None leaves unchanged.
+    default_model: Option<String>,
+    /// 0106 — splice workspace default on dead resume (0/1). None leaves unchanged.
+    force_model_on_resume: Option<i64>,
 }
 
 pub fn handle_projects_update(body: &[u8]) -> CliResponse {
@@ -851,6 +856,13 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
             Some(a.as_str())
         }
     });
+    let default_model_param = b.default_model.as_ref().map(|a| {
+        if a.trim().is_empty() {
+            None
+        } else {
+            Some(a.as_str())
+        }
+    });
     // Workspace States retired: never write projects.tier_id.
     let result = pops::projects_update(
         &b.id,
@@ -868,6 +880,8 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
         b.heartbeat_mode,
         hb_schedule_param,
         default_agent_param,
+        default_model_param,
+        b.force_model_on_resume,
     );
     if result.is_ok() {
         emit_projects_changed();
@@ -1364,6 +1378,73 @@ mod projects_update_default_agent_tests {
             resp.body
         );
         assert_eq!(get_default_agent(&project_id), None);
+    }
+
+    fn get_default_model(project_id: &str) -> Option<String> {
+        let dbh = k2_core::db::shared();
+        let conn = dbh.lock();
+        k2_core::db::schema::Project::get(&conn, project_id)
+            .expect("project row must exist")
+            .default_model
+    }
+
+    fn get_force_model_on_resume(project_id: &str) -> i64 {
+        let dbh = k2_core::db::shared();
+        let conn = dbh.lock();
+        k2_core::db::schema::Project::get(&conn, project_id)
+            .expect("project row must exist")
+            .force_model_on_resume
+    }
+
+    #[test]
+    fn projects_update_sets_and_clears_default_model() {
+        let project_id = unique("dm");
+        seed_project(&project_id, &format!("/tmp/{project_id}"));
+        assert_eq!(get_default_model(&project_id), None);
+        assert_eq!(get_force_model_on_resume(&project_id), 0);
+
+        let body = serde_json::json!({
+            "id": project_id,
+            "defaultModel": "opus",
+            "forceModelOnResume": 1
+        })
+        .to_string();
+        let resp = handle_projects_update(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert!(
+            resp.body.contains("\"defaultModel\":\"opus\""),
+            "response must echo defaultModel: {}",
+            resp.body
+        );
+        assert!(
+            resp.body.contains("\"forceModelOnResume\":1"),
+            "response must echo forceModelOnResume: {}",
+            resp.body
+        );
+        assert_eq!(get_default_model(&project_id).as_deref(), Some("opus"));
+        assert_eq!(get_force_model_on_resume(&project_id), 1);
+
+        let body = serde_json::json!({ "id": project_id, "name": "Renamed" }).to_string();
+        let resp = handle_projects_update(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(get_default_model(&project_id).as_deref(), Some("opus"));
+        assert_eq!(get_force_model_on_resume(&project_id), 1);
+
+        let body = serde_json::json!({
+            "id": project_id,
+            "defaultModel": "",
+            "forceModelOnResume": 0
+        })
+        .to_string();
+        let resp = handle_projects_update(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert!(
+            resp.body.contains("\"defaultModel\":null"),
+            "cleared defaultModel must echo as null: {}",
+            resp.body
+        );
+        assert_eq!(get_default_model(&project_id), None);
+        assert_eq!(get_force_model_on_resume(&project_id), 0);
     }
 }
 

@@ -292,6 +292,22 @@ pub fn spawn_agent_session_v2_blocking(
         }
     }
 
+    // Workspace default model (K2-direct). After identity, before launch-param.
+    if let Some(cmd) = req.command.as_deref() {
+        if !cmd.trim().is_empty() {
+            let resume = k2_core::workspace::model_splice::args_look_like_dead_resume(
+                cmd,
+                &spawn_args,
+            );
+            k2_core::workspace::model_splice::splice_model_for_workspace_spawn(
+                &req.cwd,
+                cmd,
+                &mut spawn_args,
+                resume,
+            );
+        }
+    }
+
     // Fire-once launch-param AFTER identity splice so the positional
     // user prompt stays last (Claude argv). Durable args stay identity-only.
     let identity = spawn_args;

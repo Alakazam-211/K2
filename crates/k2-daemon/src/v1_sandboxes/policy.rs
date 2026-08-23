@@ -51,6 +51,10 @@ pub struct ApiSandboxRequest {
     /// Optional terminal height hint (clamped host-side).
     #[serde(default)]
     pub rows: Option<u16>,
+    /// Optional model override (prd-workspace-default-model). Empty = omit.
+    /// Ephemeral door: API only. Workspace-scoped door: API > workspace default.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Why the resolver REFUSED to produce a host-trusted request. Fail-closed: the
@@ -169,7 +173,18 @@ pub(crate) fn resolve_spawn(
         // `projects` row), so there is no configured preset to resolve — the
         // literal claude default stays (see STANDARD_CLAUDE_ARGS).
         command: Some("claude".to_string()),
-        args: Some(STANDARD_CLAUDE_ARGS.iter().map(|s| s.to_string()).collect()),
+        args: Some({
+            let base: Vec<String> = STANDARD_CLAUDE_ARGS.iter().map(|s| s.to_string()).collect();
+            k2_core::workspace::model_splice::decide_and_apply(
+                "claude",
+                &base,
+                req.model.as_deref(),
+                None,
+                false,
+                false,
+            )
+            .args
+        }),
         exec_args: None,
         cols,
         rows,
@@ -756,6 +771,20 @@ pub(crate) fn resolve_workspace_session(
     if resolved.is_claude() {
         k2_core::workspace::agent_resolve::ensure_flag(&mut args, CLAUDE_SKIP_PERMISSIONS_FLAG);
     }
+    let (ws_default, force_on_resume) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::model_splice::load_workspace_model(&conn, ws_path)
+    };
+    args = k2_core::workspace::model_splice::decide_and_apply(
+        &command,
+        &args,
+        req.model.as_deref(),
+        ws_default.as_deref(),
+        false,
+        force_on_resume,
+    )
+    .args;
 
     // (7) The workspace-scoped MIRROR mount spec — carried to the worker.
     let overlay = WorkspaceMountSpec {
@@ -831,6 +860,7 @@ mod tests {
             prompt: Some("ignored prompt".to_string()),
             cols: Some(120),
             rows: Some(40),
+            model: None,
         };
 
         let spawn = resolve_spawn(&principal, &req).expect("resolve must succeed");

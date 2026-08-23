@@ -362,6 +362,7 @@ fn deliver_into_live(
     principal_key: &str,
     capabilities: Option<&serde_json::Value>,
     timeout_secs: Option<u64>,
+    model: Option<&str>,
 ) -> CliResponse {
     crate::sandbox_reaper::stamp(sid);
 
@@ -429,6 +430,11 @@ fn deliver_into_live(
     });
     if let Some(meta) = caps_meta {
         body["capabilities"] = meta;
+    }
+    if model.map(str::trim).filter(|s| !s.is_empty()).is_some() {
+        body["modelSource"] = serde_json::json!("ignored_live");
+        body["modelIgnored"] = serde_json::json!("live_session");
+        body["modelApplied"] = serde_json::Value::Null;
     }
     CliResponse::ok_json(body.to_string())
 }
@@ -506,6 +512,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
                 &principal.display_id(),
                 req.capabilities.as_ref(),
                 req.timeout_secs,
+                req.model.as_deref(),
             );
         }
     }
@@ -555,6 +562,11 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
                 rows: req.rows,
                 client_request_id: req
                     .client_request_id
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+                model: req
+                    .model
                     .as_ref()
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty()),
@@ -643,7 +655,7 @@ pub(crate) fn spawn_host_session_after_acquire(
     // cwd pinned, command host-minted from the workspace's configured agent,
     // caller env/args dropped, principal key staged, danger flags stripped
     // unless the owner opted in.
-    let (mut spawn_req, launch_plan) =
+    let (mut spawn_req, launch_plan, model_decision) =
         policy::resolve_host_spawn(principal, ws_path, &session_id, is_resume, req);
     spawn_req.principal_key = Some(principal_key.clone());
     spawn_req.quota_workspace = Some(ws_path.to_string());
@@ -826,6 +838,12 @@ pub(crate) fn spawn_host_session_after_acquire(
     if let Some(meta) = caps_meta {
         body["capabilities"] = meta;
     }
+    body["modelApplied"] = match &model_decision.applied {
+        Some(id) => serde_json::json!(id),
+        None => serde_json::Value::Null,
+    };
+    body["modelSource"] = serde_json::to_value(model_decision.source)
+        .unwrap_or_else(|_| serde_json::json!("none"));
     CliResponse::ok_json(body.to_string())
 }
 
@@ -1151,6 +1169,7 @@ pub(crate) fn handle_v1_host_message(
         .get("timeout_secs")
         .and_then(|x| x.as_u64());
     let caps = v.get("capabilities").cloned();
+    let model = v.get("model").and_then(|x| x.as_str());
     deliver_into_live(
         &live.session_id,
         &sid_seg,
@@ -1160,6 +1179,7 @@ pub(crate) fn handle_v1_host_message(
         &requester,
         caps.as_ref(),
         timeout_secs,
+        model,
     )
 }
 

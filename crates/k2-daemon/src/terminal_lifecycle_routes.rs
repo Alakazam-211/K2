@@ -169,6 +169,20 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
                 &brief,
             );
         }
+        if let Some(cmd) = body.command.as_deref() {
+            if !cmd.trim().is_empty() {
+                let resume = k2_core::workspace::model_splice::args_look_like_dead_resume(
+                    cmd,
+                    &spawn_args,
+                );
+                k2_core::workspace::model_splice::splice_model_for_workspace_spawn(
+                    &body.cwd,
+                    cmd,
+                    &mut spawn_args,
+                    resume,
+                );
+            }
+        }
         if minted {
             passport_sid = Some(sid);
         }

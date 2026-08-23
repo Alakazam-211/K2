@@ -112,6 +112,10 @@ pub struct ApiHostSessionRequest {
     /// the same principal+workspace returns the same `jobId` while open.
     #[serde(default, alias = "clientRequestId")]
     pub client_request_id: Option<String>,
+    /// Optional model override for this spawn (prd-workspace-default-model).
+    /// Empty/whitespace = omit. Live follow-up ignores this (cannot switch mid-PTY).
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// The legacy hardcoded FLOOR of known auto-approve flags. Since W2
@@ -256,7 +260,7 @@ pub(crate) fn resolve_host_spawn(
     session_id: &SessionId,
     resume: bool,
     req: &ApiHostSessionRequest,
-) -> (SpawnRequest, LaunchPromptPlan) {
+) -> (SpawnRequest, LaunchPromptPlan, k2_core::workspace::model_splice::ModelDecision) {
     let sid = session_id.to_string();
 
     // (1) The workspace's configured agent command — the de-generalization
@@ -360,6 +364,23 @@ pub(crate) fn resolve_host_spawn(
             args = preminted;
         }
     }
+
+    // (3b) Model splice — AFTER identity, BEFORE launch-param so `--model`
+    // rides both durable args and exec_args. API `model` > workspace default.
+    let (ws_default, force_on_resume) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::model_splice::load_workspace_model(&conn, ws_path)
+    };
+    let model_decision = k2_core::workspace::model_splice::decide_and_apply(
+        &command,
+        &args,
+        req.model.as_deref(),
+        ws_default.as_deref(),
+        resume,
+        force_on_resume,
+    );
+    args = model_decision.args.clone();
 
     // (4) Host-minted agent name — same anti-hijack namespace as the sandbox
     // doors; also what v2_session_map keys the `backend:"host"` SessionAdded
@@ -499,7 +520,7 @@ pub(crate) fn resolve_host_spawn(
         // equals the conversation id spliced into the agent argv above.
         forced_session_id: Some(*session_id),
     };
-    (spawn, plan)
+    (spawn, plan, model_decision)
 }
 
 #[cfg(test)]
@@ -552,7 +573,7 @@ mod tests {
         insert_project("v1host-policy-default", ws_path);
         let sid = SessionId::new();
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &api("key-1", Some("sk-ant-host-key")),
             ws_path,
             &sid,
@@ -614,7 +635,7 @@ mod tests {
         .expect("set opt-out");
         let sid = SessionId::new();
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &sid,
@@ -650,7 +671,7 @@ mod tests {
         insert_project("v1host-policy-resume", ws_path);
         let sid = SessionId::new();
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &sid,
@@ -696,7 +717,7 @@ mod tests {
             .expect("set default_agent");
         }
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &api("key-env", Some("sk-ant-principal-wins")),
             ws_path,
             &SessionId::new(),
@@ -734,7 +755,7 @@ mod tests {
         insert_project("v1host-policy-target", ws_path);
         let forced = SessionId::new();
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &forced,
@@ -776,7 +797,7 @@ mod tests {
         let ws_path = "/tmp/k2-v1host-policy-openai";
         insert_project("v1host-policy-openai", ws_path);
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &api_with_provider(
                 "key-oai",
                 Some("sk-oai-host-key"),
@@ -816,7 +837,7 @@ mod tests {
         let ws_path = "/tmp/k2-v1host-policy-google";
         insert_project("v1host-policy-google", ws_path);
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &api_with_provider("key-goo", Some("goog-key-1"), Some("google"), None),
             ws_path,
             &SessionId::new(),
@@ -844,7 +865,7 @@ mod tests {
         let ws_path = "/tmp/k2-v1host-policy-unkprov";
         insert_project("v1host-policy-unkprov", ws_path);
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &api_with_provider("key-unk", Some("sk-mystery"), Some("mystery-llm"), None),
             ws_path,
             &SessionId::new(),
@@ -873,7 +894,7 @@ mod tests {
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-blankkey";
         insert_project("v1host-policy-blankkey", ws_path);
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &api("key-b", Some("   ")),
             ws_path,
             &SessionId::new(),
@@ -968,7 +989,7 @@ mod tests {
             Some(r#"["--auto-yes"]"#),
         );
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &SessionId::new(),
@@ -1007,7 +1028,7 @@ mod tests {
             None,
         );
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &SessionId::new(),
@@ -1045,7 +1066,7 @@ mod tests {
         )
         .expect("set opt-in");
 
-        let (spawn, _) = resolve_host_spawn(
+        let (spawn, _, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &SessionId::new(),
@@ -1150,7 +1171,7 @@ mod tests {
         let sid = SessionId::new();
         let marker = "CALLER-COLD-PROMPT-MARKER-A1";
 
-        let (spawn, plan) = resolve_host_spawn(
+        let (spawn, plan, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &sid,
@@ -1198,7 +1219,7 @@ mod tests {
         let sid = SessionId::new();
         let marker = "CALLER-RESUME-PROMPT-MARKER-A2";
 
-        let (spawn, plan) = resolve_host_spawn(
+        let (spawn, plan, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &sid,
@@ -1239,7 +1260,7 @@ mod tests {
         let sid = SessionId::new();
         let marker = "CODEX-RESUME-PROMPT";
 
-        let (spawn, plan) = resolve_host_spawn(
+        let (spawn, plan, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &sid,
@@ -1277,7 +1298,7 @@ mod tests {
         let sid = SessionId::new();
         let marker = "PI-PROMPT";
 
-        let (spawn, plan) = resolve_host_spawn(
+        let (spawn, plan, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &sid,
@@ -1311,7 +1332,7 @@ mod tests {
         configure_custom_agent(ws_path, "hermes", None);
         let sid = SessionId::new();
 
-        let (spawn, plan) = resolve_host_spawn(
+        let (spawn, plan, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &sid,
@@ -1333,7 +1354,7 @@ mod tests {
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-lp-empty";
         insert_project("v1host-lp-empty", ws_path);
-        let (spawn, plan) = resolve_host_spawn(
+        let (spawn, plan, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &SessionId::new(),
@@ -1355,7 +1376,7 @@ mod tests {
         let ws_path = "/tmp/k2-v1host-lp-fireonce";
         insert_project("v1host-lp-fireonce", ws_path);
         let secret = "NEVER-IN-ARGS-JSON-OR-RECOVERY";
-        let (spawn, plan) = resolve_host_spawn(
+        let (spawn, plan, _) = resolve_host_spawn(
             &V1Principal::Owner,
             ws_path,
             &SessionId::new(),
@@ -1375,5 +1396,145 @@ mod tests {
         let recovered: Vec<String> =
             serde_json::from_str(&identity_json).expect("round-trip identity");
         assert!(!recovered.iter().any(|a| a.contains(secret)));
+    }
+
+    fn set_workspace_model(path: &str, model: &str, force: i64) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE projects SET default_model = ?1, force_model_on_resume = ?2 WHERE path = ?3",
+            rusqlite::params![model, force, path],
+        )
+        .expect("set workspace model");
+    }
+
+    #[test]
+    fn workspace_model_splices_claude_flag() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-ws-model";
+        insert_project("v1host-policy-ws-model", ws_path);
+        set_workspace_model(ws_path, "opus", 0);
+        let (spawn, _, decision) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        let args = spawn.args.as_deref().expect("args");
+        assert!(
+            args.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"),
+            "workspace default must splice --model opus; args={args:?}"
+        );
+        assert_eq!(
+            decision.source,
+            k2_core::workspace::model_splice::ModelSource::Workspace
+        );
+        assert_eq!(decision.applied.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn api_model_overrides_workspace() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-api-model";
+        insert_project("v1host-policy-api-model", ws_path);
+        set_workspace_model(ws_path, "opus", 0);
+        let (spawn, _, decision) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest {
+                model: Some("sonnet".into()),
+                ..Default::default()
+            },
+        );
+        let args = spawn.args.as_deref().expect("args");
+        assert!(
+            args.windows(2).any(|w| w[0] == "--model" && w[1] == "sonnet"),
+            "API model must win; args={args:?}"
+        );
+        assert!(!args.iter().any(|a| a == "opus"));
+        assert_eq!(
+            decision.source,
+            k2_core::workspace::model_splice::ModelSource::Api
+        );
+        assert_eq!(decision.applied.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
+    fn omit_both_matches_baseline_argv() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-omit-model";
+        insert_project("v1host-policy-omit-model", ws_path);
+        let sid = SessionId::new();
+        let (baseline, _, d1) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &sid,
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        let (again, _, d2) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &sid,
+            false,
+            &ApiHostSessionRequest {
+                model: Some("  ".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(baseline.args, again.args);
+        assert_eq!(d1.source, k2_core::workspace::model_splice::ModelSource::None);
+        assert_eq!(d2.source, k2_core::workspace::model_splice::ModelSource::None);
+        let args = baseline.args.as_deref().expect("args");
+        assert!(!args.iter().any(|a| a == "--model" || a == "-m"));
+    }
+
+    #[test]
+    fn resume_without_api_or_checkbox_does_not_splice() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-resume-model";
+        insert_project("v1host-policy-resume-model", ws_path);
+        set_workspace_model(ws_path, "opus", 0);
+        let (spawn, _, decision) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            true,
+            &ApiHostSessionRequest {
+                session: Some("sid-resume-1".into()),
+                ..Default::default()
+            },
+        );
+        let args = spawn.args.as_deref().expect("args");
+        assert!(!args.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"));
+        assert_eq!(decision.source, k2_core::workspace::model_splice::ModelSource::None);
+        assert_eq!(decision.applied, None);
+    }
+
+    #[test]
+    fn resume_with_force_checkbox_splices_workspace() {
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-policy-resume-force";
+        insert_project("v1host-policy-resume-force", ws_path);
+        set_workspace_model(ws_path, "opus", 1);
+        let (spawn, _, decision) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            true,
+            &ApiHostSessionRequest {
+                session: Some("sid-resume-2".into()),
+                ..Default::default()
+            },
+        );
+        let args = spawn.args.as_deref().expect("args");
+        assert!(args.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"));
+        assert_eq!(
+            decision.source,
+            k2_core::workspace::model_splice::ModelSource::Workspace
+        );
     }
 }

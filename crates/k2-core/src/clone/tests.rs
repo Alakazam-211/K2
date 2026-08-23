@@ -1037,6 +1037,8 @@ fn settings_captured_from_project_row() {
         None,                          // heartbeat_mode
         None,                          // heartbeat_schedule
         None,                          // default_agent
+        None,                          // default_model
+        None,                          // force_model_on_resume
     )
     .expect("set agent_mode + heartbeat");
 
@@ -1124,6 +1126,8 @@ fn settings_round_trip_through_bundle() {
         None,                          // heartbeat_mode
         None,                          // heartbeat_schedule
         None,                          // default_agent
+        None,                          // default_model
+        None,                          // force_model_on_resume
     )
     .expect("set agent_mode");
 

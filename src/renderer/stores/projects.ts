@@ -243,6 +243,10 @@ interface Project {
   // current global default when the row is created (non-retroactive).
   // Written via POST projects/update `defaultAgent` ('' clears to null).
   defaultAgent: string | null
+  // 0106 — per-workspace default model (opaque harness id). null = unset.
+  defaultModel?: string | null
+  // 0106 — splice default model on dead resume (0/1, default 0).
+  forceModelOnResume?: number
   // 0099 — hide auto-surfaced API host-session tabs (0/1, default 0).
   // Chat history still lists them. Written via workspace/set hide_api_sessions.
   hideApiSessions?: number

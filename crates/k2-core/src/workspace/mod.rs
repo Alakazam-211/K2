@@ -42,6 +42,8 @@ pub mod provider_resume;
 // Host-session launch-parameter prompt (interactive positional first turn /
 // dead-resume). Sibling of provider_resume — fire-once argv assembly only.
 pub mod provider_launch_prompt;
+// Workspace default model + API model override (ModelFlag splice table).
+pub mod model_splice;
 // Phase 2.5e: `claude --resume` / `--session-id` arg resolver for the
 // workspace's canonical chat session. Relocated from
 // `agents/resume_chat.rs` — operates on workspace_sessions, naturally

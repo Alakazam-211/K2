@@ -829,6 +829,48 @@ mod tests {
         assert_eq!(body["changed"], false, "re-run must converge: {body}");
     }
 
+    #[test]
+    fn workspace_set_writes_default_model_and_force_and_clears() {
+        let (name, path) = unique("defmodel");
+        insert_project(&name, &path);
+        assert_eq!(stored_value(&path, "default_model"), None, "starts NULL");
+        assert_eq!(
+            stored_value(&path, "force_model_on_resume").as_deref(),
+            Some("0"),
+            "force defaults to 0"
+        );
+
+        let resp = handle_workspace_set(&set_body(
+            &path,
+            serde_json::json!({
+                "default_model": "opus",
+                "force_model_on_resume": "1"
+            }),
+        ));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(body["changed"], true, "{body}");
+        assert_eq!(stored_value(&path, "default_model").as_deref(), Some("opus"));
+        assert_eq!(stored_value(&path, "force_model_on_resume").as_deref(), Some("1"));
+
+        let resp = handle_workspace_set(&set_body(
+            &path,
+            serde_json::json!({ "default_model": "" }),
+        ));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(
+            stored_value(&path, "default_model"),
+            None,
+            "empty string must clear default_model to NULL"
+        );
+
+        let resp = handle_workspace_set(&set_body(
+            &path,
+            serde_json::json!({ "force_model_on_resume": "2" }),
+        ));
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+    }
+
     /// GET on the POST-only route answers an explicit 405 through the
     /// read dispatch chain (feedback_post_only_route_guards).
     #[test]

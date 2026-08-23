@@ -4354,6 +4354,273 @@ EOF
     esac
 }
 
+# Workspace default model (prd-workspace-default-model-and-api-model-override-v1).
+#
+#   k2 workspace default-model get <ws>
+#   k2 workspace default-model set <ws> <model|clear>
+#
+# Storage: projects.default_model via POST /cli/workspace/set.
+cmd_workspace_default_model() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        get)
+            local target="${1:-}"
+            [[ -z "$target" ]] && {
+                echo "Usage: k2 workspace default-model get <workspace>" >&2
+                exit 2
+            }
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            cli_request "/cli/settings" "project=$(urlencode "$resolved_path")" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if isinstance(d, dict) and d.get("error"):
+    err = d["error"]
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % err, file=sys.stderr)
+    sys.exit(1)
+v = d.get("defaultModel")
+if v is None:
+    v = d.get("default_model")
+if v is None or (isinstance(v, str) and not v.strip()):
+    print("(unset)")
+else:
+    print(v)
+'
+            ;;
+        set)
+            local target="${1:-}"
+            local model="${2:-}"
+            [[ -z "$target" || -z "$model" ]] && {
+                echo "Usage: k2 workspace default-model set <workspace> <model|clear>" >&2
+                exit 2
+            }
+            local val="$model"
+            case "$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')" in
+                clear|unset|none|"") val="" ;;
+            esac
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            local body
+            body=$(python3 -c 'import json,sys
+print(json.dumps({
+    "project": sys.argv[1],
+    "fields": {"default_model": sys.argv[2]},
+}))' "$resolved_path" "$val")
+            cli_post_json "/cli/workspace/set" "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if d.get("error") or d.get("ok") is False:
+    err = d.get("error")
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % (err or raw[:200]), file=sys.stderr)
+    sys.exit(1)
+val = None
+for a in d.get("actions") or []:
+    if a.get("field") == "default_model":
+        val = a.get("value")
+        if a.get("status") == "skipped":
+            print("default_model already %s (unchanged)." % (val or "(unset)"))
+            sys.exit(0)
+if not val:
+    print("default_model cleared.")
+else:
+    print("default_model set to %s." % val)
+'
+            ;;
+        ""|-h|--help|help)
+            cat <<'EOF' >&2
+Usage: k2 workspace default-model get|set <workspace> [model|clear]
+
+Per-workspace default LLM model spliced onto new agent sessions
+(claude --model, codex -m, …). Empty/clear = today's preset/harness.
+
+  get <ws>              Print the stored model, or (unset)
+  set <ws> opus         Store an opaque model id
+  set <ws> clear        Clear back to unset
+
+API POST /v1/w/<ws>/host-sessions {"model":"…"} overrides this per call.
+EOF
+            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
+            exit 2
+            ;;
+        *)
+            echo "Unknown default-model subcommand: $sub" >&2
+            echo "Usage: k2 workspace default-model get|set <workspace> …" >&2
+            exit 2
+            ;;
+    esac
+}
+
+# Force workspace default model on dead resume (new PTY). Default off.
+#
+#   k2 workspace force-model-on-resume get <ws>
+#   k2 workspace force-model-on-resume set <ws> on|off|1|0
+cmd_workspace_force_model_on_resume() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        get)
+            local target="${1:-}"
+            [[ -z "$target" ]] && {
+                echo "Usage: k2 workspace force-model-on-resume get <workspace>" >&2
+                exit 2
+            }
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            cli_request "/cli/settings" "project=$(urlencode "$resolved_path")" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if isinstance(d, dict) and d.get("error"):
+    err = d["error"]
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % err, file=sys.stderr)
+    sys.exit(1)
+if "forceModelOnResume" in d:
+    v = d.get("forceModelOnResume")
+elif "force_model_on_resume" in d:
+    v = d.get("force_model_on_resume")
+else:
+    print("off  (default)")
+    sys.exit(0)
+if v is True or v == 1 or v == "1" or (isinstance(v, str) and v.lower() in ("on", "true", "yes")):
+    print("on")
+elif v is False or v == 0 or v == "0" or (isinstance(v, str) and v.lower() in ("off", "false", "no")):
+    print("off")
+else:
+    print("on" if v else "off")
+'
+            ;;
+        set)
+            local target="${1:-}"
+            local mode="${2:-}"
+            [[ -z "$target" || -z "$mode" ]] && {
+                echo "Usage: k2 workspace force-model-on-resume set <workspace> on|off|1|0" >&2
+                exit 2
+            }
+            local val=""
+            case "$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')" in
+                on|1|true|yes)  val="1" ;;
+                off|0|false|no) val="0" ;;
+                *)
+                    echo "Error: expected on|off|1|0, got: $mode" >&2
+                    exit 2
+                    ;;
+            esac
+            local resolved_path
+            resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("path",""))
+except Exception:
+    pass' 2>/dev/null)
+            if [ -z "$resolved_path" ]; then
+                resolved_path="$target"
+            fi
+            local body
+            body=$(python3 -c 'import json,sys
+print(json.dumps({
+    "project": sys.argv[1],
+    "fields": {"force_model_on_resume": sys.argv[2]},
+}))' "$resolved_path" "$val")
+            cli_post_json "/cli/workspace/set" "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if d.get("error") or d.get("ok") is False:
+    err = d.get("error")
+    if isinstance(err, dict):
+        print("Error: %s" % (err.get("hint") or err.get("code") or err), file=sys.stderr)
+    else:
+        print("Error: %s" % (err or raw[:200]), file=sys.stderr)
+    sys.exit(1)
+val = None
+for a in d.get("actions") or []:
+    if a.get("field") == "force_model_on_resume":
+        val = a.get("value")
+        if a.get("status") == "skipped":
+            state = "on" if str(val) in ("1", "true", "True") else "off"
+            print("force_model_on_resume already %s (unchanged)." % state)
+            sys.exit(0)
+if val is None:
+    val = ""
+state = "on" if str(val) in ("1", "true", "True") else "off"
+print("force_model_on_resume set to %s." % state)
+'
+            ;;
+        ""|-h|--help|help)
+            cat <<'EOF' >&2
+Usage: k2 workspace force-model-on-resume get|set <workspace> [on|off]
+
+When on, K2-direct dead resume (new PTY) also passes the workspace
+default model. Off (default) keeps the transcript's model. API `model`
+on a host-session still applies on resume regardless.
+
+  get <ws>              Print on|off (default off)
+  set <ws> on|1         Splice default model on resume
+  set <ws> off|0        Leave resume argv unpinned
+EOF
+            [[ -z "$sub" || "$sub" == "help" || "$sub" == "-h" || "$sub" == "--help" ]] && exit 0
+            exit 2
+            ;;
+        *)
+            echo "Unknown force-model-on-resume subcommand: $sub" >&2
+            echo "Usage: k2 workspace force-model-on-resume get|set <workspace> …" >&2
+            exit 2
+            ;;
+    esac
+}
+
 # Per-workspace concurrent host-session (live cell) cap.
 # Default 15 (env K2_SANDBOX_WORKSPACE_CELL_CAP); max 512 (daemon ceiling).
 #
@@ -12503,6 +12770,10 @@ API / HOST-SESSIONS
   api-skip-permissions set <ws> on|off   Opt in/out of auto-approve on API host spawns
   host-session-cell-cap get <ws>    Show concurrent host-session cap (15 default)
   host-session-cell-cap set <ws> <n|default>  Set/clear per-ws live cell cap (max 512)
+  default-model get <ws>            Show workspace default model (unset if empty)
+  default-model set <ws> <model|clear>   Set or clear workspace default model
+  force-model-on-resume get <ws>    Show if resume also splices the default model
+  force-model-on-resume set <ws> on|off  Pass default model on dead resume (new PTY)
 
 `<path>` defaults to K2_PROJECT_PATH or PWD.
 
@@ -23480,7 +23751,9 @@ EOF
             api-skip-permissions) shift 2; cmd_workspace_api_skip_permissions "$@" ;;
             # Per-workspace concurrent host-session live cell cap (default 15, max 512).
             host-session-cell-cap|api-host-session-cap) shift 2; cmd_workspace_host_session_cell_cap "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|set-agent-name|set-handle|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|...> [args]" >&2; exit 1 ;;
+            default-model)     shift 2; cmd_workspace_default_model "$@" ;;
+            force-model-on-resume) shift 2; cmd_workspace_force_model_on_resume "$@" ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|triage|set-agent-name|set-handle|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

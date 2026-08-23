@@ -666,6 +666,22 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     // PREMINT-capable provider (claude + grok). See
     // `autoinject_premint_session_id`.
     autoinject_premint_session_id(command.as_deref(), &mut args, &req.agent_name, &req.cwd);
+
+    // Workspace default model on durable identity args. Skip blank-shell
+    // (no command) and unknown binaries (helper no-ops). Host-sessions
+    // already spliced in policy — AlreadyPinnedSkipped keeps argv identical.
+    if let Some(cmd) = command.as_deref() {
+        if !cmd.trim().is_empty() {
+            let resume = k2_core::workspace::model_splice::args_look_like_dead_resume(cmd, &args);
+            k2_core::workspace::model_splice::splice_model_for_workspace_spawn(
+                &req.cwd,
+                cmd,
+                &mut args,
+                resume,
+            );
+        }
+    }
+
     let conversation_id =
         conversation_id_for_agent(&req.agent_name, &req.cwd, command.as_deref(), &args);
 

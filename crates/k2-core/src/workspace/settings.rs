@@ -123,6 +123,10 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // Per-workspace completion chime (default 1 / ON). AND-gated
         // with the global Settings → General toggle in the renderer.
         "completion_sound_enabled",
+        // 0106 — per-workspace default model (opaque harness id). Empty → NULL.
+        "default_model",
+        // 0106 — splice workspace default on dead resume. Values: '0' | '1'.
+        "force_model_on_resume",
     ]
 }
 
@@ -228,6 +232,11 @@ pub fn update_project_setting(
             "completion_sound_enabled must be '0' or '1', got {value:?}"
         ));
     }
+    if field == "force_model_on_resume" && value != "0" && value != "1" {
+        return Err(format!(
+            "force_model_on_resume must be '0' or '1', got {value:?}"
+        ));
+    }
     // Validate value for the new enum-like setting so a typo doesn't
     // silently leave a project in a broken half-state. Existing fields
     // keep their bare string/int semantics for back-compat.
@@ -304,6 +313,21 @@ pub fn update_project_setting(
             )
             .map_err(|e| format!("DB update failed: {}", e))?
         }
+    } else if field == "default_model" {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            conn.execute(
+                "UPDATE projects SET default_model = NULL WHERE path = ?1",
+                rusqlite::params![project_path],
+            )
+            .map_err(|e| format!("DB update failed: {}", e))?
+        } else {
+            conn.execute(
+                "UPDATE projects SET default_model = ?1 WHERE path = ?2",
+                rusqlite::params![trimmed, project_path],
+            )
+            .map_err(|e| format!("DB update failed: {}", e))?
+        }
     } else {
         let sql = format!("UPDATE projects SET {} = ?1 WHERE path = ?2", field);
         conn.execute(&sql, rusqlite::params![value, project_path])
@@ -355,7 +379,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 pinned, name, use_session_stream, allow_remote_instruct, \
                 dns_manage_enabled, agents_can_create_connections, \
                 api_guest_policy, wiki_public_chat, api_skip_permissions, \
-                host_session_cell_cap, hide_api_sessions, completion_sound_enabled \
+                host_session_cell_cap, hide_api_sessions, completion_sound_enabled, \
+                default_model, force_model_on_resume \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -393,6 +418,14 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
             };
             let hide_api = row.get::<_, i64>(14).unwrap_or(0) == 1;
             let completion_sound = row.get::<_, i64>(15).unwrap_or(1) != 0;
+            let default_model = row
+                .get::<_, Option<String>>(16)
+                .unwrap_or(None)
+                .and_then(|s| {
+                    let t = s.trim().to_string();
+                    if t.is_empty() { None } else { Some(t) }
+                });
+            let force_model_on_resume = row.get::<_, i64>(17).unwrap_or(0) != 0;
             Ok(serde_json::json!({
                 "mode": row.get::<_, String>(0).unwrap_or_else(|_| "off".to_string()),
                 "worktreeMode": row.get::<_, i64>(1).unwrap_or(0) == 1,
@@ -420,6 +453,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "hideApiSessions": hide_api,
                 // Per-workspace completion chime (default ON).
                 "completionSoundEnabled": completion_sound,
+                "defaultModel": default_model,
+                "forceModelOnResume": force_model_on_resume,
             }))
         },
     )
@@ -1914,6 +1949,36 @@ mod tests {
         assert!(
             loaded.keep_daemon_on_quit,
             "agentic toggle must not clobber keep_daemon_on_quit default",
+        );
+    }
+
+    #[test]
+    fn default_model_empty_clears_to_null_and_force_validates() {
+        let path = unique_path("default-model");
+        let _pid = insert_project(&path);
+
+        update_project_setting(&path, "default_model", "opus").expect("set model");
+        let settings = get_project_settings(&path).expect("read");
+        assert_eq!(settings["defaultModel"], "opus");
+        assert_eq!(settings["forceModelOnResume"], false);
+
+        update_project_setting(&path, "force_model_on_resume", "1").expect("set force");
+        let settings = get_project_settings(&path).expect("read force");
+        assert_eq!(settings["forceModelOnResume"], true);
+
+        update_project_setting(&path, "default_model", "").expect("clear model");
+        let settings = get_project_settings(&path).expect("read cleared");
+        assert!(
+            settings["defaultModel"].is_null(),
+            "empty default_model must store NULL; got {}",
+            settings["defaultModel"]
+        );
+
+        let err = update_project_setting(&path, "force_model_on_resume", "yes")
+            .expect_err("non 0/1 must be rejected");
+        assert!(
+            err.contains("force_model_on_resume"),
+            "error should name the field, got {err:?}"
         );
     }
 }

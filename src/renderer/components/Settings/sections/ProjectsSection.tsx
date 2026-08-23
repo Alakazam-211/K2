@@ -76,6 +76,8 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.worktrees', section: 'projects', label: 'Worktree Folders', description: 'Enable/disable per-agent git worktrees', keywords: ['worktree', 'git', 'branch'] },
   { id: 'projects.relations', section: 'projects', label: 'Connections', description: 'Local and federated connections for this workspace', keywords: ['relations', 'connected', 'connections', 'cross-workspace', 'links', 'federation'] },
   { id: 'projects.cursor-migrate', section: 'projects', label: 'Cursor Session Migration', description: 'Port Cursor IDE sessions into K2', keywords: ['cursor', 'migrate', 'session', 'import'] },
+  { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'Per-workspace default LLM model for new sessions', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
+  { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Pass workspace default model when resuming a session', keywords: ['resume', 'model', 'force'] },
 ]
 
 export function ProjectsSection(): React.JSX.Element {
@@ -1498,6 +1500,7 @@ function ProjectDetail({
               )}
 
               <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
+              <DefaultModelControls project={project} />
               <WorkspaceCompletionSoundToggle project={project} />
             </SettingsGroup>
 
@@ -2202,6 +2205,180 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
         onChange={handleChange}
         placeholder={selected || undefined}
       />
+    </div>
+  )
+}
+
+function binaryTokenFromCommand(command: string): string {
+  const first = command.trim().split(/\s+/)[0] ?? ''
+  const base = first.split(/[/\\]/).pop() ?? first
+  return base.replace(/\.exe$/i, '')
+}
+
+function modelSuggestionsForAgent(command: string): string[] {
+  switch (binaryTokenFromCommand(command)) {
+    case 'claude':
+      return ['opus', 'sonnet', 'haiku']
+    case 'codex':
+      return ['gpt-5.3-codex', 'o3', 'gpt-4.1']
+    case 'grok':
+      return ['grok-4', 'grok-3-mini']
+    case 'gemini':
+      return ['gemini-2.5-pro', 'gemini-2.5-flash']
+    case 'cursor-agent':
+    case 'agent':
+      return ['composer-1']
+    default:
+      return []
+  }
+}
+
+function DefaultModelControls({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element {
+  const presets = usePresetsStore((s) => s.presets)
+  const globalDefaultAgent = useSettingsStore((s) => s.defaultAgent)
+  const [model, setModel] = useState(project.defaultModel ?? '')
+  const [force, setForce] = useState((project.forceModelOnResume ?? 0) !== 0)
+  const [custom, setCustom] = useState('')
+
+  useEffect(() => {
+    setModel(project.defaultModel ?? '')
+  }, [project.defaultModel])
+  useEffect(() => {
+    setForce((project.forceModelOnResume ?? 0) !== 0)
+  }, [project.forceModelOnResume])
+
+  const resolvePreset = (val: string) =>
+    presets.find((p) => p.id === val) ?? presets.find((p) => p.command.split(/\s+/)[0] === val)
+
+  const selectedAgent = project.defaultAgent || globalDefaultAgent
+  const agentPreset = selectedAgent ? resolvePreset(selectedAgent) : undefined
+  const suggestions = modelSuggestionsForAgent(agentPreset?.command ?? selectedAgent ?? '')
+
+  const persist = async (nextModel: string, nextForce: boolean): Promise<void> => {
+    const stored = nextModel.trim()
+    const forceVal = stored && nextForce ? 1 : 0
+    try {
+      await daemonCliPost('projects/update', {
+        id: project.id,
+        defaultModel: stored,
+        forceModelOnResume: forceVal,
+      })
+      emitProjectsChanged()
+      const store = useProjectsStore.getState()
+      const updated = store.projects.map((p) =>
+        p.id === project.id
+          ? { ...p, defaultModel: stored || null, forceModelOnResume: forceVal }
+          : p,
+      )
+      useProjectsStore.setState({ projects: updated })
+    } catch (err) {
+      console.error('[default-model] Update failed:', err)
+    }
+  }
+
+  const handleChip = (id: string): void => {
+    const next = model === id ? '' : id
+    setModel(next)
+    setCustom('')
+    if (!next) setForce(false)
+    void persist(next, next ? force : false)
+  }
+
+  const handleClear = (): void => {
+    setModel('')
+    setCustom('')
+    setForce(false)
+    void persist('', false)
+  }
+
+  const handleCustomSubmit = (): void => {
+    const next = custom.trim()
+    if (!next) return
+    setModel(next)
+    setCustom('')
+    void persist(next, force)
+  }
+
+  const handleForce = (next: boolean): void => {
+    if (!model.trim()) return
+    setForce(next)
+    void persist(model, next)
+  }
+
+  const empty = !model.trim()
+
+  return (
+    <div className="py-2 border-t border-[var(--color-border)]" data-settings-id="projects.default-model">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <span className="text-xs text-[var(--color-text-secondary)]">Default model</span>
+          <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+            New sessions of this workspace’s agent use this model. Check the box to also pass it on resume (new process). A live chat cannot change model. API `model` on a host-session overrides this for that call, including resume.
+          </p>
+        </div>
+        {model ? (
+          <button
+            type="button"
+            onClick={handleClear}
+            className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer flex-shrink-0"
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-1 mt-2">
+        {suggestions.map((id) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => handleChip(id)}
+            className={`px-2 py-0.5 text-[10px] no-drag cursor-pointer border ${
+              model === id
+                ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)] border-[var(--color-accent)]'
+                : 'text-[var(--color-text-secondary)] border-[var(--color-border)] hover:text-[var(--color-text-primary)]'
+            }`}
+          >
+            {id}
+          </button>
+        ))}
+        <input
+          type="text"
+          value={suggestions.includes(model) ? custom : (custom || model)}
+          onChange={(e) => {
+            setCustom(e.target.value)
+            if (!suggestions.includes(e.target.value)) setModel(e.target.value)
+          }}
+          onBlur={() => {
+            if (custom.trim() && custom.trim() !== (project.defaultModel ?? '')) {
+              handleCustomSubmit()
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleCustomSubmit()
+          }}
+          placeholder="custom id"
+          className="px-2 py-0.5 text-[10px] w-28 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag"
+        />
+      </div>
+      <label
+        className={`flex items-center gap-2 mt-2 text-[10px] no-drag ${
+          empty ? 'text-[var(--color-text-muted)] opacity-60' : 'text-[var(--color-text-secondary)] cursor-pointer'
+        }`}
+        data-settings-id="projects.force-model-on-resume"
+      >
+        <input
+          type="checkbox"
+          checked={force && !empty}
+          disabled={empty}
+          onChange={(e) => handleForce(e.target.checked)}
+          className="no-drag"
+        />
+        Force this model when resuming a session
+      </label>
     </div>
   )
 }

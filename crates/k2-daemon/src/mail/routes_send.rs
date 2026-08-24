@@ -189,7 +189,7 @@ fn resolve_from_inbox(
 }
 
 /// Coerce a JSON `string | [string]` field into a list.
-fn string_list(v: &serde_json::Value, field: &str) -> Result<Vec<String>, CliResponse> {
+pub(crate) fn string_list(v: &serde_json::Value, field: &str) -> Result<Vec<String>, CliResponse> {
     match v {
         serde_json::Value::Null => Ok(Vec::new()),
         serde_json::Value::String(s) => Ok(vec![s.clone()]),
@@ -464,14 +464,15 @@ fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliResponse> {
 /// Max attachments per message, and the per-file / total size caps
 /// (enforced daemon-side after resolving each path; the CLI mirrors the
 /// count/path shape but does NO file I/O — the daemon owns the bytes).
-const MAX_ATTACHMENTS: usize = 10;
+/// Shared with `k2 mail draft` (same numbers; extract, don't copy).
+pub(crate) const MAX_ATTACHMENTS: usize = 10;
 const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_ATTACHMENTS_TOTAL_BYTES: u64 = 25 * 1024 * 1024;
 
 /// Parse the `attachments` array (workspace-relative path STRINGS — the
 /// CLI sends paths, never bytes). Enforces the count cap and the
 /// non-empty-string shape BEFORE any file is touched. Absent/null → none.
-fn parse_attachment_specs(v: &serde_json::Value) -> Result<Vec<String>, CliResponse> {
+pub(crate) fn parse_attachment_specs(v: &serde_json::Value) -> Result<Vec<String>, CliResponse> {
     let raw = match v.get("attachments") {
         None | Some(serde_json::Value::Null) => return Ok(Vec::new()),
         Some(serde_json::Value::Array(a)) => a,
@@ -549,7 +550,7 @@ fn content_type_for(filename: &str) -> String {
 /// filename is the basename; the content-type is derived from it. Bytes
 /// are never logged. Any resolve/read/cap failure names the path and
 /// aborts the whole send (nothing is submitted).
-fn read_workspace_attachments(
+pub(crate) fn read_workspace_attachments(
     ws_root: &str,
     specs: &[String],
 ) -> Result<Vec<external_smtp::OutAttachment>, CliResponse> {

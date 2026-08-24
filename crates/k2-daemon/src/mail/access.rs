@@ -513,6 +513,17 @@ pub fn readable_hosted(project_id: &str) -> Vec<(String, String)> {
     .unwrap_or_default()
 }
 
+/// Every LINKED inbox a workspace can DRAFT INTO (effective level ≥
+/// draft). Used by compose-draft's implicit `--from` resolver: 0 →
+/// teach, 1 → implicit, N → require `--from`. Does **not** include
+/// hosted addresses (draft APPEND is linked-only).
+pub fn draftable_linked(project_id: &str) -> Vec<(String, String)> {
+    readable_linked(project_id)
+        .into_iter()
+        .filter(|(addr, _)| can_draft(project_id, addr).is_ok())
+        .collect()
+}
+
 /// Every LINKED inbox a workspace can READ (primary or grant) — the
 /// no-address sweep's linked half. Returns `(address, inbox_id)` pairs.
 pub fn readable_linked(project_id: &str) -> Vec<(String, String)> {

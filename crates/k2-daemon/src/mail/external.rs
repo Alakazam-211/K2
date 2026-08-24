@@ -132,6 +132,26 @@ pub fn parse_uid_token(s: &str) -> Option<(u32, u32)> {
     Some((v.parse().ok()?, u.parse().ok()?))
 }
 
+/// Honest hint when the token's UIDVALIDITY matches no LISTed mailbox
+/// (listed from another folder, or the mailbox was rebuilt). Never
+/// "no longer on the server" — that lie is what Inbox-only SELECT produced.
+pub fn unmatched_uidvalidity_hint(validity: u32) -> String {
+    format!(
+        "id was listed from another folder / UIDVALIDITY {validity} matches no mailbox; \
+         re-list with 'k2 mail messages'"
+    )
+}
+
+/// Collision: two folders share UIDVALIDITY. First-match would FETCH
+/// the wrong mail — fail loud instead.
+pub fn colliding_uidvalidity_hint(validity: u32, folders: &[String]) -> String {
+    format!(
+        "UIDVALIDITY {validity} matches more than one mailbox ({}) — refusing to guess; \
+         re-list with 'k2 mail messages'",
+        folders.join(", ")
+    )
+}
+
 /// Attachment blob ids: `<uid-token>#<1-based part>`; the bare token
 /// is the whole raw RFC 822 message (`read --raw`).
 pub fn encode_blob_token(uid_token: &str, part_1based: usize) -> String {
@@ -246,8 +266,10 @@ pub struct RawEmail {
 /// Every IMAP effect S9 performs, behind one trait (the house
 /// engine-trait pattern) so ops + routes unit-test with fakes. All
 /// `uid_token` params are [`encode_uid_token`] strings; `Ok(None)`
-/// from fetch means unknown-UID OR changed UIDVALIDITY — the caller
-/// masks it exactly like a foreign id.
+/// from fetch means the UID is missing from the mailbox that matched
+/// the token's UIDVALIDITY. Unmatched validity / colliding validity
+/// are `Err` with [`unmatched_uidvalidity_hint`] /
+/// [`colliding_uidvalidity_hint`] — never "no longer on the server".
 pub trait ImapOps: Send + Sync {
     /// Login + folder survey (add-time validation and drafts-folder
     /// resolution). Never returns credentials in any form.
@@ -634,10 +656,23 @@ fn format_mailbox(name: Option<&str>, email: &str) -> String {
     }
 }
 
+/// `"A" <a@x>, "B" <b@y>` — a header-injection-proof address list (each
+/// mailbox goes through [`format_mailbox`], which strips CR/LF).
+fn format_addr_list(list: &[MailAddr]) -> String {
+    list.iter()
+        .map(|a| format_mailbox(a.name.as_deref(), &a.email))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Base64 body wrapped at 76 columns with CRLF (fully-ASCII output —
 /// safe in any APPEND literal, no 8BITMIME dependence).
 fn b64_body(text: &str) -> String {
-    let encoded = B64.encode(text.as_bytes());
+    b64_bytes(text.as_bytes())
+}
+
+fn b64_bytes(bytes: &[u8]) -> String {
+    let encoded = B64.encode(bytes);
     encoded
         .as_bytes()
         .chunks(76)
@@ -646,16 +681,79 @@ fn b64_body(text: &str) -> String {
         .join("\r\n")
 }
 
+/// One attachment on a draft RFC 822 (compose or reply). Distinct from
+/// the SMTP/lettre [`crate::mail::external_smtp::OutAttachment`] wire
+/// form — drafts must not APPEND that.
+#[derive(Debug, Clone)]
+pub struct Rfc822Attachment {
+    pub filename: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+fn sanitize_mime_param(s: &str) -> String {
+    s.replace(['\r', '\n', '"'], " ").trim().to_string()
+}
+
+/// Text/plain or multipart/mixed payload for a draft. No Message-ID
+/// (the user's client assigns one at send time). Boundary is injected
+/// so this stays a pure fn.
+fn emit_draft_payload(h: &mut String, body: &str, attachments: &[Rfc822Attachment], boundary: &str) {
+    if attachments.is_empty() {
+        h.push_str("MIME-Version: 1.0\r\n");
+        h.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+        h.push_str("Content-Transfer-Encoding: base64\r\n");
+        h.push_str("\r\n");
+        h.push_str(&b64_body(body));
+        h.push_str("\r\n");
+        return;
+    }
+    h.push_str("MIME-Version: 1.0\r\n");
+    h.push_str(&format!(
+        "Content-Type: multipart/mixed; boundary=\"{}\"\r\n",
+        sanitize_mime_param(boundary)
+    ));
+    h.push_str("\r\n");
+    h.push_str(&format!("--{boundary}\r\n"));
+    h.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    h.push_str("Content-Transfer-Encoding: base64\r\n");
+    h.push_str("\r\n");
+    h.push_str(&b64_body(body));
+    h.push_str("\r\n");
+    for a in attachments {
+        let filename = sanitize_mime_param(&a.filename);
+        let ct = sanitize_mime_param(&a.content_type);
+        let ct = if ct.is_empty() {
+            "application/octet-stream".to_string()
+        } else {
+            ct
+        };
+        h.push_str(&format!("--{boundary}\r\n"));
+        h.push_str(&format!("Content-Type: {ct}; name=\"{filename}\"\r\n"));
+        h.push_str("Content-Transfer-Encoding: base64\r\n");
+        h.push_str(&format!(
+            "Content-Disposition: attachment; filename=\"{filename}\"\r\n"
+        ));
+        h.push_str("\r\n");
+        h.push_str(&b64_bytes(&a.bytes));
+        h.push_str("\r\n");
+    }
+    h.push_str(&format!("--{boundary}--\r\n"));
+}
+
 /// Compose the reply draft: From = the external account (the USER —
 /// drafts are theirs to send), To = the source's Reply-To/From,
 /// threading headers per RFC 5322. No Message-ID — the user's mail
-/// client assigns one at send time. `date_rfc2822` is injected (no
-/// clock in a pure fn).
+/// client assigns one at send time. `date_rfc2822`/`boundary` are
+/// injected (no clock/RNG in a pure fn). Optional multipart/mixed
+/// when `attachments` is non-empty — never the SMTP/lettre wire form.
 pub fn compose_draft_rfc822(
     inbox: &MailExternalInbox,
     src: &DraftSource,
     body: &str,
     date_rfc2822: &str,
+    attachments: &[Rfc822Attachment],
+    boundary: &str,
 ) -> Result<Vec<u8>, String> {
     let Some(to) = src.reply_to.as_ref() else {
         return Err("the source message has no sender address to reply to".to_string());
@@ -679,12 +777,40 @@ pub fn compose_draft_rfc822(
     {
         h.push_str(&format!("References: {refs}\r\n"));
     }
-    h.push_str("MIME-Version: 1.0\r\n");
-    h.push_str("Content-Type: text/plain; charset=utf-8\r\n");
-    h.push_str("Content-Transfer-Encoding: base64\r\n");
-    h.push_str("\r\n");
-    h.push_str(&b64_body(body));
-    h.push_str("\r\n");
+    emit_draft_payload(&mut h, body, attachments, boundary);
+    Ok(h.into_bytes())
+}
+
+/// Compose a brand-new (non-reply) draft: From = the linked account,
+/// To/Subject/Cc from args, **no** In-Reply-To/References, **no**
+/// Message-ID. Optional multipart/mixed. Do not APPEND the SMTP/lettre
+/// wire form.
+#[allow(clippy::too_many_arguments)]
+pub fn compose_new_draft_rfc822(
+    inbox: &MailExternalInbox,
+    to: &[MailAddr],
+    cc: &[MailAddr],
+    subject: &str,
+    body: &str,
+    date_rfc2822: &str,
+    attachments: &[Rfc822Attachment],
+    boundary: &str,
+) -> Result<Vec<u8>, String> {
+    if to.is_empty() {
+        return Err("a compose draft needs at least one To recipient".to_string());
+    }
+    let mut h = String::new();
+    h.push_str(&format!("Date: {date_rfc2822}\r\n"));
+    h.push_str(&format!(
+        "From: {}\r\n",
+        format_mailbox(inbox.display_name.as_deref(), &inbox.email_address)
+    ));
+    h.push_str(&format!("To: {}\r\n", format_addr_list(to)));
+    if !cc.is_empty() {
+        h.push_str(&format!("Cc: {}\r\n", format_addr_list(cc)));
+    }
+    h.push_str(&format!("Subject: {}\r\n", encode_header_text(subject)));
+    emit_draft_payload(&mut h, body, attachments, boundary);
     Ok(h.into_bytes())
 }
 
@@ -696,15 +822,6 @@ pub fn compose_draft_rfc822(
 pub fn new_message_id(from_address: &str) -> String {
     let domain = from_address.split_once('@').map(|(_, d)| d).unwrap_or("localhost");
     format!("<{}@{}>", uuid::Uuid::new_v4().simple(), domain)
-}
-
-/// `"A" <a@x>, "B" <b@y>` — a header-injection-proof address list (each
-/// mailbox goes through [`format_mailbox`], which strips CR/LF).
-fn format_addr_list(list: &[MailAddr]) -> String {
-    list.iter()
-        .map(|a| format_mailbox(a.name.as_deref(), &a.email))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Compose an outgoing RFC 822 message for a LINKED SMTP submission
@@ -1249,31 +1366,13 @@ pub fn record_check(row_id: &str, result: Result<(), &str>) {
     };
 }
 
-/// The agent draft flow: fetch the source (must live in THIS inbox),
-/// extract the reply context, compose, APPEND with `\Draft` into the
-/// resolved Drafts folder. Returns the folder used. Health is stamped
-/// on the row either way.
-pub fn save_reply_draft(
+fn resolved_drafts_folder(
     ops: &dyn ImapOps,
     inbox: &MailExternalInbox,
     password: &str,
-    source_uid_token: &str,
-    body: &str,
 ) -> Result<String, ExtError> {
-    let src_raw = ops
-        .fetch_raw(inbox, password, source_uid_token)
-        .map_err(|e| {
-            record_check(&inbox.id, Err(&e));
-            ExtError::Engine(e)
-        })?
-        .ok_or_else(|| {
-            // Unknown UID / stale UIDVALIDITY — same masked shape the
-            // route uses for every not-yours/not-there case.
-            ExtError::NotFound("the source message is no longer on the server".to_string())
-        })?;
-    let src = draft_source_from_raw(&src_raw.raw).map_err(ExtError::Engine)?;
-    let folder = match inbox.drafts_folder.clone() {
-        Some(f) => f,
+    match inbox.drafts_folder.clone() {
+        Some(f) => Ok(f),
         None => {
             let check = ops.check_connect(inbox, password).map_err(|e| {
                 record_check(&inbox.id, Err(&e));
@@ -1285,12 +1384,19 @@ pub fn save_reply_draft(
                      --drafts-folder",
                     inbox.host
                 ))
-            })?
+            })
         }
-    };
-    let date = chrono::Utc::now().to_rfc2822();
-    let rfc822 = compose_draft_rfc822(inbox, &src, body, &date).map_err(ExtError::Engine)?;
-    match ops.append_draft(inbox, password, &folder, &rfc822) {
+    }
+}
+
+fn append_draft_bytes(
+    ops: &dyn ImapOps,
+    inbox: &MailExternalInbox,
+    password: &str,
+    folder: &str,
+    rfc822: &[u8],
+) -> Result<String, ExtError> {
+    match ops.append_draft(inbox, password, folder, rfc822) {
         Ok(()) => {
             record_check(&inbox.id, Ok(()));
             k2_core::log_debug!(
@@ -1298,13 +1404,74 @@ pub fn save_reply_draft(
                 folder,
                 inbox.email_address
             );
-            Ok(folder)
+            Ok(folder.to_string())
         }
         Err(e) => {
             record_check(&inbox.id, Err(&e));
             Err(ExtError::Engine(format!("draft APPEND failed: {e}")))
         }
     }
+}
+
+/// The agent draft flow: fetch the source (must live in THIS inbox),
+/// extract the reply context, compose, APPEND with `\Draft` into the
+/// resolved Drafts folder. Returns the folder used. Health is stamped
+/// on the row either way.
+pub fn save_reply_draft(
+    ops: &dyn ImapOps,
+    inbox: &MailExternalInbox,
+    password: &str,
+    source_uid_token: &str,
+    body: &str,
+    attachments: &[Rfc822Attachment],
+) -> Result<String, ExtError> {
+    let src_raw = ops
+        .fetch_raw(inbox, password, source_uid_token)
+        .map_err(|e| {
+            record_check(&inbox.id, Err(&e));
+            // Unmatched / colliding UIDVALIDITY already carry the honest
+            // hint; do not rewrite them as "no longer on the server".
+            ExtError::Engine(e)
+        })?
+        .ok_or_else(|| {
+            // UID missing from the mailbox that matched the token.
+            ExtError::NotFound("the source message is no longer on the server".to_string())
+        })?;
+    let src = draft_source_from_raw(&src_raw.raw).map_err(ExtError::Engine)?;
+    let folder = resolved_drafts_folder(ops, inbox, password)?;
+    let date = chrono::Utc::now().to_rfc2822();
+    let boundary = format!("=_k2_draft_{}", uuid::Uuid::new_v4().simple());
+    let rfc822 = compose_draft_rfc822(inbox, &src, body, &date, attachments, &boundary)
+        .map_err(ExtError::Engine)?;
+    append_draft_bytes(ops, inbox, password, &folder, &rfc822)
+}
+
+/// Brand-new compose draft: From = the linked account, To/Subject/Cc
+/// from args, no threading headers, APPEND `\Draft` to the resolved
+/// Drafts folder. Health is stamped either way.
+#[allow(clippy::too_many_arguments)]
+pub fn save_compose_draft(
+    ops: &dyn ImapOps,
+    inbox: &MailExternalInbox,
+    password: &str,
+    to: &[MailAddr],
+    cc: &[MailAddr],
+    subject: &str,
+    body: &str,
+    attachments: &[Rfc822Attachment],
+) -> Result<String, ExtError> {
+    if to.is_empty() {
+        return Err(ExtError::Usage(
+            "a compose draft needs at least one To recipient".to_string(),
+        ));
+    }
+    let folder = resolved_drafts_folder(ops, inbox, password)?;
+    let date = chrono::Utc::now().to_rfc2822();
+    let boundary = format!("=_k2_draft_{}", uuid::Uuid::new_v4().simple());
+    let rfc822 =
+        compose_new_draft_rfc822(inbox, to, cc, subject, body, &date, attachments, &boundary)
+            .map_err(ExtError::Engine)?;
+    append_draft_bytes(ops, inbox, password, &folder, &rfc822)
 }
 
 /// Pure drafts-folder pick over a LIST survey: a `\Drafts` SPECIAL-USE
@@ -1407,6 +1574,33 @@ pub(crate) mod tests {
         /// S11: records the management ops performed (verb + args) so
         /// tests assert the exact effect without any network.
         pub managed: Mutex<Vec<String>>,
+        /// Folder-aware SELECT recording: when non-empty, fetch_raw /
+        /// mark_seen resolve the token's UIDVALIDITY against this map
+        /// (validity → folder names). Multiple names = collision (fail
+        /// loud). Empty = accept any token (legacy tests).
+        pub folders_by_validity: std::collections::HashMap<u32, Vec<String>>,
+        pub selected: Mutex<Vec<String>>,
+    }
+
+    impl FakeOps {
+        /// Empty `folders_by_validity` → accept any token (do not pretend
+        /// Inbox). Populated → SELECT by UIDVALIDITY, collision fail-loud.
+        fn select_for_token(&self, uid_token: &str) -> Result<(), String> {
+            if self.folders_by_validity.is_empty() {
+                return Ok(());
+            }
+            let Some((validity, _)) = parse_uid_token(uid_token) else {
+                return Ok(());
+            };
+            match self.folders_by_validity.get(&validity).map(Vec::as_slice) {
+                None | Some([]) => Err(unmatched_uidvalidity_hint(validity)),
+                Some([folder]) => {
+                    self.selected.lock().unwrap().push(folder.clone());
+                    Ok(())
+                }
+                Some(many) => Err(colliding_uidvalidity_hint(validity, many)),
+            }
+        }
     }
 
     impl ImapOps for FakeOps {
@@ -1439,6 +1633,9 @@ pub(crate) mod tests {
             _password: &str,
             uid_token: &str,
         ) -> Result<Option<RawEmail>, String> {
+            if let Err(e) = self.select_for_token(uid_token) {
+                return Err(e);
+            }
             Ok(self.raw_by_token.get(uid_token).cloned())
         }
         fn mark_seen(
@@ -1447,6 +1644,7 @@ pub(crate) mod tests {
             _password: &str,
             uid_token: &str,
         ) -> Result<(), String> {
+            self.select_for_token(uid_token)?;
             self.marked.lock().unwrap().push(uid_token.to_string());
             Ok(())
         }
@@ -1753,9 +1951,15 @@ a,b\r\n1,2\r\n\
         let inbox = test_inbox("X1", "p1", "rosson@example.com");
         let src = draft_source_from_raw(RAW_FIXTURE).expect("source");
         let body = "Thanks — the café numbers look right. — R";
-        let rfc822 =
-            compose_draft_rfc822(&inbox, &src, body, "Thu, 09 Jul 2026 08:00:00 +0000")
-                .expect("composes");
+        let rfc822 = compose_draft_rfc822(
+            &inbox,
+            &src,
+            body,
+            "Thu, 09 Jul 2026 08:00:00 +0000",
+            &[],
+            "b",
+        )
+        .expect("composes");
         let text = String::from_utf8(rfc822.clone()).expect("draft is pure ASCII on the wire");
         assert!(text.contains("From: \"Rosson\" <rosson@example.com>\r\n"), "{text}");
         assert!(text.contains("To: <replies@sender.example>\r\n"), "{text}");
@@ -1777,15 +1981,22 @@ a,b\r\n1,2\r\n\
         // Subject line — harmless data, not a header).
         let mut evil = src.clone();
         evil.subject = "hi\r\nBcc: attacker@evil.example".to_string();
-        let rfc822 = compose_draft_rfc822(&inbox, &evil, body, "Thu, 09 Jul 2026 08:00:00 +0000")
-            .expect("composes");
+        let rfc822 = compose_draft_rfc822(
+            &inbox,
+            &evil,
+            body,
+            "Thu, 09 Jul 2026 08:00:00 +0000",
+            &[],
+            "b",
+        )
+        .expect("composes");
         let text = String::from_utf8(rfc822).unwrap();
         assert!(!text.contains("\r\nBcc:"), "no injected header line: {text}");
         assert!(text.contains("Subject: Re: hi  Bcc:"), "flattened onto one line: {text}");
 
         // No sender to reply to → loud error.
         let no_sender = DraftSource { reply_to: None, ..src };
-        assert!(compose_draft_rfc822(&inbox, &no_sender, body, "d").is_err());
+        assert!(compose_draft_rfc822(&inbox, &no_sender, body, "d", &[], "b").is_err());
     }
 
     #[test]
@@ -1798,7 +2009,7 @@ a,b\r\n1,2\r\n\
             subject: "Überweisung".to_string(),
             reply_to: Some(MailAddr { name: None, email: "a@b.example".to_string() }),
         };
-        let rfc822 = compose_draft_rfc822(&inbox, &src, "ok", "d").expect("composes");
+        let rfc822 = compose_draft_rfc822(&inbox, &src, "ok", "d", &[], "b").expect("composes");
         let text = String::from_utf8(rfc822).expect("ASCII wire form");
         assert!(text.contains("Subject: =?UTF-8?B?"), "{text}");
         assert!(text.contains("From: =?UTF-8?B?"), "{text}");
@@ -2137,7 +2348,7 @@ a,b\r\n1,2\r\n\
         let mut ops = FakeOps { folders: vec![("[Gmail]/Drafts".to_string(), true)], ..Default::default() };
         ops.raw_by_token.insert("uid:7:42".to_string(), raw_email());
 
-        let folder = save_reply_draft(&ops, &row, "pw", "uid:7:42", "On it — draft reply.")
+        let folder = save_reply_draft(&ops, &row, "pw", "uid:7:42", "On it — draft reply.", &[])
             .expect("draft saved");
         assert_eq!(folder, "[Gmail]/Drafts", "autodetected via SPECIAL-USE");
         let appended = ops.appended.lock().unwrap();
@@ -2156,12 +2367,12 @@ a,b\r\n1,2\r\n\
         // The configured override skips detection entirely.
         let mut row2 = row.clone();
         row2.drafts_folder = Some("Custom/Drafts".to_string());
-        let folder = save_reply_draft(&ops, &row2, "pw", "uid:7:42", "x").expect("draft");
+        let folder = save_reply_draft(&ops, &row2, "pw", "uid:7:42", "x", &[]).expect("draft");
         assert_eq!(folder, "Custom/Drafts");
 
         // A vanished source message answers NotFound (masked upstream).
         assert!(matches!(
-            save_reply_draft(&ops, &row, "pw", "uid:7:9999", "x"),
+            save_reply_draft(&ops, &row, "pw", "uid:7:9999", "x", &[]),
             Err(ExtError::NotFound(_))
         ));
 
@@ -2172,12 +2383,141 @@ a,b\r\n1,2\r\n\
             raw_by_token: ops.raw_by_token.clone(),
             ..Default::default()
         };
-        let err = save_reply_draft(&ops_nofolder, &row, "pw", "uid:7:42", "x").expect_err("no folder");
+        let err = save_reply_draft(&ops_nofolder, &row, "pw", "uid:7:42", "x", &[]).expect_err("no folder");
         let ExtError::Engine(hint) = err else { panic!("engine") };
         assert!(hint.contains("--drafts-folder"), "{hint}");
 
         cleanup_row(&row.id);
         cleanup_project(&project);
+    }
+
+    #[test]
+    fn save_compose_draft_sets_to_subject_no_in_reply_to_and_appends_draft() {
+        let project = unique_project();
+        let addr = unique_addr("compose");
+        let mut row = test_inbox(&uuid::Uuid::new_v4().to_string(), &project, &addr);
+        row.drafts_folder = Some("[Gmail]/Drafts".to_string());
+        seed_row(&row);
+
+        let ops = FakeOps {
+            folders: vec![("[Gmail]/Drafts".to_string(), true)],
+            ..Default::default()
+        };
+        let to = vec![MailAddr { name: None, email: "someone@x.example".to_string() }];
+        let cc = vec![MailAddr { name: None, email: "cc@x.example".to_string() }];
+        let folder = save_compose_draft(
+            &ops,
+            &row,
+            "pw",
+            &to,
+            &cc,
+            "Hello",
+            "the body",
+            &[],
+        )
+        .expect("compose draft");
+        assert_eq!(folder, "[Gmail]/Drafts");
+        let appended = ops.appended.lock().unwrap();
+        assert_eq!(appended.len(), 1);
+        assert_eq!(appended[0].0, "[Gmail]/Drafts");
+        let text = String::from_utf8(appended[0].1.clone()).expect("ascii");
+        assert!(text.contains("To: <someone@x.example>\r\n"), "{text}");
+        assert!(text.contains("Cc: <cc@x.example>\r\n"), "{text}");
+        assert!(text.contains("Subject: Hello\r\n"), "{text}");
+        assert!(!text.contains("In-Reply-To:"), "{text}");
+        assert!(!text.contains("References:"), "{text}");
+        assert!(!text.contains("\r\nMessage-ID:"), "{text}");
+        drop(appended);
+
+        cleanup_row(&row.id);
+        cleanup_project(&project);
+    }
+
+    #[test]
+    fn fake_ops_selects_all_mail_validity_and_fails_loud_on_collision() {
+        let row = test_inbox("XB-sel", "pX", "rosson@example.com");
+        let mut ops = FakeOps::default();
+        ops.folders_by_validity.insert(1, vec!["INBOX".to_string()]);
+        ops.folders_by_validity
+            .insert(11, vec!["[Gmail]/All Mail".to_string()]);
+        ops.raw_by_token
+            .insert("uid:11:42".to_string(), raw_email());
+        ops.raw_by_token.insert("uid:1:7".to_string(), raw_email());
+
+        let got = ops
+            .fetch_raw(&row, "pw", "uid:11:42")
+            .expect("ok")
+            .expect("found");
+        assert_eq!(got.raw, RAW_FIXTURE);
+        {
+            let sel = ops.selected.lock().unwrap();
+            assert_eq!(sel.as_slice(), &["[Gmail]/All Mail".to_string()]);
+        }
+        ops.fetch_raw(&row, "pw", "uid:1:7").expect("inbox ok").expect("found");
+
+        let err = ops
+            .fetch_raw(&row, "pw", "uid:99:1")
+            .expect_err("unmatched validity");
+        assert!(err.contains("UIDVALIDITY 99"), "{err}");
+        assert!(
+            !err.contains("no longer on the server"),
+            "honest hint, not the inbox-only lie: {err}"
+        );
+
+        ops.folders_by_validity.insert(
+            11,
+            vec!["INBOX".to_string(), "[Gmail]/All Mail".to_string()],
+        );
+        let err = ops
+            .fetch_raw(&row, "pw", "uid:11:42")
+            .expect_err("collision");
+        assert!(err.contains("more than one mailbox"), "{err}");
+        assert!(err.contains("INBOX"), "{err}");
+        assert!(err.contains("[Gmail]/All Mail"), "{err}");
+    }
+
+    #[test]
+    fn compose_new_draft_and_reply_draft_attachments_are_multipart_without_message_id() {
+        let inbox = test_inbox("X1", "p1", "rosson@example.com");
+        let att = Rfc822Attachment {
+            filename: "notes.txt".to_string(),
+            content_type: "text/plain".to_string(),
+            bytes: b"hello-att".to_vec(),
+        };
+        let to = vec![MailAddr { name: None, email: "a@b.example".to_string() }];
+        let rfc822 = compose_new_draft_rfc822(
+            &inbox,
+            &to,
+            &[],
+            "Subj",
+            "body-text",
+            "Thu, 09 Jul 2026 08:00:00 +0000",
+            &[att.clone()],
+            "mix-bound",
+        )
+        .expect("compose");
+        let text = String::from_utf8(rfc822.clone()).expect("ascii");
+        assert!(text.contains("multipart/mixed"), "{text}");
+        assert!(text.contains("filename=\"notes.txt\""), "{text}");
+        assert!(!text.contains("\r\nMessage-ID:"), "{text}");
+        assert!(!text.contains("In-Reply-To:"), "{text}");
+        let parsed = MessageParser::default().parse(rfc822.as_slice()).expect("parses");
+        assert_eq!(parsed.body_text(0).as_deref(), Some("body-text"));
+
+        let src = draft_source_from_raw(RAW_FIXTURE).expect("source");
+        let rfc822 = compose_draft_rfc822(
+            &inbox,
+            &src,
+            "thanks",
+            "Thu, 09 Jul 2026 08:00:00 +0000",
+            &[att],
+            "mix-bound",
+        )
+        .expect("reply+attach");
+        let text = String::from_utf8(rfc822).expect("ascii");
+        assert!(text.contains("multipart/mixed"), "{text}");
+        assert!(text.contains("In-Reply-To: <src-123@mailer.example>"), "{text}");
+        assert!(!text.contains("\r\nMessage-ID:"), "{text}");
     }
 
     // ── the ReadBackend adapter ──

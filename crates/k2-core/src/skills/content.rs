@@ -386,7 +386,8 @@ k2 mail read <message-id>                       # one full message (marks it rea
 k2 mail wait [--subject <s>] [--timeout 300]    # block until a matching message arrives; prints it in `read` format
 k2 mail send <to> --subject <s> --body <t>      # governed: off (default) | approval | on
 k2 mail reply <message-id> --body <t>           # guardrailed reply (recipient + From locked, loop caps)
-k2 mail draft <message-id> --body <t>           # external assistant inbox only: save a reply DRAFT into your human's own mail account
+k2 mail draft <message-id> --body <t> [--attach]  # linked: reply DRAFT into your human's Gmail Drafts
+k2 mail draft --to <addr> --subject <s> --body <t> [--cc] [--attach] [--from <linked>]  # brand-new draft
 k2 mail outbox [<id>]                           # your outbound + decisions (denied shows your human's note)
 k2 mail delete <address>                        # retire an address you own (frees its cap slot immediately)
 ```
@@ -396,7 +397,7 @@ k2 mail delete <address>                        # retire an address you own (fre
 - Sending is OFF by default — that is your human's decision: request access with `k2 tickets ask`, never retry-loop. In approval mode `queued for approval (out_…)` + exit 0 IS success; track it with `k2 mail outbox`, or `--wait` to block until decided (exit 2 = timed out but STILL queued).
 - `submitted` means accepted-for-delivery — never claim an email was "delivered".
 - Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
-- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other, and you `draft` replies into the account's real Drafts folder for your human to review and send. Drafting is always available; sending from a linked account requires your human to grant the `send` level (app-password and Gmail-OAuth inboxes send over SMTP; Microsoft-OAuth is draft-only for now) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
+- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from linked Gmail need the `send` level AND Sending=`on` (app-password and Gmail-OAuth send over SMTP; Microsoft-OAuth is draft-only until Graph send) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
 
 ### Discover peers + connections
 ```
@@ -540,7 +541,8 @@ k2 mail read <message-id>                       # one full message (marks it rea
 k2 mail wait [--subject <s>] [--timeout 300]    # block until a matching message arrives; prints it in `read` format
 k2 mail send <to> --subject <s> --body <t>      # governed: off (default) | approval | on
 k2 mail reply <message-id> --body <t>           # guardrailed reply (recipient + From locked, loop caps)
-k2 mail draft <message-id> --body <t>           # external assistant inbox only: save a reply DRAFT into your human's own mail account
+k2 mail draft <message-id> --body <t> [--attach]  # linked: reply DRAFT into your human's Gmail Drafts
+k2 mail draft --to <addr> --subject <s> --body <t> [--cc] [--attach] [--from <linked>]  # brand-new draft
 k2 mail outbox [<id>]                           # your outbound + decisions (denied shows your human's note)
 k2 mail delete <address>                        # retire an address you own (frees its cap slot immediately)
 ```
@@ -552,7 +554,7 @@ k2 mail delete <address>                        # retire an address you own (fre
 - Sending is OFF by default — that is your human's decision: request access with `k2 tickets ask`, never retry-loop. In approval mode `queued for approval (out_…)` + exit 0 IS success; track it with `k2 mail outbox`, or `--wait` to block until decided (exit 2 = timed out but STILL queued).
 - `submitted` means accepted-for-delivery — never claim an email was "delivered".
 - Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
-- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other, and you `draft` replies into the account's real Drafts folder for your human to review and send. Drafting is always available; sending from a linked account requires your human to grant the `send` level (app-password and Gmail-OAuth inboxes send over SMTP; Microsoft-OAuth is draft-only for now) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
+- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from linked Gmail need the `send` level AND Sending=`on` (app-password and Gmail-OAuth send over SMTP; Microsoft-OAuth is draft-only until Graph send) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
 
 ## Discover peers
 
@@ -750,7 +752,8 @@ k2 mail read <message-id>                       # one full message (marks it rea
 k2 mail wait [--subject <s>] [--timeout 300]    # block until a matching message arrives; prints it in `read` format
 k2 mail send <to> --subject <s> --body <t>      # governed: off (default) | approval | on
 k2 mail reply <message-id> --body <t>           # guardrailed reply (recipient + From locked, loop caps)
-k2 mail draft <message-id> --body <t>           # external assistant inbox only: save a reply DRAFT into your human's own mail account
+k2 mail draft <message-id> --body <t> [--attach]  # linked: reply DRAFT into your human's Gmail Drafts
+k2 mail draft --to <addr> --subject <s> --body <t> [--cc] [--attach] [--from <linked>]  # brand-new draft
 k2 mail outbox [<id>]                           # your outbound + decisions (denied shows your human's note)
 k2 mail delete <address>                        # retire an address you own (frees its cap slot immediately)
 ```
@@ -762,7 +765,7 @@ k2 mail delete <address>                        # retire an address you own (fre
 - Sending is OFF by default — that is your human's decision: request access with `k2 tickets ask`, never retry-loop. In approval mode `queued for approval (out_…)` + exit 0 IS success; track it with `k2 mail outbox`, or `--wait` to block until decided (exit 2 = timed out but STILL queued).
 - `submitted` means accepted-for-delivery — never claim an email was "delivered".
 - Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
-- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other, and you `draft` replies into the account's real Drafts folder for your human to review and send. Drafting is always available; sending from a linked account requires your human to grant the `send` level (app-password and Gmail-OAuth inboxes send over SMTP; Microsoft-OAuth is draft-only for now) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
+- Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from linked Gmail need the `send` level AND Sending=`on` (app-password and Gmail-OAuth send over SMTP; Microsoft-OAuth is draft-only until Graph send) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
 
 ## Activity feed + reviews
 
@@ -1875,6 +1878,20 @@ mod tests {
             assert!(
                 body.contains("exit 3"),
                 "{generator} must state owner verbs are server-enforced (exit 3)"
+            );
+            assert!(
+                body.contains("k2 mail draft --to"),
+                "{generator} must teach compose-draft --to/--subject"
+            );
+            assert!(
+                !body.contains("cannot send from external")
+                    && !body.contains("sending is impossible")
+                    && !body.contains("impossible in V1"),
+                "{generator} must not claim sending from external is impossible"
+            );
+            assert!(
+                body.contains("Sending=`on`") || body.contains("Sending=on"),
+                "{generator} must teach linked send needs Sending=on"
             );
         }
     }

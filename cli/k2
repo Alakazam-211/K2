@@ -11511,7 +11511,7 @@ cmd_schema() {
     {
       "name": "mail send",
       "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
-      "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level (submitted immediately over SMTP, ungated for now). Linked send needs an explicit --from <linked-address>. Attachments (--attach) are supported on LINKED sends only (not hosted yet). Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
+      "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level AND Sending=on. Linked send needs an explicit --from <linked-address>. Attachments (--attach) are supported on LINKED sends only (not hosted yet). Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
       "args": [{"name": "to", "required": false}],
       "flags": [
         {"name": "--to", "arg": "addr", "description": "Recipient (repeatable / comma-separated)."},
@@ -11531,7 +11531,7 @@ cmd_schema() {
     {
       "name": "mail reply",
       "usage": "k2 mail reply <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--wait [--timeout <secs>]] [--json]",
-      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level it submits the reply immediately over SMTP (ungated for now). Attachments (--attach) are supported on LINKED replies only (not hosted yet). For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
+      "description": "Guardrailed reply to a received message: recipient locked to the original sender, From locked to the receiving address, loop caps (max 4 replies/thread/hour). On HOSTED addresses this uses the same send gating and --wait semantics as 'mail send'; on a LINKED inbox where you hold the 'send' level AND Sending=on it submits the reply immediately over SMTP. Attachments (--attach) are supported on LINKED replies only (not hosted yet). For a linked message you'd rather NOT send, save a draft with 'k2 mail draft'.",
       "args": [{"name": "message-id", "required": true}],
       "flags": [
         {"name": "--body", "arg": "text", "description": "The reply text."},
@@ -11544,12 +11544,17 @@ cmd_schema() {
     },
     {
       "name": "mail draft",
-      "usage": "k2 mail draft <message-id> (--body <text> | --body-file <f>) [--json]",
-      "description": "Save a reply DRAFT into your human's external assistant inbox (their own Gmail/IMAP account bound to this workspace): the draft lands in the account's real Drafts folder, threaded onto the source message — your human reviews and sends it from their own mail client. This is the review-first path and works at the 'draft' level; if your workspace holds the 'send' level on the linked inbox you can instead send the reply immediately with 'k2 mail reply'. For K2-hosted messages use 'k2 mail reply' (a K2-hosted id errors with that pointer).",
-      "args": [{"name": "message-id", "required": true}],
+      "usage": "k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--json]  |  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--attach <path>] [--from <linked-addr>] [--json]",
+      "description": "Save a DRAFT into your human's linked Gmail/IMAP Drafts folder (APPEND \\Draft) — they review and send from their own client. Two forms: reply (positional <message-id>, inherits To/Subject) or compose (--to and --subject, no id). Works at the 'draft' level; a send is a different verb (k2 mail send/reply need level send AND Sending=on). --attach matches send caps (10 files / 25MiB) on both forms. Graph/Microsoft compose and Graph attachments are out of v1 (teaching error). For K2-hosted messages use 'k2 mail reply'.",
+      "args": [{"name": "message-id", "required": false}],
       "flags": [
-        {"name": "--body", "arg": "text", "description": "The draft reply text."},
+        {"name": "--to", "arg": "addr", "description": "Compose: recipient (repeatable / comma-separated). Mutually exclusive with <message-id>."},
+        {"name": "--subject", "arg": "s", "description": "Compose: subject. Required with --to."},
+        {"name": "--cc", "arg": "addr", "description": "Compose only: Cc (repeatable / comma-separated)."},
+        {"name": "--from", "arg": "linked-addr", "description": "Compose: which linked inbox to draft FROM (needed with several; one may be implicit)."},
+        {"name": "--body", "arg": "text", "description": "The draft text."},
         {"name": "--body-file", "arg": "f", "description": "Read the draft text from a file."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). IMAP linked inboxes only. Max 10 files, 25MB total."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -20112,10 +20117,25 @@ elif verb == "approvals_deny":
         print("%s rejected — your note reaches the agent in its outbox." % d.get("id", ""))
 
 elif verb == "draft":
-    # S9: reply DRAFT into the workspace's external assistant inbox.
-    # The daemon composes + APPENDs with \Draft; nothing is ever sent.
-    d = call("POST", "/cli/mail/draft",
-             body={"project": ws_path, "id": env("M_ID"), "body": env("M_BODY")})
+    # Reply DRAFT (id) or compose DRAFT (--to/--subject). APPEND \Draft;
+    # nothing is ever sent. Gate is can_draft, not mailAgentSend.
+    body = {"project": ws_path, "body": env("M_BODY")}
+    if env("M_ID"):
+        body["id"] = env("M_ID")
+    to = env_list("M_TO")
+    if to:
+        body["to"] = to
+    if env("M_SUBJECT"):
+        body["subject"] = env("M_SUBJECT")
+    cc = env_list("M_CC")
+    if cc:
+        body["cc"] = cc
+    if env("M_FROM"):
+        body["from"] = env("M_FROM")
+    attach = env_lines("M_ATTACH")
+    if attach:
+        body["attachments"] = attach
+    d = call("POST", "/cli/mail/draft", body=body)
     if as_json:
         print(dumps(d))
     else:
@@ -20149,8 +20169,9 @@ elif verb == "external_add":
             print("drafts folder: %s" % d["draftsFolder"])
         else:
             print("no Drafts folder detected — set one with --drafts-folder if 'k2 mail draft' errors")
-        print("agents in that workspace can now READ this inbox and save reply drafts;")
-        print("sending from it is impossible (drafts only — you send from your own mail client).")
+        print("agents in that workspace can now READ this inbox and save drafts")
+        print("(k2 mail draft --to/--subject compose, or draft <id> reply);")
+        print("sending FROM it needs level 'send' AND workspace Sending=on (k2 mail send/reply).")
 
 elif verb == "link_oauth_add":
     # O4 owner verb: begin an OAuth link (Gmail loopback / Microsoft
@@ -21092,13 +21113,14 @@ cmd_mail_approvals() {
     esac
 }
 
-# S9 (PRD §17.5): save a reply DRAFT into an external assistant
-# inbox's real Drafts folder. Agent verb — drafting is always on so the
-# human can review + send from their own client; agents can also send
-# directly once a workspace is raised to the 'send' level (SMTP).
+# S9 (PRD §17.5): save a DRAFT into an external assistant inbox's real
+# Drafts folder. Two forms: reply (`<id> --body`) or compose
+# (`--to --subject --body`). Agent verb — drafting is always on
+# (`can_draft`); sending needs level send AND Sending=on.
 cmd_mail_draft() {
     if _wants_help "$@"; then cmd_help_mail_draft; exit 0; fi
     local id="" body="" body_file="" as_json=false
+    local to="" subject="" cc="" from="" attach=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --body)
@@ -21107,9 +21129,24 @@ cmd_mail_draft() {
             --body-file)
                 [ $# -ge 2 ] || { _mail_err "usage" "--body-file requires a file path"; exit 2; }
                 body_file="$2"; shift 2 ;;
+            --to)
+                [ $# -ge 2 ] || { _mail_err "usage" "--to requires a recipient address"; exit 2; }
+                to="${to}${to:+$'\n'}$2"; shift 2 ;;
+            --subject)
+                [ $# -ge 2 ] || { _mail_err "usage" "--subject requires a value"; exit 2; }
+                subject="$2"; shift 2 ;;
+            --cc)
+                [ $# -ge 2 ] || { _mail_err "usage" "--cc requires an address"; exit 2; }
+                cc="${cc}${cc:+$'\n'}$2"; shift 2 ;;
+            --from)
+                [ $# -ge 2 ] || { _mail_err "usage" "--from requires a linked address (see 'k2 mail inboxes')"; exit 2; }
+                from="$2"; shift 2 ;;
+            --attach)
+                [ $# -ge 2 ] || { _mail_err "usage" "--attach requires a file path"; exit 2; }
+                attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--attach <path>] [--from <linked>]"
                 exit 2 ;;
             *)
                 if [ -z "$id" ]; then id="$1"; else
@@ -21119,9 +21156,27 @@ cmd_mail_draft() {
                 shift ;;
         esac
     done
-    if [ -z "$id" ]; then
-        _mail_err "usage" "draft requires a <message-id> (from 'k2 mail messages')"
+    if [ -n "$id" ] && { [ -n "$to" ] || [ -n "$subject" ]; }; then
+        _mail_err "usage" "pass either a <message-id> (reply draft) or --to/--subject (compose draft), not both"
         exit 2
+    fi
+    if [ -n "$id" ] && [ -n "$cc" ]; then
+        _mail_err "usage" "--cc is for compose drafts (k2 mail draft --to … --cc)"
+        exit 2
+    fi
+    if [ -n "$id" ] && [ -n "$from" ]; then
+        _mail_err "usage" "--from is for compose drafts (picks the linked inbox)"
+        exit 2
+    fi
+    if [ -z "$id" ]; then
+        if [ -z "$to" ]; then
+            _mail_err "usage" "compose draft requires --to <addr> --subject <s> (--body|--body-file); or pass a <message-id> to draft a reply"
+            exit 2
+        fi
+        if [ -z "$subject" ]; then
+            _mail_err "usage" "compose draft requires --subject"
+            exit 2
+        fi
     fi
     if [ -n "$body" ] && [ -n "$body_file" ]; then
         _mail_err "usage" "--body and --body-file are mutually exclusive"
@@ -21141,7 +21196,8 @@ cmd_mail_draft() {
         _mail_err "usage" "draft requires --body <text> or --body-file <f>"
         exit 2
     fi
-    local M_VERB="draft" M_JSON="$as_json" M_ID="$id" M_BODY="$body"
+    local M_VERB="draft" M_JSON="$as_json" M_ID="$id" M_BODY="$body" \
+          M_TO="$to" M_SUBJECT="$subject" M_CC="$cc" M_FROM="$from" M_ATTACH="$attach"
     _mail_py
 }
 
@@ -21612,8 +21668,8 @@ DISCOVER & READ
   wait                        Block until a matching message arrives (verification codes)
 
 WRITE
-  draft <message-id>          LINKED inbox: save a reply DRAFT into your human's own
-                              mail account (they review + send it themselves)
+  draft <message-id>          LINKED: reply DRAFT into your human's Gmail Drafts
+  draft --to --subject        LINKED: compose a brand-new draft (no message-id)
   send <to>                   Send from an inbox you have 'send' on — hosted OR a linked
                               inbox over SMTP — gated off | approval | on (human's choice)
   reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox)
@@ -22048,30 +22104,34 @@ EOF
 
 cmd_help_mail_draft() {
     cat <<'EOF'
-Save a reply DRAFT into your human's external assistant inbox (their own
-Gmail/Fastmail/IMAP account, connected via `k2 mail link add` and bound
-to this workspace). The draft lands in the account's REAL Drafts folder,
-threaded onto the source message — your human sees it in their own mail
-client, reviews, edits, and sends it themselves.
+Save a DRAFT into your human's linked Gmail/IMAP Drafts folder (APPEND
+\Draft). Two forms: reply onto a listed message, or compose a brand-new
+To/Subject. Your human sees it in their own mail client, reviews, edits,
+and sends it themselves.
 
-`draft` only DRAFTS — it never sends. Sending FROM a linked account is a
-separate, opt-in capability: once your human raises this workspace to the
-`send` level, `k2 mail send`/`reply` submit over SMTP (app-password and
-Gmail-OAuth inboxes; Microsoft-OAuth stays draft-only until Graph send
-lands). Using `draft` on a K2-hosted message id errors with a pointer to
-`k2 mail reply`.
+`draft` only DRAFTS — it never sends. Sending FROM a linked account needs
+level `send` AND workspace Sending=`on` (`k2 mail send`/`reply`;
+app-password and Gmail-OAuth; Microsoft-OAuth stays draft-only until
+Graph send). Using `draft` on a K2-hosted message id errors with a
+pointer to `k2 mail reply`. Graph compose-draft is out of v1.
 
 USAGE
-  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--json]
+  k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--json]
+  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--attach <path>] [--from <linked>] [--json]
 
 ARGUMENTS
-  <message-id>           A message id from 'k2 mail messages' that lives in
-                         this workspace's external inbox
+  <message-id>           Reply form: a message id from 'k2 mail messages'
+                         (mutually exclusive with --to/--subject)
 
 FLAGS
-  --body <text>          The draft reply text
+  --to <addr>            Compose form: recipient (repeatable)
+  --subject <s>          Compose form: subject (required with --to)
+  --cc <addr>            Compose only: Cc (repeatable)
+  --from <linked-addr>   Compose: which linked inbox (required when several)
+  --body <text>          The draft text
   --body-file <f>        Read the draft text from a file
-  --json                 JSON output ({ok,id,address,folder,hint})
+  --attach <path>        Workspace-relative file to attach (repeatable; 10 / 25MiB)
+  --json                 JSON output ({ok,id?,address,folder,hint})
 EOF
 }
 
@@ -22177,7 +22237,7 @@ Manage WHO can use an inbox — one access layer over BOTH hosted and
 linked inboxes (PRIMARY/owner surface; agents get exit 3). Levels order
 read < draft < send. 'send' works on BOTH sources: HOSTED sends through
 the K2 server under your send-gating governance; LINKED sends FROM the
-user's own account over SMTP (ungated for now — grant it deliberately).
+user's own account over SMTP when level send AND Sending=on.
 
 USAGE
   k2 mail access grant   <address> <workspace> --level read|draft|send
@@ -23565,8 +23625,9 @@ case "${1:-help}" in
             archive)     shift 2; cmd_mail_archive "$@" ;;
             delete)      shift 2; cmd_mail_delete "$@" ;;
             folder)      shift 2; cmd_mail_folder "$@" ;;
-            # Save a reply DRAFT into a LINKED assistant inbox's real
-            # Drafts folder (agent verb; sending is a separate 'send'-level verb).
+            # Save a DRAFT into a LINKED assistant inbox's real Drafts
+            # folder (reply onto <id>, or compose --to/--subject). Agent
+            # verb; sending is a separate 'send'-level verb.
             draft)       shift 2; cmd_mail_draft "$@" ;;
             outbox)      shift 2; cmd_mail_outbox "$@" ;;
             # S11: the user's OWN external accounts (link add|list|remove)

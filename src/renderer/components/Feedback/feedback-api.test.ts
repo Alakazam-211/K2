@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  askingSessionWakeAction,
   collectAssignees,
   countByStatus,
   filterByAssignee,
@@ -130,5 +131,102 @@ describe('collectAssignees / filterByAssignee', () => {
     expect(filterByAssignee(rows, 'julie').map((r) => r.id)).toEqual(['1', '2'])
     expect(filterByAssignee(rows, 'owner').map((r) => r.id)).toEqual(['1'])
     expect(filterByAssignee(rows, 'nobody')).toEqual([])
+  })
+})
+
+describe('askingSessionWakeAction (D6)', () => {
+  const pinned = 'conv-pinned'
+
+  it('canonical id + sessionKind=sandbox does not sandbox/reopen', () => {
+    expect(
+      askingSessionWakeAction({
+        sessionId: pinned,
+        sessionKind: 'sandbox',
+        canonicalSessionId: pinned,
+        liveById: false,
+      }),
+    ).toBe('ensure-pinned-chat')
+  })
+
+  it('true sandbox UUID still sandbox/reopens once the pinned id is known', () => {
+    expect(
+      askingSessionWakeAction({
+        sessionId: 'sess-sandbox-pty',
+        sessionKind: 'sandbox',
+        canonicalSessionId: pinned,
+        liveById: false,
+      }),
+    ).toBe('sandbox/reopen')
+  })
+
+  it('does not sandbox/reopen a poison stamp before the pinned id is loaded', () => {
+    expect(
+      askingSessionWakeAction({
+        sessionId: pinned,
+        sessionKind: 'sandbox',
+        canonicalSessionId: undefined,
+        liveById: false,
+      }),
+    ).toBe('checking')
+  })
+
+  it('unknown kinds attach if live-by-id and are not treated as canonical', () => {
+    expect(
+      askingSessionWakeAction({
+        sessionId: 'sess-x',
+        sessionKind: 'host',
+        canonicalSessionId: pinned,
+        liveById: true,
+      }),
+    ).toBe('attach-live')
+    expect(
+      askingSessionWakeAction({
+        sessionId: 'sess-x',
+        sessionKind: 'sidecar',
+        canonicalSessionId: pinned,
+        liveById: false,
+      }),
+    ).toBe('dormant-unwakeable')
+    expect(
+      askingSessionWakeAction({
+        sessionId: 'sess-x',
+        sessionKind: 'api',
+        canonicalSessionId: pinned,
+        liveById: false,
+      }),
+    ).toBe('dormant-unwakeable')
+  })
+
+  it('unknown kind that IS the pinned conversation id still ensure-pinned-chat (D6)', () => {
+    expect(
+      askingSessionWakeAction({
+        sessionId: pinned,
+        sessionKind: 'sidecar',
+        canonicalSessionId: pinned,
+        liveById: false,
+      }),
+    ).toBe('ensure-pinned-chat')
+  })
+
+  it('canonical kind wakes via ensure-pinned-chat even if ids differ', () => {
+    expect(
+      askingSessionWakeAction({
+        sessionId: 'old-conv',
+        sessionKind: 'canonical',
+        canonicalSessionId: pinned,
+        liveById: false,
+      }),
+    ).toBe('ensure-pinned-chat')
+  })
+
+  it('sessionless is none', () => {
+    expect(
+      askingSessionWakeAction({
+        sessionId: null,
+        sessionKind: null,
+        canonicalSessionId: pinned,
+        liveById: false,
+      }),
+    ).toBe('none')
   })
 })

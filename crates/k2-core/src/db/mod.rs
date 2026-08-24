@@ -829,6 +829,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0106_workspace_default_model",
             include_str!("../../drizzle_sql/0106_workspace_default_model.sql"),
         ),
+        // 0107 — poison sandbox stamp on the pinned conversation id → canonical.
+        (
+            "0107_feedback_canonical_kind_repair",
+            include_str!("../../drizzle_sql/0107_feedback_canonical_kind_repair.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1310,9 +1315,97 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0106_workspace_default_model",
+            last_name, "0107_feedback_canonical_kind_repair",
             "unexpected last migration name: {last_name}"
         );
+    }
+
+    #[test]
+    fn feedback_canonical_kind_repair_flips_poison_sandbox_stamp() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+
+        let project_a = "proj-a-0107";
+        let project_b = "proj-b-0107";
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, 'A', '/tmp/a-0107'), (?2, 'B', '/tmp/b-0107')",
+            params![project_a, project_b],
+        )
+        .unwrap();
+        let canonical_id = "conv-canonical-0107";
+        conn.execute(
+            "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+             VALUES ('ws-a', ?1, ?2, 'claude', 'user', 'sleeping', unixepoch())",
+            params![project_a, canonical_id],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO feedback (id, project_id, session_id, session_kind, agent_name, kind, title, priority, status, created_at, updated_at) \
+             VALUES ('fb-poison', ?1, ?2, 'sandbox', 'scout', 'question', 't', 3, 'waiting', 0, 0)",
+            params![project_a, canonical_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feedback (id, project_id, session_id, session_kind, agent_name, kind, title, priority, status, created_at, updated_at) \
+             VALUES ('fb-other-project', ?1, ?2, 'sandbox', 'scout', 'question', 't', 3, 'waiting', 0, 0)",
+            params![project_b, canonical_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feedback (id, project_id, session_id, session_kind, agent_name, kind, title, priority, status, created_at, updated_at) \
+             VALUES ('fb-true-sandbox', ?1, 'sess-random-sandbox', 'sandbox', 'scout', 'question', 't', 3, 'waiting', 0, 0)",
+            params![project_a],
+        )
+        .unwrap();
+
+        conn.execute_batch(include_str!(
+            "../../drizzle_sql/0107_feedback_canonical_kind_repair.sql"
+        ))
+        .unwrap();
+
+        let poison: String = conn
+            .query_row(
+                "SELECT session_kind FROM feedback WHERE id = 'fb-poison'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(poison, "canonical", "poison sandbox+canonical-id must flip");
+
+        let other: String = conn
+            .query_row(
+                "SELECT session_kind FROM feedback WHERE id = 'fb-other-project'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            other, "sandbox",
+            "same session_id on a different project_id must not flip"
+        );
+
+        let true_sandbox: String = conn
+            .query_row(
+                "SELECT session_kind FROM feedback WHERE id = 'fb-true-sandbox'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(true_sandbox, "sandbox", "random sandbox UUID must stay sandbox");
+
+        conn.execute_batch(include_str!(
+            "../../drizzle_sql/0107_feedback_canonical_kind_repair.sql"
+        ))
+        .unwrap();
+        let poison2: String = conn
+            .query_row(
+                "SELECT session_kind FROM feedback WHERE id = 'fb-poison'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(poison2, "canonical");
     }
 
     #[test]

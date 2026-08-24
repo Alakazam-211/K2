@@ -20,11 +20,14 @@ export type FeedbackStatus =
   | 'planned'
   | 'needs_discussion'
 
+/** Stamp on the asking session. Unknown strings are honest JSON, not canonical. */
+export type FeedbackSessionKind = 'canonical' | 'sandbox' | 'sidecar' | 'api' | (string & {}) | null
+
 export interface FeedbackItem {
   id: string
   projectId: string
   sessionId: string | null
-  sessionKind: 'canonical' | 'sandbox' | null
+  sessionKind: FeedbackSessionKind
   agentName: string
   kind: FeedbackKind
   title: string
@@ -59,6 +62,8 @@ export interface FeedbackShow extends FeedbackItem {
   workspace: string | null
   projectPath: string | null
   comments: FeedbackComment[]
+  /** That project's `workspace_sessions.session_id` (pinned conversation). */
+  canonicalSessionId?: string | null
 }
 
 /** Minimal slice of the projects store the fan-out needs. */
@@ -147,8 +152,52 @@ export async function fetchFeedbackShow(id: string): Promise<FeedbackShow> {
  *  (status → answered, `ask --wait` unblocks). fyi never auto-answers.
  *  (The legacy answer route still exists for API compat; the renderer
  *  no longer uses it.) */
-export async function commentFeedback(id: string, body: string): Promise<void> {
-  await daemonCliPost('feedback/comment', { id, body })
+export interface FeedbackCommentResult {
+  ok: boolean
+  id: string
+  commentId?: string
+  author?: string
+  answered?: boolean
+  status?: FeedbackStatus
+  delivered?: boolean
+  deliveryReason?: string | null
+  deliveredSessionId?: string | null
+}
+
+export async function commentFeedback(
+  id: string,
+  body: string,
+): Promise<FeedbackCommentResult> {
+  return daemonCliPost<FeedbackCommentResult>('feedback/comment', { id, body })
+}
+
+/** Agent-tab wake plan (D6). Never `sandbox/reopen` a pinned conversation id. */
+export type AskingSessionWakeAction =
+  | 'none'
+  | 'checking'
+  | 'attach-live'
+  | 'ensure-pinned-chat'
+  | 'sandbox/reopen'
+  | 'dormant-unwakeable'
+
+export function askingSessionWakeAction(args: {
+  sessionId: string | null
+  sessionKind: FeedbackSessionKind
+  /** `undefined` = show payload not loaded yet; `null` = no pinned id. */
+  canonicalSessionId: string | null | undefined
+  liveById: boolean
+}): AskingSessionWakeAction {
+  if (!args.sessionId) return 'none'
+  if (args.liveById) return 'attach-live'
+  const d6 =
+    typeof args.canonicalSessionId === 'string' &&
+    args.canonicalSessionId.length > 0 &&
+    args.sessionId === args.canonicalSessionId
+  if (d6) return 'ensure-pinned-chat'
+  if (args.sessionKind === 'canonical') return 'ensure-pinned-chat'
+  if (args.canonicalSessionId === undefined) return 'checking'
+  if (args.sessionKind === 'sandbox') return 'sandbox/reopen'
+  return 'dormant-unwakeable'
 }
 
 /** POST /cli/feedback/resolve — `resolved`, `dismissed`, `planned`,

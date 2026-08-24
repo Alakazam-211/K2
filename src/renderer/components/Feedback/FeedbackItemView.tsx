@@ -14,9 +14,10 @@
 // /cli/sessions/v2/spawn reuses the existing daemon PTY — the same
 // mechanism as AgentChatPane and the orange-tab sandbox adoption). A
 // live session attaches immediately; a dormant one shows "Wake session"
-// (canonical → activate + ensure-pinned-chat, sandbox → activate +
-// sandbox/reopen) and then attaches; no session_id shows a plain empty
-// state. PRD §4.3.1: open/attach ⇒ activate so active_reaper spares it.
+// (D6: session_id == workspace_sessions.session_id → ensure-pinned-chat
+// even if the row still says sandbox; never sandbox/reopen a pinned
+// conversation id; unknown kinds attach if live-by-id only).
+// PRD §4.3.1: open/attach ⇒ activate so active_reaper spares it.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -31,12 +32,14 @@ import {
   wakeCanonicalMemberSession,
 } from '@/components/Projects/wake-member-session'
 import {
+  askingSessionWakeAction,
   assignFeedback,
   commentFeedback,
   fetchFeedbackShow,
   optionsActionable,
   resolveFeedback,
   type FeedbackListRow,
+  type FeedbackSessionKind,
   type FeedbackShow,
 } from './feedback-api'
 import { KindBadge, PriorityBadge, StatusBadge } from './badges'
@@ -170,6 +173,7 @@ export function FeedbackItemView({
         <TerminalTab
           sessionId={view.sessionId}
           sessionKind={view.sessionKind}
+          canonicalSessionId={item?.canonicalSessionId}
           projectId={view.projectId}
           projectPath={projectPath}
           feedbackId={id}
@@ -198,6 +202,7 @@ function ThreadTab({
   const [reply, setReply] = useState(() => getTicketDraft(ticketId))
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Match Code Editor → Appearance → Font Size (default 12).
@@ -311,11 +316,21 @@ function ThreadTab({
 
   // Always a plain comment — the daemon lands human comments in the
   // asking session, and the first one on a waiting ask answers it.
+  // Keep delivered/deliveryReason (D8); a quiet miss is not a store error.
+  const sendComment = async (text: string): Promise<void> => {
+    const res = await commentFeedback(item.id, text)
+    if (res.delivered === false) {
+      setDeliveryMiss(res.deliveryReason ?? 'not delivered')
+    } else {
+      setDeliveryMiss(null)
+    }
+  }
+
   const sendReply = (): void => {
     const text = reply.trim()
     if (!text) return
     void submit(async () => {
-      await commentFeedback(item.id, text)
+      await sendComment(text)
       setReplyAndDraft('')
       clearTicketDraft(ticketId)
     })
@@ -347,7 +362,7 @@ function ThreadTab({
                     key={opt}
                     type="button"
                     disabled={!canTapOptions || busy}
-                    onClick={() => void submit(() => commentFeedback(item.id, opt))}
+                    onClick={() => void submit(() => sendComment(opt))}
                     className={`px-3 py-1.5 text-[11px] font-medium border transition-colors ${
                       accepted
                         ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
@@ -383,6 +398,11 @@ function ThreadTab({
 
       <div className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
         {actionError && <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>}
+        {deliveryMiss && (
+          <p className="mb-2 text-[10px] text-[var(--color-text-muted)] selectable-copy">
+            Reply saved. The workspace agent did not receive it ({deliveryMiss}).
+          </p>
+        )}
         <textarea
           ref={textareaRef}
           value={reply}
@@ -616,12 +636,14 @@ async function fetchLiveSessions(): Promise<LiveSessionRow[]> {
 function TerminalTab({
   sessionId,
   sessionKind,
+  canonicalSessionId,
   projectId,
   projectPath,
   feedbackId,
 }: {
   sessionId: string | null
-  sessionKind: 'canonical' | 'sandbox' | null
+  sessionKind: FeedbackSessionKind
+  canonicalSessionId: string | null | undefined
   projectId: string
   projectPath: string | null
   feedbackId: string
@@ -632,20 +654,27 @@ function TerminalTab({
 
   // Resolve whether the asking session is live and which daemon
   // agent_name key to attach to:
-  //  - sandbox cells register under a host-minted `api-<...>` key whose
-  //    daemon sessionId IS the feedback row's session id → match by id.
-  //  - canonical sessions run under the workspace's bare project-id key
-  //    (the AgentChatPane attach key); the feedback row carries the
-  //    CONVERSATION id, so liveness is checked via lookup-by-agent.
+  //  - live-by-id: sandbox cells (and any live PTY whose daemon id
+  //    matches the stamp) attach immediately.
+  //  - D6 / canonical: conversation id matches workspace_sessions, or
+  //    kind is canonical → lookup-by-agent, wake via ensure-pinned-chat.
+  //  - true sandbox (kind sandbox, id is NOT the pinned conversation)
+  //    → sandbox/reopen. Unknown kinds never reopen.
   const resolve = useCallback(async (): Promise<TermPhase> => {
     if (!sessionId) return { kind: 'none' }
     try {
       const live = await fetchLiveSessions()
       const match = live.find((r) => r.sessionId === sessionId)
-      if (match) {
+      const action = askingSessionWakeAction({
+        sessionId,
+        sessionKind,
+        canonicalSessionId,
+        liveById: Boolean(match),
+      })
+      if (action === 'attach-live' && match) {
         return { kind: 'live', agentName: match.agentName, cwd: match.cwd, sessionId: match.sessionId }
       }
-      if (sessionKind === 'canonical' && projectPath) {
+      if (action === 'ensure-pinned-chat' && projectPath) {
         const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(
           'sessions/lookup-by-agent',
           { agent: projectId },
@@ -659,13 +688,14 @@ function TerminalTab({
           }
         }
       }
+      if (action === 'checking') return { kind: 'checking' }
       const wakeable =
-        projectPath !== null && (sessionKind === 'canonical' || sessionKind === 'sandbox')
+        projectPath !== null && (action === 'ensure-pinned-chat' || action === 'sandbox/reopen')
       return { kind: 'dormant', wakeable }
     } catch (e) {
       return { kind: 'error', message: e instanceof Error ? e.message : String(e) }
     }
-  }, [sessionId, sessionKind, projectId, projectPath])
+  }, [sessionId, sessionKind, canonicalSessionId, projectId, projectPath])
 
   useEffect(() => {
     let cancelled = false
@@ -695,11 +725,19 @@ function TerminalTab({
   // is set before reaper arms — without it, active_reaper reaps after ~15s.
   const wake = useCallback(async (): Promise<void> => {
     if (!projectPath || !sessionId) return
+    const action = askingSessionWakeAction({
+      sessionId,
+      sessionKind,
+      canonicalSessionId,
+      liveById: false,
+    })
+    if (action !== 'ensure-pinned-chat' && action !== 'sandbox/reopen') return
     setPhase({ kind: 'waking' })
     try {
-      if (sessionKind === 'canonical') {
+      if (action === 'ensure-pinned-chat') {
         // Daemon-owned find-or-spawn under the canonical project-id key —
         // the same wake AgentChatPane rides; activate first (see helper).
+        // D6: poison sandbox + pinned conversation id takes this arm.
         await wakeCanonicalMemberSession(projectId, projectPath, {
           activateProject,
           ensurePinnedChat: (project) =>
@@ -708,10 +746,9 @@ function TerminalTab({
         setPhase({ kind: 'live', agentName: projectId, cwd: projectPath })
         return
       }
-      // Sandbox: mark workspace Active (client watching), re-mount the
-      // cell's persistent layer + resume, then poll the live list until
-      // the session registers (the reopen returns as soon as the relaunch
-      // is accepted).
+      // True sandbox (id is not the pinned conversation): mark workspace
+      // Active, re-mount the cell's persistent layer + resume, then poll
+      // the live list until the session registers.
       activateOnLiveSessionAttach(projectId, activateProject)
       await daemonCliPost('sandbox/reopen', {
         project_path: projectPath,
@@ -730,7 +767,7 @@ function TerminalTab({
     } catch (e) {
       setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
     }
-  }, [projectPath, sessionId, sessionKind, projectId])
+  }, [projectPath, sessionId, sessionKind, canonicalSessionId, projectId])
 
   if (phase.kind === 'none') {
     return (

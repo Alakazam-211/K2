@@ -17671,37 +17671,35 @@ print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT
         || echo "Error ($code): $hint" >&2
 }
 
-# Session auto-detection (feedback F1): the asking session's id + kind
-# from the environment, first match wins:
-#   1. K2_SESSION_ID — daemon host-curated session id for BOTH:
-#        • sandbox cells (v1_sandboxes/policy.rs — guest may splice
-#          `claude --session-id $K2_SESSION_ID`)
-#        • host-sessions (v1_host_sessions/policy.rs — same string as
-#          API sessionId / capability JWT sub; 0.40.93+)
-#      Presence alone does NOT mean "sandbox": check K2_API_CELL=1 for
-#      API cells; sandbox vs host is which spawn path ran, not this var.
-#   2. CLAUDE_SESSION_ID — reserved hook-context spelling (PRD §4.2).
-#   3. CLAUDE_CODE_SESSION_ID — what Claude Code actually exports into
-#      Bash-tool subshells; in a K2 canonical (pinned-chat) session it
-#      equals the forced `claude --session-id <id>`.
+# Session auto-detection (tickets ask): id + kind from the environment.
+# First match wins (prd-ticket-answer-wakes-canonical D3):
+#   1. K2_API_CELL=1 / K2SO_API_CELL=1 → id=K2_SESSION_ID, kind=api
+#   2. K2_CELL=sidecar → kind=sidecar (id=K2_SESSION_ID when set)
+#   3. K2_CELL=canonical, OR K2_SESSION_ID with no cell → kind=canonical
+#   4. else CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID → kind=canonical
+# Presence of K2_SESSION_ID is not a cell type. No legacy "sandbox" stamp.
 # Nothing found → both stay empty (a session-less ask must still work).
 _feedback_detect_session() {
     FB_SESSION_ID=""
     FB_SESSION_KIND=""
-    if [ -n "${K2_SESSION_ID:-}" ]; then
-        # Kind is best-effort for feedback attribution, not spawn-path truth.
-        # Prefer "api" when K2_API_CELL marks a host/sandbox API cell; else
-        # legacy label "sandbox" for older docs that grepped this helper.
+    if [ "${K2_API_CELL:-}" = "1" ] || [ "${K2SO_API_CELL:-}" = "1" ]; then
+        FB_SESSION_ID="${K2_SESSION_ID:-}"
+        FB_SESSION_KIND="api"
+    elif [ "${K2_CELL:-}" = "sidecar" ]; then
+        FB_SESSION_ID="${K2_SESSION_ID:-}"
+        FB_SESSION_KIND="sidecar"
+    elif [ "${K2_CELL:-}" = "canonical" ]; then
+        FB_SESSION_ID="${K2_SESSION_ID:-}"
+        FB_SESSION_KIND="canonical"
+    elif [ -n "${K2_SESSION_ID:-}" ] && [ -z "${K2_CELL:-}" ]; then
         FB_SESSION_ID="$K2_SESSION_ID"
-        if [ "${K2_API_CELL:-}" = "1" ] || [ "${K2SO_API_CELL:-}" = "1" ]; then
-            FB_SESSION_KIND="api"
-        else
-            FB_SESSION_KIND="sandbox"
-        fi
+        FB_SESSION_KIND="canonical"
     elif [ -n "${CLAUDE_SESSION_ID:-}" ]; then
-        FB_SESSION_ID="$CLAUDE_SESSION_ID"; FB_SESSION_KIND="canonical"
+        FB_SESSION_ID="$CLAUDE_SESSION_ID"
+        FB_SESSION_KIND="canonical"
     elif [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
-        FB_SESSION_ID="$CLAUDE_CODE_SESSION_ID"; FB_SESSION_KIND="canonical"
+        FB_SESSION_ID="$CLAUDE_CODE_SESSION_ID"
+        FB_SESSION_KIND="canonical"
     fi
 }
 
@@ -17789,6 +17787,10 @@ cmd_feedback_ask() {
         esac
     fi
     _feedback_detect_session
+    if [ "${K2_TEST_FEEDBACK_DETECT:-}" = "1" ]; then
+        printf '%s\n' "${FB_SESSION_KIND:-}"
+        exit 0
+    fi
     FB_TITLE="$title" FB_BODY="$body" FB_KIND="$kind" FB_OPTIONS="$options" \
     FB_PRIORITY="$priority" FB_ASSIGN="$assign" FB_WAIT="$wait" FB_TIMEOUT="$timeout" FB_JSON="$as_json" \
     FB_PROJECT="$PROJECT" FB_AGENT="${K2_AGENT_NAME:-${K2SO_AGENT_NAME:-}}" \

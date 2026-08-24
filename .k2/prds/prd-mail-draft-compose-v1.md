@@ -37,9 +37,9 @@ Same access as today: `can_draft`. **Not** behind `mailAgentSend` (a draft is no
 | # | Decision |
 |---|----------|
 | **D1** | **Compose-draft.** `k2 mail draft --to <addr> --subject <s> [--cc] [--attach] (--body\|--body-file) [--from <linked-addr>]`. No `<message-id>`. IMAP APPEND `\Draft` (daemon already appends on the reply path). `--to` + `--subject` required. `--from` picks the linked inbox (`can_draft`); one draftable linked inbox may be implicit; N → require `--from` (do **not** reuse send's hosted-only implicit resolver). Reply form stays `k2 mail draft <id> --body…`. Mutually exclusive: id XOR `--to`/`--subject`. |
-| **D2** | **Folder-aware fetch.** `fetch_raw` / `read` / `draft` SELECT the folder whose UIDVALIDITY matches the token (LIST survey, then SELECT). **Prefer actually fetching** the listed folder over a token-format change. `mark_seen` and `select_inbox_for_uid` (move/flag/archive/delete) share the same Inbox SELECT — fold them through the same helper so the Inbox-only hole does not remain on manage. Until the SELECT works, fail with an **honest** hint (`this id is not Inbox — listed from another folder; re-list Inbox or wait for folder-aware fetch`), never “no longer on the server.” v1 does **not** rewrite `uid:<validity>:<uid>`. |
-| **D3** | **`--attach` on draft**, matching `send` (caps, workspace-relative paths, daemon reads bytes): reply-draft **and** compose-draft. IMAP only this slice (reuse `routes_send` attach parse + `compose_*_rfc822` multipart). |
-| **D4** | **Skill/docs.** `.k2/skills` is generated from `crates/k2-core/src/skills/content.rs` (three Email blocks). Teach: `draft` = Gmail Drafts; reply needs a listed id (Inbox **or** folder-aware); compose uses `--to`/`--subject`; sending from linked Gmail **is** possible when gated `on`. Delete remaining “cannot send from external / sending is impossible” copy (`cli/k2` link-add print ~20151, catalog JSON, `cmd_help_mail_draft`, wiki `Feature - Email System`). Bump skill versions on implement (this PRD does not). |
+| **D2** | **Folder-aware fetch.** Gmail Inbox vs `[Gmail]/All Mail` do **not** share IMAP UIDs (cross-folder id is `X-GM-MSGID`, out of v1). Token stays `uid:<validity>:<uid>`. LIST names → SELECT until `uid_validity` matches, then UID FETCH. **If two folders share validity, fail loud** (do not first-match — that fetches the wrong mail). Unmatched validity → “id was listed from another folder / UIDVALIDITY matches no mailbox; re-list” — never “no longer on the server.” Same helper for `fetch_raw`, `mark_seen`, `select_inbox_for_uid` (also unblocks `read` / attachments / linked `reply`). Ship SELECT in this slice (no two-phase Inbox-only fallback). |
+| **D3** | **`--attach` on draft**, matching `send` caps (10 files / 25 MiB). Reply-draft **and** compose-draft. Extract send’s attach parse+read. **New draft RFC822 composer** (Cc + optional multipart/mixed, **no** Message-ID — reply drafts omit it on purpose). Do not APPEND the SMTP/lettre wire form. Graph + `--attach` = teaching error (out of v1). |
+| **D4** | **Skill/docs.** Agent-loaded k2-cli skill is **`generate_k2_cli_skill()`** in `crates/k2-core/src/workspace/skill_regen.rs` (still says sending from external is impossible). Sweep that **and** `skills/content.rs` Email blocks **and** `cli/k2` link-add print ~20151 / catalog “ungated for now”. Teach: draft = Gmail Drafts; compose = `--to`/`--subject`; linked send exists when level `send` **and** Sending=`on`. |
 
 **Out of v1:** Graph compose-draft (Graph has no IMAP APPEND — Microsoft is `createReply` today; note it, do not fake APPEND). Hosted K2-mailbox drafts in Gmail. Putting compose behind `mailAgentSend`. Graph send. Graph draft attachments. Encoding folder into the uid token (follow-up if UIDVALIDITY collisions show up).
 
@@ -59,13 +59,13 @@ Help + catalog (`mail draft` usage/description ~11546) name both forms.
 
 ### 4.3 IMAP — `external.rs` + `external_imap.rs`
 
-- Replace hard-coded `SELECT INBOX` in `fetch_raw` / `mark_seen` / `select_inbox_for_uid` with **SELECT by token UIDVALIDITY** (LIST names, SELECT until `mailbox.uid_validity` matches, then UID FETCH/STORE/MOVE). Inbox tokens (`uid:1:…`) still work. All Mail (`uid:11:…`) works. No match → honest hint naming Inbox vs listed folder, **not** “no longer on the server.”
+- Replace hard-coded `SELECT INBOX` in `fetch_raw` / `mark_seen` / `select_inbox_for_uid` with **SELECT by token UIDVALIDITY** (LIST names, SELECT until `mailbox.uid_validity` matches, then UID FETCH/STORE/MOVE). **Collision (two folders, same validity) → fail loud.** Inbox tokens (`uid:1:…`) still work. All Mail (`uid:11:…`) works. No match → honest hint, **not** “no longer on the server.” Also used by `fetch_blob` and linked `reply` send.
 - `save_compose_draft`: From = linked account, To/Subject/Cc from args, **no** In-Reply-To/References, APPEND `\Draft` to resolved Drafts folder (`pick_drafts_folder` / pinned `--drafts-folder`). Health stamp same as reply.
 - Attachments: multipart/mixed on both compose and reply RFC822. Caps = send (`MAX_ATTACHMENTS` 10 / 25 MiB).
 
 Fakes: `FakeOps` must record the SELECTed folder (or accept tokens from non-Inbox validity) so tests do not pretend Inbox.
 
-### 4.4 Skills — `skills/content.rs` Email blocks (manager / k2so-agent / custom)
+### 4.4 Skills — `skill_regen.rs` `generate_k2_cli_skill` (SSOT for cwd k2-cli) + `skills/content.rs` Email blocks
 
 ```
 k2 mail draft <message-id> --body <t> [--attach]
@@ -102,7 +102,7 @@ No `unwrap_or` in assertions. No skip-if-missing. IMAP tests stay on fakes / loo
 ## 6. Success
 
 1. Agent: `k2 mail draft --to someone@x --subject "Hello" --body "…"` → draft appears in the linked Gmail Drafts with that To/Subject; human opens Gmail, edits, sends. Workspace Sending may be `off`.
-2. `k2 mail messages <addr> --folder "[Gmail]/All Mail"` then `read` / `draft <that-id>` works (or, until SELECT lands, an honest “not Inbox” hint — not “no longer on the server”).
+2. `k2 mail messages <addr> --folder "[Gmail]/All Mail"` then `read` / `draft <that-id>` **works** (folder-aware SELECT in this slice). Wrong/stale validity → honest hint, not “no longer on the server.”
 3. `k2 mail draft <inbox-id> --body` still threads a reply into Drafts; `--attach` works on both forms.
 4. `k2 mail send` unchanged: still gated; still does not APPEND Drafts.
 5. Hosted addresses still cannot use `draft` (teach `reply`). Graph compose-draft is an explicit out-of-v1 teaching error.

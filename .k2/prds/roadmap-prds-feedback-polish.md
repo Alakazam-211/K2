@@ -1,7 +1,7 @@
 # Roadmap — PRDs, feedback, polish
 
 **Canonical mini-index for unfinished work.**  
-**Created:** 2026-08-08 · **Updated:** 2026-08-22 (remote E2E storm mini-PRDs)  
+**Created:** 2026-08-08 · **Updated:** 2026-08-25 (mail draft compose + folder-aware fetch)  
 **Sources:** `0.40.x-to-1.0-weekend-roadmap.md`, wiki `_Index`, host-session / Connect / polish PRDs, model-override PRD, **Julie/Scout K2-ASKS-2026-08-08**
 
 **How to use**
@@ -148,6 +148,12 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 | **Fleet observability / agent-ops** | PRD | `.k2/prds/prd-observability-agent-ops.md` |
 | **Relay redundancy** | PRD | `.k2/prds/prd-relay-redundancy-v1.md` |
 | **Billing lifecycle / dedicated tier** | PRDs | `.k2/prds/prd-billing-lifecycle-v1.md`, `.k2/prds/prd-dedicated-tier-permission-model-v1.md` |
+
+### B6 · Email / mail
+
+| Item | Status | PRD / wiki |
+|------|--------|------------|
+| **Linked Gmail compose-draft + folder-aware fetch** | Ready for implement (product lock 2026-08-25) | `.k2/prds/prd-mail-draft-compose-v1.md` · wiki Feature - Mail Draft Compose |
 
 ---
 

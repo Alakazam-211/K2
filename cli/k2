@@ -19463,7 +19463,7 @@ _mail_py() {
     M_PROVIDER="${M_PROVIDER:-}" \
     M_SMTP_HOST="${M_SMTP_HOST:-}" M_SMTP_PORT="${M_SMTP_PORT:-}" M_SMTP_TLS="${M_SMTP_TLS:-}" \
     python3 - <<'PYEOF'
-import base64, json, os, sys, time
+import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
 
 for _s in (sys.stdout, sys.stderr):
@@ -19501,7 +19501,34 @@ def die(err, exit_code=None):
         exit_code = 3 if code in ("gated", "forbidden", "owner_only") else 2 if code == "usage" else 1
     sys.exit(exit_code)
 
+def _is_socket_timeout(exc):
+    # urllib wraps a read/connect timeout as URLError(TimeoutError) (or
+    # socket.timeout, an alias of TimeoutError on 3.10+). Connection
+    # refused is a different OSError and must stay daemon_unreachable.
+    cur = exc
+    for _ in range(4):
+        if isinstance(cur, TimeoutError) or isinstance(cur, socket.timeout):
+            return True
+        nxt = getattr(cur, "reason", None)
+        if nxt is None or nxt is cur:
+            break
+        cur = nxt
+    return False
+
+def _timeout_error_body(timeout_secs):
+    try:
+        n = int(timeout_secs)
+    except (TypeError, ValueError):
+        n = timeout_secs
+    return {"error": {
+        "code": "timeout",
+        "hint": "daemon did not finish within %ss (still running — the mail fetch is slow, not down)" % n,
+    }}
+
 def request(method, route, params=None, body=None, timeout=30):
+    env_t = os.environ.get("K2_MAIL_HTTP_TIMEOUT")
+    if env_t:
+        timeout = float(env_t)
     qs = urllib.parse.urlencode(dict(params or {}, token=token))
     url = base + route + "?" + qs
     data = dumps(body).encode() if body is not None else None
@@ -19515,7 +19542,9 @@ def request(method, route, params=None, body=None, timeout=30):
             return json.loads(e.read().decode("utf-8", "replace"))
         except Exception:
             return {"error": {"code": "error", "hint": "HTTP %s on %s" % (e.code, route)}}
-    except Exception:
+    except Exception as e:
+        if _is_socket_timeout(e):
+            return _timeout_error_body(timeout)
         return None
 
 def call(method, route, params=None, body=None, timeout=30):

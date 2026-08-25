@@ -98,6 +98,20 @@ pub trait ReadBackend {
     /// One full message; `Ok(None)` = unknown id (the route masks it).
     fn fetch_full(&self, account_id: &str, email_id: &str) -> Result<Option<EmailFull>, String>;
     fn mark_seen(&self, account_id: &str, email_id: &str) -> Result<(), String>;
+    /// Fetch one message and mark it read. Linked IMAP overrides this
+    /// so FETCH + STORE share one login/LIST/STATUS/SELECT; the default
+    /// is fetch then mark (hosted JMAP / Graph).
+    fn fetch_full_and_mark_seen(
+        &self,
+        account_id: &str,
+        email_id: &str,
+    ) -> Result<Option<EmailFull>, String> {
+        let full = self.fetch_full(account_id, email_id)?;
+        if full.is_some() {
+            self.mark_seen(account_id, email_id)?;
+        }
+        Ok(full)
+    }
     fn fetch_blob(
         &self,
         account_id: &str,

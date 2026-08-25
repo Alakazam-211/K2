@@ -576,7 +576,9 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
         Ok(b) => b,
         Err(resp) => return resp,
     };
-    let full = match backend.fetch_full(&account_id, &email_id) {
+    // Linked IMAP: one session (FETCH then STORE). Two round-trips
+    // STATUS-storm Gmail (dozens of labels) and blow the CLI's 30s.
+    let full = match backend.fetch_full_and_mark_seen(&account_id, &email_id) {
         Ok(Some(f)) => f,
         // The backend not knowing the id answers the same masked
         // not_found as a foreign id.
@@ -589,9 +591,6 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
         }
         Err(hint) => return read_error_response(ReadError::Engine(hint)),
     };
-    if let Err(hint) = backend.mark_seen(&account_id, &email_id) {
-        return read_error_response(ReadError::Engine(hint));
-    }
     if crate::cli::bool_param(params, "raw") {
         let Some(blob_id) = full.blob_id.as_deref() else {
             return error_response(

@@ -53,6 +53,9 @@ use imap::{ClientBuilder, ConnectionMode, TlsKind};
 use imap_proto::types::NameAttribute;
 use k2_core::db::schema::MailExternalInbox;
 use mail_parser::MessageParser;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 type ImapSession = imap::Session<imap::Connection>;
 
@@ -572,6 +575,7 @@ impl ImapOps for RealImapOps {
             )));
         }
         out.sort_by(|a, b| b.received_at.cmp(&a.received_at));
+        remember_validity(&inbox.id, uidvalidity, &target);
         let _ = session.logout();
         Ok(out)
     }
@@ -586,7 +590,7 @@ impl ImapOps for RealImapOps {
             return Ok(None); // malformed token = unknown message
         };
         let mut session = login(inbox, password)?;
-        let result = fetch_raw_on_session(&mut session, uid_token);
+        let result = fetch_raw_on_session(&mut session, uid_token, &inbox.id);
         let _ = session.logout();
         result
     }
@@ -598,7 +602,22 @@ impl ImapOps for RealImapOps {
         uid_token: &str,
     ) -> Result<(), String> {
         let mut session = login(inbox, password)?;
-        let result = mark_seen_on_session(&mut session, uid_token);
+        let result = mark_seen_on_session(&mut session, uid_token, &inbox.id);
+        let _ = session.logout();
+        result
+    }
+
+    fn fetch_raw_and_mark_seen(
+        &self,
+        inbox: &MailExternalInbox,
+        password: &str,
+        uid_token: &str,
+    ) -> Result<Option<RawEmail>, String> {
+        if external::parse_uid_token(uid_token).is_none() {
+            return Ok(None);
+        }
+        let mut session = login(inbox, password)?;
+        let result = fetch_and_mark_on_session(&mut session, uid_token, &inbox.id);
         let _ = session.logout();
         result
     }
@@ -665,43 +684,202 @@ fn manage_survey_special(
         .collect())
 }
 
-/// LIST folder names, STATUS each for UIDVALIDITY, then SELECT the
+/// Well-known mailboxes probed (STATUS) before STATUSing every label.
+/// Gmail's 50+ user labels make a full walk ~13s; Sent SELECT of a
+/// 66k-message folder is another ~12s. Probe these names first so a
+/// Sent read does not STATUS every label. Collision among these names
+/// still fails loud (INBOX vs All Mail both validity N).
+const HINT_MAILBOXES: &[&str] = &[
+    "INBOX",
+    "[Gmail]/Sent Mail",
+    "[Gmail]/Drafts",
+    "[Gmail]/Trash",
+    "[Gmail]/All Mail",
+    "[Gmail]/Spam",
+    "Sent",
+    "Drafts",
+    "Trash",
+];
+
+const VALIDITY_CACHE_TTL: Duration = Duration::from_secs(300);
+
+struct CachedValidity {
+    at: Instant,
+    /// UIDVALIDITY → folder names (len>1 = collision).
+    by_validity: HashMap<u32, Vec<String>>,
+}
+
+fn validity_cache() -> &'static Mutex<HashMap<String, CachedValidity>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CachedValidity>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_validity(cache_key: &str, validity: u32, folder: &str) {
+    if cache_key.is_empty() {
+        return;
+    }
+    let Ok(mut guard) = validity_cache().lock() else {
+        return;
+    };
+    let entry = guard.entry(cache_key.to_string()).or_insert_with(|| CachedValidity {
+        at: Instant::now(),
+        by_validity: HashMap::new(),
+    });
+    entry.at = Instant::now();
+    let names = entry.by_validity.entry(validity).or_default();
+    if !names.iter().any(|n| n.eq_ignore_ascii_case(folder)) {
+        names.push(folder.to_string());
+    }
+}
+
+fn cached_folders(cache_key: &str, validity: u32) -> Option<Vec<String>> {
+    if cache_key.is_empty() {
+        return None;
+    }
+    let Ok(guard) = validity_cache().lock() else {
+        return None;
+    };
+    let entry = guard.get(cache_key)?;
+    if entry.at.elapsed() > VALIDITY_CACHE_TTL {
+        return None;
+    }
+    entry.by_validity.get(&validity).cloned()
+}
+
+fn invalidate_cache(cache_key: &str) {
+    if cache_key.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = validity_cache().lock() {
+        guard.remove(cache_key);
+    }
+}
+
+#[cfg(test)]
+fn clear_validity_cache() {
+    if let Ok(mut guard) = validity_cache().lock() {
+        guard.clear();
+    }
+}
+
+fn name_is_noselect(n: &Name) -> bool {
+    n.attributes()
+        .iter()
+        .any(|a| matches!(a, NameAttribute::NoSelect))
+}
+
+fn status_validity(session: &mut ImapSession, name: &str) -> Option<u32> {
+    session
+        .status(name, "(UIDVALIDITY)")
+        .ok()
+        .map(|m| m.uid_validity.unwrap_or(0))
+}
+
+fn select_named(
+    session: &mut ImapSession,
+    folder: &str,
+    want_validity: u32,
+    uid: u32,
+    cache_key: &str,
+) -> Result<(String, u32), String> {
+    let mailbox = session.select(folder).map_err(|e| imap_err("SELECT", e))?;
+    let got = mailbox.uid_validity.unwrap_or(0);
+    if got != want_validity {
+        invalidate_cache(cache_key);
+        return Err(format!(
+            "mailbox '{folder}' UIDVALIDITY is {got}, token wanted {want_validity} — re-list"
+        ));
+    }
+    remember_validity(cache_key, want_validity, folder);
+    Ok((folder.to_string(), uid))
+}
+
+/// LIST folder names, STATUS (skip `\Noselect`), then SELECT the
 /// single matching mailbox and return `(folder, uid)` with it selected.
 /// Two folders sharing validity → fail loud (do not first-match).
+///
+/// `cache_key` is the linked-inbox id. A hit SELECTs the remembered
+/// folder and skips the STATUS storm (second `k2 mail read` in a
+/// session). Miss: STATUS well-known names that appear in LIST
+/// first; only then STATUS every remaining label.
 fn select_folder_for_uid(
     session: &mut ImapSession,
     uid_token: &str,
+    cache_key: &str,
 ) -> Result<(String, u32), String> {
     let Some((want_validity, uid)) = external::parse_uid_token(uid_token) else {
         return Err(format!("malformed message token '{uid_token}'"));
     };
-    let names = session
+
+    if let Some(names) = cached_folders(cache_key, want_validity) {
+        match names.len() {
+            0 => {}
+            1 => match select_named(session, &names[0], want_validity, uid, cache_key) {
+                Ok(hit) => return Ok(hit),
+                Err(_) => invalidate_cache(cache_key),
+            },
+            _ => {
+                return Err(external::colliding_uidvalidity_hint(want_validity, &names))
+            }
+        }
+    }
+
+    let listed = session
         .list(Some(""), Some("*"))
         .map_err(|e| imap_err("LIST", e))?;
+    let selectable: Vec<String> = listed
+        .iter()
+        .filter(|n| !name_is_noselect(n))
+        .map(|n| n.name().to_string())
+        .collect();
+
     let mut matches: Vec<String> = Vec::new();
-    for n in names.iter() {
-        let name = n.name();
-        match session.status(name, "(UIDVALIDITY)") {
-            Ok(mailbox) => {
-                if mailbox.uid_validity.unwrap_or(0) == want_validity {
-                    matches.push(name.to_string());
+    let mut remaining: Vec<String> = Vec::new();
+    for name in &selectable {
+        if HINT_MAILBOXES
+            .iter()
+            .any(|h| name.eq_ignore_ascii_case(h))
+        {
+            match status_validity(session, name) {
+                Some(v) => {
+                    remember_validity(cache_key, v, name);
+                    if v == want_validity {
+                        matches.push(name.clone());
+                    }
+                }
+                None => continue,
+            }
+        } else {
+            remaining.push(name.clone());
+        }
+    }
+    match matches.len() {
+        2.. => {
+            return Err(external::colliding_uidvalidity_hint(want_validity, &matches))
+        }
+        1 => {
+            return select_named(session, &matches[0], want_validity, uid, cache_key)
+        }
+        0 => {}
+    }
+
+    for name in remaining {
+        match status_validity(session, &name) {
+            Some(v) => {
+                remember_validity(cache_key, v, &name);
+                if v == want_validity {
+                    matches.push(name);
                 }
             }
             // \Noselect / no permission — skip. The crate surfaces a
             // generic Err, so a whole-session death is indistinguishable
             // from a per-folder placeholder (Gmail `[Gmail]`).
-            Err(_) => continue,
+            None => continue,
         }
     }
     match matches.len() {
         0 => Err(external::unmatched_uidvalidity_hint(want_validity)),
-        1 => {
-            let folder = matches.remove(0);
-            session
-                .select(&folder)
-                .map_err(|e| imap_err("SELECT", e))?;
-            Ok((folder, uid))
-        }
+        1 => select_named(session, &matches[0], want_validity, uid, cache_key),
         _ => Err(external::colliding_uidvalidity_hint(want_validity, &matches)),
     }
 }
@@ -710,23 +888,19 @@ fn select_folder_for_uid(
 /// unmatched validity, or a colliding validity is a loud error — never
 /// a MOVE of the WRONG message. (Name kept: callers + PRD D2.)
 fn select_inbox_for_uid(session: &mut ImapSession, uid_token: &str) -> Result<u32, ListError> {
-    select_folder_for_uid(session, uid_token)
+    select_folder_for_uid(session, uid_token, "")
         .map(|(_, uid)| uid)
         .map_err(ListError::Engine)
 }
 
-fn fetch_raw_on_session(
+fn fetch_body_on_selected(
     session: &mut ImapSession,
-    uid_token: &str,
+    uid: u32,
 ) -> Result<Option<RawEmail>, String> {
-    if external::parse_uid_token(uid_token).is_none() {
-        return Ok(None); // malformed token = unknown message
-    }
-    let (_, uid) = select_folder_for_uid(session, uid_token)?;
     let fetches = session
         .uid_fetch(uid.to_string(), "(UID FLAGS INTERNALDATE BODY.PEEK[])")
         .map_err(|e| imap_err("FETCH", e))?;
-    let raw = fetches.iter().find(|f| f.uid == Some(uid)).and_then(|f| {
+    Ok(fetches.iter().find(|f| f.uid == Some(uid)).and_then(|f| {
         Some(RawEmail {
             received_at_iso: f
                 .internal_date()
@@ -735,16 +909,49 @@ fn fetch_raw_on_session(
             unread: !f.flags().iter().any(|fl| matches!(fl, Flag::Seen)),
             raw: f.body()?.to_vec(),
         })
-    });
-    Ok(raw)
+    }))
 }
 
-fn mark_seen_on_session(session: &mut ImapSession, uid_token: &str) -> Result<(), String> {
-    let (_, uid) = select_folder_for_uid(session, uid_token)?;
+fn fetch_raw_on_session(
+    session: &mut ImapSession,
+    uid_token: &str,
+    cache_key: &str,
+) -> Result<Option<RawEmail>, String> {
+    if external::parse_uid_token(uid_token).is_none() {
+        return Ok(None); // malformed token = unknown message
+    }
+    let (_, uid) = select_folder_for_uid(session, uid_token, cache_key)?;
+    fetch_body_on_selected(session, uid)
+}
+
+fn mark_seen_on_session(
+    session: &mut ImapSession,
+    uid_token: &str,
+    cache_key: &str,
+) -> Result<(), String> {
+    let (_, uid) = select_folder_for_uid(session, uid_token, cache_key)?;
     session
         .uid_store(uid.to_string(), "+FLAGS (\\Seen)")
         .map_err(|e| imap_err("STORE", e))?;
     Ok(())
+}
+
+fn fetch_and_mark_on_session(
+    session: &mut ImapSession,
+    uid_token: &str,
+    cache_key: &str,
+) -> Result<Option<RawEmail>, String> {
+    if external::parse_uid_token(uid_token).is_none() {
+        return Ok(None);
+    }
+    let (_, uid) = select_folder_for_uid(session, uid_token, cache_key)?;
+    let raw = fetch_body_on_selected(session, uid)?;
+    if raw.is_some() {
+        session
+            .uid_store(uid.to_string(), "+FLAGS (\\Seen)")
+            .map_err(|e| imap_err("STORE", e))?;
+    }
+    Ok(raw)
 }
 
 /// UID STORE +/-FLAGS for one flag (`\Seen` / `\Flagged`).
@@ -1513,6 +1720,7 @@ mod tests {
                     "LIST" => {
                         w.write_all(
                             b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n\
+                              * LIST (\\HasChildren \\Noselect) \"/\" \"[Gmail]\"\r\n\
                               * LIST (\\HasNoChildren) \"/\" \"[Gmail]/All Mail\"\r\n",
                         )
                         .unwrap();
@@ -1590,9 +1798,10 @@ mod tests {
 
     #[test]
     fn fetch_raw_selects_all_mail_by_uidvalidity_not_inbox() {
+        clear_validity_cache();
         let (port, handle) = spawn_folder_fetch_mock(11, 1, FETCH_FIXTURE);
         let mut session = plaintext_session(port, "app-password").expect("login");
-        let raw = fetch_raw_on_session(&mut session, "uid:11:42")
+        let raw = fetch_raw_on_session(&mut session, "uid:11:42", "t-all-mail")
             .expect("ok")
             .expect("found");
         assert_eq!(raw.raw, FETCH_FIXTURE);
@@ -1621,9 +1830,10 @@ mod tests {
 
     #[test]
     fn fetch_raw_inbox_token_still_fetches() {
+        clear_validity_cache();
         let (port, handle) = spawn_folder_fetch_mock(11, 1, FETCH_FIXTURE);
         let mut session = plaintext_session(port, "app-password").expect("login");
-        let raw = fetch_raw_on_session(&mut session, "uid:1:42")
+        let raw = fetch_raw_on_session(&mut session, "uid:1:42", "t-inbox")
             .expect("ok")
             .expect("found");
         assert_eq!(raw.raw, FETCH_FIXTURE);
@@ -1633,9 +1843,10 @@ mod tests {
 
     #[test]
     fn fetch_raw_unmatched_validity_is_honest_hint_not_gone() {
+        clear_validity_cache();
         let (port, handle) = spawn_folder_fetch_mock(11, 1, FETCH_FIXTURE);
         let mut session = plaintext_session(port, "app-password").expect("login");
-        let err = fetch_raw_on_session(&mut session, "uid:99:1").expect_err("unmatched");
+        let err = fetch_raw_on_session(&mut session, "uid:99:1", "t-unmatched").expect_err("unmatched");
         assert!(err.contains("UIDVALIDITY 99"), "{err}");
         assert!(
             !err.contains("no longer on the server"),
@@ -1647,10 +1858,11 @@ mod tests {
 
     #[test]
     fn fetch_raw_colliding_uidvalidity_fails_loud() {
+        clear_validity_cache();
         // Both folders claim validity 11 — first-match would be wrong.
         let (port, handle) = spawn_folder_fetch_mock(11, 11, FETCH_FIXTURE);
         let mut session = plaintext_session(port, "app-password").expect("login");
-        let err = fetch_raw_on_session(&mut session, "uid:11:42").expect_err("collision");
+        let err = fetch_raw_on_session(&mut session, "uid:11:42", "t-collide").expect_err("collision");
         assert!(err.contains("more than one mailbox"), "{err}");
         assert!(err.contains("INBOX"), "{err}");
         assert!(err.contains("[Gmail]/All Mail"), "{err}");
@@ -1664,6 +1876,78 @@ mod tests {
             !seen.iter().any(|l| l.to_ascii_uppercase().contains("SELECT")),
             "collision must not SELECT first-match: {seen:?}"
         );
+    }
+
+    #[test]
+    fn fetch_raw_skips_noselect_gmail_parent() {
+        clear_validity_cache();
+        let (port, handle) = spawn_folder_fetch_mock(11, 1, FETCH_FIXTURE);
+        let mut session = plaintext_session(port, "app-password").expect("login");
+        fetch_raw_on_session(&mut session, "uid:11:42", "t-noselect").expect("ok");
+        session.logout().expect("LOGOUT");
+        let seen = handle.join().expect("mock thread");
+        assert!(
+            !seen.iter().any(|l| {
+                let u = l.to_ascii_uppercase();
+                u.contains("STATUS") && l.contains("\"[Gmail]\"") && !l.contains("All Mail")
+            }),
+            "must not STATUS \\Noselect [Gmail]: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn fetch_and_mark_is_one_select_then_store() {
+        clear_validity_cache();
+        let (port, handle) = spawn_folder_fetch_mock(11, 1, FETCH_FIXTURE);
+        let mut session = plaintext_session(port, "app-password").expect("login");
+        let raw = fetch_and_mark_on_session(&mut session, "uid:11:42", "t-one-session")
+            .expect("ok")
+            .expect("found");
+        assert_eq!(raw.raw, FETCH_FIXTURE);
+        session.logout().expect("LOGOUT");
+        let seen = handle.join().expect("mock thread");
+        let selects = seen
+            .iter()
+            .filter(|l| l.to_ascii_uppercase().contains("SELECT"))
+            .count();
+        let fetches = seen
+            .iter()
+            .filter(|l| {
+                let u = l.to_ascii_uppercase();
+                u.contains("UID") && u.contains("FETCH")
+            })
+            .count();
+        let stores = seen
+            .iter()
+            .filter(|l| {
+                let u = l.to_ascii_uppercase();
+                u.contains("UID") && u.contains("STORE")
+            })
+            .count();
+        assert_eq!(selects, 1, "one SELECT: {seen:?}");
+        assert_eq!(fetches, 1, "one FETCH: {seen:?}");
+        assert_eq!(stores, 1, "one STORE after FETCH: {seen:?}");
+    }
+
+    #[test]
+    fn second_fetch_uses_validity_cache_no_second_list() {
+        clear_validity_cache();
+        let (port, handle) = spawn_folder_fetch_mock(11, 1, FETCH_FIXTURE);
+        let mut session = plaintext_session(port, "app-password").expect("login");
+        fetch_raw_on_session(&mut session, "uid:11:42", "t-cache").expect("ok");
+        fetch_raw_on_session(&mut session, "uid:11:42", "t-cache").expect("ok");
+        session.logout().expect("LOGOUT");
+        let seen = handle.join().expect("mock thread");
+        let lists = seen
+            .iter()
+            .filter(|l| l.split_whitespace().nth(1).map(|v| v.eq_ignore_ascii_case("LIST")).unwrap_or(false))
+            .count();
+        assert_eq!(lists, 1, "second read must not LIST again: {seen:?}");
+        let selects = seen
+            .iter()
+            .filter(|l| l.to_ascii_uppercase().contains("SELECT"))
+            .count();
+        assert_eq!(selects, 2, "two SELECTs (one per fetch): {seen:?}");
     }
 
     // ── O2: SASL XOAUTH2 (no real network, no real Gmail) ───────────────

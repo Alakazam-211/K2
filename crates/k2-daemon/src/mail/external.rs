@@ -303,6 +303,16 @@ pub trait ImapOps: Send + Sync {
         password: &str,
         uid_token: &str,
     ) -> Result<(), String>;
+    /// One IMAP session: FETCH BODY.PEEK[] then UID STORE `\Seen` on the
+    /// already-selected mailbox. `k2 mail read` uses this so the LIST +
+    /// STATUS walk (Gmail: dozens of labels) runs once, not twice.
+    /// Standalone [`Self::mark_seen`] stays for wait / other callers.
+    fn fetch_raw_and_mark_seen(
+        &self,
+        inbox: &MailExternalInbox,
+        password: &str,
+        uid_token: &str,
+    ) -> Result<Option<RawEmail>, String>;
     /// APPEND `rfc822` to `folder` with `\Draft` set. The ONLY write
     /// S9 ever performs against an external account (besides \Seen).
     fn append_draft(
@@ -409,6 +419,22 @@ impl ReadBackend for ExternalImapBackend {
     fn mark_seen(&self, account_id: &str, email_id: &str) -> Result<(), String> {
         self.check_handle(account_id)?;
         self.ops.mark_seen(&self.inbox, &self.password, email_id)
+    }
+
+    fn fetch_full_and_mark_seen(
+        &self,
+        account_id: &str,
+        email_id: &str,
+    ) -> Result<Option<EmailFull>, String> {
+        self.check_handle(account_id)?;
+        let Some(raw) = self
+            .ops
+            .fetch_raw_and_mark_seen(&self.inbox, &self.password, email_id)?
+        else {
+            return Ok(None);
+        };
+        record_check(&self.inbox.id, Ok(()));
+        full_from_raw(email_id, &raw).map(Some)
     }
 
     fn fetch_blob(
@@ -1648,6 +1674,19 @@ pub(crate) mod tests {
             self.marked.lock().unwrap().push(uid_token.to_string());
             Ok(())
         }
+        fn fetch_raw_and_mark_seen(
+            &self,
+            inbox: &MailExternalInbox,
+            password: &str,
+            uid_token: &str,
+        ) -> Result<Option<RawEmail>, String> {
+            // One select (the production path), not fetch_raw + mark_seen.
+            let raw = self.fetch_raw(inbox, password, uid_token)?;
+            if raw.is_some() {
+                self.marked.lock().unwrap().push(uid_token.to_string());
+            }
+            Ok(raw)
+        }
         fn append_draft(
             &self,
             _inbox: &MailExternalInbox,
@@ -2538,6 +2577,35 @@ a,b\r\n1,2\r\n\
         // Unknown uid → Ok(None) → the route's masked not_found.
         assert!(backend.fetch_full("XB1", "uid:7:9999").expect("ok").is_none());
         backend.mark_seen("XB1", "uid:7:42").expect("marks");
+
+        // Combined read: one SELECT, then mark, so `k2 mail read` does
+        // not walk UIDVALIDITY twice.
+        let mut ops2 = FakeOps::default();
+        ops2.folders_by_validity
+            .insert(7, vec!["[Gmail]/All Mail".to_string()]);
+        ops2.raw_by_token
+            .insert("uid:7:42".to_string(), raw_email());
+        let ops2 = std::sync::Arc::new(ops2);
+        let backend2 = ExternalImapBackend::new(
+            test_inbox("XB1", "pX", "rosson@example.com"),
+            "pw".to_string(),
+            ops2.clone(),
+        );
+        let full = backend2
+            .fetch_full_and_mark_seen("XB1", "uid:7:42")
+            .expect("ok")
+            .expect("found");
+        assert_eq!(full.summary.subject, "Quarterly numbers");
+        assert_eq!(
+            ops2.selected.lock().unwrap().as_slice(),
+            &["[Gmail]/All Mail".to_string()],
+            "combined read must SELECT once, not fetch+mark storms"
+        );
+        assert_eq!(
+            ops2.marked.lock().unwrap().as_slice(),
+            &["uid:7:42".to_string()]
+        );
+
         // Blob paths: whole raw + 1-based part.
         assert_eq!(backend.fetch_blob("XB1", "uid:7:42", "m.eml", "message/rfc822").unwrap(), RAW_FIXTURE.to_vec());
         assert_eq!(backend.fetch_blob("XB1", "uid:7:42#1", "q2.csv", "text/csv").unwrap(), b"a,b\r\n1,2".to_vec());

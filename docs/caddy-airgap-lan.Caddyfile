@@ -1,0 +1,22 @@
+# Air-gapped LAN-only edge (MasterControl).
+#
+# The K2 daemon stays on loopback (127.0.0.1:60710). This Caddy listen is
+# the one TCP port the IDS/firewall monitors. HTTP and WebSocket share it.
+#
+# Image env (systemd, before first start):
+#   K2_AIRGAP=1
+# Do not set K2_LISTEN=lan — that would bind the daemon on the LAN too.
+#
+# Add Server in the K2 client:
+#   http://<LAN-IP>:38471
+#
+# Replace 192.168.1.50 with the box's LAN IP. Bind host:port (not a bare
+# :38471) unless you want every interface. Do not use 80, 443, 8080, or
+# 8443. If you pick a different high port, change this file and the Add
+# Server URL together.
+#
+# Runbook: .k2/prds/runbook-airgap-linux-image-v1.md
+
+http://192.168.1.50:38471 {
+	reverse_proxy 127.0.0.1:60710
+}

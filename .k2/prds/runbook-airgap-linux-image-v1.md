@@ -1,9 +1,27 @@
 # Runbook — Air-gap Linux / MasterControl image (v1)
 
 **PRD:** `.k2/prds/prd-air-gap-and-lan-listen-v1.md`  
-**Status:** in tree (env-before-first-start). There is **no** `k2 daemon install --airgap` flag yet — that is a later convenience.
+**Example Caddyfile:** `docs/caddy-airgap-lan.Caddyfile`  
+**Status:** air-gap + LAN listen shipped **0.40.109**. This runbook is the **MasterControl air-gapped LAN-only** topology (Caddy in front) locked **0.40.110**. There is **no** `k2 daemon install --airgap` flag yet — that is a later convenience.
 
 Goal: the daemon is air-gapped **from process start**, not “install then flip a flag.” Default is off; if the daemon starts without the env, you already had a window (updater / leftover cert).
+
+## 0. Topology (locked)
+
+| Piece | MasterControl (this runbook) | Lab only |
+|---|---|---|
+| `K2_AIRGAP` | `1` (required, before first start) | same |
+| `K2_LISTEN` | **unset** — daemon stays `127.0.0.1` | `lan` — daemon binds `0.0.0.0` |
+| LAN socket | **Caddy**, one high random TCP port | the daemon sticky port |
+| Example ports | Caddy **38471** → daemon `127.0.0.1:60710` | Add Server `http://<LAN-IP>:60710` |
+| Add Server | `http://<LAN-IP>:38471` | `http://<LAN-IP>:<daemon.port>` |
+| IDS / firewall | **that Caddy port only** | the daemon port |
+
+Do **not** also set `K2_LISTEN=lan` on the MasterControl image. That opens a second LAN door the IDS on 38471 will miss.
+
+Do **not** put Caddy on 80, 443, 8080, or 8443. Chris’s bar is one **high random** port so all client HTTP + WebSocket is monitorable there. **38471** is the documented example — if they pick another high port, the Caddyfile and Add Server URL must match.
+
+LAN v1 is **cleartext HTTP** unless they terminate TLS in Caddy (not required for v1). **Not** `https://`. **Not** `:443`.
 
 ## 1. Do not run `k2 daemon install` on the air-gapped box
 
@@ -15,10 +33,9 @@ Unit or drop-in, **before first `ExecStart`**:
 
 ```
 Environment=K2_AIRGAP=1
-Environment=K2_LISTEN=lan
 ```
 
-(`K2_LISTEN=lan` only if a second machine on the VPC should Add Server. Skip it for daemon-only.)
+**Do not** set `K2_LISTEN=lan`. The daemon stays on `127.0.0.1`. Caddy is the only LAN listener (§8).
 
 ## 3. Pre-write the sticky port
 
@@ -27,7 +44,7 @@ mkdir -p ~/.k2
 echo -n 60710 > ~/.k2/daemon.port
 ```
 
-If the port is taken at boot, the daemon falls back to a new ephemeral and saved LAN Add Server URLs go stale (boot log warns).
+If the port is taken at boot, the daemon falls back to a new ephemeral. Caddy’s `reverse_proxy` target would then be wrong — boot log warns. Keep 60710 free on loopback.
 
 ## 4. Seed a connect-user
 
@@ -61,17 +78,25 @@ export K2_AIRGAP=1
 
 Otherwise `k2 connect login` / `k2 publish subdomain *` / `k2 daemon install` skip the daemon and would still curl.
 
-## 8. Add Server from the laptop
+## 8. Caddy = the one monitored LAN port
 
-Settings → Add Server:
+Chris’s requirement: **Caddy listens on a specific port** so all client traffic can be monitored there.
+
+- Daemon: `127.0.0.1:60710` (sticky `daemon.port`) — **not** on the LAN.
+- Caddy: **one** TCP port — example **38471**. Firewall/IDS that port only.
+- Add Server: `http://<LAN-IP>:38471` + seeded username/password. **Not** the daemon port.
+
+Tracked starter: `docs/caddy-airgap-lan.Caddyfile`. They own the file on the box. Bind a **host:port**, not a bare `:port`, if they do not want every interface.
 
 ```
-http://<LAN-IP>:<daemon.port>
+http://192.168.1.50:38471 {
+    reverse_proxy 127.0.0.1:60710
+}
 ```
 
-Example: `http://192.168.1.50:60710` + the seeded username/password.
+Replace `192.168.1.50` with the box’s LAN IP. A single `reverse_proxy` covers `/boot-status`, `/cli/*` (including grid + events WebSockets), `/events`, and `/v1`. Caddy upgrades WebSockets by default.
 
-**Not** `https://`. **Not** `:443`. LAN v1 is cleartext HTTP on the sticky daemon port.
+Do not also open `daemon.port` in the security group. Do not run a second proxy on 80/443.
 
 ## 9. Tuesday claim (honest)
 
@@ -83,6 +108,8 @@ The binary still **contains** those strings. Do not say “authoritatively impos
 
 `tests/airgap/run-z3mbpz-airgap-lan-3min.sh` — env-only `K2_AIRGAP=1` + `K2_LISTEN=lan` on the **existing** launchd daemon, assert plane-dark + LAN `/boot-status`, restore before the 3-minute Connect lease TTL. Does not persist settings, does not unpair, does not delete `tunnel.json`. Requires `NEW_DAEMON=` pointing at an air-gap-capable `k2-daemon`.
 
+That probe is the **lab** path (`K2_LISTEN=lan`). It does **not** stand in for the MasterControl Caddy image.
+
 ```
 NEW_DAEMON=/path/to/k2-daemon ./tests/airgap/run-z3mbpz-airgap-lan-3min.sh
 ```
@@ -91,4 +118,5 @@ NEW_DAEMON=/path/to/k2-daemon ./tests/airgap/run-z3mbpz-airgap-lan-3min.sh
 
 - Product SSOT: `.k2/prds/prd-air-gap-and-lan-listen-v1.md`
 - Review (patches applied): `.k2/prds/prd-air-gap-and-lan-listen-v1-review.md`
+- Example Caddyfile: `docs/caddy-airgap-lan.Caddyfile`
 - Wiki facts: `Feature - Air-Gap When Tunnel Off`

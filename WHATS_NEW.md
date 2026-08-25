@@ -3,6 +3,24 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.110 — Air-gapped LAN-only: Caddy in front
+
+An air-gapped box on a private network keeps the daemon on **loopback** and puts **one** Caddy port on the LAN. That port is a high random TCP port — example **38471** — not 80, 443, 8080, or 8443. HTTP and WebSocket both go through it. Add Server is `http://<LAN-IP>:38471`.
+
+Do **not** set `K2_LISTEN=lan` on that image. That flag is the lab path (client talks to the daemon with no proxy). On the MasterControl image it would open a second LAN door next to Caddy.
+
+Cloud / Connect defaults are unchanged. `K2_AIRGAP=1` still has to be on the process **before first start**.
+
+Runbook: `.k2/prds/runbook-airgap-linux-image-v1.md`. Starter Caddyfile: `docs/caddy-airgap-lan.Caddyfile`.
+
+### What to try
+
+1. Golden image: `K2_AIRGAP=1` only, sticky `~/.k2/daemon.port` = `60710`, seed a connect-user, Caddy `38471` → `127.0.0.1:60710`.
+2. Laptop Add Server: `http://<LAN-IP>:38471` — not `:60710`, not `https://`, not `:443`.
+3. Firewall/IDS: that Caddy port only.
+
+---
+
 ## 0.40.109 — Air-gap + LAN listen; server list drops :443
 
 A daemon can run **air-gapped**: set `K2_AIRGAP=1` on the process **before first start** (systemd/launchd env). It will not start a tunnel, phone Connect/cert, or hit GitHub for updates. `k2 connect login`, `k2 publish subdomain`, and `k2 daemon install` refuse the same way. Strings stay in the binary; they just must not run. This is not an installer `--airgap` flag yet.

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Loud harness for `k2 mail draft` compose + xor (prd-mail-draft-compose-v1 §5).
 # cargo does not cover cmd_mail_draft / _mail_py. Fail-loud: no skip-if-missing.
+# Run with: bash tests/cli/mail_draft_compose.sh  (no live daemon).
 
 set -euo pipefail
 

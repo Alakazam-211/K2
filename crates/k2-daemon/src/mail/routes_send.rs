@@ -432,7 +432,7 @@ fn require_linked_send_gate(project_path: &str) -> Result<(), CliResponse> {
 /// Resolve a linked inbox's vaulted app-password (same key as IMAP).
 /// Missing/unreadable → 503 not_ready with the reconnect pointer (never
 /// a leaked secret).
-fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliResponse> {
+pub(crate) fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliResponse> {
     // For an OAuth-IMAP row (Gmail XOAUTH2) the backend mints the access
     // token itself and IGNORES this param, so there is no app-password to
     // require; a `password` row must still have its vaulted credential.

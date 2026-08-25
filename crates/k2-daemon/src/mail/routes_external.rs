@@ -42,7 +42,7 @@ use crate::mail::graph;
 use crate::mail::jmap::MailAddr;
 use crate::mail::messages::{self, MailBackend, ReadError};
 use crate::mail::routes_send;
-use crate::mail::secrets::{self, FileSecretStore, SecretStore as _};
+use crate::mail::secrets::{self, FileSecretStore};
 use crate::mail::send;
 use k2_core::db::schema::MailExternalInbox;
 
@@ -444,7 +444,7 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             }
         }
         _ => {
-            let password = match linked_draft_password(&inbox) {
+            let password = match routes_send::linked_password(&inbox) {
                 Ok(p) => p,
                 Err(resp) => return resp,
             };
@@ -493,30 +493,6 @@ fn normalize_draft_recipients(raw: &[String]) -> Result<Vec<String>, CliResponse
             "usage",
             &format!("invalid recipient: {e:?}"),
         )),
-    }
-}
-
-fn linked_draft_password(inbox: &MailExternalInbox) -> Result<String, CliResponse> {
-    let is_oauth = matches!(
-        external::read_oauth_fields(&inbox.id),
-        Ok(f) if f.auth_kind == external::AUTH_OAUTH
-    );
-    if is_oauth {
-        return Ok(String::new());
-    }
-    let secrets = FileSecretStore::default();
-    match secrets.resolve(&external::vault_key(&inbox.id)) {
-        Ok(Some(p)) => Ok(p),
-        Ok(None) => Err(error_response(
-            "503 Service Unavailable",
-            "not_ready",
-            &format!(
-                "credentials for '{}' are missing from the vault — your human can reconnect \
-                 it with 'k2 mail link add'",
-                inbox.email_address
-            ),
-        )),
-        Err(hint) => Err(error_response("503 Service Unavailable", "not_ready", &hint)),
     }
 }
 

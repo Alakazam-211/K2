@@ -79,7 +79,15 @@ Packet-capture: no SYN to `connect.k2.dev`, `cert.k2.dev`, Supabase, k2e-01 (`17
 
 The binary still **contains** those strings. Do not say “authoritatively impossible” until a compile-time strip (out of v1). `--airgap` as an installer flag is later; this env-before-start flow is the product.
 
-## 10. Pointers
+## 10. Live 3-minute probe (macOS launchd / z3mbpZ)
+
+`tests/airgap/run-z3mbpz-airgap-lan-3min.sh` — env-only `K2_AIRGAP=1` + `K2_LISTEN=lan` on the **existing** launchd daemon, assert plane-dark + LAN `/boot-status`, restore before the 3-minute Connect lease TTL. Does not persist settings, does not unpair, does not delete `tunnel.json`. Requires `NEW_DAEMON=` pointing at an air-gap-capable `k2-daemon`.
+
+```
+NEW_DAEMON=/path/to/k2-daemon ./tests/airgap/run-z3mbpz-airgap-lan-3min.sh
+```
+
+## 11. Pointers
 
 - Product SSOT: `.k2/prds/prd-air-gap-and-lan-listen-v1.md`
 - Review (patches applied): `.k2/prds/prd-air-gap-and-lan-listen-v1-review.md`

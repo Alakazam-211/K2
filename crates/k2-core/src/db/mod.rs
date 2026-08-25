@@ -132,15 +132,88 @@ pub fn init_for_tests() -> Arc<ReentrantMutex<Connection>> {
 ///
 /// Endgame Stage A (prd-k2so-endgame-v1): **prefer `k2.db` if it exists**,
 /// else use legacy `k2so.db` (create path for fresh installs until Stage B
-/// flips the writer). When both exist, prefer `k2.db` and leave the dual
-/// real-file conflict for Stage B's boot guard.
+/// flips the writer).
+///
+/// **Both real files:** Stage A used to pick `k2.db` blindly. A stray
+/// stub `k2.db` (touch / `sqlite3 ~/.k2/k2.db` / a test) then hid the
+/// live `k2so.db` — workspaces and mail looked gone. If both exist as
+/// non-symlink files, pick the one with more non-sentinel `projects`
+/// rows (size as fallback). Never delete either file. Symlink
+/// `k2so.db` → `k2.db` (Stage B) still resolves to `k2.db`.
 pub fn resolve_home_db_path(db_dir: &std::path::Path) -> std::path::PathBuf {
     let new = db_dir.join("k2.db");
+    let old = db_dir.join("k2so.db");
+    if is_real_db_file(&new) && is_real_db_file(&old) {
+        let pick = pick_dual_real_db(&new, &old);
+        if pick == old {
+            eprintln!(
+                "[db] BOTH k2.db and k2so.db exist as real files; using k2so.db \
+                 (k2.db looks like a stub — a Stage A prefer-k2.db pick would \
+                 hide workspaces). Not deleting either file."
+            );
+        } else {
+            eprintln!(
+                "[db] BOTH k2.db and k2so.db exist as real files; using k2.db \
+                 (it has the live project rows). Not deleting either file."
+            );
+        }
+        return pick;
+    }
     if new.exists() {
         new
     } else {
-        db_dir.join("k2so.db")
+        old
     }
+}
+
+fn is_real_db_file(path: &std::path::Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) => m.is_file(),
+        Err(_) => false,
+    }
+}
+
+fn file_len(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Count real workspaces. Sentinels `_orphan` / `_broadcast` do not count
+/// (a migrated empty `k2.db` still has those two rows).
+fn live_project_count(path: &std::path::Path) -> i64 {
+    let Ok(conn) = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return 0;
+    };
+    conn.query_row(
+        "SELECT count(*) FROM projects WHERE id NOT IN ('_orphan', '_broadcast')",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
+}
+
+fn pick_dual_real_db(new: &std::path::Path, old: &std::path::Path) -> std::path::PathBuf {
+    let cn = live_project_count(new);
+    let co = live_project_count(old);
+    if co > cn {
+        return old.to_path_buf();
+    }
+    if cn > co {
+        return new.to_path_buf();
+    }
+    let ln = file_len(new);
+    let lo = file_len(old);
+    // Equal project counts (both stub or unreadable): a tiny k2.db must
+    // not hide a large k2so.db.
+    if lo > ln.saturating_mul(2) && lo > 1_000_000 {
+        return old.to_path_buf();
+    }
+    if ln > lo.saturating_mul(2) && ln > 1_000_000 {
+        return new.to_path_buf();
+    }
+    old.to_path_buf()
 }
 
 /// Open (or create) the K2 database under `~/.k2/`, run all migrations,
@@ -1232,14 +1305,115 @@ mod tests {
         std::fs::write(base.join("k2.db"), b"new").unwrap();
         assert_eq!(
             resolve_home_db_path(&base),
-            base.join("k2.db"),
-            "both present: prefer k2.db"
+            base.join("k2so.db"),
+            "both tiny stubs: do not hide k2so.db behind a stray k2.db"
         );
         std::fs::remove_file(base.join("k2so.db")).unwrap();
         assert_eq!(
             resolve_home_db_path(&base),
             base.join("k2.db"),
             "only k2.db: use it"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn write_sqlite_with_n_projects(path: &std::path::Path, n: usize) {
+        bootstrap_test_db_at(path).expect("bootstrap");
+        let conn = Connection::open(path).expect("open");
+        for i in 0..n {
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    format!("p{i}"),
+                    format!("ws-{i}"),
+                    format!("/tmp/ws-{i}")
+                ],
+            )
+            .expect("insert project");
+        }
+    }
+
+    #[test]
+    fn resolve_home_db_path_dual_real_prefers_populated_k2so() {
+        let base = std::env::temp_dir().join(format!(
+            "k2-db-dual-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        write_sqlite_with_n_projects(&base.join("k2so.db"), 3);
+        write_sqlite_with_n_projects(&base.join("k2.db"), 0);
+        assert_eq!(
+            resolve_home_db_path(&base),
+            base.join("k2so.db"),
+            "stub k2.db (sentinels only) must not hide k2so.db with live workspaces"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolve_home_db_path_dual_real_prefers_populated_k2() {
+        let base = std::env::temp_dir().join(format!(
+            "k2-db-dual-new-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        write_sqlite_with_n_projects(&base.join("k2so.db"), 0);
+        write_sqlite_with_n_projects(&base.join("k2.db"), 4);
+        assert_eq!(
+            resolve_home_db_path(&base),
+            base.join("k2.db"),
+            "live k2.db wins over empty k2so.db"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolve_home_db_path_dual_real_equal_count_prefers_k2so() {
+        let base = std::env::temp_dir().join(format!(
+            "k2-db-dual-tie-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        write_sqlite_with_n_projects(&base.join("k2so.db"), 0);
+        write_sqlite_with_n_projects(&base.join("k2.db"), 0);
+        assert_eq!(
+            resolve_home_db_path(&base),
+            base.join("k2so.db"),
+            "equal live counts: keep k2so.db (do not hide it behind a same-size stub k2.db)"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_home_db_path_stage_b_symlink_uses_k2() {
+        let base = std::env::temp_dir().join(format!(
+            "k2-db-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        write_sqlite_with_n_projects(&base.join("k2.db"), 2);
+        std::os::unix::fs::symlink(base.join("k2.db"), base.join("k2so.db")).unwrap();
+        assert_eq!(
+            resolve_home_db_path(&base),
+            base.join("k2.db"),
+            "Stage B compat symlink k2so.db → k2.db is not a dual-real conflict"
         );
         let _ = std::fs::remove_dir_all(&base);
     }

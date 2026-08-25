@@ -3,6 +3,19 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.111 — Don't hide your workspaces behind a stub `k2.db`
+
+If both `~/.k2/k2.db` and `~/.k2/k2so.db` exist as real files, K2 now opens the one that actually has your workspaces. A stray empty `k2.db` (touch, `sqlite3 ~/.k2/k2.db`, a test) used to win on name alone — the app looked factory-reset, mail and chats gone. **Nothing was deleted.** The live file is still `k2so.db` until a later rename. This update just stops picking the stub.
+
+Gmail `k2 mail read` no longer reports `daemon_unreachable` when the daemon is up and the mailbox is large. One IMAP session, cached folder STATUS, longer HTTP timeout.
+
+### What to try
+
+1. If workspaces vanished after an update: look in `~/.k2/` — if both `k2.db` and `k2so.db` are real files, restart this build. The sidebar should come back. Do not delete either file.
+2. Linked Gmail: `k2 mail read` of a Sent or Inbox id should return a body, not hang until timeout.
+
+---
+
 ## 0.40.110 — Air-gapped LAN-only: Caddy in front
 
 An air-gapped box on a private network keeps the daemon on **loopback** and puts **one** Caddy port on the LAN. That port is a high random TCP port — example **38471** — not 80, 443, 8080, or 8443. HTTP and WebSocket both go through it. Add Server is `http://<LAN-IP>:38471`.

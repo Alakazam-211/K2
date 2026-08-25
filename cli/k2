@@ -73,6 +73,53 @@ _ws_dot_dir() {
     if [ -d "$1/.k2" ]; then echo "$1/.k2"; else echo "$1/.k2so"; fi
 }
 
+# Same policy as k2_core::db::resolve_home_db_path.
+# Stage A: prefer k2.db if it exists, else k2so.db.
+# Both real files: pick the one with more live workspaces so a stub k2.db
+# cannot hide k2so.db. Never create k2.db here. Stage B symlink k2so.db →
+# k2.db is not a "both real" case.
+_k2_home_db() {
+    local new="$K2_HOME/k2.db"
+    local old="$K2_HOME/k2so.db"
+    if [ -f "$new" ] && [ ! -L "$new" ] && [ -f "$old" ] && [ ! -L "$old" ]; then
+        local cn=0 co=0
+        if command -v sqlite3 >/dev/null 2>&1; then
+            cn=$(sqlite3 "$new" "SELECT count(*) FROM projects WHERE id NOT IN ('_orphan', '_broadcast');" 2>/dev/null || true)
+            co=$(sqlite3 "$old" "SELECT count(*) FROM projects WHERE id NOT IN ('_orphan', '_broadcast');" 2>/dev/null || true)
+        fi
+        cn=$(( ${cn:-0} + 0 ))
+        co=$(( ${co:-0} + 0 ))
+        if [ "$co" -gt "$cn" ]; then
+            echo "$old"
+            return
+        fi
+        if [ "$cn" -gt "$co" ]; then
+            echo "$new"
+            return
+        fi
+        local ln=0 lo=0
+        ln=$(wc -c < "$new" 2>/dev/null | tr -d '[:space:]')
+        lo=$(wc -c < "$old" 2>/dev/null | tr -d '[:space:]')
+        ln=$(( ${ln:-0} + 0 ))
+        lo=$(( ${lo:-0} + 0 ))
+        if [ "$lo" -gt $(( ln * 2 )) ] && [ "$lo" -gt 1000000 ]; then
+            echo "$old"
+            return
+        fi
+        if [ "$ln" -gt $(( lo * 2 )) ] && [ "$ln" -gt 1000000 ]; then
+            echo "$new"
+            return
+        fi
+        echo "$old"
+        return
+    fi
+    if [ -e "$new" ]; then
+        echo "$new"
+    else
+        echo "$old"
+    fi
+}
+
 # Resolve project root: if K2_PROJECT_PATH is set, use it directly.
 # Otherwise walk up from CWD to find a .k2/ or .k2so/ directory, skipping $HOME.
 # Also handles git worktrees: if CWD is inside a worktree, resolve back to
@@ -3814,9 +3861,7 @@ print('yes' if (agent_inbox or ws_inbox) else 'no')
     session_info=$(python3 -c "
 import json, os, sqlite3
 try:
-    db = os.path.expanduser('$K2_HOME/k2.db')
-    if not os.path.isfile(db):
-        db = os.path.expanduser('$K2_HOME/k2so.db')
+    db = os.path.expanduser('$(_k2_home_db)')
     conn = sqlite3.connect(db)
     project = '$PROJECT'
     row = conn.execute('SELECT id FROM projects WHERE path = ?', (project,)).fetchone()
@@ -6364,10 +6409,9 @@ cmd_signal() {
     # path as the workspace id, which FK-violates against
     # projects.id (UUIDs) and silently drops audit.
     local workspace_id="$PROJECT"
-    # Endgame Stage A: prefer k2.db when present, else legacy k2so.db
-    # (same resolve as k2_core::db::resolve_home_db_path).
-    local _k2_db="$K2_HOME/k2.db"
-    [ -f "$_k2_db" ] || _k2_db="$K2_HOME/k2so.db"
+    # Endgame Stage A + dual-real heal (same as k2_core::db::resolve_home_db_path).
+    local _k2_db
+    _k2_db="$(_k2_home_db)"
     if [ -f "$_k2_db" ] && command -v sqlite3 >/dev/null 2>&1; then
         # SQL-escape single quotes in the path (doubled per SQL spec).
         local _safe_path="${PROJECT//\'/\'\'}"

@@ -63,8 +63,12 @@ Locator: `git grep -n 'k2so\.db' -- crates cli`
    K2_DB="$K2_HOME/k2.db"; [ -f "$K2_DB" ] || K2_DB="$K2_HOME/k2so.db"
    ```
 3. Unit test (k2-core): create temp dir with only `k2.db` → resolver
-   picks it; with only `k2so.db` → picks that; with BOTH → picks `k2.db`
-   (and Stage B's boot guard §3-L1 step 3 handles the both-exist case).
+   picks it; with only `k2so.db` → picks that; with BOTH real files →
+   pick the one with more live `projects` rows (exclude `_orphan` /
+   `_broadcast`; size fallback; tie → `k2so.db`). **Do not** blindly
+   prefer `k2.db` — that hid live `k2so.db` behind a stub (2026-08-25).
+   Stage B's boot guard §3-L1 still must not delete either file; after
+   B, `k2so.db` is a symlink and is not a dual-real case.
 
 ### A-L2: agentType readers accept 'k2' as synonym of 'k2so'
 Locator: `git grep -rn "\"k2so\"\|'k2so'" -- crates src | grep -i agent`

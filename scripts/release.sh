@@ -151,6 +151,30 @@ fi
 
 cd "$PROJECT_DIR"
 
+# Resume after a successful build+notarize when a later hard gate flakes
+# (0.40.109: Step 7.5 scp to the Tart guest). Does NOT re-bump or rebuild.
+#   K2_RELEASE_RESUME=7.5  — skip 0.5–7; run pairing smoke + publish
+#   K2_RELEASE_RESUME=8    — skip 0.5–7.5; publish only
+SKIP_BUILD=0
+SKIP_SMOKE=0
+case "${K2_RELEASE_RESUME:-}" in
+  "") ;;
+  7.5) SKIP_BUILD=1 ;;
+  8)   SKIP_BUILD=1; SKIP_SMOKE=1 ;;
+  *)
+    echo "ERROR: K2_RELEASE_RESUME must be 7.5 or 8 (got ${K2_RELEASE_RESUME})" >&2
+    exit 1
+    ;;
+esac
+if [ "$SKIP_BUILD" = 1 ]; then
+    DMG_RESUME="target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
+    if [ ! -f "$DMG_RESUME" ]; then
+        echo "ERROR: K2_RELEASE_RESUME=${K2_RELEASE_RESUME} but missing $DMG_RESUME" >&2
+        exit 1
+    fi
+    echo "K2_RELEASE_RESUME=${K2_RELEASE_RESUME} — skipping build/sign/notarize; using $DMG_RESUME"
+fi
+
 # ── Step 0.5: Pre-flight quality gates ──
 # Added at 0.40.31 when the tree first reached warning-zero / typecheck-zero.
 # Fail the release BEFORE any version bump or build if regressions slipped in.
@@ -159,6 +183,7 @@ cd "$PROJECT_DIR"
 # vite:build:web is the hosted-SPA production build (vite.config.web.ts) —
 # typecheck alone does not prove the Vite graph / CSS / assets still bundle.
 # R2 publish is Step 8.6 and stays best-effort; this gate is build-only.
+if [ "$SKIP_BUILD" = 0 ]; then
 echo ""
 echo "Step 0.5: Pre-flight gates (cargo -D warnings, typecheck:web, vitest, vite:build:web)..."
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
@@ -412,17 +437,20 @@ xcrun notarytool submit "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
     "${NOTARY_AUTH[@]}" --wait
 staple_with_retry "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
 echo "  DMG notarized and stapled."
+fi # SKIP_BUILD
 
 # ── Step 7.5: Clean-VM new-user pairing smoke (0.40.33/34 regression class) ──
 # Fresh Sequoia guest, empty ~/.k2*, install this DMG, start bundled daemon,
 # assert ~/.k2so → ~/.k2 symlink + /boot-status via the thin-client path.
 # Hard gate before latest.json / GitHub publish. Escape: K2_SKIP_VM_PAIRING_SMOKE=1
 # (loud; do not skip on the machine that cuts real releases).
+if [ "$SKIP_SMOKE" = 0 ]; then
 echo ""
 echo "Step 7.5: Clean-VM new-user pairing smoke..."
 "$PROJECT_DIR/scripts/vm-newuser-pair-smoke.sh" \
   "$PROJECT_DIR/target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
   "$VERSION"
+fi # SKIP_SMOKE
 
 # ── Step 8: Generate latest.json ──
 echo ""

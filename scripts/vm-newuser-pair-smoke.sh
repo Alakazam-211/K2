@@ -99,7 +99,7 @@ ssh_opts=(
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
   -o IdentitiesOnly=yes
-  -o PreferredAuthentications=password
+  -o PreferredAuthentications=keyboard-interactive,password
   -o PubkeyAuthentication=no
   -o NumberOfPasswordPrompts=1
   -o ConnectTimeout=10
@@ -108,8 +108,25 @@ ssh_opts=(
 ssh_to() {
   sshpass -p "$SSH_PASS" ssh "${ssh_opts[@]}" "${SSH_USER}@${IP}" "$@"
 }
-scp_to() {
-  sshpass -p "$SSH_PASS" scp "${ssh_opts[@]}" "$@"
+
+# Do NOT use scp. OpenSSH 9+/10 scp speaks SFTP; sshpass + PubkeyAuthentication=no
+# are honored by `ssh` but often ignored by `scp`, which then tries publickey
+# first and dies: "Permission denied (publickey,password,keyboard-interactive)".
+# 0.40.108's smoke passed this hop; 0.40.109 died on it with the same script.
+# Stream through the already-working ssh_to instead.
+put_guest() {
+  local src="$1"
+  local dest_dir="$2"
+  local base
+  base="$(basename "$src")"
+  sshpass -p "$SSH_PASS" ssh "${ssh_opts[@]}" "${SSH_USER}@${IP}" \
+    "mkdir -p ${dest_dir} && cat > ${dest_dir}/${base}" <"$src"
+}
+get_guest() {
+  local remote_path="$1"
+  local dest="$2"
+  sshpass -p "$SSH_PASS" ssh "${ssh_opts[@]}" "${SSH_USER}@${IP}" \
+    "cat ${remote_path}" >"$dest"
 }
 
 cleanup() {
@@ -221,8 +238,9 @@ rm -f "$SSH_ERR_LOG"
 ssh_to 'rm -rf ~/k2-gk-testdata ~/.k2 ~/.k2so 2>/dev/null; mkdir -p ~/k2-gk-testdata; true'
 ssh_to 'test ! -e /Applications/K2.app || (sudo -n rm -rf /Applications/K2.app 2>/dev/null; rm -rf /Applications/K2.app 2>/dev/null); true'
 
-echo "  copying DMG + guest script ..."
-scp_to "$GUEST_SCRIPT" "$DMG_PATH" "${SSH_USER}@${IP}:~/k2-gk-testdata/"
+echo "  copying DMG + guest script (via ssh, not scp) ..."
+put_guest "$GUEST_SCRIPT" '$HOME/k2-gk-testdata'
+put_guest "$DMG_PATH" '$HOME/k2-gk-testdata'
 
 echo "  running guest pairing assertions ..."
 set +e
@@ -241,7 +259,7 @@ fi
 set -e
 
 # Pull guest report if present
-scp_to "${SSH_USER}@${IP}:~/k2-newuser-${LABEL}.txt" "/tmp/k2-newuser-guest-${LABEL}.txt" 2>/dev/null || true
+get_guest "\$HOME/k2-newuser-${LABEL}.txt" "/tmp/k2-newuser-guest-${LABEL}.txt" 2>/dev/null || true
 
 if [ "$GUEST_RC" -ne 0 ]; then
   echo "" >&2

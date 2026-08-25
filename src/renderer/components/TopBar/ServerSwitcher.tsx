@@ -43,6 +43,15 @@ function statusColor(status: ConnectionStatus): string {
   }
 }
 
+/** Address shown under a saved host in the dropdown. Omit default
+ *  https port 443 (`rosson.k2.dev`, not `rosson.k2.dev:443`). LAN /
+ *  non-443 keep the port. Same rule as Connections tiles / RemoteSignIn. */
+export function hostDisplayAddress(
+  h: Pick<ConnectHost, 'hostname' | 'port' | 'secure'>,
+): string {
+  return h.secure && h.port === 443 ? h.hostname : `${h.hostname}:${h.port}`
+}
+
 /**
  * The host indicator's color + tooltip, folding the ACTIVE remote's
  * three-state recovery surface (lib/remote-recovery.ts) over the plain
@@ -317,7 +326,7 @@ export default function ServerSwitcher(): React.JSX.Element {
                 <SwitcherRow
                   key={h.id}
                   label={h.label}
-                  sublabel={`${h.hostname}:${h.port}`}
+                  sublabel={hostDisplayAddress(h)}
                   active={isActive}
                   statusDot={isActive ? connectionStatus : null}
                   onClick={() => pick(h)}

@@ -131,6 +131,8 @@ mod spawn_queue;
 mod v1_sandboxes;
 // F1: NON-SANDBOXED host sessions on /v1 (K2_API-gated; "sandbox":"none").
 mod v1_host_sessions;
+// Julie 2–4: POST /v1/w hire + wiki notes + context layers (host-sessions cap).
+mod v1_hire;
 // Capability envelope (S1–S3): ES256 JWTs + GET /v1/jwks + cap-file staging.
 mod v1_capabilities;
 // F2 (sandbox): per-session agent response log + ownership map (GET .../messages).

@@ -863,6 +863,8 @@ async fn handle_one_request(
         // branch below do the real method gating). The surface stays DARK
         // unless the /v1 gate is on (K2_API or legacy K2_SANDBOX_API; the
         // sessions family also needs K2_SANDBOX_API — checked in the `/v1/` arm).
+        // Hire is the exact path `POST /v1/w` (no trailing slash / slug).
+        || post_path == "/v1/w"
         || post_path.starts_with("/v1/w/");
     if method != "GET" && !(is_post && post_allowed) {
         let _ = stream.read(&mut buf).await;
@@ -4840,6 +4842,17 @@ async fn handle_one_request(
                 //   GET  /v1/w/<ws>/sessions                    → list <ws>'s
                 //        sandbox sessions (audit; empty in slice 1)
                 //
+                // Hire (Julie 2): exact `POST /v1/w` — MUST run before the
+                // `/v1/w/<slug>/…` parser. GET → 405 (POST-only).
+                "/v1/w" => {
+                    if !is_post {
+                        let _ = stream.read(&mut buf).await;
+                        crate::v1_hire::handle_v1_w(&principal, false, &[])
+                    } else {
+                        let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        crate::v1_hire::handle_v1_w(&principal, true, &body)
+                    }
+                }
                 // The exact `match p` above can't catch the `<ws>`/`<id>`
                 // segments, so this guard arm parses them manually (mirrors the
                 // `/v1/sandboxes/.../messages` guard) and branches on `is_post`.
@@ -4895,6 +4908,41 @@ async fn handle_one_request(
                         ([ws, "message"], true) => {
                             let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                             crate::v1_ws_message::handle_v1_ws_message(&principal, ws, &body)
+                        }
+                        // Julie 3 — POST /v1/w/<ws>/wiki/notes (write one note).
+                        ([ws, "wiki", "notes"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_hire::handle_v1_wiki_notes(&principal, ws, &body)
+                        }
+                        ([_ws, "wiki", "notes"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::cli_response::CliResponse::method_not_allowed()
+                        }
+                        // Julie 4 — GET /v1/w/<ws>/context (layer list).
+                        ([ws, "context"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::v1_hire::handle_v1_context_list(&principal, ws)
+                        }
+                        // POST /v1/w/<ws>/context — catalog XOR inline layer.
+                        ([ws, "context"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_hire::handle_v1_context_add(&principal, ws, &body)
+                        }
+                        ([ws, "context", "remove"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_hire::handle_v1_context_remove(&principal, ws, &body)
+                        }
+                        ([_ws, "context", "remove"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::cli_response::CliResponse::method_not_allowed()
+                        }
+                        ([ws, "context", "regen"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_hire::handle_v1_context_regen(&principal, ws, &body)
+                        }
+                        ([_ws, "context", "regen"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::cli_response::CliResponse::method_not_allowed()
                         }
                         // ── F1 (prd-v1-api-completion §3) — NON-SANDBOXED
                         // HOST SESSIONS. Gated on the /v1 SURFACE gate only

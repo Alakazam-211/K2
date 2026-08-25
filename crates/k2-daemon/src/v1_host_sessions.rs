@@ -441,7 +441,8 @@ fn deliver_into_live(
 
 /// Phase 0 capability gate for the host-sessions family. Missing cap → the
 /// same uniform workspace 404 as an ungranted key (no existence oracle).
-fn require_host_sessions(principal: &V1Principal) -> Result<(), CliResponse> {
+/// `pub(crate)` so `/v1` hire / wiki / context reuse this gate (not a copy).
+pub(crate) fn require_host_sessions(principal: &V1Principal) -> Result<(), CliResponse> {
     if principal.has_capability(V1Capability::HostSessions) {
         Ok(())
     } else {

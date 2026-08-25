@@ -127,6 +127,8 @@ pub mod v1_sandboxes;
 // Behind the /v1 surface gate (K2_API, default OFF); honestly labeled
 // `"sandbox":"none"`.
 pub mod v1_host_sessions;
+// Julie 2–4: POST /v1/w hire + wiki notes + context layers (host-sessions cap).
+pub mod v1_hire;
 pub mod v1_capabilities;
 // F2 (sandbox): per-session agent response log + principal→session ownership map
 // backing GET /v1/sandboxes/<id>/messages. Reached ONLY via the K2_SANDBOX_API

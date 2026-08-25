@@ -816,6 +816,82 @@ pub fn read_note(workspace: &Path, id: &str) -> Result<WikiNoteBody, String> {
     })
 }
 
+/// Jail a wiki-relative note id into a single `.md` path under `.k2/wiki/`.
+/// Rejects empty, NUL, `..`, absolute, and non-`.md` ids.
+fn jail_wiki_id(id: &str) -> Result<String, String> {
+    if id.is_empty() || id.contains('\0') {
+        return Err("invalid note id".into());
+    }
+    if id.contains("..") {
+        return Err("invalid note id".into());
+    }
+    let normalized = id.replace('\\', "/");
+    if normalized.starts_with('/')
+        || normalized.starts_with("~/")
+        || normalized == "~"
+        || Path::new(&normalized).is_absolute()
+    {
+        return Err("invalid note id".into());
+    }
+    if !normalized.ends_with(".md") {
+        return Err("invalid note id".into());
+    }
+    if normalized
+        .split('/')
+        .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+    {
+        return Err("invalid note id".into());
+    }
+    Ok(normalized)
+}
+
+/// Write one note under `<workspace>/.k2/wiki/`. Confined. Overwrite OK.
+/// Seeds the wiki vault if missing. Returns the workspace-relative path
+/// (e.g. `.k2/wiki/Interview.md`).
+pub fn write_note(workspace: &Path, id: &str, body: &str) -> Result<String, String> {
+    let id = jail_wiki_id(id)?;
+    if (body.len() as u64) > MAX_NOTE_BYTES {
+        return Err("note too large".into());
+    }
+    if !workspace.exists() {
+        return Err(format!(
+            "workspace path does not exist: {}",
+            workspace.display()
+        ));
+    }
+    seed_wiki(workspace)?;
+    let root = workspace
+        .canonicalize()
+        .map_err(|e| format!("workspace path: {e}"))?;
+    let wiki = root.join(WIKI_REL);
+    fs::create_dir_all(&wiki).map_err(|e| format!("mkdir wiki: {e}"))?;
+    let wiki_canon = wiki
+        .canonicalize()
+        .map_err(|e| format!("wiki path: {e}"))?;
+    let dest = wiki_canon.join(&id);
+    if !dest.starts_with(&wiki_canon) {
+        return Err("note path escapes wiki root".into());
+    }
+    if dest.exists() {
+        let abs = dest
+            .canonicalize()
+            .map_err(|e| format!("note path: {e}"))?;
+        if !abs.starts_with(&wiki_canon) {
+            return Err("note path escapes wiki root".into());
+        }
+    } else if let Some(parent) = dest.parent() {
+        if !parent.starts_with(&wiki_canon) {
+            return Err("note path escapes wiki root".into());
+        }
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir wiki note parent: {e}"))?;
+    }
+    fs::write(&dest, body).map_err(|e| format!("write note: {e}"))?;
+    Ok(Path::new(WIKI_REL)
+        .join(&id)
+        .to_string_lossy()
+        .replace('\\', "/"))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WikiNoteBody {
@@ -1213,6 +1289,54 @@ mod tests {
         let idx = build_index(&ws).unwrap();
         assert!(idx.links.iter().any(|l| l.missing && l.target.contains("Ghost")));
         assert!(idx.nodes.iter().any(|n| !n.exists && n.title == "Ghost"));
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn write_note_writes_under_wiki_and_seeds() {
+        let ws = temp_ws("write-note");
+        let path = write_note(&ws, "Interview.md", "# hello\n").expect("write");
+        assert_eq!(path, ".k2/wiki/Interview.md");
+        let body = fs::read_to_string(ws.join(".k2/wiki/Interview.md")).expect("read");
+        assert_eq!(body, "# hello\n");
+        assert!(
+            ws.join(".k2/wiki/Home.md").is_file(),
+            "write_note must seed Home.md when the vault is missing"
+        );
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn write_note_overwrites_and_nested_parents() {
+        let ws = temp_ws("write-note-nested");
+        write_note(&ws, "foo/bar.md", "one").expect("first");
+        write_note(&ws, "foo/bar.md", "two").expect("overwrite");
+        let body = fs::read_to_string(ws.join(".k2/wiki/foo/bar.md")).expect("read");
+        assert_eq!(body, "two");
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn write_note_rejects_jail_breaks() {
+        let ws = temp_ws("write-note-jail");
+        for id in [
+            "",
+            "..",
+            "../x.md",
+            "foo/../x.md",
+            "/tmp/x.md",
+            "/X.md",
+            "Home.txt",
+            "Home.md\0sneaky.md",
+            "foo//bar.md",
+            "./Home.md",
+        ] {
+            let err = write_note(&ws, id, "x").expect_err(id);
+            assert_eq!(err, "invalid note id", "id={id:?} err={err}");
+        }
+        let too = "x".repeat((MAX_NOTE_BYTES as usize) + 1);
+        let err = write_note(&ws, "Big.md", &too).expect_err("too large");
+        assert_eq!(err, "note too large");
         let _ = fs::remove_dir_all(&ws);
     }
 }

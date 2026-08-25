@@ -3,6 +3,33 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.108 — Default model, ticket wake, mail drafts, hire API
+
+A workspace can have a **default model**. Settings → the workspace **Agent** tab has chips plus an optional **force this model when resuming a dead chat**. The host-session API can send `model` on spawn; that wins over the workspace default, which wins over the preset. A live session ignores a model change (no 400).
+
+Answering a **ticket** wakes the workspace agent the same way `k2 msg` does, so the reply lands in the pinned chat instead of a sleeping sandbox tab.
+
+`k2 mail draft` can compose a **new** message (`--to` / `--subject` / `--body`), not only a reply. It still APPENDs to the human's Gmail Drafts and never sends. Listing All Mail and then `read` / `draft <id>` works.
+
+Programs with an API key can **hire** a workspace, write wiki notes, and stack context without the owner token:
+
+```
+POST /v1/w
+POST /v1/w/<ws>/wiki/notes
+GET/POST /v1/w/<ws>/context
+```
+
+New workspaces need a `*` workspace grant (or the owner). A draft is still not a send. Spinning up a VM stays on k2-dev-web.
+
+### What to try
+
+1. Settings → a workspace Agent tab: set a default model, spawn a host-session with and without `"model"` in the body.
+2. Answer a ticket for a sleeping agent — the pinned chat should wake with the reply.
+3. `k2 mail draft --to someone@x --subject "Hello" --body "…"` and open Gmail Drafts.
+4. `POST /v1/w` with `path`, optional `wiki` / `context` / `layers`, then `POST /v1/w/<handle>/host-sessions`.
+
+---
+
 ## 0.40.107 — Workspace Resources; pinned-chat icon stays put
 
 **Resources** are files you pick, not whatever HTML tab happens to be pinned. In the Files tree, right-click a file → **Add to Resources**. The Files drawer has **Workspace Resources** at the top (Environment and AI Config stay, all three start collapsed). Those same files show in the project **Resources** drawer. Click or drag one onto the project dashboard: HTML still uses the sandboxed page; CSV/PDF/and the rest open in the file viewer **on the dashboard**, not as a new Agents tab. Right-click → **Remove** in either drawer. Existing pinned HTML is copied into Resources once so nothing vanishes; pinning a tab no longer *defines* the list.

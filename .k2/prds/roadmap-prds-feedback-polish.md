@@ -1,7 +1,7 @@
 # Roadmap — PRDs, feedback, polish
 
 **Canonical mini-index for unfinished work.**  
-**Created:** 2026-08-08 · **Updated:** 2026-08-24 (mail draft compose on main)  
+**Created:** 2026-08-08 · **Updated:** 2026-08-24 (v1 hire + mail draft on main)  
 **Sources:** `0.40.x-to-1.0-weekend-roadmap.md`, wiki `_Index`, host-session / Connect / polish PRDs, model-override PRD, **Julie/Scout K2-ASKS-2026-08-08**
 
 **How to use**
@@ -103,6 +103,7 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 | **Host-session kill route** | Load-bearing PRD | `.k2/prds/prd-v1-host-session-kill-v1.md` (shipped train — residual only if listed) |
 | **Host-session capabilities / envelope** | Shipped envelope + **PR A resource unbake** next | `.k2/prds/prd-v1-host-session-capabilities-v1.md`, `docs/host-session-capability-envelope.md`, **`prd-caps-recovery-consensus-addendum-v1.md`** (grammar + Layer B) |
 | **Sandbox / sandboxed agent endpoints** | Open PRD family | `.k2/prds/prd-sandboxed-agent-endpoints.md`, `.k2/prds/prd-session-sandboxing-v1.md`, `.k2/prds/prd-sandbox-workspace-scoped-sessions.md`, `.k2/prds/prd-sandbox-addendum-hosted-sessions.md` (+ p1–p4 / guest-creds specs as needed) |
+| **Julie hire / wiki notes / context (`/v1`)** | On main `5facba61` (unreleased). `POST /v1/w` + `…/wiki/notes` + `…/context`. VM carve still k2-dev-web. | `.k2/prds/prd-v1-hire-wiki-context-v1.md` · wiki Research - Scout Hire APIs |
 
 ### B3 · Terminal / remote / Connect client
 

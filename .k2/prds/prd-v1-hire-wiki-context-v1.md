@@ -1,6 +1,6 @@
 # Mini-PRD — `/v1` hire + wiki notes + context layers
 
-**Date:** 2026-08-24 · **Owner:** Rosson · **Status:** Ready for implement  
+**Date:** 2026-08-24 · **Owner:** Rosson · **Status:** On main `5facba61` (unreleased)  
 **Product:** K2 daemon `/v1` (API key / owner token)  
 **Amends:** wiki `Research - Scout Hire APIs` items **2–4** (item **1** VM carve stays k2-dev-web)
 

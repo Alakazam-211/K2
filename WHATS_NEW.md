@@ -3,6 +3,22 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.109 — Air-gap + LAN listen; server list drops :443
+
+A daemon can run **air-gapped**: set `K2_AIRGAP=1` on the process **before first start** (systemd/launchd env). It will not start a tunnel, phone Connect/cert, or hit GitHub for updates. `k2 connect login`, `k2 publish subdomain`, and `k2 daemon install` refuse the same way. Strings stay in the binary; they just must not run. This is not an installer `--airgap` flag yet.
+
+A second client on the same private network can Add Server with `http://<LAN-IP>:<daemon.port>` when `K2_LISTEN=lan` is set (HTTP on the sticky port, not `https://` and not `:443`). Default for both flags is **off** — cloud users are unchanged.
+
+The top-bar server dropdown no longer appends `:443` on hosted names (`rosson.k2.dev`, not `rosson.k2.dev:443`). A LAN port still shows.
+
+### What to try
+
+1. Top bar server list: hosted rows should be hostname only.
+2. Do **not** leave `K2_AIRGAP=1` on a box that should keep `*.k2.dev` — the Connect lease is 3 minutes. Env-only, then unset and restart, recovers tunnel.json / pairing.
+3. Golden image: bake/scp the daemon (do not `k2 daemon install` on an air-gapped box), set the env on the unit, pre-write `~/.k2/daemon.port`, seed a connect-user. Runbook: `.k2/prds/runbook-airgap-linux-image-v1.md`.
+
+---
+
 ## 0.40.108 — Default model, ticket wake, mail drafts, hire API
 
 A workspace can have a **default model**. Settings → the workspace **Agent** tab has chips plus an optional **force this model when resuming a dead chat**. The host-session API can send `model` on spawn; that wins over the workspace default, which wins over the preset. A live session ignores a model change (no 400).

@@ -102,20 +102,62 @@ export async function validateHost(
  * host (`rosson.k2.dev`) — defaulted to `https://` — or a full URL
  * (`https://rosson.k2.dev`, `http://192.168.1.5:47800`).
  *
- *   - scheme `https` (or absent) → secure:true, port defaults to 443
- *   - scheme `http`              → secure:false, port defaults to 80
+ *   - scheme `https` (or absent, non-RFC1918) → secure:true, port defaults to 443
+ *   - scheme `http`                          → secure:false, port defaults to 80
+ *   - no scheme + RFC1918/link-local         → http; **port required**
+ *   - explicit `https://` + RFC1918          → teaching error (cert is `*.k2.dev`)
  *   - an explicit `:port` always wins over the scheme default
  */
 export type ParsedServerUrl =
   | { ok: true; hostname: string; secure: boolean; port: number }
   | { ok: false; reason: string }
 
+/** RFC1918 (`10/8`, `172.16/12`, `192.168/16`) + link-local `169.254/16`. */
+export function isRfc1918OrLinkLocalIpv4(hostname: string): boolean {
+  const m = hostname.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!m) return false
+  const oct = m.slice(1).map((s) => Number(s))
+  if (oct.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false
+  const [a, b] = oct
+  if (a === 10) return true
+  if (a === 192 && b === 168) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  if (a === 169 && b === 254) return true
+  return false
+}
+
+const LAN_PORT_REQUIRED =
+  'LAN server URL needs an explicit port (the daemon sticky port, e.g. http://192.168.1.50:60710).'
+const LAN_HTTPS_TEACHING =
+  'LAN K2 servers speak HTTP, not HTTPS (the cert is *.k2.dev). Use http://<ip>:<port>.'
+
 export function parseServerUrl(raw: string): ParsedServerUrl {
   const trimmed = raw.trim()
   if (!trimmed) return { ok: false, reason: 'Enter the K2 server URL.' }
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+
+  let peekHost = trimmed
+  if (hasScheme) {
+    try {
+      peekHost = new URL(trimmed).hostname
+    } catch {
+      peekHost = ''
+    }
+  } else {
+    const m = trimmed.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d+))?$/)
+    peekHost = m?.[1] ?? trimmed.split('/')[0]?.split(':')[0] ?? trimmed
+  }
+  const privateIp = isRfc1918OrLinkLocalIpv4(peekHost)
+
+  if (!hasScheme && privateIp) {
+    const m = trimmed.match(/^(\d{1,3}(?:\.\d{1,3}){3}):(\d+)$/)
+    if (!m) return { ok: false, reason: LAN_PORT_REQUIRED }
+  }
+
   // Default to https:// when no scheme is given so a bare `sub.k2.dev`
-  // works (the common hosted case).
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+  // works (the common hosted case). RFC1918/link-local without a scheme
+  // is LAN HTTP — never invent https/443.
+  const withScheme = hasScheme ? trimmed : privateIp ? `http://${trimmed}` : `https://${trimmed}`
   let u: URL
   try {
     u = new URL(withScheme)
@@ -127,6 +169,12 @@ export function parseServerUrl(raw: string): ParsedServerUrl {
   }
   const hostname = u.hostname
   if (!hostname) return { ok: false, reason: 'URL is missing a hostname.' }
+  if (u.protocol === 'https:' && isRfc1918OrLinkLocalIpv4(hostname)) {
+    return { ok: false, reason: LAN_HTTPS_TEACHING }
+  }
+  if (isRfc1918OrLinkLocalIpv4(hostname) && !u.port) {
+    return { ok: false, reason: LAN_PORT_REQUIRED }
+  }
   const secure = u.protocol === 'https:'
   const port = u.port ? Number(u.port) : secure ? 443 : 80
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {

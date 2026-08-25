@@ -92,6 +92,7 @@ impl DnsHttpClient for ReqwestDnsClient {
         agent: Option<&str>,
         body: Option<&str>,
     ) -> Result<DnsHttpResponse, String> {
+        k2_core::airgap::refuse()?;
         let url = format!("{}{}", dns_api_base(), path);
         let client = reqwest::blocking::Client::builder()
             .timeout(HTTP_TIMEOUT)

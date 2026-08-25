@@ -4,6 +4,7 @@
 
 import React, { useEffect, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
+import { isAirgap } from '@/lib/airgap'
 import { K2ConnectSection } from './K2ConnectSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
@@ -26,14 +27,20 @@ const BLURBS: Record<ConnectTab, string> = {
 
 export function K2ConnectSettingsShell(): React.JSX.Element {
   const activeSection = useSettingsStore((s) => s.activeSection)
+  const hideTunnel = isAirgap()
   const [tab, setTab] = useState<ConnectTab>(
-    activeSection === 'connections' ? 'servers' : 'tunnel',
+    hideTunnel || activeSection === 'connections' ? 'servers' : 'tunnel',
   )
 
   // Honor deep links that set activeSection to `connections` vs `k2-connect`.
+  // Air-gap: never land on Tunnel (that panel refreshSession()s Supabase).
   useEffect(() => {
+    if (hideTunnel) {
+      setTab((current) => (current === 'people' ? 'people' : 'servers'))
+      return
+    }
     setTab(activeSection === 'connections' ? 'servers' : 'tunnel')
-  }, [activeSection])
+  }, [activeSection, hideTunnel])
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden p-6">
@@ -53,7 +60,7 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
           aria-label="K2 Connect"
           className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)]"
         >
-          {TABS.map((t) => {
+          {TABS.filter((t) => !(hideTunnel && t.id === 'tunnel')).map((t) => {
             const active = tab === t.id
             return (
               <button
@@ -82,7 +89,7 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
               <ConnectionsSection />
             </SectionErrorBoundary>
           </div>
-        ) : tab === 'tunnel' ? (
+        ) : tab === 'tunnel' && !hideTunnel ? (
           /* Middle split: Tunnel (expose + URLs) | Policies */
           <div className="flex h-full min-h-0">
             <div className="flex-1 min-w-0 overflow-y-auto pr-3 [scrollbar-gutter:stable]">

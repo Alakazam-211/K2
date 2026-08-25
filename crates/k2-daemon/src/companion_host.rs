@@ -374,6 +374,12 @@ pub fn register(event_tx: broadcast::Sender<WireEvent>) {
 /// `start_companion()` returns an `already running` error which the
 /// retry loop treats as terminal.
 pub fn maybe_autostart() {
+    if k2_core::airgap::enabled() {
+        log_debug!(
+            "[daemon/companion] air-gap is on (K2_AIRGAP=1) — skipping ngrok autostart"
+        );
+        return;
+    }
     std::thread::spawn(|| {
         // Wait briefly so the daemon's HTTP server (which the tunnel
         // proxies to) is fully bound before we ask ngrok to forward.

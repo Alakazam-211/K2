@@ -304,6 +304,16 @@ pub struct AppSettings {
     /// silently drops keys with no matching field.
     #[serde(default)]
     pub api_enabled: bool,
+    /// MasterControl air-gap: refuse Connect/cert/GitHub. Default OFF.
+    /// Env `K2_AIRGAP` wins (garbage → on). Typed so the key survives
+    /// the load/update round-trip (unknown keys are dropped).
+    #[serde(default)]
+    pub airgap: bool,
+    /// Bind the HTTP listener on `0.0.0.0` (LAN). Default OFF (loopback).
+    /// Env `K2_LISTEN=lan` wins (garbage → loopback). Typed so the key
+    /// survives the load/update round-trip.
+    #[serde(default)]
+    pub listen_lan: bool,
     /// Remote Session Layer 0 — master switch for remote shell/PTY sessions
     /// driven over Connect / API. **Defaults OFF** (fail-closed): independent
     /// of grants; when this is off, every remote-session drive attempt is
@@ -670,6 +680,8 @@ impl Default for AppSettings {
             agents_can_create_connections: false,
             federation_enabled: false,
             api_enabled: false,
+            airgap: false,
+            listen_lan: false,
             remote_sessions_enabled: false,
             web_client_enabled: true,
             use_llm_hitl_detection: false,
@@ -1306,6 +1318,29 @@ mod tests {
         assert!(api_enabled_setting(), "mirror must reflect set(true)");
         set_api_enabled(false);
         assert!(!api_enabled_setting(), "mirror must reflect set(false)");
+    }
+
+    #[test]
+    fn airgap_and_listen_lan_default_off_and_round_trip() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        assert!(!load().airgap, "airgap must default OFF");
+        assert!(!load().listen_lan, "listenLan must default OFF");
+        assert!(!AppSettings::default().airgap);
+        assert!(!AppSettings::default().listen_lan);
+
+        let merged = update(serde_json::json!({ "airgap": true, "listenLan": true }))
+            .expect("update");
+        assert!(merged.airgap, "update must ingest airgap");
+        assert!(merged.listen_lan, "update must ingest camelCase listenLan");
+        let loaded = load();
+        assert!(loaded.airgap, "airgap must persist through save→load");
+        assert!(loaded.listen_lan, "listenLan must persist through save→load");
+
+        let after = reset().expect("reset");
+        assert!(!after.airgap, "reset must return airgap to OFF");
+        assert!(!after.listen_lan, "reset must return listenLan to OFF");
     }
 
     /// GH#8 — the "Use local LLM to detect HITL" opt-in must default OFF

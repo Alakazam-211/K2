@@ -2,7 +2,7 @@
 // pre-flight that hits a candidate host's /boot-status?token=.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { validateHost } from './connect-validate'
+import { parseServerUrl, validateHost } from './connect-validate'
 
 function mockFetch(impl: (url: string) => Partial<Response> & { json?: () => Promise<unknown> }) {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => impl(url) as unknown as Response))
@@ -55,5 +55,61 @@ describe('validateHost', () => {
     const r = await validateHost({ hostname: 'h', port: 443, secure: true, token: 't' }, 1)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toMatch(/protocol/i)
+  })
+})
+
+describe('parseServerUrl', () => {
+  it('keeps hosted names as https/443', () => {
+    const r = parseServerUrl('rosson.k2.dev')
+    expect(r.ok).toBe(true)
+    if (!r.ok) throw new Error(`expected ok, got ${r.reason}`)
+    expect(r.hostname).toBe('rosson.k2.dev')
+    expect(r.secure).toBe(true)
+    expect(r.port).toBe(443)
+  })
+
+  it('treats RFC1918 host:port with no scheme as http', () => {
+    const r = parseServerUrl('192.168.1.5:60710')
+    expect(r.ok).toBe(true)
+    if (!r.ok) throw new Error(`expected ok, got ${r.reason}`)
+    expect(r.hostname).toBe('192.168.1.5')
+    expect(r.secure).toBe(false)
+    expect(r.port).toBe(60710)
+  })
+
+  it('requires a port on RFC1918 with no scheme', () => {
+    const r = parseServerUrl('192.168.1.5')
+    expect(r.ok).toBe(false)
+    if (r.ok) throw new Error('expected port-required error')
+    expect(r.reason).toMatch(/port/i)
+  })
+
+  it('rejects explicit https:// to an RFC1918 address', () => {
+    const r = parseServerUrl('https://192.168.1.5')
+    expect(r.ok).toBe(false)
+    if (r.ok) throw new Error('expected https+LAN teaching error')
+    expect(r.reason).toMatch(/HTTP/i)
+    const withPort = parseServerUrl('https://192.168.1.5:60710')
+    expect(withPort.ok).toBe(false)
+    if (withPort.ok) throw new Error('expected https+LAN teaching error even with a port')
+  })
+
+  it('accepts explicit http:// RFC1918 with a port', () => {
+    const r = parseServerUrl('http://10.0.0.9:60710')
+    expect(r.ok).toBe(true)
+    if (!r.ok) throw new Error(`expected ok, got ${r.reason}`)
+    expect(r.secure).toBe(false)
+    expect(r.port).toBe(60710)
+  })
+
+  it('treats 172.16/12 and 169.254/16 as LAN http', () => {
+    const a = parseServerUrl('172.16.0.1:9')
+    expect(a.ok).toBe(true)
+    if (!a.ok) throw new Error(`expected ok, got ${a.reason}`)
+    expect(a.secure).toBe(false)
+    const b = parseServerUrl('169.254.1.1:9')
+    expect(b.ok).toBe(true)
+    if (!b.ok) throw new Error(`expected ok, got ${b.reason}`)
+    expect(b.secure).toBe(false)
   })
 })

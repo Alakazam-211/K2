@@ -450,6 +450,7 @@ fn load_row(project_id: &str, name: &str) -> Option<ps::PublishedService> {
 }
 
 fn nested_preflight() -> Result<(tunnel_config::TunnelConfig, String), PublishError> {
+    k2_core::airgap::refuse().map_err(PublishError::fail)?;
     let cfg = tunnel_config::load().map_err(PublishError::fail)?;
     if cfg.token.trim().is_empty() {
         return Err(PublishError::fail(gate_hint("no_token")));

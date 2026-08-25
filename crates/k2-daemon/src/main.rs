@@ -467,6 +467,9 @@ async fn async_main() {
     // misc_routes::api_enabled() reads this mirror per request; the K2_API
     // env flag remains a force-on override (nsi's systemd drop-in unchanged).
     k2_core::app_settings::set_api_enabled(k2_core::app_settings::load().api_enabled);
+    let settings = k2_core::app_settings::load();
+    k2_core::airgap::set_setting_enabled(settings.airgap);
+    k2_core::listen::set_setting_lan(settings.listen_lan);
 
     // 0.40.0 — retire com.k2so.* LaunchAgents (idempotent; the app's
     // boot runs the same sweep — whichever boots first wins). A swept
@@ -672,14 +675,17 @@ async fn async_main() {
     // CLI's port-file readers don't get stale-port traffic on daemon
     // restart. Algorithm + tests in `k2_core::port_claim`.
     let daemon_port_path = k2so_dir.join("daemon.port");
-    let claimed = match k2_core::port_claim::claim_port(&daemon_port_path) {
+    let bind_ip = k2_core::listen::bind_ip();
+    let lan = k2_core::listen::lan_requested();
+    let claimed = match k2_core::port_claim::claim_port_on(&daemon_port_path, bind_ip) {
         Some(c) => c,
         None => {
-            log_debug!("[daemon] FATAL: failed to bind any loopback port");
+            log_debug!("[daemon] FATAL: failed to bind any HTTP port on {bind_ip}");
             std::process::exit(2);
         }
     };
     let port = claimed.port;
+    k2_core::listen::set_lan_bound(lan);
     if claimed.reused {
         log_debug!(
             "[daemon] reused previously-published port {} (stable across restarts)",
@@ -689,6 +695,9 @@ async fn async_main() {
         log_debug!(
             "[daemon] bound new ephemeral port {} (no prior port or port taken)",
             port
+        );
+        log_debug!(
+            "[daemon] WARN: sticky daemon.port was not reused — saved Add Server URLs may go stale"
         );
     }
     // The std listener has to be set non-blocking before tokio can adopt it.
@@ -770,11 +779,19 @@ async fn async_main() {
         Err(e) => log_debug!("[daemon] WARN: stage k2 CLI: {e}"),
     }
 
-    log_debug!(
-        "[daemon] Listening on 127.0.0.1:{} — daemon.{{port,token}} + heartbeat.{{port,token}} published to {}",
-        port,
-        k2so_dir.display()
-    );
+    if lan {
+        log_debug!(
+            "[daemon] listening on 0.0.0.0:{} (LAN) — daemon.{{port,token}} + heartbeat.{{port,token}} published to {}",
+            port,
+            k2so_dir.display()
+        );
+    } else {
+        log_debug!(
+            "[daemon] listening on 127.0.0.1:{} — daemon.{{port,token}} + heartbeat.{{port,token}} published to {}",
+            port,
+            k2so_dir.display()
+        );
+    }
 
     // Event broadcast channel: the daemon's AgentHookEventSink publishes
     // here; each /events subscriber takes its own Receiver.
@@ -1209,14 +1226,20 @@ async fn async_main() {
     // AFTER boot (e.g. once the user picks a subdomain) can stand the HTTPS
     // listener up on connect rather than erroring on a never-published port.
     tunnel_tls_listener::register_ensure_hook();
-    match tunnel_tls_listener::maybe_spawn(port).await {
-        Ok(Some(https_port)) => {
-            log_debug!("[daemon/e2e] E2E HTTPS listener active on port {https_port}")
+    if k2_core::airgap::enabled() {
+        log_debug!(
+            "[daemon/e2e] air-gap is on (K2_AIRGAP=1) — skipping E2E TLS listener (no cert.k2.dev)"
+        );
+    } else {
+        match tunnel_tls_listener::maybe_spawn(port).await {
+            Ok(Some(https_port)) => {
+                log_debug!("[daemon/e2e] E2E HTTPS listener active on port {https_port}")
+            }
+            Ok(None) => { /* E2E off or no subdomain — the common case, no log noise */ }
+            Err(e) => log_debug!(
+                "[daemon/e2e] E2E listener did not start (tunnel falls back to HTTP path; daemon unaffected): {e}"
+            ),
         }
-        Ok(None) => { /* E2E off — the common case, no log noise */ }
-        Err(e) => log_debug!(
-            "[daemon/e2e] E2E listener did not start (tunnel falls back to HTTP path; daemon unaffected): {e}"
-        ),
     }
 
     // K2 Connect — re-launch the frpc tunnel on boot when the user opted
@@ -1278,6 +1301,12 @@ fn maybe_autostart_tunnel(daemon_port: u16) {
         // (best-effort, logged; the portal force-release is the backstop).
         // Blocking HTTP → worker pool; failures never touch boot.
         tokio::task::spawn_blocking(|| {
+            if k2_core::airgap::enabled() {
+                log_debug!(
+                    "[daemon/tunnel] air-gap is on (K2_AIRGAP=1) — skipping unpaired.json replay_pending"
+                );
+                return;
+            }
             match k2_core::tunnel::unpair::replay_pending() {
                 Ok(true) => log_debug!(
                     "[daemon/tunnel] queued release revocation replayed upstream"

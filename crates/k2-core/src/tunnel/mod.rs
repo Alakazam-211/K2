@@ -164,6 +164,7 @@ pub fn get_config_view() -> Result<TunnelConfigView, String> {
 /// Apply a partial config update, persist it, and return the redacted
 /// view. A blank/absent token is ignored so the secret survives re-saves.
 pub fn set_config(upd: TunnelConfigUpdate) -> Result<TunnelConfigView, String> {
+    crate::airgap::refuse()?;
     let cfg = config::update(|c| {
         if let Some(a) = upd.server_addr {
             if !a.trim().is_empty() {
@@ -255,6 +256,7 @@ pub fn enable_tunnel(
     subdomain: Option<String>,
     daemon_port: u16,
 ) -> Result<TunnelStatus, String> {
+    crate::airgap::refuse()?;
     let cfg = config::update(|c| {
         c.enabled = true;
         if let Some(s) = &subdomain {
@@ -433,6 +435,37 @@ mod tests {
                 !json.contains("relays"),
                 "empty relay list must be skipped in the view JSON\n{json}"
             );
+        });
+    }
+
+    #[test]
+    fn airgap_blocks_start_enable_and_config() {
+        with_temp_home(|| {
+            let prev = std::env::var_os("K2_AIRGAP");
+            std::env::set_var("K2_AIRGAP", "1");
+            let start_err = start_tunnel(None, 9).expect_err("start must refuse");
+            assert!(
+                start_err.contains("K2_AIRGAP=1"),
+                "start teaching error must name the env; got {start_err}"
+            );
+            let enable_err = enable_tunnel(None, 9).expect_err("enable must refuse");
+            assert!(
+                enable_err.contains("K2_AIRGAP=1"),
+                "enable teaching error must name the env; got {enable_err}"
+            );
+            let cfg_err = set_config(TunnelConfigUpdate {
+                subdomain: Some("x".into()),
+                ..Default::default()
+            })
+            .expect_err("config POST must refuse");
+            assert!(
+                cfg_err.contains("K2_AIRGAP=1"),
+                "config teaching error must name the env; got {cfg_err}"
+            );
+            match prev {
+                Some(p) => std::env::set_var("K2_AIRGAP", p),
+                None => std::env::remove_var("K2_AIRGAP"),
+            }
         });
     }
 }

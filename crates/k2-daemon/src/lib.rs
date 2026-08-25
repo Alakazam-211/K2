@@ -227,8 +227,10 @@ pub mod test_harness {
     pub struct TestDaemon {
         /// Owner (host) daemon token — passes `token_is_owner`.
         pub owner_token: String,
-        /// The ephemeral 127.0.0.1 port the listener bound.
+        /// The ephemeral port the listener bound.
         pub port: u16,
+        /// Bound socket address (loopback or `0.0.0.0`).
+        pub local_addr: std::net::SocketAddr,
     }
 
     /// Bind an ephemeral `127.0.0.1:0` listener, mark boot-status
@@ -242,13 +244,21 @@ pub mod test_harness {
     /// seed via `k2_core::connect_users::{add_user,set_role,
     /// create_session}` after pointing `$HOME` at a tempdir.
     pub async fn start(owner_token: impl Into<String>) -> TestDaemon {
+        start_on(owner_token, "127.0.0.1:0").await
+    }
+
+    /// Like [`start`] but binds `addr` (e.g. `0.0.0.0:0` for LAN tests).
+    /// `TestDaemon.local_addr` is the actual bound address — LAN tests
+    /// must assert it is unspecified, not merely that 127.0.0.1 connects.
+    pub async fn start_on(owner_token: impl Into<String>, addr: &str) -> TestDaemon {
         let owner_token = owner_token.into();
 
-        // Bind synchronously on an ephemeral port so we can read the
-        // actual port before handing the socket to tokio.
-        let std_listener =
-            StdTcpListener::bind("127.0.0.1:0").expect("bind ephemeral 127.0.0.1 port");
-        let port = std_listener.local_addr().expect("local_addr").port();
+        let std_listener = StdTcpListener::bind(addr).unwrap_or_else(|e| {
+            panic!("bind {addr}: {e}");
+        });
+        let local_addr = std_listener.local_addr().expect("local_addr");
+        let port = local_addr.port();
+        k2_core::listen::set_lan_bound(local_addr.ip().is_unspecified());
         std_listener
             .set_nonblocking(true)
             .expect("set_nonblocking");
@@ -288,6 +298,10 @@ pub mod test_harness {
             }
         });
 
-        TestDaemon { owner_token, port }
+        TestDaemon {
+            owner_token,
+            port,
+            local_addr,
+        }
     }
 }

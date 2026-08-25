@@ -142,6 +142,12 @@ fn conn_semaphore() -> &'static Arc<Semaphore> {
 /// `http_port` is the daemon's existing cleartext HTTP listener port — the
 /// decrypted stream is spliced there so the unmodified dispatcher serves it.
 pub async fn maybe_spawn(http_port: u16) -> Result<Option<u16>, String> {
+    if k2_core::airgap::enabled() {
+        log_debug!(
+            "[daemon/e2e] air-gap is on (K2_AIRGAP=1) — skipping maybe_spawn (no cert.k2.dev)"
+        );
+        return Ok(None);
+    }
     let cfg = match k2_core::tunnel::config::load() {
         Ok(c) => c,
         Err(e) => return Err(format!("load tunnel config: {e}")),
@@ -275,6 +281,9 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
 /// Errors loud — issuance/bind failure or a still-empty subdomain returns an
 /// `Err` the connector propagates; it never silently forwards cleartext.
 fn ensure_spawned_blocking(handle: tokio::runtime::Handle, http_port: u16) -> Result<u16, String> {
+    if k2_core::airgap::enabled() {
+        return Err(k2_core::airgap::TEACHING.to_string());
+    }
     // Fast path: recorded port still accepts → live.
     if let Some(p) = recorded_https_port() {
         if loopback_port_live(p) {
@@ -649,6 +658,85 @@ mod tests {
         match prev {
             Some(p) => std::env::set_var("K2_E2E", p),
             None => std::env::remove_var("K2_E2E"),
+        }
+    }
+
+    #[tokio::test]
+    async fn maybe_spawn_skips_cert_when_airgap_even_with_leftover_subdomain() {
+        let _home = crate::test_support::TempHome::new();
+        let prev_air = std::env::var_os("K2_AIRGAP");
+        let prev_e2e = std::env::var_os("K2_E2E");
+        let prev_broker = std::env::var_os(k2_core::tunnel::cert_broker::BROKER_URL_ENV);
+        std::env::remove_var("K2_E2E"); // default ON — leftover subdomain would POST
+        std::env::set_var("K2_AIRGAP", "1");
+
+        let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy bind");
+        spy.set_nonblocking(true).expect("nonblocking");
+        let spy_port = spy.local_addr().expect("addr").port();
+        std::env::set_var(
+            k2_core::tunnel::cert_broker::BROKER_URL_ENV,
+            format!("http://127.0.0.1:{spy_port}/cert"),
+        );
+
+        let mut cfg = k2_core::tunnel::config::TunnelConfig::default();
+        cfg.subdomain = "leftover".into();
+        cfg.token = "tok".into();
+        k2_core::tunnel::config::save(&cfg).expect("save leftover tunnel.json");
+
+        let res = maybe_spawn(12345)
+            .await
+            .expect("airgap must not error");
+        assert!(res.is_none(), "airgap must skip maybe_spawn entirely");
+        assert!(
+            spy.accept().is_err(),
+            "leftover subdomain must not HTTP to cert.k2.dev when air-gap is on"
+        );
+
+        match prev_broker {
+            Some(p) => std::env::set_var(k2_core::tunnel::cert_broker::BROKER_URL_ENV, p),
+            None => std::env::remove_var(k2_core::tunnel::cert_broker::BROKER_URL_ENV),
+        }
+        match prev_e2e {
+            Some(p) => std::env::set_var("K2_E2E", p),
+            None => std::env::remove_var("K2_E2E"),
+        }
+        match prev_air {
+            Some(p) => std::env::set_var("K2_AIRGAP", p),
+            None => std::env::remove_var("K2_AIRGAP"),
+        }
+    }
+
+    #[tokio::test]
+    async fn maybe_spawn_fresh_tunnel_json_still_skips_cert_when_airgap_off() {
+        let _home = crate::test_support::TempHome::new();
+        let prev_air = std::env::var_os("K2_AIRGAP");
+        std::env::remove_var("K2_AIRGAP");
+        let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy bind");
+        spy.set_nonblocking(true).expect("nonblocking");
+        let spy_port = spy.local_addr().expect("addr").port();
+        let prev_broker = std::env::var_os(k2_core::tunnel::cert_broker::BROKER_URL_ENV);
+        std::env::set_var(
+            k2_core::tunnel::cert_broker::BROKER_URL_ENV,
+            format!("http://127.0.0.1:{spy_port}/cert"),
+        );
+        // Fresh / empty subdomain: no cert POST even with air-gap off.
+        k2_core::tunnel::config::save(&k2_core::tunnel::config::TunnelConfig::default())
+            .expect("save empty tunnel.json");
+        let res = maybe_spawn(12345)
+            .await
+            .expect("empty subdomain must not error");
+        assert!(res.is_none(), "fresh tunnel.json must not spawn E2E");
+        assert!(
+            spy.accept().is_err(),
+            "fresh tunnel.json must not POST cert.k2.dev at boot"
+        );
+        match prev_broker {
+            Some(p) => std::env::set_var(k2_core::tunnel::cert_broker::BROKER_URL_ENV, p),
+            None => std::env::remove_var(k2_core::tunnel::cert_broker::BROKER_URL_ENV),
+        }
+        match prev_air {
+            Some(p) => std::env::set_var("K2_AIRGAP", p),
+            None => std::env::remove_var("K2_AIRGAP"),
         }
     }
 

@@ -238,11 +238,19 @@ pub enum DrainOutcome {
     /// Stopped at the first transport/5xx/transient failure — the rest stays
     /// queued, in order, for the next trigger.
     Stalled { delivered: usize, dead_lettered: usize, remaining: usize },
+    /// Air-gap is on — leftover outbox is not dialed.
+    Airgap,
 }
 
 /// Drain one peer's queue, oldest-first, stopping at the first retryable
 /// failure. Blocking (network I/O) — call from a blocking context.
 pub fn drain_peer(fp: &str) -> DrainOutcome {
+    if k2_core::airgap::enabled() {
+        log_debug!(
+            "[federation/drain] air-gap is on (K2_AIRGAP=1) — not dialing https://<sub>.k2.dev"
+        );
+        return DrainOutcome::Airgap;
+    }
     let Some(_claim) = DrainClaim::acquire(fp) else {
         return DrainOutcome::InFlight;
     };
@@ -838,5 +846,40 @@ mod tests {
         // And it must verify against OUR key (a real re-sign, not a splice).
         let key = k2_core::tunnel::tls::load_or_generate_keypair().unwrap();
         federation::open(&wire, &key.public_key_pem()).expect("resealed envelope must open");
+    }
+
+    #[test]
+    fn drain_peer_airgap_does_not_dial_k2_dev() {
+        let _home = crate::test_support::TempHome::new();
+        let prev_air = std::env::var_os("K2_AIRGAP");
+        std::env::set_var("K2_AIRGAP", "1");
+        let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy bind");
+        spy.set_nonblocking(true).expect("nonblocking");
+        let port = spy.local_addr().expect("addr").port();
+        let prev_base = std::env::var_os("K2_FEDERATION_INBOUND_BASE");
+        std::env::set_var(
+            "K2_FEDERATION_INBOUND_BASE",
+            format!("http://127.0.0.1:{port}"),
+        );
+        let fp = pin_trusted();
+        enqueue_msg(&fp, "leftover outbox", chrono::Utc::now());
+        let outcome = drain_peer(&fp);
+        assert_eq!(
+            outcome,
+            DrainOutcome::Airgap,
+            "leftover federation outbox must not dial when air-gap is on"
+        );
+        assert!(
+            spy.accept().is_err(),
+            "must not POST https://<sub>.k2.dev (or the inbound stub) under air-gap"
+        );
+        match prev_base {
+            Some(p) => std::env::set_var("K2_FEDERATION_INBOUND_BASE", p),
+            None => std::env::remove_var("K2_FEDERATION_INBOUND_BASE"),
+        }
+        match prev_air {
+            Some(p) => std::env::set_var("K2_AIRGAP", p),
+            None => std::env::remove_var("K2_AIRGAP"),
+        }
     }
 }

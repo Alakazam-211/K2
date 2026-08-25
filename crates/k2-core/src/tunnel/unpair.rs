@@ -328,6 +328,9 @@ pub fn perform_release() -> Result<ReleaseReport, String> {
 /// scrubbed; `Ok(false)` = nothing pending. A replay FAILURE is an error
 /// (logged by the caller; retried next boot).
 pub fn replay_pending() -> Result<bool, String> {
+    if crate::airgap::enabled() {
+        return Ok(false);
+    }
     let mut t = match load()? {
         Some(t) if !t.upstream_reported => t,
         _ => return Ok(false),
@@ -512,6 +515,46 @@ mod tests {
             })
             .expect("save reported tombstone");
             assert_eq!(replay_pending().expect("already reported"), false);
+        });
+    }
+
+    #[test]
+    fn replay_pending_airgap_does_not_post() {
+        with_temp_home(|| {
+            let prev_air = std::env::var_os("K2_AIRGAP");
+            std::env::set_var("K2_AIRGAP", "1");
+            let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy bind");
+            spy.set_nonblocking(true).expect("nonblocking");
+            let port = spy.local_addr().expect("addr").port();
+            let var = super::super::subdomains::CONTROL_PLANE_BASE_ENV;
+            let prev_cp = std::env::var_os(var);
+            std::env::set_var(var, format!("http://127.0.0.1:{port}"));
+
+            save(&UnpairTombstone {
+                released_at: "2026-07-12T00:00:00+00:00".to_string(),
+                subdomain: "leftover".to_string(),
+                device_id: Some("dev".to_string()),
+                token_sha256: token_fingerprint("tok-q"),
+                upstream_reported: false,
+                pending_token: Some("tok-q".to_string()),
+            })
+            .expect("save leftover unpaired.json");
+
+            let posted = replay_pending().expect("airgap skip must not error");
+            assert!(!posted, "airgap must skip replay_pending POST");
+            assert!(
+                spy.accept().is_err(),
+                "leftover unpaired.json must not POST /tunnel/release when air-gap is on"
+            );
+
+            match prev_cp {
+                Some(p) => std::env::set_var(var, p),
+                None => std::env::remove_var(var),
+            }
+            match prev_air {
+                Some(p) => std::env::set_var("K2_AIRGAP", p),
+                None => std::env::remove_var("K2_AIRGAP"),
+            }
         });
     }
 

@@ -339,6 +339,7 @@ pub fn fetch_map(primary: &str, token: &str) -> Result<SubdomainMap, String> {
 /// GET `/subdomains` and return the routing map PLUS the connected row's
 /// `tier`. `--no-tunnel` must never call this (no GET, no POST).
 pub fn fetch_account(primary: &str, token: &str) -> Result<AccountSubdomains, String> {
+    crate::airgap::refuse()?;
     let parsed = get_subdomains(token)?;
     let tier = tier_of_connected(&parsed.subdomains, primary);
     Ok(AccountSubdomains {

@@ -375,7 +375,7 @@ export function ConnectionsSection(): React.JSX.Element {
           <input ref={labelRef} className={inputCls} placeholder="Label (e.g. My Mac Mini)" value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
           <input
             className={inputCls}
-            placeholder="K2 Server URL (e.g. https://rosson.k2.dev)"
+            placeholder="K2 Server URL (e.g. http://192.168.1.50:60710)"
             value={draft.url}
             onChange={(e) => setDraft({ ...draft, url: e.target.value })}
           />

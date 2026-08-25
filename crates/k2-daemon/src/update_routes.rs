@@ -543,6 +543,13 @@ fn backup_path(version: &str) -> PathBuf {
 /// I/O runs on a blocking worker (the dispatcher spawns this on
 /// `spawn_blocking`).
 pub fn handle_check() -> CliResponse {
+    if k2_core::airgap::enabled() {
+        return CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: k2_core::airgap::error_json(),
+        };
+    }
     let url = manifest_url();
     let bytes = match fetch_bytes(&url) {
         Ok(b) => b,
@@ -578,6 +585,13 @@ pub fn handle_start(
     body: &[u8],
     event_tx: Option<std::sync::Arc<tokio::sync::broadcast::Sender<crate::events::WireEvent>>>,
 ) -> CliResponse {
+    if k2_core::airgap::enabled() {
+        return CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: k2_core::airgap::error_json(),
+        };
+    }
     #[derive(Deserialize, Default)]
     struct Req {
         #[serde(default)]

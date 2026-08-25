@@ -50,6 +50,7 @@ static CANCEL_START: AtomicBool = AtomicBool::new(false);
 /// at startup) and emits lifecycle events via `event_sink`. No Tauri
 /// dep — safe to move into k2so-core in the next commit.
 pub fn start_companion() -> Result<String, String> {
+    crate::airgap::refuse()?;
     // Clear any previous cancel signal
     CANCEL_START.store(false, Ordering::Relaxed);
 

@@ -126,6 +126,9 @@ pub mod mail_domain;
 // instead of launching a browser on the daemon's (possibly headless) box.
 pub mod open_shim;
 pub mod perf;
+// MasterControl air-gap / LAN listen (prd-air-gap-and-lan-listen-v1).
+pub mod airgap;
+pub mod listen;
 // Phase 2.5 follow-up — daemon port stability (sub-fix A of finding #547).
 pub mod port_claim;
 pub mod project_config;

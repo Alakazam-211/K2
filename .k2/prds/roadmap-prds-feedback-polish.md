@@ -119,6 +119,7 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 | **Remote projects mutate latency** | PRD · Phase 1–2 landed; Phase 3 → embed PRD | `.k2/prds/prd-remote-projects-mutate-latency-v1.md` |
 | **Remote E2E storms (remaining)** | CORS + embed **on main** for 0.40.106; one-WS + hello next train | `.k2/prds/prd-remote-e2e-storm-audit-v1.md` · CORS `3c958f9c` `.k2/prds/prd-cors-oneshot-while-connected-v1.md` · embed `d14aaa95` `.k2/prds/prd-projects-list-embed-workspaces-v1.md` · one events-WS `.k2/prds/prd-one-session-events-ws-per-path-v1.md` · Hello coalesce `.k2/prds/prd-hello-snapshot-coalesce-v1.md` |
 | **Hosted web / edge delivery residual** | PRD | `.k2/prds/prd-hosted-web-client-and-edge-delivery-v1.md` |
+| **Air-gap flag + LAN listen** (MasterControl / Ryan) | **PRD 2026-08-25** · Ready for implement (in tree) | `.k2/prds/prd-air-gap-and-lan-listen-v1.md` · review `prd-air-gap-and-lan-listen-v1-review.md` · runbook `.k2/prds/runbook-airgap-linux-image-v1.md` · wiki Feature - Air-Gap When Tunnel Off |
 
 ### B4 · Platform / naming / migrations
 

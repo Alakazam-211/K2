@@ -42,8 +42,14 @@ fn is_newer(current: &str, latest: &str) -> bool {
 
 #[tauri::command]
 pub async fn check_for_update() -> Result<UpdateInfo, String> {
+    if k2_core::airgap::enabled() {
+        return Err(k2_core::airgap::TEACHING.to_string());
+    }
     // Run the blocking HTTP call on a background thread to avoid freezing the UI
     tokio::task::spawn_blocking(|| {
+        if k2_core::airgap::enabled() {
+            return Err(k2_core::airgap::TEACHING.to_string());
+        }
         let client = reqwest::blocking::Client::builder()
             .user_agent("K2-UpdateChecker")
             .timeout(std::time::Duration::from_secs(10))

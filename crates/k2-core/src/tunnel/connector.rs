@@ -255,6 +255,8 @@ enum SpawnBlock {
     /// `tunnel.json` exists but can't be read/parsed. Fail closed: a
     /// corrupt secret store must never spawn a tunnel.
     Unreadable(String),
+    /// Air-gap flag is on — no frpc, no Connect.
+    Airgap,
 }
 
 impl std::fmt::Display for SpawnBlock {
@@ -272,6 +274,7 @@ impl std::fmt::Display for SpawnBlock {
                  mint a fresh identity"
             ),
             SpawnBlock::Unreadable(e) => write!(f, "tunnel state unreadable: {e}"),
+            SpawnBlock::Airgap => write!(f, "{}", crate::airgap::TEACHING),
         }
     }
 }
@@ -288,6 +291,9 @@ impl std::fmt::Display for SpawnBlock {
 /// mid-flight stops the tunnel at the next child exit and is never undone
 /// by a stale in-memory copy.
 fn spawn_gate() -> Result<(), SpawnBlock> {
+    if crate::airgap::enabled() {
+        return Err(SpawnBlock::Airgap);
+    }
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => return Err(SpawnBlock::Unreadable(e)),
@@ -1439,6 +1445,12 @@ fn spawn_supervised(
 /// restart); a later sign-in is picked up on the next tunnel start because
 /// the mode is re-evaluated each spawn.
 fn spawn_lease_renewal(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
+    if crate::airgap::enabled() {
+        crate::log_debug!(
+            "[tunnel/lease] air-gap is on (K2_AIRGAP=1) — skipping lease renewal"
+        );
+        return;
+    }
     // Target check FIRST: it's pure config (touches no keychain), and a
     // token-only manual config skips before we'd probe anything.
     let target = match super::lease::LeaseTarget::from_config(cfg) {
@@ -1543,6 +1555,12 @@ fn spawn_lease_renewal(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
 /// transient blip). Refreshes on [`super::lease::RENEW_INTERVAL`] — the same
 /// cadence the lease loop uses.
 fn spawn_subdomain_refresh(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
+    if crate::airgap::enabled() {
+        crate::log_debug!(
+            "[tunnel/subdomains] air-gap is on (K2_AIRGAP=1) — skipping GET /subdomains"
+        );
+        return;
+    }
     if !super::config::e2e_enabled(cfg) {
         return; // OFF (default) → no nested routing, no fetch. Unchanged.
     }

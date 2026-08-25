@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { check, type Update } from '@tauri-apps/plugin-updater'
+import { isAirgap } from '@/lib/airgap'
 // relaunch handled by Rust-side relaunch_via_open (helper script)
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
@@ -57,6 +58,10 @@ export const useUpdateStore = create<UpdateState>((set) => ({
   error: null,
 
   checkForUpdate: async () => {
+    if (isAirgap()) {
+      set({ status: 'idle', error: null })
+      return false
+    }
     set({ status: 'checking', error: null })
     try {
       const update = await check()

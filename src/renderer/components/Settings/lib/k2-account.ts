@@ -9,7 +9,14 @@
 // in a client: it only authorizes the unauthenticated `anon` role, and all
 // row access is scoped by Supabase RLS to the signed-in caller.
 
+import { AIRGAP_TEACHING, isAirgap } from '@/lib/airgap'
+
 const SUPABASE_URL = 'https://ttgcalfrzzgkxnfepkiu.supabase.co'
+
+function refuseAirgap(): void {
+  if (isAirgap()) throw new Error(AIRGAP_TEACHING)
+}
+
 const SUPABASE_ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z2NhbGZyenpna3huZmVwa2l1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDIyMzksImV4cCI6MjA5NjA3ODIzOX0.L28xgtYkPEj5eCNDGO5Zf5xxhdKQLxKD8c1CJRHNqI8'
 
@@ -100,6 +107,7 @@ function toSession(body: SupabaseTokenResponse, status: number): K2Session {
 
 /** Sign in with an email + password against Supabase Auth. */
 export async function signIn(email: string, password: string): Promise<K2Session> {
+  refuseAirgap()
   const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: 'POST',
     headers: {
@@ -116,6 +124,7 @@ export async function signIn(email: string, password: string): Promise<K2Session
 /** Exchange a refresh token for a fresh session. The refresh token may
  *  rotate — callers MUST persist the returned `refreshToken`. */
 export async function refreshSession(refreshToken: string): Promise<K2Session> {
+  refuseAirgap()
   const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
     method: 'POST',
     headers: {
@@ -134,6 +143,7 @@ export async function refreshSession(refreshToken: string): Promise<K2Session> {
  *  nested routing names never appear as tunnel-bind options even if the
  *  control plane returns them in the same table. */
 export async function listSubdomains(accessToken: string): Promise<K2Subdomain[]> {
+  refuseAirgap()
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/subdomains?select=label,status,tunnel_token,claimed_by,claimed_at,claimed_label`,
     {
@@ -164,6 +174,7 @@ export async function claimSubdomain(
   deviceId: string,
   deviceLabel?: string,
 ): Promise<K2ClaimResult> {
+  refuseAirgap()
   if (!isApexTunnelLabel(label)) {
     throw new Error(
       'Only apex subdomains can be claimed as tunnels (e.g. rosson → rosson.k2.dev). Nested names are not tunnel roots.',
@@ -197,6 +208,7 @@ export async function releaseSubdomain(
   label: string,
   deviceId: string,
 ): Promise<void> {
+  refuseAirgap()
   const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/release_subdomain`, {
     method: 'POST',
     headers: {
@@ -225,6 +237,7 @@ export function freshClaim(claimedAt: string | null | undefined): boolean {
  *  swallowed (the local keychain clear is what actually logs the user
  *  out of the app). */
 export async function signOut(accessToken: string): Promise<void> {
+  if (isAirgap()) return
   try {
     await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
       method: 'POST',

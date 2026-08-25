@@ -28,7 +28,7 @@
 //! binary, and so future remote-daemon flavors (K2SO Connect) share
 //! one implementation.
 
-use std::net::{SocketAddr, TcpListener as StdTcpListener};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -56,32 +56,38 @@ pub fn read_port_file(path: &Path) -> Option<u16> {
     raw.trim().parse::<u16>().ok()
 }
 
-/// Attempt to bind `port` on loopback. Returns the bound listener on
+/// Attempt to bind `port` on `bind_ip`. Returns the bound listener on
 /// success; `None` if the port is taken or otherwise unbindable.
 ///
 /// `port = 0` would defeat the purpose of this helper — the kernel
 /// would just hand back any ephemeral port — so we refuse it here.
 /// The caller should pick a real previously-claimed port or fall
 /// through to [`bind_ephemeral`].
-fn try_bind_specific(port: u16) -> Option<StdTcpListener> {
+fn try_bind_specific(bind_ip: Ipv4Addr, port: u16) -> Option<StdTcpListener> {
     if port == 0 {
         return None;
     }
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from((bind_ip, port));
     StdTcpListener::bind(addr).ok()
 }
 
-/// Bind to loopback on a kernel-assigned ephemeral port. Returns the
+/// Bind `bind_ip` on a kernel-assigned ephemeral port. Returns the
 /// `(listener, port)` pair on success; `None` on hard failure
 /// (kernel-level resource exhaustion — extremely rare in practice).
-fn bind_ephemeral() -> Option<(StdTcpListener, u16)> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+fn bind_ephemeral(bind_ip: Ipv4Addr) -> Option<(StdTcpListener, u16)> {
+    let addr = SocketAddr::from((bind_ip, 0));
     let listener = StdTcpListener::bind(addr).ok()?;
     let port = listener.local_addr().ok()?.port();
     Some((listener, port))
 }
 
 /// Claim a loopback listener, preferring the port stored in
+/// `port_file`. Same as [`claim_port_on`] with `127.0.0.1`.
+pub fn claim_port(port_file: &Path) -> Option<ClaimedPort> {
+    claim_port_on(port_file, Ipv4Addr::LOCALHOST)
+}
+
+/// Claim a listener on `bind_ip`, preferring the port stored in
 /// `port_file`.
 ///
 /// Algorithm:
@@ -93,9 +99,12 @@ fn bind_ephemeral() -> Option<(StdTcpListener, u16)> {
 ///
 /// Returns `None` only if even the ephemeral bind fails — at that
 /// point the daemon can't start so the caller should `exit(2)`.
-pub fn claim_port(port_file: &Path) -> Option<ClaimedPort> {
+///
+/// `bind_ip` is `127.0.0.1` (default) or `0.0.0.0` when LAN listen is on.
+/// Sticky port file is unchanged.
+pub fn claim_port_on(port_file: &Path, bind_ip: Ipv4Addr) -> Option<ClaimedPort> {
     if let Some(preferred) = read_port_file(port_file) {
-        if let Some(listener) = try_bind_specific(preferred) {
+        if let Some(listener) = try_bind_specific(bind_ip, preferred) {
             return Some(ClaimedPort {
                 listener,
                 port: preferred,
@@ -103,7 +112,7 @@ pub fn claim_port(port_file: &Path) -> Option<ClaimedPort> {
             });
         }
     }
-    let (listener, port) = bind_ephemeral()?;
+    let (listener, port) = bind_ephemeral(bind_ip)?;
     Some(ClaimedPort {
         listener,
         port,
@@ -234,6 +243,56 @@ mod tests {
         let port_file = dir.join("daemon.port");
         let claimed = claim_port_for_test(port_file).expect("claim_port_for_test None");
         assert!(claimed.port > 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_bind_is_loopback() {
+        let dir = scratch_dir("loopback");
+        let port_file = dir.join("daemon.port");
+        let claimed = claim_port(&port_file).expect("claim_port returned None");
+        let ip = claimed.listener.local_addr().expect("local_addr").ip();
+        assert!(
+            ip.is_loopback(),
+            "default claim_port must bind 127.0.0.1, got {ip}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lan_bind_listens_on_unspecified() {
+        let dir = scratch_dir("lan");
+        let port_file = dir.join("daemon.port");
+        let claimed = claim_port_on(&port_file, Ipv4Addr::UNSPECIFIED)
+            .expect("claim_port_on returned None");
+        let addr = claimed.listener.local_addr().expect("local_addr");
+        assert!(
+            addr.ip().is_unspecified(),
+            "LAN bind must be 0.0.0.0 (unspecified); 127.0.0.1-only is not enough, got {}",
+            addr.ip()
+        );
+        assert!(claimed.port > 0);
+        drop(claimed.listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lan_reuses_sticky_port_on_unspecified() {
+        let dir = scratch_dir("lan-reuse");
+        let port_file = dir.join("daemon.port");
+        let first = claim_port_on(&port_file, Ipv4Addr::UNSPECIFIED).expect("first");
+        let first_port = first.port;
+        drop(first.listener);
+        let mut f = std::fs::File::create(&port_file).unwrap();
+        write!(f, "{first_port}").unwrap();
+        drop(f);
+        let second = claim_port_on(&port_file, Ipv4Addr::UNSPECIFIED).expect("second");
+        assert!(second.reused, "expected sticky port reuse on LAN bind");
+        assert_eq!(second.port, first_port);
+        assert!(
+            second.listener.local_addr().expect("local_addr").ip().is_unspecified(),
+            "reused LAN bind must stay 0.0.0.0"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

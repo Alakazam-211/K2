@@ -1065,6 +1065,15 @@ async fn handle_one_request(
                 // UNAUTHENTICATED route: both facts are already observable by
                 // probing `/v1/*` (surface-404 vs 401, spawn 409); no secrets.
                 "api": crate::misc_routes::api_capability(),
+                // Air-gap + LAN listen (prd-air-gap-and-lan-listen-v1): hide-UI
+                // only. A stale app can still POST; daemon refuse is authority.
+                // PROTOCOL not bumped (additive like webClient / scopedHooks).
+                "airgap": {
+                    "enabled": k2_core::airgap::enabled(),
+                },
+                "listen": {
+                    "lan": k2_core::listen::lan_bound(),
+                },
             })
             .to_string();
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;

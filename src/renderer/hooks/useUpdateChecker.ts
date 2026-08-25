@@ -5,6 +5,7 @@ import { useUpdateStore } from '@/stores/update'
 import { useSettingsStore } from '@/stores/settings'
 import { UPDATE_CHECK_INTERVAL } from '@shared/constants'
 import { webFeatures } from '@/web/features'
+import { isAirgap } from '@/lib/airgap'
 
 interface UpdateInfo {
   current_version: string
@@ -17,6 +18,16 @@ interface UpdateInfo {
 let lastNotifiedVersion: string | null = null
 
 async function checkForUpdate(showToastIfNone = false): Promise<void> {
+  if (isAirgap()) {
+    if (showToastIfNone) {
+      useToastStore.getState().addToast(
+        'Air-gap is on (K2_AIRGAP=1). Update checks are disabled.',
+        'info',
+        4000,
+      )
+    }
+    return
+  }
   // Hosted web: no Tauri app updater — versioned SPA is edge-delivered.
   if (!webFeatures.appUpdater) {
     if (showToastIfNone) {
@@ -102,6 +113,7 @@ export type { UpdateInfo }
 export function useUpdateChecker(): void {
   useEffect(() => {
     if (!webFeatures.appUpdater) return
+    if (isAirgap()) return
     const startupTimeout = setTimeout(() => checkForUpdate(), 5000)
     const interval = setInterval(() => checkForUpdate(), UPDATE_CHECK_INTERVAL)
     return () => {

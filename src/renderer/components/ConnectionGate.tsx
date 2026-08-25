@@ -64,6 +64,7 @@ import {
   msSinceRemoteBootOk,
   noteRemoteBootOk,
 } from '@/lib/remote-path-log'
+import { setConnectedAirgap } from '@/lib/airgap'
 import { RemoteSignIn } from './RemoteSignIn'
 import { AppErrorBoundary } from './AppErrorBoundary'
 import GateChrome from './TopBar/GateChrome'
@@ -79,6 +80,8 @@ interface DaemonBootStatus {
   phase: string // 'starting' | 'migrating' | 'ready' | 'error' | future
   detail: string
   instanceId?: string
+  airgap?: { enabled: boolean }
+  listen?: { lan: boolean }
 }
 
 /**
@@ -349,6 +352,7 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
     }
     const status = (await resp.json()) as DaemonBootStatus
     noteRemoteBootOk()
+    setConnectedAirgap(status.airgap?.enabled === true)
     return { kind: 'ok', status }
   } catch (err) {
     // Network error, timeout, port file missing, unparseable body — daemon

@@ -8,7 +8,9 @@
 crates/k2-core/src/migration_home.rs :: *
 
 # Legacy frpc probe candidate (endgame B-L4 deletes this when field-clean).
-crates/k2-core/src/tunnel/connector.rs :: .k2so/bin/frpc
+# Hit line is home.join(".k2so/bin").join(name) — name is frpc/frpc.exe, not a
+# literal ".../frpc" on the same line.
+crates/k2-core/src/tunnel/connector.rs :: .k2so/bin
 
 # CLI fallback for a machine whose home migration has not run yet.
 cli/k2 :: K2_HOME="${HOME}/.k2so"

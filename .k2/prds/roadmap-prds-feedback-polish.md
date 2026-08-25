@@ -1,7 +1,7 @@
 # Roadmap — PRDs, feedback, polish
 
 **Canonical mini-index for unfinished work.**  
-**Created:** 2026-08-08 · **Updated:** 2026-08-25 (mail draft compose + folder-aware fetch)  
+**Created:** 2026-08-08 · **Updated:** 2026-08-24 (mail draft compose on main)  
 **Sources:** `0.40.x-to-1.0-weekend-roadmap.md`, wiki `_Index`, host-session / Connect / polish PRDs, model-override PRD, **Julie/Scout K2-ASKS-2026-08-08**
 
 **How to use**
@@ -76,7 +76,7 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 
 | Item | Status | PRD / wiki |
 |------|--------|------------|
-| **Workspace default model + API model override** | Proposed | `.k2/prds/prd-workspace-default-model-and-api-model-override-v1.md` |
+| **Workspace default model + API model override** | On main `fff8bc7a` (unreleased). Live z3mbpZ: host-session create + live follow-up + CLI. Dead-resume live + sandboxes not smoked. | `.k2/prds/prd-workspace-default-model-and-api-model-override-v1.md` · wiki Feature - Workspace Default Model and API Override |
 | **Settings API keys UI** (workspace API tab + global tokens) | Locked / confirm polish | `.k2/prds/prd-settings-api-keys-ui-v1.md` · wiki Feature - Settings API Keys UI |
 | **Tab session messaging** (inject/wake by sessionId) | Locked · implement with sidecar PRD | `.k2/prds/prd-session-addressed-msg-read-talk-v1.md` · wiki Feature - Tab Session Messaging |
 | **Sidecar identity + addressing** (`K2_CELL`, `sales/reviewer`, `k2 whoami`, no spawn prompt) | Ready for review | `.k2/prds/prd-sidecar-identity-and-addressing-v1.md` · wiki Feature - Sidecar Identity and Addressing |
@@ -87,6 +87,7 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 | **HTML dashboard** (pinned HTML across workspaces) | Open PRD | `.k2/prds/prd-html-dashboard.md` |
 | **Context hamburger / catalog** | Open PRDs | `.k2/prds/prd-context-hamburger-v1.md`, `.k2/prds/prd-context-hamburger-catalog-marketplace-addendum.md` |
 | **Agent feedback notifications** | Open PRD | `.k2/prds/prd-agent-feedback-notifications.md` |
+| **Ticket answer wakes canonical** | On main `458e341e` (unreleased). CLI stamp + always `deliver_live` wake + 0107 poison repair. | `.k2/prds/prd-ticket-answer-wakes-canonical-v1.md` · wiki Bug - Ticket Answer Does Not Wake Canonical |
 
 ### B2 · Host sessions / sandboxes / API cells
 
@@ -153,7 +154,7 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 
 | Item | Status | PRD / wiki |
 |------|--------|------------|
-| **Linked Gmail compose-draft + folder-aware fetch** | Ready for implement (product lock 2026-08-25) | `.k2/prds/prd-mail-draft-compose-v1.md` · wiki Feature - Mail Draft Compose |
+| **Linked Gmail compose-draft + folder-aware fetch** | On main `f92787dc`+`4e520acc` (unreleased). Compose `--to/--subject`; STATUS UIDVALIDITY then SELECT match. | `.k2/prds/prd-mail-draft-compose-v1.md` · wiki Feature - Mail Draft Compose |
 
 ---
 

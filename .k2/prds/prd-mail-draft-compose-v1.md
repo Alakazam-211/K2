@@ -1,6 +1,6 @@
 # Mini-PRD — `k2 mail draft` compose + folder-aware fetch
 
-**Date:** 2026-08-25 · **Owner:** Rosson · **Status:** Ready for implement  
+**Date:** 2026-08-25 · **Owner:** Rosson · **Status:** On main `f92787dc`+`4e520acc` (unreleased)  
 **Product:** `k2` CLI + daemon linked IMAP/XOAUTH2 (Gmail)  
 **Incident:** agent cannot put a **new** To/Subject into the human's Gmail Drafts; `list --folder "[Gmail]/All Mail"` then `draft`/`read` lies `"the source message is no longer on the server"`  
 **Related:** parent `prd-email-server-v1.md` §17.5 (reply drafts only), `prd-email-oauth-providers-v1.md`, wiki `Feature - Email System` (stale “never send from linked”)

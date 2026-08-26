@@ -16,6 +16,7 @@ vi.mock('@/stores/connect-host', () => ({
   useConnectHostStore: (sel: (s: { activeHost: 'local' }) => unknown) =>
     sel({ activeHost: 'local' }),
   activeHostKey: () => 'local',
+  onActiveHostChange: () => () => {},
 }))
 
 class FakeWS {

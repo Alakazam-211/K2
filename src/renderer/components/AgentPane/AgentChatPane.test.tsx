@@ -162,6 +162,9 @@ vi.mock('@/stores/connect-host', () => ({
   useConnectHostStore: (sel: (s: { activeHost: 'local' }) => unknown) =>
     sel({ activeHost: 'local' }),
   activeHostKey: () => 'local',
+  // settings.ts registers a host-switch listener at module scope; Thread
+  // overlay pulls that store in through this pane.
+  onActiveHostChange: () => () => {},
 }))
 vi.mock('@/lib/workspace-agent', () => ({
   agentDisplayName: vi.fn(async () => 'Agent One'),

@@ -3,6 +3,22 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.112 — Linked mail lists without walking the whole mailbox
+
+Linked Gmail/IMAP is live IMAP, not a local store. Unfiltered `k2 mail messages` now fetches the **newest page** of one folder (IMAP sequence numbers). It does not `SEARCH ALL` tens of thousands of UIDs. `--limit` is still 25 (max 200).
+
+Filtered search (`--from`, `--query`, `--unread`) is a **≤30-day window**. `--since` still means **on/after** that date. To look at a month in the past, pair it: `--since 2017-03-01 --before 2017-04-01`. `--since 2017-03-01` alone (years of mail) **errors** — add `--before`. `--since 7d` is still the last seven days through now. `--from`/`--query` with no dates inject last 30 days and **print both bounds** on every result (hit or miss), so empty cannot mean “does not exist.”
+
+SEARCH that matches more than 1000 messages fails loud (`narrow --since/--before`). Hosted (on-box) mail is unchanged.
+
+### What to try
+
+1. `k2 mail messages` on a huge linked Gmail — should return the newest 25 without a 30s stall.
+2. `k2 mail messages --from someone` — prints `searched last 30 days…` even if empty.
+3. `k2 mail messages --since 2017-03-01` — usage error asking for `--before`, not one silent month.
+
+---
+
 ## 0.40.111 — Don't hide your workspaces behind a stub `k2.db`
 
 If both `~/.k2/k2.db` and `~/.k2/k2so.db` exist as real files, K2 now opens the one that actually has your workspaces. A stray empty `k2.db` (touch, `sqlite3 ~/.k2/k2.db`, a test) used to win on name alone — the app looked factory-reset, mail and chats gone. **Nothing was deleted.** The live file is still `k2so.db` until a later rename. This update just stops picking the stub.

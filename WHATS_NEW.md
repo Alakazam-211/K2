@@ -3,6 +3,19 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.114 — Thread tab, agent-to-agent message log
+
+Agent sessions get **Thread | Terminal** tabs (default Terminal; the PTY stays running when you open Thread). The agent can post to the Thread with `k2 thread`, including choice cards and a secret field that never lands in the log. `k2 msg` / `k2 talk` are still injected into the terminal, and a copy is recorded so you can see chatter later — not mixed into the human Thread.
+
+### What to try
+
+1. Open pinned Chat — underline **Thread | Terminal**. Switch to Thread; the agent should keep running in the background.
+2. From an agent: `k2 thread <workspace> "hello"` — appears on Thread, not as a TUI line.
+3. `k2 thread ask <workspace> "Ship?" --options "Go,Hold"` — card on Thread; tap Go, or type in chat instead (voids the card).
+4. `k2 msg` another workspace — that still wakes them; a chatter record is stored (not on the Thread tab).
+
+---
+
 ## 0.40.113 — Switching servers no longer keeps the last machine's tabs
 
 Switching **this window** from This Mac to a remote server now clears the tab strip immediately. A leftover screenshot or HTML dashboard from your Mac is not requested on the remote — those `/var/folders/…` 400s stop. Switch back and your Mac tabs restore from **that** machine.

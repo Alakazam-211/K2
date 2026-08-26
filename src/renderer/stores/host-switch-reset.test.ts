@@ -70,9 +70,12 @@ import {
   __resetConnectHostStoreForTests,
   type ConnectHost,
 } from './connect-host'
+import { daemonCliGet } from '@/lib/daemon-cli'
 import {
   useTabsStore,
   __hasLoadedWorkspaceSessionsForTests,
+  __resetWorkspaceSessionsForHostSwitch,
+  type Tab,
 } from './tabs'
 import { __activeBarMemoryForTests } from '@/components/Sidebar/ActiveBar'
 import { useActiveAgentsStore } from './active-agents'
@@ -84,6 +87,44 @@ import { usePanelsStore, __resetPanelsLoadGateForTests } from './panels'
 import { useTimerStore } from './timer'
 import { useCustomThemesStore } from './custom-themes'
 import { useProjectsStore } from './projects'
+
+const SCREENSHOT_PATH =
+  '/var/folders/zz/abc/T/NSIRD_screencaptureui_xxx/Screenshot 2026-08-26.png'
+
+function makeFileViewerTab(id: string, filePath: string): Tab {
+  const pgId = `pg-${id}`
+  return {
+    id,
+    title: filePath.split('/').pop() ?? id,
+    mosaicTree: pgId,
+    paneGroups: new Map([
+      [
+        pgId,
+        {
+          id: pgId,
+          items: [
+            {
+              id: `item-${id}`,
+              type: 'file-viewer',
+              data: { filePath },
+            },
+          ],
+          activeItemIndex: 0,
+        },
+      ],
+    ]),
+  }
+}
+
+function daemonCliGetCallsWithPath(path: string): unknown[][] {
+  return vi.mocked(daemonCliGet).mock.calls.filter((args) =>
+    args.some((a) => {
+      if (typeof a === 'string') return a.includes(path)
+      if (a && typeof a === 'object') return JSON.stringify(a).includes(path)
+      return false
+    }),
+  )
+}
 
 function makeRemoteHost(): ConnectHost {
   return {
@@ -170,6 +211,47 @@ describe('#625 host-switch resets per-machine UI session state', () => {
     expect(mem.memory.size).toBe(1)
     expect(mem.dismissed.size).toBe(1)
     expect(useTabsStore.getState().activeWorkspaceKey).toBe('local-project-A:ws1')
+  })
+
+  it('view-clears populated tabs synchronously (never stashWorkspace)', () => {
+    const screenshot = makeFileViewerTab('tab-ss', SCREENSHOT_PATH)
+    useTabsStore.setState({
+      tabs: [screenshot],
+      extraGroups: [{ tabs: [makeFileViewerTab('tab-html', '/tmp/dash.html')], activeTabId: 'tab-html' }],
+      activeTabId: 'tab-ss',
+      splitCount: 2,
+      activeGroupIndex: 1,
+    })
+    const stashSpy = vi.spyOn(useTabsStore.getState(), 'stashWorkspace')
+
+    __resetWorkspaceSessionsForHostSwitch()
+
+    const s = useTabsStore.getState()
+    expect(s.tabs).toHaveLength(0)
+    expect(s.extraGroups).toEqual([])
+    expect(s.activeTabId).toBeNull()
+    expect(s.splitCount).toBe(1)
+    expect(s.activeGroupIndex).toBe(0)
+    expect(stashSpy).not.toHaveBeenCalled()
+  })
+
+  it('selectHost view-clears leftover Screenshot.png — zero daemonCliGet for that path', () => {
+    useTabsStore.setState({
+      tabs: [makeFileViewerTab('tab-ss', SCREENSHOT_PATH)],
+      extraGroups: [],
+      activeTabId: 'tab-ss',
+      splitCount: 1,
+      activeGroupIndex: 0,
+    })
+    vi.mocked(daemonCliGet).mockClear()
+
+    useConnectHostStore.getState().selectHost(makeRemoteHost())
+
+    const s = useTabsStore.getState()
+    expect(s.tabs).toHaveLength(0)
+    expect(s.activeTabId).toBeNull()
+    expect(daemonCliGetCallsWithPath(SCREENSHOT_PATH)).toHaveLength(0)
+    expect(daemonCliGetCallsWithPath('/var/folders')).toHaveLength(0)
   })
 
   it('resets again on a switch BACK to local (every real change)', () => {

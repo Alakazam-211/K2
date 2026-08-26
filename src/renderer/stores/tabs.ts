@@ -1481,6 +1481,9 @@ const LAYOUT_SAVE_MAX_BLIND_RETRIES = 3
 
 function rearmLayoutSave(err: unknown): void {
   if (layoutSaveRetryTimer !== null || layoutSaveRecoveryWait !== null) return
+  // Host switch already cancelled timers; do not persist a leftover
+  // strip (or a half-restored one) onto the NEW host.
+  if (err instanceof Error && err.name === 'HostSwitchedError') return
   if (err instanceof RecoveringError) {
     // The gate dropped the save before sending — the host is recovering.
     // Flush as soon as it's genuinely back (push-style, nothing polls).
@@ -1553,6 +1556,19 @@ function cancelPendingLayoutSave(): void {
   if (persistDebounceTimer) {
     clearTimeout(persistDebounceTimer)
     persistDebounceTimer = null
+  }
+}
+
+/** Host-switch: debounce + the remote-save retry/recovery wait. */
+function cancelLayoutPersistForHostSwitch(): void {
+  cancelPendingLayoutSave()
+  if (layoutSaveRetryTimer !== null) {
+    clearTimeout(layoutSaveRetryTimer)
+    layoutSaveRetryTimer = null
+  }
+  if (layoutSaveRecoveryWait !== null) {
+    layoutSaveRecoveryWait()
+    layoutSaveRecoveryWait = null
   }
 }
 
@@ -6452,13 +6468,11 @@ onDaemonConnected(() => {
 // a focused test can invoke it without a live store subscription.
 export function __resetWorkspaceSessionsForHostSwitch(): void {
   hasLoadedWorkspaceSessions = false
-  // Cancel any pending layout-save debounce so a queued write keyed to the
-  // OLD host's workspace can't fire its `daemonCli*` persist against the
-  // NEW host after the flip.
-  if (persistDebounceTimer) {
-    clearTimeout(persistDebounceTimer)
-    persistDebounceTimer = null
-  }
+  // Cancel debounce + layout-save retry/recovery wait so a queued write
+  // keyed to the OLD host cannot fire `daemonCli*` against the NEW host.
+  // Never stashWorkspace: an empty stash POSTs workspace-layouts/delete
+  // on whatever daemon is now active.
+  cancelLayoutPersistForHostSwitch()
   // Tear down the active workspace's session-events WS to the OLD host so
   // we don't keep a live subscription open against a daemon we've left.
   // The new host's subscription is established when the next workspace is
@@ -6470,6 +6484,14 @@ export function __resetWorkspaceSessionsForHostSwitch(): void {
     activeWorkspaceKey: null,
     activeProjectId: null,
     activeWorkspaceId: null,
+    // View-clear — same fields as clearAllTabs. Zustand survives
+    // `<App key={hostKey}>`; leftover FileViewer/ImageViewer tabs would
+    // GET the previous machine's paths against the new daemon.
+    tabs: [],
+    extraGroups: [],
+    activeTabId: null,
+    splitCount: 1,
+    activeGroupIndex: 0,
   })
   // per-client-view-state.md (Phase 2) — selection is per-machine; the NEW
   // host has its own workspaces/selections. Clear this machine's stashed

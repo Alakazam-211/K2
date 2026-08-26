@@ -201,6 +201,23 @@ rewrite.
     )
 }
 
+/// Shared Database sidecar snippet (prd-workspace-data-sidecar-v1).
+/// `heading` is `"###"` (manager) or `"##"` (custom / k2so-agent).
+fn db_skill_section(heading: &str) -> String {
+    format!(
+        r#"{heading} Database (k2 db / k2 store)
+Linux sidecar (your human enables it in Settings → Data). Fail-closed: `db_agent_access` is off/read/write (default off). Enable/disable/uninstall/doctor/bind are owner — agent tokens exit 3.
+```
+k2 db create [--id <key>] [--json]   # mint this workspace's DB (need write)
+k2 db list | dsn                     # DSN always re-fetchable; never logged
+k2 db migrate [--dir .k2/db/migrations]
+k2 db dump [--out .k2/db/dumps/<ts>.dump]
+k2 store put <name> --id <id> --json '{{…}}'  # JSONB in the same DB — create first
+```
+"#
+    )
+}
+
 pub fn generate_manager_skill_content(project_path: &str, project_name: &str) -> String {
     let mut skill = String::new();
 
@@ -399,6 +416,9 @@ k2 mail delete <address>                        # retire an address you own (fre
 - Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
 - Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from linked Gmail need the `send` level AND Sending=`on` (app-password and Gmail-OAuth send over SMTP; Microsoft-OAuth is draft-only until Graph send) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
 
+"#);
+    skill.push_str(&db_skill_section("###"));
+    skill.push_str(r#"
 ### Discover peers + connections
 ```
 k2so connections list                          # workspaces with live agents now
@@ -556,6 +576,9 @@ k2 mail delete <address>                        # retire an address you own (fre
 - Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
 - Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from linked Gmail need the `send` level AND Sending=`on` (app-password and Gmail-OAuth send over SMTP; Microsoft-OAuth is draft-only until Graph send) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
 
+"#);
+    skill.push_str(&db_skill_section("##"));
+    skill.push_str(r#"
 ## Discover peers
 
 ```
@@ -767,6 +790,9 @@ k2 mail delete <address>                        # retire an address you own (fre
 - Owner verbs (`status`, `domain`, `config`, `approvals`, `doctor`, `link`) are server-enforced: agent tokens exit 3 — approving your own mail or linking an inbox is futile; ask your human.
 - Assistant inboxes: your human can connect their OWN account to this workspace — an app-password IMAP account (Gmail/Fastmail/company IMAP) or, passwordless, a Gmail or Microsoft (Outlook/365) account via OAuth. THEY set this up in Settings → Email; you never run the OAuth flow. However it was linked, its messages appear in `messages`/`read`/`wait` like any other. `k2 mail draft` (reply onto `<message-id>`, or compose with `--to`/`--subject`) lands in the human's Gmail Drafts. Drafting is always available; `k2 mail send`/`reply` from linked Gmail need the `send` level AND Sending=`on` (app-password and Gmail-OAuth send over SMTP; Microsoft-OAuth is draft-only until Graph send) — if `k2 mail send` exits 3 on a linked inbox, that access isn't granted: ask your human, don't retry-loop.
 
+"#);
+    skill.push_str(&db_skill_section("##"));
+    skill.push_str(r#"
 ## Activity feed + reviews
 
 ```
@@ -1892,6 +1918,47 @@ mod tests {
             assert!(
                 body.contains("Sending=`on`") || body.contains("Sending=on"),
                 "{generator} must teach linked send needs Sending=on"
+            );
+        }
+    }
+
+    #[test]
+    fn wake_skill_generators_teach_db() {
+        let project_path = format!("/tmp/manager-db-{}", Uuid::new_v4());
+        let cases: [(&str, String); 3] = [
+            (
+                "generate_manager_skill_content",
+                generate_manager_skill_content(&project_path, "P"),
+            ),
+            (
+                "generate_custom_agent_skill_content",
+                generate_custom_agent_skill_content("P", "a"),
+            ),
+            (
+                "generate_k2so_agent_skill_content",
+                generate_k2so_agent_skill_content("P", "a"),
+            ),
+        ];
+        for (generator, body) in &cases {
+            assert!(
+                body.contains("k2 db create"),
+                "{generator} must teach `k2 db create`"
+            );
+            assert!(
+                body.contains("k2 store put"),
+                "{generator} must teach `k2 store put`"
+            );
+            assert!(
+                body.contains("db_agent_access"),
+                "{generator} must teach fail-closed db_agent_access"
+            );
+            assert!(
+                body.contains("exit 3"),
+                "{generator} must say owner db verbs exit 3"
+            );
+            assert!(
+                body.contains("Linux sidecar") || body.contains("Linux"),
+                "{generator} must say the sidecar is Linux"
             );
         }
     }

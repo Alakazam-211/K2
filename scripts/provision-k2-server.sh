@@ -13,6 +13,8 @@
 #
 #   # bake mode — golden-image prep, no per-customer state:
 #   ./provision-k2-server.sh --bake
+#   ./provision-k2-server.sh --bake --with-db   # also bake Postgres sidecar
+#   K2_BAKE_DB=1 ./provision-k2-server.sh --bake
 #
 #   # full provision (bake steps are idempotent — safe on a baked image):
 #   K2_TUNNEL_TOKEN=k2c_... K2_SUBDOMAIN=alice \
@@ -49,7 +51,16 @@ FRP_VERSION="${FRP_VERSION:-0.61.1}"
 K2_VERSION="${K2_VERSION:-}"
 RAW_BASE="https://raw.githubusercontent.com/Alakazam-211/K2/main"
 BAKE_ONLY=0
-[ "${1:-}" = "--bake" ] && BAKE_ONLY=1
+WITH_DB=0
+# Must still treat `--bake` as argv[1] (historical). Extra flags are
+# parsed without breaking that; `K2_BAKE_DB=1` is the env alias.
+for _arg in "$@"; do
+	case "$_arg" in
+		--bake) BAKE_ONLY=1 ;;
+		--with-db) WITH_DB=1 ;;
+	esac
+done
+[ "${K2_BAKE_DB:-}" = "1" ] && WITH_DB=1
 
 # The helper python snippets read these from the environment.
 export K2_TUNNEL_TOKEN="${K2_TUNNEL_TOKEN:-}"
@@ -208,6 +219,45 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable "$K2_UNIT_NAME" >/dev/null 2>&1
+
+# ── 7b. optional Postgres sidecar bake (`--with-db` / K2_BAKE_DB=1) ──
+# Distro packages (postgresql + postgresql-client), NOT postgresql-16
+# (jammy/bookworm ship 14/15). Empty cluster. listen_addresses=localhost.
+# Root helper + sudoers stub so User=k2 never apt-gets and never holds
+# a superuser password. Mail stays GitHub-tarball at enable; db is bake-apt.
+if [ "$WITH_DB" = 1 ]; then
+	log "baking Postgres sidecar (postgresql + postgresql-client)"
+	apt-get install -y -qq postgresql postgresql-client >/dev/null
+	# Distro default PGDATA (never the workspace). Empty cluster.
+	if [ -d /etc/postgresql ]; then
+		for _conf in /etc/postgresql/*/main/postgresql.conf; do
+			[ -f "$_conf" ] || continue
+			if grep -q "^listen_addresses" "$_conf"; then
+				sed -i "s/^listen_addresses.*/listen_addresses = 'localhost'/" "$_conf"
+			else
+				printf "\nlisten_addresses = 'localhost'\n" >> "$_conf"
+			fi
+		done
+	fi
+	systemctl enable postgresql >/dev/null 2>&1 || true
+	HELPER_SRC="$SCRIPT_DIR/k2-pg-helper"
+	if [ ! -f "$HELPER_SRC" ]; then
+		HELPER_SRC="/usr/local/libexec/k2-pg-helper"
+	fi
+	if [ -f "$SCRIPT_DIR/k2-pg-helper" ]; then
+		install -d -m 0755 /usr/local/libexec
+		install -m 0755 "$SCRIPT_DIR/k2-pg-helper" /usr/local/libexec/k2-pg-helper
+	fi
+	# Sudoers stub: daemon User=k2 may run ONLY the helper (argv allowlist
+	# inside the helper). Do not grant k2 full systemctl/psql.
+	cat > /etc/sudoers.d/k2-pg-helper <<SUDO
+# K2 Postgres sidecar helper (prd-workspace-data-sidecar-v1 D11).
+# Daemon (User=${K2_RUN_USER}) may run ONLY this argv-allowlisted helper as root.
+${K2_RUN_USER} ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper
+SUDO
+	chmod 0440 /etc/sudoers.d/k2-pg-helper
+	log "Postgres sidecar baked (unit enabled, empty cluster, helper + sudoers)"
+fi
 
 if [ "$BAKE_ONLY" = 1 ]; then
 	log "bake complete — image is ready to snapshot (daemon enabled, not personalized)"

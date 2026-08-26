@@ -1626,6 +1626,7 @@ fn parse_create_capabilities(
                 base.canonical_message,
             ),
             sandboxes: bool_field(&["sandboxes", "sandbox"], base.sandboxes),
+            db: bool_field(&["db", "sql", "database"], base.db),
         });
     }
     let to_list = |key: &str| -> Option<Vec<String>> {

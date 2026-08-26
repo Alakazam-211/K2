@@ -1936,6 +1936,7 @@ mod tests {
                 host_sessions: false,
                 canonical_message: true,
                 sandboxes: true,
+                db: false,
             },
         );
         for call in [

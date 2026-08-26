@@ -208,6 +208,8 @@ _cli_tool_id_for_verb() {
         connections|reserve|release|roster|who) echo "connections" ;;
         heartbeat) echo "heartbeat" ;;
         mail|hostmail) echo "mail" ;;
+        db) echo "db" ;;
+        store) echo "store" ;;
         dns) echo "dns" ;;
         publish) echo "publish" ;;
         # Headless Connect account pairing (login/status/logout). Distinct
@@ -234,7 +236,7 @@ _cli_tool_default_mode() {
     case "${1:-}" in
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat) echo "id" ;;
-        mail|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|remote-session) echo "id" ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|remote-session) echo "id" ;;
         browser-open|settings) echo "id" ;;
         *) echo "open" ;;
     esac
@@ -243,7 +245,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|remote-session) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|remote-session) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -11078,6 +11080,8 @@ cmd_help() {
         preset)                   cmd_help_preset ;;
         feedback|tickets)         cmd_help_feedback ;;
         mail)                     cmd_help_mail ;;
+        db)                       cmd_help_db ;;
+        store)                    cmd_help_store ;;
         dns)                      cmd_help_dns ;;
         project)                  cmd_help_project ;;
         workspace)                cmd_help_workspace ;;
@@ -11946,6 +11950,26 @@ cmd_schema() {
         {"name": "--after", "arg": "ts", "description": "Only messages with at greater than <ts> (unix seconds)."},
         {"name": "--limit", "arg": "n", "description": "How many of the most recent messages to show (default 20, or 500 when --after is given; max 500)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db create",
+      "usage": "k2 db create [--id <client-id>] [--json]",
+      "description": "Mint this workspace's Postgres database (ws_<project_id>) and return a loopback DSN for the agent role. --id is idempotency only. Owner always; agent only if db_agent_access=write. Never returns superuser. Cap counts ACTIVE DBs (drop frees).",
+      "args": [],
+      "flags": [
+        {"name": "--id", "arg": "client-id", "description": "Idempotency key."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "store put",
+      "usage": "k2 store put <name> --id <id> --json '{…}'",
+      "description": "Put a JSON document into a named JSONB collection in this workspace DB. Requires k2 db create first.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--id", "arg": "id", "description": "Document id."},
+        {"name": "--json", "arg": "object", "description": "Document JSON."}
       ]
     },
     {
@@ -24141,6 +24165,385 @@ cmd_preset_remove() {
     _preset_py
 }
 
+# ── k2 db / k2 store (workspace data sidecar) ─────────────────────────
+
+_db_err() {
+    local code="$1" hint="$2"
+    CODE="$code" HINT="$hint" python3 -c 'import json,os
+print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT"]}},
+                 ensure_ascii=False, separators=(",", ":")))' >&2 \
+        || echo "Error ($code): $hint" >&2
+}
+
+_db_py() {
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" D_WS_PATH="$PROJECT" \
+    D_VERB="${D_VERB:-}" D_JSON="${D_JSON:-false}" \
+    D_ID="${D_ID:-}" D_NAME="${D_NAME:-}" D_OUT="${D_OUT:-}" \
+    D_FILE="${D_FILE:-}" D_DIR="${D_DIR:-}" D_YES="${D_YES:-false}" \
+    D_HEALTH="${D_HEALTH:-false}" D_DOC_ID="${D_DOC_ID:-}" \
+    D_DOC_JSON="${D_DOC_JSON:-}" D_WHERE="${D_WHERE:-}" D_LIMIT="${D_LIMIT:-}" \
+    python3 - <<'PYEOF'
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+
+base = os.environ["ABASE"]
+token = os.environ["ATOKEN"]
+verb = os.environ["D_VERB"]
+as_json = os.environ.get("D_JSON") == "true"
+ws_path = os.environ.get("D_WS_PATH", "")
+
+def dumps(obj):
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+def die(err, exit_code=None):
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    code = err.get("code", "error")
+    hint = err.get("hint", "")
+    if code in ("forbidden", "owner_only") and "ask your human" not in hint:
+        hint = (hint + " — " if hint else "") + "requires owner/admin — ask your human"
+    sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
+    if exit_code is None:
+        exit_code = 3 if code in ("gated", "forbidden", "owner_only") else 2 if code == "usage" else 1
+    sys.exit(exit_code)
+
+def request(method, route, params=None, body=None):
+    qs = urllib.parse.urlencode(dict(params or {}, token=token))
+    url = base + route + "?" + qs
+    data = dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            return resp.status, raw
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
+        return e.code, raw
+    except Exception as e:
+        die({"code": "error", "hint": "daemon unreachable: %s" % e})
+
+def load(raw):
+    try:
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {"raw": raw}
+
+status, raw = 0, ""
+d = {}
+
+if verb == "status":
+    params = {}
+    if os.environ.get("D_HEALTH") == "true":
+        params["health"] = "1"
+    status, raw = request("GET", "/cli/db/status", params)
+    d = load(raw)
+elif verb == "enable":
+    status, raw = request("POST", "/cli/db/server/enable", body={})
+    d = load(raw)
+elif verb == "disable":
+    status, raw = request("POST", "/cli/db/server/disable", body={})
+    d = load(raw)
+elif verb == "uninstall":
+    status, raw = request("POST", "/cli/db/server/uninstall", body={})
+    d = load(raw)
+elif verb == "doctor":
+    status, raw = request("POST", "/cli/db/doctor", body={})
+    d = load(raw)
+elif verb == "create":
+    body = {"project": ws_path}
+    if os.environ.get("D_ID"):
+        body["clientId"] = os.environ["D_ID"]
+    if os.environ.get("D_NAME"):
+        body["name"] = os.environ["D_NAME"]
+    status, raw = request("POST", "/cli/db/create", body=body)
+    d = load(raw)
+elif verb == "list":
+    status, raw = request("GET", "/cli/db/list", {"project": ws_path})
+    d = load(raw)
+elif verb == "dsn":
+    status, raw = request("GET", "/cli/db/dsn", {"project": ws_path})
+    d = load(raw)
+elif verb == "migrate":
+    body = {"project": ws_path}
+    if os.environ.get("D_DIR"):
+        body["dir"] = os.environ["D_DIR"]
+    status, raw = request("POST", "/cli/db/migrate", body=body)
+    d = load(raw)
+elif verb == "dump":
+    body = {"project": ws_path}
+    if os.environ.get("D_OUT"):
+        body["out"] = os.environ["D_OUT"]
+    status, raw = request("POST", "/cli/db/dump", body=body)
+    d = load(raw)
+elif verb == "restore":
+    body = {"project": ws_path, "file": os.environ.get("D_FILE", "")}
+    status, raw = request("POST", "/cli/db/restore", body=body)
+    d = load(raw)
+elif verb == "drop":
+    body = {"project": ws_path, "yes": os.environ.get("D_YES") == "true"}
+    status, raw = request("POST", "/cli/db/drop", body=body)
+    d = load(raw)
+elif verb == "store_create":
+    status, raw = request("POST", "/cli/store/create", body={"project": ws_path, "name": os.environ.get("D_NAME", "")})
+    d = load(raw)
+elif verb == "store_list":
+    status, raw = request("GET", "/cli/store/list", {"project": ws_path})
+    d = load(raw)
+elif verb == "store_put":
+    doc = {}
+    rawj = os.environ.get("D_DOC_JSON") or "{}"
+    try:
+        doc = json.loads(rawj)
+    except Exception:
+        die({"code": "usage", "hint": "--json body must be JSON"})
+    body = {"project": ws_path, "name": os.environ.get("D_NAME", ""), "id": os.environ.get("D_DOC_ID", ""), "json": doc}
+    status, raw = request("POST", "/cli/store/put", body=body)
+    d = load(raw)
+elif verb == "store_get":
+    status, raw = request("GET", "/cli/store/get", {"project": ws_path, "name": os.environ.get("D_NAME", ""), "id": os.environ.get("D_DOC_ID", "")})
+    d = load(raw)
+elif verb == "store_query":
+    params = {"project": ws_path, "name": os.environ.get("D_NAME", "")}
+    if os.environ.get("D_LIMIT"):
+        params["limit"] = os.environ["D_LIMIT"]
+    status, raw = request("GET", "/cli/store/query", params)
+    d = load(raw)
+elif verb == "store_rm":
+    status, raw = request("POST", "/cli/store/rm", body={"project": ws_path, "name": os.environ.get("D_NAME", ""), "id": os.environ.get("D_DOC_ID", "")})
+    d = load(raw)
+elif verb == "store_drop":
+    status, raw = request("POST", "/cli/store/drop", body={"project": ws_path, "name": os.environ.get("D_NAME", "")})
+    d = load(raw)
+else:
+    die({"code": "usage", "hint": "unknown db/store verb"})
+
+if isinstance(d, dict) and d.get("ok") is False and isinstance(d.get("error"), dict):
+    die(d["error"])
+if status and int(status) >= 400:
+    if isinstance(d, dict) and isinstance(d.get("error"), dict):
+        die(d["error"])
+    die({"code": "error", "hint": raw[:400] or ("HTTP %s" % status)})
+
+if as_json:
+    print(dumps(d) if not isinstance(d, str) else d)
+    sys.exit(0)
+
+if verb == "status":
+    print("supported: %s" % d.get("supported"))
+    print("state:     %s" % d.get("state"))
+    if d.get("installedMajor") is not None:
+        print("pg major:  %s" % d.get("installedMajor"))
+    if d.get("listen"):
+        print("listen:    %s" % d.get("listen"))
+    if d.get("lastError"):
+        print("last error: %s" % d["lastError"])
+elif verb in ("enable", "disable", "uninstall"):
+    print("state: %s" % d.get("state"))
+elif verb == "create":
+    print("created %s" % d.get("name"))
+    if d.get("dsn"):
+        print("dsn: %s" % d.get("dsn"))
+    cap = d.get("cap") or {}
+    if cap:
+        print("cap %s/%s used" % (cap.get("used"), cap.get("cap")))
+elif verb == "dsn":
+    print(d.get("dsn") or "")
+elif verb == "list":
+    dbs = d.get("databases") or []
+    print("%s database(s)" % len(dbs))
+    for row in dbs:
+        print("  %s  %s" % (row.get("name"), row.get("status")))
+elif verb == "migrate":
+    applied = d.get("applied") or []
+    if d.get("noop"):
+        print("migrations: already applied")
+    else:
+        print("applied: %s" % ", ".join(applied))
+elif verb == "dump":
+    print("dump: %s" % d.get("path"))
+elif verb == "restore":
+    print("restored %s" % d.get("restored"))
+elif verb == "drop":
+    print("dropped %s" % d.get("dropped"))
+else:
+    print(dumps(d))
+sys.exit(0)
+PYEOF
+}
+
+cmd_help_db() {
+    cat <<'EOF'
+k2 db — workspace Postgres sidecar (SQL + JSON documents in the same DB)
+
+OWNER (engine — server-side owner/admin gate; agents exit 3)
+  status [--health] [--json]     supported, state, pg major, listen
+  enable [--json]                catalog + start unit if baked (--bake --with-db)
+  disable [--json]               stop unit, keep PGDATA
+  doctor [--json]                disk/listen/SELECT 1
+  uninstall [--json]             drop catalog row + stop unit
+
+AGENT (workspace — identity from token, never body project=)
+  create [--id <client-id>] [--json]
+  list [--json]
+  dsn | creds [--json]           always re-fetchable; never logged
+  migrate [--dir .k2/db/migrations]
+  dump  [--out .k2/db/dumps/<ts>.dump]
+  restore <file>
+  drop --yes
+
+Documents: k2 store … (same DB). Files: workspace FS. No k2 hostdb.
+
+Exit: 0 ok · 1 error · 2 usage · 3 owner-only / gated
+EOF
+}
+
+cmd_help_store() {
+    cat <<'EOF'
+k2 store — JSONB documents in this workspace's SQL database
+
+Requires k2 db create first.
+
+  create <name>
+  list
+  put  <name> --id <id> --json '{…}'
+  get  <name> <id>
+  query <name> [--limit N]
+  rm   <name> <id>
+  drop <name>
+
+OWNER vs AGENT: same passport as k2 db (db_agent_access off/read/write).
+EOF
+}
+
+cmd_db() {
+    if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_db; exit 0; fi
+    local sub="$1"; shift
+    local as_json=false health=false yes=false
+    local client_id="" name="" out="" file="" dir=""
+    case "$sub" in
+        status)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --health) health=true; shift ;;
+                    *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                esac
+            done
+            D_VERB="status" D_JSON="$as_json" D_HEALTH="$health" _db_py ;;
+        enable)
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="enable" D_JSON="$as_json" _db_py ;;
+        disable)
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="disable" D_JSON="$as_json" _db_py ;;
+        uninstall)
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="uninstall" D_JSON="$as_json" _db_py ;;
+        doctor)
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="doctor" D_JSON="$as_json" _db_py ;;
+        create)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --id) client_id="${2:-}"; shift 2 ;;
+                    --name) name="${2:-}"; shift 2 ;;
+                    *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                esac
+            done
+            D_VERB="create" D_JSON="$as_json" D_ID="$client_id" D_NAME="$name" _db_py ;;
+        list)
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="list" D_JSON="$as_json" _db_py ;;
+        dsn|creds)
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="dsn" D_JSON="$as_json" _db_py ;;
+        migrate)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --dir) dir="${2:-}"; shift 2 ;;
+                    *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                esac
+            done
+            D_VERB="migrate" D_JSON="$as_json" D_DIR="$dir" _db_py ;;
+        dump)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --out) out="${2:-}"; shift 2 ;;
+                    *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                esac
+            done
+            D_VERB="dump" D_JSON="$as_json" D_OUT="$out" _db_py ;;
+        restore)
+            file="${1:-}"; shift || true
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            [ -n "$file" ] || { _db_err "usage" "k2 db restore <file>"; exit 2; }
+            D_VERB="restore" D_JSON="$as_json" D_FILE="$file" _db_py ;;
+        drop)
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --yes) yes=true; shift ;;
+                    *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                esac
+            done
+            D_VERB="drop" D_JSON="$as_json" D_YES="$yes" _db_py ;;
+        --help|-h) cmd_help_db; exit 0 ;;
+        *) _db_err "usage" "unknown db command '$sub' — see k2 db --help"; exit 2 ;;
+    esac
+}
+
+cmd_store() {
+    if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_store; exit 0; fi
+    local sub="$1"; shift
+    local as_json=false name="" doc_id="" doc_json="" limit=""
+    case "$sub" in
+        create)
+            name="${1:-}"; shift || true
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="store_create" D_JSON="$as_json" D_NAME="$name" _db_py ;;
+        list)
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="store_list" D_JSON="$as_json" _db_py ;;
+        put)
+            name="${1:-}"; shift || true
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) if [ -n "${2:-}" ] && [ "${2:0:1}" != "-" ]; then doc_json="$2"; shift 2; else as_json=true; shift; fi ;;
+                    --id) doc_id="${2:-}"; shift 2 ;;
+                    *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                esac
+            done
+            D_VERB="store_put" D_JSON="$as_json" D_NAME="$name" D_DOC_ID="$doc_id" D_DOC_JSON="$doc_json" _db_py ;;
+        get)
+            name="${1:-}"; doc_id="${2:-}"; shift 2 || true
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="store_get" D_JSON="$as_json" D_NAME="$name" D_DOC_ID="$doc_id" _db_py ;;
+        query)
+            name="${1:-}"; shift || true
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --limit) limit="${2:-}"; shift 2 ;;
+                    --where) shift 2 ;;
+                    *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                esac
+            done
+            D_VERB="store_query" D_JSON="$as_json" D_NAME="$name" D_LIMIT="$limit" _db_py ;;
+        rm)
+            name="${1:-}"; doc_id="${2:-}"; shift 2 || true
+            D_VERB="store_rm" D_NAME="$name" D_DOC_ID="$doc_id" _db_py ;;
+        drop)
+            name="${1:-}"; shift || true
+            D_VERB="store_drop" D_NAME="$name" _db_py ;;
+        --help|-h) cmd_help_store; exit 0 ;;
+        *) _db_err "usage" "unknown store command '$sub' — see k2 store --help"; exit 2 ;;
+    esac
+}
+
 # ── Router ───────────────────────────────────────────────────────────
 # Select TCP credential by catalog mode BEFORE any verb handler runs.
 # ID/locked tools in a scoped cell keep SCOPED_TOKEN; Open tools may
@@ -24300,6 +24703,14 @@ case "${1:-help}" in
         # Owner verbs hard-fail for agent tokens SERVER-SIDE (exit 3).
         shift
         cmd_hostmail "$@"
+        ;;
+    db)
+        shift
+        cmd_db "$@"
+        ;;
+    store)
+        shift
+        cmd_store "$@"
         ;;
     dns)
         # DNS K1 — toggle-gated zone/record management via /cli/dns/*.

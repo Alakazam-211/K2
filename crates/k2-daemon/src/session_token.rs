@@ -471,6 +471,9 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/mail/link/",
         "/cli/mail/access/",
         "/cli/mail/doctor",
+        // Workspace data sidecar owner surfaces (enable/disable/doctor).
+        "/cli/db/server/",
+        "/cli/db/doctor",
         // DNS K1: zone lifecycle is owner/dashboard-only. Agent DNS verbs
         // (access/zones list/records CRUD/verify) ride ALLOW_PREFIXES
         // `/cli/dns/` below; these exact owner surfaces stay denied.
@@ -546,6 +549,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         // HookPrincipal via stamp_principal + resolve_caller_workspace —
         // client project= is never self-identity for these paths.
         "/cli/mail/",
+        "/cli/db/",
+        "/cli/store/",
         // DNS K1: agent DNS verbs (access/zones list/records/verify).
         // Zone create/delete are DENY_PREFIXES above. Identity is forced
         // from HookPrincipal; handlers also gate on dns_manage_allowed_for_path.
@@ -1287,6 +1292,11 @@ mod tests {
         ] {
             assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
         }
+        assert!(is_agent_verb("/cli/db/create"));
+        assert!(is_agent_verb("/cli/db/list"));
+        assert!(is_agent_verb("/cli/store/put"));
+        assert!(!is_agent_verb("/cli/db/server/enable"));
+        assert!(!is_agent_verb("/cli/db/doctor"));
     }
 
     /// E3 — prove scoped agents cannot self-grant: every access management

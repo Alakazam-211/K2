@@ -999,6 +999,7 @@ impl V1Principal {
                 V1Capability::HostSessions => p.capabilities.host_sessions,
                 V1Capability::CanonicalMessage => p.capabilities.canonical_message,
                 V1Capability::Sandboxes => p.capabilities.sandboxes,
+                V1Capability::Db => p.capabilities.db,
             },
         }
     }
@@ -1013,6 +1014,8 @@ pub(crate) enum V1Capability {
     CanonicalMessage,
     /// `/v1/sandboxes*` and `/v1/w/<ws>/sessions*`
     Sandboxes,
+    /// `/v1/w/<ws>/db*` (create / migrate / GET dump). Fail-closed.
+    Db,
 }
 
 /// Pick the credential a `/v1/*` request presents: the Bearer header (preferred)

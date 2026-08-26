@@ -1,0 +1,70 @@
+#!/bin/sh
+# k2-pg-helper — privileged Postgres sidecar helper
+# (prd-workspace-data-sidecar-v1 D11).
+#
+# Argv allowlist only:
+#   systemctl start|stop|is-active|enable|disable|restart postgresql*
+#   psql  (as the postgres OS user; SQL on stdin, never from argv -c)
+#
+# The k2 daemon (User=k2) invokes this via sudo. NEVER pass agent SQL
+# through this helper — the daemon constructs CREATE DATABASE/ROLE only.
+#
+# Suggested sudoers stub (installed by provision-k2-server.sh --with-db):
+#   k2 ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper
+set -eu
+
+cmd="${1:-}"
+[ -n "$cmd" ] || { echo "k2-pg-helper: missing command" >&2; exit 2; }
+shift
+
+case "$cmd" in
+	systemctl)
+		sub="${1:-}"
+		shift || true
+		now=""
+		unit=""
+		for a in "$@"; do
+			case "$a" in
+				--now) now="--now" ;;
+				postgresql|postgresql.service|postgresql@*)
+					unit="$a"
+					;;
+				*)
+					echo "k2-pg-helper: refused systemctl arg: $a" >&2
+					exit 2
+					;;
+			esac
+		done
+		case "$sub" in
+			start|stop|is-active|enable|disable|restart)
+				[ -n "$unit" ] || { echo "k2-pg-helper: missing postgresql unit" >&2; exit 2; }
+				if [ -n "$now" ]; then
+					exec systemctl "$sub" --now "$unit"
+				fi
+				exec systemctl "$sub" "$unit"
+				;;
+			*)
+				echo "k2-pg-helper: refused systemctl verb: $sub" >&2
+				exit 2
+				;;
+		esac
+		;;
+	psql)
+		# Remaining args are passed to psql (e.g. -d postgres -v ON_ERROR_STOP=1 -tA).
+		# Refuse -c / --command so agent SQL cannot ride argv.
+		for a in "$@"; do
+			case "$a" in
+				-c|--command|--command=*)
+					echo "k2-pg-helper: psql -c is forbidden (stdin only)" >&2
+					exit 2
+					;;
+			esac
+		done
+		# shellcheck disable=SC2086
+		exec su -s /bin/sh postgres -c "psql $*"
+		;;
+	*)
+		echo "k2-pg-helper: unknown command '$cmd'" >&2
+		exit 2
+		;;
+esac

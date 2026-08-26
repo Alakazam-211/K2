@@ -162,6 +162,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::mail_routes::dispatch(path, params) {
         return resp;
     }
+    if let Some(resp) = crate::sql_routes::dispatch(path, params) {
+        return resp;
+    }
     // DNS K1 — `/cli/dns/*` reads (access/zones/records) + 405 guards
     // for POST-only mutations. Principal-bound; toggle-gated in handlers.
     if let Some(resp) = crate::dns_routes::dispatch(path, params) {

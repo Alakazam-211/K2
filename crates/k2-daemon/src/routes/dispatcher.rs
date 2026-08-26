@@ -641,6 +641,22 @@ async fn handle_one_request(
             | "/cli/mail/folder/create"
             | "/cli/mail/folder/rename"
             | "/cli/mail/draft"
+            // Workspace data sidecar (prd-workspace-data-sidecar-v1).
+            // Exact post_allowed paths (not glob). Owner-gated enable/
+            // disable/uninstall/doctor in the dedicated arm below.
+            | "/cli/db/server/enable"
+            | "/cli/db/server/disable"
+            | "/cli/db/server/uninstall"
+            | "/cli/db/doctor"
+            | "/cli/db/create"
+            | "/cli/db/migrate"
+            | "/cli/db/dump"
+            | "/cli/db/restore"
+            | "/cli/db/drop"
+            | "/cli/store/create"
+            | "/cli/store/put"
+            | "/cli/store/rm"
+            | "/cli/store/drop"
             // DNS K1 — principal-bound control-plane proxy. JSON-bodied
             // POSTs; token_ok OR scoped require_hook in the dedicated arm
             // below (mirrors mail). Zone create/delete are owner-only
@@ -4025,6 +4041,48 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // Workspace data sidecar — `/cli/db/*` + `/cli/store/*` mutations.
+        p if is_post
+            && post_allowed
+            && (p.starts_with("/cli/db/") || p.starts_with("/cli/store/")) =>
+        {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let _ = stream.read(&mut buf).await;
+                let r = sql_dual_auth_failure(p, &query, bearer_token.as_deref());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            if crate::sql_routes::is_owner_level_mutation(p)
+                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
+            {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::sql_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::sql_routes::dispatch_post(&p_owned, &body_bytes)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // Projects V1 P2 — `/cli/project-group/*` mutations (create /
         // rename / delete / pin / sort / add-member / remove-member /
         // set-poc / msg / set-icon / set-color / dashboard/save-layout /
@@ -5202,6 +5260,31 @@ async fn handle_one_request(
                                 crate::cli_response::CliResponse::internal_error(e)
                             })
                         }
+                        // D19/D20 — workspace data sidecar (create/migrate/GET dump).
+                        ([ws, "db"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_db::handle_v1_db_create(&principal, ws, &body)
+                        }
+                        ([_ws, "db"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::cli_response::CliResponse::method_not_allowed()
+                        }
+                        ([ws, "db", "migrate"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_db::handle_v1_db_migrate(&principal, ws, &body)
+                        }
+                        ([_ws, "db", "migrate"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::cli_response::CliResponse::method_not_allowed()
+                        }
+                        ([ws, "db", "dump"], false) => {
+                            let _ = stream.read(&mut buf).await;
+                            crate::v1_db::handle_v1_db_dump(&principal, ws)
+                        }
+                        ([_ws, "db", "dump"], true) => {
+                            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::cli_response::CliResponse::method_not_allowed()
+                        }
                         // Anything else under `/v1/w/` (wrong shape, wrong
                         // method, extra segments) → uniform 404, drain first.
                         _ => {
@@ -5841,6 +5924,41 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        p if p.starts_with("/cli/db/") || p.starts_with("/cli/store/") =>
+        {
+            let _ = stream.read(&mut buf).await;
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let r = sql_dual_auth_failure(p, &query, bearer_token.as_deref());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if crate::sql_routes::is_sql_owner_surface(p)
+                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
+            {
+                let r = crate::sql_routes::owner_only_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // C2 (0.40.45): dual-auth peer-gated agent comms GETs —
         // `/cli/workspace/msg` (legacy GET form), `/cli/terminal/read`
         // (`k2 read <ws>`), and `/cli/inbox/*` reads. Owner/connect-user
@@ -6298,6 +6416,21 @@ fn presented_bearer<'a>(query: &'a str, bearer: Option<&'a str>) -> &'a str {
 /// #34: when dual-auth fails on a mail route, distinguish a **valid
 /// scoped agent passport on an owner surface** (teaching `owner_only`)
 /// from a missing/bogus credential (`Invalid or missing auth token`).
+fn sql_dual_auth_failure(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+) -> crate::cli_response::CliResponse {
+    let presented = presented_bearer(query, bearer);
+    if !presented.is_empty()
+        && crate::session_token::validate_hook(presented).is_some()
+        && crate::sql_routes::is_sql_owner_surface(path)
+    {
+        return crate::sql_routes::owner_only_response();
+    }
+    crate::cli_response::CliResponse::forbidden()
+}
+
 fn mail_dual_auth_failure(
     path: &str,
     query: &str,

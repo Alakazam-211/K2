@@ -1104,6 +1104,7 @@ mod tests {
                 host_sessions: false,
                 canonical_message: true,
                 sandboxes: true,
+                db: false,
             },
         );
         let r = handle_v1_hire(&key, hire_json(&path).as_bytes());
@@ -1303,6 +1304,7 @@ mod tests {
                 host_sessions: false,
                 canonical_message: true,
                 sandboxes: true,
+                db: false,
             },
         );
         let listed = handle_v1_context_list(&no_host, "anything");

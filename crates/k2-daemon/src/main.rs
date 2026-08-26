@@ -84,6 +84,9 @@ mod llm_routes;
 // family (supervisor/jmap/doctor skeletons + `/cli/mail/*` handlers).
 mod mail;
 mod mail_routes;
+mod sql;
+mod sql_routes;
+mod v1_db;
 // DNS K1 — control-plane proxy + principal-bound `/cli/dns/*` routes.
 mod dns;
 mod dns_routes;
@@ -1110,6 +1113,7 @@ async fn async_main() {
     // persists transitions onto `mail_server.status`, and raises the
     // standard `mail:server-state-changed` event on failures.
     mail::supervisor::spawn_health_loop();
+    sql::supervisor::spawn_health_loop();
 
     // Files-drawer multi-writer live refresh — recursive watcher over
     // every registered project root. Agent shell writes and other

@@ -24,6 +24,7 @@ import { ApiTokensSection, API_TOKENS_MANIFEST } from './sections/ApiTokensSecti
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
+import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 // The Projects (project GROUPS) section — §6.5 relocation. NOT to be
 // confused with ProjectsSection above, the LEGACY workspaces section
 // (id 'projects', label "Workspaces").
@@ -59,6 +60,7 @@ const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: 'companion', label: 'K2 Companion' },
   { id: 'email-hosting', label: 'Email Hosting' },
   { id: 'email-link', label: 'Email Link' },
+  { id: 'data', label: 'Data' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'code-editor', label: 'Code Editor' },
   { id: 'editors', label: 'Editors' },
@@ -115,6 +117,7 @@ export default function Settings(): React.JSX.Element {
       ...API_TOKENS_MANIFEST,
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
+      ...DATA_MANIFEST,
       ...WAKE_SCHEDULER_MANIFEST,
       ...(webFeatures.permissions ? PERMISSIONS_MANIFEST : []),
       ...DICTATION_LAB_MANIFEST,
@@ -268,7 +271,8 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'connections' ||
           activeSection === 'agents' ||
           activeSection === 'email-hosting' ||
-          activeSection === 'email-link'
+          activeSection === 'email-link' ||
+          activeSection === 'data'
             ? 'overflow-hidden p-0'
             : activeSection === 'dictation-lab'
               ? 'overflow-hidden p-6'
@@ -357,6 +361,11 @@ export default function Settings(): React.JSX.Element {
             <div className="h-full min-h-0 flex flex-col">
               <EmailLinkSection />
             </div>
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'data' && (
+          <SectionErrorBoundary>
+            <DataSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'wake-scheduler' && (

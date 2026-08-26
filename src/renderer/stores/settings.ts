@@ -57,6 +57,7 @@ export type SettingsSection =
   | 'api-tokens'
   | 'email-hosting'
   | 'email-link'
+  | 'data'
 
 export interface TerminalSettings {
   fontFamily: string

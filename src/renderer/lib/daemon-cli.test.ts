@@ -69,7 +69,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   }),
 }))
 
-import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError } from './daemon-cli'
+import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError, HostSwitchedError } from './daemon-cli'
 import * as connectionGateProbe from './connection-gate-probe'
 import {
   useConnectHostStore,
@@ -406,6 +406,83 @@ describe('withConnRetry — connection-level failures retry (shared withRemoteRe
     await expect(daemonCliGet('projects/list')).rejects.toThrow('bad request')
     expect(fetchMock).toHaveBeenCalledTimes(1) // no retry
     expect(invalidateDaemonWsMock).not.toHaveBeenCalled()
+  })
+
+  it('REMOTE HTTP 400 is not a health probe (Anna 400 is the poll, not cliFetch)', async () => {
+    const probe = vi.spyOn(connectionGateProbe, 'forceSoftHealthProbe').mockImplementation(() => {})
+    try {
+      const host = makeRemoteHost()
+      useConnectHostStore.getState().addHost(host)
+      useConnectHostStore.getState().selectHost(host)
+      getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
+      const fetchMock = vi.fn(async () =>
+        fakeRes({ status: 400, body: JSON.stringify({ error: 'bad path' }) }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+
+      await expect(daemonCliGet('fs/read-binary', { path: '/var/folders/x/Screenshot.png' })).rejects.toThrow(
+        'bad path',
+      )
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(probe).not.toHaveBeenCalled()
+    } finally {
+      probe.mockRestore()
+    }
+  })
+})
+
+describe('cliFetch host-key drop — started A, host now B → discarded', () => {
+  beforeEach(() => {
+    mem.clear()
+    __resetConnectHostStoreForTests()
+    getDaemonWsMock.mockReset()
+    invalidateDaemonWsMock.mockReset()
+  })
+
+  it('in-flight GET started on local is discarded after selectHost(remote)', async () => {
+    getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+    let resolveFetch: (value: Response) => void = () => {}
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const pending = daemonCliGet('fs/read-binary', {
+      path: '/var/folders/zz/abc/T/Screenshot.png',
+    })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    const host = makeRemoteHost()
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().selectHost(host)
+    resolveFetch(fakeRes({ body: JSON.stringify({ base64: 'abc' }) }))
+
+    await expect(pending).rejects.toBeInstanceOf(HostSwitchedError)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not issue fetch against host B when creds resolve after the switch', async () => {
+    let resolveCreds: (value: unknown) => void = () => {}
+    getDaemonWsMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreds = resolve
+        }),
+    )
+    const fetchMock = vi.fn(async () => fakeRes({ body: '{}' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const pending = daemonCliPost('fs/write-file', { path: '/tmp/x', content: 'hi' })
+    const host = makeRemoteHost()
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().selectHost(host)
+    resolveCreds(LOCAL_CREDS)
+
+    await expect(pending).rejects.toBeInstanceOf(HostSwitchedError)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

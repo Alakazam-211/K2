@@ -15,7 +15,7 @@
 // working unchanged.
 
 import { getDaemonWs, getLocalDaemonWs, invalidateDaemonWs, daemonHttpBase, type DaemonWsAvailable } from '@/kessel/daemon-ws'
-import { useConnectHostStore } from '@/stores/connect-host'
+import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { forceSoftHealthProbe } from '@/lib/connection-gate-probe'
 import {
   classifyRemoteFetchError,
@@ -60,6 +60,36 @@ export class RecoveringError extends Error {
     super(`host "${hostLabel}" is ${recoveryKind} — request skipped until recovery completes`)
     this.name = 'RecoveringError'
   }
+}
+
+/**
+ * Thrown by `cliFetch` when `activeHostKey` changed between start and
+ * completion. The HTTP result (if any) is discarded so a GET started on
+ * host A cannot land against — or be applied on — host B. Not a
+ * connection-level error: no retry, no `forceSoftHealthProbe`.
+ */
+export class HostSwitchedError extends Error {
+  readonly startedKey: string
+  readonly currentKey: string
+  constructor(startedKey: string, currentKey: string) {
+    super(`host switched (${startedKey} → ${currentKey}) — result discarded`)
+    this.name = 'HostSwitchedError'
+    this.startedKey = startedKey
+    this.currentKey = currentKey
+  }
+}
+
+export function isHostSwitchedError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'HostSwitchedError'
+}
+
+function currentHostKey(): string {
+  return activeHostKey(useConnectHostStore.getState().activeHost)
+}
+
+function throwIfHostSwitched(startedKey: string): void {
+  const now = currentHostKey()
+  if (now !== startedKey) throw new HostSwitchedError(startedKey, now)
 }
 
 /**
@@ -122,6 +152,11 @@ function releaseRemoteCliSlot(): void {
 async function cliFetch(
   build: (creds: DaemonWsAvailable) => { url: string; init?: RequestInit },
 ): Promise<CliHttpResult> {
+  // Tag the host this call belongs to. A switch mid-flight (selectHost
+  // already flipped `activeHost`) must drop the result — including
+  // fs/write-file unmount autosave and layout save — so leftover panes
+  // cannot complete against the NEW daemon.
+  const startedKey = currentHostKey()
   // 0.40.48: while the active REMOTE host is recovering, fail fast instead
   // of feeding the retry storm (and, in the wedged case, a poisoned pool).
   // Checked once at entry — the post-revival replay below is exempt by
@@ -131,18 +166,24 @@ async function cliFetch(
   const heldRemoteSlot = await acquireRemoteCliSlot()
   let lastUrl = ''
   try {
-    return await withConnRetry(async () => {
+    throwIfHostSwitched(startedKey)
+    const out = await withConnRetry(async () => {
+      throwIfHostSwitched(startedKey)
       const attempt = async (): Promise<CliHttpResult> => {
+        throwIfHostSwitched(startedKey)
         const creds = await getDaemonWs()
+        throwIfHostSwitched(startedKey)
         const { url, init } = build(creds)
         lastUrl = url
         // Hosted web: credentials:include (send/store k2_session) + X-K2-Client.
         // Desktop: withDaemonFetch is a no-op — init is unchanged.
         const res = await fetch(url, withDaemonFetch(init ?? {}))
+        throwIfHostSwitched(startedKey)
         return { res, text: await res.text() }
       }
-      let out = await attempt()
-      if (isPossibleAuthFailure(out.res.status, out.text)) {
+      let result = await attempt()
+      throwIfHostSwitched(startedKey)
+      if (isPossibleAuthFailure(result.res.status, result.text)) {
         const active = useConnectHostStore.getState().activeHost
         if (active !== 'local') {
           const outcome = await reviveRemoteSession(active.id)
@@ -150,15 +191,24 @@ async function cliFetch(
           // the caller never sees the transient stale-session rejection. Any
           // other outcome (still-valid role denial, sign-in required, network,
           // cooldown) keeps the original response.
-          if (outcome === 'revived') out = await attempt()
+          if (outcome === 'revived') {
+            throwIfHostSwitched(startedKey)
+            result = await attempt()
+          }
         }
       }
-      return out
+      throwIfHostSwitched(startedKey)
+      return result
     })
+    throwIfHostSwitched(startedKey)
+    return out
   } catch (err) {
+    if (isHostSwitchedError(err)) throw err
     // Compose send and other /cli/* rides this path. Edge 404/CORS throws
     // here; kick a health tick so the arbiter can reload the poisoned pool
-    // instead of waiting 25s (or for Local → remote).
+    // instead of waiting 25s (or for Local → remote). HTTP 400 is an
+    // application error from parseDaemonResponse — not this catch, and
+    // not a probe.
     if (
       isConnectionLevelError(err) &&
       useConnectHostStore.getState().activeHost !== 'local'

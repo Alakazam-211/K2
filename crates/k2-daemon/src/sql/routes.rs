@@ -2,15 +2,15 @@
 
 use std::collections::HashMap;
 
+use crate::caller_workspace::{principal_from_params, request_principal};
 use crate::cli_response::CliResponse;
-use crate::caller_workspace::request_principal;
 
 use super::identity::{resolve_caller, resolve_caller_params};
 use super::ops::{self, OpsError};
 use super::secrets::FileSecretStore;
+use super::sql_supported;
 use super::supervisor;
 use super::sysops::{RealSystemOps, SystemOps};
-use super::sql_supported;
 
 #[cfg(test)]
 use super::sysops::FakeSystemOps;
@@ -60,9 +60,7 @@ fn access_for(path: &str, need: &str) -> Result<(), CliResponse> {
         Err(err_json(
             "403 Forbidden",
             "forbidden",
-            format!(
-                "workspace db_agent_access is '{mode}' (need {need}) — ask your human"
-            ),
+            format!("workspace db_agent_access is '{mode}' (need {need}) — ask your human"),
         ))
     }
 }
@@ -170,7 +168,13 @@ struct CreateBody {
 pub fn handle_create(body: &[u8]) -> CliResponse {
     let b: CreateBody = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(e) => return err_json("400 Bad Request", "usage", format!("invalid JSON body: {e}")),
+        Err(e) => {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                format!("invalid JSON body: {e}"),
+            )
+        }
     };
     let (path, project_id) = match resolve_caller(&b.project) {
         Ok(v) => v,
@@ -204,16 +208,29 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
 }
 
 pub fn handle_list(params: &HashMap<String, String>) -> CliResponse {
-    let (path, project_id) = match resolve_caller_params(params) {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-    if let Err(resp) = access_for(&path, "read") {
-        return resp;
+    match resolve_caller_params(params) {
+        Ok((path, project_id)) => {
+            if let Err(resp) = access_for(&path, "read") {
+                return resp;
+            }
+            let mut v = ops::list_databases(&project_id);
+            v["cap"] = serde_json::json!(cap_for(&path));
+            ok_json(v)
+        }
+        Err(resp) => {
+            let no_identity = principal_from_params(params).is_none()
+                && params
+                    .get("project")
+                    .or_else(|| params.get("project_path"))
+                    .map(|s| s.trim().is_empty())
+                    .unwrap_or(true);
+            if no_identity {
+                ok_json(ops::catalog_json(None))
+            } else {
+                resp
+            }
+        }
     }
-    let mut v = ops::list_databases(&project_id);
-    v["cap"] = serde_json::json!(cap_for(&path));
-    ok_json(v)
 }
 
 pub fn handle_dsn(params: &HashMap<String, String>) -> CliResponse {
@@ -245,7 +262,13 @@ struct ProjectBody {
 pub fn handle_migrate(body: &[u8]) -> CliResponse {
     let b: ProjectBody = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(e) => return err_json("400 Bad Request", "usage", format!("invalid JSON body: {e}")),
+        Err(e) => {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                format!("invalid JSON body: {e}"),
+            )
+        }
     };
     let (path, project_id) = match resolve_caller(&b.project) {
         Ok(v) => v,
@@ -264,7 +287,13 @@ pub fn handle_migrate(body: &[u8]) -> CliResponse {
 pub fn handle_dump(body: &[u8]) -> CliResponse {
     let b: ProjectBody = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(e) => return err_json("400 Bad Request", "usage", format!("invalid JSON body: {e}")),
+        Err(e) => {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                format!("invalid JSON body: {e}"),
+            )
+        }
     };
     let (path, project_id) = match resolve_caller(&b.project) {
         Ok(v) => v,
@@ -283,7 +312,13 @@ pub fn handle_dump(body: &[u8]) -> CliResponse {
 pub fn handle_restore(body: &[u8]) -> CliResponse {
     let b: ProjectBody = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(e) => return err_json("400 Bad Request", "usage", format!("invalid JSON body: {e}")),
+        Err(e) => {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                format!("invalid JSON body: {e}"),
+            )
+        }
     };
     let file = b.file.as_deref().unwrap_or("").trim();
     if file.is_empty() {
@@ -306,7 +341,13 @@ pub fn handle_restore(body: &[u8]) -> CliResponse {
 pub fn handle_drop(body: &[u8]) -> CliResponse {
     let b: ProjectBody = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(e) => return err_json("400 Bad Request", "usage", format!("invalid JSON body: {e}")),
+        Err(e) => {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                format!("invalid JSON body: {e}"),
+            )
+        }
     };
     if b.yes != Some(true) {
         return err_json(
@@ -342,7 +383,11 @@ struct StoreBody {
 
 fn store_ident(body: &[u8]) -> Result<(String, String, StoreBody), CliResponse> {
     let b: StoreBody = serde_json::from_slice(body).map_err(|e| {
-        err_json("400 Bad Request", "usage", format!("invalid JSON body: {e}"))
+        err_json(
+            "400 Bad Request",
+            "usage",
+            format!("invalid JSON body: {e}"),
+        )
     })?;
     let (path, project_id) = resolve_caller(&b.project)?;
     Ok((path, project_id, b))
@@ -464,8 +509,199 @@ pub fn handle_store_drop(body: &[u8]) -> CliResponse {
         return resp;
     }
     let secrets = FileSecretStore::default();
-    match ops::store_drop(ops(), &secrets, &project_id, b.name.as_deref().unwrap_or("")) {
+    match ops::store_drop(
+        ops(),
+        &secrets,
+        &project_id,
+        b.name.as_deref().unwrap_or(""),
+    ) {
         Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
+/// Resolve a workspace spec (name | path | UUID) to `project_id` — the
+/// **grantee** (a target resource, not caller identity).
+fn resolve_grantee(project: &str) -> Result<String, CliResponse> {
+    let Some(path) = crate::workspace_msg::resolve_workspace(project) else {
+        return Err(crate::workspace_routes::workspace_not_found_response(
+            project,
+        ));
+    };
+    let project_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+    };
+    project_id.ok_or_else(|| {
+        err_json(
+            "404 Not Found",
+            "not_found",
+            format!("workspace not registered: {path}"),
+        )
+    })
+}
+
+fn caller_project_id() -> Option<String> {
+    request_principal().map(|p| p.workspace_uuid.clone())
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct GrantBody {
+    /// Grantee workspace (name | path | UUID). Not caller identity.
+    project: String,
+    db: String,
+    level: String,
+    manage: Option<bool>,
+    can_manage: Option<bool>,
+}
+
+pub fn handle_grant(body: &[u8]) -> CliResponse {
+    let b: GrantBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                format!("invalid JSON body: {e}"),
+            )
+        }
+    };
+    if b.project.trim().is_empty() {
+        return err_json(
+            "400 Bad Request",
+            "usage",
+            "missing 'project' — the workspace to grant (name | path | UUID)",
+        );
+    }
+    if b.db.trim().is_empty() {
+        return err_json(
+            "400 Bad Request",
+            "usage",
+            "missing 'db' — database id or name ('k2 db list')",
+        );
+    }
+    if b.level.trim().is_empty() {
+        return err_json("400 Bad Request", "usage", "missing 'level' — read | write");
+    }
+    let grantee = match resolve_grantee(&b.project) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let can_manage = b.manage.or(b.can_manage).unwrap_or(false);
+    match ops::grant_access(
+        ops(),
+        caller_project_id().as_deref(),
+        &b.db,
+        &grantee,
+        &b.level,
+        can_manage,
+    ) {
+        Ok(v) => {
+            let s = v.to_string().to_ascii_lowercase();
+            if s.contains("superuser") || s.contains("postgres://postgres") {
+                return err_json(
+                    "500 Internal Server Error",
+                    "engine",
+                    "refusing to return a superuser DSN",
+                );
+            }
+            ok_json(v)
+        }
+        Err(e) => ops_err(e),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct RevokeBody {
+    project: String,
+    db: String,
+}
+
+pub fn handle_revoke(body: &[u8]) -> CliResponse {
+    let b: RevokeBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                format!("invalid JSON body: {e}"),
+            )
+        }
+    };
+    if b.project.trim().is_empty() {
+        return err_json(
+            "400 Bad Request",
+            "usage",
+            "missing 'project' — the workspace to revoke (name | path | UUID)",
+        );
+    }
+    if b.db.trim().is_empty() {
+        return err_json(
+            "400 Bad Request",
+            "usage",
+            "missing 'db' — database id or name ('k2 db list')",
+        );
+    }
+    let grantee = match resolve_grantee(&b.project) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    match ops::revoke_access(ops(), caller_project_id().as_deref(), &b.db, &grantee) {
+        Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct BindBody {
+    project: String,
+    db: Option<String>,
+    role: String,
+}
+
+/// POST `/cli/db/bind` — owner/admin. Persist bind_role. Never prints secrets.
+pub fn handle_bind(body: &[u8]) -> CliResponse {
+    let b: BindBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                format!("invalid JSON body: {e}"),
+            )
+        }
+    };
+    if b.role.trim().is_empty() {
+        return err_json(
+            "400 Bad Request",
+            "usage",
+            "missing 'role' — k2 db bind --role <pg_role>",
+        );
+    }
+    let project_id = if b.project.trim().is_empty() {
+        caller_project_id()
+    } else {
+        match resolve_caller(&b.project) {
+            Ok((_path, id)) => Some(id),
+            Err(resp) => return resp,
+        }
+    };
+    match ops::bind_role(b.db.as_deref(), project_id.as_deref(), &b.role) {
+        Ok(v) => {
+            let s = v.to_string().to_ascii_lowercase();
+            if s.contains("password") || s.contains("\"dsn\"") || s.contains("dbsec_") {
+                return err_json(
+                    "500 Internal Server Error",
+                    "engine",
+                    "refusing to return secrets from bind",
+                );
+            }
+            ok_json(v)
+        }
         Err(e) => ops_err(e),
     }
 }

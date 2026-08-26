@@ -474,6 +474,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         // Workspace data sidecar owner surfaces (enable/disable/doctor).
         "/cli/db/server/",
         "/cli/db/doctor",
+        "/cli/db/bind",
         // DNS K1: zone lifecycle is owner/dashboard-only. Agent DNS verbs
         // (access/zones list/records CRUD/verify) ride ALLOW_PREFIXES
         // `/cli/dns/` below; these exact owner surfaces stay denied.
@@ -1294,9 +1295,11 @@ mod tests {
         }
         assert!(is_agent_verb("/cli/db/create"));
         assert!(is_agent_verb("/cli/db/list"));
+        assert!(is_agent_verb("/cli/db/grant"));
         assert!(is_agent_verb("/cli/store/put"));
         assert!(!is_agent_verb("/cli/db/server/enable"));
         assert!(!is_agent_verb("/cli/db/doctor"));
+        assert!(!is_agent_verb("/cli/db/bind"));
     }
 
     /// E3 — prove scoped agents cannot self-grant: every access management

@@ -114,9 +114,26 @@ fn count_active(conn: &rusqlite::Connection, project_id: &str) -> u32 {
 struct DbRow {
     id: String,
     name: String,
+    project_id: String,
     agent_secret_ref: Option<String>,
     migrator_secret_ref: Option<String>,
     status: String,
+    bind_role: Option<String>,
+}
+
+const DB_ROW_COLS: &str =
+    "id, name, project_id, agent_secret_ref, migrator_secret_ref, status, bind_role";
+
+fn db_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DbRow> {
+    Ok(DbRow {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        project_id: r.get(2)?,
+        agent_secret_ref: r.get(3)?,
+        migrator_secret_ref: r.get(4)?,
+        status: r.get(5)?,
+        bind_role: r.get(6)?,
+    })
 }
 
 fn load_active_by_client(
@@ -125,58 +142,35 @@ fn load_active_by_client(
     client_id: &str,
 ) -> Option<DbRow> {
     conn.query_row(
-        "SELECT id, name, agent_secret_ref, migrator_secret_ref, status FROM sql_databases \
-         WHERE project_id = ?1 AND client_id = ?2",
+        &format!(
+            "SELECT {DB_ROW_COLS} FROM sql_databases WHERE project_id = ?1 AND client_id = ?2"
+        ),
         rusqlite::params![project_id, client_id],
-        |r| {
-            Ok(DbRow {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                agent_secret_ref: r.get(2)?,
-                migrator_secret_ref: r.get(3)?,
-                status: r.get(4)?,
-            })
-        },
+        db_row_from,
     )
     .ok()
 }
 
-fn load_active_by_name(
-    conn: &rusqlite::Connection,
-    project_id: &str,
-    name: &str,
-) -> Option<DbRow> {
+fn load_active_by_name(conn: &rusqlite::Connection, project_id: &str, name: &str) -> Option<DbRow> {
     conn.query_row(
-        "SELECT id, name, agent_secret_ref, migrator_secret_ref, status FROM sql_databases \
-         WHERE project_id = ?1 AND name = ?2 AND status = 'active'",
+        &format!(
+            "SELECT {DB_ROW_COLS} FROM sql_databases \
+             WHERE project_id = ?1 AND name = ?2 AND status = 'active'"
+        ),
         rusqlite::params![project_id, name],
-        |r| {
-            Ok(DbRow {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                agent_secret_ref: r.get(2)?,
-                migrator_secret_ref: r.get(3)?,
-                status: r.get(4)?,
-            })
-        },
+        db_row_from,
     )
     .ok()
 }
 
 fn load_active_default(conn: &rusqlite::Connection, project_id: &str) -> Option<DbRow> {
     conn.query_row(
-        "SELECT id, name, agent_secret_ref, migrator_secret_ref, status FROM sql_databases \
-         WHERE project_id = ?1 AND status = 'active' ORDER BY created_at ASC LIMIT 1",
+        &format!(
+            "SELECT {DB_ROW_COLS} FROM sql_databases \
+             WHERE project_id = ?1 AND status = 'active' ORDER BY created_at ASC LIMIT 1"
+        ),
         rusqlite::params![project_id],
-        |r| {
-            Ok(DbRow {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                agent_secret_ref: r.get(2)?,
-                migrator_secret_ref: r.get(3)?,
-                status: r.get(4)?,
-            })
-        },
+        db_row_from,
     )
     .ok()
 }
@@ -229,7 +223,9 @@ pub fn create_database(
         })
         .unwrap_or(default_name);
     if !name.starts_with("ws_") && name_override.is_none() {
-        return Err(OpsError::Usage("internal db name must start with ws_".into()));
+        return Err(OpsError::Usage(
+            "internal db name must start with ws_".into(),
+        ));
     }
     let client_id = client_id.map(str::trim).filter(|s| !s.is_empty());
 
@@ -271,20 +267,29 @@ pub fn create_database(
     );
     let up = role_sql.to_ascii_uppercase();
     if up.contains("SUPERUSER") && !up.contains("NOSUPERUSER") {
-        return Err(OpsError::Engine("internal: superuser leaked into role SQL".into()));
+        return Err(OpsError::Engine(
+            "internal: superuser leaked into role SQL".into(),
+        ));
     }
     if up.contains("CREATEDB") && !up.contains("NOCREATEDB") {
-        return Err(OpsError::Engine("internal: createdb leaked into role SQL".into()));
+        return Err(OpsError::Engine(
+            "internal: createdb leaked into role SQL".into(),
+        ));
     }
     if up.contains("BYPASSRLS") && !up.contains("NOBYPASSRLS") {
-        return Err(OpsError::Engine("internal: bypassrls leaked into role SQL".into()));
+        return Err(OpsError::Engine(
+            "internal: bypassrls leaked into role SQL".into(),
+        ));
     }
     if up.contains("FORCE ROW LEVEL") {
         return Err(OpsError::Engine("internal: FORCE RLS is not v1".into()));
     }
 
-    ops.run_helper(&["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"], Some(role_sql.as_bytes()))
-        .map_err(OpsError::Engine)?;
+    ops.run_helper(
+        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        Some(role_sql.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
 
     let create_db = format!(
         "CREATE DATABASE {db} OWNER {owner};",
@@ -380,32 +385,7 @@ fn dsn_json(
 }
 
 pub fn list_databases(project_id: &str) -> serde_json::Value {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, name, status, created_at FROM sql_databases \
-             WHERE project_id = ?1 ORDER BY created_at",
-        )
-        .expect("prepare");
-    let rows = stmt
-        .query_map(rusqlite::params![project_id], |r| {
-            Ok(serde_json::json!({
-                "id": r.get::<_, String>(0)?,
-                "name": r.get::<_, String>(1)?,
-                "status": r.get::<_, String>(2)?,
-                "createdAt": r.get::<_, i64>(3)?,
-            }))
-        })
-        .ok();
-    let mut dbs = Vec::new();
-    if let Some(rows) = rows {
-        for r in rows.flatten() {
-            dbs.push(r);
-        }
-    }
-    let used = count_active(&conn, project_id);
-    serde_json::json!({ "ok": true, "databases": dbs, "used": used })
+    catalog_json(Some(project_id))
 }
 
 pub fn dsn_for_project(
@@ -431,10 +411,7 @@ fn active_row(project_id: &str) -> Result<DbRow, OpsError> {
     })
 }
 
-fn migrator_creds(
-    secrets: &dyn SecretStore,
-    row: &DbRow,
-) -> Result<(String, String), OpsError> {
+fn migrator_creds(secrets: &dyn SecretStore, row: &DbRow) -> Result<(String, String), OpsError> {
     let sref = row
         .migrator_secret_ref
         .as_deref()
@@ -518,7 +495,13 @@ pub fn migrate(
            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
          );",
     )?;
-    let applied_raw = exec_as(ops, &row.name, &user, &pw, "SELECT version FROM _k2_migrations;")?;
+    let applied_raw = exec_as(
+        ops,
+        &row.name,
+        &user,
+        &pw,
+        "SELECT version FROM _k2_migrations;",
+    )?;
     let applied: Vec<&str> = applied_raw
         .lines()
         .map(str::trim)
@@ -640,10 +623,7 @@ pub fn restore(
     Ok(serde_json::json!({ "ok": true, "restored": file }))
 }
 
-pub fn drop_database(
-    ops: &dyn SystemOps,
-    project_id: &str,
-) -> Result<serde_json::Value, OpsError> {
+pub fn drop_database(ops: &dyn SystemOps, project_id: &str) -> Result<serde_json::Value, OpsError> {
     require_running()?;
     let row = active_row(project_id)?;
     let sql = format!(
@@ -661,12 +641,486 @@ pub fn drop_database(
         let db = k2_core::db::shared();
         let conn = db.lock();
         conn.execute(
+            "DELETE FROM sql_grants WHERE database_id = ?1",
+            rusqlite::params![row.id],
+        )
+        .map_err(|e| OpsError::Engine(format!("catalog grant drop: {e}")))?;
+        conn.execute(
             "UPDATE sql_databases SET status = 'dropped', dropped_at = ?1 WHERE id = ?2",
             rusqlite::params![now_secs(), row.id],
         )
         .map_err(|e| OpsError::Engine(format!("catalog drop: {e}")))?;
     }
     Ok(serde_json::json!({ "ok": true, "dropped": row.name }))
+}
+
+/// Default PG role for a workspace (`ws_<id>_agent`). D22 bind overrides
+/// the *catalog* name shown to owners; DSN still uses this role's vault
+/// secret (bind does not mint or print a password).
+pub fn default_agent_role(project_id: &str) -> String {
+    format!("{}_agent", pg_ident_for_project(project_id))
+}
+
+fn project_name(conn: &rusqlite::Connection, project_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT name FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+fn project_cap(conn: &rusqlite::Connection, project_id: &str) -> u32 {
+    let cap: Option<i64> = conn
+        .query_row(
+            "SELECT db_active_cap FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
+    match cap {
+        Some(n) if n >= 0 => n as u32,
+        _ => 1,
+    }
+}
+
+/// Locate an active database by id or name. When `prefer_project` is set,
+/// a name match prefers that workspace's row.
+fn find_database(spec: &str, prefer_project: Option<&str>) -> Result<DbRow, OpsError> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Err(OpsError::Usage(
+            "missing 'db' — database id or name (k2 db list)".into(),
+        ));
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if let Ok(row) = conn.query_row(
+        &format!("SELECT {DB_ROW_COLS} FROM sql_databases WHERE id = ?1 AND status = 'active'"),
+        rusqlite::params![spec],
+        db_row_from,
+    ) {
+        return Ok(row);
+    }
+    if let Some(pid) = prefer_project {
+        if let Some(row) = load_active_by_name(&conn, pid, spec) {
+            return Ok(row);
+        }
+    }
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {DB_ROW_COLS} FROM sql_databases WHERE name = ?1 AND status = 'active'"
+        ))
+        .map_err(|e| OpsError::Engine(format!("prepare: {e}")))?;
+    let rows: Vec<DbRow> = stmt
+        .query_map(rusqlite::params![spec], db_row_from)
+        .map_err(|e| OpsError::Engine(format!("query: {e}")))?
+        .filter_map(Result::ok)
+        .collect();
+    match rows.len() {
+        0 => Err(OpsError::NotFound(format!(
+            "database not found: {spec} — see 'k2 db list'"
+        ))),
+        1 => Ok(rows.into_iter().next().unwrap()),
+        _ => Err(OpsError::Usage(format!(
+            "name '{spec}' matches more than one database — pass the id from 'k2 db list'"
+        ))),
+    }
+}
+
+fn grant_can_manage(conn: &rusqlite::Connection, database_id: &str, project_id: &str) -> bool {
+    conn.query_row(
+        "SELECT can_manage FROM sql_grants WHERE database_id = ?1 AND project_id = ?2",
+        rusqlite::params![database_id, project_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .ok()
+    .map(|n| n != 0)
+    .unwrap_or(false)
+}
+
+/// Owner token (no principal) always; owning workspace; or a grant with
+/// `can_manage`.
+fn caller_can_manage(caller_project: Option<&str>, row: &DbRow) -> bool {
+    match caller_project {
+        None => true,
+        Some(p) if p == row.project_id => true,
+        Some(p) => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            grant_can_manage(&conn, &row.id, p)
+        }
+    }
+}
+
+fn validate_level(level: &str) -> Result<&str, OpsError> {
+    match level.trim() {
+        "read" | "write" => Ok(level.trim()),
+        other => Err(OpsError::Usage(format!(
+            "level must be read or write, got {other:?}"
+        ))),
+    }
+}
+
+fn apply_pg_grant(
+    ops: &dyn SystemOps,
+    db_name: &str,
+    role: &str,
+    level: &str,
+) -> Result<(), OpsError> {
+    let pw = generate_secret().map_err(OpsError::Engine)?;
+    let create = create_role_sql(role, &pw);
+    let ensure = format!(
+        "DO $$\nBEGIN\n  {inner}\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;",
+        inner = create.trim_end_matches(';'),
+    );
+    let connect = format!(
+        "{ensure}\nGRANT CONNECT ON DATABASE {db} TO {role};",
+        db = pg_quote_ident(db_name),
+        role = pg_quote_ident(role),
+    );
+    let up = connect.to_ascii_uppercase();
+    if up.contains("SUPERUSER") && !up.contains("NOSUPERUSER") {
+        return Err(OpsError::Engine(
+            "internal: superuser leaked into grant SQL".into(),
+        ));
+    }
+    ops.run_helper(
+        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        Some(connect.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
+    let dml = if level == "write" {
+        format!(
+            "GRANT USAGE ON SCHEMA public TO {role};\n\
+             GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role};\n\
+             GRANT SELECT, INSERT, UPDATE, DELETE ON ALL SEQUENCES IN SCHEMA public TO {role};",
+            role = pg_quote_ident(role),
+        )
+    } else {
+        format!(
+            "GRANT USAGE ON SCHEMA public TO {role};\n\
+             GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role};",
+            role = pg_quote_ident(role),
+        )
+    };
+    ops.run_helper(
+        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
+        Some(dml.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
+    Ok(())
+}
+
+fn apply_pg_revoke(ops: &dyn SystemOps, db_name: &str, role: &str) -> Result<(), OpsError> {
+    let connect = format!(
+        "REVOKE CONNECT ON DATABASE {db} FROM {role};",
+        db = pg_quote_ident(db_name),
+        role = pg_quote_ident(role),
+    );
+    let _ = ops.run_helper(
+        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        Some(connect.as_bytes()),
+    );
+    let dml = format!(
+        "REVOKE ALL ON SCHEMA public FROM {role};\n\
+         REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role};\n\
+         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role};",
+        role = pg_quote_ident(role),
+    );
+    let _ = ops.run_helper(
+        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
+        Some(dml.as_bytes()),
+    );
+    Ok(())
+}
+
+/// Grant another workspace read|write on this database via **their** PG
+/// role. Never shares superuser. Same-workspace (the owner) is rejected
+/// with teaching — they already have manage/write.
+pub fn grant_access(
+    ops: &dyn SystemOps,
+    caller_project: Option<&str>,
+    db_spec: &str,
+    grantee_project_id: &str,
+    level: &str,
+    can_manage: bool,
+) -> Result<serde_json::Value, OpsError> {
+    require_running()?;
+    let level = validate_level(level)?;
+    let row = find_database(db_spec, caller_project)?;
+    if !caller_can_manage(caller_project, &row) {
+        return Err(OpsError::Forbidden(
+            "requires owner or can_manage on this database — ask your human".into(),
+        ));
+    }
+    if grantee_project_id == row.project_id {
+        return Err(OpsError::Usage(
+            "that workspace owns this database — it already has manage/write (cross-workspace grants only)"
+                .into(),
+        ));
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if project_name(&conn, grantee_project_id).is_none() {
+            return Err(OpsError::NotFound(format!(
+                "workspace not registered: {grantee_project_id}"
+            )));
+        }
+    }
+    let role = default_agent_role(grantee_project_id);
+    apply_pg_grant(ops, &row.name, &role, level)?;
+    let now = now_secs();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT (database_id, project_id) DO UPDATE SET \
+               level = excluded.level, can_manage = excluded.can_manage, updated_at = excluded.updated_at",
+            rusqlite::params![row.id, grantee_project_id, level, if can_manage { 1 } else { 0 }, now],
+        )
+        .map_err(|e| OpsError::Engine(format!("catalog grant: {e}")))?;
+    }
+    let v = serde_json::json!({
+        "ok": true,
+        "databaseId": row.id,
+        "name": row.name,
+        "projectId": grantee_project_id,
+        "level": level,
+        "canManage": can_manage,
+        "role": role,
+    });
+    assert_no_superuser_json(&v);
+    Ok(v)
+}
+
+pub fn revoke_access(
+    ops: &dyn SystemOps,
+    caller_project: Option<&str>,
+    db_spec: &str,
+    grantee_project_id: &str,
+) -> Result<serde_json::Value, OpsError> {
+    require_running()?;
+    let row = find_database(db_spec, caller_project)?;
+    if !caller_can_manage(caller_project, &row) {
+        return Err(OpsError::Forbidden(
+            "requires owner or can_manage on this database — ask your human".into(),
+        ));
+    }
+    if grantee_project_id == row.project_id {
+        return Err(OpsError::Usage(
+            "cannot revoke the owning workspace — drop the database instead".into(),
+        ));
+    }
+    let role = default_agent_role(grantee_project_id);
+    apply_pg_revoke(ops, &row.name, &role)?;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "DELETE FROM sql_grants WHERE database_id = ?1 AND project_id = ?2",
+            rusqlite::params![row.id, grantee_project_id],
+        )
+        .map_err(|e| OpsError::Engine(format!("catalog revoke: {e}")))?;
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "databaseId": row.id,
+        "name": row.name,
+        "projectId": grantee_project_id,
+        "revoked": true,
+    }))
+}
+
+fn validate_bind_role(role: &str) -> Result<Option<String>, OpsError> {
+    let role = role.trim();
+    if role.is_empty() {
+        return Ok(None);
+    }
+    let lower = role.to_ascii_lowercase();
+    if lower == "postgres" || lower == "k2_admin" || lower.contains("superuser") {
+        return Err(OpsError::Usage(
+            "bind role cannot be postgres, k2_admin, or a superuser name".into(),
+        ));
+    }
+    if role.len() > 63
+        || !role.chars().enumerate().all(|(i, c)| {
+            if i == 0 {
+                c.is_ascii_alphabetic() || c == '_'
+            } else {
+                c.is_ascii_alphanumeric() || c == '_'
+            }
+        })
+    {
+        return Err(OpsError::Usage(
+            "bind role must be a Postgres identifier (letter/underscore, then alnum/_ , ≤63)"
+                .into(),
+        ));
+    }
+    Ok(Some(role.to_string()))
+}
+
+/// D22: persist the PG role the workspace assistant uses. Owner/admin.
+/// Does **not** mint RLS, does **not** print a DSN or password.
+pub fn bind_role(
+    db_spec: Option<&str>,
+    project_id: Option<&str>,
+    role: &str,
+) -> Result<serde_json::Value, OpsError> {
+    require_running()?;
+    let row = if let Some(spec) = db_spec.map(str::trim).filter(|s| !s.is_empty()) {
+        find_database(spec, project_id)?
+    } else if let Some(pid) = project_id {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        load_active_default(&conn, pid).ok_or_else(|| {
+            OpsError::NotFound("no database for this workspace — run 'k2 db create' first".into())
+        })?
+    } else {
+        return Err(OpsError::Usage(
+            "bind requires --db or a workspace (k2 db bind --role <pg_role>)".into(),
+        ));
+    };
+    let bind = validate_bind_role(role)?;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE sql_databases SET bind_role = ?1 WHERE id = ?2",
+            rusqlite::params![bind.as_deref(), row.id],
+        )
+        .map_err(|e| OpsError::Engine(format!("catalog bind: {e}")))?;
+    }
+    let shown = bind
+        .clone()
+        .unwrap_or_else(|| default_agent_role(&row.project_id));
+    let v = serde_json::json!({
+        "ok": true,
+        "databaseId": row.id,
+        "name": row.name,
+        "bindRole": shown,
+        "default": bind.is_none(),
+    });
+    let s = v.to_string().to_ascii_lowercase();
+    if s.contains("password") || s.contains("\"dsn\"") || s.contains("dbsec_") {
+        return Err(OpsError::Engine(
+            "refusing to return secrets from bind".into(),
+        ));
+    }
+    assert_no_superuser_json(&v);
+    Ok(v)
+}
+
+struct GrantRow {
+    project_id: String,
+    level: String,
+    can_manage: bool,
+}
+
+fn grants_for(conn: &rusqlite::Connection, database_id: &str) -> Vec<GrantRow> {
+    conn.prepare(
+        "SELECT project_id, level, can_manage FROM sql_grants \
+         WHERE database_id = ?1 ORDER BY created_at, project_id",
+    )
+    .ok()
+    .and_then(|mut stmt| {
+        stmt.query_map(rusqlite::params![database_id], |r| {
+            Ok(GrantRow {
+                project_id: r.get(0)?,
+                level: r.get(1)?,
+                can_manage: r.get::<_, i64>(2)? != 0,
+            })
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .ok()
+    })
+    .unwrap_or_default()
+}
+
+fn participant_json(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    level: &str,
+    can_manage: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "projectId": project_id,
+        "workspace": project_name(conn, project_id),
+        "level": level,
+        "canManage": can_manage,
+    })
+}
+
+/// Owner view (`viewer = None`): every database. Agent view: owned + granted.
+pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut stmt = match conn.prepare(&format!(
+        "SELECT {DB_ROW_COLS}, created_at FROM sql_databases ORDER BY created_at, name"
+    )) {
+        Ok(s) => s,
+        Err(_) => return serde_json::json!({ "ok": true, "databases": [] }),
+    };
+    let loaded: Vec<(DbRow, i64)> = stmt
+        .query_map([], |r| {
+            let row = db_row_from(r)?;
+            let created: i64 = r.get(7)?;
+            Ok((row, created))
+        })
+        .ok()
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for (row, created_at) in loaded {
+        let grants = grants_for(&conn, &row.id);
+        let your = if let Some(v) = viewer {
+            if v == row.project_id {
+                Some("write")
+            } else {
+                grants
+                    .iter()
+                    .find(|g| g.project_id == v)
+                    .map(|g| g.level.as_str())
+            }
+        } else {
+            None
+        };
+        if let Some(v) = viewer {
+            if your.is_none() && v != row.project_id {
+                continue;
+            }
+        }
+        let used = count_active(&conn, &row.project_id);
+        let cap = project_cap(&conn, &row.project_id);
+        let bind = row
+            .bind_role
+            .clone()
+            .unwrap_or_else(|| default_agent_role(&row.project_id));
+        let grant_json: Vec<serde_json::Value> = grants
+            .iter()
+            .map(|g| participant_json(&conn, &g.project_id, &g.level, g.can_manage))
+            .collect();
+        out.push(serde_json::json!({
+            "id": row.id,
+            "name": row.name,
+            "status": row.status,
+            "createdAt": created_at,
+            "type": "sql",
+            "documents": true,
+            "ownerProjectId": row.project_id,
+            "ownerWorkspace": project_name(&conn, &row.project_id),
+            "bindRole": bind,
+            "cap": { "used": used, "cap": cap },
+            "owner": participant_json(&conn, &row.project_id, "write", true),
+            "grants": grant_json,
+            "yourLevel": your,
+        }));
+    }
+    serde_json::json!({ "ok": true, "databases": out })
 }
 
 fn require_store_db(
@@ -717,7 +1171,11 @@ pub fn store_list(
         "SELECT collection FROM _k2_store GROUP BY collection ORDER BY collection;",
     )
     .unwrap_or_default();
-    let names: Vec<&str> = raw.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
+    let names: Vec<&str> = raw
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     Ok(serde_json::json!({ "ok": true, "collections": names }))
 }
 

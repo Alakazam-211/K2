@@ -11963,6 +11963,39 @@ cmd_schema() {
       ]
     },
     {
+      "name": "db grant",
+      "usage": "k2 db grant <workspace> --db <id|name> --level read|write [--manage] [--json]",
+      "description": "Grant another workspace read or write on a database via THEIR Postgres role (never superuser). Owner or can_manage. Cross-workspace only — the owning workspace already has manage/write. --manage lets the grantee grant/revoke others.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "id|name", "description": "Database id or name from k2 db list."},
+        {"name": "--level", "arg": "read|write", "description": "read = SELECT; write = DML."},
+        {"name": "--manage", "arg": null, "description": "Allow the grantee to grant/revoke others."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db revoke",
+      "usage": "k2 db revoke <workspace> --db <id|name> [--json]",
+      "description": "Remove a workspace's grant on a database. Owner or can_manage. Idempotent.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "id|name", "description": "Database id or name from k2 db list."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db bind",
+      "usage": "k2 db bind --role <pg_role> [--db <id|name>] [--json]",
+      "description": "Owner/admin: set the Postgres role this workspace's assistant uses (default ws_<id>_agent). Does not mint RLS at spawn and never prints a DSN or password. Agents exit 3.",
+      "args": [],
+      "flags": [
+        {"name": "--role", "arg": "pg_role", "description": "Existing PG role name, or empty default."},
+        {"name": "--db", "arg": "id|name", "description": "Database id or name (default: this workspace)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "store put",
       "usage": "k2 store put <name> --id <id> --json '{…}'",
       "description": "Put a JSON document into a named JSONB collection in this workspace DB. Requires k2 db create first.",
@@ -24182,6 +24215,8 @@ _db_py() {
     D_FILE="${D_FILE:-}" D_DIR="${D_DIR:-}" D_YES="${D_YES:-false}" \
     D_HEALTH="${D_HEALTH:-false}" D_DOC_ID="${D_DOC_ID:-}" \
     D_DOC_JSON="${D_DOC_JSON:-}" D_WHERE="${D_WHERE:-}" D_LIMIT="${D_LIMIT:-}" \
+    D_GRANTEE="${D_GRANTEE:-}" D_DB="${D_DB:-}" D_LEVEL="${D_LEVEL:-}" \
+    D_MANAGE="${D_MANAGE:-false}" D_ROLE="${D_ROLE:-}" \
     python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.parse, urllib.request
 
@@ -24284,6 +24319,28 @@ elif verb == "drop":
     body = {"project": ws_path, "yes": os.environ.get("D_YES") == "true"}
     status, raw = request("POST", "/cli/db/drop", body=body)
     d = load(raw)
+elif verb == "grant":
+    body = {
+        "project": os.environ.get("D_GRANTEE", ""),
+        "db": os.environ.get("D_DB", ""),
+        "level": os.environ.get("D_LEVEL", ""),
+        "manage": os.environ.get("D_MANAGE") == "true",
+    }
+    status, raw = request("POST", "/cli/db/grant", body=body)
+    d = load(raw)
+elif verb == "revoke":
+    body = {
+        "project": os.environ.get("D_GRANTEE", ""),
+        "db": os.environ.get("D_DB", ""),
+    }
+    status, raw = request("POST", "/cli/db/revoke", body=body)
+    d = load(raw)
+elif verb == "bind":
+    body = {"project": ws_path, "role": os.environ.get("D_ROLE", "")}
+    if os.environ.get("D_DB"):
+        body["db"] = os.environ["D_DB"]
+    status, raw = request("POST", "/cli/db/bind", body=body)
+    d = load(raw)
 elif verb == "store_create":
     status, raw = request("POST", "/cli/store/create", body={"project": ws_path, "name": os.environ.get("D_NAME", "")})
     d = load(raw)
@@ -24366,6 +24423,14 @@ elif verb == "restore":
     print("restored %s" % d.get("restored"))
 elif verb == "drop":
     print("dropped %s" % d.get("dropped"))
+elif verb == "grant":
+    print("granted %s on %s to %s" % (d.get("level"), d.get("name"), d.get("projectId")))
+    if d.get("canManage"):
+        print("can_manage: true")
+elif verb == "revoke":
+    print("revoked %s from %s" % (d.get("name"), d.get("projectId")))
+elif verb == "bind":
+    print("bind role: %s" % d.get("bindRole"))
 else:
     print(dumps(d))
 sys.exit(0)
@@ -24382,6 +24447,7 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
   disable [--json]               stop unit, keep PGDATA
   doctor [--json]                disk/listen/SELECT 1
   uninstall [--json]             drop catalog row + stop unit
+  bind --role <pg_role> [--db …] assistant PG role (default ws_<id>_agent; no secrets)
 
 AGENT (workspace — identity from token, never body project=)
   create [--id <client-id>] [--json]
@@ -24391,6 +24457,8 @@ AGENT (workspace — identity from token, never body project=)
   dump  [--out .k2/db/dumps/<ts>.dump]
   restore <file>
   drop --yes
+  grant <workspace> --db … --level read|write [--manage]
+  revoke <workspace> --db …
 
 Documents: k2 store … (same DB). Files: workspace FS. No k2 hostdb.
 
@@ -24491,6 +24559,52 @@ cmd_db() {
                 esac
             done
             D_VERB="drop" D_JSON="$as_json" D_YES="$yes" _db_py ;;
+        grant)
+            local grantee="" db_spec="" level="" manage=false
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --db) db_spec="${2:-}"; shift 2 ;;
+                    --level) level="${2:-}"; shift 2 ;;
+                    --manage) manage=true; shift ;;
+                    -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                    *)
+                        if [ -z "$grantee" ]; then grantee="$1"; shift
+                        else _db_err "usage" "unexpected extra argument '$1'"; exit 2; fi ;;
+                esac
+            done
+            [ -n "$grantee" ] || { _db_err "usage" "k2 db grant <workspace> --db … --level read|write [--manage]"; exit 2; }
+            [ -n "$db_spec" ] || { _db_err "usage" "grant requires --db <id|name>"; exit 2; }
+            [ -n "$level" ] || { _db_err "usage" "grant requires --level read|write"; exit 2; }
+            case "$level" in read|write) ;; *) _db_err "usage" "--level must be read or write"; exit 2 ;; esac
+            D_VERB="grant" D_JSON="$as_json" D_GRANTEE="$grantee" D_DB="$db_spec" D_LEVEL="$level" D_MANAGE="$manage" _db_py ;;
+        revoke)
+            local grantee="" db_spec=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --db) db_spec="${2:-}"; shift 2 ;;
+                    -*) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                    *)
+                        if [ -z "$grantee" ]; then grantee="$1"; shift
+                        else _db_err "usage" "unexpected extra argument '$1'"; exit 2; fi ;;
+                esac
+            done
+            [ -n "$grantee" ] || { _db_err "usage" "k2 db revoke <workspace> --db …"; exit 2; }
+            [ -n "$db_spec" ] || { _db_err "usage" "revoke requires --db <id|name>"; exit 2; }
+            D_VERB="revoke" D_JSON="$as_json" D_GRANTEE="$grantee" D_DB="$db_spec" _db_py ;;
+        bind)
+            local role="" db_spec=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --role) role="${2:-}"; shift 2 ;;
+                    --db) db_spec="${2:-}"; shift 2 ;;
+                    *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                esac
+            done
+            [ -n "$role" ] || { _db_err "usage" "k2 db bind --role <pg_role>"; exit 2; }
+            D_VERB="bind" D_JSON="$as_json" D_ROLE="$role" D_DB="$db_spec" _db_py ;;
         --help|-h) cmd_help_db; exit 0 ;;
         *) _db_err "usage" "unknown db command '$sub' — see k2 db --help"; exit 2 ;;
     esac

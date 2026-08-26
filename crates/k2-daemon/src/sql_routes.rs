@@ -25,6 +25,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/db/dump"
         | "/cli/db/restore"
         | "/cli/db/drop"
+        | "/cli/db/grant"
+        | "/cli/db/revoke"
+        | "/cli/db/bind"
         | "/cli/store/create"
         | "/cli/store/put"
         | "/cli/store/rm"
@@ -45,6 +48,9 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/db/dump" => routes::handle_dump(body),
         "/cli/db/restore" => routes::handle_restore(body),
         "/cli/db/drop" => routes::handle_drop(body),
+        "/cli/db/grant" => routes::handle_grant(body),
+        "/cli/db/revoke" => routes::handle_revoke(body),
+        "/cli/db/bind" => routes::handle_bind(body),
         "/cli/store/create" => routes::handle_store_create(body),
         "/cli/store/put" => routes::handle_store_put(body),
         "/cli/store/rm" => routes::handle_store_rm(body),
@@ -54,7 +60,7 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
 }
 
 pub fn is_owner_level_mutation(path: &str) -> bool {
-    path.starts_with("/cli/db/server/") || path == "/cli/db/doctor"
+    path.starts_with("/cli/db/server/") || path == "/cli/db/doctor" || path == "/cli/db/bind"
 }
 
 pub fn is_sql_owner_surface(path: &str) -> bool {
@@ -69,7 +75,7 @@ pub fn owner_only_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "owner_only",
-                "hint": "requires owner/admin — ask your human (k2 db enable/disable/uninstall/doctor are owner surfaces)",
+                "hint": "requires owner/admin — ask your human (k2 db enable/disable/uninstall/doctor/bind are owner surfaces)",
             },
         })
         .to_string(),
@@ -91,6 +97,18 @@ mod tests {
     #[test]
     fn get_create_405() {
         let r = dispatch("/cli/db/create", &HashMap::new()).unwrap();
+        assert_eq!(r.status, "405 Method Not Allowed");
+    }
+
+    #[test]
+    fn get_grant_405() {
+        let r = dispatch("/cli/db/grant", &HashMap::new()).unwrap();
+        assert_eq!(r.status, "405 Method Not Allowed");
+    }
+
+    #[test]
+    fn get_bind_405() {
+        let r = dispatch("/cli/db/bind", &HashMap::new()).unwrap();
         assert_eq!(r.status, "405 Method Not Allowed");
     }
 }

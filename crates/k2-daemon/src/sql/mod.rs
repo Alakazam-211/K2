@@ -83,14 +83,20 @@ mod tests {
         let pid = insert_project("sql-create", &path);
         let ops = FakeSystemOps::baked();
         let secrets = MemSecretStore::default();
-        let v = ops::create_database(&ops, &secrets, &pid, 1, Some("idem-1"), None)
-            .expect("create");
+        let v =
+            ops::create_database(&ops, &secrets, &pid, 1, Some("idem-1"), None).expect("create");
         let s = v.to_string().to_ascii_lowercase();
         assert!(!s.contains("superuser"), "{s}");
         assert!(!s.contains("postgres://postgres"), "{s}");
         assert_eq!(v["role"], "agent");
         assert!(v["dsn"].as_str().unwrap_or("").contains("_agent"));
-        let helper = ops.pg.lock().unwrap().helper_sql.join("\n").to_ascii_uppercase();
+        let helper = ops
+            .pg
+            .lock()
+            .unwrap()
+            .helper_sql
+            .join("\n")
+            .to_ascii_uppercase();
         assert!(helper.contains("NOSUPERUSER"));
         assert!(helper.contains("NOCREATEDB"));
         assert!(helper.contains("NOBYPASSRLS"));
@@ -210,9 +216,164 @@ mod tests {
                 name.contains(&id_a.replace('-', "_")),
                 "DB name must be A's: {name}"
             );
-            assert!(!name.contains(&_id_b.replace('-', "_")), "must not mint B's DB");
+            assert!(
+                !name.contains(&_id_b.replace('-', "_")),
+                "must not mint B's DB"
+            );
         });
         let _ = std::fs::remove_dir_all(dir_a);
         let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    fn seed_running_sidecar() {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute("DELETE FROM sql_grants", []);
+        let _ = conn.execute("DELETE FROM sql_server", []);
+        let _ = conn.execute("DELETE FROM sql_databases", []);
+        conn.execute(
+            "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) \
+             VALUES (1, 'running', 16, 'localhost', 1)",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sql_grants_round_trip_via_their_role() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-ga-{}", std::process::id()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-gb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let id_a = insert_project("sql-ga", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-gb", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().unwrap().to_string();
+        let granted = ops::grant_access(&ops, None, &db_name, &id_b, "read", false).expect("grant");
+        assert_eq!(granted["level"], "read");
+        assert_eq!(granted["canManage"], false);
+        let role = granted["role"].as_str().unwrap();
+        assert!(role.contains("_agent"), "{role}");
+        assert!(!role.contains("postgres"), "{role}");
+        let helper = ops
+            .pg
+            .lock()
+            .unwrap()
+            .helper_sql
+            .join("\n")
+            .to_ascii_uppercase();
+        assert!(helper.contains("GRANT CONNECT"), "{helper}");
+        assert!(helper.contains("NOSUPERUSER"), "{helper}");
+        assert!(!helper.contains("FORCE ROW LEVEL"), "{helper}");
+        let cat = ops::catalog_json(None);
+        let dbs = cat["databases"].as_array().unwrap();
+        let row = dbs.iter().find(|d| d["name"] == db_name).expect("listed");
+        assert_eq!(row["grants"].as_array().unwrap().len(), 1);
+        assert_eq!(row["grants"][0]["projectId"], id_b);
+        assert_eq!(row["grants"][0]["level"], "read");
+        ops::revoke_access(&ops, None, &db_name, &id_b).expect("revoke");
+        let cat2 = ops::catalog_json(None);
+        let row2 = cat2["databases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["name"] == db_name)
+            .expect("listed");
+        assert!(row2["grants"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn agent_cannot_grant_without_can_manage() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-ag-{}", std::process::id()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-bg-{}", std::process::id()));
+        let dir_c = std::env::temp_dir().join(format!("k2-sql-cg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        std::fs::create_dir_all(&dir_c).unwrap();
+        let id_a = insert_project("sql-ag", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-bg", &dir_b.to_string_lossy());
+        let id_c = insert_project("sql-cg", &dir_c.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().unwrap().to_string();
+        let err = ops::grant_access(&ops, Some(&id_b), &db_name, &id_c, "read", false)
+            .expect_err("foreign agent must not grant");
+        assert_eq!(err.code(), "forbidden");
+        let principal = HookPrincipal {
+            workspace_uuid: id_b.clone(),
+            agent_address: "b".into(),
+        };
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        with_request_principal(Some(principal), || {
+            routes::with_fake_ops(fake, || {
+                let body = serde_json::json!({
+                    "project": id_c,
+                    "db": db_name,
+                    "level": "read",
+                });
+                let r = routes::handle_grant(body.to_string().as_bytes());
+                assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+                let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+                assert_eq!(v["error"]["code"], "forbidden");
+            });
+        });
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+        let _ = std::fs::remove_dir_all(dir_c);
+    }
+
+    #[test]
+    fn bind_does_not_print_secrets() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-bind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-bind", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().unwrap().to_string();
+        let v = ops::bind_role(Some(&db_name), Some(&pid), "app_reader").expect("bind");
+        let s = v.to_string().to_ascii_lowercase();
+        assert!(!s.contains("password"), "{s}");
+        assert!(!s.contains("dsn"), "{s}");
+        assert!(!s.contains("dbsec_"), "{s}");
+        assert!(!s.contains("superuser"), "{s}");
+        assert_eq!(v["bindRole"], "app_reader");
+        let cat = ops::catalog_json(None);
+        let row = cat["databases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["name"] == db_name)
+            .expect("listed");
+        assert_eq!(row["bindRole"], "app_reader");
+        let body = serde_json::json!({ "project": pid, "db": db_name, "role": "app_reader" });
+        let r = routes::handle_bind(body.to_string().as_bytes());
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let out: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        let s = out.to_string().to_ascii_lowercase();
+        assert!(!s.contains("password"), "{s}");
+        assert!(!s.contains("dsn"), "{s}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn get_grant_is_405() {
+        let r = sql_routes::dispatch("/cli/db/grant", &Default::default()).expect("claimed");
+        assert_eq!(r.status, "405 Method Not Allowed");
     }
 }

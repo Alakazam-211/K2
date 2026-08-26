@@ -718,6 +718,19 @@ pub fn deliver_live(
     wake: bool,
     wake_timeout: Duration,
 ) -> MsgResponse {
+    deliver_live_with_via(workspace_token, text, from, command, wake, wake_timeout, "msg")
+}
+
+/// Same as [`deliver_live`] but stamps chatter `via` (`msg` | `talk` | `inbox` | `v1`).
+pub fn deliver_live_with_via(
+    workspace_token: &str,
+    text: &str,
+    from: &str,
+    command: &str,
+    wake: bool,
+    wake_timeout: Duration,
+    via: &str,
+) -> MsgResponse {
     // Resolve once (D12). Unknown token is permanent; surface immediately.
     let target = match resolve_msg_target(workspace_token) {
         Some(t) => t,
@@ -787,6 +800,7 @@ pub fn deliver_live(
         result.attempts = attempt;
 
         if result.success {
+            crate::overlay_routes::record_inject_chatter(workspace_token, from, text, via);
             return result;
         }
 

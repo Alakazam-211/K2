@@ -536,6 +536,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         // Sidecar identity: `k2 whoami` (NOT /cli/auth/whoami — that
         // `role` is connect-user).
         "/cli/whoami",
+        "/cli/chatter",
+        "/cli/chatterlog",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -555,6 +557,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         // Published services (prd-k2-publish-hosted-services-v1). NOT
         // under `/cli/tunnel/` which is owner-only (DENY_PREFIXES).
         "/cli/publish/",
+        // Overlay threads (prd-overlay-threads-v1 S1). `/cli/chatterlog`
+        // is exact on ALLOW_EXACT so it does not ride a `/cli/chatter`
+        // prefix (chatterlog starts with chatter).
+        "/cli/thread",
+        "/cli/chatter/",
+        "/cli/chatterlog/",
         // Sandbox P1 (Finding-1 follow-on): `/cli/review-checklist/` was
         // DROPPED from the scoped allowlist. Its handlers take the raw `body`
         // (not the params map) and so are NOT reached by the principal-pin in
@@ -1178,6 +1186,11 @@ mod tests {
     fn is_agent_verb_allows_agent_routes() {
         assert!(is_agent_verb("/hook/complete"));
         assert!(is_agent_verb("/cli/workspace/msg"));
+        assert!(is_agent_verb("/cli/thread"));
+        assert!(is_agent_verb("/cli/thread/post"));
+        assert!(is_agent_verb("/cli/chatter"));
+        assert!(is_agent_verb("/cli/chatterlog"));
+        assert_eq!(crate::overlay_ws::OVERLAY_WS_PATH, "/cli/overlay/events");
         assert!(is_agent_verb("/cli/inbox/respond"));
         assert!(is_agent_verb("/cli/awareness/publish"));
         // Wave 0: agent mail verbs (owner mail surfaces stay denied).

@@ -102,7 +102,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// send-work uses handles + sidecar addresses.
 /// Bumped to 17: `k2 connections list --users` (humans on this box).
 /// Bumped to 18: `k2 agent context add users:roster` (opt-in people layer).
-pub const SKILL_VERSION_WORKSPACE: u32 = 18;
+/// Bumped to 19: overlay `k2 thread` (text write/read; not PTY).
+pub const SKILL_VERSION_WORKSPACE: u32 = 19;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

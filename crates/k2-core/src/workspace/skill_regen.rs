@@ -354,6 +354,19 @@ the recipient isn't running — use `--inbox-wake` / `--inbox-silent` to
 land a durable tray package the recipient opens with `k2 inbox read <id>`
 on their own schedule. Not `k2 mail`.
 
+## Overlay thread (side channel with the human)
+Not PTY inject — that is `k2 msg`. Write and read the user-agent overlay
+for this conversation. Same first-arg grammar as `k2 msg`.
+
+```
+k2 thread <addr> "text"                         # overlay text
+k2 thread <addr>                                # read / tail
+k2 thread <addr> --json
+```
+
+`sales` is whoever is pinned Chat *now*. `sales/reviewer` is durable.
+Do not `--wait`. Do not emit widget JSON.
+
 ## View activity
 ```
 k2 activity [--limit N] [--workspace <path>]
@@ -1752,6 +1765,16 @@ mod tests {
         assert!(
             body.contains("k2 msg"),
             "k2-cli skill must document `k2 msg`"
+        );
+        assert!(
+            body.contains("k2 thread <addr> \"text\"")
+                && body.contains("k2 thread <addr>")
+                && body.contains("--json"),
+            "k2-cli skill must document k2 thread write/read; body missing overlay lines"
+        );
+        assert!(
+            !body.contains("`thrd`") && !body.contains("k2 thrd"),
+            "k2-cli skill must not teach a thrd alias"
         );
         assert!(
             !body.contains("k2so msg"),

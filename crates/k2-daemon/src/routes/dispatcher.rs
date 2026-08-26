@@ -560,6 +560,8 @@ async fn handle_one_request(
             | "/cli/feedback/answer"
             | "/cli/feedback/resolve"
             | "/cli/feedback/assign"
+            // Overlay threads (prd-overlay-threads-v1 S1) — POST-only mutation.
+            | "/cli/thread/post"
             // K2 Mail (prd-email-server-v1 §11) — every mutating
             // `/cli/mail/*` path, listed NOW (foundation slice) so
             // later slices never fight this allowlist. JSON-bodied
@@ -1272,6 +1274,22 @@ async fn handle_one_request(
         // frames to subscribers whose `path=` matches the affected
         // session's cwd. Renderer + mobile companion consume the
         // same wire format. See `.k2so/prds/daemon-authoritative-tabs.md`.
+        p if p == crate::overlay_ws::OVERLAY_WS_PATH => {
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            crate::overlay_ws::serve_overlay_events_connection(stream, params).await;
+            return DispatchOutcome::Done;
+        }
         "/cli/sessions/events" => {
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let _ = stream.read(&mut buf).await;
@@ -3818,6 +3836,52 @@ async fn handle_one_request(
         // connect-user session — connect users see + answer feedback,
         // PRD §4.3) + require_post per feedback_post_only_route_guards.
         // Handlers run in spawn_blocking (SQLite writes).
+        p if is_post && post_allowed && p.starts_with("/cli/thread/") => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(v) = {
+                let presented = bearer_token
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| super::http::extract_token(&query));
+                presented.and_then(|t| crate::session_token::require_hook(t, p))
+            } {
+                params.insert("cell_session_id".to_string(), v.session_id);
+            }
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::overlay_routes::dispatch_post(&p_owned, &params, &body_bytes)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         p if is_post && post_allowed && p.starts_with("/cli/feedback/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -5739,7 +5803,10 @@ async fn handle_one_request(
         // msg / inbox stay token_ok / scoped only.
         p if p == "/cli/workspace/msg"
             || p == "/cli/terminal/read"
-            || p.starts_with("/cli/inbox/") =>
+            || p.starts_with("/cli/inbox/")
+            || p == "/cli/thread"
+            || p == "/cli/chatter"
+            || p == "/cli/chatterlog" =>
         {
             let _ = stream.read(&mut buf).await;
             let is_grant = super::http::extract_token(&query)

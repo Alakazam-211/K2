@@ -458,13 +458,14 @@ fn finish_deliver_response(
             Some(file_count),
         );
         let from_tag = from.unwrap_or_else(|| "external".to_string());
-        let wake_resp = crate::workspace_msg::deliver_live(
+        let wake_resp = crate::workspace_msg::deliver_live_with_via(
             target_token,
             &pointer,
             &from_tag,
             "",
             true, // always wake on --inbox-wake
             crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+            "inbox",
         );
         out["wake"] = serde_json::json!({
             "success": wake_resp.success,

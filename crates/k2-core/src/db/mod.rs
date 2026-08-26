@@ -907,6 +907,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0107_feedback_canonical_kind_repair",
             include_str!("../../drizzle_sql/0107_feedback_canonical_kind_repair.sql"),
         ),
+        // 0110 — overlay threads catalog (named conversation_id, not v2_session_map).
+        // 0108/0109 reserved by the data-sidecar worktree.
+        (
+            "0110_overlay_conversations",
+            include_str!("../../drizzle_sql/0110_overlay_conversations.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -2173,6 +2179,8 @@ mod tests {
             "workspace_relations",
             "focus_groups",
             "published_services",
+            "overlay_conversations",
+            "overlay_host",
         ] {
             let exists: i64 = conn
                 .query_row(

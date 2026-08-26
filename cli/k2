@@ -201,7 +201,7 @@ _cli_tool_id_for_verb() {
         activity|feed) echo "activity" ;;
         read) echo "read" ;;
         skills) echo "skills" ;;
-        msg|talk) echo "msg" ;;
+        msg|talk|thread) echo "msg" ;;
         inbox) echo "inbox" ;;
         wiki) echo "wiki" ;;
         respond) echo "respond" ;;
@@ -3794,6 +3794,7 @@ EOF
     local msg_args=("$target" "$text")
     [[ -n "$from" ]] && msg_args+=(--from "$from")
     [[ -n "$command" ]] && msg_args+=(--command "$command")
+    msg_args+=(--via talk)
     # Issue #9 — talk auto-wakes a dormant peer (suppress with --no-wake).
     if [[ "$wake" == "true" ]]; then
         msg_args+=(--wake)
@@ -6070,6 +6071,7 @@ cmd_msg() {
     local text=""
     local explicit_from=""
     local explicit_command=""
+    local explicit_via=""
     # Issue #9 — `msg` AUTO-WAKES a dormant canonical session by DEFAULT
     # (resume/spawn → wait READY → deliver), preserving the legacy
     # wake-on-message UX (PRD D7). `--no-wake` opts out (blind live-only
@@ -6087,6 +6089,10 @@ cmd_msg() {
                 wake="false"; shift ;;
             --wake-timeout)
                 wake_timeout="$2"; shift 2 ;;
+            --via)
+                # Internal: `k2 talk` stamps via=talk so chatter does not
+                # vanish into msg. Not a documented agent flag.
+                explicit_via="$2"; shift 2 ;;
             --agent)
                 # 0.39.0f Phase 2.1b: hard-deprecated. The agent-keyed
                 # routing path is gone; `msg` is workspace-implicit.
@@ -6213,6 +6219,7 @@ except Exception:
     # predates the param ignores it and never auto-woke — acceptable skew.)
     params="${params}&wake=${wake}"
     [[ -n "$wake_timeout" ]] && params="${params}&wake_timeout=$(urlencode "$wake_timeout")"
+    [[ -n "$explicit_via" ]] && params="${params}&via=$(urlencode "$explicit_via")"
 
     local response
     # #58 Phase-1 close: prefer the scoped per-cell UDS for msg (the daemon
@@ -6272,6 +6279,161 @@ except Exception:
         return 2
     fi
     return $rc
+}
+
+# ── `k2 thread` — user-agent overlay (not PTY; that's k2 msg) ───────
+cmd_thread() {
+    for arg in "$@"; do
+        case "$arg" in
+            --help|-h)
+                cmd_help_thread
+                return 0
+                ;;
+        esac
+    done
+
+    local target=""
+    local text=""
+    local json="false"
+    local explicit_from=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json="true"; shift ;;
+            --from) explicit_from="$2"; shift 2 ;;
+            ask|secret)
+                echo "Error: 'k2 thread $1' is not available yet (choice/secret cards land later)." >&2
+                echo "Use: k2 thread <addr> \"text\"   or   k2 thread <addr> [--json]" >&2
+                exit 1 ;;
+            post)
+                echo "Error: no 'post' subcommand — use  k2 thread <addr> \"text\"" >&2
+                exit 1 ;;
+            -*)
+                echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
+                exit 1 ;;
+            *)
+                if [[ -z "$target" ]]; then target="$1"
+                else text="$1"
+                fi
+                shift ;;
+        esac
+    done
+
+    [[ -z "$target" ]] && {
+        echo "Error: address required" >&2
+        echo "Usage: k2 thread <addr> \"text\"     # write overlay text" >&2
+        echo "       k2 thread <addr> [--json]   # read / tail" >&2
+        exit 1
+    }
+
+    local from="$explicit_from"
+    if [[ -z "$from" ]]; then
+        if [[ "${K2_CELL:-}" == "sidecar" && -n "${K2_PRIMARY:-}" && -n "${K2_SIDECAR_NAME:-}" ]]; then
+            from="${K2_PRIMARY}/${K2_SIDECAR_NAME}"
+        fi
+    fi
+    if [[ -z "$from" ]]; then
+        local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
+        if [[ -n "$sender_path" ]]; then
+            local sender_name
+            sender_name=$(cli_request "/cli/workspace/handle" \
+                "project=$(urlencode "$sender_path")" 2>/dev/null \
+                | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    name = (d.get("handle") or "").strip()
+    if name:
+        print(name)
+except Exception:
+    pass' 2>/dev/null)
+            from="${sender_name:-k2}"
+        else
+            from="k2"
+        fi
+    fi
+
+    if [[ -n "$text" ]]; then
+        local params="addr=$(urlencode "$target")"
+        params="${params}&text=$(urlencode "$text")"
+        params="${params}&from=$(urlencode "$from")"
+        params="${params}&via=thread"
+        local response
+        response=$(cli_send cli_post_form "/cli/thread/post" "$params")
+        local rc=$?
+        if [[ "$json" == "true" ]]; then
+            echo "$response"
+        else
+            echo "$response" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try:
+    d=json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(0)
+if d.get("ok") is not True:
+    err=d.get("error") or d
+    if isinstance(err, dict):
+        sys.stderr.write("%s: %s\n" % (err.get("code") or "error", err.get("hint") or err))
+    else:
+        sys.stderr.write(str(err)+"\n")
+    sys.exit(2)
+print("%s  seq=%s  from=%s" % (d.get("id",""), d.get("seq",""), d.get("from","")))
+'
+            rc=$?
+        fi
+        return $rc
+    fi
+
+    local params="addr=$(urlencode "$target")"
+    local response
+    response=$(cli_send cli_request "/cli/thread" "$params")
+    local rc=$?
+    if [[ "$json" == "true" ]]; then
+        echo "$response"
+        return $rc
+    fi
+    echo "$response" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try:
+    d=json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(0)
+if d.get("ok") is not True:
+    err=d.get("error") or d
+    if isinstance(err, dict):
+        sys.stderr.write("%s: %s\n" % (err.get("code") or "error", err.get("hint") or err))
+    else:
+        sys.stderr.write(str(err)+"\n")
+    sys.exit(2)
+items=d.get("items") or []
+if not items:
+    print("(empty)")
+    sys.exit(0)
+for it in items:
+    doc=it.get("doc") or {}
+    body=doc.get("body") or ""
+    frm=doc.get("from") or ""
+    seq=it.get("seq")
+    print("[%s] from %s: %s" % (seq, frm, body))
+'
+}
+
+cmd_help_thread() {
+    cat <<'EOF'
+k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
+
+  k2 thread <addr> "text"                         # overlay text
+  k2 thread <addr>                                # read / tail
+  k2 thread <addr> --json
+
+<addr> is the same first-arg grammar as k2 msg: sales / sales/reviewer / sales/1.
+sales = live alias for pinned Chat now. sales/reviewer is durable.
+
+Do not use k2 msg for overlay. Agent-to-agent mail is k2 msg / k2 talk
+(recorded as chatter, never mixed into Thread).
+
+No post subcommand. No thrd alias. Cards (ask / secret) are not in this slice.
+EOF
 }
 
 # ── 0.38.7: `k2 whatsnew` ──────────────────────────────────────────
@@ -10685,6 +10847,7 @@ cmd_help() {
         -a|--advanced|advanced)   cmd_help_v2_advanced ;;
         --internal|internal)      cmd_help_internal ;;
         msg)                      cmd_help_msg ;;
+        thread)                   cmd_help_thread ;;
         whoami)                   cmd_help_whoami ;;
         talk)                     cmd_help_talk ;;
         read)                     cmd_help_read ;;
@@ -11095,6 +11258,16 @@ cmd_schema() {
   "schema_note": "Static hand-maintained manifest of the agent-facing command surface. Run 'k2 help <verb>' for full prose.",
   "addressing": "Most verbs take a <workspace> as a NAME (preferred; see 'k2 connections list'), an absolute path, or a project UUID.",
   "commands": [
+    {
+      "name": "thread",
+      "usage": "k2 thread <addr> [\"text\"] [--json] [--from <name>]",
+      "description": "User-agent overlay (not PTY inject). Write text or read/tail. Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg.",
+      "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail"}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output (from + seq on write; items on read)."},
+        {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."}
+      ]
+    },
     {
       "name": "msg",
       "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace|agent::host> --inbox-silent|--inbox-wake <path> [path…]",
@@ -16305,6 +16478,8 @@ with one shared chat + one PoC agent (see PROJECTS below).
 
 TALK TO OTHERS
   whoami [--json]                       This cell: workspace / role / address / session
+  thread <addr> "text"                  Overlay text (not PTY; that's msg). sales / sales/reviewer
+  thread <addr> [--json]                Read / tail that conversation's Thread
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
   msg <workspace>/<handle> "text"       Sidecar (`sales/1`, `sales/reviewer`; slash not hyphen)
   msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)
@@ -24163,6 +24338,9 @@ EOF
     msg)
         # Phase 2.1: msg now has --inbox and --signal flag forms.
         shift; cmd_msg_v2 "$@"
+        ;;
+    thread)
+        shift; cmd_thread "$@"
         ;;
     read)
         # 0.39.x: read a workspace's live terminal by NAME — the read

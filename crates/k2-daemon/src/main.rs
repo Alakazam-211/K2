@@ -169,6 +169,8 @@ mod workspace_msg;
 mod workspace_resources_migrate;
 mod workspace_resources_routes;
 mod workspace_routes;
+mod overlay_routes;
+mod overlay_ws;
 
 #[cfg(test)]
 #[path = "test_support.rs"]

@@ -347,6 +347,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             // prefix). Empty/absent → unchanged delivery. An older CLI
             // simply never sends this param.
             let command = opt_param(params, "command").unwrap_or_default();
+            let via = opt_param(params, "via").unwrap_or_else(|| "msg".to_string());
+            let via = match via.as_str() {
+                "talk" | "inbox" | "v1" | "msg" => via,
+                _ => "msg".to_string(),
+            };
             // Issue #9 — wake gating. `wake=true` auto-wakes a dormant
             // canonical session (resume/spawn → wait READY → deliver).
             // DEFAULT ON: this preserves the LEGACY wake-on-message UX
@@ -383,8 +388,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     // workspace_not_found reason/hint (stable shape).
                 }
             }
-            let resp = crate::workspace_msg::deliver_live(
-                &workspace, &text, &from, &command, wake, wake_timeout,
+            let resp = crate::workspace_msg::deliver_live_with_via(
+                &workspace, &text, &from, &command, wake, wake_timeout, &via,
             );
             let body = serde_json::to_string(&resp)
                 .unwrap_or_else(|_| "{\"success\":false}".to_string());

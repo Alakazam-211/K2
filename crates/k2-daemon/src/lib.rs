@@ -166,6 +166,8 @@ pub mod workspace_msg;
 pub mod workspace_resources_migrate;
 pub mod workspace_resources_routes;
 pub mod workspace_routes;
+pub mod overlay_routes;
+pub mod overlay_ws;
 
 #[cfg(test)]
 mod test_support;

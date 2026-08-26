@@ -1310,13 +1310,16 @@ mod decision_tests {
         assert_eq!(delivery, ResumePromptDelivery::PtyWrite("WAKE".to_string()));
     }
 
-    /// Codex resumes subcommand-style, dropping preset args (TS argv
-    /// convention).
+    /// Codex resumes subcommand-style, keeping Settings → LLMs flags
+    /// in front of `resume <id>`.
     #[test]
     fn plan_resume_fire_codex_is_subcommand_style() {
-        let r = resolved_cmd("codex", &["--dangerously-bypass-approvals-and-sandbox"]);
+        let r = resolved_cmd("codex", &["--yolo"]);
         let (args, delivery) = plan_resume_fire(&r, "CDX", "WAKE").unwrap();
-        assert_eq!(args, vec!["resume".to_string(), "CDX".to_string()]);
+        assert_eq!(
+            args,
+            vec!["--yolo".to_string(), "resume".to_string(), "CDX".to_string()]
+        );
         assert_eq!(delivery, ResumePromptDelivery::PtyWrite("WAKE".to_string()));
     }
 

@@ -13,7 +13,7 @@
 //!   and `ChatHistory.tsx::PROVIDER_CONFIG` exactly, including the
 //!   argv-assembly convention (`tabs.ts` / `ChatHistory.tsx`):
 //!   flag style = `<preset args> <flag> <id>`; subcommand style =
-//!   `<subcommand> <id>` with the preset args DROPPED.
+//!   `<preset args> <subcommand> <id>` (`codex --yolo resume <id>`).
 //! - **Premint** — whether the provider accepts a K2-minted session id
 //!   for a NEW session (`claude --session-id <uuid>`; grok
 //!   `-s/--session-id <uuid>`, valid for new sessions per
@@ -56,9 +56,9 @@ pub enum ResumeGrammar {
     /// `--resume`; pi `--session` — pi's `--resume` is its interactive
     /// picker and takes no id, don't confuse them).
     Flag(&'static str),
-    /// `<command> <subcommand> <id>` with preset args dropped
-    /// (codex `resume <id>`). Matches the TS argv convention in
-    /// `tabs.ts`/`ChatHistory.tsx`.
+    /// `<command> <preset-args> <subcommand> <id>` (codex
+    /// `resume <id>`). Global flags from Settings → LLMs stay in front
+    /// of the subcommand (`codex --yolo resume <id>`).
     Subcommand(&'static str),
 }
 
@@ -181,8 +181,8 @@ const SESSION_FLAG_TOKENS: &[&str] = &["--session-id", "--resume", "-r", "--sess
 /// - flag style — `--session-id <id>` (claude/grok premint),
 ///   `--resume <id>` / `-r <id>` (claude/grok/gemini/cursor),
 ///   `--session <id>` (pi);
-/// - subcommand style — `resume <id>` as the LEADING argv pair
-///   (codex; K2 always assembles it at position 0, see
+/// - subcommand style — `resume <id>` after any preset flags
+///   (codex; K2 assembles `<preset> resume <id>`, see
 ///   [`ProviderResume::resume_args`]).
 ///
 /// Supersedes the daemon's inline `--session-id`/`--resume`-only scans
@@ -195,11 +195,16 @@ pub fn argv_references_session(args: &[String], session_id: &str) -> bool {
     if session_id.is_empty() {
         return false;
     }
-    if args.len() >= 2 && args[0] == "resume" && args[1] == session_id {
-        return true;
-    }
-    args.windows(2)
-        .any(|w| SESSION_FLAG_TOKENS.contains(&w[0].as_str()) && w[1] == session_id)
+    args.windows(2).any(|w| {
+        (w[0] == "resume" || SESSION_FLAG_TOKENS.contains(&w[0].as_str())) && w[1] == session_id
+    })
+}
+
+/// First `<subcommand> <id>` pair whose next token is not a flag.
+fn subcommand_session_id(args: &[String], sub: &str) -> Option<String> {
+    args.windows(2).find_map(|w| {
+        (w[0] == sub && !w[1].starts_with('-')).then(|| w[1].clone())
+    })
 }
 
 /// First `<flag> <value>` pair whose flag satisfies `is_flag`.
@@ -221,9 +226,8 @@ fn flag_value(args: &[String], is_flag: impl Fn(&str) -> bool) -> Option<String>
 /// to the /v1 host-sessions list/resume index).
 ///
 /// Command-aware:
-/// - known subcommand-grammar provider (codex) → the LEADING
-///   `resume <id>` pair only (a deeper positional `resume` is prompt
-///   text, not identity);
+/// - known subcommand-grammar provider (codex) → the first
+///   `resume <id>` pair whose id is not a flag (`codex --yolo resume <id>`);
 /// - known flag-grammar provider → its resume flag, the shared
 ///   `--resume`/`-r` aliases, and its premint flag (if any);
 /// - unknown command → the legacy generic `--session-id`/`--resume`
@@ -234,9 +238,7 @@ fn flag_value(args: &[String], is_flag: impl Fn(&str) -> bool) -> Option<String>
 pub fn session_id_from_spawn_argv(command: &str, args: &[String]) -> Option<String> {
     match provider_resume_for_command(command) {
         Some(adapter) => match adapter.grammar {
-            ResumeGrammar::Subcommand(sub) => {
-                (args.len() >= 2 && args[0] == sub).then(|| args[1].clone())
-            }
+            ResumeGrammar::Subcommand(sub) => subcommand_session_id(args, sub),
             ResumeGrammar::Flag(flag) => flag_value(args, |a| {
                 a == flag || a == "--resume" || a == "-r" || Some(a) == adapter.premint_flag()
             }),
@@ -272,16 +274,14 @@ impl ProviderResume {
             ResumeGrammar::Flag(flag) => args
                 .iter()
                 .any(|a| a == flag || a == "--resume" || a == "-r"),
-            ResumeGrammar::Subcommand(sub) => {
-                args.first().map(|a| a == sub).unwrap_or(false)
-            }
+            ResumeGrammar::Subcommand(sub) => subcommand_session_id(args, sub).is_some(),
         }
     }
 
-    /// Assemble resume argv for an existing session id, following the
-    /// TS convention: flag style appends `<flag> <id>` to the base
-    /// (preset) args; subcommand style REPLACES them with
-    /// `<subcommand> <id>`.
+    /// Assemble resume argv for an existing session id. Flag style
+    /// appends `<flag> <id>` to the Settings → LLMs preset args.
+    /// Subcommand style keeps those same preset args in front of
+    /// `<subcommand> <id>` (`codex --yolo resume <id>`).
     pub fn resume_args(&self, base_args: &[String], session_id: &str) -> Vec<String> {
         match self.grammar {
             ResumeGrammar::Flag(flag) => {
@@ -291,7 +291,10 @@ impl ProviderResume {
                 args
             }
             ResumeGrammar::Subcommand(sub) => {
-                vec![sub.to_string(), session_id.to_string()]
+                let mut args = base_args.to_vec();
+                args.push(sub.to_string());
+                args.push(session_id.to_string());
+                args
             }
         }
     }
@@ -720,15 +723,17 @@ mod tests {
     }
 
     #[test]
-    fn subcommand_style_drops_preset_args() {
+    fn subcommand_style_keeps_preset_args_in_front() {
         let codex = provider_resume_for_provider("codex").unwrap();
         assert_eq!(
-            codex.resume_args(
-                &args(&["-c", "model_reasoning_effort=high", "--dangerously-bypass-approvals-and-sandbox"]),
-                "SID"
-            ),
+            codex.resume_args(&args(&["--yolo"]), "SID"),
+            args(&["--yolo", "resume", "SID"]),
+            "codex resume keeps Settings → LLMs flags: `codex --yolo resume <id>`"
+        );
+        assert_eq!(
+            codex.resume_args(&[], "SID"),
             args(&["resume", "SID"]),
-            "codex resume replaces preset args — tabs.ts/ChatHistory.tsx convention"
+            "empty preset still leads with the subcommand"
         );
     }
 
@@ -766,14 +771,9 @@ mod tests {
                 "{flag} <id> must match"
             );
         }
-        // Subcommand style (codex `resume <id>` at position 0).
+        // Subcommand style (codex `resume <id>`, including after preset flags).
         assert!(argv_references_session(&args(&["resume", sid]), sid));
-        // A positional `resume` deeper in argv is NOT the codex
-        // subcommand shape K2 assembles — no false positive.
-        assert!(!argv_references_session(
-            &args(&["--print", "resume", sid]),
-            sid
-        ));
+        assert!(argv_references_session(&args(&["--yolo", "resume", sid]), sid));
         // Wrong id / empty id never match.
         assert!(!argv_references_session(&args(&["--resume", "other"]), sid));
         assert!(!argv_references_session(&args(&["--resume", sid]), ""));
@@ -827,16 +827,15 @@ mod tests {
     #[test]
     fn spawn_argv_extraction_covers_the_subcommand_grammar() {
         let sid = "aaaaaaaa-0000-4000-8000-000000000003";
-        // codex `resume <id>` — LEADING pair only.
         assert_eq!(
             session_id_from_spawn_argv("codex", &args(&["resume", sid])).as_deref(),
             Some(sid),
             "codex resume subcommand was the other missed grammar"
         );
         assert_eq!(
-            session_id_from_spawn_argv("codex", &args(&["-c", "resume", sid])),
-            None,
-            "a deeper positional `resume` is not identity"
+            session_id_from_spawn_argv("codex", &args(&["--yolo", "resume", sid])).as_deref(),
+            Some(sid),
+            "preset flags sit in front of `resume <id>`"
         );
         // codex has no premint and no flag grammar — a stray --resume in
         // codex argv is not the codex identity convention.

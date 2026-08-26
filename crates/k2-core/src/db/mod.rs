@@ -1032,7 +1032,7 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
     // entries the user is missing entirely (e.g. Pi on upgrade).
     let presets: &[(&str, &str, &str, &str, i64)] = &[
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456001", "Claude", "claude --dangerously-skip-permissions", "", 0),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex -c model_reasoning_effort=\"high\" --dangerously-bypass-approvals-and-sandbox", "", 1),
+        ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex --yolo", "", 1),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", "", 2),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 3),
         ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 4),
@@ -1054,6 +1054,17 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
             params![id, label, command, icon, sort_order],
         )?;
     }
+
+    // One-time: the old Codex default was a long `-c model_reasoning_effort`
+    // + `--dangerously-bypass-approvals-and-sandbox` line. Replace that
+    // exact stock command with `codex --yolo`. Do not touch a row the
+    // user already customized to something else.
+    conn.execute(
+        "UPDATE agent_presets SET command = 'codex --yolo' \
+         WHERE is_built_in = 1 AND label = 'Codex' \
+           AND command = 'codex -c model_reasoning_effort=\"high\" --dangerously-bypass-approvals-and-sandbox'",
+        [],
+    )?;
 
     // Migration-0070 metadata backfill — fresh installs AND upgrades. The
     // INSERT above deliberately leaves the metadata columns NULL (and
@@ -1601,6 +1612,55 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 13, "expected 13 built-in presets");
+        let cmd: String = conn
+            .query_row(
+                "SELECT command FROM agent_presets WHERE label = 'Codex' AND is_built_in = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cmd, "codex --yolo");
+    }
+
+    #[test]
+    fn seed_agent_presets_rewrites_stock_codex_command_only() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
+             VALUES ('legacy-codex', 'Codex', \
+                     'codex -c model_reasoning_effort=\"high\" --dangerously-bypass-approvals-and-sandbox', \
+                     '', 1, 1, 1)",
+            [],
+        )
+        .unwrap();
+        seed_agent_presets(&conn).unwrap();
+        let cmd: String = conn
+            .query_row(
+                "SELECT command FROM agent_presets WHERE label = 'Codex' AND is_built_in = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cmd, "codex --yolo");
+
+        conn.execute(
+            "UPDATE agent_presets SET command = 'codex --profile work' WHERE label = 'Codex'",
+            [],
+        )
+        .unwrap();
+        seed_agent_presets(&conn).unwrap();
+        let cmd: String = conn
+            .query_row(
+                "SELECT command FROM agent_presets WHERE label = 'Codex' AND is_built_in = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            cmd, "codex --profile work",
+            "must not clobber a user-customized Codex command"
+        );
     }
 
     #[test]

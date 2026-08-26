@@ -633,9 +633,9 @@ async function resolveSessionResumeLaunch(
   const [command, tool] = entry ?? ['claude', RESUMABLE_CLI_TOOLS['claude']]
   let args: string[]
   if (tool.resumeSubcommand) {
-    // Subcommand-style (codex): preset args dropped — the saved session
-    // carries its own model/permissions (same rule as ChatHistory).
-    args = [tool.resumeSubcommand, sessionId ?? '']
+    // Subcommand-style (codex): keep Settings → LLMs flags in front of
+    // `resume <id>` (`codex --yolo resume <uuid>`).
+    args = [...(await resolvePresetArgs(command)), tool.resumeSubcommand, sessionId ?? '']
   } else {
     args = [...(await resolvePresetArgs(command)), tool.resumeFlag ?? '--resume', sessionId ?? '']
   }
@@ -4519,7 +4519,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
               const sessionId = r.sessionId
               if (sessionId) {
                 if (toolConfig.resumeSubcommand) {
-                  agentOpts.args = [toolConfig.resumeSubcommand, sessionId]
+                  const baseArgs = agentOpts.args ?? []
+                  agentOpts.args = [...baseArgs, toolConfig.resumeSubcommand, sessionId]
                 } else if (toolConfig.resumeFlag) {
                   const baseArgs = agentOpts.args ?? []
                   agentOpts.args = [...baseArgs, toolConfig.resumeFlag, sessionId]

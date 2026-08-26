@@ -899,10 +899,7 @@ mod tests {
     fn codex_saved_session_uses_subcommand_grammar() {
         let guard = HomeGuard::new("codex-resume");
         crate::db::init_for_tests();
-        insert_preset(
-            "codex -c model_reasoning_effort=\"high\" --dangerously-bypass-approvals-and-sandbox",
-            954,
-        );
+        insert_preset("codex --yolo", 954);
         let path = format!("/fixture/codex-resume-{}", uuid::Uuid::new_v4());
         let project_id = insert_project(&path, None);
         let sid = "01920000-abcd-7000-8000-000000000001";
@@ -926,8 +923,8 @@ mod tests {
         assert_eq!(out.command, "codex");
         assert_eq!(
             out.args,
-            vec!["resume".to_string(), sid.to_string()],
-            "codex resume is subcommand-style and drops preset args (TS parity)"
+            vec!["--yolo".to_string(), "resume".to_string(), sid.to_string()],
+            "codex resume keeps the Settings → LLMs flags in front of `resume <id>`"
         );
         assert!(out.resumed_existing);
         assert_eq!(out.provider, "codex");

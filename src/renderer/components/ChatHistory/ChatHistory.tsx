@@ -60,8 +60,7 @@ interface ApiChat {
 
 // Per-provider resume contract. Either `resumeFlag` ("flag-style":
 // `<command> <preset-args> <flag> <uuid>`) OR `resumeSubcommand`
-// ("subcommand-style": `<command> <subcommand> <uuid>` — no preset
-// args, since the saved session carries its own model/permissions).
+// ("subcommand-style": `<command> <preset-args> <subcommand> <uuid>`).
 // Codex is the only subcommand-style provider currently.
 interface ProviderConfig {
   command: string
@@ -844,15 +843,13 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
 
       // Build resume args. Two shapes depending on provider:
       //   - Flag-style (Claude/Cursor/Gemini/Pi): `<preset-args> <flag> <uuid>`.
-      //     Preset flags carry through (e.g. --dangerously-skip-permissions)
-      //     so the resumed session has the same auth as a fresh launch.
-      //   - Subcommand-style (Codex): `<subcommand> <uuid>`. Preset flags
-      //     are dropped because Codex's resume subcommand only accepts a
-      //     small subset of options (the saved session already carries
-      //     model/permissions/cwd from when it was first started).
+      //   - Subcommand-style (Codex): `<preset-args> <subcommand> <uuid>`
+      //     (`codex --yolo resume <id>`). Same Settings → LLMs flags as a
+      //     fresh launch; global flags sit in front of the subcommand.
       let args: string[]
       if (config.resumeSubcommand) {
-        args = [config.resumeSubcommand, session.sessionId]
+        const presetArgs = getPresetArgsForProvider(session.provider)
+        args = [...presetArgs, config.resumeSubcommand, session.sessionId]
       } else if (config.resumeFlag) {
         const presetArgs = getPresetArgsForProvider(session.provider)
         args = [...presetArgs, config.resumeFlag, session.sessionId]

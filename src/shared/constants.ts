@@ -49,10 +49,9 @@ export const CONTEXT_MENU_DISMISS_DELAY = 50  // ms
 //   - flag-style: `<command> <preset-args> <resumeFlag> <uuid>` — the
 //     resumed PTY launches with the same preset args as a fresh start
 //     (auth flags etc.). Used by Claude/Cursor/Gemini/Pi.
-//   - subcommand-style: `<command> <resumeSubcommand> <uuid>` — preset
-//     args are dropped because the saved session carries its own
-//     model/permissions, and the resume subcommand only accepts a
-//     subset of flags. Used by Codex (`codex resume <uuid>` since v0.125).
+//   - subcommand-style: `<command> <preset-args> <resumeSubcommand> <uuid>`
+//     — same Settings → LLMs flags as a fresh start, then the resume
+//     subcommand (`codex --yolo resume <uuid>`).
 export interface ResumableCliTool {
   resumeFlag?: string
   resumeSubcommand?: string

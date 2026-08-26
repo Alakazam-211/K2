@@ -502,6 +502,9 @@ mod tests {
                 "--dangerously-bypass-approvals-and-sandbox".to_string(),
             ]
         );
+        let (cmd, args) = parse_command_string("codex --yolo");
+        assert_eq!(cmd, "codex");
+        assert_eq!(args, vec!["--yolo".to_string()]);
 
         let (cmd, args) = parse_command_string("run 'a b' \"c d\"");
         assert_eq!(cmd, "run");

@@ -32,7 +32,7 @@ use crate::project_config;
 // order still match `db::seed_agent_presets` exactly.
 const BUILT_IN_PRESETS: &[(&str, &str, &str, &str, i64)] = &[
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456001", "Claude", "claude --dangerously-skip-permissions", "", 0),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex -c model_reasoning_effort=\"high\" --dangerously-bypass-approvals-and-sandbox", "", 1),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex --yolo", "", 1),
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", "", 2),
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 3),
     ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 4),

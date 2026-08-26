@@ -3,9 +3,9 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.115 — Quiet automatic update checks
+## 0.40.115 — Final air-gapping patch
 
-Right-click the version number in Settings → General (next to Check for Updates) for a checkbox: **Automatic update checks**. Uncheck it and this Mac stops pinging on a timer. The button still checks when you ask.
+A last air-gapping patch.
 
 ---
 

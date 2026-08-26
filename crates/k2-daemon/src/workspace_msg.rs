@@ -50,10 +50,10 @@ use std::time::Duration;
 
 use parking_lot::Mutex as PlMutex;
 
-use k2_core::workspace::agent_identity::resolve_project_id;
 use k2_core::db::schema::{Project, WorkspaceSession};
 use k2_core::log_debug;
 use k2_core::session::SessionId;
+use k2_core::workspace::agent_identity::resolve_project_id;
 use serde::Serialize;
 
 use crate::session_lookup;
@@ -231,7 +231,6 @@ impl MsgResponse {
             branch: None,
         }
     }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -288,14 +287,18 @@ pub fn resolve_workspace_detailed(token: &str) -> WorkspaceResolve {
 /// `sales-reviewer` is a workspace name (or fail), never a sidecar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MsgTarget {
-    WorkspaceCanonical { path: String },
+    WorkspaceCanonical {
+        path: String,
+    },
     Sidecar {
         path: String,
         handle: String,
         conversation_key: String,
     },
     /// UUID that matched a live or durable session (provider or PTY id).
-    Session { session_id: String },
+    Session {
+        session_id: String,
+    },
 }
 
 /// Resolve `k2 msg` first arg. Order (D12):
@@ -309,8 +312,7 @@ pub fn resolve_msg_target(first_arg: &str) -> Option<MsgTarget> {
         return None;
     }
 
-    if let Some((ws, handle)) = k2_core::workspace_session_handles::split_workspace_handle(token)
-    {
+    if let Some((ws, handle)) = k2_core::workspace_session_handles::split_workspace_handle(token) {
         // First segment must already be a handle token (D14). Pretty
         // names like `Sales Team/reviewer` are rejected (`/`).
         if !k2_core::workspace_session_handles::is_address_token(ws) {
@@ -718,7 +720,15 @@ pub fn deliver_live(
     wake: bool,
     wake_timeout: Duration,
 ) -> MsgResponse {
-    deliver_live_with_via(workspace_token, text, from, command, wake, wake_timeout, "msg")
+    deliver_live_with_via(
+        workspace_token,
+        text,
+        from,
+        command,
+        wake,
+        wake_timeout,
+        "msg",
+    )
 }
 
 /// Same as [`deliver_live`] but stamps chatter `via` (`msg` | `talk` | `inbox` | `v1`).
@@ -788,19 +798,18 @@ pub fn deliver_live_with_via(
                 wake,
                 wake_timeout,
             ),
-            MsgTarget::Session { session_id } => attempt_session_delivery(
-                session_id,
-                text,
-                from,
-                command,
-                wake,
-                wake_timeout,
-            ),
+            MsgTarget::Session { session_id } => {
+                attempt_session_delivery(session_id, text, from, command, wake, wake_timeout)
+            }
         };
         result.attempts = attempt;
 
         if result.success {
-            crate::overlay_routes::record_inject_chatter(workspace_token, from, text, via);
+            // Human Thread compose / card inject already stored on the
+            // Thread collection — do not also stamp Chatter (that's k2 msg).
+            if via != "compose" && via != "thread" {
+                crate::overlay_routes::record_inject_chatter(workspace_token, from, text, via);
+            }
             return result;
         }
 
@@ -954,7 +963,14 @@ fn attempt_delivery(
     if let Some(active_tid) = saved_terminal.as_deref() {
         if let Some(sid) = SessionId::parse(active_tid) {
             if let Some(live) = session_lookup::lookup_by_session_id(&sid) {
-                return inject_live(&live, text, from, command, "active_terminal_id", &project_id);
+                return inject_live(
+                    &live,
+                    text,
+                    from,
+                    command,
+                    "active_terminal_id",
+                    &project_id,
+                );
             }
         }
         // Stale stamp — clear so downstream branches don't re-trip on it.
@@ -969,10 +985,8 @@ fn attempt_delivery(
     // subcommand-style resumes (`codex resume <id>`) are found too.
     if let Some(saved_sid) = saved_session.as_deref() {
         for (_n, live) in session_lookup::snapshot_all() {
-            if k2_core::workspace::provider_resume::argv_references_session(
-                &live.args(),
-                saved_sid,
-            ) {
+            if k2_core::workspace::provider_resume::argv_references_session(&live.args(), saved_sid)
+            {
                 return inject_live(&live, text, from, command, "argv_scan", &project_id);
             }
         }
@@ -1112,15 +1126,12 @@ fn grok_gate_open(live: &session_lookup::LiveSession) -> bool {
 ///   - the always-approve radio row
 ///     `1 (●) Yes, and don't ask again` (any radio state).
 fn screen_shows_grok_gate(rows: &[String]) -> bool {
-    rows.iter()
-        .rev()
-        .take(GROK_GATE_SCAN_ROWS)
-        .any(|row| {
-            let lower = row.to_lowercase();
-            lower.contains("ctrl+o:yolo")
-                || lower.contains("(●) yes, and don't ask again")
-                || lower.contains("(○) yes, and don't ask again")
-        })
+    rows.iter().rev().take(GROK_GATE_SCAN_ROWS).any(|row| {
+        let lower = row.to_lowercase();
+        lower.contains("ctrl+o:yolo")
+            || lower.contains("(●) yes, and don't ask again")
+            || lower.contains("(○) yes, and don't ask again")
+    })
 }
 
 /// Inject `payload` + submit into `live`, with paste framing and an
@@ -1149,10 +1160,7 @@ fn screen_shows_grok_gate(rows: &[String]) -> bool {
 ///   the bounded ~520ms of timed settles, then releases. (There is no raw
 ///   master-FD `O_NONBLOCK` flag to flip from here; the architecture
 ///   removes the wedge this guards against.)
-fn inject_and_submit(
-    live: &session_lookup::LiveSession,
-    payload: &str,
-) -> InjectOutcome {
+fn inject_and_submit(live: &session_lookup::LiveSession, payload: &str) -> InjectOutcome {
     inject_and_submit_with_timeout(live, payload, INJECT_LOCK_TIMEOUT)
 }
 
@@ -1196,10 +1204,7 @@ fn inject_and_submit_with_timeout(
 /// above is the guard for the one screen where raw keystrokes are
 /// catastrophic. Pinned by
 /// `framed_injection_payload_cannot_escape_the_paste_frame`.
-fn inject_framed_locked(
-    live: &session_lookup::LiveSession,
-    payload: &str,
-) -> InjectOutcome {
+fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str) -> InjectOutcome {
     // Slice 5 hard-safety rule (a): NEVER write into a grok pane whose
     // screen shows an open permission gate. Grok's gate default is
     // "1 (●) Yes, and don't ask again for anything (always-approve
@@ -1295,8 +1300,9 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
     }
 }
 
-/// Persist compose-bar send history. Called ONLY after a successful
-/// `POST /cli/terminal/send-message`. Tickets go through
+/// Persist compose-bar send history. Called after a successful
+/// `POST /cli/terminal/send-message` (and overlay `thread/post` via=compose
+/// records the same table). Tickets go through
 /// [`send_message_to_session`] and must never call this.
 pub fn persist_compose_send_if_delivered(success: bool, cwd: &str, from: &str, text: &str) {
     if !success {
@@ -1410,9 +1416,7 @@ fn lookup_live_for_conversation(conversation_key: &str) -> Option<session_lookup
         ) {
             return Some(live);
         }
-        if agent_name == conversation_key
-            || agent_name == format!("tab-{conversation_key}")
-        {
+        if agent_name == conversation_key || agent_name == format!("tab-{conversation_key}") {
             return Some(live);
         }
     }
@@ -1425,8 +1429,7 @@ fn lookup_live_for_conversation(conversation_key: &str) -> Option<session_lookup
             .or_else(|| {
                 // conversation_key may still be pane_group_id
                 let rows = k2_core::db::schema::WorkspaceTabSession::list_by_project(
-                    &conn,
-                    // unknown project — scan is too wide; skip
+                    &conn, // unknown project — scan is too wide; skip
                     "",
                 )
                 .ok();
@@ -1455,32 +1458,25 @@ fn tab_row_for_conversation(
     {
         return Some(row);
     }
-    if let Some(row) = k2_core::db::schema::WorkspaceTabSession::get(
-        &conn,
-        project_id,
-        conversation_key,
-    )
-    .ok()
-    .flatten()
+    if let Some(row) =
+        k2_core::db::schema::WorkspaceTabSession::get(&conn, project_id, conversation_key)
+            .ok()
+            .flatten()
     {
         return Some(row);
     }
-    k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
-        &conn,
-        project_id,
-        conversation_key,
-    )
-    .ok()
-    .flatten()
-    .or_else(|| {
-        k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
-            &conn,
-            project_id,
-            &format!("tab-{conversation_key}"),
-        )
+    k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(&conn, project_id, conversation_key)
         .ok()
         .flatten()
-    })
+        .or_else(|| {
+            k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
+                &conn,
+                project_id,
+                &format!("tab-{conversation_key}"),
+            )
+            .ok()
+            .flatten()
+        })
 }
 
 fn inject_cell(
@@ -1727,9 +1723,7 @@ fn wake_sidecar_and_fire(
     let live = match session_lookup::lookup_by_session_id(&outcome.session_id) {
         Some(l) => l,
         None => {
-            log_debug!(
-                "[msg/wake_sidecar] post-spawn lookup miss for session={target_id}"
-            );
+            log_debug!("[msg/wake_sidecar] post-spawn lookup miss for session={target_id}");
             return MsgResponse::fail(MsgReason::SpawnFailed);
         }
     };
@@ -1742,15 +1736,12 @@ fn wake_sidecar_and_fire(
             wake_start.elapsed().as_millis() as u64,
         );
     }
-    match deliver_post_wake(
-        &live,
-        &payload,
-        wake_timeout,
-        &inject_profile,
-    ) {
-        InjectOutcome::Delivered => {
-            MsgResponse::ok_woke(target_id, "sidecar_wake", wake_start.elapsed().as_millis() as u64)
-        }
+    match deliver_post_wake(&live, &payload, wake_timeout, &inject_profile) {
+        InjectOutcome::Delivered => MsgResponse::ok_woke(
+            target_id,
+            "sidecar_wake",
+            wake_start.elapsed().as_millis() as u64,
+        ),
         InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
         InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
         InjectOutcome::GateHold => MsgResponse::fail(MsgReason::HitlGateOpen),
@@ -1802,7 +1793,10 @@ fn inject_live(
 /// session; if so we inject into THAT rather than spawning a duplicate.
 /// Mirrors `attempt_delivery`'s Branch-1 (active_terminal_id) + Branch-1b
 /// (argv-scan) live lookups, but read-only (no stale-stamp clearing).
-fn relookup_live(project_id: &str, saved_session: Option<&str>) -> Option<session_lookup::LiveSession> {
+fn relookup_live(
+    project_id: &str,
+    saved_session: Option<&str>,
+) -> Option<session_lookup::LiveSession> {
     let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1821,10 +1815,8 @@ fn relookup_live(project_id: &str, saved_session: Option<&str>) -> Option<sessio
     }
     if let Some(saved_sid) = saved_session {
         for (_n, live) in session_lookup::snapshot_all() {
-            if k2_core::workspace::provider_resume::argv_references_session(
-                &live.args(),
-                saved_sid,
-            ) {
+            if k2_core::workspace::provider_resume::argv_references_session(&live.args(), saved_sid)
+            {
                 return Some(live);
             }
         }
@@ -2053,14 +2045,13 @@ fn wake_and_fire(
     // Resolve command + argv + session identity (see fn doc). Held
     // inside the wake lock so the identity writes (premint/converge)
     // are single-flight per workspace.
-    let resolved =
-        match k2_core::workspace::resume_chat::resolve_resume_chat_args(project_path) {
-            Ok(r) => r,
-            Err(e) => {
-                log_debug!("[msg/wake] resume resolve failed for {project_path}: {e}");
-                return MsgResponse::fail(MsgReason::SpawnFailed);
-            }
-        };
+    let resolved = match k2_core::workspace::resume_chat::resolve_resume_chat_args(project_path) {
+        Ok(r) => r,
+        Err(e) => {
+            log_debug!("[msg/wake] resume resolve failed for {project_path}: {e}");
+            return MsgResponse::fail(MsgReason::SpawnFailed);
+        }
+    };
     let branch = if resolved.resumed_existing {
         "resume_and_fire"
     } else {
@@ -2147,11 +2138,8 @@ fn wake_and_fire(
         let conn = db.lock();
         let _ = WorkspaceSession::save_active_terminal_id(&conn, project_id, &target_id);
         if !resolved.resume_session.is_empty() {
-            let _ = WorkspaceSession::update_session_id(
-                &conn,
-                project_id,
-                &resolved.resume_session,
-            );
+            let _ =
+                WorkspaceSession::update_session_id(&conn, project_id, &resolved.resume_session);
         }
     }
 
@@ -2316,8 +2304,7 @@ mod tests {
             rusqlite::params![pid, sid],
         )
         .expect("tab");
-        k2_core::workspace_session_handles::allocate_ordinal(&conn, &pid, &sid)
-            .expect("ord");
+        k2_core::workspace_session_handles::allocate_ordinal(&conn, &pid, &sid).expect("ord");
         drop(conn);
 
         match resolve_msg_target("sales").expect("canonical") {
@@ -2346,7 +2333,11 @@ mod tests {
             .expect("rename");
         }
         match resolve_msg_target("sales/reviewer").expect("sidecar reviewer") {
-            MsgTarget::Sidecar { handle, conversation_key, .. } => {
+            MsgTarget::Sidecar {
+                handle,
+                conversation_key,
+                ..
+            } => {
                 assert_eq!(handle, "reviewer");
                 assert_eq!(conversation_key, sid);
             }
@@ -2394,10 +2385,7 @@ mod tests {
             let conn = db.lock();
             conn.execute(
                 "INSERT INTO projects (id, name, path) VALUES (?1, 'uuid-ws', ?2)",
-                rusqlite::params![
-                    project_uuid,
-                    format!("/tmp/msg-uuid-ws-{project_uuid}")
-                ],
+                rusqlite::params![project_uuid, format!("/tmp/msg-uuid-ws-{project_uuid}")],
             )
             .expect("project");
             conn.execute(
@@ -2438,11 +2426,8 @@ mod tests {
     fn format_message_uuid_stamps_handle_not_display() {
         k2_core::db::init_for_tests();
         let id = uuid::Uuid::new_v4().to_string();
-        let dir = std::env::temp_dir().join(format!(
-            "k2-from-handle-{}-{}",
-            std::process::id(),
-            &id
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("k2-from-handle-{}-{}", std::process::id(), &id));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
         {
@@ -2489,10 +2474,7 @@ mod tests {
     #[test]
     fn format_message_empty_command_is_unchanged() {
         // Empty command → behavior identical to the pre-0.39.25 path.
-        assert_eq!(
-            format_message("scout_v3", "hi", ""),
-            "[from scout_v3] hi"
-        );
+        assert_eq!(format_message("scout_v3", "hi", ""), "[from scout_v3] hi");
     }
 
     #[test]
@@ -2690,7 +2672,10 @@ mod tests {
         // prefix) must be neutralized.
         let clean =
             sanitize_owner_display_name("ro\u{1b}sson\nadmin").expect("usable name remains");
-        assert!(!clean.contains('\u{1b}'), "no raw ESC may survive: {clean:?}");
+        assert!(
+            !clean.contains('\u{1b}'),
+            "no raw ESC may survive: {clean:?}"
+        );
         assert!(!clean.contains('\n'), "no newline may survive: {clean:?}");
         assert_eq!(clean, "rossonadmin");
 
@@ -2702,7 +2687,10 @@ mod tests {
             !frame.contains('\u{1b}'),
             "no raw ESC may reach the injected frame: {frame:?}"
         );
-        assert!(!frame.contains('\n'), "the `from` segment must stay one-line: {frame:?}");
+        assert!(
+            !frame.contains('\n'),
+            "the `from` segment must stay one-line: {frame:?}"
+        );
     }
 
     #[test]
@@ -2815,11 +2803,7 @@ mod tests {
         );
 
         persist_compose_send_if_delivered(true, &path, "owner", "delivered line");
-        assert_eq!(
-            compose_hist_count(&pid),
-            1,
-            "successful send must persist"
-        );
+        assert_eq!(compose_hist_count(&pid), 1, "successful send must persist");
 
         persist_compose_send_if_delivered(true, "/tmp/k2-compose-hist-unknown-cwd", "owner", "x");
         assert_eq!(
@@ -2960,7 +2944,11 @@ mod tests {
         let mut i = 0;
         while i < events.len() {
             let (s, sid_) = events[i];
-            assert_eq!(s, 'S', "expected Start at {i}, got {:?}: {events:?}", events[i]);
+            assert_eq!(
+                s, 'S',
+                "expected Start at {i}, got {:?}: {events:?}",
+                events[i]
+            );
             let (e, eid) = events[i + 1];
             assert_eq!(
                 e, 'E',
@@ -3040,11 +3028,8 @@ mod tests {
 
         // A healthy, uncontended session delivers normally.
         let healthy = spawn_cat_live();
-        let out2 = inject_and_submit_with_timeout(
-            &healthy,
-            "[from owner] hi",
-            Duration::from_secs(2),
-        );
+        let out2 =
+            inject_and_submit_with_timeout(&healthy, "[from owner] hi", Duration::from_secs(2));
         assert_eq!(
             out2,
             InjectOutcome::Delivered,
@@ -3360,7 +3345,10 @@ mod tests {
             Some("no_agent_mode"),
             "the #9 bug: existence must NOT be gated on the persona file"
         );
-        assert!(r.target_session_id.is_none(), "must not spawn without --wake");
+        assert!(
+            r.target_session_id.is_none(),
+            "must not spawn without --wake"
+        );
         let _ = std::fs::remove_dir_all(&path);
     }
 
@@ -3599,7 +3587,10 @@ mod tests {
         .iter()
         .map(|s| s.to_string())
         .collect();
-        assert!(screen_shows_grok_gate(&rows), "the open gate must be detected");
+        assert!(
+            screen_shows_grok_gate(&rows),
+            "the open gate must be detected"
+        );
     }
 
     #[test]
@@ -3612,11 +3603,16 @@ mod tests {
         .iter()
         .map(|s| s.to_string())
         .collect();
-        assert!(!screen_shows_grok_gate(&busy), "a busy grok screen is not a gate");
+        assert!(
+            !screen_shows_grok_gate(&busy),
+            "a busy grok screen is not a gate"
+        );
 
-        let idle: Vec<String> =
-            ["hello!", "❯", ""].iter().map(|s| s.to_string()).collect();
-        assert!(!screen_shows_grok_gate(&idle), "an idle composer is not a gate");
+        let idle: Vec<String> = ["hello!", "❯", ""].iter().map(|s| s.to_string()).collect();
+        assert!(
+            !screen_shows_grok_gate(&idle),
+            "an idle composer is not a gate"
+        );
     }
 
     #[test]
@@ -3624,9 +3620,8 @@ mod tests {
         // A gate string buried in OLD transcript rows (above the bottom
         // scan window) must not hold delivery — only a LIVE gate at the
         // bottom of the screen counts.
-        let mut rows: Vec<String> = vec![
-            "earlier: 1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel".to_string(),
-        ];
+        let mut rows: Vec<String> =
+            vec!["earlier: 1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel".to_string()];
         rows.extend((0..GROK_GATE_SCAN_ROWS).map(|i| format!("output line {i}")));
         assert!(
             !screen_shows_grok_gate(&rows),
@@ -3646,11 +3641,7 @@ mod tests {
         live.write(b"1/3:select | Ctrl+o:yolo | Ctrl+c:cancel\n")
             .expect("prime the screen with gate-looking text");
         std::thread::sleep(Duration::from_millis(300));
-        let out = inject_and_submit_with_timeout(
-            &live,
-            "[from owner] hi",
-            Duration::from_secs(2),
-        );
+        let out = inject_and_submit_with_timeout(&live, "[from owner] hi", Duration::from_secs(2));
         assert_eq!(
             out,
             InjectOutcome::Delivered,
@@ -3730,8 +3721,14 @@ mod tests {
         // `woke`/`wake_ms` are skipped unless a wake actually happened.
         let ok = MsgResponse::ok("sid".into(), "active_terminal_id");
         let json = serde_json::to_value(&ok).unwrap();
-        assert!(json.get("woke").is_none(), "woke must be omitted when false");
-        assert!(json.get("wake_ms").is_none(), "wake_ms must be omitted when None");
+        assert!(
+            json.get("woke").is_none(),
+            "woke must be omitted when false"
+        );
+        assert!(
+            json.get("wake_ms").is_none(),
+            "wake_ms must be omitted when None"
+        );
 
         let fail = MsgResponse::fail(MsgReason::DormantNoWake);
         let fj = serde_json::to_value(&fail).unwrap();

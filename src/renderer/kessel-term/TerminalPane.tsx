@@ -80,6 +80,8 @@ import {
 } from '@/components/Terminal/terminalLinkDetector'
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
+import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
+import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
 import {
   bracketPaste,
   isImagePath,
@@ -544,6 +546,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     showComposeBar = true,
     syncSizeOnShow = false,
   } = props
+  const sessionChrome = useSessionViewChrome()
+  const viewTab = sessionChrome?.viewTab ?? 'terminal'
+  const showThreadOnly = viewTab === 'thread'
+  const showSplit = viewTab === 'split'
+  const showOverlay = showThreadOnly || showSplit
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
   // / Cmd+Shift+- menu events (wired via listen('terminal:zoom-*')
@@ -5350,6 +5357,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       data-terminal-pane-wrapper=""
     >
     <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        minWidth: 0,
+        position: 'relative',
+        display: 'flex',
+        flexDirection: showSplit ? 'row' : 'column',
+      }}
+    >
+    <div
+      style={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+    <div
       ref={containerRef}
       className="kessel-pane"
       data-session-id={debugSessionId}
@@ -5374,7 +5400,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       data-terminal-kind="v2"
       data-workspace-path={cwd}
       tabIndex={0}
-      style={finalContainerStyle}
+      style={{
+        ...finalContainerStyle,
+        flex: 1,
+        minWidth: 0,
+        visibility: showThreadOnly ? 'hidden' : 'visible',
+        pointerEvents: showThreadOnly ? 'none' : undefined,
+      }}
       onFocus={() => {
         // 0.37.9 — App.tsx's global click handler + 200ms refocus
         // poll target [data-terminal-container][data-terminal-visible]
@@ -5689,15 +5721,51 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         </div>
       )}
     </div>
-
-      {/* Composer — mount on first paint so measure-first spawn sees the
-       *  bar's live height (font size is not a constant). Hide on exited.
-       *  Send no-ops until the daemon sessionId exists. */}
-      {showComposeBar && shouldShowTerminalComposeBar(phase) && (
+      {showSplit && showComposeBar && shouldShowTerminalComposeBar(phase) && (
         <TerminalComposeBar
           sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
           workspacePath={cwd}
           onInjectInput={sendInput}
+          sendDestination="pty"
+        />
+      )}
+    </div>
+      {showOverlay && sessionChrome && (
+        <div
+          className={
+            showSplit
+              ? 'flex-1 min-w-0 min-h-0 border-l border-[var(--color-border)] flex flex-col'
+              : 'absolute inset-0'
+          }
+          data-testid="agent-session-thread"
+        >
+          <div className="flex-1 min-h-0 min-w-0">
+            <ThreadOverlayPane
+              addr={sessionChrome.overlayAddr}
+              conversationId={sessionChrome.conversationId}
+            />
+          </div>
+          {showSplit && showComposeBar && shouldShowTerminalComposeBar(phase) && (
+            <TerminalComposeBar
+              sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
+              workspacePath={cwd}
+              onInjectInput={sendInput}
+              sendDestination="thread"
+            />
+          )}
+        </div>
+      )}
+    </div>
+
+      {/* Composer — mount on first paint so measure-first spawn sees the
+       *  bar's live height (font size is not a constant). Hide on exited.
+       *  Send no-ops until the daemon sessionId exists. */}
+      {!showSplit && showComposeBar && shouldShowTerminalComposeBar(phase) && (
+        <TerminalComposeBar
+          sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
+          workspacePath={cwd}
+          onInjectInput={sendInput}
+          sendDestination={showThreadOnly ? 'thread' : 'pty'}
         />
       )}
     </div>

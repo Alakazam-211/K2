@@ -1,9 +1,9 @@
 //! Per-workspace compose-bar send history.
 //!
-//! Last 50 successfully injected compose-bar lines, keyed by
-//! `projects.id`. Written only after `POST /cli/terminal/send-message`
-//! succeeds — tickets share `send_message_to_session` and must not
-//! land here.
+//! Last 50 successful compose-bar lines, keyed by `projects.id`.
+//! Written after `POST /cli/terminal/send-message` and after
+//! `POST /cli/thread/post` with `via=compose` (same Message-the-agent bar).
+//! Tickets share `send_message_to_session` and must not land here.
 
 use rusqlite::params;
 use serde::Serialize;
@@ -38,9 +38,7 @@ pub fn resolve_project_id_for_path(path: &str) -> Option<String> {
     }
     let db = db::shared();
     let conn = db.lock();
-    let mut stmt = conn
-        .prepare("SELECT id, path FROM projects")
-        .ok()?;
+    let mut stmt = conn.prepare("SELECT id, path FROM projects").ok()?;
     let rows = stmt
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -165,9 +163,7 @@ pub fn record_compose_send_for_cwd(
     record_compose_send(&project_id, body, author)
 }
 
-pub fn list_compose_send_history(
-    project_id: &str,
-) -> Result<Vec<ComposeSendHistoryEntry>, String> {
+pub fn list_compose_send_history(project_id: &str) -> Result<Vec<ComposeSendHistoryEntry>, String> {
     if project_id.is_empty() {
         return Ok(Vec::new());
     }
@@ -252,11 +248,7 @@ mod tests {
     }
 
     fn unique(label: &str) -> String {
-        format!(
-            "csh-{label}-{}-{}",
-            std::process::id(),
-            Uuid::new_v4()
-        )
+        format!("csh-{label}-{}-{}", std::process::id(), Uuid::new_v4())
     }
 
     #[test]
@@ -265,8 +257,7 @@ mod tests {
         let pid = unique("empty");
         let path = format!("/tmp/{pid}");
         ensure_project(&pid, &path, "empty");
-        let inserted = record_compose_send(&pid, "   \n\t  ", "owner")
-            .expect("record empty");
+        let inserted = record_compose_send(&pid, "   \n\t  ", "owner").expect("record empty");
         assert!(
             inserted.is_none(),
             "whitespace body must not insert: {inserted:?}"
@@ -317,9 +308,15 @@ mod tests {
         let pid = unique("order");
         let path = format!("/tmp/{pid}");
         ensure_project(&pid, &path, "order");
-        record_compose_send(&pid, "first", "a").expect("first").expect("stored");
-        record_compose_send(&pid, "second", "b").expect("second").expect("stored");
-        record_compose_send(&pid, "third", "c").expect("third").expect("stored");
+        record_compose_send(&pid, "first", "a")
+            .expect("first")
+            .expect("stored");
+        record_compose_send(&pid, "second", "b")
+            .expect("second")
+            .expect("stored");
+        record_compose_send(&pid, "third", "c")
+            .expect("third")
+            .expect("stored");
         let items = list_compose_send_history(&pid).expect("list");
         assert_eq!(
             items.iter().map(|e| e.body.as_str()).collect::<Vec<_>>(),
@@ -335,8 +332,12 @@ mod tests {
         let pid = unique("dup");
         let path = format!("/tmp/{pid}");
         ensure_project(&pid, &path, "dup");
-        record_compose_send(&pid, "same", "owner").expect("1").expect("stored");
-        record_compose_send(&pid, "same", "owner").expect("2").expect("stored");
+        record_compose_send(&pid, "same", "owner")
+            .expect("1")
+            .expect("stored");
+        record_compose_send(&pid, "same", "owner")
+            .expect("2")
+            .expect("stored");
         assert_eq!(count_for(&pid), 2, "consecutive dupes must both persist");
         delete_project(&pid);
     }

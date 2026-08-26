@@ -5,12 +5,10 @@
 //! (handles / pinned Chat), never `v2_session_map`.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
-use k2_core::overlay::{self, CardCallback, OverlayItem};
-use k2_core::session::SessionId;
-use k2_core::workspace::agent_identity::resolve_project_id;
 use k2_core::db::schema::WorkspaceSession;
+use k2_core::overlay::{self, CardCallback, OverlayItem};
+use k2_core::workspace::agent_identity::resolve_project_id;
 
 use crate::cli::{bool_param, opt_param, str_param};
 use crate::cli_response::CliResponse;
@@ -31,10 +29,7 @@ fn record_test_inject(line: &str) {
 
 #[cfg(test)]
 fn recorded_injects() -> Vec<String> {
-    TEST_INJECTS
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default()
+    TEST_INJECTS.lock().map(|g| g.clone()).unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]
@@ -75,7 +70,8 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
     if addr.is_empty() {
         return Err(usage("missing addr"));
     }
-    let canonical_alias = k2_core::workspace_session_handles::split_workspace_handle(addr).is_none();
+    let canonical_alias =
+        k2_core::workspace_session_handles::split_workspace_handle(addr).is_none();
     match workspace_msg::resolve_msg_target(addr) {
         Some(MsgTarget::WorkspaceCanonical { path }) => {
             let db = k2_core::db::shared();
@@ -300,6 +296,13 @@ fn handle_post(params: &HashMap<String, String>) -> CliResponse {
                     &resolved.project_id,
                     &resolved.addr,
                     &text,
+                );
+                let author = crate::workspace_msg::resolve_owner_from();
+                inject_thread_compose(&resolved, &author, &text);
+                let _ = k2_core::workspace_compose_history::record_compose_send(
+                    &resolved.project_id,
+                    &text,
+                    &author,
                 );
             }
             CliResponse::ok_json(
@@ -585,6 +588,22 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+/// Human Message-the-agent on the Thread tab: same `[from <user>]` stamp
+/// as Terminal inject, plus `[thread:<addr>]` so the agent can tell the
+/// two throats apart. `addr` is the overlay address (`sales` or
+/// `sales/reviewer`).
+fn format_thread_compose_pty_line(from: &str, addr: &str, text: &str) -> String {
+    crate::workspace_msg::format_message_user(from, &format!("[thread:{addr}] {text}"))
+}
+
+fn inject_thread_compose(resolved: &ResolvedOverlay, from: &str, text: &str) {
+    let payload = format!("[thread:{}] {text}", resolved.addr);
+    record_test_inject(&format_thread_compose_pty_line(from, &resolved.addr, text));
+    // Same throat as k2 talk / Projects Chat / Feedback: wake a dormant
+    // session, then inject+submit. `via=compose` skips Chatter (already on Thread).
+    deliver_thread_to_pty(&resolved.addr, &payload, from, "compose");
+}
+
 fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>) {
     for cb in cbs {
         crate::overlay_ws::publish(OverlayFrame {
@@ -594,20 +613,34 @@ fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>) {
             doc: Some(cb.doc.clone()),
             conversation_id: Some(cb.conversation_id.clone()),
         });
-        let line = format!("[thread:{addr}] {}", cb.inject_line);
-        record_test_inject(&line);
-        let conv = cb.conversation_id.clone();
-        std::thread::spawn(move || {
-            best_effort_inject(&conv, &line);
-        });
+        let payload = format!("[thread:{addr}] {}", cb.inject_line);
+        record_test_inject(&payload);
+        let from = crate::workspace_msg::resolve_owner_from();
+        deliver_thread_to_pty(addr, &payload, &from, "thread");
     }
 }
 
-fn best_effort_inject(conversation_id: &str, payload: &str) {
-    let Some(sid) = SessionId::parse(conversation_id) else {
+/// Feedback / Projects Chat / `k2 talk`: `deliver_live(..., wake=true)`.
+/// Overlay unit tests have no Tokio reactor; skip the live wake there.
+fn deliver_thread_to_pty(addr: &str, payload: &str, from: &str, via: &str) {
+    if cfg!(test) && tokio::runtime::Handle::try_current().is_err() {
         return;
-    };
-    let _ = crate::workspace_msg::inject_raw_into_session(&sid, payload, Duration::ZERO);
+    }
+    let resp = crate::workspace_msg::deliver_live_with_via(
+        addr,
+        payload,
+        from,
+        "",
+        true,
+        crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+        via,
+    );
+    if !resp.success {
+        k2_core::log_debug!(
+            "[overlay] deliver_live failed addr={addr} via={via} reason={:?}",
+            resp.reason
+        );
+    }
 }
 
 fn apply_human_prose(conversation_id: &str, project_id: &str, addr: &str, text: &str) {
@@ -627,10 +660,7 @@ pub fn on_human_pty_text(session_id: &str, text: &str) {
     }
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let Some((project_id, _, _)) = overlay::catalog::get(&conn, session_id)
-        .ok()
-        .flatten()
-    else {
+    let Some((project_id, _, _)) = overlay::catalog::get(&conn, session_id).ok().flatten() else {
         return;
     };
     let addr = display_addr_for(&conn, &project_id, session_id);
@@ -670,18 +700,14 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/thread" => handle_get_thread(params),
         "/cli/chatter" => handle_get_chatter(params),
         "/cli/chatterlog" => handle_get_chatterlog(params),
-        "/cli/thread/post" | "/cli/thread/ask" | "/cli/thread/secret"
-        | "/cli/thread/answer" | "/cli/thread/void" => CliResponse::method_not_allowed(),
+        "/cli/thread/post" | "/cli/thread/ask" | "/cli/thread/secret" | "/cli/thread/answer"
+        | "/cli/thread/void" => CliResponse::method_not_allowed(),
         _ => return None,
     };
     Some(resp)
 }
 
-pub fn dispatch_post(
-    path: &str,
-    params: &HashMap<String, String>,
-    body: &[u8],
-) -> CliResponse {
+pub fn dispatch_post(path: &str, params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
     let mut params = params.clone();
     merge_body(&mut params, body);
     match path {
@@ -823,9 +849,8 @@ mod tests {
     }
 
     fn json_body(resp: &CliResponse) -> serde_json::Value {
-        serde_json::from_str(&resp.body).unwrap_or_else(|e| {
-            panic!("response JSON parse failed: {e}; body={}", resp.body)
-        })
+        serde_json::from_str(&resp.body)
+            .unwrap_or_else(|e| panic!("response JSON parse failed: {e}; body={}", resp.body))
     }
 
     #[test]
@@ -867,11 +892,8 @@ mod tests {
         );
         assert_eq!(posted["conversation_id"], conv);
 
-        let get = dispatch(
-            "/cli/thread",
-            &params_of(&[("addr", handle.as_str())]),
-        )
-        .expect("GET thread");
+        let get =
+            dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread");
         assert_eq!(get.status, "200 OK", "{}", get.body);
         let snap = json_body(&get);
         let items = snap["items"].as_array().expect("items array");
@@ -879,6 +901,47 @@ mod tests {
         assert_eq!(items[0]["doc"]["body"], "hi");
         assert_eq!(items[0]["doc"]["from"], "k2");
         assert_eq!(items[0]["seq"], posted["seq"]);
+    }
+
+    #[test]
+    fn compose_via_thread_post_records_workspace_history() {
+        let handle = format!("ovlhist{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let body = format!("compose-hist-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let post = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": body,
+                "via": "compose",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(post.status, "200 OK", "post failed: {}", post.body);
+        let hist = k2_core::workspace_compose_history::list_compose_send_history(&project_id)
+            .expect("list compose history");
+        assert!(
+            hist.iter().any(|e| e.body == body),
+            "via=compose must record workspace compose-history, got {hist:?}"
+        );
+        let author = crate::workspace_msg::resolve_owner_from();
+        let want = format_thread_compose_pty_line(&author, &handle, &body);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &want),
+            "compose must inject [from user] [thread:addr] msg into the PTY; want {want:?} got {injects:?}"
+        );
+    }
+
+    #[test]
+    fn sidecar_compose_inject_line_uses_ws_slash_sidecar_addr() {
+        let line = format_thread_compose_pty_line("Rosson", "sales/reviewer", "ship it");
+        assert_eq!(line, "[from Rosson] [thread:sales/reviewer] ship it");
     }
 
     #[test]
@@ -893,8 +956,8 @@ mod tests {
 
         record_inject_chatter(&addr, &handle, "ping", "msg");
 
-        let thread = dispatch("/cli/thread", &params_of(&[("addr", addr.as_str())]))
-            .expect("GET thread");
+        let thread =
+            dispatch("/cli/thread", &params_of(&[("addr", addr.as_str())])).expect("GET thread");
         let t = json_body(&thread);
         let t_items = t["items"].as_array().expect("thread items");
         assert!(
@@ -902,8 +965,8 @@ mod tests {
             "GET thread must not contain the ping: {t}"
         );
 
-        let chatter = dispatch("/cli/chatter", &params_of(&[("addr", addr.as_str())]))
-            .expect("GET chatter");
+        let chatter =
+            dispatch("/cli/chatter", &params_of(&[("addr", addr.as_str())])).expect("GET chatter");
         let c = json_body(&chatter);
         let c_items = c["items"].as_array().expect("chatter items");
         assert_eq!(c_items.len(), 1, "reviewer chatter: {c}");
@@ -943,8 +1006,8 @@ mod tests {
         sidecar(&project_id, &reviewer, "reviewer");
         let addr = format!("{handle}/reviewer");
         record_inject_chatter(&addr, &handle, "ping-talk", "talk");
-        let chatter = dispatch("/cli/chatter", &params_of(&[("addr", addr.as_str())]))
-            .expect("chatter");
+        let chatter =
+            dispatch("/cli/chatter", &params_of(&[("addr", addr.as_str())])).expect("chatter");
         let c = json_body(&chatter);
         let items = c["items"].as_array().expect("items");
         assert_eq!(items.len(), 1, "{c}");
@@ -989,16 +1052,16 @@ mod tests {
             "k2 thread {handle} must follow pin-swap to B"
         );
 
-        let sales = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
-            .expect("sales read");
+        let sales =
+            dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("sales read");
         let s = json_body(&sales);
         let s_items = s["items"].as_array().expect("items");
         assert_eq!(s_items.len(), 1, "sales is B's overlay: {s}");
         assert_eq!(s_items[0]["doc"]["body"], "from-B");
 
         let durable = format!("{handle}/alice");
-        let a_read = dispatch("/cli/thread", &params_of(&[("addr", durable.as_str())]))
-            .expect("A durable");
+        let a_read =
+            dispatch("/cli/thread", &params_of(&[("addr", durable.as_str())])).expect("A durable");
         let ar = json_body(&a_read);
         let a_items = ar["items"].as_array().expect("A items");
         assert_eq!(a_items.len(), 1, "A's docs stay on A: {ar}");
@@ -1054,11 +1117,9 @@ mod tests {
             .expect("catalog")
             .expect("row");
         assert_eq!(row.0, project_id);
-        assert!(
-            k2_core::overlay::catalog::get(&c, "tab-pane-not-overlay")
-                .expect("missing")
-                .is_none()
-        );
+        assert!(k2_core::overlay::catalog::get(&c, "tab-pane-not-overlay")
+            .expect("missing")
+            .is_none());
     }
 
     #[test]
@@ -1134,11 +1195,14 @@ mod tests {
         assert!(!id.is_empty(), "ask must return an id: {posted}");
         assert_eq!(posted["prompt"], "Ship it?", "{posted}");
         let opts = posted["options"].as_array().expect("options array");
-        assert_eq!(opts, &vec![serde_json::json!("Go"), serde_json::json!("Stop")]);
+        assert_eq!(
+            opts,
+            &vec![serde_json::json!("Go"), serde_json::json!("Stop")]
+        );
         assert_eq!(posted["status"], "pending", "{posted}");
 
-        let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
-            .expect("GET thread");
+        let get =
+            dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread");
         let snap = json_body(&get);
         let items = snap["items"].as_array().expect("items");
         assert_eq!(items.len(), 1, "{snap}");
@@ -1162,7 +1226,9 @@ mod tests {
         assert_eq!(answered["answer"], "Go", "{answered}");
         let injects = recorded_injects();
         assert!(
-            injects.iter().any(|l| l == &format!("[thread:{handle}] chose Go")),
+            injects
+                .iter()
+                .any(|l| l == &format!("[thread:{handle}] chose Go")),
             "async inject must fire after tap; got {injects:?}"
         );
 
@@ -1234,8 +1300,7 @@ mod tests {
         );
         assert_eq!(void_post.status, "200 OK", "{}", void_post.body);
         let snap = json_body(
-            &dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
-                .expect("read"),
+            &dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("read"),
         );
         let items = snap["items"].as_array().expect("items");
         let choice = items
@@ -1248,8 +1313,10 @@ mod tests {
         );
         let injects = recorded_injects();
         assert!(
-            injects.iter().any(|l| l.contains(&format!("[thread:{handle}]"))
-                && l.contains("card voided — human replied in chat")),
+            injects
+                .iter()
+                .any(|l| l.contains(&format!("[thread:{handle}]"))
+                    && l.contains("card voided — human replied in chat")),
             "void inject: {injects:?}"
         );
 
@@ -1283,8 +1350,7 @@ mod tests {
         );
         assert_eq!(mark.status, "200 OK", "{}", mark.body);
         let snap2 = json_body(
-            &dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())]))
-                .expect("read2"),
+            &dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())])).expect("read2"),
         );
         let choice2 = snap2["items"]
             .as_array()
@@ -1299,7 +1365,9 @@ mod tests {
         assert_eq!(choice2["doc"]["choice"]["answer"], "Go");
         let injects2 = recorded_injects();
         assert!(
-            injects2.iter().any(|l| l == &format!("[thread:{handle2}] chose Go")),
+            injects2
+                .iter()
+                .any(|l| l == &format!("[thread:{handle2}] chose Go")),
             "chose inject: {injects2:?}"
         );
     }
@@ -1358,12 +1426,11 @@ mod tests {
             k2_core::overlay::vault::exists(&project_id, "API_TOKEN"),
             "vault must hold the bytes"
         );
-        let got = k2_core::overlay::vault::debug_read(&project_id, "API_TOKEN")
-            .expect("vault read");
+        let got =
+            k2_core::overlay::vault::debug_read(&project_id, "API_TOKEN").expect("vault read");
         assert_eq!(got, secret_val.as_bytes());
         let snap = json_body(
-            &dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
-                .expect("GET"),
+            &dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET"),
         );
         let snap_s = snap.to_string();
         assert!(
@@ -1376,7 +1443,9 @@ mod tests {
         );
         let injects = recorded_injects();
         assert!(
-            injects.iter().any(|l| l == &format!("[thread:{handle}] secret API_TOKEN set")),
+            injects
+                .iter()
+                .any(|l| l == &format!("[thread:{handle}] secret API_TOKEN set")),
             "set inject: {injects:?}"
         );
         assert!(
@@ -1414,8 +1483,7 @@ mod tests {
         );
         assert_eq!(voided.status, "200 OK", "{}", voided.body);
         let snap2 = json_body(
-            &dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())]))
-                .expect("read void"),
+            &dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())])).expect("read void"),
         );
         let secret_item = snap2["items"]
             .as_array()

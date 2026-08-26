@@ -133,6 +133,53 @@ export function shouldShowTerminalComposeBar(phase: {
   return phase.kind !== 'exited'
 }
 
+/** Raster/vector stills we can thumbnail in the composer (not PDF). */
+const COMPOSE_IMAGE_PREVIEW_RE =
+  /\.(png|jpe?g|gif|webp|bmp|heic|heif|svg)$/i
+
+export function isComposePreviewImagePath(path: string): boolean {
+  return COMPOSE_IMAGE_PREVIEW_RE.test(path.trim())
+}
+
+/** Strip compose-drop quoting (`'path with space.png'` or backslash escapes). */
+export function unquoteComposePath(token: string): string {
+  const t = token.trim()
+  if (t.length >= 2 && ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('"') && t.endsWith('"')))) {
+    return t.slice(1, -1)
+  }
+  return t.replace(/\\(.)/g, '$1')
+}
+
+/**
+ * Image file paths currently sitting in the compose draft (quoted or bare).
+ * Order preserved; duplicates dropped.
+ */
+export function extractImagePathsFromDraft(draft: string): string[] {
+  const found: string[] = []
+  const seen = new Set<string>()
+  const push = (raw: string) => {
+    const p = unquoteComposePath(raw)
+    if (!isComposePreviewImagePath(p) || seen.has(p)) return
+    seen.add(p)
+    found.push(p)
+  }
+  const quoted = /'([^']+)'/g
+  let m: RegExpExecArray | null
+  while ((m = quoted.exec(draft)) !== null) push(m[1])
+  const unquoted =
+    /(?:^|[\s])((?:\/|[A-Za-z]:\\)[^\s']+\.(?:png|jpe?g|gif|webp|bmp|heic|heif|svg))\b/gi
+  while ((m = unquoted.exec(draft)) !== null) push(m[1])
+  return found
+}
+
+/** Drop one attached path (quoted or bare) from the draft. */
+export function removePathFromDraft(draft: string, path: string): string {
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  let next = draft.replace(new RegExp(`\\s*'${escaped}'\\s*`, 'g'), ' ')
+  next = next.replace(new RegExp(`(?:^|\\s)${escaped}(?=\\s|$)`, 'g'), ' ')
+  return next.replace(/[ \t]+/g, ' ').trim()
+}
+
 /** Placeholder for the docked compose bar. Uses the workspace agent name
  *  when we have one; otherwise the generic "the agent". */
 export function composeMessagePlaceholder(agentName: string | undefined | null): string {

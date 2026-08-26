@@ -5,7 +5,7 @@ import {
   type DaemonHandleRow,
 } from '@/lib/chat-session-tab'
 import { SessionViewTabs } from './SessionViewTabs'
-import { ThreadOverlayPane } from './ThreadOverlayPane'
+import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
 import type { SessionViewTab } from './sessionViewTab'
 
@@ -55,30 +55,22 @@ export function AgentSessionChrome({
   }, [refreshing, onRefresh, agentName])
 
   return (
-    <div className="h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
-      <SidecarSessionHeader
-        title={title}
-        viewTab={viewTab}
-        onViewTabChange={setViewTab}
-        onRefresh={() => void handleRefresh()}
-        refreshing={refreshing}
-      />
-      <div className="flex-1 min-h-0 relative">
-        <div
-          data-testid="agent-session-terminal"
-          className="absolute inset-0"
-          style={{ display: viewTab === 'terminal' ? 'block' : 'none' }}
-          aria-hidden={viewTab !== 'terminal'}
-        >
+    <SessionViewChromeContext.Provider
+      value={{ viewTab, overlayAddr: addr, conversationId }}
+    >
+      <div className="h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
+        <SidecarSessionHeader
+          title={title}
+          viewTab={viewTab}
+          onViewTabChange={setViewTab}
+          onRefresh={() => void handleRefresh()}
+          refreshing={refreshing}
+        />
+        <div className="flex-1 min-h-0" data-testid="agent-session-terminal">
           <Remount key={nonce}>{children}</Remount>
         </div>
-        {viewTab === 'thread' && (
-          <div className="absolute inset-0" data-testid="agent-session-thread">
-            <ThreadOverlayPane addr={addr} conversationId={conversationId} />
-          </div>
-        )}
       </div>
-    </div>
+    </SessionViewChromeContext.Provider>
   )
 }
 
@@ -101,12 +93,12 @@ export function SidecarSessionHeader({
 }): JSX.Element {
   return (
     <div
-      className="border-b border-[var(--color-border)] flex-shrink-0"
+      className="border-b border-[var(--color-border)] flex-shrink-0 px-3 flex items-stretch gap-2"
       data-testid="sidecar-session-header"
     >
-      <div className="px-3 py-2 flex items-center gap-3">
+        <SessionViewTabs value={viewTab} onChange={onViewTabChange} />
         <span
-          className="text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0"
+          className="py-2 text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center flex-shrink-0"
           data-testid="sidecar-session-title"
         >
           {title}
@@ -118,7 +110,7 @@ export function SidecarSessionHeader({
           disabled={refreshing}
           title="Restart this session — respawns this PTY, does not switch Chat."
           aria-label="Refresh session"
-          className="inline-flex items-center justify-center h-5 w-5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+          className="self-center inline-flex items-center justify-center h-5 w-5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -139,10 +131,6 @@ export function SidecarSessionHeader({
             <path d="M16 16h5v5" />
           </svg>
         </button>
-      </div>
-      <div className="px-3">
-        <SessionViewTabs value={viewTab} onChange={onViewTabChange} />
-      </div>
     </div>
   )
 }
@@ -159,21 +147,13 @@ export function PinnedSessionBody({
   children: ReactNode
 }): JSX.Element {
   return (
-    <div className="flex-1 min-h-0 relative">
-      <div
-        data-testid="agent-session-terminal"
-        className="absolute inset-0"
-        style={{ display: viewTab === 'terminal' ? 'block' : 'none' }}
-        aria-hidden={viewTab !== 'terminal'}
-      >
+    <SessionViewChromeContext.Provider
+      value={{ viewTab, overlayAddr: addr, conversationId }}
+    >
+      <div className="flex-1 min-h-0" data-testid="agent-session-terminal">
         {children}
       </div>
-      {viewTab === 'thread' && (
-        <div className="absolute inset-0" data-testid="agent-session-thread">
-          <ThreadOverlayPane addr={addr} conversationId={conversationId} />
-        </div>
-      )}
-    </div>
+    </SessionViewChromeContext.Provider>
   )
 }
 

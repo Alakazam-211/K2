@@ -121,7 +121,9 @@ vi.mock('@/kessel-term/TerminalPane', () => ({
         data-args={props.args ? JSON.stringify(props.args) : 'NONE'}
         data-has-onexit={props.onChildExit ? 'yes' : 'no'}
         data-retain={String(props.retainWhileHidden === true)}
-      />
+      >
+        <div data-testid="message-compose" data-compose-bar="" />
+      </div>
     )
   },
 }))
@@ -573,12 +575,18 @@ describe('S2 overlay chrome (C3/C4/C10)', () => {
     )
     expect(screen.getByLabelText('Switch pinned chat session')).not.toBeNull()
     expect(screen.getByTestId('pinned-chat-header')).not.toBeNull()
+    const header = screen.getByTestId('pinned-chat-header')
+    const tabs = screen.getByTestId('session-view-tabs')
+    expect(tabs.parentElement?.parentElement).toBe(header)
+    const rowKids = Array.from(tabs.parentElement!.children)
+    expect(rowKids.indexOf(tabs)).toBe(0)
 
     fireEvent.click(screen.getByTestId('session-view-tab-thread'))
 
     expect(screen.getByTestId('terminal-pane')).not.toBeNull()
-    expect(screen.getByTestId('agent-session-terminal').style.display).toBe('none')
-    expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.getByTestId('message-compose')).not.toBeNull()
+    expect(screen.queryByTestId('thread-compose')).toBeNull()
+    expect(h.terminalProps.current.showComposeBar).toBe(true)
     expect(screen.getByLabelText('Switch pinned chat session')).not.toBeNull()
     expect(screen.getByLabelText('Refresh chat session')).not.toBeNull()
     expect(screen.getByTestId('session-view-tab-thread').textContent).toBe('Thread')

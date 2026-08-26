@@ -1,7 +1,11 @@
-import { useCallback, useState, type JSX, type KeyboardEvent } from 'react'
+import { useEffect, useState, type JSX } from 'react'
+import { ChatMessage } from '@/components/common/ChatMessage'
+import { formatRelativeTime } from '@/lib/format-relative-time'
+import { useSettingsStore } from '@/stores/settings'
 import { useOverlayThread } from './useOverlayThread'
 import {
   isVoidedHitl,
+  type OverlayDoc,
   type OverlayThreadItem,
 } from './overlayThread'
 
@@ -10,131 +14,141 @@ interface ThreadOverlayPaneProps {
   conversationId: string | null
 }
 
+/** Overlay log only — Message-the-agent compose stays on TerminalPane. */
 export function ThreadOverlayPane({
   addr,
   conversationId,
 }: ThreadOverlayPaneProps): JSX.Element {
-  const { items, error, posting, post, answer, voidCard } = useOverlayThread({
+  const { items, error, answer, voidCard } = useOverlayThread({
     addr,
     conversationId,
     enabled: true,
   })
-  const [draft, setDraft] = useState('')
-
-  const send = useCallback(async () => {
-    const text = draft
-    if (!text.trim() || posting) return
-    setDraft('')
-    try {
-      await post(text)
-    } catch {
-      setDraft(text)
-    }
-  }, [draft, posting, post])
-
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      void send()
-    }
-  }
 
   const visible = items.filter((it) => !isVoidedHitl(it.doc))
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
+  useEffect(() => {
+    const id = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 30_000)
+    return () => clearInterval(id)
+  }, [])
 
   return (
     <div
       className="h-full flex flex-col min-h-0 bg-[var(--color-bg)]"
       data-testid="thread-overlay-pane"
     >
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-2">
+      <div className="flex-1 min-h-0 overflow-y-auto px-2 py-2">
         {error && (
-          <div className="text-[11px] text-[var(--color-text-muted)]">{error}</div>
+          <div className="text-[11px] text-[var(--color-text-muted)] px-2.5">{error}</div>
         )}
         {!error && visible.length === 0 && (
-          <div className="text-[11px] text-[var(--color-text-muted)]">
-            No overlay posts yet. Compose below — this is not PTY inject.
+          <div className="text-[11px] text-[var(--color-text-muted)] px-2.5">
+            No overlay posts yet. Message the agent below — Thread vs Terminal
+            chooses where it is sent.
           </div>
         )}
-        {visible.map((it) => (
-          <ThreadItemRow
-            key={it.id}
-            item={it}
-            onAnswer={(payload) => void answer(it.id, payload)}
-            onVoid={() => void voidCard(it.id)}
-          />
-        ))}
-      </div>
-      <div
-        className="flex-shrink-0 border-t border-[var(--color-border)] px-3 py-2"
-        data-compose-bar=""
-      >
-        <textarea
-          data-testid="thread-compose"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          disabled={posting || !addr.trim()}
-          placeholder="Message the thread (not the terminal)"
-          rows={1}
-          className="w-full resize-none bg-transparent text-[12px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none"
-        />
+        <div className="flex flex-col gap-2.5">
+          {visible.map((it) => (
+            <ThreadItemRow
+              key={it.id}
+              item={it}
+              nowSec={nowSec}
+              fontSize={editorFontSize}
+              onAnswer={(payload) => void answer(it.id, payload)}
+              onVoid={() => void voidCard(it.id)}
+            />
+          ))}
+        </div>
       </div>
     </div>
   )
+}
+
+function isHumanPost(doc: OverlayDoc): boolean {
+  return doc.via === 'compose' || doc.from === 'owner'
 }
 
 export function ThreadItemRow({
   item,
+  nowSec,
+  fontSize,
   onAnswer,
   onVoid,
 }: {
   item: OverlayThreadItem
+  nowSec?: number
+  fontSize?: number
   onAnswer?: (payload: { answer?: string; secret?: string }) => void
   onVoid?: () => void
 }): JSX.Element {
   const kind = item.doc.kind
+  const owner = isHumanPost(item.doc)
+  const author = owner ? 'You' : item.doc.from || 'unknown'
+  const timeLabel = formatRelativeTime(
+    item.doc.created_at,
+    nowSec ?? Math.floor(Date.now() / 1000),
+  )
+  const prompt =
+    kind === 'choice'
+      ? item.doc.choice?.prompt || item.doc.body || ''
+      : kind === 'secret'
+        ? item.doc.secret?.prompt || item.doc.body || ''
+        : item.doc.body || ''
   return (
-    <div data-testid="thread-item" data-kind={kind} data-seq={item.seq} data-status={
-      item.doc.choice?.status || item.doc.secret?.status || ''
-    }>
-      <div className="text-[10px] text-[var(--color-text-muted)]">
-        {item.doc.from || 'unknown'} · seq {item.seq}
-      </div>
-      {kind === 'choice' && item.doc.choice ? (
-        <ChoiceCard
-          prompt={item.doc.choice.prompt || item.doc.body || ''}
-          options={item.doc.choice.options}
-          allowCustom={item.doc.choice.allow_custom}
-          status={item.doc.choice.status}
-          answer={item.doc.choice.answer}
-          onPick={(label) => onAnswer?.({ answer: label })}
-        />
-      ) : kind === 'secret' && item.doc.secret ? (
-        <SecretCard
-          name={item.doc.secret.name}
-          prompt={item.doc.secret.prompt || item.doc.body}
-          status={item.doc.secret.status}
-          onSubmit={(value) => onAnswer?.({ secret: value })}
-          onDismiss={() => onVoid?.()}
-        />
-      ) : (
-        <div className="text-[12px] text-[var(--color-text-primary)] whitespace-pre-wrap">
-          {item.doc.body || ''}
-        </div>
-      )}
+    <div
+      data-testid="thread-item"
+      data-kind={kind}
+      data-seq={item.seq}
+      data-status={item.doc.choice?.status || item.doc.secret?.status || ''}
+    >
+      <ChatMessage
+        author={author}
+        isOwner={owner}
+        timeLabel={timeLabel}
+        body={prompt}
+        fontSize={fontSize}
+        footer={
+          kind === 'choice' && item.doc.choice ? (
+            <ChoiceCard
+              options={item.doc.choice.options}
+              allowCustom={item.doc.choice.allow_custom}
+              status={item.doc.choice.status}
+              answer={item.doc.choice.answer}
+              onPick={(label) => onAnswer?.({ answer: label })}
+            />
+          ) : kind === 'secret' && item.doc.secret ? (
+            <SecretCard
+              name={item.doc.secret.name}
+              status={item.doc.secret.status}
+              onSubmit={(value) => onAnswer?.({ secret: value })}
+              onDismiss={() => onVoid?.()}
+            />
+          ) : null
+        }
+      />
     </div>
   )
 }
 
+/** A, B, … Z, AA — UI letter only; the posted answer is still the option label. */
+export function choiceLetter(index: number): string {
+  let n = index
+  let s = ''
+  do {
+    s = String.fromCharCode(65 + (n % 26)) + s
+    n = Math.floor(n / 26) - 1
+  } while (n >= 0)
+  return s
+}
+
 function ChoiceCard({
-  prompt,
   options,
   allowCustom,
   status,
   answer,
   onPick,
 }: {
-  prompt: string
   options: { label: string }[]
   allowCustom: boolean
   status: string
@@ -144,23 +158,24 @@ function ChoiceCard({
   const pending = status === 'pending'
   const [custom, setCustom] = useState('')
   return (
-    <div data-testid="thread-choice-card">
-      <div className="text-[12px] text-[var(--color-text-primary)] whitespace-pre-wrap mb-2">
-        {prompt}
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {options.map((opt, i) => {
+    <div
+      data-testid="thread-choice-card"
+      className="mt-1 w-full box-border flex flex-col gap-1.5 border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5"
+    >
+      {options.map((opt, i) => {
           const selected = answer === opt.label
+          const letter = choiceLetter(i)
           return (
             <button
               key={`${opt.label}-${i}`}
               type="button"
               data-testid="thread-choice-chip"
               data-label={opt.label}
+              data-letter={letter}
               data-primary={i === 0 ? 'true' : 'false'}
               disabled={!pending}
               onClick={() => onPick(opt.label)}
-              className={`px-3 py-1.5 text-[11px] font-medium border transition-colors ${
+              className={`flex w-full items-center gap-2 box-border px-2 py-1.5 text-left text-[11px] font-medium border transition-colors ${
                 selected
                   ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
                   : pending
@@ -168,13 +183,21 @@ function ChoiceCard({
                     : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
               } disabled:cursor-not-allowed`}
             >
-              {opt.label}
+              <span
+                className={`w-4 shrink-0 text-[10px] font-semibold ${
+                  selected
+                    ? 'text-[var(--color-accent)]'
+                    : 'text-[var(--color-text-muted)]'
+                }`}
+              >
+                {letter}
+              </span>
+              <span className="min-w-0 flex-1">{opt.label}</span>
             </button>
           )
-        })}
-      </div>
+      })}
       {allowCustom && pending && (
-        <div className="mt-2 flex gap-2">
+        <div className="mt-0.5 flex gap-2">
           <input
             data-testid="thread-choice-custom"
             value={custom}
@@ -199,13 +222,11 @@ function ChoiceCard({
 
 function SecretCard({
   name,
-  prompt,
   status,
   onSubmit,
   onDismiss,
 }: {
   name: string
-  prompt?: string | null
   status: string
   onSubmit: (value: string) => void
   onDismiss: () => void
@@ -214,9 +235,6 @@ function SecretCard({
   const [value, setValue] = useState('')
   return (
     <div data-testid="thread-secret-card">
-      <div className="text-[12px] text-[var(--color-text-primary)] mb-1">
-        {prompt || `Secret ${name}`}
-      </div>
       <div className="text-[10px] text-[var(--color-text-muted)] mb-2">{name}</div>
       {pending ? (
         <div className="flex gap-2 items-center">

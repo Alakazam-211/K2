@@ -18,6 +18,7 @@ describe('session view tab (C3/C8)', () => {
     expect(parseSessionViewTab(null)).toBe('terminal')
     expect(parseSessionViewTab('nope')).toBe('terminal')
     expect(parseSessionViewTab('thread')).toBe('thread')
+    expect(parseSessionViewTab('split')).toBe('split')
   })
 
   it('keys memory per host + conversation (this window)', () => {

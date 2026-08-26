@@ -101,11 +101,12 @@ pub const AGENTS_MD_TOOLING_SECTION: &str = "\
 \n\
 This workspace is managed by **K2**. You have the `k2` CLI — load the **k2-cli** \
 skill (`.k2/skills/k2-cli/SKILL.md`) for the full command reference \
-(`msg`, `inbox`, `activity`, `connections`, `heartbeat`, `feedback` to ask your \
-human a durable question, `project` for your project group's shared chat — reply \
-to a `[project:<name>]`-prefixed message with `k2 project msg <name> \"...\"`, \
-never `k2 msg` — and `mail` for your agent email: mint/read/wait, send under \
-your human's governance).\n";
+(`msg`, `inbox`, `activity`, `connections`, `heartbeat`, `thread` for the overlay \
+side channel with your human (`k2 thread <addr> \"...\"` / `ask` / `secret` — not \
+PTY inject), `feedback` to ask your human a durable question, `project` for your \
+project group's shared chat — reply to a `[project:<name>]`-prefixed message with \
+`k2 project msg <name> \"...\"`, never `k2 msg` — and `mail` for your agent email: \
+mint/read/wait, send under your human's governance).\n";
 
 pub fn compose_agents_md_public(project_path: &str) -> String {
     compose_agents_md(project_path)

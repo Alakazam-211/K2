@@ -18,6 +18,8 @@ import {
   composeTextareaHeight,
   composeMessagePlaceholder,
   composeAgentNameFromProjects,
+  extractImagePathsFromDraft,
+  removePathFromDraft,
 } from './terminalCompose'
 
 // ── Enter = send, Shift+Enter = newline ──────────────────────────────
@@ -185,6 +187,20 @@ describe('compose caret persistence', () => {
     expect(clampComposeCaret(-2, 5)).toBe(0)
     expect(clampComposeCaret(99, 5)).toBe(5)
     expect(clampComposeCaret(Number.NaN, 5)).toBe(5)
+  })
+})
+
+describe('extractImagePathsFromDraft / removePathFromDraft', () => {
+  it('finds quoted and bare image paths, skips pdf/txt', () => {
+    expect(
+      extractImagePathsFromDraft("see '/tmp/Screen Shot.png' and /opt/a.jpg notes.txt /x.pdf"),
+    ).toEqual(['/tmp/Screen Shot.png', '/opt/a.jpg'])
+  })
+
+  it('removes a quoted path from the draft', () => {
+    expect(removePathFromDraft("look at '/tmp/a.png' please", '/tmp/a.png')).toBe(
+      'look at please',
+    )
   })
 })
 

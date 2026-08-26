@@ -20,6 +20,7 @@
 // box; a failed send restores the text (the box reappearing IS the feedback).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
   buildComposeDropPayload,
@@ -42,11 +43,16 @@ import {
   composeAgentNameFromProjects,
   composeMessagePlaceholder,
   composerPermitted,
+  extractImagePathsFromDraft,
   mapMsgResponseToStatus,
   readComposeCaret,
+  removePathFromDraft,
   shouldSendOnKey,
   writeComposeCaret,
 } from './terminalCompose'
+import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
+import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
+import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 
 interface TerminalComposeBarProps {
   /** Resolved PTY SessionId for this pane — the pane's `terminalId`. */
@@ -61,6 +67,11 @@ interface TerminalComposeBarProps {
    * typing in the grid). Used for Esc / Ctrl+C turn-cancel.
    */
   onInjectInput?: (data: string) => void
+  /**
+   * When set, this bar always sends here (split view: one bar under
+   * the PTY, one under Thread). Otherwise the session-view tab picks.
+   */
+  sendDestination?: 'pty' | 'thread'
 }
 
 /** Insert `chunk` into draft at caret (or append). Adds a separating space when needed. */
@@ -83,6 +94,7 @@ export function TerminalComposeBar({
   sessionId,
   workspacePath = '',
   onInjectInput,
+  sendDestination,
 }: TerminalComposeBarProps): React.JSX.Element | null {
   // 1c (D4) + #67 renderer-hide: shown iff the active host is LOCAL (owner)
   // OR the app-level master is on OR the ACTIVE WORKSPACE opted into remote
@@ -104,13 +116,20 @@ export function TerminalComposeBar({
     composeAgentNameFromProjects(s.projects, workspacePath),
   )
   const messagePlaceholder = composeMessagePlaceholder(agentName)
+  const sessionChrome = useSessionViewChrome()
+  const sendOnThread =
+    sendDestination === 'thread' ||
+    (sendDestination !== 'pty' && sessionChrome?.viewTab === 'thread')
+  const threadAddr = sessionChrome?.overlayAddr ?? ''
 
   // Draft persistence (thin client): key the draft by this pane's PTY session
   // and back it with localStorage so switching workspaces/tabs restores each
   // composer's own text instead of clearing it, and a crash/restart never loses
   // it. Per-user/per-device by nature (localStorage is the desktop app's own
   // storage); the draft never touches the daemon.
-  const draftKey = `k2:composer:draft:${sessionId}`
+  const draftKey = sendOnThread
+    ? `k2:composer:draft:${sessionId}:thread`
+    : `k2:composer:draft:${sessionId}`
   const [draft, setDraft] = useState<string>(() => {
     try {
       return localStorage.getItem(`k2:composer:draft:${sessionId}`) ?? ''
@@ -124,6 +143,8 @@ export function TerminalComposeBar({
   const historyDraftRef = useRef('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const imagePaths = extractImagePathsFromDraft(draft)
 
   // Reload the saved draft when the pane's session changes — this component can
   // be reused with a new sessionId on a workspace/tab switch without remounting.
@@ -334,33 +355,95 @@ export function TerminalComposeBar({
     [insertPathsText, workspacePath],
   )
 
+  const handleAttachClick = useCallback(() => {
+    if (useConnectHostStore.getState().activeHost === 'local') {
+      fileInputRef.current?.click()
+      return
+    }
+    void useRemoteFolderPickerStore
+      .getState()
+      .open({ mode: 'file', title: 'Attach a file on the host' })
+      .then((path) => {
+        if (path) insertPathsText(buildComposeDropPayload([path]))
+      })
+  }, [insertPathsText])
+
+  const handleLocalFiles = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const list = e.target.files
+      e.target.value = ''
+      if (!list || list.length === 0) return
+      const paths: string[] = []
+      for (let i = 0; i < list.length; i++) {
+        const p = (list[i] as unknown as { path?: string }).path
+        if (p) paths.push(p)
+      }
+      if (paths.length > 0) {
+        insertPathsText(buildComposeDropPayload(paths))
+        return
+      }
+      const browserFiles = Array.from(list)
+      if (browserFiles.length > 0) {
+        void executeBrowserFileDrop(
+          browserFiles,
+          { kind: 'terminal' },
+          { workspacePath: workspacePath || undefined },
+          buildComposeDropPayload,
+        ).then((payload) => {
+          if (payload) insertPathsText(payload)
+        })
+      }
+    },
+    [insertPathsText, workspacePath],
+  )
+
   const send = useCallback(async () => {
     const text = draft.trim()
-    if (!text || sending || !sessionId) return
+    if (!text || sending) return
+    if (sendOnThread) {
+      if (!threadAddr.trim()) return
+    } else if (!sessionId) {
+      return
+    }
 
     setSending(true)
     setDraft('') // optimistic clear (PRD 1b); restored below only on failure
 
     try {
-      const resp = await daemonCliPost<MsgResponse>('terminal/send-message', {
-        session_id: sessionId,
-        text,
-      })
-      // Failed send → restore the text so it's not lost (the box reappearing
-      // IS the feedback) — but never clobber a fresh draft already started.
-      if (mapMsgResponseToStatus(resp).kind !== 'delivered') {
-        setDraft((cur) => (cur.length === 0 ? text : cur))
+      if (sendOnThread) {
+        const resp = await daemonCliPost<{ ok?: boolean }>('thread/post', {
+          addr: threadAddr,
+          text,
+          via: 'compose',
+        })
+        if (resp?.ok === false) {
+          setDraft((cur) => (cur.length === 0 ? text : cur))
+        } else {
+          setHistory((prev) => [text, ...prev].slice(0, 50))
+          setHistoryIndex(-1)
+          historyDraftRef.current = ''
+        }
       } else {
-        setHistory((prev) => [text, ...prev].slice(0, 50))
-        setHistoryIndex(-1)
-        historyDraftRef.current = ''
+        const resp = await daemonCliPost<MsgResponse>('terminal/send-message', {
+          session_id: sessionId,
+          text,
+        })
+        // Failed send → restore the text so it's not lost (the box reappearing
+        // IS the feedback) — but never clobber a fresh draft already started.
+        if (mapMsgResponseToStatus(resp).kind !== 'delivered') {
+          setDraft((cur) => (cur.length === 0 ? text : cur))
+        } else {
+          setHistory((prev) => [text, ...prev].slice(0, 50))
+          setHistoryIndex(-1)
+          historyDraftRef.current = ''
+        }
       }
     } catch {
       setDraft((cur) => (cur.length === 0 ? text : cur))
     } finally {
       setSending(false)
     }
-  }, [draft, sending, sessionId])
+  }, [draft, sending, sessionId, sendOnThread, threadAddr])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -423,16 +506,67 @@ export function TerminalComposeBar({
   // One condensed row — just the textarea.
   // min-w-0 on the flex row + field so app zoom (Cmd+=) reflows width
   // instead of pinning content-min-width and growing a horizontal scrollbar.
+  const canSend = draft.trim().length > 0 && !sending
+  // Must match composeTextareaHeight: 4px pad × 2 + line-height 1.4.
+  const firstLineH = Math.round(editorFontSize * 1.4 + 8)
+  const btnSize = Math.min(firstLineH, Math.max(16, Math.round(editorFontSize * 1.4)))
+  const iconSize = Math.max(10, Math.round(btnSize * 0.55))
+  const btnNudge = Math.max(0, (firstLineH - btnSize) / 2)
+
   return (
     <div
       ref={barRef}
-      className="flex min-w-0 w-full flex-shrink-0 items-start gap-1 border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-2 pt-1.5 pb-2.5"
+      className="flex min-w-0 w-full flex-shrink-0 flex-col gap-1.5 border-t border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-2 py-2"
       data-compose-bar=""
       data-session-id={sessionId}
+      data-compose-destination={sendOnThread ? 'thread' : 'pty'}
       data-workspace-path={workspacePath || undefined}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={handleLocalFiles}
+      />
+      <div
+        className="flex min-w-0 w-full flex-col bg-[var(--color-bg)]"
+        style={{ border: '1px solid var(--color-border)', borderRadius: 0 }}
+      >
+      {imagePaths.length > 0 && (
+        <div className="flex flex-wrap gap-1 px-1 pt-1" data-testid="compose-image-previews">
+          {imagePaths.map((path) => (
+            <ComposeImageThumb
+              key={path}
+              path={path}
+              onRemove={() => setDraft((cur) => removePathFromDraft(cur, path))}
+            />
+          ))}
+        </div>
+      )}
+      <div className="flex min-w-0 w-full items-end gap-1 px-1">
+      <button
+        type="button"
+        aria-label="Attach file"
+        title="Attach a file or image"
+        onClick={handleAttachClick}
+        className="inline-flex flex-shrink-0 items-center justify-center bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-border)] transition-colors"
+        style={{
+          borderRadius: 0,
+          width: btnSize,
+          height: btnSize,
+          marginBottom: btnNudge,
+        }}
+      >
+        <svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+      </button>
       <textarea
         ref={textareaRef}
         value={draft}
@@ -461,23 +595,156 @@ export function TerminalComposeBar({
         spellCheck={false}
         placeholder={messagePlaceholder}
         title="Enter to send, Shift+Enter for newline. Drop files for paths."
-        className="min-w-0 w-full flex-1 resize-none overflow-x-hidden bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+        className="min-w-0 w-full flex-1 resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         style={{
           fontFamily:
             "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
           fontSize: editorFontSize,
           lineHeight: 1.4,
-          border: '1px solid var(--color-border)',
+          boxSizing: 'border-box',
+          border: 'none',
           borderRadius: 0,
           padding: '4px 6px',
           maxHeight: COMPOSE_TEXTAREA_MAX_HEIGHT,
           overflowY: 'auto',
           overflowX: 'hidden',
-          // Break long tokens so zoom never forces a horizontal scrollbar.
           overflowWrap: 'anywhere',
           wordBreak: 'break-word',
         }}
       />
+      <button
+        type="button"
+        aria-label="Send message"
+        title="Send"
+        disabled={!canSend}
+        onClick={() => void send()}
+        className="inline-flex flex-shrink-0 items-center justify-center bg-[var(--color-accent)] text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+        style={{
+          borderRadius: 0,
+          width: btnSize,
+          height: btnSize,
+          marginBottom: btnNudge,
+        }}
+      >
+        <svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 19V5" />
+          <polyline points="5 12 12 5 19 12" />
+        </svg>
+      </button>
+      </div>
+      </div>
     </div>
+  )
+}
+
+function ComposeImageThumb({
+  path,
+  onRemove,
+}: {
+  path: string
+  onRemove: () => void
+}): React.JSX.Element {
+  const [url, setUrl] = useState<string | null>(null)
+  const [open, setOpen] = useState(false)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const ac = new AbortController()
+    if (urlRef.current) {
+      revokeObjectUrl(urlRef.current)
+      urlRef.current = null
+    }
+    setUrl(null)
+    void loadHostImageObjectUrl(path, { signal: ac.signal })
+      .then((r) => {
+        if (cancelled || ac.signal.aborted) {
+          revokeObjectUrl(r.url)
+          return
+        }
+        urlRef.current = r.url
+        setUrl(r.url)
+      })
+      .catch(() => {
+        if (!cancelled) setUrl(null)
+      })
+    return () => {
+      cancelled = true
+      ac.abort()
+      if (urlRef.current) {
+        revokeObjectUrl(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [path])
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open])
+
+  const name = path.split('/').pop()?.split('\\').pop() || path
+  return (
+    <>
+    <div className="relative h-20 w-20 flex-shrink-0 overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg)]" style={{ borderRadius: 0 }}>
+      {url ? (
+        <button
+          type="button"
+          className="h-full w-full cursor-zoom-in p-0 border-0 bg-transparent"
+          aria-label={`View ${name}`}
+          onClick={() => setOpen(true)}
+        >
+          <img src={url} alt={name} className="h-full w-full object-cover" />
+        </button>
+      ) : (
+        <div className="h-full w-full bg-[var(--color-bg-hover)]" title={path} />
+      )}
+      <button
+        type="button"
+        aria-label={`Remove ${name}`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onRemove()
+        }}
+        className="absolute top-0 right-0 h-4 w-4 flex items-center justify-center bg-black/60 text-white text-[10px] leading-none hover:bg-black/80"
+      >
+        ×
+      </button>
+    </div>
+    {open && url && createPortal(
+      <div
+        className="fixed inset-0 z-[99999] flex items-center justify-center bg-[var(--color-scrim)] p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-label={name}
+        onClick={() => setOpen(false)}
+      >
+        <img
+          src={url}
+          alt={name}
+          className="max-h-full max-w-full object-contain"
+          style={{ borderRadius: 0 }}
+          onClick={(e) => e.stopPropagation()}
+        />
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={() => setOpen(false)}
+          className="absolute top-3 right-3 h-7 w-7 flex items-center justify-center bg-black/70 text-white text-lg leading-none hover:bg-black/90"
+          style={{ borderRadius: 0 }}
+        >
+          ×
+        </button>
+      </div>,
+      document.body,
+    )}
+    </>
   )
 }

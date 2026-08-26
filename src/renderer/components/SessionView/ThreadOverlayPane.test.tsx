@@ -1,13 +1,71 @@
 // @vitest-environment jsdom
-import { describe, expect, it, afterEach } from 'vitest'
+import { describe, expect, it, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import { ThreadItemRow } from './ThreadOverlayPane'
+import {
+  choiceLetter,
+  ThreadItemRow,
+  ThreadOverlayPane,
+} from './ThreadOverlayPane'
 import type { OverlayThreadItem } from './overlayThread'
+
+vi.mock('./useOverlayThread', () => ({
+  useOverlayThread: () => ({
+    items: [],
+    conversationId: 'c',
+    error: null,
+    posting: false,
+    post: async () => {},
+    answer: async () => {},
+    voidCard: async () => {},
+  }),
+}))
+
+vi.mock('@/stores/settings', () => ({
+  useSettingsStore: (sel: (s: { editor: { fontSize: number } }) => unknown) =>
+    sel({ editor: { fontSize: 12 } }),
+}))
+
+describe('Thread overlay pane', () => {
+  afterEach(() => cleanup())
+
+  it('has no compose box — Message-the-agent stays on the terminal bar', () => {
+    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.queryByTestId('thread-compose')).toBeNull()
+  })
+})
 
 describe('Thread overlay choice chips + secret field', () => {
   afterEach(() => cleanup())
 
-  it('renders pending choice chips; first option is primary; tap calls onAnswer', () => {
+  it('letters options A, B, … then AA', () => {
+    expect(choiceLetter(0)).toBe('A')
+    expect(choiceLetter(1)).toBe('B')
+    expect(choiceLetter(25)).toBe('Z')
+    expect(choiceLetter(26)).toBe('AA')
+  })
+
+  it('renders markdown in a project-chat style message', () => {
+    const item: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 1,
+      id: 't1',
+      doc: {
+        id: 't1',
+        kind: 'text',
+        from: 'owner',
+        via: 'compose',
+        created_at: Math.floor(Date.now() / 1000),
+        body: '**Hello** and `code`',
+      },
+    }
+    render(<ThreadItemRow item={item} />)
+    expect(screen.getByText('You')).not.toBeNull()
+    expect(screen.getByText('Hello').tagName).toBe('STRONG')
+    expect(screen.getByText('code').tagName).toBe('CODE')
+  })
+
+  it('renders a vertical lettered choice card; first option is primary; tap calls onAnswer', () => {
     const picks: string[] = []
     const item: OverlayThreadItem = {
       collection: 'thread',
@@ -27,9 +85,17 @@ describe('Thread overlay choice chips + secret field', () => {
       },
     }
     render(<ThreadItemRow item={item} onAnswer={(p) => picks.push(p.answer || '')} />)
+    const card = screen.getByTestId('thread-choice-card')
+    expect(card.className).toContain('flex-col')
+    expect(card.className).toContain('w-full')
+    expect(card.className).not.toContain('max-w-sm')
+    expect(card.className).toMatch(/\bpx-2\b/)
     const chips = screen.getAllByTestId('thread-choice-chip')
     expect(chips).toHaveLength(2)
-    expect(chips[0].textContent).toBe('Go')
+    expect(chips[0].getAttribute('data-letter')).toBe('A')
+    expect(chips[1].getAttribute('data-letter')).toBe('B')
+    expect(chips[0].textContent).toContain('A')
+    expect(chips[0].textContent).toContain('Go')
     expect(chips[0].getAttribute('data-primary')).toBe('true')
     expect(chips[1].getAttribute('data-primary')).toBe('false')
     fireEvent.click(chips[0])
@@ -58,7 +124,9 @@ describe('Thread overlay choice chips + secret field', () => {
     expect(screen.getByTestId('thread-choice-card')).not.toBeNull()
     const go = screen.getAllByTestId('thread-choice-chip')[0]
     expect(go.getAttribute('disabled')).not.toBeNull()
+    expect(go.getAttribute('data-letter')).toBe('A')
     expect(go.className).toContain('border-[var(--color-accent)]')
+    expect(go.className).toContain('bg-[var(--color-accent)]/15')
   })
 
   it('renders a secret field and submit/dismiss; never shows the value as body text', () => {

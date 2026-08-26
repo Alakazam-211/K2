@@ -3258,8 +3258,24 @@ pub struct SqlDatabase {
     pub status: String,
     pub agent_secret_ref: Option<String>,
     pub migrator_secret_ref: Option<String>,
+    /// D22: optional PG role the workspace assistant uses. NULL = default
+    /// `ws_<project_id>_agent`. Never a secret.
+    pub bind_role: Option<String>,
     pub created_at: i64,
     pub dropped_at: Option<i64>,
+}
+
+/// One `sql_grants` row (0109). `project_id` is the **grantee** workspace
+/// (`projects.id`, not a FK). `level` is `read` | `write`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlGrant {
+    pub database_id: String,
+    pub project_id: String,
+    pub level: String,
+    pub can_manage: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 // ── K2 Mail (0075, prd-email-server-v1 §12) ────────────────────────────
@@ -3601,6 +3617,72 @@ mod unit_tests {
             .query_row("SELECT cap_db FROM api_keys WHERE id = 'k-sql-0108'", [], |r| r.get(0))
             .expect("cap_db");
         assert_eq!(db_cap, 0, "cap_db must fail closed");
+    }
+
+    /// 0109: sql_grants round-trip + bind_role + CHECK on level.
+    #[test]
+    fn sql_grants_migration_0109_applies_and_roundtrips() {
+        let conn = fresh();
+        conn.execute(
+            "INSERT INTO sql_databases (id, project_id, name, created_at) \
+             VALUES ('d1', 'p1', 'ws_p1', 100)",
+            [],
+        )
+        .expect("sql_databases insert");
+        conn.execute(
+            "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at) \
+             VALUES ('d1', 'p2', 'read', 0, 100, 100)",
+            [],
+        )
+        .expect("sql_grants insert");
+        let (level, manage): (String, i64) = conn
+            .query_row(
+                "SELECT level, can_manage FROM sql_grants WHERE database_id = 'd1' AND project_id = 'p2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("grant read");
+        assert_eq!(level, "read");
+        assert_eq!(manage, 0);
+        conn.execute(
+            "UPDATE sql_grants SET level = 'write', can_manage = 1, updated_at = 101 \
+             WHERE database_id = 'd1' AND project_id = 'p2'",
+            [],
+        )
+        .expect("grant upsert");
+        let (level2, manage2): (String, i64) = conn
+            .query_row(
+                "SELECT level, can_manage FROM sql_grants WHERE database_id = 'd1' AND project_id = 'p2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("grant reread");
+        assert_eq!(level2, "write");
+        assert_eq!(manage2, 1);
+        assert!(
+            conn.execute(
+                "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at) \
+                 VALUES ('d1', 'p3', 'admin', 0, 1, 1)",
+                [],
+            )
+            .is_err(),
+            "sql_grants.level must reject values other than read|write"
+        );
+        conn.execute(
+            "UPDATE sql_databases SET bind_role = 'custom_role' WHERE id = 'd1'",
+            [],
+        )
+        .expect("bind_role");
+        let bind: Option<String> = conn
+            .query_row("SELECT bind_role FROM sql_databases WHERE id = 'd1'", [], |r| r.get(0))
+            .expect("bind read");
+        assert_eq!(bind.as_deref(), Some("custom_role"));
+        conn.execute("DELETE FROM sql_grants WHERE database_id = 'd1' AND project_id = 'p2'", [])
+            .expect("revoke");
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sql_grants WHERE database_id = 'd1'", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 0);
     }
 
     /// 0072 (K2 Mail): the CHECK-constrained enums reject invalid

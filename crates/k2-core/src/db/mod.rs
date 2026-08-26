@@ -914,6 +914,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0108_sql",
             include_str!("../../drizzle_sql/0108_sql.sql"),
         ),
+        // 0109 — sql_grants (read|write + can_manage) + sql_databases.bind_role.
+        (
+            "0109_sql_grants",
+            include_str!("../../drizzle_sql/0109_sql_grants.sql"),
+        ),
         // 0110 — overlay threads catalog (named conversation_id, not v2_session_map).
         (
             "0110_overlay_conversations",

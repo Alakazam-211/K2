@@ -4,6 +4,9 @@ const daemonCliGet = vi.fn()
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: (...args: unknown[]) => daemonCliGet(...args),
 }))
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async () => null),
+}))
 
 import {
   decodeBase64ToUint8Array,
@@ -12,6 +15,12 @@ import {
   looksLikeBinaryText,
   revokeObjectUrl,
 } from './load-host-binary'
+import { RemoteMacTmpError } from './remote-mac-tmp'
+import {
+  useConnectHostStore,
+  __resetConnectHostStoreForTests,
+  type ConnectHost,
+} from '@/stores/connect-host'
 
 describe('decodeBase64ToUint8Array', () => {
   it('decodes ASCII payload', () => {
@@ -37,6 +46,7 @@ describe('decodeBase64ToUint8Array', () => {
 describe('loadHostBinary', () => {
   beforeEach(() => {
     daemonCliGet.mockReset()
+    __resetConnectHostStoreForTests()
   })
 
   it('calls fs/read-binary and decodes base64', async () => {
@@ -49,6 +59,32 @@ describe('loadHostBinary', () => {
   it('propagates daemon errors', async () => {
     daemonCliGet.mockRejectedValueOnce(new Error('payload too large'))
     await expect(loadHostBinary('/big.bin')).rejects.toThrow('payload too large')
+  })
+
+  it('remote + Mac tmp refuses without daemonCliGet', async () => {
+    const host: ConnectHost = {
+      id: 'dtl-1',
+      label: 'DTL',
+      hostname: 'anna.k2.dev',
+      username: 'rosson',
+      port: 443,
+      secure: true,
+      token: 'tok',
+      remember: false,
+      lastConnectedAt: null,
+    }
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().selectHost(host)
+    const path = '/var/folders/zz/abc/T/NSIRD_screencaptureui_x/Screenshot.png'
+    await expect(loadHostBinary(path)).rejects.toBeInstanceOf(RemoteMacTmpError)
+    expect(daemonCliGet).not.toHaveBeenCalled()
+  })
+
+  it('local /var/folders still reads', async () => {
+    daemonCliGet.mockResolvedValueOnce({ base64: 'aGVsbG8=' })
+    const path = '/var/folders/zz/abc/T/Screenshot.png'
+    await loadHostBinary(path)
+    expect(daemonCliGet).toHaveBeenCalledWith('fs/read-binary', { path })
   })
 })
 

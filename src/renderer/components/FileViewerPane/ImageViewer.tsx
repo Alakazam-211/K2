@@ -3,6 +3,9 @@ import {
   loadHostImageObjectUrl,
   revokeObjectUrl,
 } from '@/lib/load-host-binary'
+import { isHostSwitchedError } from '@/lib/daemon-cli'
+import { isRemoteMacTmpPath, isRemoteMacTmpError } from '@/lib/remote-mac-tmp'
+import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 
 interface ImageViewerProps {
   filePath: string
@@ -19,16 +22,20 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
   const [url, setUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [quiet, setQuiet] = useState(false)
   const [meta, setMeta] = useState<string>('')
   // Track the live object URL for cleanup even if state is stale.
   const urlRef = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    const ac = new AbortController()
+    const startedKey = activeHostKey(useConnectHostStore.getState().activeHost)
 
     async function load(): Promise<void> {
       setLoading(true)
       setError(null)
+      setQuiet(false)
       setMeta('')
       // Drop previous URL before loading the next path.
       if (urlRef.current) {
@@ -37,12 +44,26 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
       }
       setUrl(null)
 
+      if (isRemoteMacTmpPath(filePath)) {
+        if (!cancelled) {
+          setQuiet(true)
+          setLoading(false)
+        }
+        return
+      }
+
       try {
         const { url: objectUrl, mime, byteLength } = await loadHostImageObjectUrl(
           filePath,
+          { signal: ac.signal },
         )
-        if (cancelled) {
+        if (
+          cancelled ||
+          ac.signal.aborted ||
+          activeHostKey(useConnectHostStore.getState().activeHost) !== startedKey
+        ) {
           revokeObjectUrl(objectUrl)
+          if (!cancelled) setLoading(false)
           return
         }
         urlRef.current = objectUrl
@@ -51,6 +72,16 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
         setLoading(false)
       } catch (err) {
         if (cancelled) return
+        if (err instanceof Error && err.name === 'AbortError') return
+        if (isHostSwitchedError(err)) {
+          setLoading(false)
+          return
+        }
+        if (isRemoteMacTmpError(err)) {
+          setQuiet(true)
+          setLoading(false)
+          return
+        }
         const message = err instanceof Error ? err.message : String(err)
         setError(message)
         setLoading(false)
@@ -61,6 +92,7 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
 
     return () => {
       cancelled = true
+      ac.abort()
       if (urlRef.current) {
         revokeObjectUrl(urlRef.current)
         urlRef.current = null
@@ -72,6 +104,14 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
     return (
       <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-muted)] text-xs font-mono">
         Loading image...
+      </div>
+    )
+  }
+
+  if (quiet) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-muted)] text-xs font-mono px-4 text-center">
+        Not available on this server
       </div>
     )
   }

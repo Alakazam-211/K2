@@ -56,6 +56,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
 import { activateProject } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useToastStore } from '@/stores/toast'
@@ -427,30 +428,35 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
   const fileName = filePath.split('/').pop() || filePath
 
   // Initial host-aware read + the FileViewerPane 2s poll, guarded by
-  // hasSelectionWithin so a copy-in-progress never collapses. A read
-  // failure = missing-doc state (§6.3: it never breaks the layout);
-  // the poll keeps trying, so a re-created file comes back live.
+  // hasSelectionWithin so a copy-in-progress never collapses. Focused
+  // window only; CORS/connection error stops the interval; skip while
+  // recovering. A read failure = missing-doc state (§6.3).
   useEffect(() => {
     let cancelled = false
-    const read = async (): Promise<void> => {
-      if (hasSelectionWithin(rootRef.current)) return
-      try {
+    const stop = startHostFileTextPoll({
+      filePath,
+      intervalMs: FILE_POLL_INTERVAL,
+      immediate: true,
+      read: async () => {
         const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
+        return result.content
+      },
+      apply: (content) => {
         if (cancelled) return
         setPhase((prev) =>
-          prev.kind === 'ready' && prev.content === result.content
+          prev.kind === 'ready' && prev.content === content
             ? prev
-            : { kind: 'ready', content: result.content },
+            : { kind: 'ready', content },
         )
-      } catch {
+      },
+      onError: () => {
         if (!cancelled) setPhase((prev) => (prev.kind === 'ready' ? prev : { kind: 'missing' }))
-      }
-    }
-    void read()
-    const interval = setInterval(() => void read(), FILE_POLL_INTERVAL)
+      },
+      shouldSkip: () => hasSelectionWithin(rootRef.current),
+    })
     return () => {
       cancelled = true
-      clearInterval(interval)
+      stop()
     }
   }, [filePath])
 

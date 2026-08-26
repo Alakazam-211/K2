@@ -1,7 +1,10 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef, useLayoutEffect, useImperativeHandle } from 'react'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost, isHostSwitchedError } from '@/lib/daemon-cli'
+import { isRemoteMacTmpPath } from '@/lib/remote-mac-tmp'
+import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
+import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 // 0.39.0 bundle-perf: PDFViewer pulls in pdfjs-dist (~600KB gzip),
 // DocxViewer pulls in mammoth (~200KB), CodeEditor pulls in
 // @codemirror/* (~100KB). Lazy-load heavy viewers so they only enter
@@ -276,6 +279,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     setViewMode(getDefaultViewMode(newCategory))
   }, [filePath])
 
+  const loadGenRef = useRef(0)
+
   const loadFile = useCallback(async () => {
     // Binary preview categories (image/pdf/docx/audio/video) load their
     // own bytes via host-aware helpers — skip the text path.
@@ -285,21 +290,38 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       return
     }
 
+    const gen = ++loadGenRef.current
+    const startedKey = activeHostKey(useConnectHostStore.getState().activeHost)
+    // Remote Mac tmp: quiet pane, no GET, no retry.
+    if (isRemoteMacTmpPath(filePath)) {
+      setLoading(false)
+      setError(null)
+      setContent('')
+      return
+    }
+
     setLoading(true)
     setError(null)
     try {
       const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
+      if (gen !== loadGenRef.current) return
+      if (activeHostKey(useConnectHostStore.getState().activeHost) !== startedKey) return
       setContent(result.content)
-    } catch {
+    } catch (err) {
+      if (gen !== loadGenRef.current) return
+      if (isHostSwitchedError(err)) return
       // File doesn't exist yet (e.g., untitled document) — start with empty content
       setContent('')
     } finally {
-      setLoading(false)
+      if (gen === loadGenRef.current) setLoading(false)
     }
   }, [filePath])
 
   useEffect(() => {
-    loadFile()
+    void loadFile()
+    return () => {
+      loadGenRef.current += 1
+    }
   }, [loadFile])
 
   // Sync dirty state to tab
@@ -320,14 +342,19 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   // refs so the unmount cleanup writes the freshest values.
   const flushRef = useRef({ filePath, editedContent, content })
   flushRef.current = { filePath, editedContent, content }
+  const mountHostKeyRef = useRef(activeHostKey(useConnectHostStore.getState().activeHost))
   useEffect(() => {
+    mountHostKeyRef.current = activeHostKey(useConnectHostStore.getState().activeHost)
     return () => {
       const { filePath: fp, editedContent: edited, content: onDisk } = flushRef.current
       // Nothing edited, or buffer matches disk — nothing to flush.
       if (edited === null || edited === undefined || edited === onDisk) return
       // User chose Discard for this tab — drop the edit, don't write.
       if (useTabsStore.getState().consumeDiscardPending(tabId)) return
+      // Host switch unmount: do not POST the old machine's path to the new daemon.
+      if (activeHostKey(useConnectHostStore.getState().activeHost) !== mountHostKeyRef.current) return
       void daemonCliPost('fs/write-file', { path: fp, content: edited }).catch((err) => {
+        if (isHostSwitchedError(err)) return
         console.error('[file-viewer] autosave-on-leave failed:', err)
       })
     }
@@ -382,32 +409,25 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, viewMode, filePath])
 
-  // Auto-refresh: poll for file changes every 2 seconds (only when not editing)
+  // Auto-refresh: poll for file changes every 2 seconds (only when not editing).
+  // Focused window only; stop on CORS/connection error; skip while recovering.
   useEffect(() => {
     if (isBinaryPreviewCategory(getFileCategory(filePath))) return
     if (isDirty) return // Don't overwrite user edits
 
-    const interval = setInterval(async () => {
-      // Skip the refresh while the user has an active text selection
-      // anywhere inside this pane — the rendered markdown body, the
-      // filename bar at the bottom, the toolbar, etc. React re-renders
-      // collapse selection ranges, so polling would silently break
-      // Cmd+C copy. Scoped to `rootRef` so a selection in another tab
-      // or pane doesn't block this pane's refresh. The next poll cycle
-      // picks up any disk changes once the user releases the selection.
-      if (hasSelectionWithin(rootRef.current)) {
-        return
-      }
-      try {
+    return startHostFileTextPoll({
+      filePath,
+      intervalMs: FILE_POLL_INTERVAL,
+      immediate: false,
+      read: async () => {
         const result = await daemonCliGet<{ content: string }>('fs/read-file', { path: filePath })
-        // Functional update avoids stale closure over content
-        setContent(prev => result.content !== prev ? result.content : prev)
-      } catch {
-        // Ignore polling errors
-      }
-    }, FILE_POLL_INTERVAL)
-
-    return () => clearInterval(interval)
+        return result.content
+      },
+      apply: (next) => {
+        setContent((prev) => (next !== prev ? next : prev))
+      },
+      shouldSkip: () => hasSelectionWithin(rootRef.current),
+    })
   }, [filePath, isDirty])
 
   // Save file (Cmd+S) — called directly by CodeEditor with current content

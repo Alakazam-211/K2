@@ -8,6 +8,7 @@
 // assembled via ranged reads when `allowRangeAssembly` is true.
 
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { throwIfRemoteMacTmp } from '@/lib/remote-mac-tmp'
 
 /** Matches `k2_core::fs_commands::MAX_BINARY_SIZE`. */
 export const READ_BINARY_MAX_BYTES = 50 * 1024 * 1024
@@ -238,6 +239,7 @@ export async function loadHostBinary(
 ): Promise<Uint8Array> {
   const { allowRangeAssembly = false, onProgress, signal } = options
   throwIfAborted(signal)
+  throwIfRemoteMacTmp(path)
 
   try {
     const r = await daemonCliGet<{ base64?: string } | string>('fs/read-binary', {
@@ -278,6 +280,7 @@ export async function loadHostBinaryViaRange(
   options: Pick<LoadHostBinaryOptions, 'onProgress' | 'signal'> = {},
 ): Promise<Uint8Array> {
   const { onProgress, signal } = options
+  throwIfRemoteMacTmp(path)
   const chunks: Uint8Array[] = []
   let offset = 0
   let total = 0

@@ -25,6 +25,12 @@ test-util = []
 # Passthrough downgrade.
 sandbox-microvm = []
 
+# Custom/enterprise air-gap compile. Bakes air-gap ON so runtime
+# `K2_AIRGAP=0` cannot disable it, and lets k2-daemon omit the GitHub
+# daemon-latest.json URL (no update-availability ping). Default OFF:
+# cloud/self-update daemons stay as they are. Not a GitHub Release asset.
+airgap = []
+
 # k2so-core's OWN integration tests (under `crates/k2so-core/tests/`) are
 # separate compilation units that don't see `cfg(test)` of the lib —
 # they only see features. Pull the lib back in as a dev-dependency with

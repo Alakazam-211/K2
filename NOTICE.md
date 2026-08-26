@@ -12,7 +12,8 @@ available under Apache 2.0 two years after its release.
 
 A standing [Commercial Hosting Grant](COMMERCIAL_HOSTING_GRANT.md)
 permits hosting K2 for clients when remote access runs through the
-official K2 Connect tunnel service.
+official K2 Connect tunnel service. The air-gapped / LAN-only daemon
+is not in that grant — it requires a written Enterprise agreement.
 
 ## Trademarks
 

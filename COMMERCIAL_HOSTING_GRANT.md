@@ -17,8 +17,12 @@ You may host, operate, and commercially offer K2 servers **for third parties**
 2. **The software has not been modified to circumvent, disable, or defeat the K2
    Connect integration or its metering** in the hosted offering (this condition
    applies to hosting under this grant — it does not restrict what you do on
-   servers you run for yourself); and
-3. You preserve all license, copyright, and trademark notices, and you do not
+   servers you run for yourself);
+3. **You do not use the air-gapped / LAN-only K2 daemon** (the `--features airgap`
+   compile, or any binary Alakazam Labs designates as the air-gapped SKU) in that
+   offering — including with Tailscale, a private VPN, Caddy-on-LAN, or any path
+   other than official K2 Connect; and
+4. You preserve all license, copyright, and trademark notices, and you do not
    present K2 as your own product.
 
 That's it. No application, no approval step — the meter is the agreement.
@@ -26,10 +30,16 @@ That's it. No application, no approval step — the meter is the agreement.
 ## What this grant does NOT cover
 
 - Offering K2 to third parties using **your own remote-access infrastructure**
-  (your own tunnel, control plane, or equivalent). That requires a separate
-  **Enterprise license** from Alakazam Labs — including an on-premises K2 Connect
-  option for air-gapped and regulated environments. Contact:
-  rosson@alakazamlabs.com
+  (your own tunnel, Tailscale, VPN, LAN-only Caddy, control plane, or equivalent).
+  That requires a separate **Enterprise license** from Alakazam Labs — including
+  an on-premises K2 Connect option for air-gapped and regulated environments.
+  Contact: rosson@alakazamlabs.com
+- The **air-gapped / LAN-only daemon build** (`cargo build --release --bin
+  k2-daemon --features airgap`: air-gap baked on, GitHub update pings compiled
+  out). Alakazam Labs distributes and licenses that build **only** under a
+  **written Enterprise agreement**. It is not a GitHub Release asset and is not
+  covered by this self-serve grant. If you want air-gapped K2, you need a
+  contract with us.
 - Re-branding or re-selling K2 itself as a substitute product or service. That
   remains Competing Use under the FSL and is not permitted under any self-serve
   grant.
@@ -46,3 +56,7 @@ Use K2 freely — personally, internally, commercially — at any size. Build a
 hosting business on it; we'd love that, and the official tunnel is how it stays
 sustainable. If you're large enough to need your own infrastructure, talk to us —
 that's a supported, priced path, not a loophole.
+
+Air-gapped / LAN-only (including Tailscale instead of Connect) is that enterprise
+path. We do not publish that daemon on GitHub Releases. The public grant is
+Connect-metered hosting on the public daemon.

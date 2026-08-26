@@ -279,11 +279,7 @@ pub fn decide_check(current: &str, manifest: &DaemonManifest, install_kind: &str
 /// Real minisign signatures are prehashed (BLAKE2b), so we verify with
 /// `allow_legacy = false`. Returns `Ok(())` on a valid signature, or a
 /// stable error string otherwise.
-pub fn verify_minisign(
-    pubkey_wrapped_b64: &str,
-    sig_str: &str,
-    data: &[u8],
-) -> Result<(), String> {
+pub fn verify_minisign(pubkey_wrapped_b64: &str, sig_str: &str, data: &[u8]) -> Result<(), String> {
     use base64::Engine as _;
     // The embedded pubkey is base64 OF the 2-line `.pub` file. Decode that
     // outer wrapper first, then hand the `.pub` text to PublicKey::decode.
@@ -559,7 +555,11 @@ pub fn handle_check() -> CliResponse {
         Ok(m) => m,
         Err(e) => return CliResponse::bad_request(e),
     };
-    let result = decide_check(current_version(), &manifest, crate::boot_status::install_kind());
+    let result = decide_check(
+        current_version(),
+        &manifest,
+        crate::boot_status::install_kind(),
+    );
     CliResponse::ok_json(serde_json::to_string(&result).unwrap_or_default())
 }
 
@@ -1349,6 +1349,15 @@ fn daemon_port_hint() -> String {
 // Network + config
 // ─────────────────────────────────────────────────────────────────────
 
+/// Default GitHub ping URL for `POST /cli/daemon/update/check`.
+///
+/// Compiled **out** of `--features airgap` so a custom/enterprise daemon
+/// cannot phone GitHub for update availability (`strings` will not find
+/// this URL). Cloud / GitHub-shipped daemons keep it.
+#[cfg(not(feature = "airgap"))]
+const DEFAULT_MANIFEST_URL: &str =
+    "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json";
+
 /// The `daemon-latest.json` URL. Overridable via `K2SO_DAEMON_MANIFEST_URL`
 /// (self-hosting / tests). The default points at the public release
 /// channel; P1 owns the canonical value, so this is a placeholder the
@@ -1357,9 +1366,23 @@ fn manifest_url() -> String {
     // Prefer the K2-named override; fall back to the legacy K2SO_ name so
     // existing self-hosted setups keep working. Default points at the NEW
     // repo (Alakazam-211/K2) where release.sh now publishes daemon-latest.json.
-    std::env::var("K2_DAEMON_MANIFEST_URL")
-        .or_else(|_| std::env::var("K2SO_DAEMON_MANIFEST_URL"))
-        .unwrap_or_else(|_| "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json".to_string())
+    // An airgap-tagged build has no default URL — env override still exists
+    // for tests, but `handle_check` refuses before fetch because air-gap is
+    // baked on.
+    if let Ok(u) = std::env::var("K2_DAEMON_MANIFEST_URL") {
+        return u;
+    }
+    if let Ok(u) = std::env::var("K2SO_DAEMON_MANIFEST_URL") {
+        return u;
+    }
+    #[cfg(feature = "airgap")]
+    {
+        String::new()
+    }
+    #[cfg(not(feature = "airgap"))]
+    {
+        DEFAULT_MANIFEST_URL.to_string()
+    }
 }
 
 /// Blocking HTTP GET returning the body bytes. Reuses the daemon's
@@ -1435,6 +1458,67 @@ mod tests {
       }
     }"#;
 
+    struct ManifestUrlEnv {
+        k2: Option<std::ffi::OsString>,
+        k2so: Option<std::ffi::OsString>,
+    }
+
+    impl ManifestUrlEnv {
+        fn unset() -> Self {
+            let k2 = std::env::var_os("K2_DAEMON_MANIFEST_URL");
+            let k2so = std::env::var_os("K2SO_DAEMON_MANIFEST_URL");
+            std::env::remove_var("K2_DAEMON_MANIFEST_URL");
+            std::env::remove_var("K2SO_DAEMON_MANIFEST_URL");
+            Self { k2, k2so }
+        }
+    }
+
+    impl Drop for ManifestUrlEnv {
+        fn drop(&mut self) {
+            match &self.k2 {
+                Some(v) => std::env::set_var("K2_DAEMON_MANIFEST_URL", v),
+                None => std::env::remove_var("K2_DAEMON_MANIFEST_URL"),
+            }
+            match &self.k2so {
+                Some(v) => std::env::set_var("K2SO_DAEMON_MANIFEST_URL", v),
+                None => std::env::remove_var("K2SO_DAEMON_MANIFEST_URL"),
+            }
+        }
+    }
+
+    #[cfg(not(feature = "airgap"))]
+    #[test]
+    fn default_manifest_url_pings_github_releases() {
+        let _env = ManifestUrlEnv::unset();
+        let url = manifest_url();
+        assert_eq!(
+            url, "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json",
+            "cloud daemon must ping GitHub for update availability; got {url}"
+        );
+    }
+
+    #[cfg(feature = "airgap")]
+    #[test]
+    fn baked_airgap_has_no_github_update_ping_url() {
+        let _env = ManifestUrlEnv::unset();
+        let url = manifest_url();
+        assert!(
+            url.is_empty(),
+            "airgap compile must not default to a GitHub ping URL; got {url}"
+        );
+        assert!(
+            !url.contains("github.com"),
+            "airgap compile must not embed github.com in the default ping; got {url}"
+        );
+        let r = handle_check();
+        assert_eq!(r.status, "403 Forbidden", "body={}", r.body);
+        assert!(
+            r.body.contains("K2_AIRGAP=1"),
+            "baked check refuse must still name the env; body={}",
+            r.body
+        );
+    }
+
     #[test]
     fn manifest_parses_full_shape() {
         let m = DaemonManifest::parse(SAMPLE_MANIFEST.as_bytes()).expect("parse");
@@ -1479,10 +1563,8 @@ mod tests {
 
     #[test]
     fn manifest_notes_optional() {
-        let m = DaemonManifest::parse(
-            br#"{"version":"1.0.0","artifacts":{}}"#,
-        )
-        .expect("parse minimal");
+        let m =
+            DaemonManifest::parse(br#"{"version":"1.0.0","artifacts":{}}"#).expect("parse minimal");
         assert!(m.notes.is_none());
         assert!(m.artifacts.is_empty());
     }
@@ -1519,7 +1601,10 @@ mod tests {
 
         // A later prerelease of the SAME release sorts after an earlier one.
         assert_eq!(compare_versions("0.40.0-rc1", "0.40.0-rc2"), Ordering::Less);
-        assert_eq!(compare_versions("0.40.0-rc2", "0.40.0-rc1"), Ordering::Greater);
+        assert_eq!(
+            compare_versions("0.40.0-rc2", "0.40.0-rc1"),
+            Ordering::Greater
+        );
 
         // A prerelease of a HIGHER release still beats a lower bare release.
         assert_eq!(compare_versions("0.41.0-rc1", "0.40.0"), Ordering::Greater);
@@ -1528,7 +1613,10 @@ mod tests {
     #[test]
     fn compare_versions_prerelease_equality_and_metadata() {
         // Identical prereleases are Equal; build metadata is ignored.
-        assert_eq!(compare_versions("0.40.0-rc1", "0.40.0-rc1"), Ordering::Equal);
+        assert_eq!(
+            compare_versions("0.40.0-rc1", "0.40.0-rc1"),
+            Ordering::Equal
+        );
         assert_eq!(compare_versions("0.40.0+build7", "0.40.0"), Ordering::Equal);
         assert_eq!(
             compare_versions("0.40.0-rc1+abc", "0.40.0-rc1+xyz"),
@@ -1671,8 +1759,14 @@ mod tests {
         // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
         let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         assert!(verify_sha256(b"abc", expected));
-        assert!(verify_sha256(b"abc", &expected.to_uppercase()), "case-insensitive");
-        assert!(!verify_sha256(b"abcd", expected), "different data must fail");
+        assert!(
+            verify_sha256(b"abc", &expected.to_uppercase()),
+            "case-insensitive"
+        );
+        assert!(
+            !verify_sha256(b"abcd", expected),
+            "different data must fail"
+        );
         assert!(!verify_sha256(b"abc", "deadbeef"), "wrong hash must fail");
     }
 
@@ -1948,7 +2042,10 @@ mod tests {
         let j = get_job(id).unwrap();
         assert_eq!(j.phase, Phase::Failed);
         assert!(
-            j.error.as_deref().unwrap_or_default().contains("isn't running"),
+            j.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("isn't running"),
             "error should explain app not running: {:?}",
             j.error
         );
@@ -1966,7 +2063,11 @@ mod tests {
         let id = v["job_id"].as_str().expect("job_id");
         let j = get_job(id).unwrap();
         assert_eq!(j.phase, Phase::Failed);
-        assert!(j.error.as_deref().unwrap_or_default().contains("isn't running"));
+        assert!(j
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("isn't running"));
     }
 
     #[test]
@@ -2030,7 +2131,11 @@ mod tests {
             j.staged_path = Some(PathBuf::from("/no/such/staged/k2-daemon"));
         });
         let err = prepare_apply(&id).expect_err("missing staged file must reject");
-        assert!(err.body.contains("staged binary missing"), "body={}", err.body);
+        assert!(
+            err.body.contains("staged binary missing"),
+            "body={}",
+            err.body
+        );
     }
 
     #[test]
@@ -2078,8 +2183,16 @@ mod tests {
         // None ⇒ test seam: 200 ack, NO real swap/helper/shutdown.
         let resp = handle_apply(body.as_bytes(), None);
         assert!(resp.status.starts_with("200"), "status={}", resp.status);
-        assert!(resp.body.contains("\"applying\":true"), "body={}", resp.body);
-        assert!(resp.body.contains("test-seam"), "body should note the seam: {}", resp.body);
+        assert!(
+            resp.body.contains("\"applying\":true"),
+            "body={}",
+            resp.body
+        );
+        assert!(
+            resp.body.contains("test-seam"),
+            "body should note the seam: {}",
+            resp.body
+        );
         // Phase did NOT advance to applying/restarting — the seam skipped it.
         assert_eq!(
             get_job(&id).unwrap().phase,
@@ -2146,7 +2259,11 @@ mod tests {
         };
         swap_in_place(&plan).expect("swap must succeed");
 
-        assert_eq!(std::fs::read(&running).unwrap(), b"NEW", "path now serves the new binary");
+        assert_eq!(
+            std::fs::read(&running).unwrap(),
+            b"NEW",
+            "path now serves the new binary"
+        );
         // Executable bit survives the swap — systemd must be able to exec it.
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&running).unwrap().permissions().mode();
@@ -2155,7 +2272,11 @@ mod tests {
         let strays: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().starts_with(".k2-daemon.new"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".k2-daemon.new")
+            })
             .collect();
         assert!(strays.is_empty(), "swap must not leave temp files behind");
     }
@@ -2216,7 +2337,10 @@ mod tests {
             b"OLD-GOOD",
             "the known-good binary is restored"
         );
-        assert!(!pending_update_path().exists(), "marker cleared after rollback");
+        assert!(
+            !pending_update_path().exists(),
+            "marker cleared after rollback"
+        );
     }
 
     // ── swap helper script shape (no spawn) ─────────────────────────
@@ -2239,7 +2363,10 @@ mod tests {
         // The target version is bound to $TARGET and the health-check greps
         // for `"version":"$TARGET"` + `"phase":"ready"`.
         assert!(s.contains("TARGET=\"0.40.0\""), "target version bound");
-        assert!(s.contains("\\\"version\\\":\\\"$TARGET\\\""), "greps version==target");
+        assert!(
+            s.contains("\\\"version\\\":\\\"$TARGET\\\""),
+            "greps version==target"
+        );
         assert!(s.contains("\\\"phase\\\":\\\"ready\\\""), "waits for ready");
         assert!(s.contains("cp -f \"$BACKUP\""), "rollback restores backup");
         assert!(s.contains("/usr/local/bin/k2-daemon"), "running path");

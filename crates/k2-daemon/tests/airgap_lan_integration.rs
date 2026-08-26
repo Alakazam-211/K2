@@ -129,10 +129,7 @@ fn with_temp_home<F: FnOnce()>(f: F) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!(
-        "k2-airgap-lan-{}-{nanos}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("k2-airgap-lan-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(tmp.join(".k2")).expect("temp HOME/.k2");
     std::env::set_var("HOME", &tmp);
     let _ = k2_core::db::init_for_tests();
@@ -153,11 +150,20 @@ async fn boot_status_advertises_airgap_and_listen_without_bumping_protocol() {
         let r = http(d.port, "GET", "/boot-status", None);
         assert_eq!(r.status, 200, "boot-status must answer; body={}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
-        assert_eq!(v["protocol"], serde_json::json!(k2_daemon::boot_status::PROTOCOL));
+        assert_eq!(
+            v["protocol"],
+            serde_json::json!(k2_daemon::boot_status::PROTOCOL)
+        );
         assert_eq!(
             v["airgap"]["enabled"],
             serde_json::json!(true),
             "airgap.enabled must be true; body={}",
+            r.body
+        );
+        assert_eq!(
+            v["airgap"]["baked"],
+            serde_json::json!(k2_core::airgap::baked()),
+            "airgap.baked must track the cargo feature; body={}",
             r.body
         );
         assert!(

@@ -501,7 +501,8 @@ echo "  latest.json generated (darwin-aarch64; windows-x86_64 added after NSIS i
 # name: k2-daemon-linux-x86_64{,.sig}, k2-daemon-linux-aarch64{,.sig}),
 # this step merges them into the manifest; otherwise it emits a macos-only
 # manifest (documented — P2/P3 treat a missing artifact key as "no build
-# for that platform yet").
+# for that platform yet"). A `--features airgap` daemon is custom/enterprise
+# only (no GitHub update ping) and is never a GitHub Release asset.
 #
 # daemon-latest.json schema (P2/P3 consume this):
 #   {

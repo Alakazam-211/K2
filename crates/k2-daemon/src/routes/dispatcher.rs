@@ -1076,6 +1076,7 @@ async fn handle_one_request(
                 // PROTOCOL not bumped (additive like webClient / scopedHooks).
                 "airgap": {
                     "enabled": k2_core::airgap::enabled(),
+                    "baked": k2_core::airgap::baked(),
                 },
                 "listen": {
                     "lan": k2_core::listen::lan_bound(),

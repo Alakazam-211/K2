@@ -76,3 +76,12 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
         run: cargo check -p k2-core -p k2-daemon --all-targets
+
+      # Custom/enterprise air-gap compile (`--features airgap`). Compiles
+      # the GitHub update-ping URL out of k2-daemon; baked air-gap cannot
+      # be turned off with K2_AIRGAP=0. Not a GitHub Release asset. Default
+      # check above stays the cloud self-update build.
+      - name: cargo check airgap feature
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo check -p k2-core -p k2-daemon --features airgap --all-targets

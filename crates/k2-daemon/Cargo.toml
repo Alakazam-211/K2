@@ -35,6 +35,11 @@ path = "src/lib.rs"
 # `dep:` keeps the optional deps from auto-creating implicit features.
 sandbox-microvm = ["k2-core/sandbox-microvm", "dep:nix", "dep:seccompiler"]
 
+# Custom/enterprise air-gap compile (not a GitHub Release asset). Forwards
+# k2-core's baked air-gap and compiles the GitHub daemon-latest.json URL
+# out of this crate (see update_routes).
+airgap = ["k2-core/airgap"]
+
 [dependencies]
 # Session Stream + Awareness Bus primitives are now always compiled
 # into k2so-core (the `session_stream` feature flag was retired in

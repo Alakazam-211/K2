@@ -9,6 +9,11 @@
 //!
 //! Opposite polarity from [`crate::listen`] (`K2_LISTEN` garbage → loopback).
 //! Read at boot and every refuse site — never renderer-only.
+//!
+//! Custom/enterprise builds can set `--features airgap` ([`baked`] is true:
+//! air-gap cannot be turned off, and k2-daemon omits the GitHub
+//! update-availability URL). That binary is **not** a GitHub Release asset.
+//! Cloud / Linux ship builds leave this feature OFF.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -26,8 +31,20 @@ pub fn set_setting_enabled(on: bool) {
     SETTING_ENABLED.store(on, Ordering::Relaxed);
 }
 
+/// True iff this binary was compiled with the `airgap` cargo feature.
+///
+/// Custom/enterprise `--features airgap` builds set this. Runtime
+/// `K2_AIRGAP=0` cannot turn it off. Not a GitHub Release asset.
+pub fn baked() -> bool {
+    cfg!(feature = "airgap")
+}
+
 /// True iff air-gap is on. Env wins; garbage env → on; unset → setting.
+/// A `--features airgap` build is always on (see [`baked`]).
 pub fn enabled() -> bool {
+    if baked() {
+        return true;
+    }
     match std::env::var(ENV_VAR) {
         Ok(v) => parse_env(&v),
         Err(_) => SETTING_ENABLED.load(Ordering::Relaxed) || crate::app_settings::load().airgap,
@@ -111,6 +128,31 @@ mod tests {
     }
 
     #[test]
+    fn baked_matches_cargo_feature() {
+        assert_eq!(
+            baked(),
+            cfg!(feature = "airgap"),
+            "baked() must track the airgap cargo feature"
+        );
+    }
+
+    #[cfg(feature = "airgap")]
+    #[test]
+    fn baked_build_cannot_be_disabled_with_env() {
+        let _lock = HOME_LOCK.lock();
+        let (dir, prev) = isolated_home();
+        set_setting_enabled(false);
+        for v in ["0", "false", "OFF", "no"] {
+            let _env = EnvGuard::set(Some(v));
+            assert!(enabled(), "baked airgap must stay on when K2_AIRGAP={v}");
+        }
+        let _unset = EnvGuard::set(None);
+        assert!(enabled(), "baked airgap must stay on when env is unset");
+        restore_home(&dir, prev);
+    }
+
+    #[cfg(not(feature = "airgap"))]
+    #[test]
     fn defaults_off_when_env_and_setting_unset() {
         let _lock = HOME_LOCK.lock();
         let _env = EnvGuard::set(None);
@@ -132,6 +174,7 @@ mod tests {
         restore_home(&dir, prev);
     }
 
+    #[cfg(not(feature = "airgap"))]
     #[test]
     fn env_falsy_disables_even_if_setting_on() {
         let _lock = HOME_LOCK.lock();
@@ -156,6 +199,7 @@ mod tests {
         restore_home(&dir, prev);
     }
 
+    #[cfg(not(feature = "airgap"))]
     #[test]
     fn setting_enables_when_env_unset() {
         let _lock = HOME_LOCK.lock();

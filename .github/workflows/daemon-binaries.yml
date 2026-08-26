@@ -17,6 +17,11 @@
 #   k2-daemon-linux-x86_64{,.sig}
 #   k2-daemon-linux-aarch64{,.sig}
 #
+# Do NOT attach an air-gap daemon to the GitHub release. `--features airgap`
+# is a custom/enterprise compile (bakes air-gap ON, omits the GitHub
+# daemon-latest.json ping URL). Distribution is off-band / portal, not
+# `gh release upload`. Cloud Linux self-update stays on the untagged assets.
+#
 # Secrets (repo Settings → Secrets and variables → Actions):
 #   TAURI_SIGNING_PRIVATE_KEY           — the minisign private key STRING
 #                                         (same key as ~/.tauri/k2-updater.key)
@@ -215,11 +220,16 @@ jobs:
           BASE="https://github.com/$REPO/releases/download/$TAG"
           # The manifest + binaries were uploaded to THIS tag's release
           # (manifest by release.sh Step 8.5, binaries by the matrix job).
+          # Exact cloud-update names only. Never glob `k2-daemon-linux-*`
+          # in a way that could pick up a privately built `*-airgap` binary
+          # — that compile is custom/enterprise and is not a release asset.
           gh release download "$TAG" --repo "$REPO" \
             -p daemon-latest.json \
-            -p 'k2-daemon-linux-*' \
+            -p k2-daemon-linux-x86_64 \
+            -p k2-daemon-linux-x86_64.sig \
+            -p k2-daemon-linux-aarch64 \
+            -p k2-daemon-linux-aarch64.sig \
             --skip-existing
-          # .sig files also match the glob; hash only the binaries.
           python3 - "$BASE" <<'PY'
           import hashlib, json, sys
           base = sys.argv[1]
@@ -232,6 +242,9 @@ jobs:
                   "sig": f"{base}/{name}.sig",
                   "sha256": digest,
               }
+          leaked = [k for k in m["artifacts"] if "airgap" in k]
+          if leaked:
+              raise SystemExit(f"daemon-latest.json must not list airgap assets: {leaked}")
           json.dump(m, open("daemon-latest.json", "w"), indent=2)
           print("merged platforms:", sorted(m["artifacts"]))
           PY

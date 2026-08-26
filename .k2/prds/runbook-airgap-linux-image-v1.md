@@ -25,7 +25,17 @@ LAN v1 is **cleartext HTTP** unless they terminate TLS in Caddy (not required fo
 
 ## 1. Do not run `k2 daemon install` on the air-gapped box
 
-That command fetches the binary from GitHub. Bake or `scp` `k2-daemon` + `cli/k2` into the image.
+That command fetches the cloud binary from GitHub. Do **not** take `k2-daemon-linux-<arch>` from the public GitHub release for this image.
+
+Bake or `scp` a **custom/enterprise** daemon built with:
+
+```
+cargo build --release --bin k2-daemon --features airgap
+```
+
+`--features airgap` bakes air-gap **on** (`K2_AIRGAP=0` cannot disable it) and **omits** the GitHub `daemon-latest.json` URL, so `POST /cli/daemon/update/check` cannot ping GitHub for update availability. That binary is **not** a GitHub Release asset and is **not** in `daemon-latest.json`. **License:** not covered by the self-serve Commercial Hosting Grant — Alakazam ships it only under a **written Enterprise agreement** (`COMMERCIAL_HOSTING_GRANT.md`). Hand it to that customer off-band (scp / future enterprise portal) — not `gh release download`.
+
+Still set `Environment=K2_AIRGAP=1` on the unit (§2) so interactive CLI on that box refuses Connect/install the same way. Other `github.com` strings may still grep (D7 full strip is out of v1). The update-availability ping URL is the one this compile removes.
 
 ## 2. Before first start: systemd env
 
@@ -102,7 +112,7 @@ Do not also open `daemon.port` in the security group. Do not run a second proxy 
 
 Packet-capture: no SYN to `connect.k2.dev`, `cert.k2.dev`, Supabase, k2e-01 (`178.156.232.105`), or GitHub.
 
-The binary still **contains** those strings. Do not say “authoritatively impossible” until a compile-time strip (out of v1). `--airgap` as an installer flag is later; this env-before-start flow is the product.
+A `--features airgap` daemon omits the GitHub `daemon-latest.json` update-ping URL. Other hosted strings (`connect.k2.dev`, relay IPs) still grep — do not say “authoritatively impossible” for those until a full D7 strip. That binary is not published on GitHub Releases. `--airgap` as an installer flag is later; env-before-start plus the custom compile is the product.
 
 ## 10. Live 3-minute probe (macOS launchd / z3mbpZ)
 

@@ -153,7 +153,7 @@ Deep dive: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 [FSL-1.1-Apache-2.0](LICENSE.md) — free for personal and internal/business use; each release converts to Apache 2.0 two years later.
 
-Commercial multi-tenant hosting via official **K2 Connect** — [COMMERCIAL_HOSTING_GRANT.md](COMMERCIAL_HOSTING_GRANT.md).
+Commercial multi-tenant hosting via official **K2 Connect** — [COMMERCIAL_HOSTING_GRANT.md](COMMERCIAL_HOSTING_GRANT.md). Air-gapped / LAN-only daemon: written Enterprise agreement (not a GitHub Release asset).
 
 ---
 

@@ -105,9 +105,10 @@ pub fn create_role_sql(role: &str, password: &str) -> String {
 /// grantee's `ws_*_agent` role; a later `k2 db create` must not fail.
 pub fn ensure_role_sql(role: &str, password: &str) -> String {
     let create = create_role_sql(role, password);
+    // CREATE ROLE must keep its trailing semicolon so PL/pgSQL does not
+    // parse EXCEPTION as a role option (AX41: "unrecognized role option").
     format!(
-        "DO $$\nBEGIN\n  {inner}\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;",
-        inner = create.trim_end_matches(';'),
+        "DO $$\nBEGIN\n  {create}\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;"
     )
 }
 
@@ -340,7 +341,9 @@ pub fn create_database(
            doc JSONB NOT NULL,\n\
            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\
            PRIMARY KEY (collection, id)\n\
-         );\n",
+         );\n\
+         ALTER TABLE _k2_migrations OWNER TO {migrator};\n\
+         ALTER TABLE _k2_store OWNER TO {migrator};\n",
         db = pg_quote_ident(&name),
         agent = pg_quote_ident(&agent),
         migrator = pg_quote_ident(&migrator),
@@ -1344,6 +1347,12 @@ mod tests {
         assert!(up.contains("EXCEPTION WHEN DUPLICATE_OBJECT"));
         assert!(up.contains("NOSUPERUSER"));
         assert!(!up.split_whitespace().any(|w| w == "SUPERUSER"));
+        // Semicolon must precede EXCEPTION (PL/pgSQL), not be stripped.
+        let before_ex = up.split("EXCEPTION").next().unwrap();
+        assert!(
+            before_ex.trim_end().ends_with(';'),
+            "CREATE ROLE inside DO must end with ; before EXCEPTION, got {sql}"
+        );
         let alter = alter_role_password_sql("ws_abc_agent", "secret");
         let aup = alter.to_ascii_uppercase();
         assert!(aup.contains("ALTER ROLE"));

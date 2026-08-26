@@ -272,6 +272,7 @@ pub fn handle_migrate_post(params: &HashMap<String, String>) -> CliResponse {
 /// - `paths` — JSON array of absolute paths the daemon can open (multi-file
 ///   → one tray package via [`k2_core::inbox::deliver_files`])
 /// - `title` (optional override)
+/// - `body` / `note` (optional sender prose prepended to the cover)
 /// - `from` (optional sender identity for frontmatter + wake framing)
 /// - `source` (optional; default `msg-inbox`)
 /// - `wake` / `mode` — `wake=true|1|yes` or `mode=wake` enables live knock
@@ -313,6 +314,7 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
     let title = opt_param(params, "title");
     let from = opt_param(params, "from");
     let source = opt_param(params, "source");
+    let note = opt_param(params, "body").or_else(|| opt_param(params, "note"));
     let wake = deliver_wants_wake(params);
 
     let workspace = PathBuf::from(&resolved_path);
@@ -322,6 +324,7 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
         title.as_deref(),
         from.as_deref(),
         source.as_deref(),
+        note.as_deref(),
     ) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
@@ -339,7 +342,7 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
 /// Params:
 /// - `workspace` / `target` / `project` / `project_path` — recipient token
 /// - `path` — absolute path to the staged `.tar.gz` the daemon can open
-/// - `title` / `from` / `source` / `wake` / `mode` — same as deliver
+/// - `title` / `body` / `note` / `from` / `source` / `wake` / `mode` — same as deliver
 pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliResponse {
     let target_token = opt_param(params, "workspace")
         .or_else(|| opt_param(params, "target"))
@@ -374,6 +377,7 @@ pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliRespon
     let title = opt_param(params, "title");
     let from = opt_param(params, "from");
     let source = opt_param(params, "source");
+    let note = opt_param(params, "body").or_else(|| opt_param(params, "note"));
     let wake = deliver_wants_wake(params);
 
     let workspace = PathBuf::from(&resolved_path);
@@ -383,6 +387,7 @@ pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliRespon
         title.as_deref(),
         from.as_deref(),
         source.as_deref(),
+        note.as_deref(),
     ) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),

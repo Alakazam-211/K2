@@ -11108,10 +11108,11 @@ LIVE CHAT (short, one line)
   k2 msg <handle> "ready when you are"
 
 SEND A FILE
-  k2 msg <handle> --inbox-wake ./brief.md [--title "..."]
+  k2 msg <handle> --inbox-wake ./brief.md [--title "..."] [--body "..."]
       Copy into their .k2/inbox/ and ping them: Open: k2 inbox read <id>
       Preferred. Prints the id. Multiple paths → ONE package, one id.
-  k2 msg <handle> --inbox-silent ./data.csv [--title "..."]
+      Extra prose / --body is the cover brief (files AND instructions).
+  k2 msg <handle> --inbox-silent ./data.csv [--title "..."] [--body "..."]
       Copy only. Does NOT notify. They need k2 inbox list.
 
   Bare --inbox is an error. Do not paste file contents into live msg text.
@@ -11125,7 +11126,7 @@ workspace tray.
 
 USAGE
   k2 msg <handle|handle/sidecar|sessionId|agent::host> "text" [--from <name>] [--command "<text>"] [--no-wake]
-  k2 msg <handle|agent::host> --inbox-wake|--inbox-silent <path> [path...] [--title "..."]
+  k2 msg <handle|agent::host> --inbox-wake|--inbox-silent <path> [path...] [--title "..."] [--body "..."] ["brief"]
 
 Live `msg` AUTO-WAKES a dormant session by default: if the agent's
 session is asleep, msg resumes/spawns it, waits until READY, then
@@ -11206,12 +11207,13 @@ LENGTH LIMIT — IMPORTANT
       k2 msg <workspace> --inbox-silent ./report.pdf
 
 TRAY DELIVERY (work packages)
-  k2 msg <workspace> --inbox-wake <path> [path…] [--title "..."] [--from <name>]
+  k2 msg <workspace> --inbox-wake <path> [path…] [--title "..."] [--body "..."] [--from <name>]
       Package + short live knock (recommended). Wake line is a pointer
       (`[inbox:<id>] <title>` + `Open: k2 inbox read <id>`), never the
       full file body. Multiple paths → one package (cover + all sidecars).
+      Positional prose or --body is stored on the cover with the files.
 
-  k2 msg <workspace> --inbox-silent <path> [path…] [--title "..."] [--from <name>]
+  k2 msg <workspace> --inbox-silent <path> [path…] [--title "..."] [--body "..."] [--from <name>]
       Package only — does NOT notify the peer. Use wake, or a separate
       live `k2 msg` after silent, if you want a knock.
 
@@ -11489,7 +11491,7 @@ cmd_schema() {
         {"name": "--inbox-wake", "arg": null, "description": "Land tray package + short live knock ([inbox:id] title + open line). Accepts multiple paths as one package. Preferred tray mode."},
         {"name": "--inbox", "arg": null, "description": "Hard error — use --inbox-silent or --inbox-wake."},
         {"name": "--title", "arg": "text", "description": "Title override for tray package (with --inbox-silent|--inbox-wake)."},
-        {"name": "--body", "arg": "text", "description": "String body when no file path (legacy compose form with tray flags)."}
+        {"name": "--body", "arg": "text", "description": "Cover brief. With files, prepended to the tray package (not XOR). Without files, legacy compose body."}
       ]
     },
     {
@@ -16942,7 +16944,11 @@ does not wake or ping them. Use --inbox-wake for package + knock, or send
 a separate live `k2 msg <workspace> "..."` after silent if you want your
 own notify.
 
-Legacy string form (no file): 
+Files plus a brief (cover note):
+  k2 msg <workspace> --inbox-wake ./file.pdf --body "please review"
+  k2 msg <workspace> --inbox-wake ./file.pdf "please review"
+
+Legacy string form (no file):
   k2 msg <workspace> --inbox-silent --title "..." [--body "..."]
   k2 msg <workspace> --inbox-wake   --title "..." [--body "..."]
 EOF
@@ -17455,13 +17461,87 @@ with tarfile.open(out, "w:gz") as tf:
     return 0
 }
 
+# BEGIN_MSG_INBOX_TRAY_RESTORE
+# Globals (not function-locals): a RETURN trap after `local` vars are
+# torn down used to unbound `_tray_remote_applied` under `set -u` (#64).
+_K2_TRAY_SAVED_BASE_URL=""
+_K2_TRAY_SAVED_TOKEN=""
+_K2_TRAY_REMOTE_APPLIED=0
+_tray_restore_env() {
+    if [ "${_K2_TRAY_REMOTE_APPLIED:-0}" = "1" ]; then
+        BASE_URL="${_K2_TRAY_SAVED_BASE_URL}"
+        TOKEN="${_K2_TRAY_SAVED_TOKEN}"
+        _K2_TRAY_REMOTE_APPLIED=0
+    fi
+}
+# END_MSG_INBOX_TRAY_RESTORE
+
+# BEGIN_MSG_INBOX_MERGE_BRIEF
+# Merge --body with leftover non-file positionals. Usage:
+#   _msg_inbox_merge_brief "<existing-body>" <file> [file...] -- <positional...>
+# Files listed before `--` are the delivered paths (as the user typed them).
+# Positionals after `--` that are not in that file list become the brief.
+_msg_inbox_merge_brief() {
+    local existing="${1-}"
+    shift
+    local files=() extras=() seen_sep=0
+    local a already fp
+    for a in "$@"; do
+        if [ "$seen_sep" = "0" ] && [ "$a" = "--" ]; then
+            seen_sep=1
+            continue
+        fi
+        if [ "$seen_sep" = "0" ]; then
+            files+=("$a")
+        else
+            already=0
+            for fp in "${files[@]+"${files[@]}"}"; do
+                if [ "$a" = "$fp" ]; then
+                    already=1
+                    break
+                fi
+            done
+            if [ "$already" = "0" ]; then
+                extras+=("$a")
+            fi
+        fi
+    done
+    local joined=""
+    if [ ${#extras[@]} -gt 0 ]; then
+        joined="${extras[*]}"
+    fi
+    if [ -n "$existing" ] && [ -n "$joined" ]; then
+        printf '%s' "${existing} ${joined}"
+    elif [ -n "$joined" ]; then
+        printf '%s' "$joined"
+    else
+        printf '%s' "$existing"
+    fi
+}
+# END_MSG_INBOX_MERGE_BRIEF
+
 cmd_msg_inbox_form() {
+    # Wrapper so Connect host BASE_URL/TOKEN restore always runs after
+    # inner returns — never via a RETURN trap on function-locals (#64).
+    _K2_TRAY_SAVED_BASE_URL="${BASE_URL}"
+    _K2_TRAY_SAVED_TOKEN="${TOKEN}"
+    _K2_TRAY_REMOTE_APPLIED=0
+    _cmd_msg_inbox_form_inner "$@"
+    local rc=$?
+    _tray_restore_env
+    return "$rc"
+}
+
+_cmd_msg_inbox_form_inner() {
     # `msg <ws> --inbox-silent|wake [path …] [--title ...] [--body ...] [--from ...]`
     #
     # P2 multi-file: multiple positionals that are files become ONE tray
     # package (cover + sidecars under <id>.files/). Local loopback posts
     # paths[] to /cli/inbox/deliver; remote multi packs a flat tar.gz,
     # stages via upload-binary/chunk, then /cli/inbox/deliver-bundle.
+    #
+    # Files + sender brief: --body and leftover non-file positionals are
+    # posted as `body=` on deliver (cover note). Not XOR with paths (#64).
     #
     # Remote tray routing (agent::host / name@host): unlike live text msg
     # (federation), file packages must land on the daemon that owns the
@@ -17476,20 +17556,6 @@ cmd_msg_inbox_form() {
     shift
     local mode="$1"   # silent | wake
     shift
-
-    # ── Remote Connect host repoint (tray only; save/restore globals) ──
-    local _tray_saved_base_url="${BASE_URL}"
-    local _tray_saved_token="${TOKEN}"
-    local _tray_remote_applied=0
-    _tray_restore_env() {
-        if [ "${_tray_remote_applied}" = "1" ]; then
-            BASE_URL="${_tray_saved_base_url}"
-            TOKEN="${_tray_saved_token}"
-            _tray_remote_applied=0
-        fi
-    }
-    # Restore on normal function return (exit ends the process anyway).
-    trap '_tray_restore_env' RETURN
 
     _split_remote_target "$target"
     if [ "${_IS_WIRE_FORM:-0}" = "1" ]; then
@@ -17510,7 +17576,7 @@ cmd_msg_inbox_form() {
             echo "Tray file send to ${_REMOTE_HOST} needs that host's Connect token (not federation)." >&2
             return 2
         fi
-        _tray_remote_applied=1
+        _K2_TRAY_REMOTE_APPLIED=1
         target="$_BARE_TARGET"
     fi
 
@@ -17554,6 +17620,11 @@ cmd_msg_inbox_form() {
         esac
     fi
 
+    # Sender brief: --body plus any positional that is not a delivered file.
+    if [[ ${#file_paths[@]} -gt 0 ]]; then
+        body="$(_msg_inbox_merge_brief "$body" "${file_paths[@]}" -- "${positional[@]+"${positional[@]}"}")"
+    fi
+
     local wake_flag="false"
     [[ "$mode" == "wake" ]] && wake_flag="true"
 
@@ -17565,7 +17636,7 @@ cmd_msg_inbox_form() {
             abs_path=$(_msg_inbox_abspath "$fp")
             if [[ ! -f "$abs_path" ]]; then
                 echo "Error: file not found: $fp" >&2
-                echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [path…] [--title \"...\"] [--from <name>]" >&2
+                echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [path…] [--title \"...\"] [--body \"...\"] [--from <name>]" >&2
                 exit 2
             fi
             abs_paths+=("$abs_path")
@@ -17580,6 +17651,7 @@ cmd_msg_inbox_form() {
             local pth="$1"
             local params="workspace=$(urlencode "$target")&path=$(urlencode "$pth")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
             [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
+            [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
             cli_send cli_post_form "/cli/inbox/deliver" "$params"
         }
@@ -17593,6 +17665,7 @@ cmd_msg_inbox_form() {
             }
             local params="workspace=$(urlencode "$target")&paths=$(urlencode "$paths_json")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
             [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
+            [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
             cli_send cli_post_form "/cli/inbox/deliver" "$params"
         }
@@ -17601,6 +17674,7 @@ cmd_msg_inbox_form() {
             local pth="$1"
             local params="workspace=$(urlencode "$target")&path=$(urlencode "$pth")&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")&source=msg-inbox"
             [[ -n "$title" ]] && params="${params}&title=$(urlencode "$title")"
+            [[ -n "$body" ]] && params="${params}&body=$(urlencode "$body")"
             [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
             cli_send cli_post_form "/cli/inbox/deliver-bundle" "$params"
         }
@@ -17667,7 +17741,7 @@ cmd_msg_inbox_form() {
 
     # ── Legacy string compose (--title/--body, no path) ──────────────
     if [[ -z "$title" ]]; then
-        echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [path…] [--title \"...\"] [--from <name>]" >&2
+        echo "Usage: k2 msg <workspace> --inbox-${mode} <path> [path…] [--title \"...\"] [--body \"...\"] [--from <name>]" >&2
         echo "   or: k2 msg <workspace> --inbox-${mode} --title \"...\" [--body \"...\"]" >&2
         exit 2
     fi

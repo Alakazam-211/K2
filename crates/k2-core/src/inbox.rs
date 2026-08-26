@@ -286,12 +286,15 @@ pub struct DeliveredPackage {
 /// 4. Filename stem
 ///
 /// `source` defaults to `"msg-inbox"`. `from` defaults to `"self"`.
+/// `note` is optional sender prose (positional / `--body`) prepended to
+/// the cover — files plus a brief must both land (#64).
 pub fn deliver_file(
     workspace: &Path,
     source_path: &Path,
     title_override: Option<&str>,
     from: Option<&str>,
     source: Option<&str>,
+    note: Option<&str>,
 ) -> Result<DeliveredPackage, String> {
     if !source_path.is_file() {
         return Err(format!(
@@ -318,6 +321,7 @@ pub fn deliver_file(
             title_override,
             &from_tag,
             &source_tag,
+            note,
         )
     } else {
         deliver_binary_file(
@@ -326,6 +330,7 @@ pub fn deliver_file(
             title_override,
             &from_tag,
             &source_tag,
+            note,
         )
     }
 }
@@ -363,6 +368,7 @@ pub fn deliver_files(
     title_override: Option<&str>,
     from: Option<&str>,
     source: Option<&str>,
+    note: Option<&str>,
 ) -> Result<DeliveredPackage, String> {
     if source_paths.is_empty() {
         return Err("no source paths — pass at least one file".to_string());
@@ -374,6 +380,7 @@ pub fn deliver_files(
             title_override,
             from,
             source,
+            note,
         );
     }
 
@@ -399,7 +406,11 @@ pub fn deliver_files(
     fs::create_dir_all(&files_dir).map_err(|e| format!("create sidecar dir: {e}"))?;
 
     let mut sidecar_paths: Vec<String> = Vec::with_capacity(source_paths.len());
-    let mut body_lines: Vec<String> = Vec::with_capacity(source_paths.len() + 4);
+    let mut body_lines: Vec<String> = Vec::with_capacity(source_paths.len() + 8);
+    if let Some(n) = note.map(str::trim).filter(|s| !s.is_empty()) {
+        body_lines.push(n.to_string());
+        body_lines.push(String::new());
+    }
     body_lines.push(format!(
         "Multi-file package delivered via `k2 msg --inbox-*` ({n} files).\n",
         n = source_paths.len()
@@ -467,6 +478,7 @@ pub fn unpack_tray_bundle(
     title_override: Option<&str>,
     from: Option<&str>,
     source: Option<&str>,
+    note: Option<&str>,
 ) -> Result<DeliveredPackage, String> {
     if !bundle_tar_gz_path.is_file() {
         return Err(format!(
@@ -540,7 +552,7 @@ pub fn unpack_tray_bundle(
         }
     };
 
-    let result = deliver_files(workspace, &extracted, title_override, from, source);
+    let result = deliver_files(workspace, &extracted, title_override, from, source, note);
     let _ = fs::remove_dir_all(&tmp_root);
     result
 }
@@ -650,16 +662,25 @@ fn unique_sidecar_name(original: &str, used: &[String]) -> String {
     }
 }
 
+fn cover_body_with_note(note: Option<&str>, rest: &str) -> String {
+    match note.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(n) if rest.is_empty() => format!("{n}\n"),
+        Some(n) => format!("{n}\n\n{rest}"),
+        None => rest.to_string(),
+    }
+}
+
 fn deliver_markdown_file(
     root: &Path,
     source_path: &Path,
     title_override: Option<&str>,
     from: &str,
     source: &str,
+    note: Option<&str>,
 ) -> Result<DeliveredPackage, String> {
     let content = safe_read_to_string(source_path)?;
     let title = resolve_title(title_override, Some(&content), source_path);
-    let body = extract_md_body(&content);
+    let body = cover_body_with_note(note, &extract_md_body(&content));
     let filename = allocate_md_filename(root, &title);
     let created = simple_date_now();
     let priority = parse_frontmatter(&content)
@@ -693,6 +714,7 @@ fn deliver_binary_file(
     title_override: Option<&str>,
     from: &str,
     source: &str,
+    note: Option<&str>,
 ) -> Result<DeliveredPackage, String> {
     let title = resolve_title(title_override, None, source_path);
     let original_name = source_path
@@ -717,12 +739,13 @@ fn deliver_binary_file(
 
     let rel_sidecar = format!("{id}.files/{safe_name}");
     let created = simple_date_now();
-    let body = format!(
+    let rest = format!(
         "Attachment package delivered via `k2 msg --inbox-*`.\n\n\
          - **File:** `{safe_name}` ({size_human})\n\
          - **Sidecar:** `.k2/inbox/{rel_sidecar}` (or `.k2so/inbox/` on legacy workspaces)\n\n\
          Open this cover note with `k2 inbox read {id}`. Open the sidecar path on disk for the file bytes.\n"
     );
+    let body = cover_body_with_note(note, &rest);
     let written = format!(
         "---\ntitle: {title}\npriority: normal\ncreated: {created}\nsource: {source}\nfrom: {from}\n---\n\n{body}"
     );
@@ -1283,7 +1306,7 @@ mod tests {
         )
         .unwrap();
 
-        let pkg = deliver_file(ws.path(), &src, None, Some("alice"), None).unwrap();
+        let pkg = deliver_file(ws.path(), &src, None, Some("alice"), None, None).unwrap();
         assert_eq!(pkg.title, "Ship It");
         assert_eq!(pkg.source, "msg-inbox");
         assert_eq!(pkg.from, "alice");
@@ -1306,7 +1329,7 @@ mod tests {
         let src = ws.path().join("notes.md");
         fs::write(&src, "# Heading Title\n\nBody only.\n").unwrap();
 
-        let pkg = deliver_file(ws.path(), &src, None, None, None).unwrap();
+        let pkg = deliver_file(ws.path(), &src, None, None, None, None).unwrap();
         assert_eq!(pkg.title, "Heading Title");
 
         let pkg2 = deliver_file(
@@ -1315,6 +1338,7 @@ mod tests {
             Some("Explicit"),
             Some("bob"),
             Some("msg-inbox"),
+            None,
         )
         .unwrap();
         assert_eq!(pkg2.title, "Explicit");
@@ -1327,7 +1351,7 @@ mod tests {
         let src = ws.path().join("report.pdf");
         fs::write(&src, b"%PDF-1.4 fake").unwrap();
 
-        let pkg = deliver_file(ws.path(), &src, Some("Q2 Report"), Some("cli"), None).unwrap();
+        let pkg = deliver_file(ws.path(), &src, Some("Q2 Report"), Some("cli"), None, None).unwrap();
         assert_eq!(pkg.title, "Q2 Report");
         assert_eq!(pkg.sidecar_paths.len(), 1);
         assert!(pkg.sidecar_paths[0].ends_with("report.pdf"));
@@ -1340,6 +1364,53 @@ mod tests {
         assert!(cover.contains("source: msg-inbox"));
         assert!(cover.contains("report.pdf"));
         assert!(cover.contains(&format!("k2 inbox read {}", pkg.id)));
+    }
+
+    #[test]
+    fn deliver_file_binary_prepends_sender_note() {
+        let ws = make_ws();
+        let src = ws.path().join("report.pdf");
+        fs::write(&src, b"%PDF-1.4 fake").unwrap();
+        let pkg = deliver_file(
+            ws.path(),
+            &src,
+            Some("Q2 Report"),
+            Some("cli"),
+            None,
+            Some("please review the numbers"),
+        )
+        .unwrap();
+        let cover = fs::read_to_string(&pkg.cover_path).unwrap();
+        assert!(
+            cover.contains("please review the numbers"),
+            "sender brief must land on the cover; got {cover}"
+        );
+        assert!(cover.contains("report.pdf"));
+    }
+
+    #[test]
+    fn deliver_files_prepends_sender_note() {
+        let ws = make_ws();
+        let a = ws.path().join("a.txt");
+        let b = ws.path().join("b.txt");
+        fs::write(&a, "a").unwrap();
+        fs::write(&b, "b").unwrap();
+        let pkg = deliver_files(
+            ws.path(),
+            &[a, b],
+            Some("Batch"),
+            Some("desk"),
+            None,
+            Some("do both"),
+        )
+        .unwrap();
+        let cover = fs::read_to_string(&pkg.cover_path).unwrap();
+        assert!(
+            cover.contains("do both"),
+            "sender brief must land on the multi-file cover; got {cover}"
+        );
+        assert!(cover.contains("a.txt"));
+        assert!(cover.contains("b.txt"));
     }
 
     #[test]
@@ -1358,7 +1429,7 @@ mod tests {
     #[test]
     fn deliver_file_missing_source_errors() {
         let ws = make_ws();
-        let err = deliver_file(ws.path(), &ws.path().join("nope.md"), None, None, None)
+        let err = deliver_file(ws.path(), &ws.path().join("nope.md"), None, None, None, None)
             .unwrap_err();
         assert!(err.contains("not a readable file"));
     }
@@ -1366,7 +1437,7 @@ mod tests {
     #[test]
     fn deliver_files_empty_errors() {
         let ws = make_ws();
-        let err = deliver_files(ws.path(), &[], None, None, None).unwrap_err();
+        let err = deliver_files(ws.path(), &[], None, None, None, None).unwrap_err();
         assert!(err.contains("no source paths"));
     }
 
@@ -1376,7 +1447,7 @@ mod tests {
         let src = ws.path().join("solo.pdf");
         fs::write(&src, b"%PDF solo").unwrap();
 
-        let single = deliver_file(ws.path(), &src, Some("Solo"), Some("cli"), None).unwrap();
+        let single = deliver_file(ws.path(), &src, Some("Solo"), Some("cli"), None, None).unwrap();
         // Second call would allocate a different slug suffix if same title —
         // compare structural shape rather than id.
         let multi = deliver_files(
@@ -1384,6 +1455,7 @@ mod tests {
             &[src.clone()],
             Some("Solo2"),
             Some("cli"),
+            None,
             None,
         )
         .unwrap();
@@ -1407,6 +1479,7 @@ mod tests {
             &[a, b],
             None,
             Some("alice"),
+            None,
             None,
         )
         .unwrap();
@@ -1440,7 +1513,7 @@ mod tests {
         fs::write(&a, "x").unwrap();
         fs::write(&b, "y").unwrap();
 
-        let pkg = deliver_files(ws.path(), &[a.clone(), b.clone()], None, None, None).unwrap();
+        let pkg = deliver_files(ws.path(), &[a.clone(), b.clone()], None, None, None, None).unwrap();
         assert!(pkg.title.starts_with("2 files:"));
         assert!(pkg.title.contains("x.txt"));
         assert!(pkg.title.contains("y.csv"));
@@ -1449,6 +1522,7 @@ mod tests {
             ws.path(),
             &[a, b],
             Some("Batch Drop"),
+            None,
             None,
             None,
         )
@@ -1462,7 +1536,7 @@ mod tests {
         let good = ws.path().join("ok.txt");
         fs::write(&good, "ok").unwrap();
         let bad = ws.path().join("missing.bin");
-        let err = deliver_files(ws.path(), &[good, bad], None, None, None).unwrap_err();
+        let err = deliver_files(ws.path(), &[good, bad], None, None, None, None).unwrap_err();
         assert!(err.contains("not a readable file"));
     }
 
@@ -1499,6 +1573,7 @@ mod tests {
             &bundle,
             Some("From Bundle"),
             Some("remote"),
+            None,
             None,
         )
         .unwrap();

@@ -216,6 +216,30 @@ export default function ContextMenu(): React.JSX.Element | null {
             }}
             disabled={isDisabled}
           >
+            {item.checked !== undefined && (
+              <span
+                aria-hidden
+                style={{
+                  width: 12,
+                  height: 12,
+                  flexShrink: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  border: '1px solid var(--color-border)',
+                  background: item.checked
+                    ? 'var(--color-accent)'
+                    : 'transparent',
+                  color: item.checked
+                    ? 'var(--color-on-accent)'
+                    : 'transparent',
+                  fontSize: 9,
+                  lineHeight: 1,
+                }}
+              >
+                {item.checked ? '✓' : ''}
+              </span>
+            )}
             <span
               style={{
                 flex: 1,

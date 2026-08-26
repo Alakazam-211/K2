@@ -6,6 +6,10 @@ import { useSettingsStore } from '@/stores/settings'
 import { UPDATE_CHECK_INTERVAL } from '@shared/constants'
 import { webFeatures } from '@/web/features'
 import { isAirgap } from '@/lib/airgap'
+import {
+  AUTO_UPDATE_CHECKS_EVENT,
+  autoUpdateChecksEnabled,
+} from '@/lib/auto-update-checks'
 
 interface UpdateInfo {
   current_version: string
@@ -113,12 +117,26 @@ export type { UpdateInfo }
 export function useUpdateChecker(): void {
   useEffect(() => {
     if (!webFeatures.appUpdater) return
-    if (isAirgap()) return
-    const startupTimeout = setTimeout(() => checkForUpdate(), 5000)
-    const interval = setInterval(() => checkForUpdate(), UPDATE_CHECK_INTERVAL)
+    let startupTimeout: ReturnType<typeof setTimeout> | undefined
+    let interval: ReturnType<typeof setInterval> | undefined
+    const stop = (): void => {
+      if (startupTimeout !== undefined) clearTimeout(startupTimeout)
+      if (interval !== undefined) clearInterval(interval)
+      startupTimeout = undefined
+      interval = undefined
+    }
+    const start = (): void => {
+      stop()
+      if (isAirgap()) return
+      if (!autoUpdateChecksEnabled()) return
+      startupTimeout = setTimeout(() => checkForUpdate(), 5000)
+      interval = setInterval(() => checkForUpdate(), UPDATE_CHECK_INTERVAL)
+    }
+    start()
+    window.addEventListener(AUTO_UPDATE_CHECKS_EVENT, start)
     return () => {
-      clearTimeout(startupTimeout)
-      clearInterval(interval)
+      stop()
+      window.removeEventListener(AUTO_UPDATE_CHECKS_EVENT, start)
     }
   }, [])
 }

@@ -44,6 +44,11 @@ import { useSettingsStore, sanitizeOwnerDisplayName, OWNER_DISPLAY_NAME_MAX } fr
 import { SettingDropdown } from '../controls/SettingControls'
 import { useUpdateStore } from '@/stores/update'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
+import { showContextMenu } from '@/lib/context-menu'
+import {
+  autoUpdateChecksEnabled,
+  setAutoUpdateChecksEnabled,
+} from '@/lib/auto-update-checks'
 import { LocalLLMSettings } from '../shared/LocalLLMSettings'
 import { AgentSkillsSection } from './AgentSkillsSection'
 import type { SettingEntry } from '../searchManifest'
@@ -51,7 +56,7 @@ import { webFeatures } from '@/web/features'
 import type { GeneralSubTab } from '@/stores/settings'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
-  { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater', keywords: ['update', 'version', 'check', 'release'] },
+  { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
   { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
   { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
   { id: 'general.owner-display-name', section: 'general', group: 'General', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
@@ -108,6 +113,23 @@ export function GeneralSection(): React.JSX.Element {
 
   const handleCheckUpdate = useCallback(async () => {
     await checkForUpdate(true)
+  }, [])
+
+  const handleVersionContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const enabled = autoUpdateChecksEnabled()
+    void showContextMenu([
+      {
+        id: 'auto-update-checks',
+        label: 'Automatic update checks',
+        checked: enabled,
+      },
+    ]).then((id) => {
+      if (id === 'auto-update-checks') {
+        setAutoUpdateChecksEnabled(!enabled)
+      }
+    })
   }, [])
 
   // Auto-check for updates when navigated here from the update toast
@@ -189,7 +211,12 @@ export function GeneralSection(): React.JSX.Element {
                 className="w-1.5 h-1.5 flex-shrink-0"
                 style={{ backgroundColor: updateStatus === 'available' ? 'var(--color-status-warn-soft)' : 'var(--color-status-ok-soft)' }}
               />
-              <span className="text-xs text-[var(--color-text-muted)]">
+              <span
+                className="text-xs text-[var(--color-text-muted)] no-drag cursor-default"
+                data-testid="app-version-label"
+                title="Right-click to change automatic update checks"
+                onContextMenu={handleVersionContextMenu}
+              >
                 v{currentVersion || '...'}
               </span>
             </div>

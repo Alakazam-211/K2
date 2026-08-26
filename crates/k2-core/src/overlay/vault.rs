@@ -5,7 +5,6 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use crate::fs_atomic;
 
@@ -28,6 +27,7 @@ pub fn vault_root() -> PathBuf {
 
 #[cfg(any(test, feature = "test-util"))]
 fn test_vault_root() -> PathBuf {
+    use std::sync::OnceLock;
     static PATH: OnceLock<PathBuf> = OnceLock::new();
     PATH.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!(

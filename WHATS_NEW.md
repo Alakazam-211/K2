@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.116 — Codex yolo; pinned chat uses your LLM launch script
+
+Switching the pinned Chat dropdown now launches that session with the command from **Settings → LLMs**, not a stripped resume line. Codex’s default is `codex --yolo`. If you already customized Codex, that command is left alone.
+
+---
+
 ## 0.40.115 — Final air-gapping patch
 
 A last air-gapping patch.

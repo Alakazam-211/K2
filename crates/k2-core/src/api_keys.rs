@@ -34,6 +34,8 @@
 //!   which `/v1` door families the key may open. Migration DEFAULT 1 keeps
 //!   EXISTING keys all-doors-on; NEW mints write host-sessions-only unless
 //!   the owner overrides via `--allow`/`--deny`.
+//! - `cap_db` (0108) = `/v1/w/<ws>/db*` (create/migrate/dump). Fail-closed
+//!   DEFAULT 0 so EXISTING keys do not grow a new door.
 //!
 //! ## Secret hygiene
 //! The raw key is returned to the owner exactly ONCE (from [`create_api_key`]).
@@ -149,6 +151,8 @@ pub struct ApiCapabilities {
     pub canonical_message: bool,
     /// `/v1/sandboxes*` and `/v1/w/<ws>/sessions*` (sandbox cells).
     pub sandboxes: bool,
+    /// `/v1/w/<ws>/db*` (create / migrate / GET dump). Fail-closed.
+    pub db: bool,
 }
 
 impl ApiCapabilities {
@@ -158,15 +162,17 @@ impl ApiCapabilities {
             host_sessions: true,
             canonical_message: false,
             sandboxes: false,
+            db: false,
         }
     }
 
-    /// All doors ON (existing-row backfill + owner principal).
+    /// All doors ON (owner principal + explicit `--allow` of every name).
     pub const fn all() -> Self {
         Self {
             host_sessions: true,
             canonical_message: true,
             sandboxes: true,
+            db: true,
         }
     }
 
@@ -176,13 +182,14 @@ impl ApiCapabilities {
             host_sessions: false,
             canonical_message: false,
             sandboxes: false,
+            db: false,
         }
     }
 
     /// Canonical capability names accepted by CLI / create body
     /// (`allow`/`deny` arrays). Aliases fold through [`Self::parse_name`].
     pub const ACCEPTED: &'static str =
-        "host-sessions (alias: host), canonical-message (aliases: canonical, message), sandboxes (alias: sandbox)";
+        "host-sessions (alias: host), canonical-message (aliases: canonical, message), sandboxes (alias: sandbox), db (aliases: sql, database)";
 
     /// Parse one capability name (case-insensitive, trims; accepts aliases).
     pub fn parse_name(raw: &str) -> Option<&'static str> {
@@ -193,6 +200,7 @@ impl ApiCapabilities {
             "canonical-message" | "canonical_message" | "canonicalmessage" | "canonical"
             | "message" => Some("canonical-message"),
             "sandboxes" | "sandbox" => Some("sandboxes"),
+            "db" | "sql" | "database" => Some("db"),
             _ => None,
         }
     }
@@ -203,6 +211,7 @@ impl ApiCapabilities {
             "host-sessions" => self.host_sessions = on,
             "canonical-message" => self.canonical_message = on,
             "sandboxes" => self.sandboxes = on,
+            "db" => self.db = on,
             _ => {}
         }
     }
@@ -530,14 +539,15 @@ pub fn create_api_key(
     let cap_host = if caps.host_sessions { 1i64 } else { 0 };
     let cap_canon = if caps.canonical_message { 1i64 } else { 0 };
     let cap_sbx = if caps.sandboxes { 1i64 } else { 0 };
+    let cap_db = if caps.db { 1i64 } else { 0 };
 
     let db = crate::db::shared();
     let conn = db.lock();
     conn.execute(
         "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, \
          allowed_workspaces, provider, base_url, \
-         cap_host_sessions, cap_canonical_message, cap_sandboxes) \
-         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11)",
+         cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db) \
+         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         // Deliberately keep the raw key + LLM credential OUT of any error string.
         rusqlite::params![
             id,
@@ -551,6 +561,7 @@ pub fn create_api_key(
             cap_host,
             cap_canon,
             cap_sbx,
+            cap_db,
         ],
     )
     .map_err(|e| format!("DB insert failed: {e}"))?;
@@ -615,7 +626,7 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
             "SELECT id, label, scope, created_at, revoked_at, disabled_at, \
                     (anthropic_api_key IS NOT NULL AND TRIM(anthropic_api_key) <> ''), \
                     allowed_workspaces, provider, base_url, \
-                    cap_host_sessions, cap_canonical_message, cap_sandboxes \
+                    cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db \
              FROM api_keys ORDER BY created_at DESC, id DESC",
         )
         .map_err(|e| format!("DB prepare failed: {e}"))?;
@@ -640,6 +651,7 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
                     host_sessions: row.get::<_, i64>(10)? != 0,
                     canonical_message: row.get::<_, i64>(11)? != 0,
                     sandboxes: row.get::<_, i64>(12)? != 0,
+                    db: row.get::<_, i64>(13)? != 0,
                 },
             })
         })
@@ -672,7 +684,7 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
     let conn = db.lock();
     conn.query_row(
         "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url, \
-                cap_host_sessions, cap_canonical_message, cap_sandboxes \
+                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db \
          FROM api_keys \
          WHERE key_hash = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
         rusqlite::params![key_hash],
@@ -686,6 +698,7 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
             let cap_host: i64 = row.get(6)?;
             let cap_canon: i64 = row.get(7)?;
             let cap_sbx: i64 = row.get(8)?;
+            let cap_db: i64 = row.get(9)?;
             Ok(ApiPrincipal {
                 id,
                 // Treat a blank stored value as absent (parity with B3a).
@@ -702,6 +715,7 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
                     host_sessions: cap_host != 0,
                     canonical_message: cap_canon != 0,
                     sandboxes: cap_sbx != 0,
+                    db: cap_db != 0,
                 },
             })
         },
@@ -724,7 +738,7 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
     let conn = db.lock();
     conn.query_row(
         "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url, \
-                cap_host_sessions, cap_canonical_message, cap_sandboxes \
+                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db \
          FROM api_keys \
          WHERE id = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
         rusqlite::params![id],
@@ -738,6 +752,7 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
             let cap_host: i64 = row.get(6)?;
             let cap_canon: i64 = row.get(7)?;
             let cap_sbx: i64 = row.get(8)?;
+            let cap_db: i64 = row.get(9)?;
             Ok(ApiPrincipal {
                 id,
                 anthropic_key: anthropic.filter(|k| !k.trim().is_empty()),
@@ -749,6 +764,7 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
                     host_sessions: cap_host != 0,
                     canonical_message: cap_canon != 0,
                     sandboxes: cap_sbx != 0,
+                    db: cap_db != 0,
                 },
             })
         },
@@ -1188,6 +1204,7 @@ mod tests {
         assert!(p.capabilities.host_sessions);
         assert!(!p.capabilities.canonical_message);
         assert!(!p.capabilities.sandboxes);
+        assert!(!p.capabilities.db);
 
         // Explicit all → every door.
         let (_id, raw) = create_api_key(
@@ -1209,6 +1226,7 @@ mod tests {
             host_sessions: true,
             canonical_message: false,
             sandboxes: true,
+            db: false,
         };
         let (id, raw) =
             create_api_key("cap-hs-sbx", None, Some("*"), None, None, Some(caps)).expect("create");
@@ -1241,7 +1259,13 @@ mod tests {
             .expect("insert legacy-shaped row");
         }
         let p = resolve_api_key(&raw).expect("legacy-shaped row resolves");
-        assert_eq!(p.capabilities, ApiCapabilities::all());
+        assert!(p.capabilities.host_sessions);
+        assert!(p.capabilities.canonical_message);
+        assert!(p.capabilities.sandboxes);
+        assert!(
+            !p.capabilities.db,
+            "0108 cap_db DEFAULT 0 — existing keys stay fail-closed"
+        );
     }
 
     /// Phase 0 — allow/deny parser: wiki-chat recipe, full allow, deny subtract.
@@ -1259,11 +1283,12 @@ mod tests {
             ApiCapabilities::from_allow_deny(base, Some(&allow), None).unwrap(),
             ApiCapabilities::new_key_default(),
         );
-        // --allow host,canonical,sandboxes → all (aliases).
+        // --allow host,canonical,sandboxes,db → all (aliases).
         let allow = vec![
             "host".to_string(),
             "canonical".to_string(),
             "sandbox".to_string(),
+            "sql".to_string(),
         ];
         assert_eq!(
             ApiCapabilities::from_allow_deny(base, Some(&allow), None).unwrap(),

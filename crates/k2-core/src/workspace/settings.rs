@@ -101,6 +101,13 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // `AppSettings.mail_address_cap` default (5). Effective
         // resolver: `mail_address_cap_for_path`.
         "mail_address_cap",
+        // Workspace data sidecar (prd-workspace-data-sidecar-v1 D21) —
+        // per-workspace agent passport. Values: 'off' | 'read' | 'write'
+        // (write-validated below); NULL = fail-closed 'off'.
+        "db_agent_access",
+        // D9: per-workspace ACTIVE-DB cap. Non-negative integer, 0 =
+        // unlimited (write-validated below); NULL = inherit default 1.
+        "db_active_cap",
         // Phase 0b (prd-wiki-public-chat-api-loopback-v1) — per-workspace
         // owner API guest policy text. Free-form; empty/NULL → platform
         // default. Injected by the daemon on every host-session spawn +
@@ -151,6 +158,12 @@ those lines reach the caller.";
 
 /// The valid `mail_agent_send` gating modes (PRD §8.4 / D4).
 pub const MAIL_AGENT_SEND_MODES: [&str; 3] = ["off", "approval", "on"];
+
+/// The valid `db_agent_access` passport modes (prd-workspace-data-sidecar-v1 D21).
+pub const DB_AGENT_ACCESS_MODES: [&str; 3] = ["off", "read", "write"];
+
+/// Default ACTIVE workspace-DB cap when `projects.db_active_cap` is NULL (D9).
+pub const DEFAULT_DB_ACTIVE_CAP: u32 = 1;
 
 /// Update a single project setting. Field names are allowlisted —
 /// the SQL interpolates the column name directly so any arbitrary
@@ -258,6 +271,16 @@ pub fn update_project_setting(
     if field == "mail_address_cap" && value.parse::<u32>().is_err() {
         return Err(format!(
             "mail_address_cap must be a non-negative integer (0 = unlimited), got {value:?}"
+        ));
+    }
+    if field == "db_agent_access" && !DB_AGENT_ACCESS_MODES.contains(&value) {
+        return Err(format!(
+            "db_agent_access must be 'off', 'read', or 'write', got {value:?}"
+        ));
+    }
+    if field == "db_active_cap" && value.parse::<u32>().is_err() {
+        return Err(format!(
+            "db_active_cap must be a non-negative integer (0 = unlimited), got {value:?}"
         ));
     }
     // Per-workspace host-session cell cap: empty / "default" / "null"
@@ -872,6 +895,48 @@ pub fn mail_address_cap_for_path(project_path: &str) -> u32 {
     match per_workspace {
         Some(v) if v >= 0 => v as u32,
         _ => crate::app_settings::load().mail_address_cap,
+    }
+}
+
+/// EFFECTIVE `db_agent_access` for `project_path`: `off` | `read` | `write`.
+///
+/// NULL / unknown / unrecognized → `'off'` (fail-closed). Owner tokens
+/// bypass this at the route layer; agents cannot create unless `'write'`.
+pub fn db_agent_access_for_path(project_path: &str) -> String {
+    let per_workspace: Option<String> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT db_agent_access FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    };
+    match per_workspace {
+        Some(v) if DB_AGENT_ACCESS_MODES.contains(&v.as_str()) => v,
+        _ => "off".to_string(),
+    }
+}
+
+/// EFFECTIVE ACTIVE-DB cap for `project_path` (D9). 0 = unlimited.
+/// NULL / unknown → [`DEFAULT_DB_ACTIVE_CAP`] (1).
+pub fn db_active_cap_for_path(project_path: &str) -> u32 {
+    let per_workspace: Option<i64> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT db_active_cap FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten()
+    };
+    match per_workspace {
+        Some(v) if v >= 0 => v as u32,
+        _ => DEFAULT_DB_ACTIVE_CAP,
     }
 }
 
@@ -1554,6 +1619,37 @@ mod tests {
                 .expect_err("bad cap must be rejected");
             assert!(err.contains("mail_address_cap"), "'{bad}' → {err:?}");
         }
+    }
+
+    /// Data sidecar passport: NULL/unknown → off; write-validated
+    /// off/read/write; cap NULL → 1, 0 = unlimited.
+    #[test]
+    fn db_agent_access_and_cap_defaults_and_validation() {
+        let path = unique_path("db-access");
+        let _pid = insert_project(&path);
+
+        assert_eq!(db_agent_access_for_path(&path), "off");
+        assert_eq!(db_agent_access_for_path("/tmp/never-registered-db"), "off");
+        assert_eq!(db_active_cap_for_path(&path), DEFAULT_DB_ACTIVE_CAP);
+        assert_eq!(db_active_cap_for_path("/tmp/never-registered-db"), 1);
+
+        update_project_setting(&path, "db_agent_access", "read").expect("read");
+        assert_eq!(db_agent_access_for_path(&path), "read");
+        update_project_setting(&path, "db_agent_access", "write").expect("write");
+        assert_eq!(db_agent_access_for_path(&path), "write");
+        update_project_setting(&path, "db_agent_access", "off").expect("off");
+        assert_eq!(db_agent_access_for_path(&path), "off");
+
+        let err = update_project_setting(&path, "db_agent_access", "admin")
+            .expect_err("bad mode");
+        assert!(err.contains("db_agent_access"), "got {err:?}");
+
+        update_project_setting(&path, "db_active_cap", "0").expect("unlimited");
+        assert_eq!(db_active_cap_for_path(&path), 0);
+        update_project_setting(&path, "db_active_cap", "3").expect("3");
+        assert_eq!(db_active_cap_for_path(&path), 3);
+        let err = update_project_setting(&path, "db_active_cap", "-1").expect_err("neg");
+        assert!(err.contains("db_active_cap"), "got {err:?}");
     }
 
     // ── Per-workspace host-session concurrent cell cap ──────────────

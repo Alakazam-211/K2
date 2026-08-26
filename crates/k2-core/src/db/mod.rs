@@ -907,8 +907,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0107_feedback_canonical_kind_repair",
             include_str!("../../drizzle_sql/0107_feedback_canonical_kind_repair.sql"),
         ),
+        // 0108 — workspace data sidecar catalog (Postgres supervisor).
+        // Singleton `sql_server` + `sql_databases` + per-workspace
+        // `db_agent_access` / `db_active_cap` + fail-closed `api_keys.cap_db`.
+        (
+            "0108_sql",
+            include_str!("../../drizzle_sql/0108_sql.sql"),
+        ),
         // 0110 — overlay threads catalog (named conversation_id, not v2_session_map).
-        // 0108/0109 reserved by the data-sidecar worktree.
         (
             "0110_overlay_conversations",
             include_str!("../../drizzle_sql/0110_overlay_conversations.sql"),
@@ -1506,7 +1512,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0107_feedback_canonical_kind_repair",
+            last_name, "0110_overlay_conversations",
             "unexpected last migration name: {last_name}"
         );
     }

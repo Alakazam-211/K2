@@ -3226,6 +3226,42 @@ impl SubdomainWorkspace {
     }
 }
 
+// ── Workspace data sidecar (0108, prd-workspace-data-sidecar-v1) ─────
+//
+// Catalog-only rows. Live Postgres state lives in the distro cluster.
+
+/// The `sql_server` SINGLETON row (id = 1). "not-installed" is the
+/// ABSENCE of the row — `status` only covers installed lifecycles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlServer {
+    pub id: i64,
+    pub status: String,
+    pub installed_major: Option<i64>,
+    pub listen: Option<String>,
+    pub enable_progress_json: Option<String>,
+    pub last_error: Option<String>,
+    pub installed_at: Option<i64>,
+    pub updated_at: i64,
+}
+
+/// One `sql_databases` row. `project_id` is `projects.id` (not a FK).
+/// Secrets are vault refs (`dbsec_*`), never plaintext.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlDatabase {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub client_id: Option<String>,
+    /// `active` | `dropped`.
+    pub status: String,
+    pub agent_secret_ref: Option<String>,
+    pub migrator_secret_ref: Option<String>,
+    pub created_at: i64,
+    pub dropped_at: Option<i64>,
+}
+
 // ── K2 Mail (0075, prd-email-server-v1 §12) ────────────────────────────
 //
 // Row structs for the mail tables. Serialize camelCase — the wire
@@ -3506,6 +3542,65 @@ mod unit_tests {
             )
             .expect("projects override read");
         assert!(send.is_none() && cap.is_none(), "overrides backfill to NULL");
+    }
+
+    /// 0108 (workspace data sidecar): tables exist, singleton CHECK,
+    /// cap/passport columns NULL, cap_db DEFAULT 0.
+    #[test]
+    fn sql_sidecar_migration_0108_applies_and_roundtrips() {
+        let conn = fresh();
+        conn.execute(
+            "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) \
+             VALUES (1, 'running', 16, 'localhost', 100)",
+            [],
+        )
+        .expect("sql_server insert");
+        conn.execute(
+            "INSERT INTO sql_databases (id, project_id, name, created_at) \
+             VALUES ('d1', 'p1', 'ws_p1', 100)",
+            [],
+        )
+        .expect("sql_databases insert");
+        let status: String = conn
+            .query_row("SELECT status FROM sql_databases WHERE id = 'd1'", [], |r| r.get(0))
+            .expect("db status");
+        assert_eq!(status, "active");
+        assert!(
+            conn.execute(
+                "INSERT INTO sql_server (id, status, updated_at) VALUES (2, 'running', 1)",
+                [],
+            )
+            .is_err(),
+            "sql_server id != 1 must be rejected"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO sql_server (id, status, updated_at) VALUES (1, 'exploded', 1)",
+                [],
+            )
+            .is_err(),
+            "bad sql_server.status must be rejected"
+        );
+        let pid = make_project_row(&conn, "/tmp/sql-mig-proj");
+        let (access, cap): (Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT db_agent_access, db_active_cap FROM projects WHERE id = ?1",
+                params![pid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("projects override read");
+        assert!(access.is_none() && cap.is_none(), "overrides backfill to NULL");
+        // Fresh api_keys row: cap_db defaults to 0 (fail-closed).
+        conn.execute(
+            "INSERT INTO api_keys (id, key_hash, scope, created_at) \
+             VALUES ('k-sql-0108', 'abc', 'owner', 1)",
+            [],
+        )
+        .expect("api key");
+        let db_cap: i64 = conn
+            .query_row("SELECT cap_db FROM api_keys WHERE id = 'k-sql-0108'", [], |r| r.get(0))
+            .expect("cap_db");
+        assert_eq!(db_cap, 0, "cap_db must fail closed");
     }
 
     /// 0072 (K2 Mail): the CHECK-constrained enums reject invalid

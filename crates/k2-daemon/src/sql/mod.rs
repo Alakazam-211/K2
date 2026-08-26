@@ -376,4 +376,41 @@ mod tests {
         let r = sql_routes::dispatch("/cli/db/grant", &Default::default()).expect("claimed");
         assert_eq!(r.status, "405 Method Not Allowed");
     }
+
+    #[test]
+    fn grant_then_create_does_not_fail_on_duplicate_role() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-gtc-a-{}", std::process::id()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-gtc-b-{}", std::process::id()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let id_a = insert_project("sql-gtc-a", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-gtc-b", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created_a = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create A");
+        let db_a = created_a["name"].as_str().unwrap().to_string();
+        ops::grant_access(&ops, None, &db_a, &id_b, "write", false).expect("grant B");
+        let n_helper_before = ops.pg.lock().unwrap().helper_sql.len();
+        let created_b = ops::create_database(&ops, &secrets, &id_b, 1, None, None)
+            .expect("create B after grant must not fail on duplicate ROLE");
+        assert_eq!(created_b["ok"], true);
+        let s = created_b.to_string().to_ascii_lowercase();
+        assert!(!s.contains("superuser"), "{s}");
+        let helper = ops.pg.lock().unwrap().helper_sql[n_helper_before..]
+            .join("\n")
+            .to_ascii_uppercase();
+        assert!(
+            helper.contains("EXCEPTION WHEN DUPLICATE_OBJECT"),
+            "create must use idempotent CREATE ROLE, got {helper}"
+        );
+        assert!(
+            helper.contains("ALTER ROLE"),
+            "create must ALTER ROLE to reset password after grant, got {helper}"
+        );
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
 }

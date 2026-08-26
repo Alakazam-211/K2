@@ -101,6 +101,26 @@ pub fn create_role_sql(role: &str, password: &str) -> String {
     )
 }
 
+/// Idempotent CREATE ROLE. A prior `k2 db grant` may have minted the
+/// grantee's `ws_*_agent` role; a later `k2 db create` must not fail.
+pub fn ensure_role_sql(role: &str, password: &str) -> String {
+    let create = create_role_sql(role, password);
+    format!(
+        "DO $$\nBEGIN\n  {inner}\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;",
+        inner = create.trim_end_matches(';'),
+    )
+}
+
+/// Reset LOGIN + password on an existing role (grant-then-create). The
+/// helper runs as postgres, so this never prints the password.
+pub fn alter_role_password_sql(role: &str, password: &str) -> String {
+    format!(
+        "ALTER ROLE {role} WITH LOGIN PASSWORD {pw} NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT;",
+        role = pg_quote_ident(role),
+        pw = pg_quote_literal(password),
+    )
+}
+
 fn count_active(conn: &rusqlite::Connection, project_id: &str) -> u32 {
     conn.query_row(
         "SELECT COUNT(*) FROM sql_databases WHERE project_id = ?1 AND status = 'active'",
@@ -261,9 +281,11 @@ pub fn create_database(
     let agent_pw = generate_secret().map_err(OpsError::Engine)?;
 
     let role_sql = format!(
-        "{}\n{}",
-        create_role_sql(&migrator, &migrator_pw),
-        create_role_sql(&agent, &agent_pw),
+        "{}\n{}\n{}\n{}",
+        ensure_role_sql(&migrator, &migrator_pw),
+        alter_role_password_sql(&migrator, &migrator_pw),
+        ensure_role_sql(&agent, &agent_pw),
+        alter_role_password_sql(&agent, &agent_pw),
     );
     let up = role_sql.to_ascii_uppercase();
     if up.contains("SUPERUSER") && !up.contains("NOSUPERUSER") {
@@ -770,11 +792,7 @@ fn apply_pg_grant(
     level: &str,
 ) -> Result<(), OpsError> {
     let pw = generate_secret().map_err(OpsError::Engine)?;
-    let create = create_role_sql(role, &pw);
-    let ensure = format!(
-        "DO $$\nBEGIN\n  {inner}\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;",
-        inner = create.trim_end_matches(';'),
-    );
+    let ensure = ensure_role_sql(role, &pw);
     let connect = format!(
         "{ensure}\nGRANT CONNECT ON DATABASE {db} TO {role};",
         db = pg_quote_ident(db_name),
@@ -1317,6 +1335,19 @@ mod tests {
         assert!(up.contains("NOBYPASSRLS"));
         assert!(!up.contains("FORCE ROW LEVEL"));
         assert!(!up.split_whitespace().any(|w| w == "SUPERUSER"));
+    }
+
+    #[test]
+    fn ensure_role_sql_is_idempotent_duplicate_object() {
+        let sql = ensure_role_sql("ws_abc_agent", "secret");
+        let up = sql.to_ascii_uppercase();
+        assert!(up.contains("EXCEPTION WHEN DUPLICATE_OBJECT"));
+        assert!(up.contains("NOSUPERUSER"));
+        assert!(!up.split_whitespace().any(|w| w == "SUPERUSER"));
+        let alter = alter_role_password_sql("ws_abc_agent", "secret");
+        let aup = alter.to_ascii_uppercase();
+        assert!(aup.contains("ALTER ROLE"));
+        assert!(aup.contains("NOSUPERUSER"));
     }
 
     #[test]

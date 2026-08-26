@@ -11579,8 +11579,8 @@ cmd_schema() {
         {"name": "--unread", "arg": null, "description": "Only unread messages."},
         {"name": "--limit", "arg": "N", "description": "1-200 (default 25)."},
         {"name": "--offset", "arg": "N", "description": "Skip the newest N (pagination cursor; use the nextOffset the response returns)."},
-        {"name": "--since", "arg": "date", "description": "Only mail on/after <date>: YYYY-MM-DD or a relative age like 7d/24h/30m (IMAP-linked is day-granular)."},
-        {"name": "--before", "arg": "date", "description": "Only mail before <date> (same forms as --since)."},
+        {"name": "--since", "arg": "date", "description": "Only mail on/after <date>: YYYY-MM-DD or a relative age like 7d/24h/30m (IMAP-linked is day-granular). Linked IMAP requires --before within 30 days of --since if the range would be longer."},
+        {"name": "--before", "arg": "date", "description": "Only mail before <date> (same forms as --since). Linked IMAP: pair with --since to close a ≤30-day window."},
         {"name": "--folder", "arg": "name", "description": "Read a mailbox other than the Inbox (case-insensitive; unknown name lists the real folders)."},
         {"name": "--junk", "arg": null, "description": "Read the Junk/Spam folder (shorthand for --folder)."},
         {"name": "--query", "arg": "text", "description": "Match subject AND body."},
@@ -21952,7 +21952,9 @@ FLAGS
   --offset <n>           Skip the newest <n> (pagination cursor; when a page is
                          full the output prints a ready-to-run "more:" line)
   --since <date>         Only mail on/after <date>: YYYY-MM-DD or a relative age
-                         like 7d / 24h / 30m (IMAP-linked inboxes are day-granular)
+                         like 7d / 24h / 30m (IMAP-linked inboxes are day-granular).
+                         Linked IMAP requires --before within 30 days of --since
+                         if the range would be longer.
   --before <date>        Only mail before <date> (same date forms as --since)
   --folder <name>        Read a mailbox OTHER than the Inbox (case-insensitive;
                          an unknown name lists the folders that DO exist)

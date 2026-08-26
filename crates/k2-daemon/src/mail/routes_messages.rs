@@ -1642,6 +1642,34 @@ mod tests {
         cleanup_project(&project_id);
     }
 
+    #[test]
+    fn linked_imap_since_2017_no_before_is_400_usage_without_engine_dial() {
+        let _g = crate::mail::mail_server_test_lock();
+        let (name, path) = unique("since2017");
+        let project_id = insert_project(&name, &path);
+        let address = format!("mine@{name}.example");
+        let row_id = seed_linked_inbox(&project_id, &address);
+        let resp = handle_messages(&params(&[
+            ("project", &path),
+            ("address", &address),
+            ("since", "2017-03-01"),
+        ]));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "usage");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("2017-03-01"), "{hint}");
+        assert!(hint.contains("through now"), "{hint}");
+        assert!(hint.contains("pass --before"), "{hint}");
+        assert!(hint.contains("within 30 days"), "{hint}");
+        assert!(
+            hint.contains("--since 2017-03-01 --before 2017-04-01"),
+            "{hint}"
+        );
+        cleanup_linked_inbox(&row_id);
+        cleanup_project(&project_id);
+    }
+
     // ── read ──
 
     #[test]

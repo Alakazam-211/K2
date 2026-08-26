@@ -425,13 +425,12 @@ pub fn build_search_query(filter: &ListFilter) -> String {
 
 /// Sliding 30-day SEARCH window for linked IMAP list (D3). Applied
 /// INSIDE [`list_inbox`], never by mutating the shared [`ListFilter`]
-/// the hosted JMAP / Graph backends also see.
+/// the hosted JMAP / Graph backends also see. `--since` stays on/after
+/// through now; an open since older than 30 days is Usage (never a
+/// silent +30d clip, never a 2017-through-today SEARCH).
 pub const LINKED_LIST_WINDOW_SECS: i64 = 30 * 86400;
 const LINKED_SEARCH_UID_CAP: usize = 1000;
 const LIST_FETCH_QUERY: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER])";
-
-pub const LINKED_SEARCH_WINDOW_HINT: &str =
-    "Linked IMAP search is limited to a 30-day window. Narrow --since/--before.";
 
 /// Bounds the IMAP SEARCH actually ran, plus whether we injected a
 /// bound the caller did not set. JSON `searchWindow` on
@@ -444,12 +443,36 @@ pub struct LinkedSearchWindow {
 }
 
 impl LinkedSearchWindow {
+    /// CLI/JSON hint names both calendar bounds (or "now" when IMAP
+    /// BEFORE is omitted).
+    pub fn hint(&self) -> String {
+        let since = unix_ymd(self.after_unix);
+        match self.before_unix {
+            None if self.injected => format!(
+                "searched last 30 days ({since} through now) — pass --since/--before to move the window"
+            ),
+            None => format!(
+                "searched from {since} through now — pass --before to close a ≤30-day window"
+            ),
+            Some(before) => {
+                let until = unix_ymd(before);
+                if self.injected {
+                    format!(
+                        "searched from {since} through {until} — pass --since/--before to move the window"
+                    )
+                } else {
+                    format!("searched from {since} through {until}")
+                }
+            }
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "since": unix_to_iso(self.after_unix),
             "before": self.before_unix.map(unix_to_iso),
             "injected": self.injected,
-            "hint": LINKED_SEARCH_WINDOW_HINT,
+            "hint": self.hint(),
         })
     }
 }
@@ -458,6 +481,32 @@ fn unix_to_iso(secs: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
         .unwrap_or_default()
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn unix_ymd(secs: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+        .unwrap_or_default()
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// `--since DATE --before DATE+1month` example for the open-since Usage
+/// hint (`2017-03-01` → `2017-04-01`).
+fn example_before_one_month(after: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(after, 0)
+        .and_then(|d| d.checked_add_months(chrono::Months::new(1)))
+        .unwrap_or_default()
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn open_since_too_long_hint(after: i64) -> String {
+    let since = unix_ymd(after);
+    let example_before = example_before_one_month(after);
+    format!(
+        "searched from {since} through now — pass --before within 30 days of --since \
+         to close a ≤30-day window (example: --since {since} --before {example_before})"
+    )
 }
 
 /// SEARCH keys (query/from/unread or any date). Offset-only is still
@@ -472,8 +521,10 @@ fn filter_has_search_keys(filter: &ListFilter) -> bool {
 }
 
 /// D3 window for linked IMAP SEARCH. `Ok(None)` = skip D3 (`since_unix`
-/// is wait, or the unfiltered sequence path). Span > 30d is
-/// [`ListError::Usage`].
+/// is wait, or the unfiltered sequence path). `--since` without
+/// `--before` stays on/after through now when `now - since ≤ 30d`;
+/// older than 30d (and both-bounds span > 30d) is [`ListError::Usage`]
+/// — never a silent +30d clip.
 pub fn linked_list_search_window(
     filter: &ListFilter,
     now_unix: i64,
@@ -491,11 +542,16 @@ pub fn linked_list_search_window(
             before_unix: None, // omit IMAP BEFORE (BEFORE today excludes today)
             injected: true,
         })),
-        (Some(after), None) => Ok(Some(LinkedSearchWindow {
-            after_unix: after,
-            before_unix: Some(after.saturating_add(LINKED_LIST_WINDOW_SECS)),
-            injected: true,
-        })),
+        (Some(after), None) => {
+            if now_unix.saturating_sub(after) > LINKED_LIST_WINDOW_SECS {
+                return Err(ListError::Usage(open_since_too_long_hint(after)));
+            }
+            Ok(Some(LinkedSearchWindow {
+                after_unix: after,
+                before_unix: None, // through now, including today
+                injected: false,
+            }))
+        }
         (None, Some(before)) => Ok(Some(LinkedSearchWindow {
             after_unix: before.saturating_sub(LINKED_LIST_WINDOW_SECS),
             before_unix: Some(before),
@@ -503,11 +559,12 @@ pub fn linked_list_search_window(
         })),
         (Some(after), Some(before)) => {
             if before.saturating_sub(after) > LINKED_LIST_WINDOW_SECS {
-                return Err(ListError::Usage(
-                    "date window is longer than 30 days — narrow --since/--before \
-                     (linked IMAP search is capped at 30 days)"
-                        .to_string(),
-                ));
+                return Err(ListError::Usage(format!(
+                    "date window from {} through {} is longer than 30 days — \
+                     narrow --since/--before (linked IMAP search is capped at 30 days)",
+                    unix_ymd(after),
+                    unix_ymd(before),
+                )));
             }
             Ok(Some(LinkedSearchWindow {
                 after_unix: after,
@@ -550,6 +607,9 @@ fn list_on_session(
     limit: usize,
     now_unix: i64,
 ) -> Result<Vec<EmailSummary>, ListError> {
+    // Usage (open --since older than 30d, span > 30d) before IMAP SEARCH.
+    let window = linked_list_search_window(filter, now_unix)?;
+
     let target = resolve_read_folder(session, &filter.folder)?;
     let mailbox = session.select(&target).map_err(|e| imap_err("SELECT", e))?;
     let uidvalidity = mailbox.uid_validity.unwrap_or(0);
@@ -575,7 +635,7 @@ fn list_on_session(
     }
 
     let mut search_filter = filter.clone();
-    if let Some(win) = linked_list_search_window(filter, now_unix)? {
+    if let Some(win) = window {
         search_filter.after_unix = Some(win.after_unix);
         search_filter.before_unix = win.before_unix;
     }
@@ -1402,16 +1462,51 @@ mod tests {
         let json = w.to_json();
         assert_eq!(json["injected"], true);
         let hint = json["hint"].as_str().expect("hint");
-        assert!(hint.contains("30-day"), "hint: {hint}");
+        let since_ymd = unix_ymd(now - LINKED_LIST_WINDOW_SECS);
+        assert!(
+            hint.contains("searched last 30 days"),
+            "inject hint: {hint}"
+        );
+        assert!(hint.contains(&since_ymd), "actual since date: {hint}");
+        assert!(hint.contains("through now"), "hint: {hint}");
+        assert!(
+            hint.contains("pass --since/--before to move the window"),
+            "hint: {hint}"
+        );
         // D4: CLI prints this hint on hit AND miss — JSON carries it either way.
         assert!(!hint.is_empty());
     }
 
     #[test]
-    fn linked_window_since_2017_caps_30d_not_through_today() {
+    fn linked_window_since_2017_no_before_is_usage() {
         let after =
             crate::mail::messages::parse_date_bound("2017-03-01", 0).expect("2017-03-01 parses");
-        let now = 1_800_000_000; // ~2027
+        let now =
+            crate::mail::messages::parse_date_bound("2026-08-25", 0).expect("2026-08-25 parses");
+        let f = ListFilter {
+            after_unix: Some(after),
+            ..Default::default()
+        };
+        match linked_list_search_window(&f, now) {
+            Err(ListError::Usage(hint)) => {
+                assert!(hint.contains("2017-03-01"), "{hint}");
+                assert!(hint.contains("through now"), "{hint}");
+                assert!(hint.contains("pass --before"), "{hint}");
+                assert!(hint.contains("within 30 days"), "{hint}");
+                assert!(
+                    hint.contains("--since 2017-03-01 --before 2017-04-01"),
+                    "{hint}"
+                );
+            }
+            other => panic!("expected Usage 400, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn linked_window_since_7d_no_before_omits_imap_before() {
+        let now =
+            crate::mail::messages::parse_date_bound("2026-08-25", 0).expect("2026-08-25 parses");
+        let after = crate::mail::messages::parse_date_bound("7d", now).expect("7d parses");
         let f = ListFilter {
             after_unix: Some(after),
             ..Default::default()
@@ -1420,13 +1515,40 @@ mod tests {
             .expect("window ok")
             .expect("window applied");
         assert_eq!(w.after_unix, after);
-        let before = w.before_unix.expect("injected before");
-        assert_eq!(before, after + LINKED_LIST_WINDOW_SECS);
-        assert!(w.injected);
-        assert!(
-            before < now - 365 * 86400,
-            "window must not run through today: before={before} now={now}"
-        );
+        assert_eq!(w.before_unix, None, "omit IMAP BEFORE (through now)");
+        assert!(!w.injected);
+        let q = {
+            let mut sf = f.clone();
+            sf.after_unix = Some(w.after_unix);
+            sf.before_unix = w.before_unix;
+            build_search_query(&sf)
+        };
+        assert!(q.contains(&format!("SINCE {}", imap_date(after))), "{q}");
+        assert!(!q.contains("BEFORE "), "no IMAP BEFORE: {q}");
+        let hint = w.to_json()["hint"].as_str().expect("hint").to_string();
+        assert!(hint.contains(&unix_ymd(after)), "actual since: {hint}");
+        assert!(hint.contains("through now"), "{hint}");
+    }
+
+    #[test]
+    fn linked_window_since_and_before_one_month_is_ok() {
+        let after =
+            crate::mail::messages::parse_date_bound("2017-03-01", 0).expect("2017-03-01");
+        let before =
+            crate::mail::messages::parse_date_bound("2017-03-31", 0).expect("2017-03-31");
+        let now =
+            crate::mail::messages::parse_date_bound("2026-08-25", 0).expect("2026-08-25");
+        let f = ListFilter {
+            after_unix: Some(after),
+            before_unix: Some(before),
+            ..Default::default()
+        };
+        let w = linked_list_search_window(&f, now)
+            .expect("window ok")
+            .expect("window applied");
+        assert_eq!(w.after_unix, after);
+        assert_eq!(w.before_unix, Some(before));
+        assert!(!w.injected);
         let q = {
             let mut sf = f.clone();
             sf.after_unix = Some(w.after_unix);
@@ -1435,7 +1557,9 @@ mod tests {
         };
         assert!(q.contains("SINCE 1-Mar-2017"), "{q}");
         assert!(q.contains("BEFORE 31-Mar-2017"), "{q}");
-        assert!(!q.contains(&imap_date(now)), "must not BEFORE today: {q}");
+        let hint = w.to_json()["hint"].as_str().expect("hint").to_string();
+        assert!(hint.contains("2017-03-01"), "{hint}");
+        assert!(hint.contains("2017-03-31"), "{hint}");
     }
 
     #[test]
@@ -1448,6 +1572,8 @@ mod tests {
         match linked_list_search_window(&f, 1_800_000_000) {
             Err(ListError::Usage(hint)) => {
                 assert!(hint.contains("30 days"), "{hint}");
+                assert!(hint.contains(&unix_ymd(0)), "{hint}");
+                assert!(hint.contains(&unix_ymd(LINKED_LIST_WINDOW_SECS + 1)), "{hint}");
             }
             other => panic!("expected Usage, got {other:?}"),
         }
@@ -1483,6 +1609,14 @@ mod tests {
         assert!(
             cli.contains("≤30-day window") || cli.contains("30-day search window"),
             "k2 mail help must mention the ≤30-day search window"
+        );
+        assert!(
+            cli.contains("on/after"),
+            "k2 mail help must keep --since as on/after"
+        );
+        assert!(
+            cli.contains("requires --before within 30 days of --since"),
+            "k2 mail help must say linked IMAP needs --before within 30d of --since"
         );
         let help_mail = cli.split("cmd_help_mail()").nth(1).expect("cmd_help_mail");
         let first = help_mail
@@ -2593,15 +2727,91 @@ mod tests {
         assert_eq!(window_json["injected"], true);
         // Hint is what CLI prints on this hit (and on a miss).
         let hint = window_json["hint"].as_str().expect("hint");
-        assert!(hint.contains("30-day"), "{hint}");
+        let since_ymd = unix_ymd(now - LINKED_LIST_WINDOW_SECS);
+        assert!(hint.contains("searched last 30 days"), "{hint}");
+        assert!(hint.contains(&since_ymd), "actual since date: {hint}");
+        assert!(hint.contains("through now"), "{hint}");
+        assert!(
+            hint.contains("pass --since/--before to move the window"),
+            "{hint}"
+        );
     }
 
     #[test]
-    fn since_2017_no_before_windows_30d_not_through_today() {
+    fn since_2017_no_before_is_usage_no_search() {
         let after = crate::mail::messages::parse_date_bound("2017-03-01", 0).expect("2017-03-01");
-        let now = 1_800_000_000;
+        let now =
+            crate::mail::messages::parse_date_bound("2026-08-25", 0).expect("2026-08-25");
         let filter = ListFilter {
             after_unix: Some(after),
+            ..Default::default()
+        };
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 10,
+                uidvalidity: 7,
+                search_uids: None, // panic if SEARCH runs
+            },
+            &filter,
+            25,
+            now,
+        );
+        match out {
+            Err(ListError::Usage(hint)) => {
+                assert!(hint.contains("2017-03-01"), "{hint}");
+                assert!(hint.contains("through now"), "{hint}");
+                assert!(
+                    hint.contains("--since 2017-03-01 --before 2017-04-01"),
+                    "{hint}"
+                );
+            }
+            other => panic!("expected Usage 400, got {other:?}"),
+        }
+        assert!(
+            !seen.iter().any(|l| line_is_search(l)),
+            "must not IMAP SEARCH: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn since_7d_no_before_searches_since_omits_before() {
+        let now =
+            crate::mail::messages::parse_date_bound("2026-08-25", 0).expect("2026-08-25");
+        let after = crate::mail::messages::parse_date_bound("7d", now).expect("7d");
+        let filter = ListFilter {
+            after_unix: Some(after),
+            ..Default::default()
+        };
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 10,
+                uidvalidity: 7,
+                search_uids: Some(vec![42]),
+            },
+            &filter,
+            25,
+            now,
+        );
+        let msgs = out.expect("list ok");
+        assert_eq!(msgs.len(), 1);
+        let search = seen.iter().find(|l| line_is_search(l)).expect("UID SEARCH");
+        assert!(
+            search.contains(&format!("SINCE {}", imap_date(after))),
+            "{search}"
+        );
+        assert!(!search.contains("BEFORE "), "no IMAP BEFORE: {search}");
+    }
+
+    #[test]
+    fn since_and_before_one_month_searches_both_bounds() {
+        let after = crate::mail::messages::parse_date_bound("2017-03-01", 0).expect("2017-03-01");
+        let before =
+            crate::mail::messages::parse_date_bound("2017-03-31", 0).expect("2017-03-31");
+        let now =
+            crate::mail::messages::parse_date_bound("2026-08-25", 0).expect("2026-08-25");
+        let filter = ListFilter {
+            after_unix: Some(after),
+            before_unix: Some(before),
             ..Default::default()
         };
         let (out, seen) = run_list(
@@ -2619,10 +2829,6 @@ mod tests {
         let search = seen.iter().find(|l| line_is_search(l)).expect("UID SEARCH");
         assert!(search.contains("SINCE 1-Mar-2017"), "{search}");
         assert!(search.contains("BEFORE 31-Mar-2017"), "{search}");
-        assert!(
-            !search.contains(&imap_date(now)),
-            "not through today: {search}"
-        );
     }
 
     #[test]

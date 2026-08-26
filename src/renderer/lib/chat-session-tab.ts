@@ -138,6 +138,22 @@ export function findChatSessionInTab(
   return null
 }
 
+/**
+ * Overlay Thread|Terminal chrome (C9): pinned Chat is handled separately.
+ * Extra terminal items get chrome when they are an **agent PTY**
+ * (harness command / sidecar / heartbeat surface), not empty bash,
+ * file viewer, inbox, browser, or `/v1` API cells.
+ */
+export function isAgentPtyTerminalItem(item: { type: string; data: unknown }): boolean {
+  if (item.type !== 'terminal') return false
+  const td = item.data as TerminalItemData
+  if (td.fromApi) return false
+  if (td.attachAgentName?.startsWith('api-')) return false
+  if (providerFromCommand(td.command) || providerFromCommand(td.commandHint)) return true
+  if (td.conversationId?.trim()) return true
+  return false
+}
+
 /** True when a tab looks like a harness session (N5). File / heartbeat / API stay false. */
 export function tabLooksLikeChatSession(tab: Pick<Tab, 'isSystemAgent' | 'paneGroups'>): boolean {
   if (tab.isSystemAgent) return false

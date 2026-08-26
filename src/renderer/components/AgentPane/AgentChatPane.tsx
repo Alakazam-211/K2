@@ -14,7 +14,11 @@ import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useActiveStore } from '@/stores/active'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged } from '@/stores/session-events'
-import { chatDisplayName } from '@/lib/chat-session-tab'
+import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
+import { SessionViewTabs } from '@/components/SessionView/SessionViewTabs'
+import { PinnedSessionBody, ThreadOverlayPane } from '@/components/SessionView/AgentSessionChrome'
+import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
+import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import {
   initialBreakerState,
   recordSpawn,
@@ -164,6 +168,8 @@ interface ChatHeaderProps {
    *  persist workspace_sessions.harness with the id (the canonical
    *  session's agent may differ from the workspace default). */
   onSwitchSession: (newSessionId: string, provider: string) => void
+  viewTab: SessionViewTab
+  onViewTabChange: (tab: SessionViewTab) => void
 }
 
 interface HistorySession {
@@ -183,6 +189,8 @@ function ChatHeader({
   onRefresh,
   refreshing,
   onSwitchSession,
+  viewTab,
+  onViewTabChange,
 }: ChatHeaderProps): React.JSX.Element {
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -249,7 +257,11 @@ function ChatHeader({
     : 'New chat'
 
   return (
-    <div className="px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0 flex items-center gap-3 relative">
+    <div
+      className="border-b border-[var(--color-border)] flex-shrink-0 relative"
+      data-testid="pinned-chat-header"
+    >
+    <div className="px-3 py-2 flex items-center gap-3">
       <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate flex-shrink-0">
         {displayName}
       </span>
@@ -348,6 +360,10 @@ function ChatHeader({
           <path d="M16 16h5v5" />
         </svg>
       </button>
+    </div>
+      <div className="px-3">
+        <SessionViewTabs value={viewTab} onChange={onViewTabChange} />
+      </div>
     </div>
   )
 }
@@ -496,6 +512,26 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // side-effect" class as #682. `ensure()` and `onAdded` both stamp this ref
   // with the session they settled on, so the echo for that session no-ops.
   const attachedSessionIdRef = useRef<string | null>(null)
+
+  const lastOverlayConvRef = useRef<string | null>(restoredSessionId ?? null)
+  const overlayConv =
+    phase.kind === 'ready' ? phase.canonicalSessionId : lastOverlayConvRef.current
+  if (phase.kind === 'ready' && phase.canonicalSessionId) {
+    lastOverlayConvRef.current = phase.canonicalSessionId
+  }
+  const [viewTab, setViewTab] = useSessionViewTab(overlayConv)
+  const [overlayAddr, setOverlayAddr] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    resolvePinnedChatCopyableAddress(projectPath, projectId)
+      .then((a) => {
+        if (!cancelled && a?.clipboard) setOverlayAddr(a.clipboard)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [projectPath, projectId])
 
   // Latest onDaemonSessionRemoved in a ref so the session-events
   // subscription (deps: projectPath/projectId) fires the CURRENT
@@ -670,6 +706,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       onRefresh={() => void handleRefresh()}
       refreshing={refreshing}
       onSwitchSession={(sid, provider) => void handleSwitchSession(sid, provider)}
+      viewTab={viewTab}
+      onViewTabChange={setViewTab}
     />
   )
 
@@ -677,6 +715,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     return (
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
+        {viewTab === 'thread' ? (
+          <div className="flex-1 min-h-0">
+            <ThreadOverlayPane addr={overlayAddr} conversationId={overlayConv} />
+          </div>
+        ) : (
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             Chat session failed to start
@@ -686,6 +729,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           </div>
           <RetryButton onClick={handleRefresh} refreshing={refreshing} />
         </div>
+        )}
       </div>
     )
   }
@@ -694,6 +738,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     return (
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
+        {viewTab === 'thread' ? (
+          <div className="flex-1 min-h-0">
+            <ThreadOverlayPane addr={overlayAddr} conversationId={overlayConv} />
+          </div>
+        ) : (
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             Chat session ended
@@ -703,6 +752,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           </div>
           <RetryButton onClick={handleRefresh} refreshing={refreshing} />
         </div>
+        )}
       </div>
     )
   }
@@ -719,7 +769,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   return (
     <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
-      <div className="flex-1 min-h-0">
+      <PinnedSessionBody
+        viewTab={viewTab}
+        addr={overlayAddr}
+        conversationId={overlayConv}
+      >
         <TerminalPane
           // Remount on each daemon respawn so TerminalPane re-attaches to
           // the NEW PTY under the canonical key.
@@ -733,6 +787,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           attachAgentName={projectId}
           seedLabel={displayName}
           lockLabel={true}
+          showComposeBar={viewTab === 'terminal'}
           // Retention exemption (daemon-owned path ONLY — the legacy
           // fallback keeps park-on-hidden, per the capability gate).
           retainWhileHidden={retainWhileHidden}
@@ -742,7 +797,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           // renderer-side breaker because there's no renderer respawn loop
           // to bound.
         />
-      </div>
+      </PinnedSessionBody>
     </div>
   )
 }
@@ -831,6 +886,23 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     }
     return null
   }, [launchConfig])
+
+  const lastOverlayConvRef = useRef<string | null>(restoredSessionId ?? null)
+  if (currentSessionId) lastOverlayConvRef.current = currentSessionId
+  const overlayConv = currentSessionId ?? lastOverlayConvRef.current
+  const [viewTab, setViewTab] = useSessionViewTab(overlayConv)
+  const [overlayAddr, setOverlayAddr] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    resolvePinnedChatCopyableAddress(projectPath, projectId)
+      .then((a) => {
+        if (!cancelled && a?.clipboard) setOverlayAddr(a.clipboard)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [projectPath, projectId])
 
   // Bumped on every refresh-button click to force a clean remount of
   // TerminalPane (key={refreshNonce}) and a re-run of the resolve effect.
@@ -1109,6 +1181,8 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       onRefresh={() => void handleRefresh()}
       refreshing={refreshing}
       onSwitchSession={(sid, provider) => void switchToSession(sid, provider)}
+      viewTab={viewTab}
+      onViewTabChange={setViewTab}
     />
   )
 
@@ -1116,6 +1190,11 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     return (
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
+        {viewTab === 'thread' ? (
+          <div className="flex-1 min-h-0">
+            <ThreadOverlayPane addr={overlayAddr} conversationId={overlayConv} />
+          </div>
+        ) : (
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             Chat session failed to start
@@ -1126,6 +1205,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
           </div>
           <RetryButton onClick={() => void handleRefresh()} refreshing={refreshing} />
         </div>
+        )}
       </div>
     )
   }
@@ -1141,7 +1221,11 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   return (
     <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
-      <div className="flex-1 min-h-0">
+      <PinnedSessionBody
+        viewTab={viewTab}
+        addr={overlayAddr}
+        conversationId={overlayConv}
+      >
         <TerminalPane
           key={refreshNonce}
           terminalId={terminalIdRef.current}
@@ -1151,12 +1235,13 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
           attachAgentName={projectId}
           seedLabel={displayName}
           lockLabel={true}
+          showComposeBar={viewTab === 'terminal'}
           // K2 #682 — feed child-exit into the spawn-loop circuit breaker.
           // ONLY the fallback path wires this: the daemon-owned path relies
           // on the daemon's SessionRemoved broadcast for exit.
           onChildExit={handleChildExit}
         />
-      </div>
+      </PinnedSessionBody>
     </div>
   )
 }

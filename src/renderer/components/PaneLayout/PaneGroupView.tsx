@@ -10,6 +10,11 @@ import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import { PaneTabBar } from './PaneTabBar'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
+import { isAgentPtyTerminalItem, conversationIdFromTerminal } from '@/lib/chat-session-tab'
+import {
+  AgentSessionChrome,
+  useSidecarOverlayAddr,
+} from '@/components/SessionView/AgentSessionChrome'
 
 // ── Props ────────────────────────────────────────────────────────────────
 
@@ -222,7 +227,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                 // ('alacritty-v2' is the pre-rename working name for
                 // the same stack; in-flight tabs stamped with it
                 // dispatch here too.) See .k2so/prds/alacritty-v2.md.
-                content = (
+                const pane = (
                   <TerminalPane
                     terminalId={td.terminalId}
                     tabId={tabId}
@@ -250,6 +255,20 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                     // Nothing sets `td.sandbox` today (default-OFF).
                     sandbox={td.sandbox}
                   />
+                )
+                content = isAgentPtyTerminalItem(item) ? (
+                  <SidecarAgentChrome
+                    cwd={td.cwd}
+                    paneGroupId={paneGroupId}
+                    attachAgentName={(td as { attachAgentName?: string }).attachAgentName}
+                    terminalId={td.terminalId}
+                    conversationId={conversationIdFromTerminal(td)}
+                    fallbackTitle={isMeaningfulTitle ? tabTitle ?? '' : ''}
+                  >
+                    {pane}
+                  </SidecarAgentChrome>
+                ) : (
+                  pane
                 )
               } else {
                 content = (
@@ -349,5 +368,38 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
         />
       )}
     </>
+  )
+}
+
+function SidecarAgentChrome({
+  cwd,
+  paneGroupId,
+  attachAgentName,
+  terminalId,
+  conversationId,
+  fallbackTitle,
+  children,
+}: {
+  cwd: string
+  paneGroupId: string
+  attachAgentName?: string
+  terminalId: string
+  conversationId: string | null
+  fallbackTitle: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  const overlay = useSidecarOverlayAddr(cwd, paneGroupId, attachAgentName)
+  const title = overlay.title || fallbackTitle || 'agent'
+  const addr = overlay.addr
+  const agentName = attachAgentName || `tab-${terminalId}`
+  return (
+    <AgentSessionChrome
+      title={title}
+      addr={addr}
+      conversationId={conversationId}
+      agentName={agentName}
+    >
+      {children}
+    </AgentSessionChrome>
   )
 }

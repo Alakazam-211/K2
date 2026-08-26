@@ -8,6 +8,7 @@ import {
   daemonRowForTab,
   findChatSessionInTab,
   findTabByPaneGroupId,
+  isAgentPtyTerminalItem,
   persistChatRenameIfSessionTab,
   pickConversationId,
   restampSessionTabs,
@@ -314,5 +315,63 @@ describe('copy address', () => {
       label: 'reviewer',
       clipboard: 'sales/reviewer',
     })
+  })
+})
+
+describe('isAgentPtyTerminalItem (C9)', () => {
+  it('true for harness command and sidecar conversation', () => {
+    expect(
+      isAgentPtyTerminalItem({
+        type: 'terminal',
+        data: { terminalId: 't', cwd: '/ws', command: 'claude' },
+      }),
+    ).toBe(true)
+    expect(
+      isAgentPtyTerminalItem({
+        type: 'terminal',
+        data: { terminalId: 't', cwd: '/ws', command: 'grok', conversationId: SID },
+      }),
+    ).toBe(true)
+  })
+
+  it('false for empty bash, file viewer, and API cells', () => {
+    expect(
+      isAgentPtyTerminalItem({
+        type: 'terminal',
+        data: { terminalId: 't', cwd: '/ws' },
+      }),
+    ).toBe(false)
+    expect(
+      isAgentPtyTerminalItem({
+        type: 'file-viewer',
+        data: { filePath: '/ws/README.md' },
+      }),
+    ).toBe(false)
+    expect(
+      isAgentPtyTerminalItem({
+        type: 'terminal',
+        data: { terminalId: 't', cwd: '/ws', command: 'claude', fromApi: true },
+      }),
+    ).toBe(false)
+    expect(
+      isAgentPtyTerminalItem({
+        type: 'browser',
+        data: { url: 'https://example.com' },
+      }),
+    ).toBe(false)
+  })
+
+  it('true for heartbeat-surfaced agent PTY (still an agent session)', () => {
+    expect(
+      isAgentPtyTerminalItem({
+        type: 'terminal',
+        data: {
+          terminalId: 't',
+          cwd: '/ws',
+          command: 'claude',
+          heartbeatName: 'daily',
+        },
+      }),
+    ).toBe(true)
   })
 })

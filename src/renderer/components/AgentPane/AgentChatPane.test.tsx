@@ -48,6 +48,11 @@ const h = vi.hoisted(() => {
       if (route === 'workspace/resume-chat-args') {
         return { command: 'claude', args: ['--resume', 'claude-legacy'], cwd: '/ws', resumeSession: 'claude-legacy', resumedExisting: true }
       }
+      if (route === 'thread') return { ok: true, conversation_id: 'claude-1', items: [] }
+      if (route === 'workspace/handle') return { handle: 'sales' }
+      if (route === 'sessions/list-for-workspace') {
+        return [{ kind: 'canonical', handle: 'sales', agentName: 'proj-1' }]
+      }
       return undefined
     },
   )
@@ -146,8 +151,15 @@ vi.mock('@/lib/terminal-daemon', () => ({
   terminalExists: vi.fn(async () => false),
 }))
 vi.mock('@/kessel/daemon-ws', () => ({
-  getDaemonWs: vi.fn(async () => ({ port: 1, token: 't', host: '127.0.0.1' })),
+  getDaemonWs: vi.fn(async () => ({ port: 1, token: 't', host: '127.0.0.1', secure: false })),
   daemonHttpBase: () => 'http://127.0.0.1:1',
+  daemonWsBase: () => 'ws://127.0.0.1:1',
+}))
+
+vi.mock('@/stores/connect-host', () => ({
+  useConnectHostStore: (sel: (s: { activeHost: 'local' }) => unknown) =>
+    sel({ activeHost: 'local' }),
+  activeHostKey: () => 'local',
 }))
 vi.mock('@/lib/workspace-agent', () => ({
   agentDisplayName: vi.fn(async () => 'Agent One'),
@@ -174,6 +186,16 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
+
+class FakeWS {
+  url: string
+  onmessage: ((ev: { data: string }) => void) | null = null
+  constructor(url: string) {
+    this.url = url
+  }
+  close() {}
+}
+vi.stubGlobal('WebSocket', FakeWS)
 
 import { AgentChatPane } from './AgentChatPane'
 
@@ -538,5 +560,27 @@ describe('#683 capability gate — fallback to legacy renderer-orchestrated path
     expect(pane.getAttribute('data-args')).not.toBe('NONE')
     // Breaker is wired ONLY on the fallback path.
     expect(pane.getAttribute('data-has-onexit')).toBe('yes')
+  })
+})
+
+describe('S2 overlay chrome (C3/C4/C10)', () => {
+  it('defaults to Terminal and keeps ChatHeader dropdown on Thread without unmounting PTY', async () => {
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+
+    expect(screen.getByTestId('session-view-tab-terminal').getAttribute('aria-selected')).toBe(
+      'true',
+    )
+    expect(screen.getByLabelText('Switch pinned chat session')).not.toBeNull()
+    expect(screen.getByTestId('pinned-chat-header')).not.toBeNull()
+
+    fireEvent.click(screen.getByTestId('session-view-tab-thread'))
+
+    expect(screen.getByTestId('terminal-pane')).not.toBeNull()
+    expect(screen.getByTestId('agent-session-terminal').style.display).toBe('none')
+    expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.getByLabelText('Switch pinned chat session')).not.toBeNull()
+    expect(screen.getByLabelText('Refresh chat session')).not.toBeNull()
+    expect(screen.getByTestId('session-view-tab-thread').textContent).toBe('Thread')
   })
 })

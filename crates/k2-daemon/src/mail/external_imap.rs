@@ -423,6 +423,219 @@ pub fn build_search_query(filter: &ListFilter) -> String {
     }
 }
 
+/// Sliding 30-day SEARCH window for linked IMAP list (D3). Applied
+/// INSIDE [`list_inbox`], never by mutating the shared [`ListFilter`]
+/// the hosted JMAP / Graph backends also see.
+pub const LINKED_LIST_WINDOW_SECS: i64 = 30 * 86400;
+const LINKED_SEARCH_UID_CAP: usize = 1000;
+const LIST_FETCH_QUERY: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER])";
+
+pub const LINKED_SEARCH_WINDOW_HINT: &str =
+    "Linked IMAP search is limited to a 30-day window. Narrow --since/--before.";
+
+/// Bounds the IMAP SEARCH actually ran, plus whether we injected a
+/// bound the caller did not set. JSON `searchWindow` on
+/// `k2 mail messages` when at least one listed inbox is linked IMAP.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedSearchWindow {
+    pub after_unix: i64,
+    pub before_unix: Option<i64>,
+    pub injected: bool,
+}
+
+impl LinkedSearchWindow {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "since": unix_to_iso(self.after_unix),
+            "before": self.before_unix.map(unix_to_iso),
+            "injected": self.injected,
+            "hint": LINKED_SEARCH_WINDOW_HINT,
+        })
+    }
+}
+
+fn unix_to_iso(secs: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
+        .unwrap_or_default()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// SEARCH keys (query/from/unread or any date). Offset-only is still
+/// the unfiltered sequence-page path (D2).
+fn filter_has_search_keys(filter: &ListFilter) -> bool {
+    filter.unread_only
+        || filter.query.as_deref().is_some_and(|s| !s.is_empty())
+        || filter.from.as_deref().is_some_and(|s| !s.is_empty())
+        || filter.since_unix.is_some()
+        || filter.after_unix.is_some()
+        || filter.before_unix.is_some()
+}
+
+/// D3 window for linked IMAP SEARCH. `Ok(None)` = skip D3 (`since_unix`
+/// is wait, or the unfiltered sequence path). Span > 30d is
+/// [`ListError::Usage`].
+pub fn linked_list_search_window(
+    filter: &ListFilter,
+    now_unix: i64,
+) -> Result<Option<LinkedSearchWindow>, ListError> {
+    // Wait (`k2 mail wait`) stamps `since_unix` — never 30d-cap it.
+    if filter.since_unix.is_some() {
+        return Ok(None);
+    }
+    if !filter_has_search_keys(filter) {
+        return Ok(None);
+    }
+    match (filter.after_unix, filter.before_unix) {
+        (None, None) => Ok(Some(LinkedSearchWindow {
+            after_unix: now_unix.saturating_sub(LINKED_LIST_WINDOW_SECS),
+            before_unix: None, // omit IMAP BEFORE (BEFORE today excludes today)
+            injected: true,
+        })),
+        (Some(after), None) => Ok(Some(LinkedSearchWindow {
+            after_unix: after,
+            before_unix: Some(after.saturating_add(LINKED_LIST_WINDOW_SECS)),
+            injected: true,
+        })),
+        (None, Some(before)) => Ok(Some(LinkedSearchWindow {
+            after_unix: before.saturating_sub(LINKED_LIST_WINDOW_SECS),
+            before_unix: Some(before),
+            injected: true,
+        })),
+        (Some(after), Some(before)) => {
+            if before.saturating_sub(after) > LINKED_LIST_WINDOW_SECS {
+                return Err(ListError::Usage(
+                    "date window is longer than 30 days — narrow --since/--before \
+                     (linked IMAP search is capped at 30 days)"
+                        .to_string(),
+                ));
+            }
+            Ok(Some(LinkedSearchWindow {
+                after_unix: after,
+                before_unix: Some(before),
+                injected: false,
+            }))
+        }
+    }
+}
+
+/// IMAP sequence page, newest-first: seq 1 = oldest, `exists` = newest.
+/// `exists=60000 offset=2000 limit=1` → `(58000, 58000)`.
+pub(crate) fn linked_imap_sequence_page(
+    exists: u32,
+    offset: usize,
+    limit: usize,
+) -> Option<(u32, u32)> {
+    if exists == 0 || limit == 0 || offset >= exists as usize {
+        return None;
+    }
+    let hi = exists - offset as u32;
+    let lo = hi.saturating_sub((limit as u32).saturating_sub(1)).max(1);
+    Some((lo, hi))
+}
+
+fn sequence_set(lo: u32, hi: u32) -> String {
+    if lo == hi {
+        lo.to_string()
+    } else {
+        format!("{lo}:{hi}")
+    }
+}
+
+/// SELECT + sequence FETCH or windowed UID SEARCH. Tests drive this
+/// over the plaintext loopback mock; production logs in/out around it.
+fn list_on_session(
+    session: &mut ImapSession,
+    cache_key: &str,
+    filter: &ListFilter,
+    limit: usize,
+    now_unix: i64,
+) -> Result<Vec<EmailSummary>, ListError> {
+    let target = resolve_read_folder(session, &filter.folder)?;
+    let mailbox = session.select(&target).map_err(|e| imap_err("SELECT", e))?;
+    let uidvalidity = mailbox.uid_validity.unwrap_or(0);
+    let exists = mailbox.exists;
+
+    if !filter_has_search_keys(filter) {
+        // D2: unfiltered list — sequence FETCH the newest page. No
+        // SEARCH / UID SEARCH at all (UID SEARCH ALL on a 60k folder
+        // is what this path exists to stop). Offset past exists is
+        // empty, not the #38 engine error that SEARCH-empty used to
+        // fire.
+        let Some((lo, hi)) = linked_imap_sequence_page(exists, filter.offset, limit) else {
+            return Ok(Vec::new());
+        };
+        return fetch_summaries(
+            session,
+            cache_key,
+            &target,
+            uidvalidity,
+            &sequence_set(lo, hi),
+            false,
+        );
+    }
+
+    let mut search_filter = filter.clone();
+    if let Some(win) = linked_list_search_window(filter, now_unix)? {
+        search_filter.after_unix = Some(win.after_unix);
+        search_filter.before_unix = win.before_unix;
+    }
+    let mut uids: Vec<u32> = session
+        .uid_search(build_search_query(&search_filter))
+        .map_err(|e| imap_err("SEARCH", e))?
+        .into_iter()
+        .collect();
+    // Newest first ≈ highest UID first (UIDs ascend with arrival
+    // within one UIDVALIDITY generation); the route re-sorts the
+    // merged list by date anyway.
+    uids.sort_unstable_by(|a, b| b.cmp(a));
+    if uids.len() > LINKED_SEARCH_UID_CAP {
+        // D5: fail BEFORE skip/take so a 60k hit never becomes a
+        // silent first page of 25.
+        return Err(ListError::Usage(format!(
+            "IMAP SEARCH matched {} (cap {LINKED_SEARCH_UID_CAP}) — narrow --since/--before",
+            uids.len()
+        )));
+    }
+    let uids: Vec<u32> = uids.into_iter().skip(filter.offset).take(limit).collect();
+    if uids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    fetch_summaries(session, cache_key, &target, uidvalidity, &set, true)
+}
+
+fn fetch_summaries(
+    session: &mut ImapSession,
+    cache_key: &str,
+    target: &str,
+    uidvalidity: u32,
+    set: &str,
+    uid: bool,
+) -> Result<Vec<EmailSummary>, ListError> {
+    let fetches = if uid {
+        session.uid_fetch(set, LIST_FETCH_QUERY)
+    } else {
+        session.fetch(set, LIST_FETCH_QUERY)
+    }
+    .map_err(|e| imap_err("FETCH", e))?;
+    let fetch_count = fetches.len();
+    let mut out: Vec<EmailSummary> = fetches
+        .iter()
+        .filter_map(|f| summary_from_fetch(uidvalidity, f))
+        .collect();
+    // #38: FETCH rows landed but zero headers parsed → engine fault,
+    // not "empty inbox" (agents must not treat as success).
+    if out.is_empty() && fetch_count > 0 {
+        return Err(ListError::Engine(format!(
+            "IMAP FETCH returned {fetch_count} message(s) but none could be summarized \
+             (missing/unparseable headers) — retry or re-link this inbox"
+        )));
+    }
+    out.sort_by(|a, b| b.received_at.cmp(&a.received_at));
+    remember_validity(cache_key, uidvalidity, target);
+    Ok(out)
+}
+
 // ── Summary shaping (headers-only fetch → EmailSummary) ─────────────────
 
 /// One summary out of a `UID FETCH (UID FLAGS INTERNALDATE
@@ -513,71 +726,13 @@ impl ImapOps for RealImapOps {
         limit: usize,
     ) -> Result<Vec<EmailSummary>, ListError> {
         let mut session = login(inbox, password)?;
-        let target = resolve_read_folder(&mut session, &filter.folder)?;
-        let mailbox = session.select(&target).map_err(|e| imap_err("SELECT", e))?;
-        let uidvalidity = mailbox.uid_validity.unwrap_or(0);
-        let exists = mailbox.exists;
-        let mut uids: Vec<u32> = session
-            .uid_search(build_search_query(filter))
-            .map_err(|e| imap_err("SEARCH", e))?
-            .into_iter()
-            .collect();
-        // Newest first ≈ highest UID first (UIDs ascend with arrival
-        // within one UIDVALIDITY generation); the route re-sorts the
-        // merged list by date anyway. `offset` is the pagination cursor:
-        // skip that many of the newest before taking a page.
-        uids.sort_unstable_by(|a, b| b.cmp(a));
-        // #38: unfiltered page-0 SEARCH returned nothing while SELECT
-        // reported messages — never pretend this is a healthy empty inbox.
-        // (Filtered / offset queries legitimately return empty.)
-        let unfiltered = !filter.unread_only
-            && filter.query.as_ref().map(|s| s.is_empty()).unwrap_or(true)
-            && filter.from.as_ref().map(|s| s.is_empty()).unwrap_or(true)
-            && filter.since_unix.is_none()
-            && filter.after_unix.is_none()
-            && filter.before_unix.is_none()
-            && filter.offset == 0;
-        if uids.is_empty() {
-            let _ = session.logout();
-            if unfiltered && exists > 0 {
-                return Err(ListError::Engine(format!(
-                    "IMAP SEARCH returned no UIDs but SELECT reports {exists} message(s) in '{target}' — \
-                     the list path failed; retry or re-link this inbox if it persists"
-                )));
-            }
-            return Ok(Vec::new());
-        }
-        let uids: Vec<u32> = uids.into_iter().skip(filter.offset).take(limit).collect();
-        if uids.is_empty() {
-            let _ = session.logout();
-            return Ok(Vec::new());
-        }
-        let set = uids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let fetches = session
-            .uid_fetch(set, "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER])")
-            .map_err(|e| imap_err("FETCH", e))?;
-        let fetch_count = fetches.len();
-        let mut out: Vec<EmailSummary> = fetches
-            .iter()
-            .filter_map(|f| summary_from_fetch(uidvalidity, f))
-            .collect();
-        // #38: UIDs + FETCH rows landed but zero headers parsed → engine
-        // fault, not "empty inbox" (agents must not treat as success).
-        if out.is_empty() && fetch_count > 0 {
-            let _ = session.logout();
-            return Err(ListError::Engine(format!(
-                "IMAP FETCH returned {fetch_count} message(s) but none could be summarized \
-                 (missing/unparseable headers) — retry or re-link this inbox"
-            )));
-        }
-        out.sort_by(|a, b| b.received_at.cmp(&a.received_at));
-        remember_validity(&inbox.id, uidvalidity, &target);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let result = list_on_session(&mut session, &inbox.id, filter, limit, now);
         let _ = session.logout();
-        Ok(out)
+        result
     }
 
     fn fetch_raw(
@@ -1195,6 +1350,169 @@ mod tests {
         let f = ListFilter { since_unix: Some(1), after_unix: Some(1_783_512_000), ..Default::default() };
         let q = build_search_query(&f);
         assert!(q.contains("SINCE 8-Jul-2026") && !q.contains("SINCE 1-Jan-1970"), "{q}");
+    }
+
+    #[test]
+    fn sequence_page_newest_first_clamps_and_empties() {
+        // exists=60000 offset=2000 limit=1 → FETCH 58000 (not UID 58000).
+        assert_eq!(
+            linked_imap_sequence_page(60_000, 2000, 1),
+            Some((58_000, 58_000))
+        );
+        assert_eq!(
+            linked_imap_sequence_page(60_000, 0, 25),
+            Some((59_976, 60_000))
+        );
+        assert_eq!(linked_imap_sequence_page(10, 0, 25), Some((1, 10)));
+        assert_eq!(
+            linked_imap_sequence_page(5, 5, 1),
+            None,
+            "offset>=exists is empty"
+        );
+        assert_eq!(
+            linked_imap_sequence_page(0, 0, 25),
+            None,
+            "exists==0 is empty"
+        );
+        assert_eq!(linked_imap_sequence_page(10, 8, 25), Some((1, 2)));
+    }
+
+    #[test]
+    fn linked_window_from_no_dates_injects_since_omits_before() {
+        let now = 1_800_000_000;
+        let f = ListFilter {
+            from: Some("alice@example.com".to_string()),
+            ..Default::default()
+        };
+        let w = linked_list_search_window(&f, now)
+            .expect("window ok")
+            .expect("window applied");
+        assert_eq!(w.after_unix, now - LINKED_LIST_WINDOW_SECS);
+        assert_eq!(w.before_unix, None, "BEFORE today would exclude today");
+        assert!(w.injected, "injected SINCE, caller passed no dates");
+        let q = {
+            let mut sf = f.clone();
+            sf.after_unix = Some(w.after_unix);
+            sf.before_unix = w.before_unix;
+            build_search_query(&sf)
+        };
+        assert!(q.contains("SINCE "), "SINCE not ALL: {q}");
+        assert!(!q.contains("ALL"), "must not SEARCH ALL: {q}");
+        assert!(!q.contains("BEFORE "), "no IMAP BEFORE: {q}");
+        let json = w.to_json();
+        assert_eq!(json["injected"], true);
+        let hint = json["hint"].as_str().expect("hint");
+        assert!(hint.contains("30-day"), "hint: {hint}");
+        // D4: CLI prints this hint on hit AND miss — JSON carries it either way.
+        assert!(!hint.is_empty());
+    }
+
+    #[test]
+    fn linked_window_since_2017_caps_30d_not_through_today() {
+        let after =
+            crate::mail::messages::parse_date_bound("2017-03-01", 0).expect("2017-03-01 parses");
+        let now = 1_800_000_000; // ~2027
+        let f = ListFilter {
+            after_unix: Some(after),
+            ..Default::default()
+        };
+        let w = linked_list_search_window(&f, now)
+            .expect("window ok")
+            .expect("window applied");
+        assert_eq!(w.after_unix, after);
+        let before = w.before_unix.expect("injected before");
+        assert_eq!(before, after + LINKED_LIST_WINDOW_SECS);
+        assert!(w.injected);
+        assert!(
+            before < now - 365 * 86400,
+            "window must not run through today: before={before} now={now}"
+        );
+        let q = {
+            let mut sf = f.clone();
+            sf.after_unix = Some(w.after_unix);
+            sf.before_unix = w.before_unix;
+            build_search_query(&sf)
+        };
+        assert!(q.contains("SINCE 1-Mar-2017"), "{q}");
+        assert!(q.contains("BEFORE 31-Mar-2017"), "{q}");
+        assert!(!q.contains(&imap_date(now)), "must not BEFORE today: {q}");
+    }
+
+    #[test]
+    fn linked_window_span_over_30d_is_usage() {
+        let f = ListFilter {
+            after_unix: Some(0),
+            before_unix: Some(LINKED_LIST_WINDOW_SECS + 1),
+            ..Default::default()
+        };
+        match linked_list_search_window(&f, 1_800_000_000) {
+            Err(ListError::Usage(hint)) => {
+                assert!(hint.contains("30 days"), "{hint}");
+            }
+            other => panic!("expected Usage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn linked_window_skipped_when_since_unix_set() {
+        let f = ListFilter {
+            from: Some("codes@example.com".to_string()),
+            since_unix: Some(1_700_000_000),
+            ..Default::default()
+        };
+        match linked_list_search_window(&f, 1_800_000_000) {
+            Ok(None) => {}
+            other => panic!("D3 must skip when since_unix is set: {other:?}"),
+        }
+        let q = build_search_query(&f);
+        assert!(q.contains("SINCE "), "{q}");
+        assert!(
+            !q.contains(&imap_date(1_800_000_000 - LINKED_LIST_WINDOW_SECS)),
+            "{q}"
+        );
+    }
+
+    #[test]
+    fn mail_help_says_linked_inboxes_are_live_imap_not_a_local_store() {
+        let cli = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cli/k2"));
+        assert!(cli.contains("live IMAP"), "k2 mail help must say live IMAP");
+        assert!(
+            cli.contains("not a local store"),
+            "k2 mail help must say not a local store"
+        );
+        assert!(
+            cli.contains("≤30-day window") || cli.contains("30-day search window"),
+            "k2 mail help must mention the ≤30-day search window"
+        );
+        let help_mail = cli.split("cmd_help_mail()").nth(1).expect("cmd_help_mail");
+        let first = help_mail
+            .split("cat <<'EOF'")
+            .nth(1)
+            .expect("heredoc")
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .expect("first sentence");
+        assert!(
+            first.contains("live IMAP"),
+            "k2 mail --help first sentence: {first}"
+        );
+        assert!(first.contains("not a local store"), "{first}");
+        let help_msgs = cli
+            .split("cmd_help_mail_messages()")
+            .nth(1)
+            .expect("cmd_help_mail_messages");
+        let first = help_msgs
+            .split("cat <<'EOF'")
+            .nth(1)
+            .expect("heredoc")
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .expect("first sentence");
+        assert!(
+            first.contains("live IMAP"),
+            "k2 mail messages help first sentence: {first}"
+        );
+        assert!(first.contains("not a local store"), "{first}");
     }
 
     // ── the scripted loopback mock ──
@@ -1948,6 +2266,431 @@ mod tests {
             .filter(|l| l.to_ascii_uppercase().contains("SELECT"))
             .count();
         assert_eq!(selects, 2, "two SELECTs (one per fetch): {seen:?}");
+    }
+
+    // ── linked IMAP list: sequence page + 30-day SEARCH window ──────────
+
+    struct ListMock {
+        exists: u32,
+        uidvalidity: u32,
+        /// `None` = panic on SEARCH (D2 unfiltered path). `Some` = UID SEARCH
+        /// returns these UIDs.
+        search_uids: Option<Vec<u32>>,
+    }
+
+    fn parse_imap_set(s: &str) -> Vec<u32> {
+        let mut out = Vec::new();
+        for part in s.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if let Some((a, b)) = part.split_once(':') {
+                let lo: u32 = a.parse().unwrap_or_else(|_| panic!("seq lo '{a}'"));
+                let hi: u32 = b.parse().unwrap_or_else(|_| panic!("seq hi '{b}'"));
+                out.extend(lo..=hi);
+            } else {
+                out.push(part.parse().unwrap_or_else(|_| panic!("seq '{part}'")));
+            }
+        }
+        out
+    }
+
+    fn reply_header_fetches(w: &mut impl Write, tag: &str, items: &[(u32, u32)]) {
+        for (seq, uid) in items {
+            let headers = format!("From: sender{uid}@example.com\r\nSubject: msg {uid}\r\n\r\n");
+            let n = headers.len();
+            w.write_all(
+                format!(
+                    "* {seq} FETCH (UID {uid} FLAGS () INTERNALDATE \"08-Jul-2026 12:00:00 +0000\" BODY[HEADER] {{{n}}}\r\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            w.write_all(headers.as_bytes()).unwrap();
+            w.write_all(b")\r\n").unwrap();
+        }
+        w.write_all(format!("{tag} OK FETCH done\r\n").as_bytes())
+            .unwrap();
+    }
+
+    fn spawn_list_mock(cfg: ListMock) -> (u16, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .expect("read timeout");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut w = stream;
+            let mut seen: Vec<String> = Vec::new();
+            w.write_all(b"* OK mock list IMAP4rev1 ready\r\n").unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let line = line.trim_end().to_string();
+                seen.push(line.clone());
+                let tag = line.split_whitespace().next().unwrap_or("*").to_string();
+                let verb = line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("")
+                    .to_ascii_uppercase();
+                match verb.as_str() {
+                    "LOGIN" => {
+                        w.write_all(format!("{tag} OK LOGIN done\r\n").as_bytes())
+                            .unwrap();
+                    }
+                    "SELECT" => {
+                        w.write_all(
+                            format!(
+                                "* {} EXISTS\r\n\
+                                 * 0 RECENT\r\n\
+                                 * OK [UIDVALIDITY {}] UIDs valid\r\n\
+                                 * OK [UIDNEXT {}] Predicted next UID\r\n\
+                                 {tag} OK [READ-WRITE] SELECT done\r\n",
+                                cfg.exists,
+                                cfg.uidvalidity,
+                                cfg.exists.saturating_add(1),
+                            )
+                            .as_bytes(),
+                        )
+                        .unwrap();
+                    }
+                    "FETCH" => {
+                        let set = line.split_whitespace().nth(2).unwrap_or("");
+                        let seqs = parse_imap_set(set);
+                        let items: Vec<(u32, u32)> = seqs.into_iter().map(|s| (s, s)).collect();
+                        reply_header_fetches(&mut w, &tag, &items);
+                    }
+                    "UID" => {
+                        let sub = line
+                            .split_whitespace()
+                            .nth(2)
+                            .unwrap_or("")
+                            .to_ascii_uppercase();
+                        if sub == "SEARCH" {
+                            let Some(uids) = cfg.search_uids.as_ref() else {
+                                panic!("unfiltered list must not SEARCH: {line}");
+                            };
+                            let body = uids
+                                .iter()
+                                .map(u32::to_string)
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            w.write_all(format!("* SEARCH {body}\r\n").as_bytes())
+                                .unwrap();
+                            w.write_all(format!("{tag} OK SEARCH done\r\n").as_bytes())
+                                .unwrap();
+                        } else if sub == "FETCH" {
+                            let set = line.split_whitespace().nth(3).unwrap_or("");
+                            let uids = parse_imap_set(set);
+                            let items: Vec<(u32, u32)> = uids.into_iter().map(|u| (u, u)).collect();
+                            reply_header_fetches(&mut w, &tag, &items);
+                        } else {
+                            panic!("list mock unexpected UID {sub}: {line}");
+                        }
+                    }
+                    "SEARCH" => panic!("must not sequence SEARCH: {line}"),
+                    "LOGOUT" => {
+                        w.write_all(b"* BYE mock done\r\n").unwrap();
+                        w.write_all(format!("{tag} OK LOGOUT done\r\n").as_bytes())
+                            .unwrap();
+                        break;
+                    }
+                    other => panic!("list mock unexpected command '{other}': {line}"),
+                }
+            }
+            seen
+        });
+        (port, handle)
+    }
+
+    fn run_list(
+        cfg: ListMock,
+        filter: &ListFilter,
+        limit: usize,
+        now: i64,
+    ) -> (Result<Vec<EmailSummary>, ListError>, Vec<String>) {
+        let (port, handle) = spawn_list_mock(cfg);
+        let mut session = plaintext_session(port, "app-password").expect("login");
+        let out = list_on_session(&mut session, "list-test", filter, limit, now);
+        let _ = session.logout();
+        let seen = handle.join().expect("mock thread");
+        (out, seen)
+    }
+
+    fn line_is_search(line: &str) -> bool {
+        let u = line.to_ascii_uppercase();
+        let rest: Vec<&str> = u.split_whitespace().skip(1).collect();
+        rest.first().is_some_and(|v| *v == "SEARCH")
+            || (rest.first().is_some_and(|v| *v == "UID")
+                && rest.get(1).is_some_and(|v| *v == "SEARCH"))
+    }
+
+    fn line_is_uid_fetch(line: &str) -> bool {
+        let u = line.to_ascii_uppercase();
+        let rest: Vec<&str> = u.split_whitespace().skip(1).collect();
+        rest.first().is_some_and(|v| *v == "UID") && rest.get(1).is_some_and(|v| *v == "FETCH")
+    }
+
+    fn line_is_seq_fetch(line: &str) -> bool {
+        let u = line.to_ascii_uppercase();
+        let rest: Vec<&str> = u.split_whitespace().skip(1).collect();
+        rest.first().is_some_and(|v| *v == "FETCH")
+    }
+
+    #[test]
+    fn unfiltered_page0_sequence_fetches_last_limit_no_search() {
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 10,
+                uidvalidity: 7,
+                search_uids: None,
+            },
+            &ListFilter::default(),
+            3,
+            1_800_000_000,
+        );
+        let msgs = out.expect("list ok");
+        assert_eq!(msgs.len(), 3, "last 3 of 10: {msgs:?}");
+        assert!(
+            !seen.iter().any(|l| line_is_search(l)),
+            "D2 must not SEARCH: {seen:?}"
+        );
+        let fetch = seen
+            .iter()
+            .find(|l| line_is_seq_fetch(l))
+            .expect("sequence FETCH");
+        assert!(
+            fetch.contains("8:10") || fetch.contains("8:10"),
+            "FETCH last limit 8:10: {fetch}"
+        );
+        assert!(
+            !seen.iter().any(|l| line_is_uid_fetch(l)),
+            "must not UID FETCH: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn unfiltered_offset_2000_limit_1_exists_60000_fetches_seq_58000() {
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 60_000,
+                uidvalidity: 7,
+                search_uids: None,
+            },
+            &ListFilter {
+                offset: 2000,
+                ..Default::default()
+            },
+            1,
+            1_800_000_000,
+        );
+        let msgs = out.expect("list ok");
+        assert_eq!(msgs.len(), 1);
+        assert!(
+            !seen.iter().any(|l| line_is_search(l)),
+            "must not SEARCH: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|l| line_is_uid_fetch(l)),
+            "NOT UID FETCH 58000: {seen:?}"
+        );
+        let fetch = seen
+            .iter()
+            .find(|l| line_is_seq_fetch(l))
+            .expect("sequence FETCH");
+        let set = fetch.split_whitespace().nth(2).expect("seq set");
+        assert_eq!(set, "58000", "FETCH 58000 sequence: {fetch}");
+    }
+
+    #[test]
+    fn unfiltered_offset_past_exists_is_empty_ok_not_engine() {
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 5,
+                uidvalidity: 7,
+                search_uids: None,
+            },
+            &ListFilter {
+                offset: 5,
+                ..Default::default()
+            },
+            1,
+            1_800_000_000,
+        );
+        match out {
+            Ok(msgs) => assert!(msgs.is_empty(), "empty page: {msgs:?}"),
+            Err(e) => panic!("offset>=exists must not be #38 engine error: {e}"),
+        }
+        assert!(!seen.iter().any(|l| line_is_search(l)), "{seen:?}");
+        assert!(
+            !seen
+                .iter()
+                .any(|l| line_is_seq_fetch(l) || line_is_uid_fetch(l)),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn unfiltered_exists_zero_is_empty_ok() {
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 0,
+                uidvalidity: 7,
+                search_uids: None,
+            },
+            &ListFilter::default(),
+            25,
+            1_800_000_000,
+        );
+        match out {
+            Ok(msgs) => assert!(msgs.is_empty(), "{msgs:?}"),
+            Err(e) => panic!("exists==0 must be empty ok: {e}"),
+        }
+        assert!(!seen.iter().any(|l| line_is_search(l)), "{seen:?}");
+    }
+
+    #[test]
+    fn from_no_dates_searches_since_not_all_no_before_today() {
+        let now = 1_800_000_000;
+        let filter = ListFilter {
+            from: Some("alice@example.com".to_string()),
+            ..Default::default()
+        };
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 10,
+                uidvalidity: 7,
+                search_uids: Some(vec![42]),
+            },
+            &filter,
+            25,
+            now,
+        );
+        let msgs = out.expect("list ok");
+        assert_eq!(msgs.len(), 1, "hit: {msgs:?}");
+        let search = seen.iter().find(|l| line_is_search(l)).expect("UID SEARCH");
+        let u = search.to_ascii_uppercase();
+        assert!(u.contains("UID SEARCH"), "{search}");
+        assert!(search.contains("FROM"), "{search}");
+        assert!(search.contains("SINCE "), "SINCE not ALL: {search}");
+        assert!(!u.contains(" ALL"), "must not SEARCH ALL: {search}");
+        assert!(!search.contains("BEFORE "), "no BEFORE today: {search}");
+        assert!(
+            search.contains(&imap_date(now - LINKED_LIST_WINDOW_SECS)),
+            "SINCE now-30d: {search}"
+        );
+        let w = linked_list_search_window(&filter, now)
+            .expect("ok")
+            .expect("window");
+        assert!(w.injected);
+        let window_json = w.to_json();
+        assert_eq!(window_json["injected"], true);
+        // Hint is what CLI prints on this hit (and on a miss).
+        let hint = window_json["hint"].as_str().expect("hint");
+        assert!(hint.contains("30-day"), "{hint}");
+    }
+
+    #[test]
+    fn since_2017_no_before_windows_30d_not_through_today() {
+        let after = crate::mail::messages::parse_date_bound("2017-03-01", 0).expect("2017-03-01");
+        let now = 1_800_000_000;
+        let filter = ListFilter {
+            after_unix: Some(after),
+            ..Default::default()
+        };
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 10,
+                uidvalidity: 7,
+                search_uids: Some(vec![]),
+            },
+            &filter,
+            25,
+            now,
+        );
+        let msgs = out.expect("empty in window is ok");
+        assert!(msgs.is_empty());
+        let search = seen.iter().find(|l| line_is_search(l)).expect("UID SEARCH");
+        assert!(search.contains("SINCE 1-Mar-2017"), "{search}");
+        assert!(search.contains("BEFORE 31-Mar-2017"), "{search}");
+        assert!(
+            !search.contains(&imap_date(now)),
+            "not through today: {search}"
+        );
+    }
+
+    #[test]
+    fn search_1001_uids_is_usage_before_skip_take_no_summaries() {
+        let uids: Vec<u32> = (1..=1001).collect();
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 5000,
+                uidvalidity: 7,
+                search_uids: Some(uids),
+            },
+            &ListFilter {
+                from: Some("alice@example.com".to_string()),
+                ..Default::default()
+            },
+            25,
+            1_800_000_000,
+        );
+        match out {
+            Err(ListError::Usage(hint)) => {
+                assert!(hint.contains("1001"), "{hint}");
+                assert!(hint.contains("1000"), "{hint}");
+                assert!(hint.contains("narrow --since/--before"), "{hint}");
+            }
+            other => panic!("expected Usage 400, got {other:?}"),
+        }
+        assert!(
+            !seen
+                .iter()
+                .any(|l| line_is_uid_fetch(l) || line_is_seq_fetch(l)),
+            "must not FETCH summaries after 1001 cap: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn wait_since_unix_skips_d3_window() {
+        let since = 1_700_000_000;
+        let now = 1_800_000_000;
+        let filter = ListFilter {
+            from: Some("codes@example.com".to_string()),
+            since_unix: Some(since),
+            ..Default::default()
+        };
+        let (out, seen) = run_list(
+            ListMock {
+                exists: 10,
+                uidvalidity: 7,
+                search_uids: Some(vec![9]),
+            },
+            &filter,
+            20,
+            now,
+        );
+        let msgs = out.expect("wait list ok");
+        assert_eq!(msgs.len(), 1);
+        let search = seen.iter().find(|l| line_is_search(l)).expect("UID SEARCH");
+        assert!(
+            search.contains(&format!("SINCE {}", imap_date(since))),
+            "{search}"
+        );
+        assert!(
+            !search.contains(&imap_date(now - LINKED_LIST_WINDOW_SECS)),
+            "must not inject now-30d: {search}"
+        );
+        assert!(
+            !search.contains("BEFORE "),
+            "wait does not inject BEFORE: {search}"
+        );
     }
 
     // ── O2: SASL XOAUTH2 (no real network, no real Gmail) ───────────────

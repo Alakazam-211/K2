@@ -73,12 +73,13 @@ fn read_error_response(err: ReadError) -> CliResponse {
 }
 
 /// Map a list failure onto the wire contract: an engine/transport fault
-/// is a 502 `engine`; a mistyped `--folder`/`--junk` is a 400 `usage`
-/// that TEACHES with the folders that actually exist. Both backends
+/// is a 502 `engine`; a mistyped `--folder`/`--junk` OR a linked-IMAP
+/// search-window/SEARCH-cap failure is a 400 `usage`. Both backends
 /// classify identically (§17.5 uniform seam).
 fn list_error_response(err: ListError) -> CliResponse {
     match err {
         ListError::Engine(hint) => error_response("502 Bad Gateway", "engine", &hint),
+        ListError::Usage(hint) => error_response("400 Bad Request", "usage", &hint),
         ListError::UnknownFolder { requested, available } => {
             let list = if available.is_empty() {
                 "(none visible)".to_string()
@@ -439,6 +440,19 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
         folder,
         offset,
     };
+    // D1: do NOT mutate `filter` here — that would 30d-cap hosted JMAP.
+    // Detect linked IMAP from the watch list; apply the window inside
+    // IMAP `list_inbox`, and only then attach JSON `searchWindow`.
+    let any_linked_imap = watch.iter().any(|w| {
+        messages::backend_for_address(&w.address) == MailBackend::ExternalImap
+    });
+    let mut search_window: Option<external_imap::LinkedSearchWindow> = None;
+    if any_linked_imap {
+        match external_imap::linked_list_search_window(&filter, now) {
+            Ok(w) => search_window = w,
+            Err(e) => return list_error_response(e),
+        }
+    }
     let mut shaped: Vec<(i64, serde_json::Value)> = Vec::new();
     // A backend that returns a FULL page may have more behind it — the
     // cursor's "there is a next page" signal (exact for one inbox; a
@@ -503,6 +517,8 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
             .unwrap_or("all inboxes failed to list messages");
         let status = if code == "not_ready" {
             "503 Service Unavailable"
+        } else if code == "usage" {
+            "400 Bad Request"
         } else {
             "502 Bad Gateway"
         };
@@ -537,6 +553,9 @@ pub fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
         // ones that failed are named here (address + code + hint) so the
         // caller can act without the whole call 5xx-ing.
         body["inboxErrors"] = serde_json::json!(inbox_errors);
+    }
+    if let Some(w) = search_window {
+        body["searchWindow"] = w.to_json();
     }
     ok_json(body)
 }
@@ -1459,6 +1478,10 @@ mod tests {
         let v = body_json(&resp);
         assert_eq!(v["ok"], true);
         assert_eq!(v["count"], 0);
+        assert!(
+            v.get("searchWindow").is_none(),
+            "hosted/empty must not grow searchWindow: {v}"
+        );
 
         // A FOREIGN address answers the masked not_found.
         let (name2, path2) = unique("messages-foreign");
@@ -1590,6 +1613,32 @@ mod tests {
         let v = body_json(&resp);
         assert_eq!(v["count"], 0);
         assert!(v.get("nextOffset").is_none(), "no cursor on an empty page");
+        assert!(
+            v.get("searchWindow").is_none(),
+            "hosted JMAP must not 30d-cap or attach searchWindow: {v}"
+        );
+        cleanup_project(&project_id);
+    }
+
+    #[test]
+    fn linked_imap_span_over_30d_is_400_usage_without_engine_dial() {
+        let _g = crate::mail::mail_server_test_lock();
+        let (name, path) = unique("span30");
+        let project_id = insert_project(&name, &path);
+        let address = format!("mine@{name}.example");
+        let row_id = seed_linked_inbox(&project_id, &address);
+        let resp = handle_messages(&params(&[
+            ("project", &path),
+            ("address", &address),
+            ("since", "2017-03-01"),
+            ("before", "2018-03-01"),
+        ]));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "usage");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("30 days"), "{hint}");
+        cleanup_linked_inbox(&row_id);
         cleanup_project(&project_id);
     }
 

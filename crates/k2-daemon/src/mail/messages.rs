@@ -452,20 +452,28 @@ pub struct ListFilter {
 
 /// A list/read failure, split so the route can answer the RIGHT code:
 /// an engine/transport fault is a 502 `engine`; a mistyped `--folder`
-/// is a 400 `usage` that TEACHES (lists the folders that DO exist). The
-/// split lives here (ops layer) so BOTH backends — hosted JMAP and
-/// linked IMAP — classify a bad folder identically (the §17.5 uniform
-/// seam), never one 400 and the other 502.
+/// is a 400 `usage` that TEACHES (lists the folders that DO exist);
+/// linked-IMAP search-window / SEARCH-cap failures are also 400 `usage`
+/// ([`ListError::Usage`]) — never a 502, so agents retry with a
+/// narrower `--since`/`--before` instead of treating the engine as
+/// down. The split lives here (ops layer) so BOTH backends — hosted
+/// JMAP and linked IMAP — classify a bad folder identically (the
+/// §17.5 uniform seam), never one 400 and the other 502.
 #[derive(Debug)]
 pub enum ListError {
     Engine(String),
+    /// Caller-fixable: date window too wide, SEARCH hit the UID cap.
+    /// Wire: HTTP 400 `usage`. A bare `String` still becomes
+    /// [`ListError::Engine`] (502) — Usage must be constructed
+    /// explicitly so transport faults cannot be mis-tagged.
+    Usage(String),
     UnknownFolder { requested: String, available: Vec<String> },
 }
 
 impl std::fmt::Display for ListError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ListError::Engine(s) => write!(f, "{s}"),
+            ListError::Engine(s) | ListError::Usage(s) => write!(f, "{s}"),
             ListError::UnknownFolder { requested, available } => write!(
                 f,
                 "no folder '{requested}' here — available: {}",

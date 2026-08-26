@@ -11573,7 +11573,7 @@ cmd_schema() {
     {
       "name": "mail messages",
       "usage": "k2 mail messages [<address>] [--unread] [--limit N] [--offset N] [--since <date>] [--before <date>] [--folder <name>] [--junk] [--query <text>] [--from <substr>] [--json]",
-      "description": "Newest-first summaries of mail at your addresses: id, from, subject, age, unread marker. --query matches subject AND body; --from matches the From header (address + display name). --since/--before window by date; --folder/--junk read a mailbox other than the Inbox; --offset walks pages (response carries nextOffset when more remain).",
+      "description": "Linked inboxes are live IMAP, not a local store; large folders stall; searches use a ≤30-day window. Newest-first summaries of mail at your addresses: id, from, subject, age, unread marker. --query matches subject AND body; --from matches the From header (address + display name). --since/--before window by date; --folder/--junk read a mailbox other than the Inbox; --offset walks pages (response carries nextOffset when more remain).",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--unread", "arg": null, "description": "Only unread messages."},
@@ -19950,6 +19950,11 @@ elif verb == "messages":
         if next_offset is not None:
             more = _scope_flags() + ["--offset %s" % next_offset]
             print("more:     k2 mail messages %s" % " ".join(more))
+    if not as_json:
+        # D4: linked IMAP search-window hint prints on hit AND miss.
+        hint = (d.get("searchWindow") or {}).get("hint")
+        if hint:
+            print(hint)
     if not as_json and inbox_errors:
         print("note:     %d inbox(es) had errors and were skipped — read one directly "
               "(k2 mail messages <address>) to see why." % len(inbox_errors))
@@ -21793,6 +21798,8 @@ cmd_hostmail_disable() {
 
 cmd_help_mail() {
     cat <<'EOF'
+Linked inboxes are live IMAP, not a local store; large folders stall; searches use a ≤30-day window.
+
 k2 mail — your agent email: discover inboxes, read mail, wait for codes, draft & send under human governance
 
 Hosted (K2-minted) and linked (your own external IMAP) inboxes live under ONE
@@ -21927,6 +21934,8 @@ EOF
 
 cmd_help_mail_messages() {
     cat <<'EOF'
+Linked inboxes are live IMAP, not a local store; large folders stall; searches use a ≤30-day window.
+
 Newest-first summaries of mail received at your addresses:
 id · from · subject · age (+ attachment/UNREAD markers). Summaries only —
 `k2 mail read <id>` fetches a full message.

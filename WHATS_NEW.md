@@ -3,6 +3,20 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.113 — Switching servers no longer keeps the last machine's tabs
+
+Switching **this window** from This Mac to a remote server now clears the tab strip immediately. A leftover screenshot or HTML dashboard from your Mac is not requested on the remote — those `/var/folders/…` 400s stop. Switch back and your Mac tabs restore from **that** machine.
+
+A background window no longer polls HTML/markdown files every 2 seconds while it is unfocused.
+
+### What to try
+
+1. Open a screenshot on This Mac, switch that window to a remote — strip empties, no 400 storm in the console.
+2. Switch back — Mac workspaces return, including the screenshot tab (the tmp file itself may already be gone; an error pane is fine).
+3. Two windows (Local + remote): blur the remote window; its HTML dashboards stop polling.
+
+---
+
 ## 0.40.112 — Linked mail lists without walking the whole mailbox
 
 Linked Gmail/IMAP is live IMAP, not a local store. Unfiltered `k2 mail messages` now fetches the **newest page** of one folder (IMAP sequence numbers). It does not `SEARCH ALL` tens of thousands of UIDs. `--limit` is still 25 (max 200).

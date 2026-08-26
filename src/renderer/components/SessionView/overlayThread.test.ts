@@ -64,6 +64,51 @@ describe('overlay Thread list never includes chatter', () => {
     expect(afterText[1].doc.body).toBe('later')
   })
 
+  it('WS frame with an existing id replaces the doc in place (card answered)', () => {
+    const start: OverlayThreadItem[] = [
+      {
+        collection: 'thread',
+        seq: 2,
+        id: 'choice-1',
+        doc: {
+          id: 'choice-1',
+          kind: 'choice',
+          from: 'k2',
+          choice: {
+            prompt: '?',
+            options: [{ label: 'Go' }, { label: 'Stop' }],
+            allow_custom: false,
+            status: 'pending',
+          },
+        },
+      },
+    ]
+    const after = applyOverlayFrame(
+      start,
+      {
+        collection: 'thread',
+        seq: 2,
+        id: 'choice-1',
+        doc: {
+          id: 'choice-1',
+          kind: 'choice',
+          from: 'k2',
+          choice: {
+            prompt: '?',
+            options: [{ label: 'Go' }, { label: 'Stop' }],
+            allow_custom: false,
+            status: 'answered',
+            answer: 'Go',
+          },
+        },
+      },
+      2,
+    )
+    expect(after).toHaveLength(1)
+    expect(after[0].doc.choice?.status).toBe('answered')
+    expect(after[0].doc.choice?.answer).toBe('Go')
+  })
+
   it('isThreadSurfaceItem rejects chatter', () => {
     expect(
       isThreadSurfaceItem({

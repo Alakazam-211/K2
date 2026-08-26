@@ -1188,6 +1188,10 @@ mod tests {
         assert!(is_agent_verb("/cli/workspace/msg"));
         assert!(is_agent_verb("/cli/thread"));
         assert!(is_agent_verb("/cli/thread/post"));
+        assert!(is_agent_verb("/cli/thread/ask"));
+        assert!(is_agent_verb("/cli/thread/secret"));
+        assert!(is_agent_verb("/cli/thread/answer"));
+        assert!(is_agent_verb("/cli/thread/void"));
         assert!(is_agent_verb("/cli/chatter"));
         assert!(is_agent_verb("/cli/chatterlog"));
         assert_eq!(crate::overlay_ws::OVERLAY_WS_PATH, "/cli/overlay/events");

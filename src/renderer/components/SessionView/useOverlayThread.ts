@@ -18,6 +18,8 @@ export function useOverlayThread(opts: {
   error: string | null
   posting: boolean
   post: (text: string) => Promise<void>
+  answer: (id: string, payload: { answer?: string; secret?: string }) => Promise<void>
+  voidCard: (id: string) => Promise<void>
 } {
   const { addr, conversationId, enabled } = opts
   const [items, setItems] = useState<OverlayThreadItem[]>([])
@@ -126,5 +128,77 @@ export function useOverlayThread(opts: {
     [addr],
   )
 
-  return { items, conversationId: resolvedConv, error, posting, post }
+  const answer = useCallback(
+    async (id: string, payload: { answer?: string; secret?: string }) => {
+      if (!addr.trim() || !id) return
+      const body: Record<string, string> = { addr, id }
+      if (payload.answer !== undefined) body.answer = payload.answer
+      if (payload.secret !== undefined) body.secret = payload.secret
+      const res = await daemonCliPost<{
+        ok?: boolean
+        id?: string
+        status?: string
+        answer?: string
+        name?: string
+        kind?: string
+      }>('thread/answer', body)
+      setItems((prev) =>
+        prev.map((it) => {
+          if (it.id !== id) return it
+          if (payload.secret !== undefined && it.doc.secret) {
+            return {
+              ...it,
+              doc: {
+                ...it.doc,
+                secret: { ...it.doc.secret, status: res.status || 'set' },
+              },
+            }
+          }
+          if (it.doc.choice) {
+            return {
+              ...it,
+              doc: {
+                ...it.doc,
+                choice: {
+                  ...it.doc.choice,
+                  status: res.status || 'answered',
+                  answer: res.answer ?? payload.answer ?? it.doc.choice.answer,
+                },
+              },
+            }
+          }
+          return it
+        }),
+      )
+    },
+    [addr],
+  )
+
+  const voidCard = useCallback(
+    async (id: string) => {
+      if (!addr.trim() || !id) return
+      await daemonCliPost('thread/void', { addr, id })
+      setItems((prev) =>
+        prev.map((it) => {
+          if (it.id !== id) return it
+          if (it.doc.kind === 'choice' && it.doc.choice) {
+            return {
+              ...it,
+              doc: { ...it.doc, choice: { ...it.doc.choice, status: 'voided', answer: null } },
+            }
+          }
+          if (it.doc.kind === 'secret' && it.doc.secret) {
+            return {
+              ...it,
+              doc: { ...it.doc, secret: { ...it.doc.secret, status: 'voided' } },
+            }
+          }
+          return it
+        }),
+      )
+    },
+    [addr],
+  )
+
+  return { items, conversationId: resolvedConv, error, posting, post, answer, voidCard }
 }

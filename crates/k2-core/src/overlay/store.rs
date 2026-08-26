@@ -352,6 +352,34 @@ pub fn debug_doc_exists(id: &str) -> Result<bool, String> {
     Ok(get_doc(id)?.is_some())
 }
 
+/// True if any `docs/` body contains `needle`. Tests only — heap scan,
+/// not a product query path. Used to prove secret bytes never land in redb.
+pub fn debug_docs_contain(needle: &str) -> Result<bool, String> {
+    if needle.is_empty() {
+        return Ok(false);
+    }
+    let db = db()?;
+    let txn = db
+        .begin_read()
+        .map_err(|e| format!("overlay redb read: {e}"))?;
+    let table = match txn.open_table(DOCS) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(false),
+        Err(e) => return Err(format!("overlay open docs: {e}")),
+    };
+    let iter = table
+        .iter()
+        .map_err(|e| format!("overlay docs iter: {e}"))?;
+    for entry in iter {
+        let (_, v) = entry.map_err(|e| format!("overlay docs row: {e}"))?;
+        let blob = String::from_utf8_lossy(v.value());
+        if blob.contains(needle) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// How many collection keys point at `id`. Tests only.
 pub fn debug_pointer_count(id: &str) -> Result<(u32, u32, u32), String> {
     let db = db()?;

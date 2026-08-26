@@ -1,5 +1,19 @@
 /** Overlay Thread snapshot + WS frame helpers. Thread pane never shows chatter. */
 
+export interface OverlayChoice {
+  prompt: string
+  options: { label: string }[]
+  allow_custom: boolean
+  status: string
+  answer?: string | null
+}
+
+export interface OverlaySecret {
+  name: string
+  status: string
+  prompt?: string | null
+}
+
 export interface OverlayDoc {
   id: string
   kind: string
@@ -8,6 +22,8 @@ export interface OverlayDoc {
   created_at?: number
   body?: string | null
   via?: string | null
+  choice?: OverlayChoice | null
+  secret?: OverlaySecret | null
 }
 
 export interface OverlayThreadItem {
@@ -62,18 +78,34 @@ export function applyOverlayFrame(
 ): OverlayThreadItem[] {
   if (frame.collection !== 'thread') return items
   const seq = typeof frame.seq === 'number' ? frame.seq : Number.NaN
-  if (!Number.isFinite(seq) || seq <= snapshotSeq) return items
   const id = typeof frame.id === 'string' ? frame.id : ''
   if (!id) return items
   const doc = frame.doc
   if (!doc || isChatterDoc(doc)) return items
-  if (items.some((it) => it.id === id)) return items
+  const existing = items.findIndex((it) => it.id === id)
+  if (existing >= 0) {
+    const next = items.slice()
+    next[existing] = {
+      ...items[existing],
+      seq: Number.isFinite(seq) ? seq : items[existing].seq,
+      doc,
+      collection: 'thread',
+    }
+    return next
+  }
+  if (!Number.isFinite(seq) || seq <= snapshotSeq) return items
   const next = [
     ...items,
     { collection: 'thread', seq, id, doc },
   ]
   next.sort((a, b) => a.seq - b.seq)
   return next
+}
+
+export function isVoidedHitl(doc: OverlayDoc): boolean {
+  if (doc.kind === 'choice' && doc.choice?.status === 'voided') return true
+  if (doc.kind === 'secret' && doc.secret?.status === 'voided') return true
+  return false
 }
 
 function coerceItem(row: unknown): OverlayThreadItem | null {
@@ -99,6 +131,40 @@ function coerceItem(row: unknown): OverlayThreadItem | null {
       created_at: typeof d.created_at === 'number' ? d.created_at : undefined,
       body: typeof d.body === 'string' ? d.body : null,
       via: typeof d.via === 'string' ? d.via : null,
+      choice: coerceChoice(d.choice),
+      secret: coerceSecret(d.secret),
     },
+  }
+}
+
+function coerceChoice(raw: unknown): OverlayChoice | null {
+  if (!raw || typeof raw !== 'object') return null
+  const c = raw as Record<string, unknown>
+  const optionsRaw = Array.isArray(c.options) ? c.options : []
+  const options = optionsRaw
+    .map((o) => {
+      if (typeof o === 'string') return { label: o }
+      if (o && typeof o === 'object' && typeof (o as { label?: unknown }).label === 'string') {
+        return { label: (o as { label: string }).label }
+      }
+      return null
+    })
+    .filter((o): o is { label: string } => o !== null)
+  return {
+    prompt: typeof c.prompt === 'string' ? c.prompt : '',
+    options,
+    allow_custom: c.allow_custom === true,
+    status: typeof c.status === 'string' ? c.status : 'pending',
+    answer: typeof c.answer === 'string' ? c.answer : null,
+  }
+}
+
+function coerceSecret(raw: unknown): OverlaySecret | null {
+  if (!raw || typeof raw !== 'object') return null
+  const s = raw as Record<string, unknown>
+  return {
+    name: typeof s.name === 'string' ? s.name : '',
+    status: typeof s.status === 'string' ? s.status : 'pending',
+    prompt: typeof s.prompt === 'string' ? s.prompt : null,
   }
 }

@@ -359,12 +359,14 @@ Not PTY inject — that is `k2 msg`. Write and read the user-agent overlay
 for this conversation. Same first-arg grammar as `k2 msg`.
 
 ```
-k2 thread <addr> "text"                         # overlay text
+k2 thread <addr> "text"                         # overlay text (not PTY; that's k2 msg)
 k2 thread <addr>                                # read / tail
-k2 thread <addr> --json
+k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
+k2 thread secret <addr> --name NAME             # secret field; you never see the value
 ```
 
 `sales` is whoever is pinned Chat *now*. `sales/reviewer` is durable.
+Post and continue. The human may tap later or just chat; the card marks or voids; you get a later turn.
 Do not `--wait`. Do not emit widget JSON.
 
 ## View activity
@@ -1769,8 +1771,10 @@ mod tests {
         assert!(
             body.contains("k2 thread <addr> \"text\"")
                 && body.contains("k2 thread <addr>")
-                && body.contains("--json"),
-            "k2-cli skill must document k2 thread write/read; body missing overlay lines"
+                && body.contains("k2 thread ask <addr>")
+                && body.contains("k2 thread secret <addr> --name NAME")
+                && body.contains("do not wait"),
+            "k2-cli skill must document k2 thread write/read/ask/secret; body missing overlay lines"
         );
         assert!(
             !body.contains("`thrd`") && !body.contains("k2 thrd"),

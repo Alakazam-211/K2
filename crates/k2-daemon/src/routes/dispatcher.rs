@@ -560,8 +560,12 @@ async fn handle_one_request(
             | "/cli/feedback/answer"
             | "/cli/feedback/resolve"
             | "/cli/feedback/assign"
-            // Overlay threads (prd-overlay-threads-v1 S1) — POST-only mutation.
+            // Overlay threads (prd-overlay-threads-v1 S1/S3) — POST-only mutations.
             | "/cli/thread/post"
+            | "/cli/thread/ask"
+            | "/cli/thread/secret"
+            | "/cli/thread/answer"
+            | "/cli/thread/void"
             // K2 Mail (prd-email-server-v1 §11) — every mutating
             // `/cli/mail/*` path, listed NOW (foundation slice) so
             // later slices never fight this allowlist. JSON-bodied

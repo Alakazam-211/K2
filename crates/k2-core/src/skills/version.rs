@@ -103,7 +103,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 17: `k2 connections list --users` (humans on this box).
 /// Bumped to 18: `k2 agent context add users:roster` (opt-in people layer).
 /// Bumped to 19: overlay `k2 thread` (text write/read; not PTY).
-pub const SKILL_VERSION_WORKSPACE: u32 = 19;
+/// Bumped to 20: overlay `k2 thread ask` / `k2 thread secret` (do not wait).
+pub const SKILL_VERSION_WORKSPACE: u32 = 20;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

@@ -2,7 +2,32 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One overlay document body. Widget `choice`/`secret` fields land in S3.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChoiceOption {
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChoiceBody {
+    pub prompt: String,
+    pub options: Vec<ChoiceOption>,
+    pub allow_custom: bool,
+    /// `pending` | `answered` | `voided`
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretBody {
+    pub name: String,
+    /// `pending` | `set` | `voided`
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+/// One overlay document body. Secret **value** never lives here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OverlayDoc {
     pub id: String,
@@ -19,6 +44,10 @@ pub struct OverlayDoc {
     pub via: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<ChoiceBody>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<SecretBody>,
 }
 
 impl OverlayDoc {
@@ -32,6 +61,64 @@ impl OverlayDoc {
             body: Some(body),
             via: Some(via.to_string()),
             inject: None,
+            choice: None,
+            secret: None,
+        }
+    }
+
+    pub fn choice(
+        id: String,
+        from: String,
+        to: String,
+        prompt: String,
+        options: Vec<String>,
+        allow_custom: bool,
+    ) -> Self {
+        Self {
+            id,
+            kind: "choice".to_string(),
+            from,
+            to: Some(to),
+            created_at: now_secs(),
+            body: Some(prompt.clone()),
+            via: Some("card".to_string()),
+            inject: None,
+            choice: Some(ChoiceBody {
+                prompt,
+                options: options
+                    .into_iter()
+                    .map(|label| ChoiceOption { label })
+                    .collect(),
+                allow_custom,
+                status: "pending".to_string(),
+                answer: None,
+            }),
+            secret: None,
+        }
+    }
+
+    pub fn secret_card(
+        id: String,
+        from: String,
+        to: String,
+        name: String,
+        prompt: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            kind: "secret".to_string(),
+            from,
+            to: Some(to),
+            created_at: now_secs(),
+            body: prompt.clone(),
+            via: Some("card".to_string()),
+            inject: None,
+            choice: None,
+            secret: Some(SecretBody {
+                name,
+                status: "pending".to_string(),
+                prompt,
+            }),
         }
     }
 
@@ -52,7 +139,25 @@ impl OverlayDoc {
             body: Some(body),
             via: Some(via.to_string()),
             inject: Some(inject.to_string()),
+            choice: None,
+            secret: None,
         }
+    }
+
+    pub fn is_pending_choice(&self) -> bool {
+        self.kind == "choice"
+            && self
+                .choice
+                .as_ref()
+                .is_some_and(|c| c.status == "pending")
+    }
+
+    pub fn is_pending_secret(&self) -> bool {
+        self.kind == "secret"
+            && self
+                .secret
+                .as_ref()
+                .is_some_and(|s| s.status == "pending")
     }
 }
 

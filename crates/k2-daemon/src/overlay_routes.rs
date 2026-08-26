@@ -1,18 +1,41 @@
-//! `/cli/thread`, `/cli/chatter`, `/cli/chatterlog` + POST `/cli/thread/post`.
+//! `/cli/thread`, `/cli/chatter`, `/cli/chatterlog` + POST
+//! `/cli/thread/{post,ask,secret,answer,void}`.
 //!
 //! GET mutations 405. Overlay is keyed by named conversation_id
 //! (handles / pinned Chat), never `v2_session_map`.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
-use k2_core::overlay::{self, OverlayItem};
+use k2_core::overlay::{self, CardCallback, OverlayItem};
+use k2_core::session::SessionId;
 use k2_core::workspace::agent_identity::resolve_project_id;
 use k2_core::db::schema::WorkspaceSession;
 
-use crate::cli::{opt_param, str_param};
+use crate::cli::{bool_param, opt_param, str_param};
 use crate::cli_response::CliResponse;
+use crate::overlay_ws::OverlayFrame;
 use crate::session_token::HookPrincipal;
 use crate::workspace_msg::{self, MsgTarget};
+
+#[cfg(test)]
+static TEST_INJECTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn record_test_inject(line: &str) {
+    #[cfg(test)]
+    if let Ok(mut g) = TEST_INJECTS.lock() {
+        g.push(line.to_string());
+    }
+    let _ = line;
+}
+
+#[cfg(test)]
+fn recorded_injects() -> Vec<String> {
+    TEST_INJECTS
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default()
+}
 
 #[derive(Debug, Clone)]
 struct ResolvedOverlay {
@@ -270,6 +293,15 @@ fn handle_post(params: &HashMap<String, String>) -> CliResponse {
     ) {
         Ok((item, links)) => {
             crate::overlay_ws::emit_links(&links, &item.doc);
+            drop(conn);
+            if via == "compose" {
+                apply_human_prose(
+                    &resolved.conversation_id,
+                    &resolved.project_id,
+                    &resolved.addr,
+                    &text,
+                );
+            }
             CliResponse::ok_json(
                 serde_json::json!({
                     "ok": true,
@@ -287,6 +319,349 @@ fn handle_post(params: &HashMap<String, String>) -> CliResponse {
             )
         }
         Err(e) => error_json("500 Internal Server Error", "store", e),
+    }
+}
+
+fn reject_wait(params: &HashMap<String, String>) -> Result<(), CliResponse> {
+    if bool_param(params, "wait") || opt_param(params, "timeout").is_some() {
+        return Err(usage(
+            "thread cards are fire-and-forget; no --wait / --timeout",
+        ));
+    }
+    Ok(())
+}
+
+fn collect_ask_options(params: &HashMap<String, String>) -> Result<Vec<String>, CliResponse> {
+    let options = opt_param(params, "options");
+    let option = opt_param(params, "option");
+    match (options.as_deref(), option.as_deref()) {
+        (Some(_), Some(_)) => Err(usage("mix of --options and --option is not allowed")),
+        (Some(raw), None) | (None, Some(raw)) => overlay::parse_options_value(raw).map_err(usage),
+        (None, None) => Err(usage("ask requires --options or --option")),
+    }
+}
+
+fn stamped_from(params: &HashMap<String, String>) -> String {
+    let explicit = opt_param(params, "from").unwrap_or_default();
+    if !explicit.is_empty() {
+        explicit
+    } else {
+        "k2".to_string()
+    }
+}
+
+fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
+    if let Err(e) = reject_wait(params) {
+        return e;
+    }
+    let addr = str_param(params, "addr");
+    let prompt = {
+        let p = str_param(params, "prompt");
+        if p.is_empty() {
+            str_param(params, "text")
+        } else {
+            p
+        }
+    };
+    if addr.is_empty() {
+        return usage("missing addr");
+    }
+    if prompt.trim().is_empty() {
+        return usage("missing prompt");
+    }
+    let options = match collect_ask_options(params) {
+        Ok(o) => o,
+        Err(e) => return e,
+    };
+    let allow_custom = bool_param(params, "allow_custom") || bool_param(params, "allow-custom");
+    let resolved = match resolve_addr(&addr) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let principal = crate::caller_workspace::principal_from_params(params);
+    let from = stamped_from(params);
+    if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
+        return e;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match overlay::post_choice(
+        &conn,
+        &resolved.conversation_id,
+        &resolved.project_id,
+        &from,
+        &resolved.addr,
+        prompt.trim(),
+        options,
+        allow_custom,
+    ) {
+        Ok((item, links)) => {
+            crate::overlay_ws::emit_links(&links, &item.doc);
+            let choice = item.doc.choice.as_ref();
+            let labels: Vec<String> = choice
+                .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
+                .unwrap_or_default();
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "id": item.id,
+                    "prompt": choice.map(|c| c.prompt.clone()).unwrap_or_else(|| prompt.trim().to_string()),
+                    "options": labels,
+                    "allow_custom": choice.map(|c| c.allow_custom).unwrap_or(allow_custom),
+                    "status": choice.map(|c| c.status.clone()).unwrap_or_else(|| "pending".to_string()),
+                    "kind": item.doc.kind,
+                    "seq": item.seq,
+                    "conversation_id": resolved.conversation_id,
+                    "addr": resolved.addr,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => error_json("400 Bad Request", "usage", e),
+    }
+}
+
+fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
+    if let Err(e) = reject_wait(params) {
+        return e;
+    }
+    let addr = str_param(params, "addr");
+    let name = str_param(params, "name");
+    if addr.is_empty() {
+        return usage("missing addr");
+    }
+    if name.trim().is_empty() {
+        return usage("secret --name is required");
+    }
+    let dest = opt_param(params, "dest").unwrap_or_else(|| "vault".to_string());
+    if dest.trim() != "vault" {
+        return usage("--dest vault only");
+    }
+    let prompt = opt_param(params, "prompt");
+    let resolved = match resolve_addr(&addr) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let principal = crate::caller_workspace::principal_from_params(params);
+    let from = stamped_from(params);
+    if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
+        return e;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match overlay::post_secret(
+        &conn,
+        &resolved.conversation_id,
+        &resolved.project_id,
+        &from,
+        &resolved.addr,
+        name.trim(),
+        prompt.as_deref(),
+    ) {
+        Ok((item, links)) => {
+            crate::overlay_ws::emit_links(&links, &item.doc);
+            let secret = item.doc.secret.as_ref();
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "id": item.id,
+                    "name": secret.map(|s| s.name.clone()).unwrap_or_else(|| name.trim().to_string()),
+                    "status": secret.map(|s| s.status.clone()).unwrap_or_else(|| "pending".to_string()),
+                    "kind": item.doc.kind,
+                    "seq": item.seq,
+                    "conversation_id": resolved.conversation_id,
+                    "addr": resolved.addr,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => error_json("400 Bad Request", "usage", e),
+    }
+}
+
+fn card_id_of(params: &HashMap<String, String>) -> String {
+    let id = str_param(params, "id");
+    if id.is_empty() {
+        str_param(params, "card_id")
+    } else {
+        id
+    }
+}
+
+fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
+    let addr = str_param(params, "addr");
+    let card_id = card_id_of(params);
+    if addr.is_empty() {
+        return usage("missing addr");
+    }
+    if card_id.is_empty() {
+        return usage("missing card id");
+    }
+    let resolved = match resolve_addr(&addr) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let principal = crate::caller_workspace::principal_from_params(params);
+    if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
+        return e;
+    }
+    let answer = opt_param(params, "answer").or_else(|| opt_param(params, "option"));
+    let secret = opt_param(params, "secret").or_else(|| opt_param(params, "value"));
+    let secret_bytes = secret.as_deref().map(str::as_bytes);
+    match overlay::answer_card(
+        &resolved.conversation_id,
+        &resolved.project_id,
+        &card_id,
+        answer.as_deref(),
+        secret_bytes,
+    ) {
+        Ok(cb) => {
+            fire_card_callbacks(&resolved.addr, vec![cb.clone()]);
+            let mut body = serde_json::json!({
+                "ok": true,
+                "id": cb.doc_id,
+                "seq": cb.seq,
+                "kind": cb.doc.kind,
+                "conversation_id": resolved.conversation_id,
+                "addr": resolved.addr,
+            });
+            if let Some(choice) = &cb.doc.choice {
+                body["status"] = serde_json::json!(choice.status);
+                if let Some(a) = &choice.answer {
+                    body["answer"] = serde_json::json!(a);
+                }
+            }
+            if let Some(secret_body) = &cb.doc.secret {
+                body["status"] = serde_json::json!(secret_body.status);
+                body["name"] = serde_json::json!(secret_body.name);
+            }
+            CliResponse::ok_json(body.to_string())
+        }
+        Err(e) => error_json("400 Bad Request", "usage", e),
+    }
+}
+
+fn handle_void(params: &HashMap<String, String>) -> CliResponse {
+    let addr = str_param(params, "addr");
+    let card_id = card_id_of(params);
+    if addr.is_empty() {
+        return usage("missing addr");
+    }
+    if card_id.is_empty() {
+        return usage("missing card id");
+    }
+    let resolved = match resolve_addr(&addr) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let principal = crate::caller_workspace::principal_from_params(params);
+    if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
+        return e;
+    }
+    match overlay::void_card(&resolved.conversation_id, &resolved.project_id, &card_id) {
+        Ok(cb) => {
+            fire_card_callbacks(&resolved.addr, vec![cb.clone()]);
+            let status = cb
+                .doc
+                .choice
+                .as_ref()
+                .map(|c| c.status.clone())
+                .or_else(|| cb.doc.secret.as_ref().map(|s| s.status.clone()))
+                .unwrap_or_else(|| "voided".to_string());
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "id": cb.doc_id,
+                    "status": status,
+                    "seq": cb.seq,
+                    "kind": cb.doc.kind,
+                    "conversation_id": resolved.conversation_id,
+                    "addr": resolved.addr,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => error_json("400 Bad Request", "usage", e),
+    }
+}
+
+fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>) {
+    for cb in cbs {
+        crate::overlay_ws::publish(OverlayFrame {
+            collection: "thread".to_string(),
+            seq: cb.seq,
+            id: cb.doc_id.clone(),
+            doc: Some(cb.doc.clone()),
+            conversation_id: Some(cb.conversation_id.clone()),
+        });
+        let line = format!("[thread:{addr}] {}", cb.inject_line);
+        record_test_inject(&line);
+        let conv = cb.conversation_id.clone();
+        std::thread::spawn(move || {
+            best_effort_inject(&conv, &line);
+        });
+    }
+}
+
+fn best_effort_inject(conversation_id: &str, payload: &str) {
+    let Some(sid) = SessionId::parse(conversation_id) else {
+        return;
+    };
+    let _ = crate::workspace_msg::inject_raw_into_session(&sid, payload, Duration::ZERO);
+}
+
+fn apply_human_prose(conversation_id: &str, project_id: &str, addr: &str, text: &str) {
+    match overlay::apply_prose(conversation_id, project_id, text) {
+        Ok(cbs) if !cbs.is_empty() => fire_card_callbacks(addr, cbs),
+        Ok(_) => {}
+        Err(e) => k2_core::log_debug!("[overlay] apply_prose failed: {e}"),
+    }
+}
+
+/// T25 for Terminal Message-the-agent. Best-effort; never fails the inject.
+pub fn on_human_pty_text(session_id: &str, text: &str) {
+    let session_id = session_id.trim();
+    let text = text.trim();
+    if session_id.is_empty() || text.is_empty() {
+        return;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Some((project_id, _, _)) = overlay::catalog::get(&conn, session_id)
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    let addr = display_addr_for(&conn, &project_id, session_id);
+    drop(conn);
+    apply_human_prose(session_id, &project_id, &addr, text);
+}
+
+fn display_addr_for(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    conversation_id: &str,
+) -> String {
+    let ws = conn
+        .query_row(
+            "SELECT handle FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let pinned = WorkspaceSession::get(conn, project_id)
+        .ok()
+        .flatten()
+        .and_then(|s| s.session_id)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    match (ws, pinned) {
+        (Some(ws), Some(pin)) if pin == conversation_id => ws,
+        (Some(ws), _) => ws,
+        (None, _) => conversation_id.to_string(),
     }
 }
 
@@ -311,6 +686,10 @@ pub fn dispatch_post(
     merge_body(&mut params, body);
     match path {
         "/cli/thread/post" => handle_post(&params),
+        "/cli/thread/ask" => handle_ask(&params),
+        "/cli/thread/secret" => handle_secret(&params),
+        "/cli/thread/answer" => handle_answer(&params),
+        "/cli/thread/void" => handle_void(&params),
         _ => CliResponse::not_found(),
     }
 }
@@ -325,6 +704,8 @@ fn merge_body(params: &mut HashMap<String, String>, body: &[u8]) {
                 if let Some(s) = val.as_str() {
                     params.insert(k.clone(), s.to_string());
                 } else if val.is_number() || val.is_boolean() {
+                    params.insert(k.clone(), val.to_string());
+                } else if val.is_array() {
                     params.insert(k.clone(), val.to_string());
                 }
             }
@@ -707,6 +1088,348 @@ mod tests {
             get.status, "200 OK",
             "same-workspace sidecar can read Chat overlay: {}",
             get.body
+        );
+    }
+
+    #[test]
+    fn get_ask_secret_answer_void_are_405() {
+        for path in [
+            "/cli/thread/ask",
+            "/cli/thread/secret",
+            "/cli/thread/answer",
+            "/cli/thread/void",
+        ] {
+            let resp = dispatch(path, &HashMap::new()).expect("GET mutation handled");
+            assert_eq!(
+                resp.status, "405 Method Not Allowed",
+                "GET {path} must 405, got {} body={}",
+                resp.status, resp.body
+            );
+        }
+    }
+
+    #[test]
+    fn ask_returns_immediately_pending_then_tap_injects() {
+        let handle = format!("ovlask{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+
+        let ask = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "prompt": "Ship it?",
+                "options": "Go,Stop",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(ask.status, "200 OK", "ask failed: {}", ask.body);
+        let posted = json_body(&ask);
+        assert_eq!(posted["ok"], true, "{posted}");
+        let id = posted["id"].as_str().expect("id").to_string();
+        assert!(!id.is_empty(), "ask must return an id: {posted}");
+        assert_eq!(posted["prompt"], "Ship it?", "{posted}");
+        let opts = posted["options"].as_array().expect("options array");
+        assert_eq!(opts, &vec![serde_json::json!("Go"), serde_json::json!("Stop")]);
+        assert_eq!(posted["status"], "pending", "{posted}");
+
+        let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
+            .expect("GET thread");
+        let snap = json_body(&get);
+        let items = snap["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1, "{snap}");
+        assert_eq!(items[0]["doc"]["kind"], "choice");
+        assert_eq!(items[0]["doc"]["choice"]["status"], "pending");
+
+        let answer = dispatch_post(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "id": id,
+                "answer": "Go",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(answer.status, "200 OK", "answer failed: {}", answer.body);
+        let answered = json_body(&answer);
+        assert_eq!(answered["status"], "answered", "{answered}");
+        assert_eq!(answered["answer"], "Go", "{answered}");
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &format!("[thread:{handle}] chose Go")),
+            "async inject must fire after tap; got {injects:?}"
+        );
+
+        let get2 = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
+            .expect("GET after tap");
+        let snap2 = json_body(&get2);
+        assert_eq!(
+            snap2["items"][0]["doc"]["choice"]["status"], "answered",
+            "{snap2}"
+        );
+        assert_eq!(snap2["items"][0]["doc"]["choice"]["answer"], "Go");
+    }
+
+    #[test]
+    fn mix_options_and_option_is_400() {
+        let handle = format!("ovlmix{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let resp = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "prompt": "?",
+                "options": "Go,Stop",
+                "option": ["Hold"],
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(
+            resp.status, "400 Bad Request",
+            "mix of --options and --option must 400: {}",
+            resp.body
+        );
+    }
+
+    #[test]
+    fn compose_prose_voids_pending_exact_label_marks() {
+        let handle = format!("ovlprose{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+
+        let ask = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "prompt": "?",
+                "options": "Go,Stop",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(ask.status, "200 OK", "{}", ask.body);
+
+        let void_post = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": "never mind",
+                "from": "owner",
+                "via": "compose",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(void_post.status, "200 OK", "{}", void_post.body);
+        let snap = json_body(
+            &dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
+                .expect("read"),
+        );
+        let items = snap["items"].as_array().expect("items");
+        let choice = items
+            .iter()
+            .find(|i| i["doc"]["kind"] == "choice")
+            .expect("choice card");
+        assert_eq!(
+            choice["doc"]["choice"]["status"], "voided",
+            "human thread text must void pending: {snap}"
+        );
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l.contains(&format!("[thread:{handle}]"))
+                && l.contains("card voided — human replied in chat")),
+            "void inject: {injects:?}"
+        );
+
+        let handle2 = format!("ovlmark{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id2, _) = seed(&handle2);
+        pin(&project_id2, &uuid::Uuid::new_v4().to_string());
+        let ask2 = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle2,
+                "prompt": "?",
+                "options": "Go,Stop",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(ask2.status, "200 OK", "{}", ask2.body);
+        let mark = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle2,
+                "text": "Go",
+                "from": "owner",
+                "via": "compose",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(mark.status, "200 OK", "{}", mark.body);
+        let snap2 = json_body(
+            &dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())]))
+                .expect("read2"),
+        );
+        let choice2 = snap2["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|i| i["doc"]["kind"] == "choice")
+            .expect("choice");
+        assert_eq!(
+            choice2["doc"]["choice"]["status"], "answered",
+            "exact Go must mark rather than void: {snap2}"
+        );
+        assert_eq!(choice2["doc"]["choice"]["answer"], "Go");
+        let injects2 = recorded_injects();
+        assert!(
+            injects2.iter().any(|l| l == &format!("[thread:{handle2}] chose Go")),
+            "chose inject: {injects2:?}"
+        );
+    }
+
+    #[test]
+    fn secret_submit_vault_and_never_in_json() {
+        let handle = format!("ovlsec{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let secret_val = "s3cr3t-NEVER-IN-GET-xyz";
+
+        let posted = dispatch_post(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "name": "API_TOKEN",
+                "prompt": "Paste the Grok token",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(posted.status, "200 OK", "{}", posted.body);
+        let body = json_body(&posted);
+        assert_eq!(body["name"], "API_TOKEN", "{body}");
+        assert_eq!(body["status"], "pending", "{body}");
+        assert!(body.get("secret").is_none() || body["secret"].as_str().is_none());
+        assert!(
+            !posted.body.contains(secret_val),
+            "create must not echo a value: {}",
+            posted.body
+        );
+        let id = body["id"].as_str().expect("id").to_string();
+
+        let set = dispatch_post(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "id": id,
+                "secret": secret_val,
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(set.status, "200 OK", "{}", set.body);
+        let set_body = json_body(&set);
+        assert_eq!(set_body["status"], "set", "{set_body}");
+        assert!(
+            !set.body.contains(secret_val),
+            "answer JSON must not contain secret: {}",
+            set.body
+        );
+        assert!(
+            k2_core::overlay::vault::exists(&project_id, "API_TOKEN"),
+            "vault must hold the bytes"
+        );
+        let got = k2_core::overlay::vault::debug_read(&project_id, "API_TOKEN")
+            .expect("vault read");
+        assert_eq!(got, secret_val.as_bytes());
+        let snap = json_body(
+            &dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
+                .expect("GET"),
+        );
+        let snap_s = snap.to_string();
+        assert!(
+            !snap_s.contains(secret_val),
+            "GET snapshot must not contain secret: {snap_s}"
+        );
+        assert!(
+            !k2_core::overlay::store::debug_docs_contain(secret_val).expect("scan"),
+            "redb docs must not contain secret bytes"
+        );
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &format!("[thread:{handle}] secret API_TOKEN set")),
+            "set inject: {injects:?}"
+        );
+        assert!(
+            injects.iter().all(|l| !l.contains(secret_val)),
+            "inject must never carry secret bytes: {injects:?}"
+        );
+
+        let handle2 = format!("ovlvoid{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id2, _) = seed(&handle2);
+        pin(&project_id2, &uuid::Uuid::new_v4().to_string());
+        let pending = dispatch_post(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle2,
+                "name": "OTHER_TOKEN",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(pending.status, "200 OK", "{}", pending.body);
+        let pid = json_body(&pending)["id"].as_str().expect("id").to_string();
+        let voided = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle2,
+                "text": "I'll paste later",
+                "from": "owner",
+                "via": "compose",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(voided.status, "200 OK", "{}", voided.body);
+        let snap2 = json_body(
+            &dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())]))
+                .expect("read void"),
+        );
+        let secret_item = snap2["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|i| i["id"] == pid)
+            .expect("secret card");
+        assert_eq!(
+            secret_item["doc"]["secret"]["status"], "voided",
+            "chat instead must void secret: {snap2}"
+        );
+        assert!(
+            !k2_core::overlay::vault::exists(&project_id2, "OTHER_TOKEN"),
+            "vault empty after chat-instead void"
         );
     }
 }

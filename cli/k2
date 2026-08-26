@@ -503,6 +503,7 @@ _uds_eligible() {
         /cli/heartbeat/install-launchd|/cli/heartbeat/uninstall-launchd|/cli/heartbeat/apply-wake-scheduler) return 1 ;;
         /cli/heartbeat/list-all|/cli/heartbeat/fires-list-all|/cli/heartbeat/set-show-sessions) return 1 ;;
         /cli/heartbeat/*|/cli/heartbeat-log) return 0 ;;
+        /cli/thread|/cli/thread/*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -6282,6 +6283,35 @@ except Exception:
 }
 
 # ── `k2 thread` — user-agent overlay (not PTY; that's k2 msg) ───────
+_thread_sender_from() {
+    local explicit_from="$1"
+    if [[ -n "$explicit_from" ]]; then
+        printf '%s' "$explicit_from"
+        return 0
+    fi
+    if [[ "${K2_CELL:-}" == "sidecar" && -n "${K2_PRIMARY:-}" && -n "${K2_SIDECAR_NAME:-}" ]]; then
+        printf '%s' "${K2_PRIMARY}/${K2_SIDECAR_NAME}"
+        return 0
+    fi
+    local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
+    if [[ -n "$sender_path" ]]; then
+        local sender_name
+        sender_name=$(cli_request "/cli/workspace/handle" \
+            "project=$(urlencode "$sender_path")" 2>/dev/null \
+            | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    name = (d.get("handle") or "").strip()
+    if name:
+        print(name)
+except Exception:
+    pass' 2>/dev/null)
+        printf '%s' "${sender_name:-k2}"
+        return 0
+    fi
+    printf '%s' "k2"
+}
+
 cmd_thread() {
     for arg in "$@"; do
         case "$arg" in
@@ -6292,6 +6322,26 @@ cmd_thread() {
         esac
     done
 
+    local first_pos="" skip_next=0
+    for arg in "$@"; do
+        if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
+        case "$arg" in
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style)
+                skip_next=1
+                continue
+                ;;
+            --*) continue ;;
+            *) first_pos="$arg"; break ;;
+        esac
+    done
+    case "$first_pos" in
+        ask) cmd_thread_ask "$@"; return $? ;;
+        secret) cmd_thread_secret "$@"; return $? ;;
+        post)
+            echo "Error: no 'post' subcommand — use  k2 thread <addr> \"text\"" >&2
+            exit 1 ;;
+    esac
+
     local target=""
     local text=""
     local json="false"
@@ -6300,13 +6350,6 @@ cmd_thread() {
         case "$1" in
             --json) json="true"; shift ;;
             --from) explicit_from="$2"; shift 2 ;;
-            ask|secret)
-                echo "Error: 'k2 thread $1' is not available yet (choice/secret cards land later)." >&2
-                echo "Use: k2 thread <addr> \"text\"   or   k2 thread <addr> [--json]" >&2
-                exit 1 ;;
-            post)
-                echo "Error: no 'post' subcommand — use  k2 thread <addr> \"text\"" >&2
-                exit 1 ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
                 exit 1 ;;
@@ -6322,34 +6365,13 @@ cmd_thread() {
         echo "Error: address required" >&2
         echo "Usage: k2 thread <addr> \"text\"     # write overlay text" >&2
         echo "       k2 thread <addr> [--json]   # read / tail" >&2
+        echo "       k2 thread ask <addr> \"prompt\" --options \"a,b,c\"" >&2
+        echo "       k2 thread secret <addr> --name NAME" >&2
         exit 1
     }
 
-    local from="$explicit_from"
-    if [[ -z "$from" ]]; then
-        if [[ "${K2_CELL:-}" == "sidecar" && -n "${K2_PRIMARY:-}" && -n "${K2_SIDECAR_NAME:-}" ]]; then
-            from="${K2_PRIMARY}/${K2_SIDECAR_NAME}"
-        fi
-    fi
-    if [[ -z "$from" ]]; then
-        local sender_path="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-$PWD}}"
-        if [[ -n "$sender_path" ]]; then
-            local sender_name
-            sender_name=$(cli_request "/cli/workspace/handle" \
-                "project=$(urlencode "$sender_path")" 2>/dev/null \
-                | python3 -c 'import json,sys
-try:
-    d = json.load(sys.stdin)
-    name = (d.get("handle") or "").strip()
-    if name:
-        print(name)
-except Exception:
-    pass' 2>/dev/null)
-            from="${sender_name:-k2}"
-        else
-            from="k2"
-        fi
-    fi
+    local from
+    from="$(_thread_sender_from "$explicit_from")"
 
     if [[ -n "$text" ]]; then
         local params="addr=$(urlencode "$target")"
@@ -6418,21 +6440,202 @@ for it in items:
 '
 }
 
+cmd_thread_ask() {
+    local target="" prompt="" json="false" explicit_from=""
+    local options_csv="" allow_custom="false"
+    local option_list=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            ask) shift ;;
+            --json) json="true"; shift ;;
+            --from)
+                [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
+                explicit_from="$2"; shift 2 ;;
+            --options)
+                [[ $# -ge 2 ]] || { echo "Error: --options requires a comma-separated list" >&2; exit 1; }
+                if [[ ${#option_list[@]} -gt 0 ]]; then
+                    echo "Error: mix of --options and --option is not allowed" >&2
+                    exit 1
+                fi
+                options_csv="$2"; shift 2 ;;
+            --option)
+                [[ $# -ge 2 ]] || { echo "Error: --option requires a label" >&2; exit 1; }
+                if [[ -n "$options_csv" ]]; then
+                    echo "Error: mix of --options and --option is not allowed" >&2
+                    exit 1
+                fi
+                option_list+=("$2"); shift 2 ;;
+            --allow-custom) allow_custom="true"; shift ;;
+            --wait|--timeout)
+                echo "Error: thread cards are fire-and-forget; no --wait / --timeout" >&2
+                exit 1 ;;
+            --style)
+                echo "Error: no --style in v1" >&2
+                exit 1 ;;
+            -*)
+                echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
+                exit 1 ;;
+            *)
+                if [[ -z "$target" ]]; then target="$1"
+                elif [[ -z "$prompt" ]]; then prompt="$1"
+                else
+                    echo "Error: unexpected extra argument '$1'" >&2
+                    exit 1
+                fi
+                shift ;;
+        esac
+    done
+    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --options \"a,b,c\"" >&2; exit 1; }
+    [[ -n "$prompt" ]] || { echo "Error: prompt required" >&2; echo "Usage: k2 thread ask <addr> \"<prompt>\" --options \"a,b,c\"" >&2; exit 1; }
+    if [[ -z "$options_csv" && ${#option_list[@]} -eq 0 ]]; then
+        echo "Error: ask requires --options or --option" >&2
+        exit 1
+    fi
+    local from option_json=""
+    from="$(_thread_sender_from "$explicit_from")"
+    if [[ ${#option_list[@]} -gt 0 ]]; then
+        option_json=$(printf '%s\n' "${option_list[@]}" | python3 -c 'import json,sys; print(json.dumps([ln.rstrip("\n") for ln in sys.stdin]))')
+    fi
+    local body
+    body=$(ADDR="$target" PROMPT="$prompt" FROM="$from" OPTIONS_CSV="$options_csv" \
+        OPTIONS_JSON="$option_json" ALLOW="$allow_custom" python3 -c 'import json,os
+obj={"addr":os.environ["ADDR"],"prompt":os.environ["PROMPT"],"from":os.environ.get("FROM","k2")}
+csv=os.environ.get("OPTIONS_CSV") or ""
+optj=os.environ.get("OPTIONS_JSON") or ""
+if csv:
+    obj["options"]=csv
+if optj:
+    obj["option"]=json.loads(optj)
+if os.environ.get("ALLOW")=="true":
+    obj["allow_custom"]=True
+print(json.dumps(obj))
+')
+    local response
+    response=$(cli_send cli_post_json "/cli/thread/ask" "$body")
+    local rc=$?
+    if [[ "$json" == "true" ]]; then
+        echo "$response"
+        return $rc
+    fi
+    echo "$response" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try:
+    d=json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(0)
+if d.get("ok") is not True:
+    err=d.get("error") or d
+    if isinstance(err, dict):
+        sys.stderr.write("%s: %s\n" % (err.get("code") or "error", err.get("hint") or err))
+    else:
+        sys.stderr.write(str(err)+"\n")
+    sys.exit(2)
+print(d.get("id",""))
+'
+}
+
+cmd_thread_secret() {
+    local target="" json="false" explicit_from="" name="" prompt="" dest=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            secret) shift ;;
+            --json) json="true"; shift ;;
+            --from)
+                [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
+                explicit_from="$2"; shift 2 ;;
+            --name)
+                [[ $# -ge 2 ]] || { echo "Error: --name requires a value" >&2; exit 1; }
+                name="$2"; shift 2 ;;
+            --prompt)
+                [[ $# -ge 2 ]] || { echo "Error: --prompt requires a value" >&2; exit 1; }
+                prompt="$2"; shift 2 ;;
+            --dest)
+                [[ $# -ge 2 ]] || { echo "Error: --dest requires a value" >&2; exit 1; }
+                dest="$2"; shift 2 ;;
+            --wait|--timeout)
+                echo "Error: thread cards are fire-and-forget; no --wait / --timeout" >&2
+                exit 1 ;;
+            -*)
+                echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
+                exit 1 ;;
+            *)
+                if [[ -z "$target" ]]; then target="$1"
+                else
+                    echo "Error: unexpected extra argument '$1'" >&2
+                    exit 1
+                fi
+                shift ;;
+        esac
+    done
+    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread secret <addr> --name NAME" >&2; exit 1; }
+    [[ -n "$name" ]] || { echo "Error: secret --name is required" >&2; exit 1; }
+    if [[ -n "$dest" && "$dest" != "vault" ]]; then
+        echo "Error: --dest vault only" >&2
+        exit 1
+    fi
+    local from
+    from="$(_thread_sender_from "$explicit_from")"
+    local body
+    body=$(ADDR="$target" NAME="$name" FROM="$from" PROMPT="$prompt" python3 -c 'import json,os
+obj={"addr":os.environ["ADDR"],"name":os.environ["NAME"],"from":os.environ.get("FROM","k2"),"dest":"vault"}
+p=os.environ.get("PROMPT") or ""
+if p:
+    obj["prompt"]=p
+print(json.dumps(obj))
+')
+    local response
+    response=$(cli_send cli_post_json "/cli/thread/secret" "$body")
+    local rc=$?
+    if [[ "$json" == "true" ]]; then
+        echo "$response" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try:
+    d=json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(0)
+# Never stdout a secret value — drop any accidental fields.
+d.pop("value", None)
+d.pop("secret", None)
+print(json.dumps(d))
+'
+        return $rc
+    fi
+    echo "$response" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try:
+    d=json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(0)
+if d.get("ok") is not True:
+    err=d.get("error") or d
+    if isinstance(err, dict):
+        sys.stderr.write("%s: %s\n" % (err.get("code") or "error", err.get("hint") or err))
+    else:
+        sys.stderr.write(str(err)+"\n")
+    sys.exit(2)
+print(d.get("id",""))
+'
+}
+
 cmd_help_thread() {
     cat <<'EOF'
 k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
 
-  k2 thread <addr> "text"                         # overlay text
+  k2 thread <addr> "text"                         # overlay text (not PTY; that's k2 msg)
   k2 thread <addr>                                # read / tail
-  k2 thread <addr> --json
+  k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
+  k2 thread secret <addr> --name NAME             # secret field; you never see the value
 
 <addr> is the same first-arg grammar as k2 msg: sales / sales/reviewer / sales/1.
 sales = live alias for pinned Chat now. sales/reviewer is durable.
 
-Do not use k2 msg for overlay. Agent-to-agent mail is k2 msg / k2 talk
-(recorded as chatter, never mixed into Thread).
+Post and continue. The human may tap later or just chat; the card marks or voids;
+you get a later turn. Do not --wait. Do not emit widget JSON.
 
-No post subcommand. No thrd alias. Cards (ask / secret) are not in this slice.
+--json on any verb. Ask --option repeatable; --allow-custom; mix with --options is 400.
 EOF
 }
 
@@ -11260,12 +11463,18 @@ cmd_schema() {
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--json] [--from <name>]",
-      "description": "User-agent overlay (not PTY inject). Write text or read/tail. Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg.",
-      "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail"}],
+      "usage": "k2 thread <addr> [\"text\"] [--json] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME",
+      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
+      "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
-        {"name": "--json", "arg": null, "description": "JSON output (from + seq on write; items on read)."},
-        {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."}
+        {"name": "--json", "arg": null, "description": "JSON output (ask: {id,prompt,options}; secret never includes the value)."},
+        {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
+        {"name": "--options", "arg": "a,b,c", "description": "Choice labels (comma list; \\, = literal comma). Mix with --option is 400."},
+        {"name": "--option", "arg": "label", "description": "Repeatable choice label. Mix with --options is 400."},
+        {"name": "--allow-custom", "arg": null, "description": "Allow a free-text answer on the choice card."},
+        {"name": "--name", "arg": "NAME", "description": "Required for secret. Vault key. Never printed."},
+        {"name": "--prompt", "arg": "text", "description": "Optional secret field prompt."},
+        {"name": "--dest", "arg": "vault", "description": "Secret destination. vault only."}
       ]
     },
     {
@@ -16480,6 +16689,8 @@ TALK TO OTHERS
   whoami [--json]                       This cell: workspace / role / address / session
   thread <addr> "text"                  Overlay text (not PTY; that's msg). sales / sales/reviewer
   thread <addr> [--json]                Read / tail that conversation's Thread
+  thread ask <addr> "prompt" --options  Choice card; returns immediately (do not wait)
+  thread secret <addr> --name NAME      Secret field; you never see the value
   msg <workspace> "text"                Live delivery (call/IM — blocks until landed; SHORT messages only)
   msg <workspace>/<handle> "text"       Sidecar (`sales/1`, `sales/reviewer`; slash not hyphen)
   msg <agent>::<host> "text"            Federated peer (prefer ::; legacy agent@host ok; not email)

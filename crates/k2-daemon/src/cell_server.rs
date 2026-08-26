@@ -547,9 +547,10 @@ mod unix_impl {
                 k2_core::agent_hooks::handle_hook_complete(params).to_string(),
             ),
             "/cli/workspace/msg" => from_cli(crate::cli::dispatch(path, params)),
-            "/cli/thread/post" if is_post => from_cli(crate::overlay_routes::dispatch_post(
-                path, params, body,
-            )),
+            "/cli/thread" => from_cli(crate::cli::dispatch(path, params)),
+            path if is_post && path.starts_with("/cli/thread/") => {
+                from_cli(crate::overlay_routes::dispatch_post(path, params, body))
+            }
             // C2: peer-gated live terminal peek (`k2 read <ws>`).
             "/cli/terminal/read" => from_cli(crate::cli::dispatch(path, params)),
             // F2 (sandbox API): the in-cell agent's RESPONSE egress. Append the

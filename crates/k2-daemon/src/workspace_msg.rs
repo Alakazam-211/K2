@@ -1286,6 +1286,7 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
     let payload = format_message_user(from, text);
     match inject_and_submit(&live, &payload) {
         InjectOutcome::Delivered => {
+            crate::overlay_routes::on_human_pty_text(session_id, text);
             MsgResponse::ok(live.session_id().to_string(), "send_message")
         }
         InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),

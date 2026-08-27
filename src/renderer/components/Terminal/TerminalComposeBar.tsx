@@ -649,10 +649,10 @@ export function TerminalComposeBar({
           data-testid="compose-slash-button"
           disabled={sending}
           onClick={toggleSlashMenu}
-          className={`inline-flex flex-shrink-0 items-center justify-center bg-[var(--color-bg-hover)] hover:bg-[var(--color-border)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+          className={`inline-flex flex-shrink-0 items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
             slashCommand
-              ? 'text-[var(--color-accent)]'
-              : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+              ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90'
+              : 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-border)]'
           }`}
           style={{
             borderRadius: 0,

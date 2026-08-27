@@ -5263,14 +5263,16 @@ async fn handle_one_request(
                                 crate::cli_response::CliResponse::internal_error(e)
                             })
                         }
-                        // D19/D20 — workspace data sidecar (create/migrate/GET dump).
+                        // D19/D20 — workspace data sidecar (create/migrate/GET
+                        // status + dump, POST restore). GET on mutating
+                        // routes is 405.
                         ([ws, "db"], true) => {
                             let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                             crate::v1_db::handle_v1_db_create(&principal, ws, &body)
                         }
-                        ([_ws, "db"], false) => {
+                        ([ws, "db"], false) => {
                             let _ = stream.read(&mut buf).await;
-                            crate::cli_response::CliResponse::method_not_allowed()
+                            crate::v1_db::handle_v1_db_status(&principal, ws)
                         }
                         ([ws, "db", "migrate"], true) => {
                             let body = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -5286,6 +5288,14 @@ async fn handle_one_request(
                         }
                         ([_ws, "db", "dump"], true) => {
                             let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::cli_response::CliResponse::method_not_allowed()
+                        }
+                        ([ws, "db", "restore"], true) => {
+                            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            crate::v1_db::handle_v1_db_restore(&principal, ws, &body)
+                        }
+                        ([_ws, "db", "restore"], false) => {
+                            let _ = stream.read(&mut buf).await;
                             crate::cli_response::CliResponse::method_not_allowed()
                         }
                         // Anything else under `/v1/w/` (wrong shape, wrong

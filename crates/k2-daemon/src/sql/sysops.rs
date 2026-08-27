@@ -211,7 +211,8 @@ pub struct FakePg {
     pub roles: Vec<String>,
     pub role_sql: Vec<String>,
     pub helper_sql: Vec<String>,
-    pub migrations: HashMap<String, Vec<String>>,
+    /// (version, checksum) rows per database name.
+    pub migrations: HashMap<String, Vec<(String, String)>>,
     pub store: HashMap<(String, String), HashMap<String, serde_json::Value>>,
     pub dump_marker: Vec<u8>,
 }
@@ -247,17 +248,39 @@ impl FakePg {
         if trimmed.to_ascii_uppercase().contains("SELECT 1") {
             return Ok("1".into());
         }
+        if trimmed.to_ascii_uppercase().contains("PG_DATABASE_SIZE") {
+            return Ok("8192".into());
+        }
         let db_name = db.unwrap_or("postgres");
         if trimmed.contains("_k2_migrations") {
-            if trimmed.to_ascii_uppercase().starts_with("SELECT") {
+            let up = trimmed.to_ascii_uppercase();
+            if up.starts_with("SELECT") {
                 let vers = self.migrations.entry(db_name.to_string()).or_default();
-                return Ok(vers.join("\n"));
+                if up.contains("CHECKSUM") {
+                    return Ok(vers
+                        .iter()
+                        .map(|(v, c)| {
+                            if up.contains("APPLIED_AT") {
+                                format!("{v}\t{c}\t2026-01-01 00:00:00+00")
+                            } else {
+                                format!("{v}\t{c}")
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"));
+                }
+                return Ok(vers
+                    .iter()
+                    .map(|(v, _)| v.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"));
             }
-            if trimmed.to_ascii_uppercase().starts_with("INSERT") {
-                if let Some(ver) = extract_sql_string_literal(trimmed) {
+            if up.starts_with("INSERT") {
+                if let Some(ver) = nth_sql_string(trimmed, 0) {
+                    let checksum = nth_sql_string(trimmed, 1).unwrap_or_default();
                     let vers = self.migrations.entry(db_name.to_string()).or_default();
-                    if !vers.iter().any(|v| v == &ver) {
-                        vers.push(ver);
+                    if !vers.iter().any(|(v, _)| v == &ver) {
+                        vers.push((ver, checksum));
                     }
                 }
                 return Ok(String::new());
@@ -341,14 +364,6 @@ fn extract_quoted_after(sql: &str, keyword: &str) -> Option<String> {
     } else {
         Some(ident.to_string())
     }
-}
-
-#[cfg(test)]
-fn extract_sql_string_literal(sql: &str) -> Option<String> {
-    let start = sql.find('\'')?;
-    let rest = &sql[start + 1..];
-    let end = rest.find('\'')?;
-    Some(rest[..end].to_string())
 }
 
 #[cfg(test)]

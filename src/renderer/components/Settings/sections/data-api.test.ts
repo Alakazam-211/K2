@@ -20,6 +20,9 @@ describe('data-api helpers', () => {
     expect(blob).not.toContain('dbsec_')
     expect(blob).not.toContain('superuser')
     expect(SAMPLE_STATUS.supported).toBe(false)
+    expect(SAMPLE_STATUS.port).toBe(5432)
+    expect(SAMPLE_STATUS.publishHint).toContain('k2 publish subdomain')
+    expect(blob).not.toContain('static ip')
   })
 
   it('sample databases list owner + grants with manage/read/write', () => {

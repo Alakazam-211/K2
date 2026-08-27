@@ -428,7 +428,15 @@ function ServerPanel({
               </span>
               <span className="text-xs font-mono text-[var(--color-text-primary)]">
                 {status.listen}
+                {status.port != null ? `:${status.port}` : ''}
               </span>
+            </div>
+          )}
+          {status.publishHint && (
+            <div className="px-3 py-2">
+              <p className="text-[11px] text-[var(--color-text-muted)] break-words font-mono">
+                {status.publishHint}
+              </p>
             </div>
           )}
           {status.lastError && (

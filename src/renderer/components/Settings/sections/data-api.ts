@@ -13,6 +13,10 @@ export interface SqlStatus {
   state: string
   installedMajor: number | null
   listen: string | null
+  /** Loopback port (5432 unless catalog says otherwise). */
+  port?: number
+  /** Off-box recipe: k2 publish subdomain … --target localhost:<port>. */
+  publishHint?: string | null
   lastError: string | null
   enableProgress?: unknown
   health?: unknown
@@ -129,6 +133,9 @@ export const SAMPLE_STATUS: SqlStatus = {
   state: 'running',
   installedMajor: 16,
   listen: 'localhost',
+  port: 5432,
+  publishHint:
+    'off-box *.k2.dev: k2 publish subdomain create <label> --target localhost:5432 (port already listening — do not publish run Postgres)',
   lastError: null,
 }
 

@@ -141,6 +141,124 @@ mod tests {
             .any(|v| v.as_str() == Some("0001_init")));
         let second = ops::migrate(&ops, &secrets, &pid, &path, None).expect("second");
         assert_eq!(second["noop"], true);
+        let status = ops::database_status(&ops, &secrets, &pid).expect("status");
+        let migrations = status["migrations"].as_array().expect("migrations");
+        assert!(
+            migrations
+                .iter()
+                .any(|m| m["version"].as_str() == Some("0001_init")),
+            "{migrations:?}"
+        );
+        let checksum = migrations[0]["checksum"].as_str().expect("checksum");
+        assert_eq!(
+            checksum,
+            ops::migration_checksum(b"CREATE TABLE t (id int);\n")
+        );
+        let size = status["sizeBytes"].as_i64().expect("sizeBytes");
+        assert!(size > 0, "sizeBytes={size}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_checksum_mismatch_refuses_same_checksum_is_ok() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_databases", []);
+            conn.execute(
+                "INSERT INTO sql_server (id, status, updated_at) VALUES (1, 'running', 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("k2-sql-cksum-{}", std::process::id()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        std::fs::write(mig.join("0001_init.sql"), b"CREATE TABLE t (id int);\n").unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-cksum", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        ops::migrate(&ops, &secrets, &pid, &path, None).expect("first");
+        let again = ops::migrate(&ops, &secrets, &pid, &path, None).expect("same checksum");
+        assert_eq!(again["noop"], true, "{again}");
+        std::fs::write(mig.join("0001_init.sql"), b"CREATE TABLE t (id int, n int);\n").unwrap();
+        let err = ops::migrate(&ops, &secrets, &pid, &path, None).expect_err("mismatch");
+        assert_eq!(err.code(), "checksum_mismatch");
+        assert!(
+            err.hint().contains("0001_init"),
+            "hint names the file: {}",
+            err.hint()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn restore_jail_rejects_dotdot_and_abs_happy_path_ok() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_databases", []);
+            conn.execute(
+                "INSERT INTO sql_server (id, status, updated_at) VALUES (1, 'running', 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("k2-sql-restore-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".k2/db/dumps")).unwrap();
+        std::fs::write(dir.join(".k2/db/dumps/ok.dump"), b"FAKE-PG-DUMP").unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-restore", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let err = ops::restore(&ops, &secrets, &pid, &path, "../outside.dump").expect_err("..");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        assert!(err.hint().contains(".."), "{}", err.hint());
+        let err = ops::restore(&ops, &secrets, &pid, &path, "/tmp/outside.dump").expect_err("abs");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        assert!(err.hint().contains("absolute"), "{}", err.hint());
+        let ok = ops::restore(&ops, &secrets, &pid, &path, ".k2/db/dumps/ok.dump")
+            .expect("fresh workspace restore");
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert_eq!(ok["restored"], ".k2/db/dumps/ok.dump", "{ok}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn persist_db_access_write() {
+        k2_core::db::init_for_tests();
+        let dir = std::env::temp_dir().join(format!("k2-sql-acc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, "sql-acc", path],
+            )
+            .expect("insert project default access");
+        }
+        assert_eq!(
+            k2_core::workspace::settings::db_agent_access_for_path(&path),
+            "off"
+        );
+        ops::persist_db_access(&path, Some("write")).expect("write");
+        assert_eq!(
+            k2_core::workspace::settings::db_agent_access_for_path(&path),
+            "write"
+        );
+        let err = ops::persist_db_access(&path, Some("admin")).expect_err("bad");
+        assert_eq!(err.code(), "usage");
         let _ = std::fs::remove_dir_all(dir);
     }
 

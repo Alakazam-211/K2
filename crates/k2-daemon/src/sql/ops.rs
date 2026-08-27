@@ -1,6 +1,9 @@
 //! Workspace database + JSONB store operations (create/migrate/dump/store).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
 
 use super::paths::{resolve_in_path, resolve_out_path, InPathError};
 use super::secrets::{generate_secret, SecretStore};
@@ -13,6 +16,7 @@ pub enum OpsError {
     NotFound(String),
     CapReached(String),
     NotReady(String),
+    ChecksumMismatch(String),
     #[allow(dead_code)]
     Forbidden(String),
     Engine(String),
@@ -23,7 +27,7 @@ impl OpsError {
         match self {
             Self::Usage(_) => "400 Bad Request",
             Self::NotFound(_) => "404 Not Found",
-            Self::CapReached(_) | Self::NotReady(_) => "409 Conflict",
+            Self::CapReached(_) | Self::NotReady(_) | Self::ChecksumMismatch(_) => "409 Conflict",
             Self::Forbidden(_) => "403 Forbidden",
             Self::Engine(_) => "502 Bad Gateway",
         }
@@ -34,6 +38,7 @@ impl OpsError {
             Self::NotFound(_) => "not_found",
             Self::CapReached(_) => "cap_reached",
             Self::NotReady(_) => "not_ready",
+            Self::ChecksumMismatch(_) => "checksum_mismatch",
             Self::Forbidden(_) => "forbidden",
             Self::Engine(_) => "engine",
         }
@@ -44,10 +49,37 @@ impl OpsError {
             | Self::NotFound(h)
             | Self::CapReached(h)
             | Self::NotReady(h)
+            | Self::ChecksumMismatch(h)
             | Self::Forbidden(h)
             | Self::Engine(h) => h,
         }
     }
+}
+
+/// SHA-256 hex of a migration file. Used to refuse silently-rewritten
+/// already-applied versions (Julie Stage 2).
+pub fn migration_checksum(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Persist `projects.db_agent_access` (`off`/`read`/`write`). Empty = no-op
+/// (default stays fail-closed `off`).
+pub fn persist_db_access(project_path: &str, access: Option<&str>) -> Result<(), OpsError> {
+    let Some(access) = access.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    if !k2_core::workspace::settings::DB_AGENT_ACCESS_MODES.contains(&access) {
+        return Err(OpsError::Usage(
+            "access must be 'off', 'read', or 'write'".into(),
+        ));
+    }
+    k2_core::workspace::settings::update_project_setting(
+        project_path,
+        "db_agent_access",
+        access,
+    )
+    .map_err(OpsError::Engine)
 }
 
 fn now_secs() -> i64 {
@@ -333,6 +365,7 @@ pub fn create_database(
            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {agent};\n\
          CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
            version TEXT PRIMARY KEY,\n\
+           checksum TEXT NOT NULL DEFAULT '',\n\
            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
          );\n\
          CREATE TABLE IF NOT EXISTS _k2_store (\n\
@@ -476,6 +509,59 @@ fn exec_as(
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
 
+fn ensure_migrations_table(
+    ops: &dyn SystemOps,
+    db: &str,
+    user: &str,
+    password: &str,
+) -> Result<(), OpsError> {
+    exec_as(
+        ops,
+        db,
+        user,
+        password,
+        "CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
+           version TEXT PRIMARY KEY,\n\
+           checksum TEXT NOT NULL DEFAULT '',\n\
+           applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
+         );\n\
+         DO $$\nBEGIN\n\
+           ALTER TABLE _k2_migrations ADD COLUMN checksum TEXT;\n\
+         EXCEPTION WHEN duplicate_column THEN NULL;\n\
+         END $$;",
+    )?;
+    Ok(())
+}
+
+fn load_applied_checksums(
+    ops: &dyn SystemOps,
+    db: &str,
+    user: &str,
+    password: &str,
+) -> Result<HashMap<String, String>, OpsError> {
+    let applied_raw = exec_as(
+        ops,
+        db,
+        user,
+        password,
+        "SELECT version, checksum FROM _k2_migrations;",
+    )?;
+    let mut applied = HashMap::new();
+    for line in applied_raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, '\t');
+        let ver = parts.next().unwrap_or("").trim();
+        let sum = parts.next().unwrap_or("").trim();
+        if !ver.is_empty() {
+            applied.insert(ver.to_string(), sum.to_string());
+        }
+    }
+    Ok(applied)
+}
+
 pub fn migrate(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -510,28 +596,8 @@ pub fn migrate(
         .collect();
     files.sort();
 
-    exec_as(
-        ops,
-        &row.name,
-        &user,
-        &pw,
-        "CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
-           version TEXT PRIMARY KEY,\n\
-           applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
-         );",
-    )?;
-    let applied_raw = exec_as(
-        ops,
-        &row.name,
-        &user,
-        &pw,
-        "SELECT version FROM _k2_migrations;",
-    )?;
-    let applied: Vec<&str> = applied_raw
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
+    ensure_migrations_table(ops, &row.name, &user, &pw)?;
+    let applied = load_applied_checksums(ops, &row.name, &user, &pw)?;
 
     let mut ran = Vec::new();
     for path in files {
@@ -540,11 +606,17 @@ pub fn migrate(
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        if applied.iter().any(|a| *a == version) {
-            continue;
-        }
         let sql = std::fs::read_to_string(&path)
             .map_err(|e| OpsError::Engine(format!("read {}: {e}", path.display())))?;
+        let checksum = migration_checksum(sql.as_bytes());
+        if let Some(prev) = applied.get(&version) {
+            if prev == &checksum {
+                continue;
+            }
+            return Err(OpsError::ChecksumMismatch(format!(
+                "migration {version} already applied with checksum {prev}, file is {checksum} — refuse"
+            )));
+        }
         if sql.to_ascii_uppercase().contains("FORCE ROW LEVEL") {
             return Err(OpsError::Usage(
                 "FORCE RLS is not enabled in v1 — remove FORCE ROW LEVEL SECURITY from migrations"
@@ -553,8 +625,9 @@ pub fn migrate(
         }
         exec_as(ops, &row.name, &user, &pw, &sql)?;
         let insert = format!(
-            "INSERT INTO _k2_migrations (version) VALUES ({});",
-            pg_quote_literal(&version)
+            "INSERT INTO _k2_migrations (version, checksum) VALUES ({ver}, {sum});",
+            ver = pg_quote_literal(&version),
+            sum = pg_quote_literal(&checksum),
         );
         exec_as(ops, &row.name, &user, &pw, &insert)?;
         ran.push(version);
@@ -563,6 +636,63 @@ pub fn migrate(
         "ok": true,
         "applied": ran,
         "noop": ran.is_empty(),
+    }))
+}
+
+/// Workspace DB status for org-box verify (Julie Stage 2 A): applied
+/// migrations + size. Fails loud when this workspace has no database.
+pub fn database_status(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+) -> Result<serde_json::Value, OpsError> {
+    require_running()?;
+    let row = active_row(project_id)?;
+    let (user, pw) = migrator_creds(secrets, &row)?;
+    ensure_migrations_table(ops, &row.name, &user, &pw)?;
+    let applied_raw = exec_as(
+        ops,
+        &row.name,
+        &user,
+        &pw,
+        "SELECT version, checksum, applied_at FROM _k2_migrations ORDER BY version;",
+    )?;
+    let mut migrations = Vec::new();
+    for line in applied_raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split('\t');
+        let version = parts.next().unwrap_or("").trim();
+        if version.is_empty() {
+            continue;
+        }
+        let checksum = parts.next().unwrap_or("").trim();
+        let applied_at = parts.next().unwrap_or("").trim();
+        migrations.push(serde_json::json!({
+            "version": version,
+            "checksum": checksum,
+            "appliedAt": applied_at,
+        }));
+    }
+    let size_raw = exec_as(
+        ops,
+        &row.name,
+        &user,
+        &pw,
+        "SELECT pg_database_size(current_database());",
+    )?;
+    let size_bytes: i64 = size_raw.parse().map_err(|e| {
+        OpsError::Engine(format!(
+            "pg_database_size returned {size_raw:?} (not an integer): {e}"
+        ))
+    })?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "name": row.name,
+        "migrations": migrations,
+        "sizeBytes": size_bytes,
     }))
 }
 
@@ -621,13 +751,26 @@ pub fn restore(
     file: &str,
 ) -> Result<serde_json::Value, OpsError> {
     require_running()?;
-    let row = active_row(project_id)?;
-    let (user, pw) = migrator_creds(secrets, &row)?;
+    // Jail first (D17) so `..` / abs fail loud even on a fresh workspace.
     let src = match resolve_in_path(ws_path, file) {
         Ok(p) => p,
         Err(InPathError::Usage(h)) => return Err(OpsError::Usage(h)),
         Err(InPathError::NotFound(h)) => return Err(OpsError::NotFound(h)),
     };
+    let row = match active_row(project_id) {
+        Ok(r) => r,
+        Err(OpsError::NotFound(_)) => {
+            let cap = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                project_cap(&conn, project_id)
+            };
+            create_database(ops, secrets, project_id, cap, None, None)?;
+            active_row(project_id)?
+        }
+        Err(e) => return Err(e),
+    };
+    let (user, pw) = migrator_creds(secrets, &row)?;
     ops.run_cmd(
         PG_RESTORE_PATH,
         &[

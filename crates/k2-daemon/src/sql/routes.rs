@@ -70,7 +70,7 @@ fn cap_for(path: &str) -> u32 {
 }
 
 /// Injected ops for tests; production uses RealSystemOps.
-fn ops() -> &'static dyn SystemOps {
+pub(crate) fn current_ops() -> &'static dyn SystemOps {
     #[cfg(test)]
     {
         TEST_OPS.with(|c| {
@@ -83,6 +83,10 @@ fn ops() -> &'static dyn SystemOps {
         }
     }
     &RealSystemOps
+}
+
+fn ops() -> &'static dyn SystemOps {
+    current_ops()
 }
 
 #[cfg(test)]
@@ -163,6 +167,9 @@ struct CreateBody {
     project: String,
     client_id: Option<String>,
     name: Option<String>,
+    /// `off` | `read` | `write` — persist `db_agent_access` (D21 hire/create).
+    #[serde(alias = "dbAccess", alias = "db_access")]
+    access: Option<String>,
 }
 
 pub fn handle_create(body: &[u8]) -> CliResponse {
@@ -182,6 +189,9 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
     };
     if let Err(resp) = access_for(&path, "write") {
         return resp;
+    }
+    if let Err(e) = ops::persist_db_access(&path, b.access.as_deref()) {
+        return ops_err(e);
     }
     let secrets = FileSecretStore::default();
     match ops::create_database(

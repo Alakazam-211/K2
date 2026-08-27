@@ -72,9 +72,10 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// Manager / K2SO-agent / custom-agent bumped to 9: skills teach the
 /// `k2 db` / `k2 store` sidecar (Linux; fail-closed `db_agent_access`;
 /// owner enable; create/dsn/migrate/dump/store).
-pub const SKILL_VERSION_MANAGER: u32 = 9;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 9;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 9;
+/// Bumped to 10: restore + publish-subdomain off-box hint (D30).
+pub const SKILL_VERSION_MANAGER: u32 = 10;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 10;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 10;
 pub const SKILL_VERSION_TEMPLATE: u32 = 3;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 /// v2 = authored persona file is `.k2/agent/ROLE.md`.
@@ -109,7 +110,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 19: overlay `k2 thread` (text write/read; not PTY).
 /// Bumped to 20: overlay `k2 thread ask` / `k2 thread secret` (do not wait).
 /// Bumped to 21: loadable k2-cli skill gains Database (`k2 db` / `k2 store`).
-pub const SKILL_VERSION_WORKSPACE: u32 = 21;
+/// Bumped to 22: restore + publish-subdomain off-box hint (D30).
+pub const SKILL_VERSION_WORKSPACE: u32 = 22;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

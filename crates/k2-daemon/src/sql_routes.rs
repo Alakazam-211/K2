@@ -111,4 +111,10 @@ mod tests {
         let r = dispatch("/cli/db/bind", &HashMap::new()).unwrap();
         assert_eq!(r.status, "405 Method Not Allowed");
     }
+
+    #[test]
+    fn get_restore_405() {
+        let r = dispatch("/cli/db/restore", &HashMap::new()).unwrap();
+        assert_eq!(r.status, "405 Method Not Allowed");
+    }
 }

@@ -206,12 +206,13 @@ rewrite.
 fn db_skill_section(heading: &str) -> String {
     format!(
         r#"{heading} Database (k2 db / k2 store)
-Linux sidecar (your human enables it in Settings → Data). Fail-closed: `db_agent_access` is off/read/write (default off). Enable/disable/uninstall/doctor/bind are owner — agent tokens exit 3.
+Linux sidecar (your human enables it in Settings → Data). Fail-closed: `db_agent_access` is off/read/write (default off). Enable/disable/uninstall/doctor/bind are owner — agent tokens exit 3. Postgres stays loopback. Off-box `*.k2.dev`: `k2 publish subdomain create <label> --target localhost:<port>` (port already listening — do not `publish run` Postgres; no `k2 db expose`; not a static-IP feature).
 ```
-k2 db create [--id <key>] [--json]   # mint this workspace's DB (need write)
+k2 db create [--id <key>] [--db-access write] [--json]   # mint this workspace's DB (need write)
 k2 db list | dsn                     # DSN always re-fetchable; never logged
 k2 db migrate [--dir .k2/db/migrations]
 k2 db dump [--out .k2/db/dumps/<ts>.dump]
+k2 db restore <file>                 # workspace-relative; no .. / abs
 k2 store put <name> --id <id> --json '{{…}}'  # JSONB in the same DB — create first
 ```
 "#
@@ -1959,6 +1960,18 @@ mod tests {
             assert!(
                 body.contains("Linux sidecar") || body.contains("Linux"),
                 "{generator} must say the sidecar is Linux"
+            );
+            assert!(
+                body.contains("k2 publish subdomain"),
+                "{generator} must teach publish subdomain for off-box PG"
+            );
+            assert!(
+                !body.to_ascii_lowercase().contains("static ip"),
+                "{generator} must not mention static IP"
+            );
+            assert!(
+                body.contains("k2 db restore"),
+                "{generator} must teach restore"
             );
         }
     }

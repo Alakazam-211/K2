@@ -280,6 +280,10 @@ struct HireBody {
     default_model: Option<String>,
     #[serde(default)]
     no_wiki: Option<bool>,
+    /// Persist `db_agent_access` (`off`/`read`/`write`). Default stays off.
+    /// Does NOT mint a database — hire calls create separately.
+    #[serde(default)]
+    db_access: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -545,6 +549,28 @@ pub(crate) fn handle_v1_hire(principal: &V1Principal, body: &[u8]) -> CliRespons
                 }
                 Err(resp) => return resp,
             }
+        }
+    }
+
+    if let Some(access) = req
+        .db_access
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if !k2_core::workspace::settings::DB_AGENT_ACCESS_MODES.contains(&access) {
+            return usage("dbAccess must be 'off', 'read', or 'write'");
+        }
+        let already = k2_core::workspace::settings::db_agent_access_for_path(&path);
+        if already != access {
+            if let Err(e) = k2_core::workspace::settings::update_project_setting(
+                &path,
+                "db_agent_access",
+                access,
+            ) {
+                return usage(e);
+            }
+            changed = true;
         }
     }
 
@@ -1357,6 +1383,42 @@ mod tests {
         let row = lookup_project(&path).expect("row");
         assert_eq!(row.default_agent.as_deref(), Some("claude"));
         assert_eq!(row.default_model.as_deref(), Some("opus"));
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn hire_db_access_write_persists_and_does_not_create_db() {
+        k2_core::db::init_for_tests();
+        let ws = unique_ws("db-access");
+        let path = ws.to_string_lossy().into_owned();
+        assert_eq!(
+            k2_core::workspace::settings::db_agent_access_for_path(&path),
+            "off"
+        );
+        let body = serde_json::json!({
+            "path": path,
+            "dbAccess": "write",
+        })
+        .to_string();
+        let r = handle_v1_hire(&V1Principal::Owner, body.as_bytes());
+        let _v = parse_ok(&r);
+        assert_eq!(
+            k2_core::workspace::settings::db_agent_access_for_path(&path),
+            "write"
+        );
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sql_databases WHERE project_id = \
+                     (SELECT id FROM projects WHERE path = ?1)",
+                    rusqlite::params![path],
+                    |row| row.get(0),
+                )
+                .expect("count sql_databases");
+            assert_eq!(n, 0, "hire must not mint a database");
+        }
         let _ = fs::remove_dir_all(&ws);
     }
 

@@ -381,16 +381,41 @@ pub fn status_json(include_health: bool) -> serde_json::Value {
     let enable_progress = progress
         .and_then(|p| serde_json::from_str::<serde_json::Value>(&p).ok())
         .unwrap_or(serde_json::Value::Null);
+    let port = listen_port(listen.as_deref());
     serde_json::json!({
         "ok": true,
         "supported": sql_supported(),
         "state": state,
         "installedMajor": major,
         "listen": listen,
+        "port": port,
+        "publishHint": publish_hint(port),
         "enableProgress": enable_progress,
         "lastError": last_error,
         "health": health,
     })
+}
+
+/// Loopback Postgres port (D1/D30). Catalog `listen` is `localhost` or
+/// `localhost:<port>`; missing/unparseable → 5432.
+pub fn listen_port(listen: Option<&str>) -> u16 {
+    let raw = listen.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("");
+    if let Some((_, p)) = raw.rsplit_once(':') {
+        if let Ok(n) = p.parse::<u16>() {
+            if n != 0 {
+                return n;
+            }
+        }
+    }
+    5432
+}
+
+/// One-line off-box recipe. Postgres stays loopback; `k2 publish` fronts
+/// the already-listening port. Not a static-IP feature. Not `k2 db expose`.
+pub fn publish_hint(port: u16) -> String {
+    format!(
+        "off-box *.k2.dev: k2 publish subdomain create <label> --target localhost:{port} (port already listening — do not publish run Postgres)"
+    )
 }
 
 pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
@@ -503,5 +528,51 @@ mod tests {
         assert_eq!(parse_installed_major("160003"), Some(16));
         assert_eq!(parse_installed_major("140013"), Some(14));
         assert_eq!(parse_installed_major(" 160003 \n"), Some(16));
+    }
+
+    #[test]
+    fn listen_port_defaults_5432_and_parses_catalog() {
+        assert_eq!(listen_port(None), 5432);
+        assert_eq!(listen_port(Some("")), 5432);
+        assert_eq!(listen_port(Some("localhost")), 5432);
+        assert_eq!(listen_port(Some("localhost:15432")), 15432);
+        assert_eq!(listen_port(Some("127.0.0.1:5433")), 5433);
+    }
+
+    #[test]
+    fn status_json_reports_port_and_publish_subdomain_not_static_ip() {
+        let _g = db_guard();
+        clean_row();
+        k2_core::db::init_for_tests();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) \
+                 VALUES (1, 'running', 16, 'localhost', 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let v = status_json(false);
+        assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(v["port"], 5432, "default port: {v}");
+        let hint = v["publishHint"].as_str().expect("publishHint present");
+        assert!(
+            hint.contains("k2 publish subdomain"),
+            "hint must mention publish subdomain: {hint}"
+        );
+        assert!(
+            hint.contains("localhost:5432"),
+            "hint must name the loopback port: {hint}"
+        );
+        assert!(
+            !hint.to_ascii_lowercase().contains("static ip"),
+            "D30: static IP is not a K2 feature: {hint}"
+        );
+        assert!(
+            !hint.contains("k2 db expose"),
+            "must not invent k2 db expose: {hint}"
+        );
     }
 }

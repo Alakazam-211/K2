@@ -7,6 +7,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 Two machines on the same network can **Pair as a federated peer** without buying a `*.k2.dev` tunnel. Add Server as `http://<LAN-IP>:<port>`, enable federation, Pair. `k2 msg sales::10.2.40.28:38471` is the address shape. HTTPS to a private IP is still refused.
 
+What's New has a little drawer on the right — if you're enjoying K2, a star on GitHub helps a lot. Hidden in air-gap builds.
+
 ---
 
 ## 0.40.117 — Terminal hitch; inbox files keep the note

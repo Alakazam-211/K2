@@ -1,7 +1,11 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { isAirgap } from '@/lib/airgap'
 import { DialogScrim, Surface } from '@/components/ui'
 import Markdown from '../Markdown/Markdown'
+
+const GITHUB_REPO_URL = 'https://github.com/Alakazam-211/K2'
 
 interface WhatsNewPayload {
   current_version: string
@@ -201,6 +205,8 @@ export default function WhatsNewModal({
 
   const isFirst = pageIdx === 0
   const isLast = pageIdx === totalPages - 1
+  // Air-gap builds do not phone GitHub; hide the star CTA there.
+  const showStarDrawer = !isAirgap()
 
   return (
     <>
@@ -264,6 +270,25 @@ export default function WhatsNewModal({
         .wn-nav-btn:not(:disabled):hover {
           background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
         }
+        .wn-star-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          width: 100%;
+          padding: 7px 12px;
+          font-size: 12.5px;
+          font-family: inherit;
+          font-weight: 600;
+          border: 1px solid var(--color-accent, #4a9eff);
+          background: var(--color-accent, #4a9eff);
+          color: var(--color-on-accent);
+          cursor: pointer;
+          line-height: 1.4;
+        }
+        .wn-star-btn:hover {
+          opacity: 0.9;
+        }
       `}</style>
 
       {/* Backdrop. */}
@@ -274,9 +299,8 @@ export default function WhatsNewModal({
         }}
       />
 
-      {/* Dialog */}
-      <Surface
-        role2="surface"
+      {/* Dialog + optional GitHub-star drawer, centered as a unit. */}
+      <div
         className="no-drag"
         style={{
           position: 'fixed',
@@ -284,15 +308,29 @@ export default function WhatsNewModal({
           left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 99999,
-          width: 'min(620px, 90vw)',
+          display: 'flex',
+          alignItems: 'center',
+          maxWidth: '96vw',
+          maxHeight: '78vh',
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+      <Surface
+        role2="surface"
+        className="no-drag"
+        style={{
+          width: showStarDrawer
+            ? 'min(620px, calc(96vw - 200px))'
+            : 'min(620px, 90vw)',
           maxHeight: '78vh',
           display: 'flex',
           flexDirection: 'column',
           boxShadow:
             '0 12px 40px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4)',
-          overflow: 'hidden'
+          overflow: 'hidden',
+          flex: '1 1 auto',
+          minWidth: 0,
         }}
-        onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Header — overall title + per-page version chip + page-count */}
         <div
@@ -442,6 +480,85 @@ export default function WhatsNewModal({
           </button>
         </div>
       </Surface>
+      {showStarDrawer && <GithubStarDrawer />}
+      </div>
     </>
+  )
+}
+
+function GithubStarDrawer(): React.JSX.Element {
+  const openRepo = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    void openUrl(GITHUB_REPO_URL).catch(() => {
+      window.open(GITHUB_REPO_URL, '_blank', 'noopener,noreferrer')
+    })
+  }, [])
+
+  return (
+    <Surface
+      role2="elevated"
+      elevation={2}
+      className="no-drag"
+      style={{
+        width: 188,
+        flex: '0 0 188px',
+        marginLeft: -1,
+        padding: '18px 16px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: 10,
+        alignSelf: 'center',
+        maxHeight: '100%',
+        boxShadow:
+          '0 10px 28px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.3)',
+        fontFamily:
+          "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          color: 'var(--color-accent, #4a9eff)',
+          display: 'flex',
+          lineHeight: 0,
+        }}
+      >
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2.5l2.76 6.05 6.6.72-4.92 4.5 1.36 6.48L12 16.9 6.2 20.25l1.36-6.48-4.92-4.5 6.6-.72L12 2.5z" />
+        </svg>
+      </span>
+      <div
+        style={{
+          fontSize: '14px',
+          fontWeight: 600,
+          color: 'var(--color-text-primary)',
+          lineHeight: 1.3,
+        }}
+      >
+        Enjoying K2?
+      </div>
+      <div
+        style={{
+          fontSize: '12.5px',
+          lineHeight: 1.5,
+          color: 'var(--color-text-secondary)',
+        }}
+      >
+        Go give us a star on GitHub! It helps us a ton and we really
+        appreciate it.
+      </div>
+      <button
+        type="button"
+        className="wn-star-btn"
+        onClick={openRepo}
+        title="Open github.com/Alakazam-211/K2"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2.5l2.76 6.05 6.6.72-4.92 4.5 1.36 6.48L12 16.9 6.2 20.25l1.36-6.48-4.92-4.5 6.6-.72L12 2.5z" />
+        </svg>
+        Star on GitHub
+      </button>
+    </Surface>
   )
 }

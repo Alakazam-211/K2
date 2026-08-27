@@ -3,6 +3,7 @@ import {
   SAMPLE_DATABASES,
   SAMPLE_STATUS,
   dbTypeLabel,
+  formatSqlListen,
   sqlErrorInfo,
   sqlErrorMessage,
   type SqlDatabase,
@@ -31,6 +32,14 @@ describe('data-api helpers', () => {
     expect(sales.owner.canManage).toBe(true)
     expect(sales.grants[0]?.level).toBe('read')
     expect(sales.bindRole).toBeTruthy()
+  })
+
+  it('formatSqlListen does not double-append port', () => {
+    expect(formatSqlListen('localhost', 5432)).toBe('localhost:5432')
+    expect(formatSqlListen('localhost:15432', 15432)).toBe('localhost:15432')
+    expect(formatSqlListen('localhost:15432', 5432)).toBe('localhost:15432')
+    expect(formatSqlListen(null, 5432)).toBeNull()
+    expect(formatSqlListen('localhost')).toBe('localhost')
   })
 
   it('sqlErrorMessage prefers daemon hint', () => {

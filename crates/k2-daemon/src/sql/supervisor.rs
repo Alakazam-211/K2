@@ -3,11 +3,15 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::sysops::{is_baked, RealSystemOps, SystemOps, PG_UNIT, PG_UNIT_PATHS, PSQL_PATH};
-use super::sql_supported; // used by spawn_health_loop
+use super::sql_supported;
+use super::sysops::{
+    guc_show_sql, is_baked, pin_gucs_sql, ram_dropin, RealSystemOps, SystemOps, GUC_PINNED,
+    PG_RAM_DROPIN_PATH, PG_RAM_TEMPLATE_DROPIN_PATH, PG_UNIT, PG_UNIT_PATHS, PSQL_PATH,
+    RAM_CPU_WEIGHT, RAM_MEMORY_HIGH, RAM_MEMORY_MAX,
+}; // used by spawn_health_loop
 
 #[allow(dead_code)]
-pub const ENABLE_STEPS: &[&str] = &["baked", "start", "catalog"];
+pub const ENABLE_STEPS: &[&str] = &["baked", "ram", "start", "gucs", "catalog"];
 
 pub fn enable_running() -> &'static AtomicBool {
     static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -132,13 +136,10 @@ impl EnableError {
     pub fn hint(&self) -> String {
         match self {
             Self::Unsupported => {
-                "the SQL sidecar only works on Linux deployments; this daemon is not Linux"
-                    .into()
+                "the SQL sidecar only works on Linux deployments; this daemon is not Linux".into()
             }
             Self::NotBaked(h) => h.clone(),
-            Self::InProgress => {
-                "an enable run is already in progress — poll /cli/db/status".into()
-            }
+            Self::InProgress => "an enable run is already in progress — poll /cli/db/status".into(),
             Self::Engine(h) => h.clone(),
         }
     }
@@ -148,16 +149,25 @@ const NOT_BAKED_HINT: &str = "Postgres sidecar is not baked on this box. Re-run 
 provision-k2-server.sh --bake --with-db (or K2_BAKE_DB=1). The daemon does not apt-get.";
 
 /// Catalog ingest + helper start if the unit is baked. Never apt-get.
+/// D29 ram fence is applied even when the sidecar is already running so
+/// an upgrade re-enable converges MemoryHigh/Max + GUC pins.
 pub fn enable_with(ops: &dyn SystemOps) -> Result<serde_json::Value, EnableError> {
-    if current_status().as_deref() == Some("running") {
-        return Ok(serde_json::json!({
-            "ok": true,
-            "state": "running",
-            "alreadyEnabled": true,
-        }));
-    }
     if !is_baked(ops) {
         return Err(EnableError::NotBaked(NOT_BAKED_HINT.into()));
+    }
+    if current_status().as_deref() == Some("running") {
+        if !try_begin_enable() {
+            return Err(EnableError::InProgress);
+        }
+        let result = apply_ram_fence(ops).map(|()| {
+            serde_json::json!({
+                "ok": true,
+                "state": "running",
+                "alreadyEnabled": true,
+            })
+        });
+        end_enable();
+        return result.map_err(EnableError::Engine);
     }
     if !try_begin_enable() {
         return Err(EnableError::InProgress);
@@ -184,10 +194,17 @@ fn run_enable_machine(ops: &dyn SystemOps) -> Result<serde_json::Value, EnableEr
     set_current("baked");
     mark_step("baked");
 
+    set_current("ram");
+    apply_ram_fence(ops).map_err(|e| fail("ram", e))?;
+    mark_step("ram");
+
     set_current("start");
     ops.run_helper(&["systemctl", "enable", "--now", PG_UNIT], None)
         .map_err(|e| fail("start", e))?;
     mark_step("start");
+
+    set_current("gucs");
+    mark_step("gucs");
 
     set_current("catalog");
     let version_out = ops
@@ -227,7 +244,12 @@ pub fn parse_installed_major(raw: &str) -> Option<i64> {
     let token = raw
         .split(|c: char| c.is_whitespace() || c == '.')
         .find(|s| !s.is_empty())?;
-    let n: i64 = token.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().ok()?;
+    let n: i64 = token
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .ok()?;
     if n >= 100000 {
         Some(n / 10000)
     } else if n >= 10 {
@@ -283,7 +305,11 @@ pub fn health_check_with(ops: &dyn SystemOps, ping: &dyn Fn() -> Result<(), Stri
     if active != "active" {
         return Health::Stopped(format!(
             "systemd reports the postgresql unit is '{}'",
-            if active.is_empty() { "unknown" } else { &active }
+            if active.is_empty() {
+                "unknown"
+            } else {
+                &active
+            }
         ));
     }
     match ping() {
@@ -295,10 +321,7 @@ pub fn health_check_with(ops: &dyn SystemOps, ping: &dyn Fn() -> Result<(), Stri
 pub fn refresh_health() -> serde_json::Value {
     let ping = || -> Result<(), String> {
         RealSystemOps
-            .run_helper(
-                &["psql", "-d", "postgres", "-tA"],
-                Some(b"SELECT 1;"),
-            )
+            .run_helper(&["psql", "-d", "postgres", "-tA"], Some(b"SELECT 1;"))
             .map(|_| ())
     };
     let health = health_check_with(&RealSystemOps, &ping);
@@ -348,10 +371,7 @@ pub fn spawn_health_loop() {
 }
 
 pub fn status_json(include_health: bool) -> serde_json::Value {
-    let health = if sql_supported()
-        && include_health
-        && !enable_running().load(Ordering::SeqCst)
-    {
+    let health = if sql_supported() && include_health && !enable_running().load(Ordering::SeqCst) {
         Some(refresh_health())
     } else {
         None
@@ -399,7 +419,10 @@ pub fn status_json(include_health: bool) -> serde_json::Value {
 /// Loopback Postgres port (D1/D30). Catalog `listen` is `localhost` or
 /// `localhost:<port>`; missing/unparseable → 5432.
 pub fn listen_port(listen: Option<&str>) -> u16 {
-    let raw = listen.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("");
+    let raw = listen
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
     if let Some((_, p)) = raw.rsplit_once(':') {
         if let Ok(n) = p.parse::<u16>() {
             if n != 0 {
@@ -418,14 +441,213 @@ pub fn publish_hint(port: u16) -> String {
     )
 }
 
+/// Write the systemd drop-in + pg conf.d (helper), daemon-reload, restart
+/// so MemoryHigh/Max attach, then ALTER SYSTEM the D29 GUC pins.
+fn apply_ram_fence(ops: &dyn SystemOps) -> Result<(), String> {
+    ops.run_helper(&["install-ram-fence"], None)?;
+    ops.run_helper(&["systemctl", "daemon-reload"], None)?;
+    ops.run_helper(&["systemctl", "restart", PG_UNIT], None)?;
+    pin_gucs_with_retry(ops)
+}
+
+fn pin_gucs_with_retry(ops: &dyn SystemOps) -> Result<(), String> {
+    let sql = pin_gucs_sql();
+    let mut last = String::new();
+    for i in 0..5 {
+        match ops.run_helper(
+            &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tA"],
+            Some(sql.as_bytes()),
+        ) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last = e;
+                if i + 1 < 5 {
+                    ops.sleep_ms(400);
+                }
+            }
+        }
+    }
+    Err(last)
+}
+
+fn dropin_present(ops: &dyn SystemOps) -> bool {
+    ops.path_exists(PG_RAM_DROPIN_PATH) && ops.path_exists(PG_RAM_TEMPLATE_DROPIN_PATH)
+}
+
+fn dropin_matches_policy(ops: &dyn SystemOps) -> bool {
+    let read = |p: &str| -> Option<String> {
+        ops.read_file(p)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok())
+    };
+    let want = ram_dropin();
+    match (read(PG_RAM_DROPIN_PATH), read(PG_RAM_TEMPLATE_DROPIN_PATH)) {
+        (Some(a), Some(b)) => a == want && b == want,
+        _ => false,
+    }
+}
+
+fn cluster_unit_name(ops: &dyn SystemOps, major: Option<i64>) -> String {
+    let listed = ops.systemctl_query(&[
+        "list-units",
+        "--type=service",
+        "--state=active",
+        "--no-legend",
+        "--plain",
+        "postgresql@*",
+    ]);
+    for line in listed.lines() {
+        let name = line.split_whitespace().next().unwrap_or("");
+        if name.starts_with("postgresql@") && name.ends_with(".service") {
+            return name.to_string();
+        }
+        if name.starts_with("postgresql@") {
+            return name.to_string();
+        }
+    }
+    if let Some(m) = major {
+        if m > 0 {
+            return format!("postgresql@{m}-main.service");
+        }
+    }
+    PG_UNIT.to_string()
+}
+
+fn parse_systemctl_show(raw: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for line in raw.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            out.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    out
+}
+
+fn parse_mem_bytes(raw: &str) -> Option<u64> {
+    let s = raw.trim();
+    if s.is_empty()
+        || s.eq_ignore_ascii_case("infinity")
+        || s.eq_ignore_ascii_case("[not set]")
+        || s == "unlimited"
+    {
+        return None;
+    }
+    let n: u64 = s.parse().ok()?;
+    if n == u64::MAX {
+        None
+    } else {
+        Some(n)
+    }
+}
+
+fn parse_pg_duration_ms(raw: &str) -> Option<u64> {
+    let s = raw.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return None;
+    }
+    if s == "0" || s == "0s" || s == "0ms" {
+        return Some(0);
+    }
+    let (num, mul) = if let Some(n) = s.strip_suffix("ms") {
+        (n, 1u64)
+    } else if let Some(n) = s.strip_suffix("min") {
+        (n, 60_000)
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, 60_000)
+    } else if let Some(n) = s.strip_suffix('s') {
+        (n, 1_000)
+    } else if let Some(n) = s.strip_suffix('h') {
+        (n, 3_600_000)
+    } else {
+        (s.as_str(), 1u64)
+    };
+    let n: u64 = num.trim().parse().ok()?;
+    n.checked_mul(mul)
+}
+
+fn parse_pg_bytes(raw: &str) -> Option<u64> {
+    let s = raw.trim();
+    if s == "-1" {
+        return None;
+    }
+    let lower = s.to_ascii_lowercase();
+    let (num, mul) = if let Some(n) = lower.strip_suffix("gb") {
+        (n, 1024u64 * 1024 * 1024)
+    } else if let Some(n) = lower.strip_suffix("mb") {
+        (n, 1024 * 1024)
+    } else if let Some(n) = lower.strip_suffix("kb") {
+        (n, 1024)
+    } else {
+        (lower.as_str(), 1)
+    };
+    let n: u64 = num.trim().parse().ok()?;
+    n.checked_mul(mul)
+}
+
+fn guc_matches(name: &str, got: &str, want: &str) -> bool {
+    if got == want {
+        return true;
+    }
+    match name {
+        "statement_timeout" | "idle_in_transaction_session_timeout" => {
+            parse_pg_duration_ms(got) == parse_pg_duration_ms(want)
+                && parse_pg_duration_ms(want).is_some()
+        }
+        "shared_buffers" | "work_mem" | "temp_file_limit" => {
+            parse_pg_bytes(got) == parse_pg_bytes(want) && parse_pg_bytes(want).is_some()
+        }
+        "max_connections" | "max_parallel_workers" => got.trim() == want.trim(),
+        _ => false,
+    }
+}
+
+fn collect_gucs(ops: &dyn SystemOps) -> (serde_json::Value, bool) {
+    let sql = guc_show_sql();
+    let raw = match ops.run_helper(
+        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tA"],
+        Some(sql.as_bytes()),
+    ) {
+        Ok(s) => s,
+        Err(_) => {
+            return (serde_json::json!({}), false);
+        }
+    };
+    let mut got: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('|') {
+            got.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    let mut obj = serde_json::Map::new();
+    let mut all_ok = true;
+    for (name, want) in GUC_PINNED {
+        match got.get(*name) {
+            Some(v) if guc_matches(name, v, want) => {
+                obj.insert((*name).to_string(), serde_json::Value::String(v.clone()));
+            }
+            Some(v) => {
+                all_ok = false;
+                obj.insert((*name).to_string(), serde_json::Value::String(v.clone()));
+            }
+            None => {
+                all_ok = false;
+            }
+        }
+    }
+    if obj.len() != GUC_PINNED.len() {
+        all_ok = false;
+    }
+    (serde_json::Value::Object(obj), all_ok)
+}
+
 pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
     let baked = is_baked(ops);
     let active = ops.systemctl_query(&["is-active", PG_UNIT]);
-    let ping = ops
-        .run_helper(
-            &["psql", "-d", "postgres", "-tA"],
-            Some(b"SELECT 1;"),
-        );
+    let ping = ops.run_helper(&["psql", "-d", "postgres", "-tA"], Some(b"SELECT 1;"));
     let recorded_major: Option<i64> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -437,7 +659,57 @@ pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
         .ok()
         .flatten()
     };
-    let ok = baked && active == "active" && ping.is_ok();
+    let ram_unit = cluster_unit_name(ops, recorded_major);
+    let show = ops.systemctl_query(&[
+        "show",
+        &ram_unit,
+        "--property=MemoryCurrent,MemoryHigh,MemoryMax,MemoryAccounting",
+    ]);
+    let props = parse_systemctl_show(&show);
+    let current_bytes = props.get("MemoryCurrent").and_then(|s| parse_mem_bytes(s));
+    let high_bytes = props.get("MemoryHigh").and_then(|s| parse_mem_bytes(s));
+    let max_bytes = props.get("MemoryMax").and_then(|s| parse_mem_bytes(s));
+    let accounting = props
+        .get("MemoryAccounting")
+        .map(|s| s.eq_ignore_ascii_case("yes"))
+        == Some(true);
+    let dropin = dropin_present(ops);
+    let dropin_ok = dropin_matches_policy(ops);
+    let within_cap = match (current_bytes, max_bytes) {
+        (Some(c), Some(m)) => c <= m,
+        _ => false,
+    };
+    let ram_applied = dropin_ok && accounting && max_bytes.is_some();
+    let (gucs, gucs_ok) = if ping.is_ok() {
+        collect_gucs(ops)
+    } else {
+        (serde_json::json!({}), false)
+    };
+    let ok = baked && active == "active" && ping.is_ok() && ram_applied && gucs_ok && within_cap;
+    let hint = if ok {
+        serde_json::Value::Null
+    } else if !baked {
+        serde_json::Value::String(NOT_BAKED_HINT.into())
+    } else if !ram_applied {
+        serde_json::Value::String(
+            "Postgres RAM fence missing — re-run k2 db enable (MemoryHigh=25% MemoryMax=40% drop-in + GUC caps)"
+                .into(),
+        )
+    } else if !gucs_ok {
+        serde_json::Value::String(
+            "Postgres GUC caps are not pinned — re-run k2 db enable (work_mem/max_connections/timeouts)"
+                .into(),
+        )
+    } else if !within_cap {
+        serde_json::Value::String(
+            "Postgres RSS is at or above MemoryMax — OOM should kill Postgres only; check k2 db doctor --json"
+                .into(),
+        )
+    } else {
+        serde_json::Value::String(
+            "postgresql unit is not healthy — see k2 db status --health".into(),
+        )
+    };
     serde_json::json!({
         "ok": ok,
         "baked": baked,
@@ -445,12 +717,29 @@ pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
         "select1": ping.is_ok(),
         "installedMajor": recorded_major,
         "listen": "localhost",
-        "hint": if ok { serde_json::Value::Null } else {
-            serde_json::Value::String(
-                if !baked { NOT_BAKED_HINT.into() }
-                else { "postgresql unit is not healthy — see k2 db status --health".into() }
-            )
+        "ram": {
+            "unit": ram_unit,
+            "accounting": accounting,
+            "currentBytes": current_bytes,
+            "highBytes": high_bytes,
+            "maxBytes": max_bytes,
+            "high": RAM_MEMORY_HIGH,
+            "max": RAM_MEMORY_MAX,
+            "cpuWeight": RAM_CPU_WEIGHT,
+            "dropin": PG_RAM_DROPIN_PATH,
+            "templateDropin": PG_RAM_TEMPLATE_DROPIN_PATH,
+            "dropinPresent": dropin,
+            "dropinOk": dropin_ok,
+            "withinCap": within_cap,
+            "oomTarget": "postgres-only",
         },
+        "gucs": gucs,
+        "gucsOk": gucs_ok,
+        "gucsWant": GUC_PINNED
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        "hint": hint,
     })
 }
 
@@ -504,10 +793,43 @@ mod tests {
         assert_eq!(current_status().as_deref(), Some("running"));
         let rec = ops.recorded();
         assert!(
-            rec.iter().any(|l| l.contains("systemctl enable --now postgresql")),
+            rec.iter()
+                .any(|l| l.contains("systemctl enable --now postgresql")),
             "expected helper start: {rec:?}"
         );
+        assert!(
+            rec.iter().any(|l| l.contains("helper install-ram-fence")),
+            "enable must write the D29 drop-in via helper: {rec:?}"
+        );
+        assert!(
+            rec.iter().any(|l| l.contains("systemctl daemon-reload")),
+            "enable must daemon-reload after the drop-in: {rec:?}"
+        );
+        assert!(
+            rec.iter()
+                .any(|l| l.contains("systemctl restart postgresql")),
+            "enable must restart so MemoryMax attaches: {rec:?}"
+        );
         assert!(rec.iter().all(|l| !l.contains("apt")));
+        let files = ops.files.lock().unwrap_or_else(|p| p.into_inner());
+        let dropin = files
+            .get(crate::sql::sysops::PG_RAM_DROPIN_PATH)
+            .expect("wrapper drop-in written");
+        let dropin = std::str::from_utf8(dropin).expect("utf8 drop-in");
+        assert_eq!(dropin, crate::sql::sysops::ram_dropin());
+        let tmpl = files
+            .get(crate::sql::sysops::PG_RAM_TEMPLATE_DROPIN_PATH)
+            .expect("template drop-in written");
+        assert_eq!(std::str::from_utf8(tmpl).expect("utf8"), dropin);
+        assert!(
+            ops.pg
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .helper_sql
+                .iter()
+                .any(|s| s.contains("ALTER SYSTEM SET work_mem")),
+            "enable must pin GUCs via helper psql ALTER SYSTEM"
+        );
     }
 
     #[test]
@@ -574,5 +896,164 @@ mod tests {
             !hint.contains("k2 db expose"),
             "must not invent k2 db expose: {hint}"
         );
+    }
+
+    #[test]
+    fn guc_timeout_1min_matches_60s() {
+        assert!(guc_matches("statement_timeout", "1min", "60s"));
+        assert!(guc_matches("statement_timeout", "60000ms", "60s"));
+        assert!(!guc_matches("statement_timeout", "0", "60s"));
+        assert!(guc_matches("work_mem", "8192kB", "8MB"));
+        assert!(!guc_matches("max_connections", "100", "50"));
+    }
+
+    #[test]
+    fn ram_dropin_is_fraction_never_100_and_oom_postgres_only() {
+        let d = crate::sql::sysops::ram_dropin();
+        assert!(d.contains("MemoryAccounting=yes"), "{d}");
+        assert!(d.contains("MemoryHigh=25%"), "{d}");
+        assert!(d.contains("MemoryMax=40%"), "{d}");
+        assert!(d.contains("CPUWeight=50"), "{d}");
+        assert!(d.contains("OOMPolicy=kill"), "{d}");
+        assert!(!d.contains("100%"), "never cap at 100% of box RAM: {d}");
+        assert!(!d.contains("MemoryMax=infinity"), "{d}");
+        let conf = crate::sql::sysops::guc_conf();
+        assert!(conf.contains("shared_buffers = 128MB"), "{conf}");
+        assert!(conf.contains("work_mem = 8MB"), "{conf}");
+        assert!(conf.contains("max_connections = 50"), "{conf}");
+        assert!(conf.contains("max_parallel_workers = 2"), "{conf}");
+        assert!(conf.contains("statement_timeout = 60s"), "{conf}");
+        assert!(
+            conf.contains("idle_in_transaction_session_timeout = 60s"),
+            "{conf}"
+        );
+        assert!(conf.contains("temp_file_limit = 1GB"), "{conf}");
+        assert!(
+            !conf.to_ascii_lowercase().contains("25%"),
+            "shared_buffers must not be a RAM percentage: {conf}"
+        );
+    }
+
+    #[test]
+    fn helper_script_allowlists_ram_fence_and_daemon_reload() {
+        let helper = include_str!("../../../../scripts/k2-pg-helper");
+        assert!(helper.contains("install-ram-fence"), "{helper}");
+        assert!(helper.contains("daemon-reload"), "{helper}");
+        assert!(helper.contains("MemoryHigh=25%"), "{helper}");
+        assert!(helper.contains("MemoryMax=40%"), "{helper}");
+        assert!(helper.contains("OOMPolicy=kill"), "{helper}");
+        assert!(helper.contains("99-k2-ram.conf"), "{helper}");
+        assert!(helper.contains("work_mem = 8MB"), "{helper}");
+        assert!(
+            !helper.contains("100%"),
+            "helper drop-in must never be 100%: {helper}"
+        );
+        assert!(
+            helper.contains("psql -c is forbidden"),
+            "agent SQL must not ride argv: {helper}"
+        );
+        let dropin = crate::sql::sysops::ram_dropin();
+        assert!(
+            helper.contains(dropin),
+            "helper heredoc must match ram_dropin() exactly:\n{dropin:?}\n{helper}"
+        );
+        let provision = include_str!("../../../../scripts/provision-k2-server.sh");
+        assert!(
+            provision.contains("install-ram-fence"),
+            "bake --with-db must apply the RAM fence: {provision}"
+        );
+    }
+
+    #[test]
+    fn doctor_without_fence_is_not_ok() {
+        let _g = db_guard();
+        clean_row();
+        k2_core::db::init_for_tests();
+        let ops = FakeSystemOps::baked();
+        let v = doctor_with(&ops);
+        assert_eq!(v["baked"], true, "{v}");
+        assert_eq!(v["unit"], "active", "{v}");
+        assert_eq!(v["select1"], true, "{v}");
+        assert_eq!(v["ok"], false, "unfenced baked unit must fail doctor: {v}");
+        assert_eq!(v["ram"]["dropinPresent"], false, "{v}");
+        assert_eq!(v["ram"]["dropinOk"], false, "{v}");
+        assert_eq!(v["gucsOk"], false, "{v}");
+        assert_eq!(v["gucs"]["max_connections"], "100", "{v}");
+        assert_eq!(v["gucs"]["work_mem"], "4MB", "{v}");
+        let hint = v["hint"].as_str().expect("hint");
+        assert!(
+            hint.contains("RAM fence") || hint.contains("GUC"),
+            "hint must name the missing fence: {hint}"
+        );
+    }
+
+    #[test]
+    fn doctor_reports_rss_vs_cap_and_pinned_gucs() {
+        let _g = db_guard();
+        clean_row();
+        k2_core::db::init_for_tests();
+        let ops = FakeSystemOps::baked();
+        enable_with(&ops).expect("enable");
+        let v = doctor_with(&ops);
+        assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(v["ram"]["high"], "25%", "{v}");
+        assert_eq!(v["ram"]["max"], "40%", "{v}");
+        assert_eq!(v["ram"]["cpuWeight"], "50", "{v}");
+        assert_eq!(v["ram"]["oomTarget"], "postgres-only", "{v}");
+        assert_eq!(v["ram"]["dropinPresent"], true, "{v}");
+        assert_eq!(v["ram"]["dropinOk"], true, "{v}");
+        assert_eq!(v["ram"]["accounting"], true, "{v}");
+        assert_eq!(v["ram"]["currentBytes"], 268435456_i64, "{v}");
+        assert_eq!(v["ram"]["maxBytes"], 6871947673_i64, "{v}");
+        assert_eq!(v["ram"]["withinCap"], true, "{v}");
+        assert_eq!(
+            v["ram"]["unit"], "postgresql@16-main.service",
+            "RSS must come from the cluster unit, not the oneshot wrapper: {v}"
+        );
+        assert_eq!(v["gucsOk"], true, "{v}");
+        assert_eq!(v["gucs"]["shared_buffers"], "128MB", "{v}");
+        assert_eq!(v["gucs"]["work_mem"], "8MB", "{v}");
+        assert_eq!(v["gucs"]["max_connections"], "50", "{v}");
+        assert_eq!(v["gucs"]["max_parallel_workers"], "2", "{v}");
+        assert_eq!(v["gucs"]["statement_timeout"], "60s", "{v}");
+        assert_eq!(
+            v["gucs"]["idle_in_transaction_session_timeout"], "60s",
+            "{v}"
+        );
+        assert_eq!(v["gucs"]["temp_file_limit"], "1GB", "{v}");
+        assert_eq!(v["gucsWant"]["work_mem"], "8MB", "{v}");
+        assert_eq!(v["hint"], serde_json::Value::Null, "{v}");
+    }
+
+    #[test]
+    fn already_running_enable_still_applies_ram_fence() {
+        let _g = db_guard();
+        clean_row();
+        k2_core::db::init_for_tests();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) \
+                 VALUES (1, 'running', 16, 'localhost', 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let ops = FakeSystemOps::baked();
+        let v = enable_with(&ops).expect("re-enable");
+        assert_eq!(v["alreadyEnabled"], true, "{v}");
+        let rec = ops.recorded();
+        assert!(
+            rec.iter().any(|l| l.contains("helper install-ram-fence")),
+            "upgrade re-enable must still write the fence: {rec:?}"
+        );
+        assert!(
+            rec.iter().any(|l| l.contains("systemctl daemon-reload")),
+            "upgrade re-enable must daemon-reload: {rec:?}"
+        );
+        let d = doctor_with(&ops);
+        assert_eq!(d["ok"], true, "{d}");
+        assert_eq!(d["gucs"]["max_connections"], "50", "{d}");
     }
 }

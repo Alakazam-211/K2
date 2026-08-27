@@ -7,7 +7,6 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
-import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { Toggle } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
@@ -18,6 +17,7 @@ import {
   bindSqlRole,
   createSqlDatabase,
   dbTypeLabel,
+  formatSqlListen,
   disableSqlServer,
   enableSqlServer,
   fetchSqlDatabases,
@@ -345,7 +345,17 @@ function BindPanel({
           {busy ? 'Saving…' : 'Bind'}
         </button>
       </div>
-      {note && <p className="text-[10px] text-[var(--color-text-muted)]">{note}</p>}
+      {note && (
+        <p
+          className={`text-[10px] ${
+            note === 'Saved.'
+              ? 'text-[var(--color-text-muted)]'
+              : 'text-[var(--color-status-error-soft)]'
+          }`}
+        >
+          {note}
+        </p>
+      )}
     </div>
   )
 }
@@ -365,6 +375,7 @@ function ServerPanel({
   const [error, setError] = useState<string | null>(null)
   const notInstalled = status.state === 'not-installed'
   const stopped = status.state === 'disabled' || status.state === 'stopped'
+  const listenLine = formatSqlListen(status.listen, status.port)
 
   const doEnable = useCallback(async (): Promise<void> => {
     if (sample) return
@@ -421,14 +432,13 @@ function ServerPanel({
               </span>
             )}
           </div>
-          {status.listen && (
+          {listenLine && (
             <div className="flex items-center gap-3 px-3 py-2">
               <span className="text-[11px] text-[var(--color-text-secondary)] w-24 flex-shrink-0">
                 Listen
               </span>
               <span className="text-xs font-mono text-[var(--color-text-primary)]">
-                {status.listen}
-                {status.port != null ? `:${status.port}` : ''}
+                {listenLine}
               </span>
             </div>
           )}
@@ -534,6 +544,7 @@ export function DataSection(): React.JSX.Element {
   const [status, setStatus] = useState<SqlStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [databases, setDatabases] = useState<SqlDatabase[] | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection>({ kind: 'server' })
   const [revision, setRevision] = useState(0)
   const bump = useCallback(() => setRevision((r) => r + 1), [])
@@ -567,15 +578,20 @@ export function DataSection(): React.JSX.Element {
     if (supported === null) return
     if (!supported) {
       setDatabases(SAMPLE_DATABASES)
+      setListError(null)
       return
     }
     let cancelled = false
     fetchSqlDatabases()
       .then((rows) => {
-        if (!cancelled) setDatabases(rows)
+        if (cancelled) return
+        setDatabases(rows)
+        setListError(null)
       })
-      .catch(() => {
-        if (!cancelled) setDatabases([])
+      .catch((e) => {
+        if (cancelled) return
+        setDatabases([])
+        setListError(sqlErrorMessage(e))
       })
     return () => {
       cancelled = true
@@ -699,6 +715,10 @@ export function DataSection(): React.JSX.Element {
           <div className="flex-1 overflow-y-auto px-1 py-1">
             {databases === null ? (
               <p className="px-2 py-1 text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+            ) : listError ? (
+              <p className="px-2 py-1 text-[11px] text-[var(--color-status-error-soft)] break-words">
+                {listError}
+              </p>
             ) : databases.length === 0 ? (
               <p className="px-2 py-1 text-[11px] text-[var(--color-text-muted)] italic">
                 No databases yet.

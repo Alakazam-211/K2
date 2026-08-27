@@ -256,7 +256,13 @@ if [ "$WITH_DB" = 1 ]; then
 ${K2_RUN_USER} ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper
 SUDO
 	chmod 0440 /etc/sudoers.d/k2-pg-helper
-	log "Postgres sidecar baked (unit enabled, empty cluster, helper + sudoers)"
+	# D29: MemoryHigh/Max drop-in + GUC caps. Helper body is canned
+	# (daemon User=k2 cannot write systemd itself).
+	if [ -x /usr/local/libexec/k2-pg-helper ]; then
+		/usr/local/libexec/k2-pg-helper install-ram-fence
+		systemctl daemon-reload
+	fi
+	log "Postgres sidecar baked (unit enabled, empty cluster, helper + sudoers, RAM fence)"
 fi
 
 if [ "$BAKE_ONLY" = 1 ]; then

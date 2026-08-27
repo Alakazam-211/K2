@@ -24495,6 +24495,26 @@ elif verb == "revoke":
     print("revoked %s from %s" % (d.get("name"), d.get("projectId")))
 elif verb == "bind":
     print("bind role: %s" % d.get("bindRole"))
+elif verb == "doctor":
+    print("ok:       %s" % d.get("ok"))
+    print("baked:    %s" % d.get("baked"))
+    print("unit:     %s" % d.get("unit"))
+    print("select1:  %s" % d.get("select1"))
+    ram = d.get("ram") or {}
+    cur = ram.get("currentBytes")
+    mx = ram.get("maxBytes")
+    print("rss:      %s / %s  (MemoryHigh=%s MemoryMax=%s withinCap=%s)" % (
+        cur, mx, ram.get("high"), ram.get("max"), ram.get("withinCap")))
+    print("ram unit: %s  oom=%s  dropinOk=%s" % (
+        ram.get("unit"), ram.get("oomTarget"), ram.get("dropinOk")))
+    gucs = d.get("gucs") or {}
+    print("gucsOk:   %s" % d.get("gucsOk"))
+    for k in ("shared_buffers", "work_mem", "max_connections", "max_parallel_workers",
+              "statement_timeout", "idle_in_transaction_session_timeout", "temp_file_limit"):
+        if k in gucs:
+            print("  %s = %s" % (k, gucs.get(k)))
+    if d.get("hint"):
+        print("hint:     %s" % d.get("hint"))
 else:
     print(dumps(d))
 sys.exit(0)
@@ -24509,7 +24529,7 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
   status [--health] [--json]     supported, state, pg major, listen, port
   enable [--json]                catalog + start unit if baked (--bake --with-db)
   disable [--json]               stop unit, keep PGDATA
-  doctor [--json]                disk/listen/SELECT 1
+  doctor [--json]                RSS vs MemoryMax + GUC caps (work_mem, max_connections, …)
   uninstall [--json]             drop catalog row + stop unit
   bind --role <pg_role> [--db …] assistant PG role (default ws_<id>_agent; no secrets)
 

@@ -22,6 +22,80 @@ pub const PG_UNIT_PATHS: &[&str] = &[
     "/usr/lib/systemd/system/postgresql.service",
 ];
 
+/// Distro-owned unit — we DROP-IN, we never rewrite postgresql.service.
+/// Template drop-in is load-bearing on Debian/Ubuntu: `postgresql.service`
+/// is a oneshot wrapper; the postmaster lives in `postgresql@.service`.
+pub const PG_RAM_DROPIN_PATH: &str = "/etc/systemd/system/postgresql.service.d/k2-ram.conf";
+pub const PG_RAM_TEMPLATE_DROPIN_PATH: &str =
+    "/etc/systemd/system/postgresql@.service.d/k2-ram.conf";
+
+/// D29 OS fence — fraction of box RAM, never 100%. Leaves the daemon + ≥1 agent.
+pub const RAM_MEMORY_HIGH: &str = "25%";
+pub const RAM_MEMORY_MAX: &str = "40%";
+pub const RAM_CPU_WEIGHT: &str = "50";
+
+/// systemd drop-in body (D29). `OOMPolicy=kill` = this cgroup only.
+/// Must match `scripts/k2-pg-helper` `install-ram-fence` byte-for-byte
+/// (no indent — rust `\` continuations would keep leading spaces).
+pub fn ram_dropin() -> &'static str {
+    "[Service]\nMemoryAccounting=yes\nMemoryHigh=25%\nMemoryMax=40%\nCPUWeight=50\nOOMPolicy=kill\n"
+}
+
+/// Engine fence (D29). Modest shared_buffers — not 25% of RAM.
+/// 15 GB→4 GB is usually `work_mem × connections × hash/sort`.
+pub const GUC_PINNED: &[(&str, &str)] = &[
+    ("shared_buffers", "128MB"),
+    ("work_mem", "8MB"),
+    ("max_connections", "50"),
+    ("max_parallel_workers", "2"),
+    ("statement_timeout", "60s"),
+    ("idle_in_transaction_session_timeout", "60s"),
+    ("temp_file_limit", "1GB"),
+];
+
+#[cfg(test)]
+pub fn guc_conf() -> &'static str {
+    "# K2 D29 RAM fence — one query must not explode host RAM.\n\
+     shared_buffers = 128MB\n\
+     work_mem = 8MB\n\
+     max_connections = 50\n\
+     max_parallel_workers = 2\n\
+     max_parallel_workers_per_gather = 1\n\
+     statement_timeout = 60s\n\
+     idle_in_transaction_session_timeout = 60s\n\
+     temp_file_limit = 1GB\n"
+}
+
+/// ALTER SYSTEM block applied via helper `psql` (stdin, never `-c`).
+pub fn pin_gucs_sql() -> String {
+    let mut sql = String::new();
+    for (name, value) in GUC_PINNED {
+        sql.push_str("ALTER SYSTEM SET ");
+        sql.push_str(name);
+        sql.push_str(" = '");
+        sql.push_str(value);
+        sql.push_str("';\n");
+    }
+    sql.push_str("SELECT pg_reload_conf();\n");
+    sql
+}
+
+/// `SELECT name, current_setting(name)` for the D29 GUC set.
+pub fn guc_show_sql() -> String {
+    let mut sql = String::from("SELECT name, current_setting(name) FROM (VALUES ");
+    for (i, (name, _)) in GUC_PINNED.iter().enumerate() {
+        if i > 0 {
+            sql.push_str(", ");
+        }
+        sql.push('(');
+        sql.push('\'');
+        sql.push_str(name);
+        sql.push_str("')");
+    }
+    sql.push_str(") AS t(name);\n");
+    sql
+}
+
 #[allow(dead_code)]
 pub trait SystemOps: Send + Sync {
     fn write_file(&self, path: &str, contents: &[u8], mode: u32) -> Result<(), String>;
@@ -33,8 +107,9 @@ pub trait SystemOps: Send + Sync {
     fn systemctl(&self, args: &[&str]) -> Result<String, String>;
     /// `systemctl` where non-zero is an answer (`is-active` exits 3).
     fn systemctl_query(&self, args: &[&str]) -> String;
-    /// Privileged helper (sudoers stub). `args[0]` is `systemctl` or `psql`.
-    /// Never pass agent SQL — callers construct CREATE DATABASE/ROLE only.
+    /// Privileged helper (sudoers stub). `args[0]` is `systemctl`, `psql`,
+    /// or `install-ram-fence`. Never pass agent SQL — callers construct
+    /// CREATE DATABASE/ROLE / ALTER SYSTEM only.
     fn run_helper(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, String>;
     /// Unprivileged client tool (`psql` / `pg_dump` / `pg_restore`) as a
     /// workspace role on loopback. Env is `KEY=VAL` pairs (PGPASSWORD).
@@ -177,7 +252,8 @@ impl SystemOps for RealSystemOps {
             let mut child = c.spawn().map_err(|e| format!("{cmd}: {e}"))?;
             if let Some(mut sin) = child.stdin.take() {
                 use std::io::Write;
-                sin.write_all(bytes).map_err(|e| format!("{cmd} stdin: {e}"))?;
+                sin.write_all(bytes)
+                    .map_err(|e| format!("{cmd} stdin: {e}"))?;
             }
             child
                 .wait_with_output()
@@ -205,7 +281,6 @@ impl SystemOps for RealSystemOps {
 /// In-memory Postgres stand-in used by [`FakeSystemOps`]. Unit tests
 /// never talk to a live cluster.
 #[cfg(test)]
-#[derive(Default)]
 pub struct FakePg {
     pub dbs: Vec<String>,
     pub roles: Vec<String>,
@@ -215,6 +290,40 @@ pub struct FakePg {
     pub migrations: HashMap<String, Vec<(String, String)>>,
     pub store: HashMap<(String, String), HashMap<String, serde_json::Value>>,
     pub dump_marker: Vec<u8>,
+    /// Live GUC map (`current_setting`). Defaults look like stock Postgres
+    /// so doctor fails loudly until `install-ram-fence` / ALTER SYSTEM pins.
+    pub gucs: HashMap<String, String>,
+}
+
+#[cfg(test)]
+impl Default for FakePg {
+    fn default() -> Self {
+        let mut gucs = HashMap::new();
+        gucs.insert("shared_buffers".into(), "128MB".into());
+        gucs.insert("work_mem".into(), "4MB".into());
+        gucs.insert("max_connections".into(), "100".into());
+        gucs.insert("max_parallel_workers".into(), "8".into());
+        gucs.insert("statement_timeout".into(), "0".into());
+        gucs.insert("idle_in_transaction_session_timeout".into(), "0".into());
+        gucs.insert("temp_file_limit".into(), "-1".into());
+        Self {
+            dbs: Vec::new(),
+            roles: Vec::new(),
+            role_sql: Vec::new(),
+            helper_sql: Vec::new(),
+            migrations: HashMap::new(),
+            store: HashMap::new(),
+            dump_marker: Vec::new(),
+            gucs,
+        }
+    }
+}
+
+#[cfg(test)]
+pub fn pin_k2_gucs(gucs: &mut HashMap<String, String>) {
+    for (k, v) in GUC_PINNED {
+        gucs.insert((*k).to_string(), (*v).to_string());
+    }
 }
 
 #[cfg(test)]
@@ -242,10 +351,36 @@ impl FakePg {
             self.role_sql.push(trimmed.to_string());
             return Ok(String::new());
         }
-        if trimmed.to_ascii_uppercase().contains("SHOW SERVER_VERSION_NUM") {
+        let up = trimmed.to_ascii_uppercase();
+        if up.contains("ALTER SYSTEM SET") {
+            for stmt in trimmed.split(';') {
+                let s = stmt.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                let su = s.to_ascii_uppercase();
+                if !su.contains("ALTER SYSTEM SET") {
+                    continue;
+                }
+                if let Some((name, value)) = parse_alter_system(s) {
+                    self.gucs.insert(name, value);
+                }
+            }
+            return Ok(String::new());
+        }
+        if up.contains("CURRENT_SETTING") || up.contains("PG_SETTINGS") {
+            let mut lines = Vec::new();
+            for (name, _) in GUC_PINNED {
+                if let Some(v) = self.gucs.get(*name) {
+                    lines.push(format!("{name}|{v}"));
+                }
+            }
+            return Ok(lines.join("\n"));
+        }
+        if up.contains("SHOW SERVER_VERSION_NUM") {
             return Ok("160003".into());
         }
-        if trimmed.to_ascii_uppercase().contains("SELECT 1") {
+        if up.contains("SELECT 1") {
             return Ok("1".into());
         }
         if trimmed.to_ascii_uppercase().contains("PG_DATABASE_SIZE") {
@@ -298,7 +433,10 @@ impl FakePg {
         if up.contains("CREATE TABLE") {
             return Ok(String::new());
         }
-        if up.starts_with("INSERT") || up.starts_with("UPDATE") || (up.contains("ON CONFLICT") && up.contains("INSERT")) {
+        if up.starts_with("INSERT")
+            || up.starts_with("UPDATE")
+            || (up.contains("ON CONFLICT") && up.contains("INSERT"))
+        {
             let coll = extract_named(sql, "collection").or_else(|| nth_sql_string(sql, 0));
             let id = extract_named(sql, "id").or_else(|| nth_sql_string(sql, 1));
             let doc = extract_jsonb(sql);
@@ -323,7 +461,11 @@ impl FakePg {
                 }
                 return Ok(String::new());
             }
-            let map = self.store.get(&(db.to_string(), coll)).cloned().unwrap_or_default();
+            let map = self
+                .store
+                .get(&(db.to_string(), coll))
+                .cloned()
+                .unwrap_or_default();
             let mut rows = Vec::new();
             for (id, doc) in map {
                 rows.push(serde_json::json!({"id": id, "doc": doc}));
@@ -406,6 +548,32 @@ fn extract_jsonb(sql: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&sql[start..=end]).ok()
 }
 
+#[cfg(test)]
+fn parse_alter_system(stmt: &str) -> Option<(String, String)> {
+    let s = stmt.trim();
+    let up = s.to_ascii_uppercase();
+    let idx = up.find("ALTER SYSTEM SET")?;
+    let rest = s[idx + "ALTER SYSTEM SET".len()..].trim();
+    let rest_up = rest.to_ascii_uppercase();
+    let sep = rest_up.find(" TO ").or_else(|| rest.find('='))?;
+    let name = rest[..sep].trim().to_ascii_lowercase();
+    if name.is_empty() {
+        return None;
+    }
+    let mut val = rest[sep..].trim();
+    if let Some(stripped) = val.strip_prefix('=') {
+        val = stripped.trim();
+    } else if val.len() >= 2 && val[..2].eq_ignore_ascii_case("to") {
+        val = val[2..].trim();
+    }
+    let value = val.trim_matches(|c: char| c == '\'' || c == '"' || c == ';');
+    if name.is_empty() || value.is_empty() {
+        None
+    } else {
+        Some((name, value.to_string()))
+    }
+}
+
 /// Recording fake: every effect appends one line to `ops`. ZERO real
 /// systemd / apt / network. Optional in-memory Postgres for create /
 /// migrate / store unit tests.
@@ -437,21 +605,37 @@ impl Default for FakeSystemOps {
 #[cfg(test)]
 impl FakeSystemOps {
     pub fn record(&self, line: String) {
-        self.ops.lock().unwrap_or_else(|p| p.into_inner()).push(line);
+        self.ops
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(line);
     }
     pub fn recorded(&self) -> Vec<String> {
         self.ops.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
     pub fn baked() -> Self {
+        let mut query_answers = HashMap::new();
+        query_answers.insert("is-active postgresql".into(), "active".into());
+        query_answers.insert(
+            "list-units --type=service --state=active --no-legend --plain postgresql@*".into(),
+            "postgresql@16-main.service loaded active running PostgreSQL Cluster 16-main".into(),
+        );
+        query_answers.insert(
+            "show postgresql@16-main.service --property=MemoryCurrent,MemoryHigh,MemoryMax,MemoryAccounting".into(),
+            "MemoryCurrent=268435456\nMemoryHigh=4294967296\nMemoryMax=6871947673\nMemoryAccounting=yes".into(),
+        );
+        query_answers.insert(
+            "show postgresql --property=MemoryCurrent,MemoryHigh,MemoryMax,MemoryAccounting".into(),
+            "MemoryCurrent=0\nMemoryHigh=4294967296\nMemoryMax=6871947673\nMemoryAccounting=yes"
+                .into(),
+        );
         Self {
             existing_paths: vec![
                 PSQL_PATH.to_string(),
                 PG_UNIT_PATHS[0].to_string(),
                 HELPER_PATH.to_string(),
             ],
-            query_answers: [("is-active postgresql".to_string(), "active".to_string())]
-                .into_iter()
-                .collect(),
+            query_answers,
             ..Self::default()
         }
     }
@@ -517,6 +701,13 @@ impl SystemOps for FakeSystemOps {
             "helper {joined} stdin={}",
             stdin.map(|s| s.len()).unwrap_or(0)
         ));
+        if args.first().copied() == Some("install-ram-fence") {
+            let body = ram_dropin().as_bytes();
+            self.write_file(PG_RAM_DROPIN_PATH, body, 0o644)?;
+            self.write_file(PG_RAM_TEMPLATE_DROPIN_PATH, body, 0o644)?;
+            pin_k2_gucs(&mut self.pg.lock().unwrap_or_else(|p| p.into_inner()).gucs);
+            return Ok(String::new());
+        }
         if args.first().copied() == Some("systemctl") {
             if args.get(1) == Some(&"is-active") {
                 let key = args[1..].join(" ");
@@ -579,14 +770,12 @@ impl SystemOps for FakeSystemOps {
             .find(|w| w[0] == "-d")
             .map(|w| w[1].to_string());
         let mut pg = self.pg.lock().unwrap_or_else(|p| p.into_inner());
-        pg.exec_sql(db.as_deref(), &sql)
-            .map(|s| s.into_bytes())
+        pg.exec_sql(db.as_deref(), &sql).map(|s| s.into_bytes())
     }
     fn sleep_ms(&self, _ms: u64) {}
 }
 
 /// Distro packages + unit present (bake `--with-db`). Never apt-get.
 pub fn is_baked(ops: &dyn SystemOps) -> bool {
-    ops.path_exists(PSQL_PATH)
-        && PG_UNIT_PATHS.iter().any(|p| ops.path_exists(p))
+    ops.path_exists(PSQL_PATH) && PG_UNIT_PATHS.iter().any(|p| ops.path_exists(p))
 }

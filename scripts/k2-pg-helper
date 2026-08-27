@@ -1,13 +1,17 @@
 #!/bin/sh
 # k2-pg-helper — privileged Postgres sidecar helper
-# (prd-workspace-data-sidecar-v1 D11).
+# (prd-workspace-data-sidecar-v1 D11 / D29).
 #
 # Argv allowlist only:
 #   systemctl start|stop|is-active|enable|disable|restart postgresql*
+#   systemctl daemon-reload
+#   install-ram-fence   (canned systemd drop-in + pg conf.d; no stdin)
 #   psql  (as the postgres OS user; SQL on stdin, never from argv -c)
 #
 # The k2 daemon (User=k2) invokes this via sudo. NEVER pass agent SQL
-# through this helper — the daemon constructs CREATE DATABASE/ROLE only.
+# through this helper — the daemon constructs CREATE DATABASE/ROLE /
+# ALTER SYSTEM only. Drop-in body is canned here so a compromised
+# daemon cannot inject an ExecStart hijack.
 #
 # Suggested sudoers stub (installed by provision-k2-server.sh --with-db):
 #   k2 ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper
@@ -23,6 +27,15 @@ case "$cmd" in
 		shift || true
 		now=""
 		unit=""
+		case "$sub" in
+			daemon-reload)
+				[ $# -eq 0 ] || {
+					echo "k2-pg-helper: daemon-reload takes no args" >&2
+					exit 2
+				}
+				exec systemctl daemon-reload
+				;;
+		esac
 		for a in "$@"; do
 			case "$a" in
 				--now) now="--now" ;;
@@ -48,6 +61,43 @@ case "$cmd" in
 				exit 2
 				;;
 		esac
+		;;
+	install-ram-fence)
+		# Canned D29 fence. No extra argv, stdin ignored.
+		[ $# -eq 0 ] || {
+			echo "k2-pg-helper: install-ram-fence takes no args" >&2
+			exit 2
+		}
+		umask 022
+		mkdir -p /etc/systemd/system/postgresql.service.d
+		mkdir -p /etc/systemd/system/postgresql@.service.d
+		# postgresql.service is a Debian oneshot wrapper; the postmaster
+		# is postgresql@.service. Write BOTH so OOM kills Postgres only.
+		cat > /etc/systemd/system/postgresql.service.d/k2-ram.conf <<'EOF'
+[Service]
+MemoryAccounting=yes
+MemoryHigh=25%
+MemoryMax=40%
+CPUWeight=50
+OOMPolicy=kill
+EOF
+		cp /etc/systemd/system/postgresql.service.d/k2-ram.conf \
+			/etc/systemd/system/postgresql@.service.d/k2-ram.conf
+		for confd in /etc/postgresql/*/main/conf.d; do
+			[ -d "$confd" ] || continue
+			cat > "$confd/99-k2-ram.conf" <<'EOF'
+# K2 D29 RAM fence — one query must not explode host RAM.
+shared_buffers = 128MB
+work_mem = 8MB
+max_connections = 50
+max_parallel_workers = 2
+max_parallel_workers_per_gather = 1
+statement_timeout = 60s
+idle_in_transaction_session_timeout = 60s
+temp_file_limit = 1GB
+EOF
+		done
+		exit 0
 		;;
 	psql)
 		# Remaining args are passed to psql (e.g. -d postgres -v ON_ERROR_STOP=1 -tA).

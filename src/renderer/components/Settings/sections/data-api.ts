@@ -76,6 +76,14 @@ export function dbTypeLabel(row: Pick<SqlDatabase, 'type' | 'documents'>): strin
   return row.type
 }
 
+/** Loopback listen line. Catalog `listen` is `localhost` or `localhost:<port>` — never append port twice. */
+export function formatSqlListen(listen: string | null | undefined, port?: number): string | null {
+  if (!listen) return null
+  if (listen.includes(':')) return listen
+  if (port != null) return `${listen}:${port}`
+  return listen
+}
+
 export async function fetchSqlStatus(): Promise<SqlStatus> {
   return daemonCliGet<SqlStatus>('db/status')
 }

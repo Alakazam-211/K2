@@ -12,6 +12,7 @@ import {
   trustedPeers,
   fetchPeerRoster,
   formatAgentHost,
+  federatedPeerHost,
   type RemoteConnectionEntry,
   type FederationPeer,
   type RosterAgent,
@@ -3210,9 +3211,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
 
   const availableRosterAgents = useMemo(() => {
     if (!selectedPeer) return []
-    const host = selectedPeer.subdomain
-      ? `${selectedPeer.subdomain}.k2.dev`
-      : ''
+    const host = federatedPeerHost(selectedPeer)
     if (!host) return rosterAgents
     return rosterAgents.filter((a) => {
       const addr = formatAgentHost(a.agent, host).toLowerCase()
@@ -3256,11 +3255,12 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
 
   const handleAddFederated = useCallback(
     async (agent: RosterAgent) => {
-      if (!sourcePath || !selectedPeer?.subdomain) {
-        setRemoteError('Missing workspace path or peer subdomain — cannot add federated connection.')
+      const peerHost = selectedPeer ? federatedPeerHost(selectedPeer) : ''
+      if (!sourcePath || !peerHost) {
+        setRemoteError('Missing workspace path or peer host — cannot add federated connection.')
         return
       }
-      const target = formatAgentHost(agent.agent, `${selectedPeer.subdomain}.k2.dev`)
+      const target = formatAgentHost(agent.agent, peerHost)
       setAdding(true)
       setRemoteError(null)
       try {
@@ -3496,9 +3496,10 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                   fullWidth
                   options={fedPeers.map((p) => ({
                     value: p.fingerprint,
-                    label: p.subdomain
-                      ? `${peerLabel(p)} (${p.subdomain}.k2.dev)`
-                      : peerLabel(p),
+                    label: (() => {
+                      const host = federatedPeerHost(p)
+                      return host ? `${peerLabel(p)} (${host})` : peerLabel(p)
+                    })(),
                   }))}
                   onChange={(fp) => {
                     setSelectedPeerFp(fp)
@@ -3512,7 +3513,9 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
               <div className="max-h-[220px] overflow-y-auto">
                 <div className="px-3 py-1.5 text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
                   Agents on {selectedPeer ? peerLabel(selectedPeer) : 'server'} you can connect to
-                  {selectedPeer?.subdomain ? ` · ${selectedPeer.subdomain}.k2.dev` : ''}
+                  {selectedPeer && federatedPeerHost(selectedPeer)
+                    ? ` · ${federatedPeerHost(selectedPeer)}`
+                    : ''}
                 </div>
                 {rosterLoading ? (
                   <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">Loading agents…</div>
@@ -3526,7 +3529,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                     <button
                       key={`${a.workspace_id}:${a.agent}`}
                       type="button"
-                      disabled={adding || !selectedPeer?.subdomain}
+                      disabled={adding || !selectedPeer || !federatedPeerHost(selectedPeer)}
                       onClick={() => void handleAddFederated(a)}
                       className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors no-drag cursor-pointer disabled:opacity-50 border-b border-[var(--color-border)] last:border-b-0"
                     >

@@ -37,6 +37,8 @@ import {
   listRemoteConnections,
   getPubkey,
   peerMatchesHostname,
+  federatedHostFromSubdomain,
+  federatedPeerHost,
   type FederationPeer,
 } from '@/lib/federation'
 
@@ -221,6 +223,30 @@ describe('peerMatchesHostname', () => {
   })
 })
 
+describe('federatedHostFromSubdomain / federatedPeerHost', () => {
+  it('suffixes Connect labels only — never LAN IP:port.k2.dev', () => {
+    expect(federatedHostFromSubdomain('rosson')).toBe('rosson.k2.dev')
+    expect(federatedHostFromSubdomain('rpm.k2.dev')).toBe('rpm.k2.dev')
+    expect(federatedHostFromSubdomain('192.168.1.50:38471')).toBe('192.168.1.50:38471')
+    expect(federatedHostFromSubdomain('10.2.40.28:38471.k2.dev')).toBe('10.2.40.28:38471')
+    expect(federatedHostFromSubdomain('box.ts.net')).toBe('box.ts.net')
+    expect(federatedHostFromSubdomain('')).toBe('')
+  })
+
+  it('prefers peer base_url host:port over subdomain.k2.dev', () => {
+    expect(
+      federatedPeerHost({
+        subdomain: '192.168.1.50:38471',
+        base_url: 'http://192.168.1.50:38471',
+      }),
+    ).toBe('192.168.1.50:38471')
+    expect(federatedPeerHost({ subdomain: 'rpm', base_url: '' })).toBe('rpm.k2.dev')
+    expect(
+      federatedPeerHost({ subdomain: 'rpm', base_url: 'https://rpm.k2.dev' }),
+    ).toBe('rpm.k2.dev')
+  })
+})
+
 describe('autoPairWithHost', () => {
   beforeEach(() => {
     hosts = signedInRemote()
@@ -370,6 +396,61 @@ describe('addRemoteConnection', () => {
     await expect(addRemoteConnection('/Users/me/ws', 'not-an-address')).rejects.toThrow(
       /not a valid remote agent address/i,
     )
+  })
+
+  it('adds a LAN agent::IP:port against a saved hostname+port — no .k2.dev', async () => {
+    hosts = [
+      {
+        id: 'lan1',
+        label: 'LAN box',
+        hostname: '192.168.1.50',
+        port: 38471,
+        secure: false,
+        token: 'LANTOK',
+        remember: true,
+        lastConnectedAt: null,
+      },
+    ]
+    const rec = installFetch({
+      localPeers: [],
+      remotePeers: [],
+      localSubdomain: '',
+      localBaseUrl: 'http://192.168.1.40:38471',
+    })
+    const res = await addRemoteConnection('/Users/me/ws', 'ai::192.168.1.50:38471')
+    expect(res.reverseWarning).toBeNull()
+    const forward = rec.find(
+      (r) => r.url.startsWith(LOCAL_BASE) && r.url.includes('/cli/connections'),
+    )
+    expect(forward).toBeDefined()
+    const u = new URL(forward!.url)
+    expect(u.searchParams.get('target')).toBe('ai::192.168.1.50:38471')
+    expect(u.searchParams.get('target')).not.toMatch(/k2\.dev/)
+    expect(rec.some((r) => r.url.includes('38471.k2.dev'))).toBe(false)
+  })
+
+  it('still finds a saved LAN server if UI glued .k2.dev onto IP:port', async () => {
+    hosts = [
+      {
+        id: 'lan1',
+        label: 'LAN box',
+        hostname: '10.2.40.28',
+        port: 38471,
+        secure: false,
+        token: 'LANTOK',
+        remember: true,
+        lastConnectedAt: null,
+      },
+    ]
+    installFetch({
+      localPeers: [],
+      remotePeers: [],
+      localSubdomain: '',
+      localBaseUrl: 'http://192.168.1.40:38471',
+    })
+    await expect(
+      autoPairWithHost('10.2.40.28:38471.k2.dev'),
+    ).resolves.toBeUndefined()
   })
 })
 

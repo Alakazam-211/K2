@@ -274,10 +274,7 @@ async function activeCreds(): Promise<DaemonCreds> {
  * LOUD with an actionable message when the host is unknown or has no token.
  */
 async function remoteCreds(host: string): Promise<DaemonCreds> {
-  const wanted = host.trim().toLowerCase()
-  const match = useConnectHostStore
-    .getState()
-    .hosts.find((h) => h.hostname.trim().toLowerCase() === wanted)
+  const match = findSavedHost(host)
   if (!match) {
     throw new Error(
       `"${host}" is not a saved server. Add it under Settings → Connections and sign in first.`,
@@ -402,16 +399,78 @@ async function pairAndConfirm(
   })
 }
 
+/** Strip a leftover `.k2.dev` glued onto a LAN IPv4[:port] (`10.2.40.28:38471.k2.dev`).
+ *  Real Connect hosts (`rpm.k2.dev`) stay intact. */
+function stripAccidentalLanK2Dev(host: string): string {
+  const h = host.trim()
+  const SUFFIX = '.k2.dev'
+  if (!h.toLowerCase().endsWith(SUFFIX)) return h
+  const stem = h.slice(0, h.length - SUFFIX.length)
+  if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(stem)) return stem
+  return h
+}
+
+/** Saved address-book authority (`rpm.k2.dev`, `192.168.1.50:38471`). */
+function savedAuthority(h: { hostname: string; port: number; secure: boolean }): string {
+  const name = h.hostname.trim().toLowerCase()
+  const omit = (h.secure && h.port === 443) || (!h.secure && h.port === 80)
+  return omit ? name : `${name}:${h.port}`
+}
+
+/** Match a connection host against the address book: hostname, or `hostname:port`. */
+function findSavedHost(host: string) {
+  const raw = stripAccidentalLanK2Dev(host).trim().toLowerCase()
+  if (!raw) return undefined
+  const hosts = useConnectHostStore.getState().hosts
+  const byName = hosts.find((h) => h.hostname.trim().toLowerCase() === raw)
+  if (byName) return byName
+  const byAuth = hosts.find((h) => savedAuthority(h) === raw)
+  if (byAuth) return byAuth
+  const keyed = hostKey(raw)
+  return hosts.find((h) => {
+    const name = h.hostname.trim().toLowerCase()
+    if (keyed !== name) return false
+    const colon = raw.lastIndexOf(':')
+    if (colon <= 0) return true
+    const portStr = raw.slice(colon + 1)
+    return /^\d+$/.test(portStr) && h.port === Number(portStr)
+  })
+}
+
 /** A peer's pinned subdomain such that `<subdomain>.k2.dev === host`. Deriving
  *  it from the typed host (strip the `.k2.dev` zone) keeps the daemon-side
  *  send-gate — which reconstructs `<agent>::<subdomain>.k2.dev` — matching the
  *  literal `agent::host` we record. Off-zone hosts fall back to the daemon's
- *  self-reported subdomain (then the raw host). */
+ *  self-reported subdomain (then the raw host). LAN IPv4:port stays as-is. */
 function subdomainForHost(host: string, reported: string): string {
   const SUFFIX = '.k2.dev'
-  const h = host.trim()
+  const h = stripAccidentalLanK2Dev(host).trim()
   if (h.toLowerCase().endsWith(SUFFIX)) return h.slice(0, h.length - SUFFIX.length)
   return reported || h
+}
+
+/**
+ * Host used in `agent::host` for a peer pin. Connect labels (`rosson`) get
+ * `.k2.dev`. LAN `IP:port` / dotted hosts / already-`*.k2.dev` stay as stored.
+ * Never produces `10.2.40.28:38471.k2.dev`.
+ */
+export function federatedHostFromSubdomain(subdomain: string): string {
+  const sub = stripAccidentalLanK2Dev(subdomain).trim()
+  if (!sub) return ''
+  if (sub.includes('.') || sub.includes(':') || isK2DevHostname(sub)) return sub
+  return `${sub}.k2.dev`
+}
+
+/** Dial / address-book host for a pinned peer. Prefer `base_url`, else subdomain. */
+export function federatedPeerHost(
+  peer: Pick<FederationPeer, 'subdomain' | 'base_url' | 'baseUrl'>,
+): string {
+  const base = (peer.base_url || peer.baseUrl || '').trim()
+  if (base) {
+    const hp = hostPortFromUrl(base)
+    if (hp && !isLoopbackHost(hp)) return hp
+  }
+  return federatedHostFromSubdomain(peer.subdomain || '')
 }
 
 /** Whether the RHS of a 2-part `::` address looks like a network host. */
@@ -452,7 +511,7 @@ function advertisedHostPort(creds: DaemonCreds, pub: FederationPubkey): string |
     const hp = hostPortFromUrl(fromPub)
     if (hp && !isLoopbackHost(hp)) return hp
   }
-  if ((pub.subdomain || '').trim()) return `${pub.subdomain.trim()}.k2.dev`
+  if ((pub.subdomain || '').trim()) return federatedHostFromSubdomain(pub.subdomain)
   try {
     const u = new URL(creds.base)
     if (isLoopbackHost(u.hostname) || isK2DevHostname(u.hostname)) {
@@ -515,9 +574,7 @@ export async function autoPairWithHost(host: string): Promise<void> {
     throw new Error(`${lead} (${inner})`)
   })
 
-  const saved = useConnectHostStore
-    .getState()
-    .hosts.find((h) => h.hostname.trim().toLowerCase() === host.trim().toLowerCase())
+  const saved = findSavedHost(host)
   const remoteSavedBase = saved ? savedHostBaseUrl(saved) : ''
   const remoteIsLan = remoteSavedBase.startsWith('http://') || (saved ? !saved.secure : false)
   const localLanUrl = advertisedLanBaseUrl(localC, localPub)

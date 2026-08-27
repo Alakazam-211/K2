@@ -53,6 +53,7 @@ import {
 } from '@/lib/host-ops'
 import {
   autoPairWithHost,
+  federatedPeerHost,
   isTrustedPeerHost,
   listFederationPeers,
   savedHostBaseUrl,
@@ -584,11 +585,7 @@ function ActiveHostPeersPanel({
               <div className="text-[10px] text-[var(--color-text-muted)] font-mono truncate">
                 {p.base_url || p.baseUrl
                   ? (p.base_url || p.baseUrl)
-                  : p.subdomain
-                    ? p.subdomain.includes('.') || p.subdomain.includes(':')
-                      ? p.subdomain
-                      : `${p.subdomain}.k2.dev`
-                    : p.fingerprint.slice(0, 24) + '…'}
+                  : federatedPeerHost(p) || p.fingerprint.slice(0, 24) + '…'}
               </div>
             </div>
           ))}

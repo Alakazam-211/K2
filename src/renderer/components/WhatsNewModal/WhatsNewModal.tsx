@@ -4,6 +4,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { isAirgap } from '@/lib/airgap'
 import { DialogScrim, Surface } from '@/components/ui'
 import Markdown from '../Markdown/Markdown'
+import k2Logo from '../../assets/k2-logo.png'
 
 const GITHUB_REPO_URL = 'https://github.com/Alakazam-211/K2'
 
@@ -513,18 +514,14 @@ function GithubStarDrawer(): React.JSX.Element {
           "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif",
       }}
     >
-      <span
+      <img
+        src={k2Logo}
+        alt=""
+        width={28}
+        height={28}
         aria-hidden="true"
-        style={{
-          color: 'var(--color-accent, #4a9eff)',
-          display: 'flex',
-          lineHeight: 0,
-        }}
-      >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 2.5l2.76 6.05 6.6.72-4.92 4.5 1.36 6.48L12 16.9 6.2 20.25l1.36-6.48-4.92-4.5 6.6-.72L12 2.5z" />
-        </svg>
-      </span>
+        style={{ borderRadius: 6, display: 'block' }}
+      />
       <div
         style={{
           fontSize: '14px',

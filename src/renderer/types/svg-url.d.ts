@@ -17,3 +17,8 @@ declare module '*.woff2?url' {
   const url: string
   export default url
 }
+
+declare module '*.png' {
+  const src: string
+  export default src
+}

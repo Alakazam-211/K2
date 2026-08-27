@@ -78,6 +78,8 @@ function installFetch(opts: {
   remotePeers?: unknown[]
   /** LOCAL pubkey subdomain (default `mybox`; `''` disables the reverse row). */
   localSubdomain?: string
+  /** LOCAL pubkey advertised LAN URL (pair-back `baseUrl`). */
+  localBaseUrl?: string
   /** Agents the LOCAL `federation/peer-roster` reports (default the `ai` ws). */
   rosterAgents?: unknown[]
   /** Rows the REMOTE `projects/list` returns (default UUID→`/srv/ai`). */
@@ -107,6 +109,7 @@ function installFetch(opts: {
               public_key_pem: 'LOCALPEM',
               fingerprint: 'LOCALFP',
               subdomain: opts.localSubdomain ?? 'mybox',
+              base_url: opts.localBaseUrl ?? '',
             }
           : {
               public_key_pem: 'REMOTEPEM',
@@ -119,6 +122,16 @@ function installFetch(opts: {
       return ok({ peers: isLocal ? opts.localPeers ?? [] : opts.remotePeers ?? [] })
     }
     if (path === '/cli/federation/pair/request') {
+      const pair = (body ?? {}) as Record<string, unknown>
+      const sub = typeof pair.subdomain === 'string' ? pair.subdomain.trim() : ''
+      const url = String(pair.baseUrl || pair.base_url || pair.url || '').trim()
+      if (!sub && !url) {
+        return {
+          ok: false,
+          status: 400,
+          text: async () => JSON.stringify({ error: 'empty url and subdomain' }),
+        }
+      }
       return ok({ fingerprint: 'PFP', sas: '424242' })
     }
     if (path === '/cli/federation/pair/confirm') {
@@ -201,7 +214,10 @@ describe('peerMatchesHostname', () => {
       base_url: 'http://192.168.1.50:38471',
     })
     expect(peerMatchesHostname(p, '192.168.1.50:38471')).toBe(true)
-    expect(peerMatchesHostname(p, '192.168.1.50')).toBe(false)
+    expect(peerMatchesHostname(p, '192.168.1.50')).toBe(true)
+    expect(peerMatchesHostname(p, 'http://192.168.1.50:38471')).toBe(true)
+    expect(peerMatchesHostname(p, '192.168.1.51')).toBe(false)
+    expect(JSON.stringify(p)).not.toMatch(/k2\.dev/)
   })
 })
 
@@ -272,7 +288,12 @@ describe('autoPairWithHost', () => {
         lastConnectedAt: null,
       },
     ]
-    const rec = installFetch({ localPeers: [], remotePeers: [], localSubdomain: '' })
+    const rec = installFetch({
+      localPeers: [],
+      remotePeers: [],
+      localSubdomain: '',
+      localBaseUrl: 'http://192.168.1.40:38471',
+    })
     await autoPairWithHost('192.168.1.50')
 
     const pairReqs = rec.filter((r) => r.url.includes('/cli/federation/pair/request'))
@@ -284,6 +305,35 @@ describe('autoPairWithHost', () => {
       baseUrl: 'http://192.168.1.50:38471',
     })
     expect(JSON.stringify(onLocal?.body)).not.toMatch(/k2\.dev/)
+
+    const onRemote = pairReqs.find((r) => r.url.startsWith('http://192.168.1.50:38471'))
+    expect(onRemote?.body).toMatchObject({
+      public_key_pem: 'LOCALPEM',
+      baseUrl: 'http://192.168.1.40:38471',
+    })
+    expect(onRemote?.body).not.toHaveProperty('subdomain')
+    expect(JSON.stringify(onRemote?.body)).not.toMatch(/k2\.dev/)
+    expect(JSON.stringify(onRemote?.body)).not.toMatch(/127\.0\.0\.1|localhost/)
+  })
+
+  it('fails loud when pairing to a LAN host and this Mac has no advertised URL', async () => {
+    hosts = [
+      {
+        id: 'lan1',
+        label: 'LAN box',
+        hostname: '192.168.1.50',
+        port: 38471,
+        secure: false,
+        token: 'LANTOK',
+        remember: true,
+        lastConnectedAt: null,
+      },
+    ]
+    const rec = installFetch({ localPeers: [], remotePeers: [], localSubdomain: '' })
+    await expect(autoPairWithHost('192.168.1.50')).rejects.toThrow(
+      /no advertised LAN URL|Enable LAN listen|advertise URL|air-gap Caddy/i,
+    )
+    expect(rec.some((r) => r.url.includes('/cli/federation/pair/request'))).toBe(false)
   })
 })
 

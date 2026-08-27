@@ -96,7 +96,10 @@ pub fn is_tailscale_ip_host(host: &str) -> bool {
 pub fn is_loopback_host(host: &str) -> bool {
     match parse_ipv4(host) {
         Some([127, _, _, _]) => true,
-        _ => hostname_only(host) == "localhost",
+        _ => {
+            let h = host_port(host).to_ascii_lowercase();
+            h == "localhost" || h.starts_with("localhost:")
+        }
     }
 }
 
@@ -230,6 +233,151 @@ pub fn peer_address_host(subdomain: &str, base_url: &str) -> String {
     crate::connections::normalize_remote_host(subdomain)
 }
 
+/// Operator override for this daemon's advertised pair-back URL.
+/// Distinct from `K2_FEDERATION_INBOUND_BASE` (test dial-target override).
+pub const ADVERTISE_URL_ENV: &str = "K2_FEDERATION_ADVERTISE_URL";
+
+/// Optional advertised TCP port when [`ADVERTISE_URL_ENV`] is unset.
+pub const ADVERTISE_PORT_ENV: &str = "K2_FEDERATION_ADVERTISE_PORT";
+
+/// Air-gap Caddy LAN front (daemon stays loopback).
+pub const AIRGAP_ADVERTISE_PORT: u16 = 38471;
+
+/// This daemon's LAN/Tailscale URL for pair-back. Never loopback / localhost.
+/// Empty when nothing routable is known.
+pub fn advertised_federation_base() -> String {
+    advertised_federation_base_from(
+        std::env::var(ADVERTISE_URL_ENV).ok().as_deref(),
+        parse_advertise_port_env(std::env::var(ADVERTISE_PORT_ENV).ok().as_deref()),
+        crate::airgap::enabled(),
+        crate::listen::lan_bound(),
+        daemon_http_port(),
+        &local_ipv4_addrs(),
+    )
+}
+
+fn parse_advertise_port_env(raw: Option<&str>) -> Option<u16> {
+    let s = raw?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    match s.parse::<u16>() {
+        Ok(p) if p != 0 => Some(p),
+        _ => None,
+    }
+}
+
+fn daemon_http_port() -> Option<u16> {
+    crate::port_claim::read_port_file(&crate::paths::k2_home().join("daemon.port"))
+}
+
+/// Pick among already-collected IPv4s (unit-tested with a fake iface list).
+/// Prefers RFC1918, then Tailscale CGNAT, then any other non-loopback.
+pub fn pick_advertise_ipv4(addrs: &[std::net::Ipv4Addr]) -> Option<std::net::Ipv4Addr> {
+    fn usable(ip: std::net::Ipv4Addr) -> bool {
+        !ip.is_loopback()
+            && !ip.is_unspecified()
+            && !ip.is_broadcast()
+            && !ip.is_multicast()
+            && !ip.is_link_local()
+    }
+    fn rank(ip: std::net::Ipv4Addr) -> u8 {
+        let s = ip.to_string();
+        if is_rfc1918_host(&s) {
+            0
+        } else if is_tailscale_ip_host(&s) {
+            1
+        } else {
+            2
+        }
+    }
+    addrs
+        .iter()
+        .copied()
+        .filter(|ip| usable(*ip))
+        .min_by_key(|ip| rank(*ip))
+}
+
+fn sanitize_advertise_url(raw: &str) -> Option<String> {
+    let url = normalize_base_url(raw).ok()?;
+    if is_loopback_host(&url) {
+        return None;
+    }
+    if assert_lan_http(&url).is_err() {
+        return None;
+    }
+    Some(url)
+}
+
+pub(crate) fn advertised_federation_base_from(
+    env_url: Option<&str>,
+    env_port: Option<u16>,
+    airgap: bool,
+    lan_bound: bool,
+    daemon_port: Option<u16>,
+    ifaces: &[std::net::Ipv4Addr],
+) -> String {
+    if let Some(raw) = env_url {
+        if let Some(url) = sanitize_advertise_url(raw) {
+            return url;
+        }
+    }
+    let port = if let Some(p) = env_port.filter(|p| *p != 0) {
+        p
+    } else if airgap {
+        AIRGAP_ADVERTISE_PORT
+    } else if lan_bound {
+        match daemon_port.filter(|p| *p != 0) {
+            Some(p) => p,
+            None => return String::new(),
+        }
+    } else {
+        return String::new();
+    };
+    match pick_advertise_ipv4(ifaces) {
+        Some(ip) => format!("http://{ip}:{port}"),
+        None => String::new(),
+    }
+}
+
+fn local_ipv4_addrs() -> Vec<std::net::Ipv4Addr> {
+    #[cfg(unix)]
+    {
+        unix_ipv4_addrs()
+    }
+    #[cfg(not(unix))]
+    {
+        Vec::new()
+    }
+}
+
+#[cfg(unix)]
+fn unix_ipv4_addrs() -> Vec<std::net::Ipv4Addr> {
+    use std::net::Ipv4Addr;
+    let mut out = Vec::new();
+    unsafe {
+        let mut ifap: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut ifap) != 0 || ifap.is_null() {
+            return out;
+        }
+        let mut p = ifap;
+        while !p.is_null() {
+            let ifa = &*p;
+            let up = (ifa.ifa_flags as u32) & (libc::IFF_UP as u32) != 0;
+            if up && !ifa.ifa_addr.is_null() {
+                let family = (*ifa.ifa_addr).sa_family as u32;
+                if family == libc::AF_INET as u32 {
+                    let sin = &*(ifa.ifa_addr as *const libc::sockaddr_in);
+                    out.push(Ipv4Addr::from(sin.sin_addr.s_addr.to_ne_bytes()));
+                }
+            }
+            p = ifa.ifa_next;
+        }
+        libc::freeifaddrs(ifap);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +429,10 @@ mod tests {
         assert!(is_connect_subdomain_label("rpm"));
         assert!(!is_connect_subdomain_label("192.168.1.50:38471"));
         assert!(!is_connect_subdomain_label("http://x"));
+        assert!(is_loopback_host("127.0.0.1:38471"));
+        assert!(is_loopback_host("http://localhost:38471"));
+        assert!(is_loopback_host("localhost"));
+        assert!(!is_loopback_host("192.168.1.40:38471"));
     }
 
     #[test]
@@ -361,5 +513,150 @@ mod tests {
             "192.168.1.50:38471"
         );
         assert_ne!(peer_address_host("", "http://192.168.1.50:38471"), "lan");
+    }
+
+    #[test]
+    fn pick_advertise_ipv4_skips_loopback_prefers_rfc1918() {
+        use std::net::Ipv4Addr;
+        let loopback = Ipv4Addr::new(127, 0, 0, 1);
+        let link_local = Ipv4Addr::new(169, 254, 1, 1);
+        let lan = Ipv4Addr::new(192, 168, 1, 40);
+        let ts = Ipv4Addr::new(100, 64, 1, 2);
+        let public = Ipv4Addr::new(8, 8, 8, 8);
+        assert_eq!(pick_advertise_ipv4(&[loopback]), None);
+        assert_eq!(pick_advertise_ipv4(&[loopback, link_local]), None);
+        assert_eq!(pick_advertise_ipv4(&[loopback, lan]), Some(lan));
+        assert_eq!(pick_advertise_ipv4(&[public, lan]), Some(lan));
+        assert_eq!(pick_advertise_ipv4(&[public, ts]), Some(ts));
+        assert_eq!(pick_advertise_ipv4(&[ts, lan]), Some(lan));
+        assert_eq!(
+            pick_advertise_ipv4(&[Ipv4Addr::new(10, 0, 0, 5), lan]),
+            Some(Ipv4Addr::new(10, 0, 0, 5)),
+            "first RFC1918 wins among equals"
+        );
+    }
+
+    #[test]
+    fn advertised_base_env_url_round_trips_skips_loopback() {
+        use std::net::Ipv4Addr;
+        let lan = [Ipv4Addr::new(192, 168, 1, 40)];
+        assert_eq!(
+            advertised_federation_base_from(
+                Some("http://10.0.0.9:38471/"),
+                None,
+                false,
+                false,
+                None,
+                &lan,
+            ),
+            "http://10.0.0.9:38471"
+        );
+        assert!(
+            !advertised_federation_base_from(
+                Some("http://127.0.0.1:38471"),
+                None,
+                false,
+                false,
+                None,
+                &[],
+            )
+            .contains("127.0.0.1")
+        );
+        assert!(
+            advertised_federation_base_from(
+                Some("http://localhost:38471"),
+                None,
+                false,
+                false,
+                None,
+                &[],
+            )
+            .is_empty()
+        );
+        assert!(
+            advertised_federation_base_from(
+                Some("https://192.168.1.40:38471"),
+                None,
+                true,
+                false,
+                None,
+                &[],
+            )
+            .is_empty(),
+            "HTTPS+RFC1918 must not be advertised"
+        );
+    }
+
+    #[test]
+    fn advertised_base_airgap_uses_caddy_port_on_rfc1918() {
+        use std::net::Ipv4Addr;
+        let ifaces = [
+            Ipv4Addr::new(127, 0, 0, 1),
+            Ipv4Addr::new(192, 168, 1, 40),
+        ];
+        assert_eq!(
+            advertised_federation_base_from(None, None, true, false, Some(60710), &ifaces),
+            "http://192.168.1.40:38471"
+        );
+        assert_eq!(
+            advertised_federation_base_from(None, Some(9999), true, false, Some(60710), &ifaces),
+            "http://192.168.1.40:9999"
+        );
+    }
+
+    #[test]
+    fn advertised_base_lan_bound_uses_daemon_port_loopback_skipped() {
+        use std::net::Ipv4Addr;
+        let ifaces = [Ipv4Addr::new(127, 0, 0, 1), Ipv4Addr::new(10, 1, 2, 3)];
+        assert_eq!(
+            advertised_federation_base_from(None, None, false, true, Some(60710), &ifaces),
+            "http://10.1.2.3:60710"
+        );
+        assert!(
+            advertised_federation_base_from(
+                None,
+                None,
+                false,
+                false,
+                Some(60710),
+                &ifaces,
+            )
+            .is_empty(),
+            "loopback-only non-airgap without LAN listen / env stays empty"
+        );
+        assert!(advertised_federation_base_from(
+            None,
+            None,
+            true,
+            false,
+            None,
+            &[Ipv4Addr::LOCALHOST],
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn advertised_federation_base_env_round_trips_never_loopback() {
+        let _lock = HOME_LOCK.lock();
+        let prev_url = std::env::var_os(ADVERTISE_URL_ENV);
+        let prev_port = std::env::var_os(ADVERTISE_PORT_ENV);
+        std::env::set_var(ADVERTISE_URL_ENV, "http://192.168.1.40:38471");
+        std::env::remove_var(ADVERTISE_PORT_ENV);
+        let got = advertised_federation_base();
+        std::env::set_var(ADVERTISE_URL_ENV, "http://127.0.0.1:38471");
+        let skipped = advertised_federation_base();
+        match prev_url {
+            Some(p) => std::env::set_var(ADVERTISE_URL_ENV, p),
+            None => std::env::remove_var(ADVERTISE_URL_ENV),
+        }
+        match prev_port {
+            Some(p) => std::env::set_var(ADVERTISE_PORT_ENV, p),
+            None => std::env::remove_var(ADVERTISE_PORT_ENV),
+        }
+        assert_eq!(got, "http://192.168.1.40:38471");
+        assert!(
+            !skipped.contains("127.0.0.1") && !skipped.to_ascii_lowercase().contains("localhost"),
+            "must never advertise loopback; got {skipped:?}"
+        );
     }
 }

@@ -43,8 +43,8 @@ pub mod roster;
 pub mod seen;
 
 pub use dial::{
-    assert_may_dial, host_port, peer_address_host, resolve_peer_base_url, AIRGAP_CONNECT_REFUSE,
-    LAN_HTTPS_REFUSE,
+    advertised_federation_base, assert_may_dial, host_port, peer_address_host, resolve_peer_base_url,
+    ADVERTISE_URL_ENV, AIRGAP_CONNECT_REFUSE, LAN_HTTPS_REFUSE,
 };
 pub use envelope::{open, reseal, seal, FederationEnvelope, FederationError, SignedPayload};
 pub use ingress::{ingest, IngressError, NonceCache, CAP_INBOUND, DEFAULT_SKEW_SECS};

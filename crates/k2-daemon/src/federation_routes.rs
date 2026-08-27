@@ -163,14 +163,13 @@ pub fn handle_pubkey() -> CliResponse {
     let subdomain = k2_core::tunnel::config::load()
         .map(|c| c.subdomain)
         .unwrap_or_default();
+    let base_url = federation::advertised_federation_base();
     CliResponse::ok_json(
         serde_json::json!({
             "public_key_pem": key.public_key_pem(),
             "fingerprint": fingerprint,
             "subdomain": subdomain,
-            // Pair body carries the URL to dial back (F3). Empty when we
-            // only have a Connect subdomain (or loopback-unknown LAN IP).
-            "base_url": "",
+            "base_url": base_url,
         })
         .to_string(),
     )
@@ -1773,6 +1772,58 @@ mod tests {
             );
             // `subdomain` is always present (empty when no tunnel configured).
             assert!(v.get("subdomain").is_some(), "subdomain key must be present");
+            assert!(v.get("base_url").is_some(), "base_url key must be present");
+            let base = v["base_url"].as_str().unwrap_or("");
+            assert!(
+                !base.contains("127.0.0.1") && !base.to_ascii_lowercase().contains("localhost"),
+                "pubkey must never advertise loopback; got {base:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn pubkey_base_url_round_trips_advertise_env() {
+        with_temp_home(|| {
+            let prev = std::env::var_os(k2_core::federation::ADVERTISE_URL_ENV);
+            std::env::set_var(
+                k2_core::federation::ADVERTISE_URL_ENV,
+                "http://192.168.1.40:38471",
+            );
+            let resp = handle_pubkey();
+            match prev {
+                Some(p) => std::env::set_var(k2_core::federation::ADVERTISE_URL_ENV, p),
+                None => std::env::remove_var(k2_core::federation::ADVERTISE_URL_ENV),
+            }
+            assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["base_url"], "http://192.168.1.40:38471");
+            assert!(
+                !v["base_url"].as_str().unwrap().contains("k2.dev"),
+                "air-gap advertise URL must not concatenate .k2.dev"
+            );
+        });
+    }
+
+    #[test]
+    fn pubkey_base_url_skips_loopback_env() {
+        with_temp_home(|| {
+            let prev = std::env::var_os(k2_core::federation::ADVERTISE_URL_ENV);
+            std::env::set_var(
+                k2_core::federation::ADVERTISE_URL_ENV,
+                "http://127.0.0.1:38471",
+            );
+            let resp = handle_pubkey();
+            match prev {
+                Some(p) => std::env::set_var(k2_core::federation::ADVERTISE_URL_ENV, p),
+                None => std::env::remove_var(k2_core::federation::ADVERTISE_URL_ENV),
+            }
+            assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            let base = v["base_url"].as_str().unwrap_or("missing");
+            assert!(
+                !base.contains("127.0.0.1") && !base.to_ascii_lowercase().contains("localhost"),
+                "loopback advertise env must be skipped; got {base:?}"
+            );
         });
     }
 

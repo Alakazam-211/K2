@@ -139,6 +139,12 @@ function hostKey(hostname: string): string {
   return x.split(':')[0] ?? x
 }
 
+/** Dotted IPv4, stripping an optional `:port`. Null if not an IPv4 literal. */
+function ipv4Literal(host: string): string | null {
+  const m = host.trim().toLowerCase().match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/)
+  return m ? m[1] : null
+}
+
 function hostPortFromUrl(url: string): string {
   const s = url.trim().replace(/\/+$/, '')
   const rest = /^https?:\/\//i.test(s) ? s.replace(/^https?:\/\//i, '') : s
@@ -146,22 +152,29 @@ function hostPortFromUrl(url: string): string {
 }
 
 export function peerMatchesHostname(peer: FederationPeer, hostname: string): boolean {
-  const raw = hostname.trim().toLowerCase()
-  if (!raw) return false
+  const raw0 = hostname.trim().toLowerCase()
+  if (!raw0) return false
+  const raw = /^https?:\/\//i.test(raw0) ? hostPortFromUrl(raw0).toLowerCase() : raw0
   const hostOnly = hostKey(raw)
   if (!hostOnly) return false
+  const wantIp = ipv4Literal(hostOnly)
+  const sameHost = (candidate: string): boolean => {
+    const key = hostKey(candidate)
+    if (key && (key === hostOnly || hostOnly === key)) return true
+    const ip = ipv4Literal(key || candidate)
+    return !!(wantIp && ip && wantIp === ip)
+  }
   const sub = (peer.subdomain || '').trim().toLowerCase()
   if (sub) {
-    if (hostOnly === sub || hostOnly === hostKey(sub)) return true
+    if (sameHost(sub)) return true
     if (hostOnly === `${sub}.k2.dev`) return true
   }
   const base = (peer.base_url || peer.baseUrl || '').trim().toLowerCase()
   if (base) {
-    const hp = hostKey(hostPortFromUrl(base))
-    if (hp && hp === hostOnly) return true
+    if (sameHost(hostPortFromUrl(base))) return true
   }
   const label = (peer.label || '').trim().toLowerCase()
-  if (label && hostKey(label) === hostOnly) return true
+  if (label && sameHost(label)) return true
   return false
 }
 
@@ -417,7 +430,8 @@ function isK2DevHostname(hostname: string): boolean {
 
 function isLoopbackHost(hostname: string): boolean {
   const h = hostname.trim().toLowerCase()
-  return h === 'localhost' || h === '127.0.0.1' || h.startsWith('127.')
+  const host = h.split('/')[0]?.split(':')[0] ?? h
+  return host === 'localhost' || host === '127.0.0.1' || host.startsWith('127.')
 }
 
 /** Saved Add Server URL (`http://192.168.1.50:38471` or `https://box.k2.dev`). */
@@ -434,7 +448,10 @@ export function savedHostBaseUrl(host: {
 
 function advertisedHostPort(creds: DaemonCreds, pub: FederationPubkey): string | null {
   const fromPub = (pub.base_url || pub.baseUrl || '').trim()
-  if (fromPub) return hostPortFromUrl(fromPub)
+  if (fromPub) {
+    const hp = hostPortFromUrl(fromPub)
+    if (hp && !isLoopbackHost(hp)) return hp
+  }
   if ((pub.subdomain || '').trim()) return `${pub.subdomain.trim()}.k2.dev`
   try {
     const u = new URL(creds.base)
@@ -450,6 +467,20 @@ function advertisedHostPort(creds: DaemonCreds, pub: FederationPubkey): string |
   } catch {
     return null
   }
+}
+
+/** Non-loopback LAN/Tailscale dial URL this Mac should pin on the peer. */
+function advertisedLanBaseUrl(creds: DaemonCreds, pub: FederationPubkey): string {
+  const raw = (pub.base_url || pub.baseUrl || '').trim().replace(/\/+$/, '')
+  if (raw && /^https?:\/\//i.test(raw)) {
+    const hp = hostPortFromUrl(raw)
+    if (hp && !isLoopbackHost(hp) && !isK2DevHostname(hp)) return raw
+  }
+  const advertised = advertisedHostPort(creds, pub)
+  if (advertised && !isLoopbackHost(advertised) && !isK2DevHostname(advertised)) {
+    return `http://${advertised}`
+  }
+  return ''
 }
 
 /**
@@ -489,19 +520,23 @@ export async function autoPairWithHost(host: string): Promise<void> {
     .hosts.find((h) => h.hostname.trim().toLowerCase() === host.trim().toLowerCase())
   const remoteSavedBase = saved ? savedHostBaseUrl(saved) : ''
   const remoteIsLan = remoteSavedBase.startsWith('http://') || (saved ? !saved.secure : false)
-  const localAdvertise = advertisedHostPort(localC, localPub)
-  const localLanUrl = localAdvertise && !isK2DevHostname(localAdvertise)
-    ? `http://${localAdvertise}`
-    : ''
+  const localLanUrl = advertisedLanBaseUrl(localC, localPub)
+  const localSub = (localPub.subdomain || '').trim()
 
   // F3: Connect subdomain OR LAN URL. Empty both still fails. Drop the
   // "buy a subdomain" copy when pairing over a saved http host:port.
-  if (!(localPub.subdomain || '').trim() && !remoteIsLan && !localLanUrl) {
+  if (!localSub && !remoteIsLan && !localLanUrl) {
     throw new Error(
       `Can't pair as a federated peer with "${host}": this server has no K2 Connect tunnel.\n\n` +
         `Each federated server needs its own purchased <subdomain>.k2.dev so peers can reach it. ` +
         `Buy a subdomain at k2.dev, bind it under Settings → K2 Connect (tunnel Connected), ` +
         `then try Pair again.`,
+    )
+  }
+  if (remoteIsLan && !localSub && !localLanUrl) {
+    throw new Error(
+      `Can't pair as a federated peer with "${host}": this Mac has no advertised LAN URL. ` +
+        `Enable LAN listen, set an advertise URL, or run air-gap Caddy.`,
     )
   }
 
@@ -648,11 +683,12 @@ async function tryAddReverseConnection(
  *
  * The forward (local→remote) direction is the one the local daemon's send-gate
  * checks. The reverse row lets the remote agent message back: on `host`, for the
- * workspace exposing `<agent>`, it records `<sourceBasename>::<localSubdomain>.k2.dev`
- * (source agent name = source workspace folder basename; local subdomain from the
- * active daemon's federation pubkey). The reverse is FAIL-SOFT — it NEVER breaks
- * the forward connection or pairing; on any soft failure it returns a human
- * `reverseWarning` (else null) so the operator knows back-messaging isn't wired yet.
+ * workspace exposing `<agent>`, it records `<sourceBasename>::<advertisedHost>`
+ * (source agent name = source workspace folder basename; advertisedHost is this
+ * daemon's LAN/Connect host:port from pubkey `base_url` or subdomain — skipped
+ * when unknown). The reverse is FAIL-SOFT — it NEVER breaks the forward
+ * connection or pairing; on any soft failure it returns a human `reverseWarning`
+ * (else null) so the operator knows back-messaging isn't wired yet.
  */
 export async function addRemoteConnection(
   sourceWorkspacePath: string,

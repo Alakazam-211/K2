@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.118 — Pair as federated peers over LAN (no tunnel)
+
+Two machines on the same network can **Pair as a federated peer** without buying a `*.k2.dev` tunnel. Add Server as `http://<LAN-IP>:<port>`, enable federation, Pair. `k2 msg sales::10.2.40.28:38471` is the address shape. HTTPS to a private IP is still refused.
+
+---
+
 ## 0.40.117 — Terminal hitch; inbox files keep the note
 
 Quiet agent sessions no longer freeze the window for a second or two while you type in **Message the agent**. The grid still pauses a runaway TUI; catch-up no longer stop-the-worlds the compose bar, and idle panes no longer log a false stall.

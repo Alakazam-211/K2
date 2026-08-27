@@ -229,6 +229,31 @@ class Reader {
   }
 }
 
+/** Peek k1 kind from the 3-byte header. Does **not** decode the grid
+ *  — onmessage can enqueue the ArrayBuffer and leave the expensive
+ *  scrollback walk for the coalescer apply path. Throws on malformed
+ *  header (same class of error as {@link decodeGridFrame}). */
+export function peekK1Kind(buf: ArrayBuffer): 'snapshot' | 'delta' {
+  if (buf.byteLength < 3) {
+    throw new Error(
+      'k1 wire decode error: truncated frame, need 3 bytes at offset 0',
+    )
+  }
+  const v = new DataView(buf)
+  const magic = v.getUint8(0)
+  if (magic !== WIRE_MAGIC) {
+    throw new Error(`k1 wire decode error: bad magic 0x${magic.toString(16)}`)
+  }
+  const version = v.getUint8(1)
+  if (version !== WIRE_VERSION) {
+    throw new Error(`k1 wire decode error: unsupported wire version ${version}`)
+  }
+  const kind = v.getUint8(2)
+  if (kind === KIND_SNAPSHOT) return 'snapshot'
+  if (kind === KIND_DELTA) return 'delta'
+  throw new Error(`k1 wire decode error: unknown frame kind ${kind}`)
+}
+
 /** Decode one k1 binary WS message. Throws on malformed input. */
 export function decodeGridFrame(buf: ArrayBuffer): WireFrame {
   const r = new Reader(buf)

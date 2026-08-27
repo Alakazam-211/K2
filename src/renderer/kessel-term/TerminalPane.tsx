@@ -106,7 +106,17 @@ import {
   computeStripLayout,
   scrollPxFromThumbTopFrac,
 } from './scrollMath'
-import { decodeGridFrame, type WireFrame } from './gridWire'
+
+import {
+  ackVersionAfterApply,
+  decodeK1Queued,
+  queueK1Binary,
+  type K1QueuedFrame,
+} from './k1FramePipeline'
+import {
+  shouldLogGridStallRecovered,
+  tickGridHealth,
+} from './gridHealthTick'
 import { computeResyncScrollPx } from './resyncAnchor'
 import { colToTextIndex, runColSpan } from './runCols'
 import { hexToCss, TerminalRow } from './rowRender'
@@ -254,10 +264,15 @@ interface TermGridDelta {
  *  flush. Applying frames per-rAF instead of per-message coalesces a
  *  burst (e.g. `cat` of a big file → hundreds of deltas) into one
  *  React render per display refresh. Legacy v1 had the same batching
- *  (`scheduleRender`); v2 dropped it and re-rendered per message. */
+ *  (`scheduleRender`); v2 dropped it and re-rendered per message.
+ *
+ *  k1 binary frames enqueue the raw ArrayBuffer (`K1QueuedFrame`);
+ *  decode runs on apply so `ws.onmessage` does not walk scrollback
+ *  on the compose-input turn. JSON frames still carry a decoded payload. */
 type PendingFrame =
   | { kind: 'snapshot'; payload: TermGridSnapshot }
   | { kind: 'delta'; payload: TermGridDelta }
+  | K1QueuedFrame
 
 type OutboundMsg =
   | { event: 'snapshot'; payload: TermGridSnapshot }
@@ -614,10 +629,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // reattach; harmless when not paused.
   const lastAckVersionRef = useRef(0)
   const lastAckAtRef = useRef(0)
-  // Stall-episode latch: log `[grid-stall]` once on enter; OPEN no-frame
-  // heal once per episode; clear on any frame + log recovered.
+  // Stall-episode latch: log `[grid-stall]` once on not-OPEN enter;
+  // clear on any frame + log recovered. OPEN silence is idle (G5).
   const gridStallActiveRef = useRef(false)
-  const gridStallHealedRef = useRef(false)
   const lastAckProbeAtRef = useRef(0)
   // True while the current grid URL opted into proto=k1 (always today).
   const gridProtoK1Ref = useRef(false)
@@ -721,6 +735,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // resize hold parks a blank intermediate here — see the resize-hold
   // block below.
   const liveGridRef = useRef<TermGridSnapshot | null>(null)
+  const firstSnapshotEmptyRef = useRef<boolean>(true)
+  const firstSnapshotSeenRef = useRef<boolean>(false)
   // Scroll position in PIXELS above the bottom of the buffer. 0 =
   // pinned to the live grid (the heavy-output path — every input
   // handler snaps here); max = scrollback.length * cellHeight. Pixel
@@ -794,13 +810,44 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // flush, so everything below runs once per display refresh no
   // matter how many WS messages arrived.
   const applyFrameBatch = useCallback((pending: PendingFrame[]) => {
-    if (import.meta.env.DEV) framesAppliedRef.current += pending.length
+    // k1: decode the queued ArrayBuffer here (rAF / backstop), not in
+    // onmessage. JSON frames already carry a payload. Malformed k1
+    // frames are skipped (no floor bump — ack only applied chunks).
+    type AppliedFrame =
+      | { kind: 'snapshot'; payload: TermGridSnapshot }
+      | { kind: 'delta'; payload: TermGridDelta }
+    const applied: AppliedFrame[] = []
+    for (const f of pending) {
+      if ('buf' in f) {
+        try {
+          const decoded = decodeK1Queued(f)
+          if (decoded.kind === 'snapshot') {
+            applied.push({
+              kind: 'snapshot',
+              payload: decoded.payload as TermGridSnapshot,
+            })
+          } else {
+            applied.push({
+              kind: 'delta',
+              payload: decoded.payload as TermGridDelta,
+            })
+          }
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('[kessel-term] k1 frame decode failed:', e)
+        }
+      } else {
+        applied.push(f)
+      }
+    }
+    if (applied.length === 0) return
+    if (import.meta.env.DEV) framesAppliedRef.current += applied.length
     // A full snapshot replace starts a new grid generation — absolute
     // row coords no longer map, so the canvas selection clears
     // (webgl painter only; the ref is always null in DOM mode).
     if (
       webglSelectionRef.current &&
-      pending.some((f) => f.kind === 'snapshot')
+      applied.some((f) => f.kind === 'snapshot')
     ) {
       webglSelectionRef.current = null
       setSelectionVersion((v) => v + 1)
@@ -822,10 +869,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       (next?.scrollback.length ?? 0) + (next?.grid.length ?? 0)
     let appendedRows = 0
     let sawSnapshot = false
-    for (const f of pending) {
+    for (const f of applied) {
       if (f.kind === 'snapshot') {
         sawSnapshot = true
         next = f.payload
+        if (!firstSnapshotSeenRef.current) {
+          firstSnapshotSeenRef.current = true
+          firstSnapshotEmptyRef.current = isGridEmpty(f.payload)
+        }
       } else {
         appendedRows += f.payload.scrollbackAppended.length
         next = mergeDelta(next, f.payload)
@@ -896,10 +947,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // fresh full snapshot on our next ack. Gated on the daemon
     // actually speaking k1 (see k1WireActiveRef).
     if (k1WireActiveRef.current) {
-      let maxVersion = 0
-      for (const f of pending) {
-        if (f.payload.version > maxVersion) maxVersion = f.payload.version
-      }
+      const maxVersion = ackVersionAfterApply(applied)
       const ws = wsRef.current
       if (maxVersion > 0 && ws && ws.readyState === WebSocket.OPEN) {
         lastAckVersionRef.current = maxVersion
@@ -1078,8 +1126,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const mountT0Ref = useRef<number | null>(null)
   if (mountT0Ref.current === null) mountT0Ref.current = performance.now()
   const stageMsRef = useRef<Record<string, number>>({})
-  const firstSnapshotEmptyRef = useRef<boolean>(true)
-  const firstSnapshotSeenRef = useRef<boolean>(false)
   const firstSnapshotReusedRef = useRef<boolean | null>(null)
   const firstRenderFiredRef = useRef<boolean>(false)
   const tuiFirstPaintFiredRef = useRef<boolean>(false)
@@ -1917,18 +1963,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // object shape JSON.parse yields (pinned by gridWire.test.ts),
       // so everything downstream is transport-blind.
       const applySnapshotFrame = (payload: TermGridSnapshot) => {
-        const isFirst = !firstSnapshotSeenRef.current
-        if (isFirst) {
-          firstSnapshotSeenRef.current = true
-          const empty = isGridEmpty(payload)
-          firstSnapshotEmptyRef.current = empty
-          perfLog('first_snapshot', {
-            rows: payload.rows,
-            cols: payload.cols,
-            empty: String(empty),
-            scrollback: payload.scrollback.length,
-          })
-        }
         enqueueFrame({ kind: 'snapshot', payload })
         // Activity detection runs in a snapshot-driven useEffect
         // below, NOT inline here. ws.onmessage is captured in the
@@ -1949,27 +1983,42 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         )
       }
 
+      const flushPendingInput = () => {
+        const pending = pendingInputRef.current
+        if (!pending) return
+        pendingInputRef.current = ''
+        try {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: 'input', text: pending }))
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       ws.onmessage = (evt) => {
         // Any message marks the stream live (stall recovery).
         lastGridFrameAtRef.current = performance.now()
-        if (gridStallActiveRef.current || gridStallHealedRef.current) {
-          const wasActive = gridStallActiveRef.current
+        if (shouldLogGridStallRecovered(gridStallActiveRef.current)) {
           gridStallActiveRef.current = false
-          gridStallHealedRef.current = false
-          if (wasActive) {
-            // eslint-disable-next-line no-console
-            console.warn('[grid-stall] recovered', {
-              pane: terminalId.slice(0, 8),
-              sessionId8: sessionId.slice(0, 8),
-            })
-          }
+          // eslint-disable-next-line no-console
+          console.warn('[grid-stall] recovered', {
+            pane: terminalId.slice(0, 8),
+            sessionId8: sessionId.slice(0, 8),
+          })
+        } else {
+          gridStallActiveRef.current = false
         }
+        // OPEN idle never latches stallActive, so the recovered warn
+        // cannot fire after a healthy silent interval.
         if (evt.data instanceof ArrayBuffer) {
-          // k1 binary wire — snapshot/delta only; every other event
-          // still arrives as JSON text below.
-          let frame: WireFrame
+          // k1 binary wire — snapshot/delta only. Peek kind + enqueue
+          // the ArrayBuffer; decode runs on the coalescer apply path
+          // so this turn does not walk a full-scrollback snap before
+          // rAF (compose onChange shares the JS thread).
+          let queued: K1QueuedFrame
           try {
-            frame = decodeGridFrame(evt.data)
+            queued = queueK1Binary(evt.data)
           } catch (e) {
             // A frame that fails to decode is a protocol violation —
             // surface it rather than silently desyncing the mirror.
@@ -1978,22 +2027,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             return
           }
           k1WireActiveRef.current = true
-          if (frame.kind === 'snapshot') {
-            applySnapshotFrame(frame.payload)
-            // Flush keystrokes buffered while we reattached a dead WS.
-            const pending = pendingInputRef.current
-            if (pending) {
-              pendingInputRef.current = ''
-              try {
-                if (ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ action: 'input', text: pending }))
-                }
-              } catch {
-                // ignore
-              }
-            }
-          } else {
-            enqueueFrame({ kind: 'delta', payload: frame.payload })
+          enqueueFrame(queued)
+          if (queued.kind === 'snapshot') {
+            setPhase((prev) =>
+              prev.kind === 'ready' && prev.sessionId === sessionId
+                ? prev
+                : { kind: 'ready', sessionId },
+            )
+            flushPendingInput()
           }
           return
         }
@@ -2007,19 +2048,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         switch (parsed.event) {
           case 'snapshot':
             applySnapshotFrame(parsed.payload)
-            {
-              const pending = pendingInputRef.current
-              if (pending) {
-                pendingInputRef.current = ''
-                try {
-                  if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ action: 'input', text: pending }))
-                  }
-                } catch {
-                  // ignore
-                }
-              }
-            }
+            flushPendingInput()
             break
           case 'delta':
             enqueueFrame({ kind: 'delta', payload: parsed.payload })
@@ -2470,24 +2499,20 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     return () => clearInterval(id)
   }, [isTabVisible, terminalId])
 
-  // Grid health while phase is ready (Unit E / P1-6..7 + 0.40.88 focus):
+  // Grid health while phase is ready (Unit E / P1-6..7 + G5):
   //
   // 1. Dead / missing WS → one `[grid-stall]` log per episode; the
   //    ready-ws-not-open poll already force-reattaches.
   // 2. OPEN + silence:
   //    - ≥15s: re-send last k1 ack (daemon pause unblock; keep forever).
-  //    - ≥20s with no paint is NORMAL while idle. Do NOT tear down —
-  //      that was a 24s redial loop (close → "network connection was
-  //      lost" → snapshot → recovered → idle → stall). True zombies
-  //      leave OPEN via onclose / ready-ws-not-open. Log once.
-  // 3. Any frame clears stall+healed and logs `[grid-stall] recovered`.
+  //    - ≥20s with no paint is NORMAL while idle. Do NOT latch a stall
+  //      and do NOT forceGridResync('grid-stall-no-frame').
+  // 3. A real not-OPEN stall clears on the next frame and may log
+  //    `[grid-stall] recovered`. Healthy idle never does.
   //
   // Do NOT reintroduce input-no-frame thrash.
   useEffect(() => {
     if (!isTabVisible) return
-    const STALL_WS_MS = 5_000
-    const ACK_PROBE_MS = 15_000
-    const OPEN_NO_FRAME_MS = 20_000
     const id = setInterval(() => {
       const phaseNow = phaseRef.current
       if (phaseNow.kind !== 'ready') return
@@ -2502,7 +2527,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }
       const now = performance.now()
       const ws = wsRef.current
-      const readyState = ws?.readyState
+      const readyState = ws == null ? null : ws.readyState
       const lastFrame = lastGridFrameAtRef.current
       const ageMs = lastFrame > 0 ? Math.round(now - lastFrame) : null
       const sessionId8 =
@@ -2519,7 +2544,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         reason,
         pane: terminalId.slice(0, 8),
         sessionId8,
-        readyState: readyState ?? null,
+        readyState,
         ageMs,
         lastAckVersion: lastAckVersion || null,
         ackAgeMs,
@@ -2531,55 +2556,34 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           typeof document !== 'undefined' ? document.hidden : null,
       })
 
-      // ── OPEN path: ack re-probe + one-shot 20s heal ──
-      if (ws && readyState === WebSocket.OPEN) {
-        // Keep 15s ack probe (k1 pause unblock). Not a stall by itself.
-        if (
-          ageMs !== null &&
-          ageMs >= ACK_PROBE_MS &&
-          lastAckVersion > 0 &&
-          now - lastAckProbeAtRef.current >= ACK_PROBE_MS
-        ) {
-          lastAckProbeAtRef.current = now
-          try {
-            ws.send(
-              JSON.stringify({
-                action: 'ack',
-                version: lastAckVersion,
-              }),
-            )
-            lastAckAtRef.current = now
-          } catch {
-            // Fall through to dead-ws recovery via sendInput / poll.
-          }
-        }
+      const tick = tickGridHealth({
+        now,
+        readyState,
+        lastFrameAt: lastFrame,
+        lastAckVersion,
+        lastAckProbeAt: lastAckProbeAtRef.current,
+        stallActive: gridStallActiveRef.current,
+      })
+      gridStallActiveRef.current = tick.stallActive
 
-        // Idle terminals do not emit deltas. Closing an OPEN socket here
-        // is what produced the 24s rpmavs loop.
-        if (
-          lastFrame > 0 &&
-          ageMs !== null &&
-          ageMs >= OPEN_NO_FRAME_MS &&
-          !gridStallActiveRef.current
-        ) {
-          gridStallActiveRef.current = true
-          logRemotePath('open-silent', stallPayload('no-frame-idle'))
+      if (tick.ackProbeVersion !== null && ws) {
+        lastAckProbeAtRef.current = now
+        try {
+          ws.send(
+            JSON.stringify({
+              action: 'ack',
+              version: tick.ackProbeVersion,
+            }),
+          )
+          lastAckAtRef.current = now
+        } catch {
+          // Fall through to dead-ws recovery via sendInput / poll.
         }
-        return
       }
 
-      // ── not-OPEN path: faster detection + ready-ws-not-open poll ──
-      if (readyState === WebSocket.CONNECTING) return
-      if (lastFrame === 0 && ageMs === null) return
-      if (ageMs !== null && ageMs < STALL_WS_MS && lastFrame > 0) return
-
-      if (!gridStallActiveRef.current) {
-        gridStallActiveRef.current = true
+      if (tick.stallWarnReason) {
         // eslint-disable-next-line no-console
-        console.warn(
-          '[grid-stall]',
-          stallPayload(!ws ? 'ws-missing' : `ws-not-open:${readyState}`),
-        )
+        console.warn('[grid-stall]', stallPayload(tick.stallWarnReason))
       }
     }, 5_000)
     return () => clearInterval(id)

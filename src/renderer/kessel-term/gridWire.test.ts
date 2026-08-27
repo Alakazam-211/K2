@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { decodeGridFrame } from './gridWire'
+import { decodeGridFrame, peekK1Kind } from './gridWire'
 
 // Cross-language fixture: the hex and JSON constants below are the
 // OUTPUT of the Rust encoder for the canonical nontrivial fixture
@@ -81,5 +81,17 @@ describe('gridWire k1 decoder', () => {
       decodeGridFrame(full.slice(0, full.length - 1).buffer),
     ).toThrow(/truncated/)
     expect(() => decodeGridFrame(new ArrayBuffer(0))).toThrow(/truncated/)
+  })
+
+  it('peeks kind from the 3-byte header without walking the body', () => {
+    expect(peekK1Kind(hexToArrayBuffer(SNAPSHOT_HEX))).toBe('snapshot')
+    expect(peekK1Kind(hexToArrayBuffer(DELTA_HEX))).toBe('delta')
+    expect(peekK1Kind(hexToArrayBuffer(SNAPSHOT_HEX).slice(0, 3))).toBe(
+      'snapshot',
+    )
+    expect(() => peekK1Kind(new ArrayBuffer(0))).toThrow(/truncated/)
+    expect(() =>
+      peekK1Kind(new Uint8Array([0x00, 0x01, 0x01]).buffer),
+    ).toThrow(/bad magic/)
   })
 })

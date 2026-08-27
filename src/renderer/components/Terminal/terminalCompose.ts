@@ -180,6 +180,43 @@ export function removePathFromDraft(draft: string, path: string): string {
   return next.replace(/[ \t]+/g, ' ').trim()
 }
 
+/** Composer `/` picker — only these two go out as a `command` field. */
+export const COMPOSE_SLASH_COMMANDS = [
+  { command: '/compact', title: 'compact context' },
+  { command: '/goal', title: 'set a goal' },
+] as const
+
+export type ComposeSlashCommand = (typeof COMPOSE_SLASH_COMMANDS)[number]['command']
+
+/**
+ * Normalize a composer slash-command. Empty/whitespace → null. Optional
+ * missing slash, case-insensitive exact match → canonical `/compact` or
+ * `/goal`. Unknown (`/exit`, `/loop`, `/compact now`) → null (the daemon
+ * 400s those; the picker never offers them).
+ */
+export function normalizeComposeSlashCommand(
+  raw: string | null | undefined,
+): ComposeSlashCommand | null {
+  const trimmed = (raw ?? '').trim()
+  if (!trimmed) return null
+  const withSlash = (trimmed.startsWith('/') ? trimmed : `/${trimmed}`).toLowerCase()
+  for (const item of COMPOSE_SLASH_COMMANDS) {
+    if (item.command === withSlash) return item.command
+  }
+  return null
+}
+
+/** Send is allowed when the draft is non-empty OR a command is selected. */
+export function composeCanSend(input: {
+  draft: string
+  sending: boolean
+  command?: string | null
+}): boolean {
+  if (input.sending) return false
+  if (input.draft.trim().length > 0) return true
+  return normalizeComposeSlashCommand(input.command) != null
+}
+
 /** Placeholder for the docked compose bar. Uses the workspace agent name
  *  when we have one; otherwise the generic "the agent". */
 export function composeMessagePlaceholder(agentName: string | undefined | null): string {

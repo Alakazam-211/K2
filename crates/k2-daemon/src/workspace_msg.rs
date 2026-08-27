@@ -416,6 +416,35 @@ pub fn format_message(from: &str, text: &str, command: &str) -> String {
     }
 }
 
+/// Composer slash-commands the GUI picker may send. `k2 msg --command`
+/// still accepts arbitrary strings; this allowlist is composer-only.
+pub const COMPOSER_SLASH_COMMANDS: &[&str] = &["/compact", "/goal"];
+
+/// Normalize a composer `command` field.
+///
+/// - Empty / whitespace → `Ok(None)` (no slash prefix).
+/// - Optional missing slash, case-insensitive exact match against
+///   [`COMPOSER_SLASH_COMMANDS`] → `Ok(Some("/compact"))` or `"/goal"`.
+/// - Anything else (`/exit`, `/loop`, `/compact now`, garbage) → `Err`.
+///   Callers must NOT inject on `Err`.
+pub fn normalize_composer_slash_command(raw: &str) -> Result<Option<&'static str>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let with_slash = if trimmed.starts_with('/') {
+        trimmed.to_ascii_lowercase()
+    } else {
+        format!("/{}", trimmed.to_ascii_lowercase())
+    };
+    for &canonical in COMPOSER_SLASH_COMMANDS {
+        if with_slash == canonical {
+            return Ok(Some(canonical));
+        }
+    }
+    Err(format!("unknown composer command: {trimmed}"))
+}
+
 /// Composer 1a (D3) — attributed bytes formatter for the session-scoped
 /// `send-message` route. ALWAYS produces a non-empty `[from <name>]`
 /// prefix. The sender is resolved server-side from the auth token by the
@@ -426,11 +455,29 @@ pub fn format_message(from: &str, text: &str, command: &str) -> String {
 ///   depth fallback and must stay there) — an empty `from` here falls
 ///   back to `owner` (1a is owner-token-only), so an injection is never
 ///   unattributed (red-team C3).
-/// - It has no `command` slash-prefix branch (the composer never sends
-///   slash-commands; that surface is `k2 msg`/`--command` only).
+/// - Slash-commands use [`format_message_user_with_command`] so `/compact`
+///   lands at the VERY FRONT (`/compact [from owner] hi`). Stuffing the
+///   slash into `text` would yield `[from owner] /compact …` and the TUI
+///   would not treat it as a command. Empty command is identical to this
+///   helper's historical output.
 pub fn format_message_user(from: &str, text: &str) -> String {
+    format_message_user_with_command(from, text, "")
+        .expect("empty composer slash command is always allowed")
+}
+
+/// Like [`format_message_user`], with an optional composer slash-command
+/// prepended at the VERY FRONT (same shape as [`format_message`], owner
+/// fallback). Unknown commands return `Err` and must not be injected.
+pub fn format_message_user_with_command(
+    from: &str,
+    text: &str,
+    command: &str,
+) -> Result<String, String> {
     let sender = humanize_chat_from(from, "owner");
-    format!("[from {sender}] {text}")
+    match normalize_composer_slash_command(command)? {
+        None => Ok(format!("[from {sender}] {text}")),
+        Some(cmd) => Ok(format!("{cmd} [from {sender}] {text}")),
+    }
 }
 
 /// Last-mile chat attribution: stamp the **handle** (D18), never a
@@ -1277,19 +1324,37 @@ fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str) -> In
 /// - **Anti-splice (D1/D2/D5).** Delivery funnels through the shared,
 ///   bounded, ESC-sanitized [`inject_and_submit`], so the composer and
 ///   `k2 msg` are strictly one-at-a-time on the same PTY.
+///
+/// Tickets and other no-command callers keep this 3-arg form (empty
+/// command). The composer picker uses
+/// [`send_message_to_session_with_command`].
 pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgResponse {
+    send_message_to_session_with_command(session_id, from, text, "")
+        .expect("empty composer slash command is always allowed")
+}
+
+/// Composer `send-message` with an allowlisted slash-command.
+///
+/// Unknown commands return `Err` and do **not** inject. Empty/whitespace
+/// command is identical to [`send_message_to_session`].
+pub fn send_message_to_session_with_command(
+    session_id: &str,
+    from: &str,
+    text: &str,
+    command: &str,
+) -> Result<MsgResponse, String> {
+    let payload = format_message_user_with_command(from, text, command)?;
     // M1 — resolve to a LIVE session; never spawn.
     let sid = match SessionId::parse(session_id) {
         Some(s) => s,
-        None => return MsgResponse::fail(MsgReason::PtyDied),
+        None => return Ok(MsgResponse::fail(MsgReason::PtyDied)),
     };
     let live = match session_lookup::lookup_by_session_id(&sid) {
         Some(l) => l,
-        None => return MsgResponse::fail(MsgReason::PtyDied),
+        None => return Ok(MsgResponse::fail(MsgReason::PtyDied)),
     };
 
-    let payload = format_message_user(from, text);
-    match inject_and_submit(&live, &payload) {
+    Ok(match inject_and_submit(&live, &payload) {
         InjectOutcome::Delivered => {
             crate::overlay_routes::on_human_pty_text(session_id, text);
             MsgResponse::ok(live.session_id().to_string(), "send_message")
@@ -1297,7 +1362,7 @@ pub fn send_message_to_session(session_id: &str, from: &str, text: &str) -> MsgR
         InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
         InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
         InjectOutcome::GateHold => MsgResponse::fail(MsgReason::HitlGateOpen),
-    }
+    })
 }
 
 /// Persist compose-bar send history. Called after a successful
@@ -2713,6 +2778,72 @@ mod tests {
         assert_eq!(
             format_message_user("owner", "line1\nline2"),
             "[from owner] line1\nline2"
+        );
+    }
+
+    // ── Composer slash-command allowlist (picker, not k2 msg --command) ──
+
+    #[test]
+    fn composer_slash_compact_with_body() {
+        let framed = format_message_user_with_command("owner", "hi", "/compact")
+            .expect("allowed command");
+        assert_eq!(framed, "/compact [from owner] hi");
+    }
+
+    #[test]
+    fn composer_slash_empty_command_unchanged() {
+        assert_eq!(
+            format_message_user_with_command("owner", "hi", "").expect("empty command"),
+            format_message_user("owner", "hi")
+        );
+        assert_eq!(
+            format_message_user_with_command("owner", "hi", "   ").expect("whitespace command"),
+            "[from owner] hi"
+        );
+        assert_eq!(
+            normalize_composer_slash_command("").expect("empty"),
+            None
+        );
+        assert_eq!(
+            normalize_composer_slash_command("  \t").expect("whitespace"),
+            None
+        );
+    }
+
+    #[test]
+    fn composer_slash_unknown_returns_err() {
+        assert!(normalize_composer_slash_command("/exit").is_err());
+        assert!(normalize_composer_slash_command("/loop").is_err());
+        assert!(normalize_composer_slash_command("/compact now").is_err());
+        assert!(normalize_composer_slash_command("garbage").is_err());
+        assert!(format_message_user_with_command("owner", "hi", "/exit").is_err());
+        assert!(send_message_to_session_with_command("not-a-uuid", "owner", "hi", "/loop").is_err());
+    }
+
+    #[test]
+    fn composer_slash_normalizes_goal() {
+        assert_eq!(
+            normalize_composer_slash_command("/GOAL").expect("allowed"),
+            Some("/goal")
+        );
+        assert_eq!(
+            normalize_composer_slash_command("goal").expect("allowed"),
+            Some("/goal")
+        );
+        let framed = format_message_user_with_command("owner", "hi", "/GOAL")
+            .expect("allowed command");
+        assert_eq!(framed, "/goal [from owner] hi");
+    }
+
+    #[test]
+    fn composer_slash_normalizes_compact() {
+        assert_eq!(
+            normalize_composer_slash_command("COMPACT").expect("allowed"),
+            Some("/compact")
+        );
+        assert_eq!(
+            normalize_composer_slash_command("  /Compact  ").expect("allowed"),
+            Some("/compact")
         );
     }
 

@@ -33,10 +33,13 @@ import { useSettingsStore } from '@/stores/settings'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import {
   type ComposeHistoryItem,
+  type ComposeSlashCommand,
   type MsgResponse,
   applyComposeHistoryNav,
   clearComposeCaret,
+  COMPOSE_SLASH_COMMANDS,
   COMPOSE_TEXTAREA_MAX_HEIGHT,
+  composeCanSend,
   composeHistoryKeyAction,
   composeInterruptSequence,
   composeTextareaHeight,
@@ -140,10 +143,15 @@ export function TerminalComposeBar({
   const [sending, setSending] = useState(false)
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
+  const [slashCommand, setSlashCommand] = useState<ComposeSlashCommand | null>(null)
+  const [slashMenuOpen, setSlashMenuOpen] = useState(false)
+  const [slashMenuPos, setSlashMenuPos] = useState<{ left: number; bottom: number } | null>(null)
   const historyDraftRef = useRef('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const slashBtnRef = useRef<HTMLButtonElement>(null)
+  const slashMenuRef = useRef<HTMLDivElement>(null)
   const imagePaths = extractImagePathsFromDraft(draft)
 
   // Reload the saved draft when the pane's session changes — this component can
@@ -153,6 +161,8 @@ export function TerminalComposeBar({
       setDraft('')
       setHistoryIndex(-1)
       historyDraftRef.current = ''
+      setSlashCommand(null)
+      setSlashMenuOpen(false)
       return
     }
     try {
@@ -162,6 +172,8 @@ export function TerminalComposeBar({
     }
     setHistoryIndex(-1)
     historyDraftRef.current = ''
+    setSlashCommand(null)
+    setSlashMenuOpen(false)
   }, [draftKey, sessionId])
 
   // Persist on every change (localStorage writes are cheap + synchronous — this
@@ -399,7 +411,8 @@ export function TerminalComposeBar({
 
   const send = useCallback(async () => {
     const text = draft.trim()
-    if (!text || sending) return
+    const command = sendOnThread ? null : slashCommand
+    if (!composeCanSend({ draft, sending, command }) || sending) return
     if (sendOnThread) {
       if (!threadAddr.trim()) return
     } else if (!sessionId) {
@@ -408,6 +421,7 @@ export function TerminalComposeBar({
 
     setSending(true)
     setDraft('') // optimistic clear (PRD 1b); restored below only on failure
+    setSlashMenuOpen(false)
 
     try {
       if (sendOnThread) {
@@ -419,23 +433,27 @@ export function TerminalComposeBar({
         if (resp?.ok === false) {
           setDraft((cur) => (cur.length === 0 ? text : cur))
         } else {
-          setHistory((prev) => [text, ...prev].slice(0, 50))
+          if (text) setHistory((prev) => [text, ...prev].slice(0, 50))
           setHistoryIndex(-1)
           historyDraftRef.current = ''
         }
       } else {
-        const resp = await daemonCliPost<MsgResponse>('terminal/send-message', {
+        const body: { session_id: string; text: string; command?: string } = {
           session_id: sessionId,
           text,
-        })
+        }
+        if (command) body.command = command
+        const resp = await daemonCliPost<MsgResponse>('terminal/send-message', body)
         // Failed send → restore the text so it's not lost (the box reappearing
         // IS the feedback) — but never clobber a fresh draft already started.
+        // Keep the selected slash-command on failure so retry still sends it.
         if (mapMsgResponseToStatus(resp).kind !== 'delivered') {
           setDraft((cur) => (cur.length === 0 ? text : cur))
         } else {
-          setHistory((prev) => [text, ...prev].slice(0, 50))
+          if (text) setHistory((prev) => [text, ...prev].slice(0, 50))
           setHistoryIndex(-1)
           historyDraftRef.current = ''
+          setSlashCommand(null)
         }
       }
     } catch {
@@ -443,10 +461,16 @@ export function TerminalComposeBar({
     } finally {
       setSending(false)
     }
-  }, [draft, sending, sessionId, sendOnThread, threadAddr])
+  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (slashMenuOpen && e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setSlashMenuOpen(false)
+        return
+      }
       const interrupt = composeInterruptSequence({
         key: e.key,
         ctrlKey: e.ctrlKey,
@@ -497,8 +521,50 @@ export function TerminalComposeBar({
         e.stopPropagation()
       }
     },
-    [send, draft, history, historyIndex, onInjectInput]
+    [send, draft, history, historyIndex, onInjectInput, slashMenuOpen]
   )
+
+  const toggleSlashMenu = useCallback(() => {
+    setSlashMenuOpen((open) => {
+      if (open) return false
+      const rect = slashBtnRef.current?.getBoundingClientRect()
+      if (rect) {
+        const width = 200
+        const left = Math.max(4, Math.min(rect.left, window.innerWidth - width - 4))
+        setSlashMenuPos({
+          left,
+          bottom: window.innerHeight - rect.top + 4,
+        })
+      }
+      return true
+    })
+  }, [])
+
+  const pickSlashCommand = useCallback((cmd: ComposeSlashCommand) => {
+    setSlashCommand((cur) => (cur === cmd ? null : cmd))
+    setSlashMenuOpen(false)
+  }, [])
+
+  useEffect(() => {
+    if (!slashMenuOpen) return
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as Node
+      if (slashBtnRef.current?.contains(t) || slashMenuRef.current?.contains(t)) return
+      setSlashMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      setSlashMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [slashMenuOpen])
 
   // 1c renderer-hide (after all hooks): not permitted → render nothing.
   if (!permitted) return null
@@ -506,7 +572,11 @@ export function TerminalComposeBar({
   // One condensed row — just the textarea.
   // min-w-0 on the flex row + field so app zoom (Cmd+=) reflows width
   // instead of pinning content-min-width and growing a horizontal scrollbar.
-  const canSend = draft.trim().length > 0 && !sending
+  const canSend = composeCanSend({
+    draft,
+    sending,
+    command: sendOnThread ? null : slashCommand,
+  })
   // Must match composeTextareaHeight: 4px pad × 2 + line-height 1.4.
   const firstLineH = Math.round(editorFontSize * 1.4 + 8)
   const btnSize = Math.min(firstLineH, Math.max(16, Math.round(editorFontSize * 1.4)))
@@ -567,6 +637,83 @@ export function TerminalComposeBar({
           <line x1="5" y1="12" x2="19" y2="12" />
         </svg>
       </button>
+      {!sendOnThread && (
+        <button
+          ref={slashBtnRef}
+          type="button"
+          aria-label="Slash command"
+          title={slashCommand ? `${slashCommand} selected` : 'Slash command'}
+          aria-haspopup="menu"
+          aria-expanded={slashMenuOpen}
+          aria-pressed={slashCommand != null}
+          data-testid="compose-slash-button"
+          disabled={sending}
+          onClick={toggleSlashMenu}
+          className={`inline-flex flex-shrink-0 items-center justify-center bg-[var(--color-bg-hover)] hover:bg-[var(--color-border)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+            slashCommand
+              ? 'text-[var(--color-accent)]'
+              : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+          }`}
+          style={{
+            borderRadius: 0,
+            width: btnSize,
+            height: btnSize,
+            marginBottom: btnNudge,
+            fontFamily:
+              "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
+            fontSize: Math.max(11, iconSize),
+            fontWeight: 600,
+            lineHeight: 1,
+          }}
+        >
+          /
+        </button>
+      )}
+      {slashMenuOpen &&
+        slashMenuPos &&
+        !sendOnThread &&
+        createPortal(
+          <div
+            ref={slashMenuRef}
+            role="menu"
+            data-testid="compose-slash-menu"
+            className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)] py-0.5 shadow-lg"
+            style={{
+              position: 'fixed',
+              left: slashMenuPos.left,
+              bottom: slashMenuPos.bottom,
+              zIndex: 99999,
+              borderRadius: 0,
+              minWidth: 180,
+            }}
+          >
+            {COMPOSE_SLASH_COMMANDS.map((item) => {
+              const selected = slashCommand === item.command
+              return (
+                <button
+                  key={item.command}
+                  type="button"
+                  role="menuitem"
+                  aria-checked={selected}
+                  onClick={() => pickSlashCommand(item.command)}
+                  className="flex w-full items-baseline gap-2 px-2 py-1 text-left hover:bg-[var(--color-bg-hover)]"
+                  style={{ borderRadius: 0 }}
+                >
+                  <span
+                    className="font-mono text-[11px]"
+                    style={{
+                      color: selected ? 'var(--color-accent)' : 'var(--color-text-primary)',
+                    }}
+                  >
+                    {item.command}
+                  </span>
+                  <span className="text-[10px] text-[var(--color-text-muted)]">{item.title}</span>
+                </button>
+              )
+            })}
+          </div>,
+          document.body,
+        )}
       <textarea
         ref={textareaRef}
         value={draft}

@@ -39,6 +39,7 @@ import { DictationLabSection, DICTATION_LAB_MANIFEST } from './sections/Dictatio
 import ServerSwitcher from '../TopBar/ServerSwitcher'
 import PageTabs from '../TopBar/PageTabs'
 import TimerButton from '@/components/Timer/TimerButton'
+import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { webFeatures } from '@/web/features'
@@ -205,6 +206,7 @@ export default function Settings(): React.JSX.Element {
         <DesktopChromeRight>
           <div className="flex items-center gap-1 no-drag">
             <TimerButton />
+            <K2NounsCheatSheet />
             <ModeToggle />
           </div>
         </DesktopChromeRight>

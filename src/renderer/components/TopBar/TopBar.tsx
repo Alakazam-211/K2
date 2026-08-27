@@ -7,6 +7,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import TimerButton from '@/components/Timer/TimerButton'
+import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import ServerSwitcher from './ServerSwitcher'
@@ -197,6 +198,8 @@ export default function TopBar({
 
           {/* Timer */}
           <TimerButton />
+
+          <K2NounsCheatSheet />
 
           {/* Per-window viewer/claimer mode toggle */}
           <ModeToggle />

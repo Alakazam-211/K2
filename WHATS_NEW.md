@@ -9,6 +9,12 @@ Quiet agent sessions no longer freeze the window for a second or two while you t
 
 `k2 msg --inbox-wake` / `--inbox-silent` with files now keeps the cover note you typed (it used to drop the prose and only attach the files). A leftover tray-teardown bug that printed `exit 1` on a successful send is gone.
 
+Agents extra columns: the divider between columns now stays under the cursor while you drag (including when the window is zoomed). It used to run ahead, pause, then leap.
+
+**Message the agent** has a `/` picker next to attach — `/compact` and `/goal` go to the TUI as real slash commands, not as typed text.
+
+A paper-note button in the top bar (next to the timer) opens a **K2 cheat sheet** of CLI nouns (`k2 msg`, `k2 thread`, `k2 inbox`, …).
+
 ---
 
 ## 0.40.116 — Codex yolo; pinned chat uses your LLM launch script

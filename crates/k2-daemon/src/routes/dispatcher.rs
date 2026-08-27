@@ -4535,7 +4535,7 @@ async fn handle_one_request(
             // before the 403 (mirrors require_manage's drain-then-403).
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             // Body may be form-encoded OR JSON; query is the fallback.
-            // session_id/text only — `from` is NEVER read from the body
+            // session_id/text/command — `from` is NEVER read from the body
             // (D3), it is resolved below from the token.
             let mut params = super::http::parse_params(&path, &query);
             for (k, v) in super::http::parse_form_body(&body_bytes) {
@@ -4544,7 +4544,7 @@ async fn handle_one_request(
             if let Ok(serde_json::Value::Object(map)) =
                 serde_json::from_slice::<serde_json::Value>(&body_bytes)
             {
-                for key in ["session_id", "text"] {
+                for key in ["session_id", "text", "command"] {
                     if let Some(s) = map.get(key).and_then(|v| v.as_str()) {
                         params.insert(key.to_string(), s.to_string());
                     }
@@ -4552,6 +4552,7 @@ async fn handle_one_request(
             }
             let session_id = params.get("session_id").cloned().unwrap_or_default();
             let text = params.get("text").cloned().unwrap_or_default();
+            let command_raw = params.get("command").cloned().unwrap_or_default();
 
             // #67 — D4 capability decision, now PER-WORKSPACE. The opt-in
             // gates ONLY the connect-user path; the owner is allowed
@@ -4593,6 +4594,24 @@ async fn handle_one_request(
                     return DispatchOutcome::Done;
                 }
             };
+            // Composer allowlist BEFORE spawn_blocking inject. Empty is
+            // fine (plain send). Unknown (`/exit`, `/loop`, `/compact now`)
+            // → 400, do not inject.
+            let command = match crate::workspace_msg::normalize_composer_slash_command(&command_raw)
+            {
+                Ok(None) => String::new(),
+                Ok(Some(c)) => c.to_string(),
+                Err(_) => {
+                    super::http::send_response(
+                        &mut *stream,
+                        "400 Bad Request",
+                        "application/json",
+                        r#"{"error":"unknown composer command"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
             let body = tokio::task::spawn_blocking(move || {
                 // M2 (inject-time half): re-validate a connect-user token
                 // right before injecting. The gate validated it once, but
@@ -4609,11 +4628,24 @@ async fn handle_one_request(
                         .to_string();
                     }
                 }
-                let resp = crate::workspace_msg::send_message_to_session(
+                let resp = match crate::workspace_msg::send_message_to_session_with_command(
                     &session_id,
                     &from,
                     &text,
-                );
+                    &command,
+                ) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        // Dispatcher already allowlisted; this is defense
+                        // in depth and must still not inject.
+                        return serde_json::json!({
+                            "success": false,
+                            "reason": "unknown_command",
+                            "hint": "composer may only send /compact or /goal"
+                        })
+                        .to_string();
+                    }
+                };
                 if resp.success {
                     crate::workspace_msg::persist_compose_send_after_success(
                         &session_id,

@@ -34,6 +34,7 @@ import PageTabs from '@/components/TopBar/PageTabs'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import TimerButton from '@/components/Timer/TimerButton'
+import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import { Surface } from '@/components/ui'
 import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
@@ -364,6 +365,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
         <DesktopChromeRight>
           <div className="flex items-center gap-1">
             <TimerButton />
+            <K2NounsCheatSheet />
             <ModeToggle />
             <div className="w-px h-4 bg-[var(--color-border)] mx-1" />
             <button

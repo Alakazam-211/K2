@@ -20,6 +20,9 @@ import {
   composeAgentNameFromProjects,
   extractImagePathsFromDraft,
   removePathFromDraft,
+  COMPOSE_SLASH_COMMANDS,
+  normalizeComposeSlashCommand,
+  composeCanSend,
 } from './terminalCompose'
 
 // ── Enter = send, Shift+Enter = newline ──────────────────────────────
@@ -201,6 +204,54 @@ describe('extractImagePathsFromDraft / removePathFromDraft', () => {
     expect(removePathFromDraft("look at '/tmp/a.png' please", '/tmp/a.png')).toBe(
       'look at please',
     )
+  })
+})
+
+describe('COMPOSE_SLASH_COMMANDS / normalizeComposeSlashCommand', () => {
+  it('lists only /compact and /goal', () => {
+    expect(COMPOSE_SLASH_COMMANDS.map((c) => c.command)).toEqual(['/compact', '/goal'])
+  })
+
+  it('normalizes optional slash and case to canonical forms', () => {
+    expect(normalizeComposeSlashCommand('/compact')).toBe('/compact')
+    expect(normalizeComposeSlashCommand('COMPACT')).toBe('/compact')
+    expect(normalizeComposeSlashCommand('  /Compact  ')).toBe('/compact')
+    expect(normalizeComposeSlashCommand('/GOAL')).toBe('/goal')
+    expect(normalizeComposeSlashCommand('goal')).toBe('/goal')
+  })
+
+  it('empty / whitespace is no command', () => {
+    expect(normalizeComposeSlashCommand('')).toBeNull()
+    expect(normalizeComposeSlashCommand('   ')).toBeNull()
+    expect(normalizeComposeSlashCommand(null)).toBeNull()
+    expect(normalizeComposeSlashCommand(undefined)).toBeNull()
+  })
+
+  it('unknown commands are rejected (not normalized)', () => {
+    expect(normalizeComposeSlashCommand('/exit')).toBeNull()
+    expect(normalizeComposeSlashCommand('/loop')).toBeNull()
+    expect(normalizeComposeSlashCommand('/compact now')).toBeNull()
+    expect(normalizeComposeSlashCommand('garbage')).toBeNull()
+  })
+})
+
+describe('composeCanSend', () => {
+  it('empty draft + /compact can send', () => {
+    expect(composeCanSend({ draft: '', sending: false, command: '/compact' })).toBe(true)
+  })
+
+  it('empty draft + no command cannot send', () => {
+    expect(composeCanSend({ draft: '', sending: false })).toBe(false)
+    expect(composeCanSend({ draft: '   ', sending: false, command: null })).toBe(false)
+  })
+
+  it('sending is never sendable', () => {
+    expect(composeCanSend({ draft: 'hi', sending: true })).toBe(false)
+    expect(composeCanSend({ draft: '', sending: true, command: '/compact' })).toBe(false)
+  })
+
+  it('non-empty draft can send without a command', () => {
+    expect(composeCanSend({ draft: 'hi', sending: false })).toBe(true)
   })
 })
 

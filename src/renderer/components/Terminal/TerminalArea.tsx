@@ -7,6 +7,7 @@ import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
 import { KeyCombo } from '@/components/KeySymbol'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
+import { applyColumnResize } from './columnResize'
 
 interface TerminalAreaProps {
   cwd: string
@@ -86,36 +87,36 @@ function useTabDragState(): TabDragState | null {
 function ColumnResizeHandle({
   onDrag
 }: {
-  onDrag: (deltaX: number) => void
+  onDrag: (clientX: number) => void
 }): React.JSX.Element {
-  const startXRef = useRef(0)
   const draggingRef = useRef(false)
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const endDrag = useCallback(() => {
+    draggingRef.current = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }, [])
+
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
     e.preventDefault()
-    startXRef.current = e.clientX
     draggingRef.current = true
-
-    const handleMouseMove = (ev: MouseEvent): void => {
-      if (!draggingRef.current) return
-      const delta = ev.clientX - startXRef.current
-      startXRef.current = ev.clientX
-      onDrag(delta)
-    }
-
-    const handleMouseUp = (): void => {
-      draggingRef.current = false
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
+    e.currentTarget.setPointerCapture(e.pointerId)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
+  }, [])
+
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingRef.current) return
+    onDrag(e.clientX)
   }, [onDrag])
+
+  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+    endDrag()
+  }, [endDrag])
 
   return (
     <div
@@ -124,8 +125,13 @@ function ColumnResizeHandle({
         width: 4,
         cursor: 'col-resize',
         backgroundColor: 'var(--color-border)',
+        touchAction: 'none',
       }}
-      onMouseDown={handleMouseDown}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      onLostPointerCapture={endDrag}
     />
   )
 }
@@ -276,25 +282,11 @@ export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
 
   useTerminalShortcuts(cwd)
 
-  const handleResize = useCallback((handleIndex: number, deltaX: number) => {
+  const handleResize = useCallback((handleIndex: number, clientX: number) => {
     const container = containerRef.current
     if (!container) return
-    const totalWidth = container.offsetWidth
-    const deltaPct = (deltaX / totalWidth) * 100
-
-    setFlexes((prev) => {
-      const next = [...prev]
-      const minPct = 15
-      let newLeft = next[handleIndex] + deltaPct
-      let newRight = next[handleIndex + 1] - deltaPct
-
-      if (newLeft < minPct) { newRight += newLeft - minPct; newLeft = minPct }
-      if (newRight < minPct) { newLeft += newRight - minPct; newRight = minPct }
-
-      next[handleIndex] = newLeft
-      next[handleIndex + 1] = newRight
-      return next
-    })
+    const rowRect = container.getBoundingClientRect()
+    setFlexes((prev) => applyColumnResize({ clientX, rowRect, handleIndex, flexes: prev }))
   }, [])
 
   const prevSplitCountRef = useRef(splitCount)
@@ -314,7 +306,7 @@ export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
           <React.Fragment key={i}>
             {i > 0 && (
               <ColumnResizeHandle
-                onDrag={(delta) => handleResize(i - 1, delta)}
+                onDrag={(clientX) => handleResize(i - 1, clientX)}
               />
             )}
             <TabGroupColumn

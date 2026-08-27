@@ -451,6 +451,7 @@ impl K1PauseAck {
         self.paused
     }
 
+    #[cfg(test)]
     fn dropped_while_paused(&self) -> bool {
         self.dropped_while_paused
     }

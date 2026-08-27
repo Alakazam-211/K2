@@ -299,7 +299,8 @@ export default function WhatsNewModal({
         }}
       />
 
-      {/* Dialog + optional GitHub-star drawer, centered as a unit. */}
+      {/* Dialog stays viewport-centered. Star drawer is absolute on the
+          right, lower z-index so it reads as tucked behind. */}
       <div
         className="no-drag"
         style={{
@@ -308,9 +309,7 @@ export default function WhatsNewModal({
           left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 99999,
-          display: 'flex',
-          alignItems: 'center',
-          maxWidth: '96vw',
+          width: 'min(620px, 90vw)',
           maxHeight: '78vh',
         }}
         onMouseDown={(e) => e.stopPropagation()}
@@ -319,17 +318,15 @@ export default function WhatsNewModal({
         role2="surface"
         className="no-drag"
         style={{
-          width: showStarDrawer
-            ? 'min(620px, calc(96vw - 200px))'
-            : 'min(620px, 90vw)',
+          position: 'relative',
+          zIndex: 2,
+          width: '100%',
           maxHeight: '78vh',
           display: 'flex',
           flexDirection: 'column',
           boxShadow:
             '0 12px 40px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4)',
           overflow: 'hidden',
-          flex: '1 1 auto',
-          minWidth: 0,
         }}
       >
         {/* Header — overall title + per-page version chip + page-count */}
@@ -496,22 +493,22 @@ function GithubStarDrawer(): React.JSX.Element {
 
   return (
     <Surface
-      role2="elevated"
-      elevation={2}
+      role2="inset"
+      bordered
       className="no-drag"
       style={{
-        width: 188,
-        flex: '0 0 188px',
-        marginLeft: -1,
-        padding: '18px 16px 16px',
+        position: 'absolute',
+        left: '100%',
+        top: '22%',
+        zIndex: 1,
+        width: 176,
+        marginLeft: -10,
+        padding: '16px 14px 14px 22px',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'flex-start',
         gap: 10,
-        alignSelf: 'center',
-        maxHeight: '100%',
-        boxShadow:
-          '0 10px 28px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.3)',
+        boxShadow: '4px 8px 20px rgba(0, 0, 0, 0.28)',
         fontFamily:
           "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif",
       }}

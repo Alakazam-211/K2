@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DialogScrim, Surface } from '@/components/ui'
-import { K2_CHEAT_SHEET_INTRO, K2_NOUN_GROUPS } from './k2Nouns'
+import { K2_CHEAT_SHEET_INTRO, K2_CHEAT_SHEET_NOTES, K2_NOUN_GROUPS } from './k2Nouns'
 
 const noDrag = {
   WebkitAppRegion: 'no-drag',
@@ -117,6 +117,20 @@ export default function K2NounsCheatSheet(): React.JSX.Element {
               <p className="text-[12.5px] leading-[1.55] text-[var(--color-text-secondary)] m-0 mb-3">
                 {K2_CHEAT_SHEET_INTRO}
               </p>
+              <div className="mb-3 space-y-2">
+                {K2_CHEAT_SHEET_NOTES.map((n) => (
+                  <p
+                    key={n.note}
+                    className="text-[12.5px] leading-[1.5] text-[var(--color-text-secondary)] m-0"
+                  >
+                    <span className="font-semibold text-[var(--color-text-primary)]">
+                      {n.title}
+                    </span>
+                    {' — '}
+                    {n.body}
+                  </p>
+                ))}
+              </div>
               {K2_NOUN_GROUPS.map((group) => (
                 <section key={group.title} className="mb-3 last:mb-0">
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] m-0 mb-1.5">
@@ -137,6 +151,16 @@ export default function K2NounsCheatSheet(): React.JSX.Element {
                           >
                             {item.noun}
                           </code>
+                          {item.note === 'sidecar' && (
+                            <span className="ml-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                              sidecar
+                            </span>
+                          )}
+                          {item.note === 'linux' && (
+                            <span className="ml-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                              Linux
+                            </span>
+                          )}
                           <span className="text-[var(--color-text-secondary)]">
                             {' '}
                             — {item.blurb}

@@ -11,6 +11,8 @@ Quiet agent sessions no longer freeze the window for a second or two while you t
 
 Agents extra columns: the divider between columns now stays under the cursor while you drag (including when the window is zoomed). It used to run ahead, pause, then leap.
 
+`k2 mail link add` for an IMAP app-password account no longer dies with `Query returned no rows` before it talks to the server (Gmail OAuth was fine). Pipe the password as before.
+
 **Message the agent** has a `/` picker next to attach — `/compact` and `/goal` go to the TUI as real slash commands, not as typed text.
 
 A paper-note button in the top bar (next to the timer) opens a **K2 cheat sheet** of CLI nouns (`k2 msg`, `k2 thread`, `k2 inbox`, …).

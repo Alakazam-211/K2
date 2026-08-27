@@ -231,8 +231,9 @@ enum Inbound {
     /// highest frame version it has rendered. Sent once per rAF
     /// flush (not per message). Drives the ack-gated pacing: the
     /// daemon stops forwarding deltas to a connection whose unacked
-    /// backlog exceeds [`UNACKED_FRAMES_MAX`] / [`UNACKED_BYTES_MAX`]
-    /// and resyncs it with a fresh full snapshot on its next ack.
+    /// backlog exceeds [`UNACKED_FRAMES_MAX`] / [`UNACKED_BYTES_MAX`].
+    /// The next ack unpauses quietly when nothing was dropped; a full
+    /// `snapshot_term` is sent only if frames were dropped while paused.
     /// JSON (non-k1) clients never send this; an older daemon
     /// receiving it logs "malformed inbound" and carries on.
     Ack { version: u64 },
@@ -363,7 +364,8 @@ impl AttachSettleFence {
 /// live loop share one policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameFwd {
-    /// Client already paused (non-fence): drop; resync on next ack.
+    /// Client already paused (non-fence): drop; mark
+    /// `dropped_while_paused`. Next ack sends one full snapshot.
     DropPaused,
     /// Fence active and credit exhausted: drop; one snap at fence end.
     DropFence,
@@ -414,6 +416,94 @@ fn should_trip_pause_after_enqueue(
         return false;
     }
     unacked_frames >= frames_max || unacked_bytes >= bytes_max
+}
+
+/// k1 pause + ack catch-up policy (PRD grid-pause-snapshot-hitch G3).
+///
+/// Pause still trips at [`UNACKED_FRAMES_MAX`] / [`UNACKED_BYTES_MAX`].
+/// Catch-up is a full `snapshot_term` on the next ack **only if**
+/// frames were dropped while paused (`FrameFwd::DropPaused` sets
+/// `dropped_while_paused`). If the client acked every forwarded frame,
+/// unpause with **zero** snapshots — the full-history snap is the
+/// compose hitch this policy exists to skip. Pure so the WS loop and
+/// unit tests share one decision; no socket required.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct K1PauseAck {
+    paused: bool,
+    dropped_while_paused: bool,
+}
+
+/// What the live Ack arm should do after popping `unacked`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AckCatchup {
+    /// `!paused`: pop unacked only; never snapshot (G2).
+    None,
+    /// Paused, nothing dropped, ack emptied unacked: unpause, 0 snaps.
+    UnpauseQuiet,
+    /// Paused + dropped: one full snapshot, then unpause; flag clears.
+    Snapshot,
+    /// Paused, nothing dropped, unacked still non-empty: stay paused.
+    StayPaused,
+}
+
+impl K1PauseAck {
+    fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    fn dropped_while_paused(&self) -> bool {
+        self.dropped_while_paused
+    }
+
+    /// `FrameFwd::DropPaused`: this connection missed a frame. Sets
+    /// pause if we weren't already (defensive over-cap arm).
+    fn note_drop_paused(&mut self) {
+        self.paused = true;
+        self.dropped_while_paused = true;
+    }
+
+    /// Cap crossed on a *forwarded* frame — pause, but the client
+    /// still has every forwarded frame. Does **not** set dropped.
+    fn note_trip_pause(&mut self) {
+        self.paused = true;
+    }
+
+    /// Ack after popping versions `<=` the client's floor.
+    ///
+    /// Same-version ack is not enough by itself to skip a snap: if
+    /// anything was dropped, we still send one full history snapshot.
+    fn on_ack(&mut self, unacked_empty_after_pop: bool) -> AckCatchup {
+        if !self.paused {
+            return AckCatchup::None;
+        }
+        if self.dropped_while_paused {
+            self.paused = false;
+            self.dropped_while_paused = false;
+            return AckCatchup::Snapshot;
+        }
+        if unacked_empty_after_pop {
+            self.paused = false;
+            return AckCatchup::UnpauseQuiet;
+        }
+        AckCatchup::StayPaused
+    }
+
+    /// input / resize / `set_active` while paused: unpause without an
+    /// immediate snap, then the caller `rearm_clearing_pause`s so the
+    /// settle fence coalesces to one snap. Clears `dropped_while_paused`
+    /// so a later ack cannot double-snap with that fence.
+    fn unpause_for_fence_rearm(&mut self) -> bool {
+        let was = self.paused;
+        self.paused = false;
+        self.dropped_while_paused = false;
+        was
+    }
+
+    /// Lagged / settle-fence already sent a snap that covers drops.
+    fn clear_after_resync_snap(&mut self) {
+        self.paused = false;
+        self.dropped_while_paused = false;
+    }
 }
 
 /// Ceiling on a forwarded OSC 52 payload (decoded bytes). Anything a
@@ -1028,12 +1118,13 @@ pub async fn serve_session_grid_connection(
     // expected). `unacked` holds (version, payload-bytes) of frames
     // forwarded but not yet covered by a client ack; when it exceeds
     // the thresholds we stop forwarding (`paused`) — the SHARED
-    // emitter keeps running for every other subscriber — and the
-    // connection's next ack triggers a fresh read-only full snapshot
-    // through the same version-floor machinery as attach/Lagged.
+    // emitter keeps running for every other subscriber. The next ack
+    // unpauses quietly when nothing was dropped; a dropped-while-paused
+    // connection gets one read-only full snapshot (same floor as
+    // attach/Lagged).
     let mut unacked: VecDeque<(u64, usize)> = VecDeque::new();
     let mut unacked_bytes: usize = 0;
-    let mut paused = false;
+    let mut pause_ack = K1PauseAck::default();
     // Unit E P1-8: once-per-episode enter breadcrumb for k1 pause.
     // Cleared on every pause exit path so the next enter logs again.
     let mut grid_pause_logged = false;
@@ -1083,8 +1174,7 @@ pub async fn serve_session_grid_connection(
                     };
                     unacked.clear();
                     unacked_bytes = 0;
-                    if paused {
-                        paused = false;
+                    if pause_ack.is_paused() {
                         grid_pause_logged = false;
                         log_debug!(
                             "[grid-pause] exit session={} acked_version={} \
@@ -1093,6 +1183,7 @@ pub async fn serve_session_grid_connection(
                             frame_floor,
                         );
                     }
+                    pause_ack.clear_after_resync_snap();
                     log_debug!(
                         "[daemon/sessions_grid_ws] settle fence end — coalesce \
                          snapshot at floor {} for session {} sub {}",
@@ -1156,7 +1247,7 @@ pub async fn serve_session_grid_connection(
                             let fence_active = settle_fence.is_active(now);
                             let fwd = if proto_k1 {
                                 decide_k1_frame_fwd(
-                                    paused,
+                                    pause_ack.is_paused(),
                                     fence_active,
                                     unacked.len(),
                                     unacked_bytes,
@@ -1169,14 +1260,17 @@ pub async fn serve_session_grid_connection(
                             match fwd {
                                 FrameFwd::DropPaused => {
                                     // Ack backlog over threshold: drop
-                                    // for THIS connection only. Resync
-                                    // snapshot on the next ack restamps
-                                    // the floor (covers scrollback_appended).
-                                    // Enter pause if we crossed the cap
-                                    // without the trip_pause path (e.g.
-                                    // fence just ended while unacked was
-                                    // already at the ceiling).
-                                    if !paused {
+                                    // for THIS connection only. Sets
+                                    // dropped_while_paused so the next
+                                    // ack sends one full snapshot (covers
+                                    // scrollback_appended). Enter pause
+                                    // if we crossed the cap without the
+                                    // trip_pause path (e.g. fence just
+                                    // ended while unacked was already
+                                    // at the ceiling).
+                                    let entering = !pause_ack.is_paused();
+                                    pause_ack.note_drop_paused();
+                                    if entering {
                                         log_debug!(
                                             "[daemon/sessions_grid_ws] k1 ack backlog \
                                              ({} frames / {} bytes) — pausing deltas for \
@@ -1186,7 +1280,6 @@ pub async fn serve_session_grid_connection(
                                             session.session_id,
                                             subscriber_id,
                                         );
-                                        paused = true;
                                         if !grid_pause_logged {
                                             grid_pause_logged = true;
                                             let version = unacked
@@ -1240,7 +1333,7 @@ pub async fn serve_session_grid_connection(
                                             UNACKED_FRAMES_MAX,
                                             UNACKED_BYTES_MAX,
                                         ) {
-                                            if !paused {
+                                            if !pause_ack.is_paused() {
                                                 log_debug!(
                                                     "[daemon/sessions_grid_ws] k1 ack backlog \
                                                      ({} frames / {} bytes) — pausing deltas for \
@@ -1267,7 +1360,7 @@ pub async fn serve_session_grid_connection(
                                                     );
                                                 }
                                             }
-                                            paused = true;
+                                            pause_ack.note_trip_pause();
                                         } else if fence_active
                                             && (unacked.len() >= UNACKED_FRAMES_MAX
                                                 || unacked_bytes >= UNACKED_BYTES_MAX)
@@ -1303,8 +1396,7 @@ pub async fn serve_session_grid_connection(
                         // acks for them pop nothing).
                         unacked.clear();
                         unacked_bytes = 0;
-                        if paused {
-                            paused = false;
+                        if pause_ack.is_paused() {
                             grid_pause_logged = false;
                             log_debug!(
                                 "[grid-pause] exit session={} acked_version={} \
@@ -1313,6 +1405,7 @@ pub async fn serve_session_grid_connection(
                                 frame_floor,
                             );
                         }
+                        pause_ack.clear_after_resync_snap();
                         // Lagged recovery already restamped — clear any
                         // pending fence coalesce so we don't double-snap.
                         settle_fence.clear_dropped();
@@ -1628,8 +1721,7 @@ pub async fn serve_session_grid_connection(
                                         // PR3: input-steal claimer resize
                                         // can reflow — rearm settle fence.
                                         let now = std::time::Instant::now();
-                                        if paused {
-                                            paused = false;
+                                        if pause_ack.unpause_for_fence_rearm() {
                                             grid_pause_logged = false;
                                             log_debug!(
                                                 "[grid-pause] exit session={} \
@@ -1708,8 +1800,7 @@ pub async fn serve_session_grid_connection(
                                     // hundreds of ms — rearm the settle
                                     // fence so pause→resync doesn't spiral.
                                     let now = std::time::Instant::now();
-                                    if paused {
-                                        paused = false;
+                                    if pause_ack.unpause_for_fence_rearm() {
                                         grid_pause_logged = false;
                                         log_debug!(
                                             "[grid-pause] exit session={} \
@@ -1788,8 +1879,7 @@ pub async fn serve_session_grid_connection(
                                     && rows.is_some();
                                 if may_reflow {
                                     let now = std::time::Instant::now();
-                                    if paused {
-                                        paused = false;
+                                    if pause_ack.unpause_for_fence_rearm() {
                                         grid_pause_logged = false;
                                         log_debug!(
                                             "[grid-pause] exit session={} \
@@ -1898,49 +1988,57 @@ pub async fn serve_session_grid_connection(
                                     let (_, n) = unacked.pop_front().unwrap();
                                     unacked_bytes -= n;
                                 }
-                                if paused {
-                                    // First ack after the backlog
-                                    // tripped: resync with a fresh
-                                    // READ-ONLY snapshot through the
-                                    // SAME version-floor machinery as
-                                    // attach/Lagged — the re-stamped
-                                    // floor guarantees no delta whose
-                                    // `scrollback_appended` rows this
-                                    // snapshot already contains can be
-                                    // forwarded afterwards (those rows
-                                    // are concatenated client-side,
-                                    // NOT idempotent), and every frame
-                                    // dropped while paused is covered.
-                                    let snap = {
-                                        let st = shared_emit_state.lock();
-                                        let term_mutex = session.term();
-                                        let term = term_mutex.lock();
-                                        frame_floor = st.version;
-                                        snapshot_term(&pane_id, &*term, frame_floor)
-                                    };
-                                    unacked.clear();
-                                    unacked_bytes = 0;
-                                    paused = false;
-                                    grid_pause_logged = false;
-                                    settle_fence.clear_dropped();
-                                    log_debug!(
-                                        "[grid-pause] exit session={} acked_version={}",
-                                        session.session_id,
-                                        version,
-                                    );
-                                    log_debug!(
-                                        "[daemon/sessions_grid_ws] k1 ack (v{version}) after \
-                                         backlog pause — resync snapshot at floor {} for \
-                                         session {} sub {}",
-                                        frame_floor,
-                                        session.session_id,
-                                        subscriber_id,
-                                    );
-                                    if send_snapshot(&mut write, &snap, true)
-                                        .await
-                                        .is_err()
-                                    {
-                                        break;
+                                match pause_ack.on_ack(unacked.is_empty()) {
+                                    AckCatchup::None | AckCatchup::StayPaused => {}
+                                    AckCatchup::UnpauseQuiet => {
+                                        // Every forwarded frame was acked;
+                                        // nothing dropped. Unpause without
+                                        // a full-history snap (the hitch).
+                                        grid_pause_logged = false;
+                                        log_debug!(
+                                            "[grid-pause] exit session={} acked_version={} \
+                                             (quiet-no-drop)",
+                                            session.session_id,
+                                            version,
+                                        );
+                                    }
+                                    AckCatchup::Snapshot => {
+                                        // Frames were dropped while paused:
+                                        // one READ-ONLY snapshot through the
+                                        // SAME version-floor machinery as
+                                        // attach/Lagged. Same-version ack is
+                                        // not enough by itself to skip this
+                                        // — dropped damage is not in unacked.
+                                        let snap = {
+                                            let st = shared_emit_state.lock();
+                                            let term_mutex = session.term();
+                                            let term = term_mutex.lock();
+                                            frame_floor = st.version;
+                                            snapshot_term(&pane_id, &*term, frame_floor)
+                                        };
+                                        unacked.clear();
+                                        unacked_bytes = 0;
+                                        grid_pause_logged = false;
+                                        settle_fence.clear_dropped();
+                                        log_debug!(
+                                            "[grid-pause] exit session={} acked_version={}",
+                                            session.session_id,
+                                            version,
+                                        );
+                                        log_debug!(
+                                            "[daemon/sessions_grid_ws] k1 ack (v{version}) after \
+                                             backlog pause — resync snapshot at floor {} for \
+                                             session {} sub {}",
+                                            frame_floor,
+                                            session.session_id,
+                                            subscriber_id,
+                                        );
+                                        if send_snapshot(&mut write, &snap, true)
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -2176,6 +2274,209 @@ mod tests {
             8,
             UNACKED_BYTES_MAX
         ));
+    }
+
+    // ── G3 pause/ack catch-up (prd-grid-pause-snapshot-hitch) ─────
+    //
+    // The WS loop calls K1PauseAck; these tests pin the four daemon
+    // bullets without a socket. Fail loudly: a snap on !paused ack, a
+    // quiet unpause that still snaps, or DropPaused that forgets the
+    // dropped bit is a compose hitch / stuck-grid regression.
+
+    fn catchup_snaps(outcome: AckCatchup) -> usize {
+        match outcome {
+            AckCatchup::Snapshot => 1,
+            AckCatchup::None | AckCatchup::UnpauseQuiet | AckCatchup::StayPaused => 0,
+        }
+    }
+
+    #[test]
+    fn ack_unpaused_never_snapshots() {
+        let mut p = K1PauseAck::default();
+        assert!(!p.is_paused());
+        assert!(!p.dropped_while_paused());
+        assert_eq!(p.on_ack(true), AckCatchup::None);
+        assert_eq!(catchup_snaps(p.on_ack(false)), 0);
+        assert!(!p.is_paused());
+        assert!(!p.dropped_while_paused());
+    }
+
+    #[test]
+    fn ack_paused_no_drop_empty_unacked_unpause_zero_snaps() {
+        let mut p = K1PauseAck::default();
+        p.note_trip_pause();
+        assert!(p.is_paused());
+        assert!(
+            !p.dropped_while_paused(),
+            "forwarded cap frame is not a drop"
+        );
+        let outcome = p.on_ack(true);
+        assert_eq!(outcome, AckCatchup::UnpauseQuiet);
+        assert_eq!(catchup_snaps(outcome), 0);
+        assert!(!p.is_paused());
+        assert!(!p.dropped_while_paused());
+    }
+
+    #[test]
+    fn ack_paused_dropped_one_snapshot_clears_flag() {
+        let mut p = K1PauseAck::default();
+        p.note_trip_pause();
+        p.note_drop_paused();
+        assert!(p.is_paused());
+        assert!(p.dropped_while_paused());
+        // Unacked may still hold forwarded frames; dropped damage is
+        // not in that queue — still one snap. Same-version ack must
+        // not skip it (ack floor == last forwarded is not enough).
+        let outcome = p.on_ack(false);
+        assert_eq!(outcome, AckCatchup::Snapshot);
+        assert_eq!(catchup_snaps(outcome), 1);
+        assert!(!p.is_paused());
+        assert!(
+            !p.dropped_while_paused(),
+            "dropped_while_paused must clear after the snap"
+        );
+        assert_eq!(
+            catchup_snaps(p.on_ack(true)),
+            0,
+            "second ack after unpause must not snap again"
+        );
+    }
+
+    #[test]
+    fn ack_paused_dropped_same_version_still_snapshots() {
+        let mut p = K1PauseAck::default();
+        p.note_drop_paused();
+        // unacked empty after pop (ack version == floor) — still snap.
+        let outcome = p.on_ack(true);
+        assert_eq!(outcome, AckCatchup::Snapshot);
+        assert_eq!(catchup_snaps(outcome), 1);
+        assert!(!p.dropped_while_paused());
+    }
+
+    #[test]
+    fn hitting_32_frames_or_2mb_pauses_drop_paused_sets_dropped() {
+        let mut unacked_frames = 0usize;
+        let mut unacked_bytes = 0usize;
+        let mut p = K1PauseAck::default();
+        const PAYLOAD: usize = 1024;
+
+        for i in 0..UNACKED_FRAMES_MAX {
+            let fwd = decide_k1_frame_fwd(
+                p.is_paused(),
+                false,
+                unacked_frames,
+                unacked_bytes,
+                UNACKED_FRAMES_MAX,
+                UNACKED_BYTES_MAX,
+            );
+            assert_eq!(
+                fwd,
+                FrameFwd::Forward { trip_pause: false },
+                "frame {i} under the 32-frame cap must forward"
+            );
+            unacked_frames += 1;
+            unacked_bytes += PAYLOAD;
+            if should_trip_pause_after_enqueue(
+                false,
+                unacked_frames,
+                unacked_bytes,
+                UNACKED_FRAMES_MAX,
+                UNACKED_BYTES_MAX,
+            ) {
+                p.note_trip_pause();
+            }
+        }
+        assert!(
+            p.is_paused(),
+            "exactly {UNACKED_FRAMES_MAX} forwarded frames must pause"
+        );
+        assert!(
+            !p.dropped_while_paused(),
+            "the cap-crossing frame was forwarded, not dropped"
+        );
+
+        let over = decide_k1_frame_fwd(
+            p.is_paused(),
+            false,
+            unacked_frames,
+            unacked_bytes,
+            UNACKED_FRAMES_MAX,
+            UNACKED_BYTES_MAX,
+        );
+        assert_eq!(over, FrameFwd::DropPaused);
+        p.note_drop_paused();
+        assert!(
+            p.dropped_while_paused(),
+            "FrameFwd::DropPaused must set dropped_while_paused"
+        );
+
+        // Bytes cap: two payloads that together exceed 2MB.
+        let mut p2 = K1PauseAck::default();
+        let mut frames = 0usize;
+        let mut bytes = 0usize;
+        let fat = UNACKED_BYTES_MAX / 2 + 1;
+        loop {
+            let fwd = decide_k1_frame_fwd(
+                p2.is_paused(),
+                false,
+                frames,
+                bytes,
+                UNACKED_FRAMES_MAX,
+                UNACKED_BYTES_MAX,
+            );
+            match fwd {
+                FrameFwd::Forward { .. } => {
+                    frames += 1;
+                    bytes += fat;
+                    if should_trip_pause_after_enqueue(
+                        false,
+                        frames,
+                        bytes,
+                        UNACKED_FRAMES_MAX,
+                        UNACKED_BYTES_MAX,
+                    ) {
+                        p2.note_trip_pause();
+                        break;
+                    }
+                }
+                other => panic!("bytes-cap fill must forward until trip, got {other:?}"),
+            }
+        }
+        assert!(p2.is_paused(), "crossing UNACKED_BYTES_MAX must pause");
+        assert!(
+            bytes >= UNACKED_BYTES_MAX,
+            "test must actually cross 2MB, got {bytes}"
+        );
+        assert_eq!(
+            decide_k1_frame_fwd(
+                p2.is_paused(),
+                false,
+                frames,
+                bytes,
+                UNACKED_FRAMES_MAX,
+                UNACKED_BYTES_MAX,
+            ),
+            FrameFwd::DropPaused
+        );
+        p2.note_drop_paused();
+        assert!(
+            p2.dropped_while_paused(),
+            "DropPaused after the 2MB pause must set dropped"
+        );
+    }
+
+    #[test]
+    fn fence_rearm_unpause_does_not_double_snap_on_ack() {
+        let mut p = K1PauseAck::default();
+        p.note_drop_paused();
+        assert!(p.unpause_for_fence_rearm());
+        assert!(!p.is_paused());
+        assert!(!p.dropped_while_paused());
+        assert_eq!(
+            p.on_ack(true),
+            AckCatchup::None,
+            "ack after fence-rearm unpause must not snapshot (fence owns catch-up)"
+        );
     }
 
     /// Simulated attach + synthetic repaint under low credit (W=8 and

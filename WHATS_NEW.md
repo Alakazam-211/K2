@@ -3,6 +3,20 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.120 — Workspace Postgres sidecar; hostmail enable needs a hostname
+
+Linux boxes can grow a **database sidecar** the way they grew mail: `k2 db enable` supervises distro Postgres (loopback only — not a static-IP feature). Agents mint a per-workspace DB with `k2 db create`, apply `.k2/db/migrations`, dump/restore inside the workspace, and store JSON documents with `k2 store`. Settings → **Data** is the owner surface.
+
+Off-box `*.k2.dev` is the existing publish door: `k2 publish subdomain create <label> --target localhost:<port>` (the port is already listening — do not `k2 publish run` Postgres). `k2 db status --json` reports `port` and that hint. There is no `k2 db expose`.
+
+Hire an interview workspace with write in one shot: `k2 agent hire … --db-access write` then `k2 db create` (create is still not implicit on hire). `GET /v1/w/<ws>/db` returns applied migrations + size; `POST /v1/w/<ws>/db/restore` restores onto a fresh workspace. Re-running migrate with the same checksum is a no-op; a rewritten already-applied file is refused.
+
+Postgres is fenced so it cannot starve agents (systemd memory cap + query GUCs). `k2 db doctor` reports RSS vs the cap.
+
+`k2 hostmail enable` now requires `--hostname mail.acme.dev` (the daemon already 400'd an empty body). `k2 db enable` still POSTs `{}`.
+
+---
+
 ## 0.40.119 — LAN federated connections use the saved IP:port
 
 After you Pair a LAN peer, picking an agent under a workspace's **Federated connections** no longer looks up `<LAN-IP>:38471.k2.dev` (that host was never in Settings → Connections). The address is `agent::<LAN-IP>:38471` against the server you already signed in.

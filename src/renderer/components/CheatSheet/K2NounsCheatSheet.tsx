@@ -151,14 +151,9 @@ export default function K2NounsCheatSheet(): React.JSX.Element {
                           >
                             {item.noun}
                           </code>
-                          {item.note === 'sidecar' && (
+                          {item.note === 'linux-sidecar' && (
                             <span className="ml-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-                              sidecar
-                            </span>
-                          )}
-                          {item.note === 'linux' && (
-                            <span className="ml-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-                              Linux
+                              Linux sidecar
                             </span>
                           )}
                           <span className="text-[var(--color-text-secondary)]">

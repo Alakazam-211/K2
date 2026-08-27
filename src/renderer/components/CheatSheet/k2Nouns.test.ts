@@ -7,19 +7,18 @@ describe('K2 noun cheat sheet catalog', () => {
     expect(K2_CHEAT_SHEET_INTRO.toLowerCase()).not.toContain('k2so')
   })
 
-  it('explains sidecar chats vs Linux-hosted mail', () => {
-    const notes = Object.fromEntries(K2_CHEAT_SHEET_NOTES.map((n) => [n.note, n.body]))
-    expect(notes.sidecar).toMatch(/sales\/reviewer/)
-    expect(notes.sidecar.toLowerCase()).toMatch(/not a second/)
-    expect(notes.linux.toLowerCase()).toMatch(/linux/)
-    expect(notes.linux.toLowerCase()).toMatch(/gmail|imap/)
-    for (const n of K2_CHEAT_SHEET_NOTES) {
-      expect(n.body.toLowerCase()).not.toContain('k2so')
-    }
+  it('marks CLI nouns that need a Linux sidecar loaded', () => {
+    expect(K2_CHEAT_SHEET_NOTES).toHaveLength(1)
+    const note = K2_CHEAT_SHEET_NOTES[0]
+    expect(note.note).toBe('linux-sidecar')
+    expect(note.body.toLowerCase()).toMatch(/sidecar/)
+    expect(note.body.toLowerCase()).toMatch(/linux/)
+    expect(note.body.toLowerCase()).toMatch(/postgres|mail/)
+    expect(note.body.toLowerCase()).not.toContain('k2so')
     const mail = K2_NOUN_GROUPS.flatMap((g) => g.items).find((i) => i.noun === 'mail')
-    expect(mail?.note).toBe('linux')
+    expect(mail?.note).toBe('linux-sidecar')
     const whoami = K2_NOUN_GROUPS.flatMap((g) => g.items).find((i) => i.noun === 'whoami')
-    expect(whoami?.note).toBe('sidecar')
+    expect(whoami?.note).toBeUndefined()
   })
 
   it('groups the expected noun families', () => {

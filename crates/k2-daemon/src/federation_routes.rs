@@ -58,6 +58,9 @@ pub fn handle_pair_request(body: &[u8]) -> CliResponse {
     struct Req {
         label: Option<String>,
         subdomain: Option<String>,
+        /// F3: `--url` / `baseUrl` (LAN/Tailscale). Alias `url` for CLI.
+        #[serde(default, alias = "baseUrl", alias = "url")]
+        base_url: Option<String>,
         public_key_pem: String,
     }
     let req: Req = match serde_json::from_slice(body) {
@@ -75,6 +78,7 @@ pub fn handle_pair_request(body: &[u8]) -> CliResponse {
     let pair_req = pairing::PairRequest {
         label: req.label.unwrap_or_default(),
         subdomain: req.subdomain.unwrap_or_default(),
+        base_url: req.base_url.unwrap_or_default(),
         public_key_pem: req.public_key_pem,
     };
     let outcome = match pairing::apply_pair_request(&mut store, &pair_req, &local_fp) {
@@ -164,6 +168,9 @@ pub fn handle_pubkey() -> CliResponse {
             "public_key_pem": key.public_key_pem(),
             "fingerprint": fingerprint,
             "subdomain": subdomain,
+            // Pair body carries the URL to dial back (F3). Empty when we
+            // only have a Connect subdomain (or loopback-unknown LAN IP).
+            "base_url": "",
         })
         .to_string(),
     )
@@ -284,7 +291,7 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     // fingerprint), never request plaintext. Both sides lowercase.
     let host = store
         .get(&ingested.peer_fingerprint)
-        .map(|p| peer_host(&p.subdomain))
+        .map(peer_host)
         .unwrap_or_default();
     let sender_agent = match &signal.from {
         AgentAddress::Agent { name, .. } => name.as_str(),
@@ -474,9 +481,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     };
     // Resolve the peer by fingerprint, label, OR subdomain (identity is the
     // key; label/subdomain are convenience selectors).
-    let peer = store.list().iter().find(|p| {
-        p.fingerprint == peer_sel || p.label == peer_sel || p.subdomain == peer_sel
-    });
+    let peer = store.list().iter().find(|p| peer_selector_matches(p, peer_sel));
     let peer = match peer {
         Some(p) => p.clone(),
         None => return json_err("404 Not Found", format!("no pinned peer matches '{peer_sel}'")),
@@ -499,7 +504,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     // Owner-remote `k2 talk` (no principal, no body from_workspace) is the
     // ungated path; Trusted peer check still always runs.
     if let Some(from_ws) = from_workspace.as_deref() {
-        let remote_addr = format!("{agent}::{}", peer_host(&peer.subdomain));
+        let remote_addr = format!("{agent}::{}", peer_host(&peer));
         if !k2_core::connections::is_remote_connection(from_ws, &remote_addr) {
             // C2 teaching shape parity with local not_connected (mail/dns):
             // stable code + hint so CLI exit-3 mappers recognize it.
@@ -574,6 +579,11 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         )
     };
 
+    let dial_base = match gated_peer_base_url(&peer) {
+        Ok(b) => b,
+        Err(e) => return json_err("403 Forbidden", e),
+    };
+
     let bytes = match federation::seal(&signal, &key, &peer.subdomain, OUTBOUND_TTL) {
         Ok(b) => b,
         Err(e) => return json_err("500 Internal Server Error", format!("seal envelope: {e}")),
@@ -612,7 +622,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     }
 
     // Dial the peer's E2E listener over the Connect tunnel + POST the envelope.
-    match post_inbound(&peer_base_url(&peer.subdomain), &bytes) {
+    match post_inbound(&dial_base, &bytes) {
         Ok(resp_body) => {
             // The transport succeeded and the message left this daemon, so the
             // queued copy is consumed either way (a DECLINE is a terminal
@@ -631,7 +641,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("declined_by_peer");
-                let target = format!("{agent}::{}", peer_host(&peer.subdomain));
+                let target = format!("{agent}::{}", peer_host(&peer));
                 CliResponse::ok_json(
                     serde_json::json!({
                         "status": "declined",
@@ -662,46 +672,54 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     }
 }
 
-/// Resolve a peer's inbound base URL. Defaults to its `<subdomain>.k2.dev`
-/// HTTPS endpoint (the relay carries only ciphertext; B terminates TLS).
-/// `K2_FEDERATION_INBOUND_BASE` overrides it for local/loopback testing.
+/// Resolve a peer's inbound base URL. Prefer the stored per-peer base URL
+/// (F2). `K2_FEDERATION_INBOUND_BASE` overrides it for local/loopback testing.
 /// `pub(crate)` so the outbox drain dials the SAME target a direct send would.
-pub(crate) fn peer_base_url(subdomain: &str) -> String {
+pub(crate) fn peer_base_url(peer: &k2_core::federation::FederationPeer) -> String {
+    peer_base_url_from(&peer.subdomain, &peer.base_url)
+}
+
+/// Same as [`peer_base_url`] from the raw store fields (tests / drain).
+pub(crate) fn peer_base_url_from(subdomain: &str, base_url: &str) -> String {
     if let Ok(base) = std::env::var("K2_FEDERATION_INBOUND_BASE") {
         if !base.trim().is_empty() {
             return base.trim().trim_end_matches('/').to_string();
         }
     }
-    // PR3: avoid `https://rpm.k2.dev.k2.dev` when the peer row already
-    // stores a full host (or a doubled zone). Collapse then ensure a
-    // single trailing `.k2.dev`.
-    let host = {
-        let n = k2_core::connections::normalize_remote_host(subdomain);
-        if n.ends_with(".k2.dev") {
-            n
-        } else if n.is_empty() {
-            n
-        } else {
-            format!("{n}.k2.dev")
+    federation::resolve_peer_base_url(subdomain, base_url)
+}
+
+/// Dial URL after the F6/F7 gate. Empty / Connect-zone under air-gap → Err
+/// (no SYN).
+pub(crate) fn gated_peer_base_url(
+    peer: &k2_core::federation::FederationPeer,
+) -> Result<String, String> {
+    let base = peer_base_url(peer);
+    federation::assert_may_dial(&base)?;
+    Ok(base)
+}
+
+fn peer_selector_matches(peer: &k2_core::federation::FederationPeer, sel: &str) -> bool {
+    if peer.fingerprint == sel || peer.label == sel || peer.subdomain == sel {
+        return true;
+    }
+    if !peer.base_url.is_empty() {
+        let hp = federation::host_port(&peer.base_url);
+        if hp == sel || peer.base_url == sel {
+            return true;
         }
-    };
-    format!("https://{host}")
+    }
+    false
 }
 
 /// The peer's full HOST (no scheme/path) — the right-hand side of the
-/// `<agent>::<host>` connection address. Derived from the SAME source as
-/// the dial target ([`peer_base_url`]) so the gate's reconstructed
-/// `<agent>::<host>` matches what the operator typed into
-/// `k2 connections add` (canonically `<subdomain>.k2.dev`; the
-/// `K2_FEDERATION_INBOUND_BASE` override host for local/loopback tests).
-fn peer_host(subdomain: &str) -> String {
-    let base = peer_base_url(subdomain);
-    let host = base
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .to_string();
-    k2_core::connections::normalize_remote_host(&host)
+/// `<agent>::<host>` connection address (F5: saved host:port, not `name::lan`).
+fn peer_host(peer: &k2_core::federation::FederationPeer) -> String {
+    let base = peer_base_url(peer);
+    if !base.is_empty() {
+        return k2_core::connections::normalize_remote_host(&federation::host_port(&base));
+    }
+    federation::peer_address_host(&peer.subdomain, &peer.base_url)
 }
 
 /// POST a sealed envelope to `<base>/cli/federation/inbound`. Blocking
@@ -787,6 +805,7 @@ pub fn handle_peers() -> CliResponse {
                 "fingerprint": p.fingerprint,
                 "label": p.label,
                 "subdomain": p.subdomain,
+                "base_url": p.base_url,
                 "trust": serde_json::to_value(p.trust).unwrap_or(serde_json::Value::Null),
                 "capabilities": p.capabilities,
             })
@@ -866,11 +885,7 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
     let peer = store
         .list()
         .iter()
-        .find(|p| {
-            p.fingerprint == peer_selector
-                || p.label == peer_selector
-                || p.subdomain == peer_selector
-        })
+        .find(|p| peer_selector_matches(p, peer_selector))
         .cloned();
     let peer = match peer {
         Some(p) => p,
@@ -893,7 +908,11 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
         Err(e) => return json_err("500 Internal Server Error", format!("sign roster request: {e}")),
     };
 
-    match get_peer_roster(&peer_base_url(&peer.subdomain), &fp, ts, &sig) {
+    let roster_base = match gated_peer_base_url(&peer) {
+        Ok(b) => b,
+        Err(e) => return json_err("403 Forbidden", e),
+    };
+    match get_peer_roster(&roster_base, &fp, ts, &sig) {
         Ok(body) => {
             let parsed: serde_json::Value =
                 serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
@@ -2068,5 +2087,171 @@ mod tests {
         assert!(!is_agent_verb("/cli/federation/pair/confirm"));
         assert!(!is_agent_verb("/cli/federation/pair/request"));
         assert!(!is_agent_verb("/cli/federation/outbox"));
+    }
+
+    // ── Air-gap LAN federation (prd-airgap-lan-federation-v1) ──
+
+    struct AirgapEnv(Option<std::ffi::OsString>);
+    impl AirgapEnv {
+        fn set(val: Option<&str>) -> Self {
+            let prev = std::env::var_os("K2_AIRGAP");
+            match val {
+                Some(v) => std::env::set_var("K2_AIRGAP", v),
+                None => std::env::remove_var("K2_AIRGAP"),
+            }
+            k2_core::airgap::set_setting_enabled(false);
+            Self(prev)
+        }
+    }
+    impl Drop for AirgapEnv {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(p) => std::env::set_var("K2_AIRGAP", p),
+                None => std::env::remove_var("K2_AIRGAP"),
+            }
+            k2_core::airgap::set_setting_enabled(false);
+        }
+    }
+
+    #[test]
+    fn peer_base_url_airgap_never_concatenates_k2_dev() {
+        with_temp_home(|| {
+            let _env = AirgapEnv::set(Some("1"));
+            std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+            let url = peer_base_url_from("rpm", "");
+            assert!(
+                !url.contains("k2.dev"),
+                "air-gap peer_base_url must not append .k2.dev; got {url:?}"
+            );
+            let lan = peer_base_url_from("", "http://192.168.1.50:38471");
+            assert_eq!(lan, "http://192.168.1.50:38471");
+            assert!(!lan.contains("k2.dev"));
+        });
+    }
+
+    #[cfg(not(feature = "airgap"))]
+    #[test]
+    fn peer_base_url_connect_unchanged_when_not_airgap() {
+        with_temp_home(|| {
+            let _env = AirgapEnv::set(Some("0"));
+            std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+            assert_eq!(peer_base_url_from("rpm", ""), "https://rpm.k2.dev");
+        });
+    }
+
+    #[test]
+    fn pair_request_url_then_confirm_is_trusted_no_k2_dev() {
+        with_temp_home(|| {
+            let _env = AirgapEnv::set(Some("1"));
+            let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let req = handle_pair_request(&body(serde_json::json!({
+                "label": "lan-box",
+                "baseUrl": "http://192.168.1.50:38471",
+                "public_key_pem": peer_key.public_key_pem(),
+            })));
+            assert_eq!(req.status, "200 OK", "body: {}", req.body);
+            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+            let fp = v["fingerprint"].as_str().unwrap().to_string();
+            let sas = v["sas"].as_str().unwrap().to_string();
+            let conf = handle_pair_confirm(&body(serde_json::json!({
+                "fingerprint": fp,
+                "sas": sas,
+            })));
+            assert_eq!(conf.status, "200 OK", "{}", conf.body);
+            let store = PeerStore::load().unwrap();
+            let p = store.get(&fp).unwrap();
+            assert_eq!(p.trust, PeerTrust::Trusted);
+            assert_eq!(p.base_url, "http://192.168.1.50:38471");
+            assert!(
+                !p.base_url.contains("k2.dev"),
+                "stored dial URL must not contain .k2.dev"
+            );
+            let dial = peer_base_url(p);
+            assert!(!dial.contains("k2.dev"), "got {dial}");
+        });
+    }
+
+    #[test]
+    fn pair_request_empty_url_and_subdomain_is_400() {
+        with_temp_home(|| {
+            let _env = AirgapEnv::set(Some("1"));
+            let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let req = handle_pair_request(&body(serde_json::json!({
+                "public_key_pem": peer_key.public_key_pem(),
+            })));
+            assert!(
+                req.status.starts_with("400"),
+                "empty url+subdomain must 400; got {} {}",
+                req.status,
+                req.body
+            );
+            assert!(PeerStore::load().unwrap().list().is_empty());
+        });
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn airgap_send_to_k2_dev_refuses_without_syn() {
+        let _home = crate::test_support::TempHome::new();
+        let _env = AirgapEnv::set(Some("1"));
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy");
+        spy.set_nonblocking(true).expect("nb");
+        let fp = pin_trusted_peer_for_send("foo");
+        let send_body = body(serde_json::json!({ "to": format!("{fp}::ws::bob"), "text": "nope" }));
+        let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
+            .await
+            .unwrap();
+        assert_eq!(resp.status, "403 Forbidden", "must refuse Connect zone: {}", resp.body);
+        assert!(
+            resp.body.contains("k2.dev") || resp.body.contains("Air-gap"),
+            "got {}",
+            resp.body
+        );
+        assert!(spy.accept().is_err(), "must not SYN");
+        assert!(
+            outbox::list_for_peer(&fp).is_empty(),
+            "refused Connect send must not enqueue leftover k2.dev outbox"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn airgap_send_to_lan_http_allowed_fake_http() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _home = crate::test_support::TempHome::new();
+        let _env = AirgapEnv::set(Some("1"));
+        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.expect("accept");
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).await;
+            let body = r#"{"delivered":true,"mode":"live"}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = s.write_all(resp.as_bytes()).await;
+        });
+
+        let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut store = PeerStore::default();
+        let fp = store.upsert(
+            FederationPeer::pin("lan", "127.0.0.1", peer_key.public_key_pem())
+                .unwrap()
+                .with_base_url(format!("http://127.0.0.1:{port}")),
+        );
+        store.set_trust(&fp, PeerTrust::Trusted);
+        store.grant(&fp, "inbound");
+        store.save().unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        let to = format!("{fp}::ws::bob");
+        let send_body = body(serde_json::json!({ "to": to, "text": "lan ping" }));
+        let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
+            .await
+            .unwrap();
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["status"], "sent", "{}", resp.body);
     }
 }

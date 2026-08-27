@@ -245,12 +245,6 @@ pub enum DrainOutcome {
 /// Drain one peer's queue, oldest-first, stopping at the first retryable
 /// failure. Blocking (network I/O) — call from a blocking context.
 pub fn drain_peer(fp: &str) -> DrainOutcome {
-    if k2_core::airgap::enabled() {
-        log_debug!(
-            "[federation/drain] air-gap is on (K2_AIRGAP=1) — not dialing https://<sub>.k2.dev"
-        );
-        return DrainOutcome::Airgap;
-    }
     let Some(_claim) = DrainClaim::acquire(fp) else {
         return DrainOutcome::InFlight;
     };
@@ -275,7 +269,18 @@ pub fn drain_peer(fp: &str) -> DrainOutcome {
         );
         return DrainOutcome::PeerUnavailable;
     };
-    let base = crate::federation_routes::peer_base_url(&peer.subdomain);
+    // F7: air-gap may dial RFC1918 / Tailscale / explicit http://; leftover
+    // *.k2.dev must not SYN. Gate after resolving the URL so LAN drains.
+    let base = match crate::federation_routes::gated_peer_base_url(&peer) {
+        Ok(b) => b,
+        Err(e) => {
+            log_debug!(
+                "[federation/drain] peer {fp}: not dialing ({e}) — {} message(s) stay queued",
+                items.len()
+            );
+            return DrainOutcome::Airgap;
+        }
+    };
 
     let mut delivered = 0usize;
     let mut dead_lettered = 0usize;
@@ -855,24 +860,19 @@ mod tests {
         std::env::set_var("K2_AIRGAP", "1");
         let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy bind");
         spy.set_nonblocking(true).expect("nonblocking");
-        let port = spy.local_addr().expect("addr").port();
+        // No inbound-base override: Connect subdomain would have been
+        // https://peer.k2.dev — must refuse without SYN (F7).
         let prev_base = std::env::var_os("K2_FEDERATION_INBOUND_BASE");
-        std::env::set_var(
-            "K2_FEDERATION_INBOUND_BASE",
-            format!("http://127.0.0.1:{port}"),
-        );
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
         let fp = pin_trusted();
         enqueue_msg(&fp, "leftover outbox", chrono::Utc::now());
         let outcome = drain_peer(&fp);
         assert_eq!(
             outcome,
             DrainOutcome::Airgap,
-            "leftover federation outbox must not dial when air-gap is on"
+            "leftover *.k2.dev outbox must not dial when air-gap is on"
         );
-        assert!(
-            spy.accept().is_err(),
-            "must not POST https://<sub>.k2.dev (or the inbound stub) under air-gap"
-        );
+        assert!(spy.accept().is_err(), "must not SYN *.k2.dev under air-gap");
         match prev_base {
             Some(p) => std::env::set_var("K2_FEDERATION_INBOUND_BASE", p),
             None => std::env::remove_var("K2_FEDERATION_INBOUND_BASE"),
@@ -881,5 +881,41 @@ mod tests {
             Some(p) => std::env::set_var("K2_AIRGAP", p),
             None => std::env::remove_var("K2_AIRGAP"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drain_airgap_allows_lan_http_fake() {
+        let _home = crate::test_support::TempHome::new();
+        let prev_air = std::env::var_os("K2_AIRGAP");
+        std::env::set_var("K2_AIRGAP", "1");
+        let (port, _rx) = spawn_stub("200 OK", r#"{"delivered":true,"mode":"live"}"#).await;
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut store = PeerStore::load().unwrap_or_default();
+        let fp = store.upsert(
+            FederationPeer::pin("lan", "127.0.0.1", key.public_key_pem())
+                .unwrap()
+                .with_base_url(format!("http://127.0.0.1:{port}")),
+        );
+        store.set_trust(&fp, PeerTrust::Trusted);
+        store.grant(&fp, "inbound");
+        store.save().unwrap();
+        enqueue_msg(&fp, "lan leftover", chrono::Utc::now());
+
+        let fp2 = fp.clone();
+        let outcome = tokio::task::spawn_blocking(move || drain_peer(&fp2)).await.unwrap();
+        match prev_air {
+            Some(p) => std::env::set_var("K2_AIRGAP", p),
+            None => std::env::remove_var("K2_AIRGAP"),
+        }
+        assert_eq!(
+            outcome,
+            DrainOutcome::Drained {
+                delivered: 1,
+                dead_lettered: 0
+            }
+        );
+        assert!(outbox::list_for_peer(&fp).is_empty());
     }
 }

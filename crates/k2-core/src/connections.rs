@@ -419,6 +419,24 @@ fn host_matches_peer_subdomain(host: &str, subdomain: &str) -> bool {
     !host_label.is_empty() && !sub_label.is_empty() && host_label == sub_label
 }
 
+fn host_matches_peer(host: &str, peer: &crate::federation::FederationPeer) -> bool {
+    if host_matches_peer_subdomain(host, &peer.subdomain) {
+        return true;
+    }
+    if !peer.base_url.is_empty() {
+        let hp = crate::federation::host_port(&peer.base_url);
+        if host_matches_peer_subdomain(host, &hp) {
+            return true;
+        }
+        let n_host = normalize_remote_host(host);
+        let n_hp = normalize_remote_host(&hp);
+        if !n_host.is_empty() && n_host == n_hp {
+            return true;
+        }
+    }
+    false
+}
+
 /// 0.40.21: whether a **Trusted** federation peer is pinned that ROUTES to
 /// `host` (the right-hand side of a remote connection address).
 ///
@@ -448,7 +466,7 @@ pub fn trusted_peer_fingerprint_for_host(host: &str) -> Option<String> {
         if p.trust != PeerTrust::Trusted {
             return None;
         }
-        if host_matches_peer_subdomain(host, &p.subdomain) {
+        if host_matches_peer(host, p) {
             Some(p.fingerprint.clone())
         } else {
             None

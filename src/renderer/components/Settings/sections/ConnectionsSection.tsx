@@ -55,8 +55,10 @@ import {
   autoPairWithHost,
   isTrustedPeerHost,
   listFederationPeers,
+  savedHostBaseUrl,
   type FederationPeer,
 } from '@/lib/federation'
+import { isAirgap } from '@/lib/airgap'
 import { isConnectionLevelError } from '@/lib/remote-retry'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import { recoveryStatusText } from '@/lib/remote-recovery'
@@ -555,7 +557,7 @@ function ActiveHostPeersPanel({
       ) : !available ? (
         <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 leading-relaxed">
           Federation peers are unavailable on this host (federation off, not owner/admin, or unreachable).
-          Enable federation under Tunnel → Policies while signed into this server.
+          Enable federation under {isAirgap() ? 'Servers → Policies' : 'Tunnel → Policies'} while signed into this server.
         </div>
       ) : peers.length === 0 ? (
         <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">
@@ -580,7 +582,13 @@ function ActiveHostPeersPanel({
                 </span>
               </div>
               <div className="text-[10px] text-[var(--color-text-muted)] font-mono truncate">
-                {p.subdomain ? `${p.subdomain}.k2.dev` : p.fingerprint.slice(0, 24) + '…'}
+                {p.base_url || p.baseUrl
+                  ? (p.base_url || p.baseUrl)
+                  : p.subdomain
+                    ? p.subdomain.includes('.') || p.subdomain.includes(':')
+                      ? p.subdomain
+                      : `${p.subdomain}.k2.dev`
+                    : p.fingerprint.slice(0, 24) + '…'}
               </div>
             </div>
           ))}
@@ -611,7 +619,7 @@ function ActiveHostPeersPanel({
                     {h.label || h.hostname}
                   </div>
                   <div className="text-[10px] text-[var(--color-text-muted)] font-mono truncate">
-                    {h.hostname}
+                    {h.secure ? h.hostname : savedHostBaseUrl(h)}
                   </div>
                 </div>
                 <button
@@ -1221,7 +1229,7 @@ function HostTile({
                 data-settings-id="connections.pair-federated-peer"
                 title={
                   federation === 'off'
-                    ? `Enable federation on this server (and on ${activePeerSideLabel} under K2 Connect) first`
+                    ? `Enable federation on this server (and on ${activePeerSideLabel}) first`
                     : `Establish mutual federation trust between ${activePeerSideLabel} and this server`
                 }
               >

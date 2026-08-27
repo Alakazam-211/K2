@@ -791,14 +791,27 @@ if not isinstance(d, dict) or not isinstance(d.get("peers"), list):
         print("NOFED\t%s" % (d.get("error") if not isinstance(d.get("error"), dict) else d["error"].get("hint") or d["error"]))
         sys.exit(0)
     print("NOFED"); sys.exit(0)
+def host_port(u):
+    u = (u or "").strip()
+    if u.lower().startswith("https://"):
+        u = u[8:]
+    elif u.lower().startswith("http://"):
+        u = u[7:]
+    return u.split("/")[0] if u else ""
 for p in d["peers"]:
     sub = p.get("subdomain") or ""
     label = p.get("label") or ""
+    base = p.get("base_url") or p.get("baseUrl") or ""
+    hp = host_port(base)
     if want and bare(sub) == want:
         print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
         sys.exit(0)
     # Also match full host forms stored as subdomain
     if host and sub and sub.lower() in (host, host + ".k2.dev", want + ".k2.dev"):
+        print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
+        sys.exit(0)
+    # F5: LAN/Tailscale saved host:port (do not require .k2.dev)
+    if host and (sub.lower() == host or hp.lower() == host or hp.lower() == want):
         print("OK\t%s\t%s" % (p.get("fingerprint", ""), p.get("trust", "")))
         sys.exit(0)
     if want and bare(label) == want:
@@ -807,9 +820,15 @@ for p in d["peers"]:
 # List known peer hosts so the NONE error is actionable (GH #48).
 known = []
 for p in d["peers"]:
+    base = (p.get("base_url") or p.get("baseUrl") or "").strip()
     sub = (p.get("subdomain") or "").strip()
-    if sub:
-        known.append(sub if sub.endswith(".k2.dev") else sub + ".k2.dev")
+    if base:
+        known.append(host_port(base) or base)
+    elif sub:
+        if ":" in sub or sub.endswith(".ts.net") or sub.endswith(".k2.dev"):
+            known.append(sub)
+        else:
+            known.append(sub + ".k2.dev")
     elif p.get("label"):
         known.append(str(p.get("label")))
 print("NONE\t%s" % (", ".join(known) if known else ""))
@@ -18010,7 +18029,7 @@ cmd_update_v2() {
 #   k2 fed pubkey [--pem|--fingerprint|--json]   export THIS box's SPKI pubkey
 #   k2 fed send <peer>::<workspace>::<agent> "message"
 #   k2 fed outbox                                queued + dead-lettered per peer
-#   k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S]
+#   k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S] [--url URL]
 #   k2 fed confirm <fingerprint> <sas-code>
 #
 # send + confirm are OWNER-gated (they need ~/.k2/daemon.token). pubkey is
@@ -18048,7 +18067,7 @@ cmd_fed() {
             echo
             ;;
         pair-request)
-            local pubkey_file="" label="" subdomain=""
+            local pubkey_file="" label="" subdomain="" url=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --pubkey) pubkey_file="${2:-}"; shift 2 ;;
@@ -18057,15 +18076,18 @@ cmd_fed() {
                     --label=*) label="${1#--label=}"; shift ;;
                     --subdomain) subdomain="${2:-}"; shift 2 ;;
                     --subdomain=*) subdomain="${1#--subdomain=}"; shift ;;
+                    --url|--base-url|--baseUrl) url="${2:-}"; shift 2 ;;
+                    --url=*|--base-url=*|--baseUrl=*) url="${1#*=}"; shift ;;
                     *) echo "k2 fed pair-request: unknown arg: $1" >&2; exit 2 ;;
                 esac
             done
             if [ -z "$pubkey_file" ] || [ ! -f "$pubkey_file" ]; then
-                echo "usage: k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S]" >&2
+                echo "usage: k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S] [--url http://host:port]" >&2
                 exit 2
             fi
             local body
-            body=$(python3 -c 'import json,sys; print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"public_key_pem":open(sys.argv[3]).read()}))' "$label" "$subdomain" "$pubkey_file")
+            body=$(python3 -c 'import json,sys
+print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv[3],"public_key_pem":open(sys.argv[4]).read()}))' "$label" "$subdomain" "$url" "$pubkey_file")
             # UNAUTH route (creates only a Pending peer).
             curl -s -X POST "${BASE_URL}/cli/federation/pair/request" \
                 --connect-timeout 5 --max-time 30 \
@@ -18168,7 +18190,15 @@ if not peers:
 print('Peers (%d):' % len(peers))
 for p in peers:
     sub = (p.get('subdomain') or '').strip()
-    host = (sub + '.k2.dev') if sub and not sub.endswith('.k2.dev') else (sub or '—')
+    base = (p.get('base_url') or p.get('baseUrl') or '').strip()
+    if base:
+        host = base
+    elif sub.startswith('http://') or sub.startswith('https://') or ':' in sub or sub.endswith('.ts.net'):
+        host = sub
+    elif sub and not sub.endswith('.k2.dev'):
+        host = sub + '.k2.dev'
+    else:
+        host = sub or '—'
     label = p.get('label') or ''
     trust = p.get('trust') or '?'
     fp = (p.get('fingerprint') or '')[:16]
@@ -18214,6 +18244,7 @@ print(f\"total queued: {d.get('total_queued',0)}\")"
             echo "usage: k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-request|confirm> ..." >&2
             echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)" >&2
             echo "  peers: list pinned servers (use their host with k2 msg agent::host)" >&2
+            echo "  pair-request: --pubkey PEM [--subdomain S] [--url http://host:port] (LAN/air-gap)" >&2
             echo "  send/outbox/pair-request/confirm need federation ON; pubkey works anytime" >&2
             echo "  outbox: queued + dead-lettered cross-server messages per peer" >&2
             exit 2

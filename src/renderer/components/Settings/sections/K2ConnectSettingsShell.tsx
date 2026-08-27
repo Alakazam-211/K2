@@ -84,11 +84,28 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
 
       <div className="flex-1 min-h-0 overflow-hidden">
         {tab === 'servers' ? (
+          hideTunnel ? (
+            /* F10: Tunnel pane is hidden under air-gap; host policies
+               (Enable federation) live here so pairing still works. */
+            <div className="flex h-full min-h-0">
+              <div className="w-[min(22rem,40%)] flex-shrink-0 overflow-y-auto pr-3 [scrollbar-gutter:stable]">
+                <SectionErrorBoundary>
+                  <K2ConnectSection panel="policies" />
+                </SectionErrorBoundary>
+              </div>
+              <div className="flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] pl-6 pr-3 [scrollbar-gutter:stable]">
+                <SectionErrorBoundary>
+                  <ConnectionsSection />
+                </SectionErrorBoundary>
+              </div>
+            </div>
+          ) : (
           <div className="h-full min-h-0 overflow-y-auto pr-3 [scrollbar-gutter:stable]">
             <SectionErrorBoundary>
               <ConnectionsSection />
             </SectionErrorBoundary>
           </div>
+          )
         ) : tab === 'tunnel' && !hideTunnel ? (
           /* Middle split: Tunnel (expose + URLs) | Policies */
           <div className="flex h-full min-h-0">

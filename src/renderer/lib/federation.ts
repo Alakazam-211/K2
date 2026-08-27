@@ -31,6 +31,9 @@ export interface FederationPeer {
   fingerprint: string
   label: string
   subdomain: string
+  /** Per-peer dial URL (`http://192.168.1.50:38471`). Empty on Connect-only pins. */
+  base_url?: string
+  baseUrl?: string
   trust: PeerTrust
   capabilities: string[]
 }
@@ -129,19 +132,36 @@ export function trustedPeers(peers: FederationPeer[]): FederationPeer[] {
  * zone or bare subdomain — not by fingerprint (the address book doesn't
  * store fingerprints).
  */
+function hostKey(hostname: string): string {
+  const x = hostname.trim().toLowerCase().split('/')[0] ?? ''
+  // F5: IPv4:port stays intact (`192.168.1.50:38471`). Connect drops :443.
+  if (/^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(x)) return x
+  return x.split(':')[0] ?? x
+}
+
+function hostPortFromUrl(url: string): string {
+  const s = url.trim().replace(/\/+$/, '')
+  const rest = /^https?:\/\//i.test(s) ? s.replace(/^https?:\/\//i, '') : s
+  return rest.split('/')[0] ?? rest
+}
+
 export function peerMatchesHostname(peer: FederationPeer, hostname: string): boolean {
   const raw = hostname.trim().toLowerCase()
   if (!raw) return false
-  // Drop :port if the ConnectHost stored a non-443 URL as host:port elsewhere.
-  const hostOnly = raw.split('/')[0]?.split(':')[0] ?? raw
+  const hostOnly = hostKey(raw)
   if (!hostOnly) return false
   const sub = (peer.subdomain || '').trim().toLowerCase()
   if (sub) {
-    if (hostOnly === sub) return true
+    if (hostOnly === sub || hostOnly === hostKey(sub)) return true
     if (hostOnly === `${sub}.k2.dev`) return true
   }
+  const base = (peer.base_url || peer.baseUrl || '').trim().toLowerCase()
+  if (base) {
+    const hp = hostKey(hostPortFromUrl(base))
+    if (hp && hp === hostOnly) return true
+  }
   const label = (peer.label || '').trim().toLowerCase()
-  if (label && label === hostOnly) return true
+  if (label && hostKey(label) === hostOnly) return true
   return false
 }
 
@@ -216,6 +236,9 @@ export interface FederationPubkey {
   fingerprint: string
   /** This daemon's tunnel subdomain, or `''` when none is configured. */
   subdomain: string
+  /** Advertised dial URL when known (LAN/Tailscale). Empty on Connect-only. */
+  base_url?: string
+  baseUrl?: string
 }
 
 /** Resolved `{base,token}` for a single daemon. `base` is `<scheme>://<authority>`. */
@@ -324,6 +347,7 @@ async function getPubkeyFor(creds: DaemonCreds): Promise<FederationPubkey> {
     public_key_pem: body.public_key_pem,
     fingerprint: body.fingerprint,
     subdomain: body.subdomain ?? '',
+    base_url: body.base_url ?? body.baseUrl ?? '',
   }
 }
 
@@ -346,11 +370,15 @@ async function pairAndConfirm(
   creds: DaemonCreds,
   publicKeyPem: string,
   subdomain: string,
+  baseUrl?: string,
 ): Promise<void> {
+  const body: Record<string, string> = { public_key_pem: publicKeyPem }
+  if (subdomain) body.subdomain = subdomain
+  if (baseUrl) body.baseUrl = baseUrl
   const req = await cliPost<{ fingerprint?: string; sas?: string }>(
     creds,
     'federation/pair/request',
-    { public_key_pem: publicKeyPem, subdomain },
+    body,
   )
   if (!req?.fingerprint || !req?.sas) {
     throw new Error('pair/request did not return a fingerprint + SAS')
@@ -377,7 +405,51 @@ function subdomainForHost(host: string, reported: string): string {
 function looksLikeHost(host: string): boolean {
   const h = host.trim()
   if (!h) return false
+  // F5: IPv4:port (`192.168.1.50:38471`) and MagicDNS (`box.ts.net`).
+  if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(h)) return true
   return h.includes('.') || h.toLowerCase().endsWith('.k2.dev')
+}
+
+function isK2DevHostname(hostname: string): boolean {
+  const h = hostname.trim().toLowerCase()
+  return h === 'k2.dev' || h.endsWith('.k2.dev')
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.trim().toLowerCase()
+  return h === 'localhost' || h === '127.0.0.1' || h.startsWith('127.')
+}
+
+/** Saved Add Server URL (`http://192.168.1.50:38471` or `https://box.k2.dev`). */
+export function savedHostBaseUrl(host: {
+  hostname: string
+  port: number
+  secure: boolean
+}): string {
+  const scheme = host.secure ? 'https' : 'http'
+  const omitPort = (host.secure && host.port === 443) || (!host.secure && host.port === 80)
+  const authority = omitPort ? host.hostname : `${host.hostname}:${host.port}`
+  return `${scheme}://${authority}`
+}
+
+function advertisedHostPort(creds: DaemonCreds, pub: FederationPubkey): string | null {
+  const fromPub = (pub.base_url || pub.baseUrl || '').trim()
+  if (fromPub) return hostPortFromUrl(fromPub)
+  if ((pub.subdomain || '').trim()) return `${pub.subdomain.trim()}.k2.dev`
+  try {
+    const u = new URL(creds.base)
+    if (isLoopbackHost(u.hostname) || isK2DevHostname(u.hostname)) {
+      if (isK2DevHostname(u.hostname)) {
+        return u.port && u.port !== '443' ? `${u.hostname}:${u.port}` : u.hostname
+      }
+      return null
+    }
+    const omit = (u.protocol === 'https:' && (u.port === '' || u.port === '443'))
+      || (u.protocol === 'http:' && (u.port === '' || u.port === '80'))
+    return omit ? u.hostname : `${u.hostname}:${u.port}`
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -412,10 +484,19 @@ export async function autoPairWithHost(host: string): Promise<void> {
     throw new Error(`${lead} (${inner})`)
   })
 
-  // Mutual federation dials https://<subdomain>.k2.dev. Without a bound
-  // tunnel the daemon refuses the pin ("missing the peer subdomain").
-  // Fail early with operator copy: no purchased tunnel → cannot pair.
-  if (!(localPub.subdomain || '').trim()) {
+  const saved = useConnectHostStore
+    .getState()
+    .hosts.find((h) => h.hostname.trim().toLowerCase() === host.trim().toLowerCase())
+  const remoteSavedBase = saved ? savedHostBaseUrl(saved) : ''
+  const remoteIsLan = remoteSavedBase.startsWith('http://') || (saved ? !saved.secure : false)
+  const localAdvertise = advertisedHostPort(localC, localPub)
+  const localLanUrl = localAdvertise && !isK2DevHostname(localAdvertise)
+    ? `http://${localAdvertise}`
+    : ''
+
+  // F3: Connect subdomain OR LAN URL. Empty both still fails. Drop the
+  // "buy a subdomain" copy when pairing over a saved http host:port.
+  if (!(localPub.subdomain || '').trim() && !remoteIsLan && !localLanUrl) {
     throw new Error(
       `Can't pair as a federated peer with "${host}": this server has no K2 Connect tunnel.\n\n` +
         `Each federated server needs its own purchased <subdomain>.k2.dev so peers can reach it. ` +
@@ -434,14 +515,27 @@ export async function autoPairWithHost(host: string): Promise<void> {
   )
   if (remoteTrustsLocal && localTrustsRemote) return
 
-  // 3. Make the REMOTE trust LOCAL (pin local's key under local's subdomain).
+  // 3. Make the REMOTE trust LOCAL (pin local's key + URL to dial back).
   if (!remoteTrustsLocal) {
-    await pairAndConfirm(remoteC, localPub.public_key_pem, localPub.subdomain)
+    await pairAndConfirm(
+      remoteC,
+      localPub.public_key_pem,
+      localPub.subdomain,
+      localLanUrl || undefined,
+    )
   }
-  // 4. Make LOCAL trust the REMOTE (pin remote's key under the host's
-  //    subdomain so the send-gate + dial target line up).
+  // 4. Make LOCAL trust the REMOTE. LAN: pin saved http://host:port (F4/F10).
+  //    Connect: pin host-derived subdomain so send-gate matches agent::host.
   if (!localTrustsRemote) {
-    await pairAndConfirm(localC, remotePub.public_key_pem, subdomainForHost(host, remotePub.subdomain))
+    const remoteSub = remoteIsLan
+      ? `${saved!.hostname}${saved!.port && saved!.port !== 80 ? `:${saved!.port}` : ''}`
+      : subdomainForHost(host, remotePub.subdomain)
+    await pairAndConfirm(
+      localC,
+      remotePub.public_key_pem,
+      remoteSub,
+      remoteIsLan ? remoteSavedBase : undefined,
+    )
   }
 }
 
@@ -513,7 +607,10 @@ async function tryAddReverseConnection(
     const localC = await activeCreds()
     const remoteC = await remoteCreds(host)
     const [localPub, remotePub] = await Promise.all([getPubkeyFor(localC), getPubkeyFor(remoteC)])
-    if (!localPub.subdomain) return 'Reverse connection skipped: this server has no tunnel subdomain (the peer could not reach it back).'
+    const reverseHost = advertisedHostPort(localC, localPub)
+    if (!reverseHost) {
+      return 'Reverse connection skipped: this server has no advertised LAN/Connect base (the peer could not reach it back).'
+    }
     // Always lowercase — federated handles are case-insensitive and stored
     // as `agent::host` (canonical). Capitalized basenames like "Cortana"
     // used to produce Cortana::z3thon.k2.dev and break older remotes that
@@ -524,8 +621,8 @@ async function tryAddReverseConnection(
       localC, remoteC, remotePub.fingerprint, remoteAgent.trim().toLowerCase(),
     )
     if ('error' in resolved) return `Reverse connection skipped: ${resolved.error}.`
-    const reverseTarget = formatAgentHost(sourceAgent, `${localPub.subdomain}.k2.dev`)
-    const reverseLegacy = `${sourceAgent}@${localPub.subdomain.toLowerCase()}.k2.dev`
+    const reverseTarget = formatAgentHost(sourceAgent, reverseHost)
+    const reverseLegacy = `${sourceAgent}@${reverseHost}`
     try {
       await cliGet(remoteC, 'connections', { project: resolved.path, action: 'add', target: reverseTarget })
     } catch (e) {
@@ -641,14 +738,15 @@ export async function removeRemoteConnection(
   try {
     const remoteC = await remoteCreds(parsed.host)
     const [localPub, remotePub] = await Promise.all([getPubkey(), getPubkeyFor(remoteC)])
-    if (!localPub.subdomain) return
+    const reverseHost = advertisedHostPort(await activeCreds(), localPub)
+    if (!reverseHost) return
     const resolved = await resolveRemoteWorkspacePath(await activeCreds(), remoteC, remotePub.fingerprint, parsed.agent)
     if ('error' in resolved) return
     const reverseTarget = formatAgentHost(
       workspaceBasename(sourceWorkspacePath),
-      `${localPub.subdomain}.k2.dev`,
+      reverseHost,
     )
-    const reverseLegacy = `${workspaceBasename(sourceWorkspacePath)}@${localPub.subdomain}.k2.dev`
+    const reverseLegacy = `${workspaceBasename(sourceWorkspacePath)}@${reverseHost}`
     try {
       await cliGet(remoteC, 'connections', { project: resolved.path, action: 'remove', target: reverseTarget })
     } catch {

@@ -22,6 +22,7 @@
 
 use sha2::{Digest, Sha256};
 
+use super::dial;
 use super::peers::{FederationPeer, PeerStore, PeerTrust};
 
 /// Default capabilities granted to a freshly-confirmed peer when the owner
@@ -34,10 +35,16 @@ pub const DEFAULT_CONFIRM_CAPS: [&str; 2] = ["inbound", "roster"];
 /// A peer's presented identity on the pairing path. The fingerprint is
 /// NEVER taken from here — it is re-derived from `public_key_pem` so a
 /// caller cannot name a key it does not hold.
+///
+/// F3: supply a Connect **subdomain** *or* an operator `--url` / `baseUrl`.
+/// Empty both is still 400.
 #[derive(Debug, Clone)]
 pub struct PairRequest {
     pub label: String,
     pub subdomain: String,
+    /// Dial base URL (`http://192.168.1.50:38471`). Optional when
+    /// `subdomain` is a Connect label.
+    pub base_url: String,
     pub public_key_pem: String,
 }
 
@@ -101,51 +108,11 @@ pub fn apply_pair_request(
     req: &PairRequest,
     local_fp: &str,
 ) -> Result<PairOutcome, String> {
-    // 0.40.21 FAIL-CLOSED: never pin a peer with an EMPTY/blank subdomain.
-    // The subdomain is this peer's routing hint → a cross-server send
-    // resolves the peer by `p.subdomain` and dials `https://<subdomain>.k2.dev`
-    // (see `federation_routes::handle_send` / `peer_base_url`). A peer pinned
-    // with a blank subdomain is therefore PERMANENTLY UNROUTABLE: it can never
-    // match an `<agent>@<host>` selector nor be dialed, and the only feedback
-    // is a silent 404 at send time. Reject the request rather than persist an
-    // unreachable peer — the caller (the renderer's add-remote / auto-pair)
-    // must supply the peer's tunnel subdomain (it derives it from the peer
-    // host when the peer's `pubkey` response omits one). We cannot derive it
-    // here: the pair-request HTTP arrives at THIS daemon, so the only host in
-    // scope is our own — the peer's subdomain is knowable only from the body.
-    let subdomain = req.subdomain.trim();
-    if subdomain.is_empty() {
-        return Err(
-            "can't federate: peer has no K2 Connect tunnel subdomain \
-             (fail-closed — unroutable without <subdomain>.k2.dev). \
-             Each side needs a purchased/bound tunnel under Settings → K2 Connect \
-             (or k2.dev/dashboard) before Pair"
-                .to_string(),
-        );
-    }
-    // Re-derive the fingerprint from the presented key — the id can't
-    // disagree with the bytes it names. Store the TRIMMED subdomain so a
-    // padded value can't desync the routing-hint compare.
-    //
-    // PR3 host normalize: collapse accidental double zone, then prefer bare
-    // subdomain so dial (`https://{sub}.k2.dev`) appends the zone once.
-    let subdomain = {
-        let mut n = subdomain.to_lowercase();
-        while n.ends_with(".k2.dev.k2.dev") {
-            n.truncate(n.len() - ".k2.dev".len());
-        }
-        n.strip_suffix(".k2.dev").unwrap_or(&n).to_string()
-    };
-    if subdomain.is_empty() {
-        return Err(
-            "can't federate: peer has no K2 Connect tunnel subdomain \
-             (fail-closed — unroutable without <subdomain>.k2.dev). \
-             Each side needs a purchased/bound tunnel under Settings → K2 Connect \
-             (or k2.dev/dashboard) before Pair"
-                .to_string(),
-        );
-    }
-    let fresh = FederationPeer::pin(&req.label, &subdomain, &req.public_key_pem)?;
+    // F3: Connect subdomain OR operator --url / baseUrl. Empty both → 400.
+    // A LAN URL is the routing hint under air-gap (never invent `.k2.dev`).
+    let (subdomain, base_url) = normalize_pair_routing(&req.subdomain, &req.base_url)?;
+    let fresh =
+        FederationPeer::pin(&req.label, &subdomain, &req.public_key_pem)?.with_base_url(base_url);
     let fp = fresh.fingerprint.clone();
     // PR3: never pin this daemon as a remote peer (self-fingerprint).
     if !local_fp.is_empty() && fp == local_fp {
@@ -223,6 +190,62 @@ pub fn apply_pair_confirm(
     Ok(())
 }
 
+fn empty_pair_err() -> String {
+    if crate::airgap::enabled() {
+        "can't federate: need a LAN/Tailscale URL (--url / baseUrl, e.g. \
+         http://192.168.1.50:38471) — air-gap will not dial <subdomain>.k2.dev"
+            .to_string()
+    } else {
+        "can't federate: peer has no K2 Connect tunnel subdomain \
+         (fail-closed — unroutable without <subdomain>.k2.dev). \
+         Each side needs a purchased/bound tunnel under Settings → K2 Connect \
+         (or k2.dev/dashboard) before Pair — or pass --url / baseUrl for LAN"
+            .to_string()
+    }
+}
+
+/// Collapse a Connect zone label; leave LAN host:port / MagicDNS intact.
+fn normalize_connect_label(raw: &str) -> String {
+    let mut n = raw.trim().to_lowercase();
+    while n.ends_with(".k2.dev.k2.dev") {
+        n.truncate(n.len() - ".k2.dev".len());
+    }
+    n.strip_suffix(".k2.dev").unwrap_or(&n).to_string()
+}
+
+fn normalize_pair_routing(subdomain: &str, base_url: &str) -> Result<(String, String), String> {
+    let mut url = base_url.trim().to_string();
+    let mut sub = subdomain.trim().to_string();
+    if url.is_empty() && dial::is_absolute_http_url(&sub) {
+        url = sub;
+        sub = String::new();
+    }
+    if url.is_empty() && sub.is_empty() {
+        return Err(empty_pair_err());
+    }
+    if !url.is_empty() {
+        let url = dial::normalize_base_url(&url)?;
+        dial::assert_lan_http(&url)?;
+        if crate::airgap::enabled() {
+            dial::assert_may_dial(&url)?;
+        }
+        if sub.is_empty() {
+            sub = dial::host_port(&url);
+        } else {
+            sub = normalize_connect_label(&sub);
+            if sub.is_empty() {
+                sub = dial::host_port(&url);
+            }
+        }
+        return Ok((sub, url));
+    }
+    sub = normalize_connect_label(&sub);
+    if sub.is_empty() {
+        return Err(empty_pair_err());
+    }
+    Ok((sub, String::new()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +265,11 @@ mod tests {
         assert_eq!(s1, s2, "SAS must be symmetric in its two fingerprints");
         assert_eq!(s1.len(), 6, "SAS is a fixed 6-digit code");
         assert!(s1.chars().all(|c| c.is_ascii_digit()));
-        assert_ne!(sas_code("aaaa", "cccc"), s1, "different peers → different SAS");
+        assert_ne!(
+            sas_code("aaaa", "cccc"),
+            s1,
+            "different peers → different SAS"
+        );
     }
 
     #[test]
@@ -251,13 +278,18 @@ mod tests {
         let req = PairRequest {
             label: "rosson@laptop".into(),
             subdomain: "rosson".into(),
+            base_url: String::new(),
             public_key_pem: fresh_peer_pem(),
         };
         let out = apply_pair_request(&mut store, &req, "local-fp").expect("request");
         assert!(out.created);
         assert_eq!(out.trust, PeerTrust::Pending);
         let peer = store.get(&out.fingerprint).expect("peer pinned");
-        assert_eq!(peer.trust, PeerTrust::Pending, "request creates only Pending");
+        assert_eq!(
+            peer.trust,
+            PeerTrust::Pending,
+            "request creates only Pending"
+        );
         assert!(peer.capabilities.is_empty(), "no caps until owner confirm");
         // Re-seeing the same key does not duplicate or promote.
         let out2 = apply_pair_request(&mut store, &req, "local-fp").expect("re-request");
@@ -275,11 +307,15 @@ mod tests {
             let req = PairRequest {
                 label: "p".into(),
                 subdomain: blank.into(),
+                base_url: String::new(),
                 public_key_pem: fresh_peer_pem(),
             };
             let err = apply_pair_request(&mut store, &req, "local-fp")
                 .expect_err("blank subdomain must be rejected");
-            assert!(err.contains("subdomain"), "error must name the cause; got: {err}");
+            assert!(
+                err.contains("subdomain"),
+                "error must name the cause; got: {err}"
+            );
             assert!(
                 store.list().is_empty(),
                 "a rejected pair request must NOT pin an (unroutable) peer"
@@ -295,6 +331,7 @@ mod tests {
         let req = PairRequest {
             label: "p".into(),
             subdomain: "  rpm  ".into(),
+            base_url: String::new(),
             public_key_pem: fresh_peer_pem(),
         };
         let out = apply_pair_request(&mut store, &req, "local-fp").expect("padded subdomain ok");
@@ -311,6 +348,7 @@ mod tests {
         let req = PairRequest {
             label: "p".into(),
             subdomain: "p".into(),
+            base_url: String::new(),
             public_key_pem: fresh_peer_pem(),
         };
         let out = apply_pair_request(&mut store, &req, "local-fp").expect("request");
@@ -343,6 +381,7 @@ mod tests {
         let req = PairRequest {
             label: "p".into(),
             subdomain: "p".into(),
+            base_url: String::new(),
             public_key_pem: fresh_peer_pem(),
         };
         let out = apply_pair_request(&mut store, &req, "lf").unwrap();
@@ -351,7 +390,10 @@ mod tests {
         let err = apply_pair_confirm(&mut store, &out.fingerprint, &sas, "lf", &[])
             .expect_err("blocked must fail");
         assert!(err.contains("Blocked"), "got: {err}");
-        assert_eq!(store.get(&out.fingerprint).unwrap().trust, PeerTrust::Blocked);
+        assert_eq!(
+            store.get(&out.fingerprint).unwrap().trust,
+            PeerTrust::Blocked
+        );
     }
 
     #[test]
@@ -365,6 +407,7 @@ mod tests {
         let req = PairRequest {
             label: "myself".into(),
             subdomain: "self".into(),
+            base_url: String::new(),
             public_key_pem: pem,
         };
         let err = apply_pair_request(&mut store, &req, &fp)
@@ -385,6 +428,7 @@ mod tests {
         let req = PairRequest {
             label: "p".into(),
             subdomain: "rpm.k2.dev.k2.dev".into(),
+            base_url: String::new(),
             public_key_pem: fresh_peer_pem(),
         };
         let out = apply_pair_request(&mut store, &req, "local-fp").expect("request");
@@ -393,5 +437,78 @@ mod tests {
             "rpm",
             "double-zone subdomain must collapse to bare routing label"
         );
+    }
+
+    #[test]
+    fn pair_request_url_pins_lan_base_without_k2_dev() {
+        let mut store = PeerStore::default();
+        let req = PairRequest {
+            label: "lan-box".into(),
+            subdomain: String::new(),
+            base_url: "http://192.168.1.50:38471".into(),
+            public_key_pem: fresh_peer_pem(),
+        };
+        let out = apply_pair_request(&mut store, &req, "local-fp").expect("lan url");
+        let peer = store.get(&out.fingerprint).expect("pinned");
+        assert_eq!(peer.base_url, "http://192.168.1.50:38471");
+        assert_eq!(peer.subdomain, "192.168.1.50:38471");
+        assert!(
+            !peer.base_url.contains("k2.dev") && !peer.subdomain.contains("k2.dev"),
+            "LAN pair must not store a .k2.dev dial URL"
+        );
+        let sas = sas_code("local-fp", &out.fingerprint);
+        apply_pair_confirm(&mut store, &out.fingerprint, &sas, "local-fp", &[]).expect("confirm");
+        assert_eq!(
+            store.get(&out.fingerprint).unwrap().trust,
+            PeerTrust::Trusted
+        );
+    }
+
+    #[test]
+    fn pair_request_rejects_empty_url_and_empty_subdomain() {
+        let mut store = PeerStore::default();
+        let req = PairRequest {
+            label: "p".into(),
+            subdomain: String::new(),
+            base_url: String::new(),
+            public_key_pem: fresh_peer_pem(),
+        };
+        let err = apply_pair_request(&mut store, &req, "local-fp")
+            .expect_err("empty url+subdomain must 400");
+        assert!(
+            err.contains("subdomain") || err.contains("baseUrl") || err.contains("url"),
+            "got: {err}"
+        );
+        assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn pair_request_https_rfc1918_is_teaching_error() {
+        let mut store = PeerStore::default();
+        let req = PairRequest {
+            label: "p".into(),
+            subdomain: String::new(),
+            base_url: "https://192.168.1.50:38471".into(),
+            public_key_pem: fresh_peer_pem(),
+        };
+        let err = apply_pair_request(&mut store, &req, "local-fp").expect_err("https lan");
+        assert!(err.contains("HTTP"), "got: {err}");
+        assert!(store.list().is_empty());
+    }
+
+    #[cfg(not(feature = "airgap"))]
+    #[test]
+    fn pair_request_connect_subdomain_unchanged_when_not_airgap() {
+        let mut store = PeerStore::default();
+        let req = PairRequest {
+            label: "p".into(),
+            subdomain: "rosson".into(),
+            base_url: String::new(),
+            public_key_pem: fresh_peer_pem(),
+        };
+        let out = apply_pair_request(&mut store, &req, "local-fp").expect("connect pair");
+        let peer = store.get(&out.fingerprint).unwrap();
+        assert_eq!(peer.subdomain, "rosson");
+        assert!(peer.base_url.is_empty());
     }
 }

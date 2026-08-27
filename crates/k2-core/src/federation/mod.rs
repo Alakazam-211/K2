@@ -33,6 +33,7 @@
 //! regardless of the flag — inertness comes from having no caller, not from a
 //! runtime branch inside the crypto.
 
+pub mod dial;
 pub mod envelope;
 pub mod ingress;
 pub mod outbox;
@@ -41,19 +42,23 @@ pub mod peers;
 pub mod roster;
 pub mod seen;
 
+pub use dial::{
+    assert_may_dial, host_port, peer_address_host, resolve_peer_base_url, AIRGAP_CONNECT_REFUSE,
+    LAN_HTTPS_REFUSE,
+};
 pub use envelope::{open, reseal, seal, FederationEnvelope, FederationError, SignedPayload};
 pub use ingress::{ingest, IngressError, NonceCache, CAP_INBOUND, DEFAULT_SKEW_SECS};
 pub use outbox::{DeadLetter, OutboxItem};
-pub use roster::{
-    build_local_roster, sign_roster_request, verify_roster_request, LocalRoster, RosterAgent,
-    RosterAuthError, CAP_ROSTER, DEFAULT_ROSTER_SKEW_SECS,
-};
 pub use pairing::{
     apply_pair_confirm, apply_pair_request, sas_code, PairOutcome, PairRequest,
     DEFAULT_CONFIRM_CAPS,
 };
 pub use peers::{
     local_fingerprint, FederationPeer, PeerStore, PeerTrust, RequirePeerError, STORE_VERSION,
+};
+pub use roster::{
+    build_local_roster, sign_roster_request, verify_roster_request, LocalRoster, RosterAgent,
+    RosterAuthError, CAP_ROSTER, DEFAULT_ROSTER_SKEW_SECS,
 };
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -80,7 +85,10 @@ pub fn set_enabled(on: bool) {
 /// toggle for everyone else).
 pub fn enabled() -> bool {
     if let Ok(v) = std::env::var("K2_FEDERATION") {
-        if matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") {
+        if matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ) {
             return true;
         }
     }

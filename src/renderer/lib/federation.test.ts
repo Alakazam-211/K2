@@ -108,7 +108,11 @@ function installFetch(opts: {
               fingerprint: 'LOCALFP',
               subdomain: opts.localSubdomain ?? 'mybox',
             }
-          : { public_key_pem: 'REMOTEPEM', fingerprint: 'REMOTEFP', subdomain: 'rpm' },
+          : {
+              public_key_pem: 'REMOTEPEM',
+              fingerprint: 'REMOTEFP',
+              subdomain: u.hostname.endsWith('.k2.dev') ? 'rpm' : '',
+            },
       )
     }
     if (path === '/cli/federation/peers') {
@@ -147,6 +151,11 @@ describe('parseAgentAtHost', () => {
   it('splits a valid agent::host user form', () => {
     expect(parseAgentAtHost('ai::rpm.k2.dev')).toEqual({ agent: 'ai', host: 'rpm.k2.dev' })
     expect(parseAgentAtHost('bob::127.0.0.1:1')).toEqual({ agent: 'bob', host: '127.0.0.1:1' })
+    expect(parseAgentAtHost('ai::192.168.1.50:38471')).toEqual({
+      agent: 'ai',
+      host: '192.168.1.50:38471',
+    })
+    expect(parseAgentAtHost('ai::box.ts.net')).toEqual({ agent: 'ai', host: 'box.ts.net' })
   })
   it('rejects non-addresses and wire form', () => {
     expect(parseAgentAtHost('local-workspace')).toBeNull()
@@ -184,6 +193,15 @@ describe('peerMatchesHostname', () => {
   it('matches label when subdomain is empty', () => {
     const p = peer({ label: 'my-box.example.com', subdomain: '' })
     expect(peerMatchesHostname(p, 'my-box.example.com')).toBe(true)
+  })
+
+  it('matches LAN host:port and base_url without appending .k2.dev', () => {
+    const p = peer({
+      subdomain: '192.168.1.50:38471',
+      base_url: 'http://192.168.1.50:38471',
+    })
+    expect(peerMatchesHostname(p, '192.168.1.50:38471')).toBe(true)
+    expect(peerMatchesHostname(p, '192.168.1.50')).toBe(false)
   })
 })
 
@@ -239,6 +257,33 @@ describe('autoPairWithHost', () => {
     await expect(autoPairWithHost('rpm.k2.dev')).rejects.toThrow(
       /no K2 Connect tunnel|purchased <subdomain>\.k2\.dev/i,
     )
+  })
+
+  it('pairs a saved LAN http host:port with baseUrl and no .k2.dev', async () => {
+    hosts = [
+      {
+        id: 'lan1',
+        label: 'LAN box',
+        hostname: '192.168.1.50',
+        port: 38471,
+        secure: false,
+        token: 'LANTOK',
+        remember: true,
+        lastConnectedAt: null,
+      },
+    ]
+    const rec = installFetch({ localPeers: [], remotePeers: [], localSubdomain: '' })
+    await autoPairWithHost('192.168.1.50')
+
+    const pairReqs = rec.filter((r) => r.url.includes('/cli/federation/pair/request'))
+    expect(pairReqs).toHaveLength(2)
+    const onLocal = pairReqs.find((r) => r.url.startsWith(LOCAL_BASE))
+    expect(onLocal?.body).toMatchObject({
+      public_key_pem: 'REMOTEPEM',
+      subdomain: '192.168.1.50:38471',
+      baseUrl: 'http://192.168.1.50:38471',
+    })
+    expect(JSON.stringify(onLocal?.body)).not.toMatch(/k2\.dev/)
   })
 })
 

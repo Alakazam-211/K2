@@ -68,8 +68,14 @@ pub struct FederationPeer {
     pub fingerprint: String,
     /// Cosmetic label (e.g. `"rosson@laptop"`). Never trusted for routing/auth.
     pub label: String,
-    /// Routing hint → `<subdomain>.k2.dev`. A hint only; identity is the key.
+    /// Routing hint. Connect: bare subdomain (`rpm` → `https://rpm.k2.dev`).
+    /// LAN/Tailscale: saved host:port (`192.168.1.50:38471`). Identity is the key.
     pub subdomain: String,
+    /// Explicit dial base URL (`http://192.168.1.50:38471`). Empty means
+    /// derive from [`Self::subdomain`] (Connect zone, unless air-gap).
+    /// Additive: missing on old stores (serde default). STORE_VERSION stays 1.
+    #[serde(default)]
+    pub base_url: String,
     /// Pinned ECDSA P-256 SPKI, PEM-encoded (TOFU). Verification pins THIS.
     pub public_key_pem: String,
     /// Trust state. Only `Trusted` passes the gate.
@@ -102,12 +108,19 @@ impl FederationPeer {
             fingerprint,
             label: label.into(),
             subdomain: subdomain.into(),
+            base_url: String::new(),
             public_key_pem: pem,
             trust: PeerTrust::Pending,
             capabilities: BTreeSet::new(),
             epoch: 0,
             added_at: Utc::now(),
         })
+    }
+
+    /// Set the per-peer dial base URL (F2). Empty clears it.
+    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = url.into().trim().trim_end_matches('/').to_string();
+        self
     }
 }
 
@@ -448,7 +461,9 @@ mod tests {
 
         // Grant the capability → now (and only now) it passes.
         assert!(store.grant(&fp, "inbound"));
-        let peer = store.require_peer(&fp, "inbound").expect("granted → allowed");
+        let peer = store
+            .require_peer(&fp, "inbound")
+            .expect("granted → allowed");
         assert_eq!(peer.fingerprint, fp);
 
         // A DIFFERENT capability is still denied (grants are per-capability).
@@ -476,7 +491,8 @@ mod tests {
         with_temp_home(|| {
             let pem = fresh_peer_pem();
             let mut store = PeerStore::default();
-            let fp = store.upsert(FederationPeer::pin("rosson@laptop", "rosson", pem).expect("pin"));
+            let fp =
+                store.upsert(FederationPeer::pin("rosson@laptop", "rosson", pem).expect("pin"));
             store.set_trust(&fp, PeerTrust::Trusted);
             store.grant(&fp, "inbound");
             store.grant(&fp, "roster");
@@ -497,10 +513,47 @@ mod tests {
             let reloaded = PeerStore::load().expect("reload");
             let peer = reloaded.get(&fp).expect("peer survives reload");
             assert_eq!(peer.trust, PeerTrust::Trusted);
+            assert!(peer.base_url.is_empty(), "legacy pin has empty base_url");
             assert!(peer.capabilities.contains("inbound"));
             assert!(peer.capabilities.contains("roster"));
             // The gate still works against the reloaded store.
             assert!(reloaded.require_peer(&fp, "inbound").is_ok());
+        });
+    }
+
+    #[test]
+    fn store_persist_reload_keeps_base_url() {
+        with_temp_home(|| {
+            let pem = fresh_peer_pem();
+            let mut store = PeerStore::default();
+            let fp = store.upsert(
+                FederationPeer::pin("lan", "192.168.1.50:38471", pem)
+                    .expect("pin")
+                    .with_base_url("http://192.168.1.50:38471"),
+            );
+            store.save().expect("save");
+            let peer = PeerStore::load().expect("reload").get(&fp).unwrap().clone();
+            assert_eq!(peer.base_url, "http://192.168.1.50:38471");
+            assert_eq!(peer.subdomain, "192.168.1.50:38471");
+        });
+    }
+
+    #[test]
+    fn old_store_json_without_base_url_loads() {
+        with_temp_home(|| {
+            let pem = fresh_peer_pem();
+            let fp = fingerprint_of_spki_pem(&pem).unwrap();
+            let raw = format!(
+                r#"{{"version":1,"peers":[{{"fingerprint":"{fp}","label":"legacy","subdomain":"rpm","public_key_pem":{pem},"trust":"pending","capabilities":[],"epoch":0,"added_at":"2026-01-01T00:00:00Z"}}]}}"#,
+                fp = fp,
+                pem = serde_json::to_string(&pem).unwrap(),
+            );
+            std::fs::create_dir_all(store_path().parent().unwrap()).unwrap();
+            std::fs::write(store_path(), raw).unwrap();
+            let loaded = PeerStore::load().expect("v1 peer without base_url must load");
+            let p = loaded.get(&fp).expect("peer");
+            assert!(p.base_url.is_empty());
+            assert_eq!(p.subdomain, "rpm");
         });
     }
 

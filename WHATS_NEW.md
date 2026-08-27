@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.119 — LAN federated connections use the saved IP:port
+
+After you Pair a LAN peer, picking an agent under a workspace's **Federated connections** no longer looks up `<LAN-IP>:38471.k2.dev` (that host was never in Settings → Connections). The address is `agent::<LAN-IP>:38471` against the server you already signed in.
+
+What's New star drawer: K2 logo on the tag, the card stays centered, the drawer sits behind it.
+
+---
+
 ## 0.40.118 — Pair as federated peers over LAN (no tunnel)
 
 Two machines on the same network can **Pair as a federated peer** without buying a `*.k2.dev` tunnel. Add Server as `http://<LAN-IP>:<port>`, enable federation, Pair. `k2 msg sales::10.2.40.28:38471` is the address shape. HTTPS to a private IP is still refused.

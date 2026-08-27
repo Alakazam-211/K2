@@ -48,7 +48,7 @@ export default function K2NounsCheatSheet(): React.JSX.Element {
         type="button"
         data-testid="k2-nouns-cheat-sheet"
         onClick={() => setOpen(true)}
-        className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
+        className="flex h-6 w-6 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
         style={noDrag}
         title="K2 cheat sheet"
         aria-label="K2 cheat sheet"

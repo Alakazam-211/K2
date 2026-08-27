@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.117 — Terminal hitch; inbox files keep the note
+
+Quiet agent sessions no longer freeze the window for a second or two while you type in **Message the agent**. The grid still pauses a runaway TUI; catch-up no longer stop-the-worlds the compose bar, and idle panes no longer log a false stall.
+
+`k2 msg --inbox-wake` / `--inbox-silent` with files now keeps the cover note you typed (it used to drop the prose and only attach the files). A leftover tray-teardown bug that printed `exit 1` on a successful send is gone.
+
+---
+
 ## 0.40.116 — Codex yolo; pinned chat uses your LLM launch script
 
 Switching the pinned Chat dropdown now launches that session with the command from **Settings → LLMs**, not a stripped resume line. Codex’s default is `codex --yolo`. If you already customized Codex, that command is left alone.

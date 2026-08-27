@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { K2_CHEAT_SHEET_INTRO, K2_CHEAT_SHEET_NOTES, K2_NOUN_GROUPS } from './k2Nouns'
+import { K2_CHEAT_SHEET_INTRO, K2_NOUN_GROUPS } from './k2Nouns'
 
 describe('K2 noun cheat sheet catalog', () => {
   it('intro talks about K2 nouns, never K2SO', () => {
@@ -7,18 +7,10 @@ describe('K2 noun cheat sheet catalog', () => {
     expect(K2_CHEAT_SHEET_INTRO.toLowerCase()).not.toContain('k2so')
   })
 
-  it('marks CLI nouns that need a Linux sidecar loaded', () => {
-    expect(K2_CHEAT_SHEET_NOTES).toHaveLength(1)
-    const note = K2_CHEAT_SHEET_NOTES[0]
-    expect(note.note).toBe('linux-sidecar')
-    expect(note.body.toLowerCase()).toMatch(/sidecar/)
-    expect(note.body.toLowerCase()).toMatch(/linux/)
-    expect(note.body.toLowerCase()).toMatch(/postgres|mail/)
-    expect(note.body.toLowerCase()).not.toContain('k2so')
-    const mail = K2_NOUN_GROUPS.flatMap((g) => g.items).find((i) => i.noun === 'mail')
-    expect(mail?.note).toBe('linux-sidecar')
-    const whoami = K2_NOUN_GROUPS.flatMap((g) => g.items).find((i) => i.noun === 'whoami')
-    expect(whoami?.note).toBeUndefined()
+  it('tags whoami as sidecar and mail as Linux sidecar', () => {
+    const items = K2_NOUN_GROUPS.flatMap((g) => g.items)
+    expect(items.find((i) => i.noun === 'whoami')?.note).toBe('sidecar')
+    expect(items.find((i) => i.noun === 'mail')?.note).toBe('linux-sidecar')
   })
 
   it('groups the expected noun families', () => {

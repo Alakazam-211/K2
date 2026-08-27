@@ -1,8 +1,8 @@
 // Human-facing catalog of `k2 <noun> …` verbs. Static on purpose — the
 // daemon glossary is agent-facing and still says k2so in places.
 
-/** Nouns that talk to a Linux sidecar process the daemon supervises. */
-export type K2NounNote = 'linux-sidecar'
+/** `sidecar` = extra chat in this workspace; `linux-sidecar` = Linux process the daemon loads. */
+export type K2NounNote = 'sidecar' | 'linux-sidecar'
 
 export interface K2Noun {
   /** CLI noun (`k2 <noun>`). Slash-pairs like `feedback / tickets` stay one row. */
@@ -19,14 +19,6 @@ export interface K2NounGroup {
 
 export const K2_CHEAT_SHEET_INTRO =
   'A workspace is an agent. In a K2 terminal you (or the agent) run `k2 <noun> …`.'
-
-export const K2_CHEAT_SHEET_NOTES: { note: K2NounNote; title: string; body: string }[] = [
-  {
-    note: 'linux-sidecar',
-    title: 'Linux sidecar',
-    body: 'Some verbs talk to a sidecar the daemon loads on a Linux box. If that sidecar is not installed/running, the CLI fails (`supported: no`). Today that is hosted mail. A Postgres data sidecar is next. Linking your own Gmail/IMAP does not need it.',
-  },
-]
 
 export const K2_NOUN_GROUPS: K2NounGroup[] = [
   {
@@ -67,6 +59,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       {
         noun: 'whoami',
         blurb: "This cell's handle/address (`sales/reviewer`).",
+        note: 'sidecar',
       },
       {
         noun: 'connections',

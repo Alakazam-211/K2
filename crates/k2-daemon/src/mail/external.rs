@@ -207,13 +207,21 @@ pub struct OauthFields {
     pub token_expires_at: Option<i64>,
 }
 
-/// Read the 0082 auth columns for a row. A missing row (or a schema
-/// without the columns) is a LOUD error — an oauth inbox must never be
-/// silently mistaken for a password inbox.
+/// Read the 0082 auth columns for a row.
+///
+/// A missing row is password-auth, not an error. `add_inbox` live-connects
+/// BEFORE insert so a bad password never leaves a half-added row;
+/// `RealImapOps::login` (and SMTP) call this on that candidate id.
+/// Treating `QueryReturnedNoRows` as a hard error made every IMAP
+/// password `k2 mail link add` fail with
+/// `could not connect: read auth fields … Query returned no rows`
+/// (measured 2026-08-27, Dovecot). A missing row must never be mistaken
+/// for oauth — defaulting to password keeps LOGIN, which is the add-time
+/// path and the pre-O2 path. A schema without the columns is still loud.
 pub fn read_oauth_fields(row_id: &str) -> Result<OauthFields, String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    conn.query_row(
+    match conn.query_row(
         "SELECT auth_kind, provider, token_expires_at \
          FROM mail_external_inboxes WHERE id = ?1",
         rusqlite::params![row_id],
@@ -224,8 +232,15 @@ pub fn read_oauth_fields(row_id: &str) -> Result<OauthFields, String> {
                 token_expires_at: r.get(2)?,
             })
         },
-    )
-    .map_err(|e| format!("read auth fields for inbox {row_id}: {e}"))
+    ) {
+        Ok(fields) => Ok(fields),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(OauthFields {
+            auth_kind: "password".to_string(),
+            provider: None,
+            token_expires_at: None,
+        }),
+        Err(e) => Err(format!("read auth fields for inbox {row_id}: {e}")),
+    }
 }
 
 /// Persist a REFRESHED absolute `token_expires_at` back to the row (O2:
@@ -2232,6 +2247,19 @@ a,b\r\n1,2\r\n\
             "{label}-{}@ext-test.example",
             &uuid::Uuid::new_v4().simple().to_string()[..12]
         )
+    }
+
+    #[test]
+    fn read_oauth_fields_missing_row_is_password_not_an_error() {
+        // add_inbox connects BEFORE insert. login() reads oauth columns
+        // on that candidate id. A missing row used to hard-error and
+        // made every password IMAP link fail.
+        let id = uuid::Uuid::new_v4().to_string();
+        let f = read_oauth_fields(&id).expect("missing row is password auth");
+        assert_ne!(f.auth_kind, AUTH_OAUTH);
+        assert_eq!(f.auth_kind, "password");
+        assert!(f.provider.is_none());
+        assert!(f.token_expires_at.is_none());
     }
 
     #[test]

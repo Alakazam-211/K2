@@ -617,8 +617,7 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
 /// `sales/reviewer`). Optional composer slash-command is prepended
 /// (`/compact [from user] [thread:addr] text`).
 fn format_thread_compose_pty_line(from: &str, addr: &str, text: &str) -> String {
-    format_thread_compose_pty_line_with_command(from, addr, text, "")
-        .expect("empty composer slash command is always allowed")
+    crate::workspace_msg::format_message_user(from, &format!("[thread:{addr}] {text}"))
 }
 
 fn format_thread_compose_pty_line_with_command(

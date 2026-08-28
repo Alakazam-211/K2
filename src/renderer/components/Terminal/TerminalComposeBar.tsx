@@ -411,7 +411,7 @@ export function TerminalComposeBar({
 
   const send = useCallback(async () => {
     const text = draft.trim()
-    const command = sendOnThread ? null : slashCommand
+    const command = slashCommand
     if (!composeCanSend({ draft, sending, command }) || sending) return
     if (sendOnThread) {
       if (!threadAddr.trim()) return
@@ -425,17 +425,20 @@ export function TerminalComposeBar({
 
     try {
       if (sendOnThread) {
-        const resp = await daemonCliPost<{ ok?: boolean }>('thread/post', {
+        const body: { addr: string; text: string; via: string; command?: string } = {
           addr: threadAddr,
           text,
           via: 'compose',
-        })
+        }
+        if (command) body.command = command
+        const resp = await daemonCliPost<{ ok?: boolean }>('thread/post', body)
         if (resp?.ok === false) {
           setDraft((cur) => (cur.length === 0 ? text : cur))
         } else {
           if (text) setHistory((prev) => [text, ...prev].slice(0, 50))
           setHistoryIndex(-1)
           historyDraftRef.current = ''
+          setSlashCommand(null)
         }
       } else {
         const body: { session_id: string; text: string; command?: string } = {
@@ -575,7 +578,7 @@ export function TerminalComposeBar({
   const canSend = composeCanSend({
     draft,
     sending,
-    command: sendOnThread ? null : slashCommand,
+    command: slashCommand,
   })
   // Must match composeTextareaHeight: 4px pad × 2 + line-height 1.4.
   const firstLineH = Math.round(editorFontSize * 1.4 + 8)
@@ -637,8 +640,7 @@ export function TerminalComposeBar({
           <line x1="5" y1="12" x2="19" y2="12" />
         </svg>
       </button>
-      {!sendOnThread && (
-        <button
+      <button
           ref={slashBtnRef}
           type="button"
           aria-label="Slash command"
@@ -668,10 +670,8 @@ export function TerminalComposeBar({
         >
           /
         </button>
-      )}
       {slashMenuOpen &&
         slashMenuPos &&
-        !sendOnThread &&
         createPortal(
           <div
             ref={slashMenuRef}

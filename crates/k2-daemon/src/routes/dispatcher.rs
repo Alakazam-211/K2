@@ -3873,9 +3873,21 @@ async fn handle_one_request(
                 crate::caller_workspace::stamp_principal(&mut params, principal);
             }
             let p_owned = p.to_string();
+            let session_author = if super::http::token_is_owner(&query, state.token.as_str()) {
+                "owner".to_string()
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .unwrap_or_else(|| "owner".to_string())
+            };
             let resp = tokio::task::spawn_blocking(move || {
                 crate::caller_workspace::with_request_principal(scoped_principal, || {
-                    crate::overlay_routes::dispatch_post(&p_owned, &params, &body_bytes)
+                    crate::overlay_routes::dispatch_post_as(
+                        &p_owned,
+                        &params,
+                        &body_bytes,
+                        &session_author,
+                    )
                 })
             })
             .await

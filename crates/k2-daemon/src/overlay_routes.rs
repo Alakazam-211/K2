@@ -250,7 +250,18 @@ fn parse_since(params: &HashMap<String, String>) -> i64 {
         .unwrap_or(0)
 }
 
-fn handle_post(params: &HashMap<String, String>) -> CliResponse {
+/// Human Message-the-agent on Thread: token identity, never body `from`.
+/// Owner token (`"owner"`) → `owner_display_name`. Connect-user → username.
+fn compose_from_for_session(session_author: &str) -> String {
+    let s = session_author.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("owner") {
+        workspace_msg::resolve_owner_from()
+    } else {
+        s.to_string()
+    }
+}
+
+fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     let addr = str_param(params, "addr");
     let text = str_param(params, "text");
     if addr.is_empty() {
@@ -264,7 +275,10 @@ fn handle_post(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return e,
     };
     let principal = crate::caller_workspace::principal_from_params(params);
-    let from = {
+    let via = opt_param(params, "via").unwrap_or_else(|| "thread".to_string());
+    let from = if via == "compose" {
+        compose_from_for_session(session_author)
+    } else {
         let explicit = opt_param(params, "from").unwrap_or_default();
         if !explicit.is_empty() {
             explicit
@@ -272,10 +286,20 @@ fn handle_post(params: &HashMap<String, String>) -> CliResponse {
             "k2".to_string()
         }
     };
+    let command = if via == "compose" {
+        match workspace_msg::normalize_composer_slash_command(
+            &opt_param(params, "command").unwrap_or_default(),
+        ) {
+            Ok(Some(cmd)) => cmd.to_string(),
+            Ok(None) => String::new(),
+            Err(e) => return usage(e),
+        }
+    } else {
+        String::new()
+    };
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
     }
-    let via = opt_param(params, "via").unwrap_or_else(|| "thread".to_string());
     let db = k2_core::db::shared();
     let conn = db.lock();
     match overlay::post_thread(
@@ -297,12 +321,11 @@ fn handle_post(params: &HashMap<String, String>) -> CliResponse {
                     &resolved.addr,
                     &text,
                 );
-                let author = crate::workspace_msg::resolve_owner_from();
-                inject_thread_compose(&resolved, &author, &text);
+                inject_thread_compose(&resolved, &from, &text, &command);
                 let _ = k2_core::workspace_compose_history::record_compose_send(
                     &resolved.project_id,
                     &text,
-                    &author,
+                    &from,
                 );
             }
             CliResponse::ok_json(
@@ -591,17 +614,34 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
 /// Human Message-the-agent on the Thread tab: same `[from <user>]` stamp
 /// as Terminal inject, plus `[thread:<addr>]` so the agent can tell the
 /// two throats apart. `addr` is the overlay address (`sales` or
-/// `sales/reviewer`).
+/// `sales/reviewer`). Optional composer slash-command is prepended
+/// (`/compact [from user] [thread:addr] text`).
 fn format_thread_compose_pty_line(from: &str, addr: &str, text: &str) -> String {
-    crate::workspace_msg::format_message_user(from, &format!("[thread:{addr}] {text}"))
+    format_thread_compose_pty_line_with_command(from, addr, text, "")
+        .expect("empty composer slash command is always allowed")
 }
 
-fn inject_thread_compose(resolved: &ResolvedOverlay, from: &str, text: &str) {
+fn format_thread_compose_pty_line_with_command(
+    from: &str,
+    addr: &str,
+    text: &str,
+    command: &str,
+) -> Result<String, String> {
+    crate::workspace_msg::format_message_user_with_command(
+        from,
+        &format!("[thread:{addr}] {text}"),
+        command,
+    )
+}
+
+fn inject_thread_compose(resolved: &ResolvedOverlay, from: &str, text: &str, command: &str) {
     let payload = format!("[thread:{}] {text}", resolved.addr);
-    record_test_inject(&format_thread_compose_pty_line(from, &resolved.addr, text));
+    let line = format_thread_compose_pty_line_with_command(from, &resolved.addr, text, command)
+        .unwrap_or_else(|_| format_thread_compose_pty_line(from, &resolved.addr, text));
+    record_test_inject(&line);
     // Same throat as k2 talk / Projects Chat / Feedback: wake a dormant
     // session, then inject+submit. `via=compose` skips Chatter (already on Thread).
-    deliver_thread_to_pty(&resolved.addr, &payload, from, "compose");
+    deliver_thread_to_pty(&resolved.addr, &payload, from, "compose", command);
 }
 
 fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>) {
@@ -616,13 +656,13 @@ fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>) {
         let payload = format!("[thread:{addr}] {}", cb.inject_line);
         record_test_inject(&payload);
         let from = crate::workspace_msg::resolve_owner_from();
-        deliver_thread_to_pty(addr, &payload, &from, "thread");
+        deliver_thread_to_pty(addr, &payload, &from, "thread", "");
     }
 }
 
 /// Feedback / Projects Chat / `k2 talk`: `deliver_live(..., wake=true)`.
 /// Overlay unit tests have no Tokio reactor; skip the live wake there.
-fn deliver_thread_to_pty(addr: &str, payload: &str, from: &str, via: &str) {
+fn deliver_thread_to_pty(addr: &str, payload: &str, from: &str, via: &str, command: &str) {
     if cfg!(test) && tokio::runtime::Handle::try_current().is_err() {
         return;
     }
@@ -630,7 +670,7 @@ fn deliver_thread_to_pty(addr: &str, payload: &str, from: &str, via: &str) {
         addr,
         payload,
         from,
-        "",
+        command,
         true,
         crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
         via,
@@ -708,10 +748,22 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 }
 
 pub fn dispatch_post(path: &str, params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
+    dispatch_post_as(path, params, body, "owner")
+}
+
+/// `session_author` is `"owner"` (host owner token) or a connect-user
+/// username — same as project chat / feedback. Used only for
+/// `via=compose` human posts (D3: never trust body `from`).
+pub fn dispatch_post_as(
+    path: &str,
+    params: &HashMap<String, String>,
+    body: &[u8],
+    session_author: &str,
+) -> CliResponse {
     let mut params = params.clone();
     merge_body(&mut params, body);
     match path {
-        "/cli/thread/post" => handle_post(&params),
+        "/cli/thread/post" => handle_post(&params, session_author),
         "/cli/thread/ask" => handle_ask(&params),
         "/cli/thread/secret" => handle_secret(&params),
         "/cli/thread/answer" => handle_answer(&params),
@@ -930,12 +982,108 @@ mod tests {
             "via=compose must record workspace compose-history, got {hist:?}"
         );
         let author = crate::workspace_msg::resolve_owner_from();
+        let posted = json_body(&post);
+        assert_eq!(
+            posted["from"].as_str().expect("from"),
+            author.as_str(),
+            "via=compose must stamp the session actor, not body from; {posted}"
+        );
         let want = format_thread_compose_pty_line(&author, &handle, &body);
         let injects = recorded_injects();
         assert!(
             injects.iter().any(|l| l == &want),
             "compose must inject [from user] [thread:addr] msg into the PTY; want {want:?} got {injects:?}"
         );
+    }
+
+    #[test]
+    fn compose_via_uses_connect_user_session_not_body_from_or_owner() {
+        let handle = format!("ovluser{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let body = format!("alice-says-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let post = dispatch_post_as(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": body,
+                "via": "compose",
+                "from": "spoofed-owner",
+            })
+            .to_string()
+            .as_bytes(),
+            "alice",
+        );
+        assert_eq!(post.status, "200 OK", "post failed: {}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(posted["from"], "alice", "must ignore body from: {posted}");
+        let want = format_thread_compose_pty_line("alice", &handle, &body);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &want),
+            "connect-user compose must inject [from alice]; want {want:?} got {injects:?}"
+        );
+        assert!(
+            injects.iter().all(|l| !l.contains("spoofed-owner")),
+            "must not stamp body from; got {injects:?}"
+        );
+    }
+
+    #[test]
+    fn compose_slash_command_prepends_on_thread_inject() {
+        let handle = format!("ovlslash{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let post = dispatch_post_as(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": "wrap it up",
+                "via": "compose",
+                "command": "/compact",
+            })
+            .to_string()
+            .as_bytes(),
+            "alice",
+        );
+        assert_eq!(post.status, "200 OK", "post failed: {}", post.body);
+        let want =
+            format_thread_compose_pty_line_with_command("alice", &handle, "wrap it up", "/compact")
+                .expect("compact");
+        assert_eq!(
+            want,
+            format!("/compact [from alice] [thread:{handle}] wrap it up")
+        );
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &want),
+            "slash command must lead the PTY line; want {want:?} got {injects:?}"
+        );
+    }
+
+    #[test]
+    fn compose_unknown_slash_command_is_400() {
+        let handle = format!("ovlbad{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let post = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": "nope",
+                "via": "compose",
+                "command": "/exit",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(post.status, "400 Bad Request", "{}", post.body);
     }
 
     #[test]

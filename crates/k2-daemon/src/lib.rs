@@ -173,6 +173,7 @@ pub mod workspace_resources_routes;
 pub mod workspace_routes;
 pub mod overlay_routes;
 pub mod overlay_ws;
+pub mod skin_routes;
 
 #[cfg(test)]
 mod test_support;

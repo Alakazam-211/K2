@@ -221,6 +221,7 @@ _cli_tool_id_for_verb() {
         daemon) echo "daemon-admin" ;;
         users) echo "users-admin" ;;
         api-key) echo "api-key" ;;
+        skin|skin-token) echo "skin" ;;
         # Remote Session owner/admin surface (Layer 0 + grants + shell PTY).
         # Locked id: cannot Open; needs owner/admin or grant token server-side.
         remote-session) echo "remote-session" ;;
@@ -236,7 +237,7 @@ _cli_tool_default_mode() {
     case "${1:-}" in
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat) echo "id" ;;
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|remote-session) echo "id" ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
         browser-open|settings) echo "id" ;;
         *) echo "open" ;;
     esac
@@ -245,7 +246,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|remote-session) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -5236,6 +5237,233 @@ except Exception as e:
     esac
 }
 
+# Skin Access (slice 1+2) — guest list + k2skn_ capability passes + front-door
+# stub. Separate from Connect users (`k2 users`) and `/v1` `k2sk_` API keys.
+# Owner-tier daemon routes. Secret shown once on skin-token create.
+_skin_usage() {
+    cat >&2 <<'EOF'
+Usage: k2 skin <user|front-door> ...
+       k2 skin-token <create|list|revoke> ...
+
+  k2 skin user add <username>           Add a skin principal (not a Connect user)
+  k2 skin user list                     Roster (no secrets)
+  k2 skin user remove <username>        Drop principal + their passes
+  k2 skin front-door [connect|direct]   Show or persist the Skin front door
+  k2 skin-token create <username> [--caps thread:read,thread:post]
+                                        Mint k2skn_ pass (secret once)
+  k2 skin-token list                    Live/revoked passes (prefix + caps)
+  k2 skin-token revoke <id>
+
+Caps: thread:read (GET /cli/thread + overlay WS), thread:post (POST /cli/thread/post).
+Grid/PTY is never a skin room.
+EOF
+}
+
+cmd_skin() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        user|users)
+            local action="${1:-list}"
+            shift || true
+            case "$action" in
+                add)
+                    local username="${1:-}"
+                    [[ -z "$username" ]] && { echo "Usage: k2 skin user add <username>" >&2; exit 1; }
+                    local body
+                    body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
+                    cli_post_json "/cli/skin/users" "$body" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("Skin user added: %s" % d.get("username",""))
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+                    ;;
+                list|"")
+                    cli_request "/cli/skin/users" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if isinstance(d,dict) and "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    users=d.get("users",[])
+    if not users:
+        print("No skin users."); sys.exit(0)
+    for u in users:
+        print("%s  %s" % (u.get("username",""), u.get("id","")))
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+                    ;;
+                remove|rm)
+                    local username="${1:-}"
+                    [[ -z "$username" ]] && { echo "Usage: k2 skin user remove <username>" >&2; exit 1; }
+                    local body
+                    body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
+                    cli_post_json "/cli/skin/users/remove" "$body" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("Skin user removed." if d.get("success") else "No matching skin user.")
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+                    ;;
+                *)
+                    echo "Usage: k2 skin user <add|list|remove>" >&2
+                    exit 1 ;;
+            esac
+            ;;
+        front-door|frontdoor)
+            local mode="${1:-}"
+            if [ -z "$mode" ]; then
+                cli_request "/cli/skin/front-door" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if isinstance(d,dict) and "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("mode:  %s" % (d.get("mode") or "-"))
+    print("url:   %s" % (d.get("url") or "(none)"))
+    if d.get("hint"):
+        print("hint:  %s" % d["hint"])
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+                return 0
+            fi
+            case "$mode" in
+                connect|direct) ;;
+                *) echo "Usage: k2 skin front-door [connect|direct]" >&2; exit 1 ;;
+            esac
+            shift || true
+            local url="" hint=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --url) url="${2:-}"; shift 2 ;;
+                    --hint) hint="${2:-}"; shift 2 ;;
+                    *) echo "Unknown flag: $1" >&2; exit 1 ;;
+                esac
+            done
+            local body
+            body=$(K2_SKIN_MODE="$mode" K2_SKIN_URL="$url" K2_SKIN_HINT="$hint" python3 -c '
+import json,os
+b={"mode": os.environ.get("K2_SKIN_MODE","")}
+u=os.environ.get("K2_SKIN_URL","").strip()
+if u: b["url"]=u
+h=os.environ.get("K2_SKIN_HINT","").strip()
+if h: b["hint"]=h
+print(json.dumps(b))')
+            cli_post_json "/cli/skin/front-door" "$body" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("Front door: %s  %s" % (d.get("mode","?"), d.get("url") or "(no url yet)"))
+    if d.get("hint"):
+        print(d["hint"])
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+            ;;
+        --help|-h|"")
+            _skin_usage
+            [[ -z "$sub" ]] && exit 1
+            exit 0
+            ;;
+        *)
+            _skin_usage
+            exit 1 ;;
+    esac
+}
+
+cmd_skin_token() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        create)
+            local username="" caps=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --caps|--cap) caps="${2:-}"; shift 2 ;;
+                    --help|-h) echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post]" >&2; exit 0 ;;
+                    -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                    *) [[ -z "$username" ]] && username="$1"; shift ;;
+                esac
+            done
+            [[ -z "$username" ]] && { echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post]" >&2; exit 1; }
+            local body
+            body=$(K2_SKIN_USER="$username" K2_SKIN_CAPS="$caps" python3 -c '
+import json,os
+b={"username": os.environ.get("K2_SKIN_USER","")}
+c=os.environ.get("K2_SKIN_CAPS","").strip()
+if c:
+    b["caps"]=[s.strip() for s in c.split(",") if s.strip()]
+print(json.dumps(b))')
+            cli_post_json "/cli/skin-tokens" "$body" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("Skin token created (id: %s) for %s." % (d.get("id",""), d.get("username","")))
+    caps=d.get("caps") or []
+    print("Capabilities: %s" % (", ".join(caps) if caps else "(none)"))
+    print("")
+    print("  %s" % d.get("token",""))
+    print("")
+    print("STORE THIS KEY NOW — it is shown only once and cannot be retrieved again.")
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+            ;;
+        list)
+            cli_request "/cli/skin-tokens" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if isinstance(d,dict) and "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    tokens=d.get("tokens",[])
+    if not tokens:
+        print("No skin tokens."); sys.exit(0)
+    for t in tokens:
+        state="revoked" if t.get("revokedAt") else "active"
+        caps=",".join(t.get("caps") or []) or "none"
+        print("%s  [%s]  %s  %s  caps=%s" % (t.get("id",""), state, t.get("username",""), t.get("prefix",""), caps))
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+            ;;
+        revoke)
+            local id="${1:-}"
+            [[ -z "$id" ]] && { echo "Usage: k2 skin-token revoke <id>" >&2; exit 1; }
+            local body
+            body=$(K2_SKIN_ID="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["K2_SKIN_ID"]}))')
+            cli_post_json "/cli/skin-tokens/revoke" "$body" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    if "error" in d:
+        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+    print("Skin token revoked." if d.get("success") else "No matching active token (unknown or already revoked).")
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+            ;;
+        --help|-h|"")
+            echo "Usage: k2 skin-token <create|list|revoke>" >&2
+            echo "  create <username> [--caps thread:read,thread:post]" >&2
+            echo "  list" >&2
+            echo "  revoke <id>" >&2
+            [[ -z "$sub" ]] && exit 1
+            exit 0
+            ;;
+        *)
+            echo "Usage: k2 skin-token <create|list|revoke>" >&2
+            exit 1 ;;
+    esac
+}
+
 # ── Remote Session (owner/admin + grant-token drive) ──────────────────
 # Stages 1–3 daemon: Layer 0 toggle, grants (k2rs_…), shell PTY + I/O.
 # Routes live under /cli/remote-session/* and terminal write/read with
@@ -8596,6 +8824,16 @@ _nudge_subdomain_refresh() {
     return 0
 }
 
+# U7 — nested label `skin` is the Skin front door, never a publish target.
+_refuse_reserved_nested_label() {
+    local label
+    label=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+    if [ "$label" = "skin" ]; then
+        echo "Error: reserved_label: 'skin' is reserved for the Skin front door (https://skin.<sub>.k2.dev). Pick another nested label." >&2
+        exit 1
+    fi
+}
+
 cmd_publish_subdomain() {
     local action="${1:-list}"
     shift 2>/dev/null || true
@@ -8662,6 +8900,7 @@ else:
                 echo "  e.g. k2 publish subdomain create staging --target localhost:3000" >&2
                 exit 1
             fi
+            _refuse_reserved_nested_label "$label"
             local body
             body="$(python3 -c 'import json,sys; print(json.dumps({"label": sys.argv[1], "target": sys.argv[2]}))' "$label" "$target")"
             _connect_curl POST "/subdomains" "$body" | _connect_subdomain_render '
@@ -8814,6 +9053,7 @@ else:
                 echo "Usage: k2 publish subdomain point <label> --target <endpoint>" >&2
                 exit 1
             fi
+            _refuse_reserved_nested_label "$label"
             local body
             body="$(python3 -c 'import json,sys; print(json.dumps({"target": sys.argv[1]}))' "$target")"
             _connect_curl PUT "/subdomains/$(urlencode "$label")" "$body" | _connect_subdomain_render '
@@ -12582,6 +12822,72 @@ cmd_schema() {
         {"name": "--role", "arg": "role", "description": "owner | admin | member | viewer"},
         {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."}
       ]
+    },
+    {
+      "name": "skin",
+      "usage": "k2 skin <user|front-door> ...",
+      "description": "Skin Access guest list + front-door stub. Separate from Connect users. Owner-tier.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "skin user add",
+      "usage": "k2 skin user add <username>",
+      "description": "Add a skin principal (not a Connect user / not a /v1 API key).",
+      "args": [{"name": "username", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "skin user list",
+      "usage": "k2 skin user list",
+      "description": "List skin principals (no secrets).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "skin user remove",
+      "usage": "k2 skin user remove <username>",
+      "description": "Remove a skin principal and revoke their passes.",
+      "args": [{"name": "username", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "skin front-door",
+      "usage": "k2 skin front-door [connect|direct] [--url URL] [--hint TEXT]",
+      "description": "Show or persist the Skin front door. connect derives https://skin.<sub>.k2.dev from the tunnel public URL.",
+      "args": [{"name": "mode", "required": false}],
+      "flags": [
+        {"name": "--url", "arg": "URL", "description": "Optional public URL."},
+        {"name": "--hint", "arg": "TEXT", "description": "Optional operator hint."}
+      ]
+    },
+    {
+      "name": "skin-token",
+      "usage": "k2 skin-token <create|list|revoke> ...",
+      "description": "Mint/list/revoke k2skn_ capability passes (thread:read / thread:post). Secret shown once.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "skin-token create",
+      "usage": "k2 skin-token create <username> [--caps thread:read,thread:post]",
+      "description": "Mint a k2skn_ pass for a skin principal. Raw secret printed once. Default caps: thread:read + thread:post.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [{"name": "--caps", "arg": "list", "description": "Comma-separated rooms (thread:read, thread:post)."}]
+    },
+    {
+      "name": "skin-token list",
+      "usage": "k2 skin-token list",
+      "description": "List skin passes (prefix + caps, never the secret).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "skin-token revoke",
+      "usage": "k2 skin-token revoke <id>",
+      "description": "Revoke a skin pass. Next GET / overlay is 401.",
+      "args": [{"name": "id", "required": true}],
+      "flags": []
     },
     {
       "name": "remote-session",
@@ -16994,6 +17300,11 @@ USERS (local daemon connect-user accounts)
   users | users list                            List accounts (username, role, disabled)
   users add <username> [--role owner|admin|member|viewer] [--password-stdin]
                                                 Create account (password via prompt or stdin)
+
+SKIN (guest list + k2skn_ passes — Thread rooms, never grid)
+  skin user add|list|remove                     Skin principals (not Connect users)
+  skin-token create|list|revoke                 Capability pass (secret once at create)
+  skin front-door [connect|direct]              Persist front door; connect URL is https://skin.<sub>.k2.dev
 
 REMOTE SESSION (owner/admin Layer 0 + grants + shell PTY)
   remote-session status [--json]                Master switch + grants/sessions/denials
@@ -25390,6 +25701,20 @@ EOF
     api-key)
         # P3a (sandbox) — owner-only API-key auth-tier management for /v1/*.
         shift; cmd_api_key "$@"
+        ;;
+    skin)
+        if _wants_help "${@:2}"; then
+            _skin_usage
+            exit 0
+        fi
+        shift; cmd_skin "$@"
+        ;;
+    skin-token)
+        if _wants_help "${@:2}"; then
+            cmd_skin_token --help
+            exit 0
+        fi
+        shift; cmd_skin_token "$@"
         ;;
     publish)
         # Hosted services (run/ps/start/stop/rm/logs → /cli/publish/*) plus

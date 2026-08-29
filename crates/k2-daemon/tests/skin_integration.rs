@@ -1,0 +1,596 @@
+//! Skin slice 1+2 — guest list + `k2skn_` passes + Thread rooms + grid 403.
+//!
+//! Driven through the real dispatcher (`k2_daemon::test_harness::start`).
+//! Loud contracts (prd-skin-auth-v1 §8):
+//!   1. Owner-tier mint (`owner_role_identity`); Admin/Member 403.
+//!   2. Mint `thread:read` → GET `/cli/thread` 200; grid + bytes 403
+//!      `{"error":"skin tokens cannot use the terminal"}`.
+//!   3. Token without `thread:post` → POST `/cli/thread/post` 403.
+//!   4. Revoke → next GET 401.
+//!   5. Skin tokens are NOT `token_ok` (settings-class GET 403).
+//!   6. POST-only mutations: GET twins 405.
+//!   7. Nested label `skin` is reserved (400 loud).
+//!   8. Overlay WS: thread:read accepted; chatterlog frames filtered.
+//!
+//! ISOLATION: `$HOME` is process-wide — every test serializes on `TEST_LOCK`
+//! and redirects HOME to a fresh tempdir (`~/.k2/skin.db`).
+
+#![cfg(unix)]
+
+use std::io::{Read, Write};
+use std::net::TcpStream as StdTcpStream;
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
+
+use futures_util::StreamExt;
+use k2_core::db::schema::WorkspaceSession;
+use k2_core::overlay::OverlayDoc;
+use k2_daemon::overlay_ws::{self, OverlayFrame};
+use k2_daemon::test_harness;
+use rusqlite::params;
+use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::Message;
+
+static TEST_LOCK: StdMutex<()> = StdMutex::new(());
+
+fn lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+const OWNER_TOKEN: &str = "owner-token-deadbeef-skin-slice12";
+const TERMINAL_403: &str = r#"{"error":"skin tokens cannot use the terminal"}"#;
+
+struct Resp {
+    status: u16,
+    body: String,
+}
+
+fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Resp {
+    let mut stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("set read timeout");
+    let req = match body {
+        Some(b) => format!(
+            "{method} {path_and_query} HTTP/1.1\r\n\
+             Host: 127.0.0.1\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{b}",
+            b.len()
+        ),
+        None => format!(
+            "{method} {path_and_query} HTTP/1.1\r\n\
+             Host: 127.0.0.1\r\n\r\n"
+        ),
+    };
+    stream.write_all(req.as_bytes()).expect("write request");
+    stream.flush().expect("flush");
+
+    let mut raw: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        if let Some((status, body, complete)) = try_parse(&raw) {
+            if complete {
+                return Resp { status, body };
+            }
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::UnexpectedEof
+                ) =>
+            {
+                break
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if let Some((status, body, _)) = try_parse(&raw) {
+                    return Resp { status, body };
+                }
+                panic!("read timeout: {e:?} raw={}", String::from_utf8_lossy(&raw));
+            }
+            Err(e) => panic!("read response: {e:?}"),
+        }
+    }
+    let text = String::from_utf8_lossy(&raw);
+    let status = text
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("could not parse status from response: {text:?}"));
+    let body = match text.split_once("\r\n\r\n") {
+        Some((_h, b)) => b.to_string(),
+        None => String::new(),
+    };
+    Resp { status, body }
+}
+
+fn try_parse(raw: &[u8]) -> Option<(u16, String, bool)> {
+    let text = String::from_utf8_lossy(raw);
+    let (headers, body) = text.split_once("\r\n\r\n")?;
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())?;
+    let content_len = headers.lines().find_map(|l| {
+        l.to_ascii_lowercase()
+            .strip_prefix("content-length:")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+    });
+    let complete = match content_len {
+        Some(clen) => body.len() >= clen,
+        None => true,
+    };
+    Some((status, body.to_string(), complete))
+}
+
+fn futures_block<F: std::future::Future>(fut: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
+}
+
+fn with_temp_home<F: FnOnce()>(f: F) {
+    let prev = std::env::var_os("HOME");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("k2-skin-it-{}-{}", std::process::id(), nanos));
+    std::fs::create_dir_all(&tmp).expect("create temp HOME");
+    std::env::set_var("HOME", &tmp);
+    f();
+    match prev {
+        Some(p) => std::env::set_var("HOME", p),
+        None => std::env::remove_var("HOME"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+fn json(body: &str) -> serde_json::Value {
+    serde_json::from_str(body).unwrap_or_else(|e| panic!("body must be JSON ({e}): {body:?}"))
+}
+
+fn login(port: u16, username: &str, password: &str) -> String {
+    let r = http(
+        port,
+        "POST",
+        "/cli/auth/login",
+        Some(&format!(
+            r#"{{"username":"{username}","password":"{password}"}}"#
+        )),
+    );
+    assert_eq!(r.status, 200, "login must succeed; body={}", r.body);
+    json(&r.body)["token"]
+        .as_str()
+        .expect("login token")
+        .to_string()
+}
+
+fn provision_role(port: u16, username: &str, password: &str, role: &str) -> String {
+    let r = http(
+        port,
+        "POST",
+        &format!("/cli/users/add?token={OWNER_TOKEN}"),
+        Some(&format!(
+            r#"{{"username":"{username}","password":"{password}"}}"#
+        )),
+    );
+    assert_eq!(r.status, 200, "users/add({username}); {}", r.body);
+    if role != "member" {
+        let r = http(
+            port,
+            "POST",
+            &format!("/cli/users/set-role?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"username":"{username}","role":"{role}"}}"#)),
+        );
+        assert_eq!(r.status, 200, "set-role; {}", r.body);
+    }
+    login(port, username, password)
+}
+
+fn seed_thread_addr(handle: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let id = uuid::Uuid::new_v4().to_string();
+    let path = format!("/tmp/skin-it-{handle}-{id}");
+    conn.execute(
+        "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+        params![id, handle, path],
+    )
+    .expect("seed project");
+    let conv = uuid::Uuid::new_v4().to_string();
+    WorkspaceSession::upsert(
+        &conn,
+        &format!("ws-{conv}"),
+        &id,
+        None,
+        Some(&conv),
+        "claude",
+        "system",
+        "running",
+    )
+    .expect("pin");
+    conv
+}
+
+fn add_user(port: u16, username: &str) {
+    let r = http(
+        port,
+        "POST",
+        &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+        Some(&format!(r#"{{"username":"{username}"}}"#)),
+    );
+    assert_eq!(r.status, 200, "skin user add; {}", r.body);
+}
+
+fn mint(port: u16, username: &str, caps: &[&str]) -> (String, String) {
+    let caps_json = serde_json::to_string(&caps).unwrap();
+    let r = http(
+        port,
+        "POST",
+        &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+        Some(&format!(
+            r#"{{"username":"{username}","caps":{caps_json}}}"#
+        )),
+    );
+    assert_eq!(r.status, 200, "mint; {}", r.body);
+    let v = json(&r.body);
+    let token = v["token"].as_str().expect("token once").to_string();
+    assert!(
+        token.starts_with("k2skn_"),
+        "prefix must be k2skn_, got {token}"
+    );
+    assert!(
+        !token.starts_with("k2sk_"),
+        "must never mint k2sk_: {token}"
+    );
+    (v["id"].as_str().expect("id").to_string(), token)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_slice12_thread_rooms_grid_403() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("skinsales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+        add_user(port, "guest");
+
+        let (_id, read_tok) = mint(port, "guest", &["thread:read"]);
+
+        let get = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={read_tok}&addr={handle}"),
+            None,
+        );
+        assert_eq!(get.status, 200, "thread:read GET thread; {}", get.body);
+        let snap = json(&get.body);
+        assert_eq!(snap["ok"], true, "{snap}");
+        assert_eq!(snap["collection"], "thread");
+
+        let grid = http(
+            port,
+            "GET",
+            &format!("/cli/sessions/grid?token={read_tok}&session=nope"),
+            None,
+        );
+        assert_eq!(grid.status, 403, "grid must 403; {}", grid.body);
+        assert_eq!(
+            grid.body.trim(),
+            TERMINAL_403,
+            "grid 403 body is pinned: {}",
+            grid.body
+        );
+
+        let bytes = http(
+            port,
+            "GET",
+            &format!("/cli/sessions/bytes?token={read_tok}&session=nope"),
+            None,
+        );
+        assert_eq!(bytes.status, 403, "bytes must 403; {}", bytes.body);
+        assert_eq!(bytes.body.trim(), TERMINAL_403);
+
+        let post = http(
+            port,
+            "POST",
+            &format!("/cli/thread/post?token={read_tok}"),
+            Some(&format!(r#"{{"addr":"{handle}","text":"nope"}}"#)),
+        );
+        assert_eq!(post.status, 403, "no thread:post; {}", post.body);
+        assert!(
+            post.body.contains("thread:post"),
+            "missing-cap must name thread:post: {}",
+            post.body
+        );
+
+        let (_pid, post_tok) = mint(port, "guest", &["thread:read", "thread:post"]);
+        let posted = http(
+            port,
+            "POST",
+            &format!("/cli/thread/post?token={post_tok}"),
+            Some(&format!(r#"{{"addr":"{handle}","text":"hello-skin"}}"#)),
+        );
+        assert_eq!(posted.status, 200, "thread:post; {}", posted.body);
+
+        let chatter = http(
+            port,
+            "GET",
+            &format!("/cli/chatterlog?token={read_tok}"),
+            None,
+        );
+        assert_eq!(chatter.status, 403, "chatterlog; {}", chatter.body);
+
+        let whoami = http(port, "GET", &format!("/cli/whoami?token={read_tok}"), None);
+        assert_eq!(
+            whoami.status, 403,
+            "skin must not be token_ok; {}",
+            whoami.body
+        );
+
+        let owner_get = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={OWNER_TOKEN}&addr={handle}"),
+            None,
+        );
+        assert_eq!(
+            owner_get.status, 200,
+            "owner still reads thread; {}",
+            owner_get.body
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_revoke_is_401_and_mutations_are_post_only() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("skinrev{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+        add_user(port, "revokee");
+        let (id, tok) = mint(port, "revokee", &["thread:read"]);
+
+        let ok = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok}&addr={handle}"),
+            None,
+        );
+        assert_eq!(ok.status, 200, "{}", ok.body);
+
+        let rev = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens/revoke?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"id":"{id}"}}"#)),
+        );
+        assert_eq!(rev.status, 200, "{}", rev.body);
+
+        let gone = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok}&addr={handle}"),
+            None,
+        );
+        assert_eq!(gone.status, 401, "revoked GET must 401; {}", gone.body);
+        assert!(
+            gone.body.contains("invalid or revoked skin token"),
+            "{}",
+            gone.body
+        );
+
+        let get_revoke = http(
+            port,
+            "GET",
+            &format!("/cli/skin-tokens/revoke?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(get_revoke.status, 405, "GET revoke; {}", get_revoke.body);
+
+        let get_remove = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users/remove?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(get_remove.status, 405, "GET remove; {}", get_remove.body);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_mint_is_owner_tier_admin_member_403() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        add_user(port, "stay");
+        let admin = provision_role(port, "skinadmin", "hunter2-strong-1", "admin");
+        let member = provision_role(port, "skinmember", "hunter2-strong-2", "member");
+
+        for (tok, who) in [(&admin, "admin"), (&member, "member")] {
+            let r = http(
+                port,
+                "POST",
+                &format!("/cli/skin-tokens?token={tok}"),
+                Some(r#"{"username":"stay","caps":["thread:read"]}"#),
+            );
+            assert_eq!(r.status, 403, "{who} must not mint; {}", r.body);
+            let list = http(port, "GET", &format!("/cli/skin-tokens?token={tok}"), None);
+            assert_eq!(list.status, 403, "{who} list; {}", list.body);
+        }
+
+        let owner_role = provision_role(port, "skinowner", "hunter2-strong-3", "owner");
+        let r = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={owner_role}"),
+            Some(r#"{"username":"stay","caps":["thread:read"]}"#),
+        );
+        assert_eq!(r.status, 200, "Owner-ROLE may mint; {}", r.body);
+        let minted = json(&r.body);
+        let raw = minted["token"].as_str().expect("token");
+        assert!(raw.starts_with("k2skn_"));
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reserved_nested_label_skin_is_400_loud() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let pid = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+                "INSERT INTO projects (id, name, path, handle) VALUES (?1, 'skinws', '/tmp/skin-rsv', 'skinws')",
+                params![pid],
+            )
+            .expect("project");
+        drop(conn);
+
+        let r = http(
+            port,
+            "POST",
+            &format!("/cli/tunnel/subdomains/claim?token={OWNER_TOKEN}&label=skin&project={pid}"),
+            Some(""),
+        );
+        assert_eq!(r.status, 400, "reserved skin; {}", r.body);
+        assert!(
+            r.body.contains("reserved_label"),
+            "must fail loud: {}",
+            r.body
+        );
+        assert!(
+            r.body.contains("skin.<sub>.k2.dev"),
+            "must name the front door: {}",
+            r.body
+        );
+
+        let err = k2_core::published_services::normalize_name("skin").unwrap_err();
+        assert!(err.contains("reserved_label"), "{err}");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_front_door_persists_connect_url_from_tunnel() {
+    let _g = lock();
+    with_temp_home(|| {
+        let mut cfg = k2_core::tunnel::config::TunnelConfig::default();
+        cfg.subdomain = "rosson".into();
+        k2_core::tunnel::config::save(&cfg).expect("save tunnel.json");
+
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let set = http(
+            port,
+            "POST",
+            &format!("/cli/skin/front-door?token={OWNER_TOKEN}"),
+            Some(r#"{"mode":"connect"}"#),
+        );
+        assert_eq!(set.status, 200, "{}", set.body);
+        let v = json(&set.body);
+        assert_eq!(v["mode"], "connect");
+        assert_eq!(v["url"], "https://skin.rosson.k2.dev");
+
+        let get = http(
+            port,
+            "GET",
+            &format!("/cli/skin/front-door?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(get.status, 200, "{}", get.body);
+        assert_eq!(json(&get.body)["url"], "https://skin.rosson.k2.dev");
+
+        let direct = http(
+            port,
+            "POST",
+            &format!("/cli/skin/front-door?token={OWNER_TOKEN}"),
+            Some(r#"{"mode":"direct","url":"https://skin.app.com","hint":"Caddy"}"#),
+        );
+        assert_eq!(direct.status, 200, "{}", direct.body);
+        assert_eq!(json(&direct.body)["mode"], "direct");
+        assert_eq!(json(&direct.body)["url"], "https://skin.app.com");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overlay_ws_accepts_skin_read_and_filters_chatterlog() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        add_user(port, "wsguest");
+        let (_id, tok) = mint(port, "wsguest", &["thread:read"]);
+        let conv = uuid::Uuid::new_v4().to_string();
+
+        futures_block(async {
+            let url =
+                format!("ws://127.0.0.1:{port}/cli/overlay/events?conversation={conv}&token={tok}");
+            let (mut ws, _resp) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("skin overlay WS must accept thread:read");
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            overlay_ws::publish(OverlayFrame {
+                collection: "chatterlog".into(),
+                seq: 1,
+                id: "clog".into(),
+                doc: None,
+                conversation_id: None,
+            });
+            overlay_ws::publish(OverlayFrame {
+                collection: "thread".into(),
+                seq: 2,
+                id: "tid".into(),
+                doc: Some(OverlayDoc::text(
+                    "tid".into(),
+                    "k2".into(),
+                    "guest".into(),
+                    "hi".into(),
+                    "thread",
+                )),
+                conversation_id: Some(conv.clone()),
+            });
+
+            let received = timeout(Duration::from_secs(3), ws.next())
+                .await
+                .expect("timed out waiting for overlay frame")
+                .expect("ws open")
+                .expect("message Ok");
+            let text = match received {
+                Message::Text(t) => t,
+                other => panic!("expected text, got {other:?}"),
+            };
+            let parsed: serde_json::Value = serde_json::from_str(&text).expect("frame JSON");
+            assert_eq!(
+                parsed["collection"], "thread",
+                "skin WS must not see chatterlog; got {parsed}"
+            );
+            assert_eq!(parsed["id"], "tid");
+
+            match timeout(Duration::from_millis(200), ws.next()).await {
+                Err(_) => {}
+                Ok(None) => {}
+                Ok(Some(Ok(Message::Text(t)))) => {
+                    panic!("skin WS must not receive chatterlog/extra frame: {t}")
+                }
+                Ok(Some(other)) => panic!("unexpected extra frame: {other:?}"),
+            }
+        });
+    });
+}

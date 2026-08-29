@@ -815,6 +815,13 @@ async fn handle_one_request(
             | "/cli/api-keys/revoke"
             | "/cli/api-keys/disable"
             | "/cli/api-keys/enable"
+            // Skin slice 1+2 — guest list + k2skn_ passes + front-door stub.
+            // Owner-tier (owner_role_identity). GET twins for mutations 405.
+            | "/cli/skin/users"
+            | "/cli/skin/users/remove"
+            | "/cli/skin-tokens"
+            | "/cli/skin-tokens/revoke"
+            | "/cli/skin/front-door"
             // F2 host read-back (prd-v1-api-completion §4) — the in-session
             // agent's RESPONSE egress over loopback TCP (`k2 respond` from a
             // HOST session, which has no per-cell UDS worth of jail). Auth is
@@ -1240,7 +1247,14 @@ async fn handle_one_request(
             // STREAM token scoped to EXACTLY this request's `?session=` (so an
             // external /v1/sandboxes caller streams with the per-session token,
             // never the API key — which is NOT token_ok and NOT in the stream
-            // registry, so it is rejected here).
+            // registry, so it is rejected here). Skin `k2skn_` passes are
+            // NEVER a terminal room — 403 loud, even if Caddy is bypassed.
+            if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::skin_routes::skin_terminal_forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
             if !super::http::token_ok(&query, state.token.as_str())
                 && !crate::stream_token::query_authorizes(&query)
             {
@@ -1271,6 +1285,13 @@ async fn handle_one_request(
             // STREAM token scoped to EXACTLY this request's `?session=` (the
             // external /v1/sandboxes caller streams with the per-session token;
             // the API key is NEVER accepted here — it fails both checks).
+            // Skin `k2skn_` passes never ride grid — 403 loud (S6).
+            if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::skin_routes::skin_terminal_forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
             if !super::http::token_ok(&query, state.token.as_str())
                 && !crate::stream_token::query_authorizes(&query)
             {
@@ -1299,7 +1320,45 @@ async fn handle_one_request(
         // session's cwd. Renderer + mobile companion consume the
         // same wire format. See `.k2so/prds/daemon-authoritative-tabs.md`.
         p if p == crate::overlay_ws::OVERLAY_WS_PATH => {
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            // Skin tokens are a third class: NOT token_ok. Overlay WS accepts
+            // a live `k2skn_` pass with thread:read; chatterlog frames are
+            // filtered in the handler. Revoked/unknown skin prefix → 401.
+            let skin_ws = if super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token)
+            {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => true,
+                    Some(_) => {
+                        let _ = stream.read(&mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::THREAD_READ,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {
+                        let _ = stream.read(&mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                false
+            } else {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -1309,9 +1368,9 @@ async fn handle_one_request(
                 )
                 .await;
                 return DispatchOutcome::Done;
-            }
+            };
             let params = super::http::parse_params(&path, &query);
-            crate::overlay_ws::serve_overlay_events_connection(stream, params).await;
+            crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws).await;
             return DispatchOutcome::Done;
         }
         "/cli/sessions/events" => {
@@ -3864,8 +3923,68 @@ async fn handle_one_request(
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
-            let (auth_ok, scoped_principal) =
-                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let skin_pass = if skin_presented {
+                super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+            } else {
+                None
+            };
+            let (auth_ok, scoped_principal, skin_author) = if skin_presented {
+                match skin_pass {
+                    None => {
+                        let _ = stream.read(&mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    Some(pass)
+                        if p == "/cli/thread/post"
+                            && pass.has_cap(crate::skin_routes::THREAD_POST) =>
+                    {
+                        (true, None, Some(pass.username.clone()))
+                    }
+                    Some(_) if p == "/cli/thread/post" => {
+                        let _ = stream.read(&mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::THREAD_POST,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    Some(_) => {
+                        let _ = stream.read(&mut buf).await;
+                        super::http::send_response(
+                            &mut *stream,
+                            "403 Forbidden",
+                            "application/json",
+                            r#"{"error":"skin tokens cannot use this room"}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let (ok, scoped) = token_or_scoped_hook_auth(
+                    p,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                );
+                (ok, scoped, None)
+            };
             if !auth_ok {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
@@ -3892,7 +4011,9 @@ async fn handle_one_request(
                 crate::caller_workspace::stamp_principal(&mut params, principal);
             }
             let p_owned = p.to_string();
-            let session_author = if super::http::token_is_owner(&query, state.token.as_str()) {
+            let session_author = if let Some(name) = skin_author {
+                name
+            } else if super::http::token_is_owner(&query, state.token.as_str()) {
                 "owner".to_string()
             } else {
                 super::http::extract_token(&query)
@@ -4883,6 +5004,180 @@ async fn handle_one_request(
                         tokio::task::spawn_blocking(crate::misc_routes::handle_api_key_list)
                             .await
                             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                }
+                _ => {
+                    let _ = stream.read(&mut buf).await;
+                    crate::cli_response::CliResponse::not_found()
+                }
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // Skin slice 1+2 — guest list, k2skn_ passes, front-door stub.
+        // OWNER-TIER (`owner_role_identity`). Skin tokens themselves never
+        // manage the roster (they are not token_ok and not Owner-role).
+        // Mutations POST-only; GET twins 405.
+        p if p.starts_with("/cli/skin") => {
+            let r = match p {
+                "/cli/skin/users" if is_post => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_users_post(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/users" => {
+                    let _ = stream.read(&mut buf).await;
+                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(crate::skin_routes::handle_users_get)
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                    }
+                }
+                "/cli/skin/users/remove" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_users_remove(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin-tokens" if is_post => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_tokens_post(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin-tokens" => {
+                    let _ = stream.read(&mut buf).await;
+                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(crate::skin_routes::handle_tokens_get)
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                    }
+                }
+                "/cli/skin-tokens/revoke" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_tokens_revoke(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/front-door" if is_post => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_front_door_post(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/front-door" => {
+                    let _ = stream.read(&mut buf).await;
+                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(crate::skin_routes::handle_front_door_get)
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
                     }
                 }
                 _ => {
@@ -5991,7 +6286,48 @@ async fn handle_one_request(
             let _ = stream.read(&mut buf).await;
             let is_grant = super::http::extract_token(&query)
                 .is_some_and(k2_core::remote_sessions::is_grant_token);
-            let (auth_ok, scoped_principal) = if p == "/cli/terminal/read" && is_grant {
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            if skin_presented && (p == "/cli/chatter" || p == "/cli/chatterlog") {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"skin tokens cannot use chatter"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let (auth_ok, scoped_principal) = if skin_presented && p == "/cli/thread" {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => (true, None),
+                    Some(_) => {
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::THREAD_READ,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if p == "/cli/terminal/read" && is_grant {
                 // Grant token: enter handler; gate_remote_session_io enforces.
                 (true, None)
             } else {

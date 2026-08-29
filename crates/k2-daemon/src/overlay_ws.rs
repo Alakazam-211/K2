@@ -58,10 +58,23 @@ fn wire_json(frame: &OverlayFrame) -> String {
     .to_string()
 }
 
+/// Whether this overlay subscriber may see `frame`.
+///
+/// Skin WS is Thread-only: host-wide chatterlog frames (`conversation_id:
+/// None`) are dropped. Owner/Connect subscribers keep the unfiltered bus.
+pub fn skin_may_see_frame(frame: &OverlayFrame, conversation: &str, skin: bool) -> bool {
+    match &frame.conversation_id {
+        Some(cid) => cid == conversation,
+        None => !skin, // chatterlog is host-wide — never a skin room
+    }
+}
+
 /// WS handler. Dispatcher already token-authed. Requires `conversation=`.
+/// `skin` filters chatterlog frames (prd-skin-auth-v1 non-goal).
 pub async fn serve_overlay_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
+    skin: bool,
 ) {
     let conversation = params
         .get("conversation")
@@ -104,11 +117,7 @@ pub async fn serve_overlay_events_connection(
             event = rx.recv() => {
                 match event {
                     Ok(frame) => {
-                        let matches = match &frame.conversation_id {
-                            Some(cid) => cid == &conversation,
-                            None => true, // chatterlog is host-wide
-                        };
-                        if !matches {
+                        if !skin_may_see_frame(&frame, &conversation, skin) {
                             continue;
                         }
                         if write
@@ -181,8 +190,12 @@ mod tests {
             conversation_id: Some(conv),
         });
 
-        let a = overlay_a.try_recv().expect("window A must receive overlay frame");
-        let b = overlay_b.try_recv().expect("window B must receive overlay frame");
+        let a = overlay_a
+            .try_recv()
+            .expect("window A must receive overlay frame");
+        let b = overlay_b
+            .try_recv()
+            .expect("window B must receive overlay frame");
         assert_eq!(a.collection, "thread");
         assert_eq!(a.id, id);
         assert_eq!(b.id, id);
@@ -196,5 +209,41 @@ mod tests {
             }
             Err(e) => panic!("session_events try_recv failed: {e}"),
         }
+    }
+
+    #[test]
+    fn skin_ws_drops_chatterlog_keeps_thread() {
+        let conv = "conv-skin-filter";
+        let thread = OverlayFrame {
+            collection: "thread".into(),
+            seq: 1,
+            id: "t1".into(),
+            doc: None,
+            conversation_id: Some(conv.into()),
+        };
+        let chatterlog = OverlayFrame {
+            collection: "chatterlog".into(),
+            seq: 2,
+            id: "c1".into(),
+            doc: None,
+            conversation_id: None,
+        };
+        let other = OverlayFrame {
+            collection: "thread".into(),
+            seq: 3,
+            id: "t2".into(),
+            doc: None,
+            conversation_id: Some("other".into()),
+        };
+        assert!(skin_may_see_frame(&thread, conv, true));
+        assert!(
+            !skin_may_see_frame(&chatterlog, conv, true),
+            "skin WS must not see host-wide chatterlog"
+        );
+        assert!(!skin_may_see_frame(&other, conv, true));
+        assert!(
+            skin_may_see_frame(&chatterlog, conv, false),
+            "owner overlay still receives chatterlog"
+        );
     }
 }

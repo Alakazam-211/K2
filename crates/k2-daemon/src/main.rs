@@ -174,6 +174,7 @@ mod workspace_resources_routes;
 mod workspace_routes;
 mod overlay_routes;
 mod overlay_ws;
+mod skin_routes;
 
 #[cfg(test)]
 #[path = "test_support.rs"]

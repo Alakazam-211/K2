@@ -1297,6 +1297,15 @@ mod tests {
     }
 
     #[test]
+    fn token_ok_never_accepts_skin_k2skn_prefix() {
+        // Skin passes are a third class. They must not ride token_ok
+        // (grid, settings, spawn, …) — overlay/thread opt in separately.
+        assert!(!token_ok("token=k2skn_not-a-real-skin-pass", "owner-token"));
+        assert!(!k2_core::skin::is_skin_token("k2sk_integrator"));
+        assert!(k2_core::skin::is_skin_token("k2skn_guest"));
+    }
+
+    #[test]
     fn token_ok_is_case_sensitive() {
         // Tokens are random hex, but if the field name's case ever
         // shifts the auth gate must fail closed (no match means no

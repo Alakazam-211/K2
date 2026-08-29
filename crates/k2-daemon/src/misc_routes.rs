@@ -1815,6 +1815,9 @@ pub fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
     if label.trim().is_empty() {
         return CliResponse::bad_request("Missing label parameter".to_string());
     }
+    if k2_core::skin::is_reserved_nested_label(&label) {
+        return CliResponse::bad_request(k2_core::skin::reserved_nested_label_error(&label));
+    }
     let project = match need_project(params) {
         Ok(p) => p,
         Err(resp) => return resp,

@@ -43,6 +43,9 @@ pub fn normalize_name(name: &str) -> Result<String, String> {
             "bad_label: Invalid label (use lowercase letters, digits, and dashes).".into(),
         );
     }
+    if crate::skin::is_reserved_nested_label(&s) {
+        return Err(crate::skin::reserved_nested_label_error(&s));
+    }
     Ok(s)
 }
 
@@ -509,5 +512,20 @@ mod tests {
         assert!(normalize_name("").is_err());
         assert!(normalize_name("Has_Underscore").is_err());
         assert!(normalize_name("ok!").is_err());
+    }
+
+    #[test]
+    fn reserved_nested_label_skin_is_400_loud() {
+        let err = normalize_name("skin").expect_err("skin is reserved");
+        assert!(
+            err.contains("reserved_label"),
+            "must fail loud with reserved_label, got {err}"
+        );
+        assert!(
+            err.contains("skin.<sub>.k2.dev"),
+            "must name the Skin front door, got {err}"
+        );
+        assert!(normalize_name("Skin").is_err());
+        assert!(normalize_name("staging").is_ok());
     }
 }

@@ -24,7 +24,7 @@
 // (task #617) — that's the daemon-owned access list (PRD §6.2), a
 // separate area from this account/expose page.
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getDaemonWs, getLocalDaemonWs, daemonHttpBase, invalidateDaemonWs } from '@/kessel/daemon-ws'
 import { withRemoteRetry } from '@/lib/remote-retry'
@@ -480,6 +480,8 @@ export function K2ConnectSection({
   const [usersLoaded, setUsersLoaded] = useState(false)
   const [newUsername, setNewUsername] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [newRole, setNewRole] = useState<K2Role>('member')
+  const [userQuery, setUserQuery] = useState('')
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [addBusy, setAddBusy] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
@@ -729,8 +731,19 @@ export function K2ConnectSection({
         setAddError(await errText(res))
         return
       }
+      // add_user always creates Member. Owner can pick a starting role
+      // here; apply it with the same set-role path as the per-row selector.
+      if (canChangeRoles(viewerRole) && newRole !== 'member') {
+        const roleRes = await userPost('/set-role', { username, role: newRole })
+        if (!roleRes.ok) {
+          setAddError(`Added as member, but role could not be set: ${await errText(roleRes)}`)
+          await refreshUsers()
+          return
+        }
+      }
       setNewUsername('')
       setNewPassword('')
+      setNewRole('member')
       setAddedMsg(`Added — share these credentials with the user.`)
       setTimeout(() => setAddedMsg(null), 4000)
       await refreshUsers()
@@ -1064,6 +1077,15 @@ export function K2ConnectSection({
 
   const inputCls =
     'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+
+  const visibleUsers = useMemo(() => {
+    const q = userQuery.trim().toLowerCase()
+    if (!q) return users
+    return users.filter((u) => {
+      const role = (u.role ?? 'member').toLowerCase()
+      return u.username.toLowerCase().includes(q) || role.includes(q)
+    })
+  }, [users, userQuery])
 
   const running = status?.running ?? false
   // PRD tunnel-disable-unpair tri-state. Optional-safe: a pre-PRD daemon
@@ -1642,9 +1664,9 @@ export function K2ConnectSection({
                 void addUser()
               }}
             >
-              <div className="flex gap-1.5 w-full">
+              <div className="flex flex-wrap gap-1.5 w-full items-center">
                 <input
-                  className={`${inputCls} flex-1 min-w-0`}
+                  className={`${inputCls} flex-1 min-w-[8rem]`}
                   placeholder="username"
                   autoCapitalize="none"
                   autoCorrect="off"
@@ -1652,7 +1674,7 @@ export function K2ConnectSection({
                   value={newUsername}
                   onChange={(e) => setNewUsername(e.target.value)}
                 />
-                <div className="relative flex-1 min-w-0">
+                <div className="relative flex-1 min-w-[8rem]">
                   <input
                     className={`${inputCls} w-full pr-7`}
                     type={showNewPassword ? 'text' : 'password'}
@@ -1675,6 +1697,21 @@ export function K2ConnectSection({
                     )}
                   </button>
                 </div>
+                {canChangeRoles(viewerRole) && (
+                  <SettingDropdown
+                    value={newRole}
+                    options={[
+                      ...(supportsViewerRole
+                        ? [{ value: 'viewer', label: 'Viewer — view-only unless granted' }]
+                        : []),
+                      { value: 'member', label: 'Member' },
+                      { value: 'admin', label: 'Admin' },
+                      { value: 'owner', label: 'Owner' },
+                    ]}
+                    onChange={(value) => setNewRole(value as K2Role)}
+                    menuAlign="left"
+                  />
+                )}
                 <button
                   type="submit"
                   disabled={addBusy || !newUsername.trim() || !newPassword}
@@ -1695,13 +1732,25 @@ export function K2ConnectSection({
             {resetMsg && <div className="text-[10px] text-[var(--color-status-ok-soft)]">{resetMsg}</div>}
 
             {/* User list */}
+            <input
+              type="search"
+              value={userQuery}
+              onChange={(e) => setUserQuery(e.target.value)}
+              placeholder="Search users"
+              aria-label="Search users"
+              className={inputCls}
+            />
             {usersLoaded && users.length === 0 ? (
               <div className="text-[10px] text-[var(--color-text-muted)] py-1">
                 No users yet — add one above.
               </div>
+            ) : usersLoaded && visibleUsers.length === 0 ? (
+              <div className="text-[10px] text-[var(--color-text-muted)] py-1">
+                No users match.
+              </div>
             ) : (
               <div className="divide-y divide-[var(--color-border)]">
-                {users.map((u) => (
+                {visibleUsers.map((u) => (
                   <div key={u.username} className="py-2 space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <span className="flex items-center gap-2 min-w-0">

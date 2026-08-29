@@ -129,6 +129,7 @@ export function SettingDropdown({
             return (
               <button
                 key={option.value}
+                type="button"
                 disabled={isDisabled}
                 onClick={() => {
                   if (isDisabled) return

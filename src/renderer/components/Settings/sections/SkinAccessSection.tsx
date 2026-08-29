@@ -44,7 +44,7 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   },
 ]
 
-export const DEFAULT_SKIN_CAPS = ['thread:read', 'thread:post', 'overlay'] as const
+export const DEFAULT_SKIN_CAPS = ['thread:read', 'thread:post'] as const
 
 export type FrontDoorMode = 'connect' | 'direct'
 
@@ -499,7 +499,8 @@ export function SkinAccessSection(): React.JSX.Element {
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
               Each live key shows scopes / rooms. The raw secret is shown only once when minted.
               Prefix <code className="text-[10px]">k2skn_</code> — not{' '}
-              <code className="text-[10px]">k2sk_</code> API keys.
+              <code className="text-[10px]">k2sk_</code> API keys.{' '}
+              <code className="text-[10px]">thread:read</code> includes overlay WS.
             </p>
             <div className="space-y-2">
               <input

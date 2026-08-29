@@ -32,7 +32,7 @@ const KEY_ROW = {
   id: 'tok-1',
   prefix: 'k2skn_deadbeefab12',
   username: 'alice',
-  caps: ['thread:read', 'thread:post', 'overlay'],
+  caps: ['thread:read', 'thread:post'],
 }
 
 function mockOk(): void {
@@ -87,7 +87,7 @@ describe('parsers', () => {
       id: 'tok-1',
       prefix: 'k2skn_deadbeefab12',
       username: 'alice',
-      caps: ['thread:read', 'thread:post', 'overlay'],
+      caps: ['thread:read', 'thread:post'],
     })
     expect(mintSecretFrom({ secret: 'k2skn_once' })).toBe('k2skn_once')
     expect(mintSecretFrom({ id: 'tok-1' })).toBeNull()
@@ -119,7 +119,7 @@ describe('SkinAccessSection', () => {
     expect(screen.getByText('https://skin.acme.k2.dev')).not.toBeNull()
     expect(screen.getAllByText('alice').length).toBeGreaterThan(0)
     expect(screen.getAllByText('thread:read').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('overlay').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('thread:read').length).toBeGreaterThan(0)
   })
 
   it('POSTs front-door connect|direct and does not start Caddy', async () => {
@@ -178,7 +178,7 @@ describe('SkinAccessSection', () => {
     })
     expect(h.daemonCliPost).toHaveBeenCalledWith('skin-tokens', {
       username: 'alice',
-      caps: ['thread:read', 'thread:post', 'overlay'],
+      caps: ['thread:read', 'thread:post'],
     })
     expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()

@@ -756,6 +756,7 @@ export function DataSection(): React.JSX.Element {
               options={[{ value: '', label: 'Workspace…' }, ...createOptions]}
               onChange={(v) => setCreateWs(v)}
               menuAlign="left"
+              menuPlacement="up"
             />
             <button
               type="button"

@@ -51,6 +51,31 @@ export function SettingsGroup({
   )
 }
 
+/** Overflow-clipping ancestor (or the viewport) — used to flip menus up
+ *  when a trigger sits at the bottom of a panel with overflow:hidden. */
+function clipRectFor(el: HTMLElement): DOMRect {
+  let n: HTMLElement | null = el.parentElement
+  while (n) {
+    const s = getComputedStyle(n)
+    if (/(auto|hidden|scroll|clip)/.test(s.overflowY) || /(auto|hidden|scroll|clip)/.test(s.overflowX)) {
+      return n.getBoundingClientRect()
+    }
+    n = n.parentElement
+  }
+  return new DOMRect(0, 0, window.innerWidth, window.innerHeight)
+}
+
+function shouldOpenMenuUp(trigger: HTMLElement, optionCount: number): boolean {
+  const t = trigger.getBoundingClientRect()
+  const clip = clipRectFor(trigger)
+  const gap = 4
+  const menuMax = 240
+  const estimated = Math.min(menuMax, Math.max(optionCount, 1) * 28)
+  const spaceBelow = Math.min(window.innerHeight, clip.bottom) - t.bottom - gap
+  const spaceAbove = t.top - Math.max(0, clip.top) - gap
+  return spaceBelow < estimated && spaceAbove > spaceBelow
+}
+
 export function SettingDropdown({
   value,
   options,
@@ -58,6 +83,7 @@ export function SettingDropdown({
   className,
   placeholder,
   menuAlign = 'right',
+  menuPlacement = 'auto',
   fullWidth = false,
 }: {
   value: string
@@ -73,6 +99,12 @@ export function SettingDropdown({
    */
   menuAlign?: 'left' | 'right'
   /**
+   * Vertical placement. `'auto'` (default) opens down unless the trigger
+   * sits too close to the bottom of its clipping ancestor (Create database
+   * workspace picker, etc.), then opens up so the list stays visible.
+   */
+  menuPlacement?: 'up' | 'down' | 'auto'
+  /**
    * When provided, a `value` that matches no option shows this placeholder
    * (muted) INSTEAD of silently falling back to `options[0]`. Without it the
    * dropdown would display the first option as if it were chosen, even though
@@ -85,6 +117,7 @@ export function SettingDropdown({
   fullWidth?: boolean
 }): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
+  const [openUp, setOpenUp] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const match = options.find((o) => o.value === value)
@@ -101,11 +134,26 @@ export function SettingDropdown({
     return () => document.removeEventListener('mousedown', handler)
   }, [isOpen])
 
+  const toggleOpen = (): void => {
+    if (!isOpen) {
+      const up =
+        menuPlacement === 'up'
+          ? true
+          : menuPlacement === 'down'
+            ? false
+            : containerRef.current
+              ? shouldOpenMenuUp(containerRef.current, options.length)
+              : false
+      setOpenUp(up)
+    }
+    setIsOpen(!isOpen)
+  }
+
   return (
     <div ref={containerRef} className={`relative no-drag ${fullWidth ? 'w-full' : ''} ${className ?? ''}`}>
       <button
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={toggleOpen}
         className={`flex items-center gap-2 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-primary)] transition-colors cursor-pointer ${
           fullWidth ? 'w-full justify-between' : ''
         }`}
@@ -122,7 +170,7 @@ export function SettingDropdown({
       </button>
 
       {isOpen && (
-        <div className={`absolute top-full ${menuAlign === 'left' ? 'left-0' : 'right-0'} z-50 mt-0.5 w-max min-w-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto`}>
+        <div className={`absolute ${openUp ? 'bottom-full mb-0.5' : 'top-full mt-0.5'} ${menuAlign === 'left' ? 'left-0' : 'right-0'} z-50 w-max min-w-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto`}>
           {options.map((option) => {
             const isActive = option.value === value
             const isDisabled = option.disabled === true

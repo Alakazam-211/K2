@@ -806,6 +806,11 @@ export function TerminalComposeBar({
               const selected = slashCommand === item.command
               const highlighted =
                 index === Math.min(slashHighlight, slashMatches.length - 1)
+              // Accent the committed command, or the keyboard cursor when
+              // nothing is committed yet (so Enter/arrows have an obvious
+              // first choice). Never paint row 0 as chosen if another
+              // command is already selected.
+              const accent = selected || (slashCommand == null && highlighted)
               return (
                 <button
                   key={item.command}
@@ -826,7 +831,7 @@ export function TerminalComposeBar({
                   <span
                     className="font-mono text-[11px]"
                     style={{
-                      color: selected
+                      color: accent
                         ? 'var(--color-accent)'
                         : 'var(--color-text-primary)',
                     }}

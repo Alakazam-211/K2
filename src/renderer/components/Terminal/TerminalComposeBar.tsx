@@ -48,6 +48,7 @@ import {
   composeCanSend,
   composeHistoryKeyAction,
   composeInterruptSequence,
+  composeSlashBackspaceClearsCommand,
   composeSlashMenuKeyAction,
   composeSlashMenuOpenFromDraft,
   composeSlashSpaceCommit,
@@ -579,6 +580,19 @@ export function TerminalComposeBar({
         onInjectInput?.(interrupt)
         return
       }
+      if (
+        composeSlashBackspaceClearsCommand({
+          draft,
+          command: slashCommand,
+          key: e.key,
+          isComposing: e.nativeEvent.isComposing,
+        })
+      ) {
+        e.preventDefault()
+        e.stopPropagation()
+        setSlashCommand(null)
+        return
+      }
       if (shouldSendOnKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) {
         e.preventDefault()
         void send()
@@ -624,6 +638,7 @@ export function TerminalComposeBar({
       onInjectInput,
       selectSlashCommand,
       send,
+      slashCommand,
       slashHighlight,
       slashMatches,
       slashMenuOpen,
@@ -824,7 +839,23 @@ export function TerminalComposeBar({
           </div>,
           document.body,
         )}
-      <div className="min-w-0 w-full flex-1 self-end">
+      <div className="relative min-w-0 flex-1">
+      {draft.length === 0 && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 truncate text-[var(--color-text-muted)]"
+          style={{
+            fontFamily:
+              "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
+            fontSize: editorFontSize,
+            lineHeight: 1.4,
+            padding: '4px 6px',
+            boxSizing: 'border-box',
+          }}
+        >
+          {messagePlaceholder}
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={draft}
@@ -891,7 +922,7 @@ export function TerminalComposeBar({
         onDrop={handleDrop}
         rows={1}
         spellCheck={false}
-        placeholder={messagePlaceholder}
+        placeholder=""
         title="Enter to send, Shift+Enter for newline. Drop files for paths."
         className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         style={{

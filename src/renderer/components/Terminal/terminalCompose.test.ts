@@ -29,6 +29,7 @@ import {
   consumeComposeSlashToken,
   composeSlashExactCommand,
   composeSlashSpaceCommit,
+  composeSlashBackspaceClearsCommand,
   composeSlashMenuKeyAction,
 } from './terminalCompose'
 
@@ -345,6 +346,57 @@ describe('composeSlashExactCommand / space-commit', () => {
     expect(composeSlashSpaceCommit('/c ')).toBeNull()
     expect(composeSlashSpaceCommit('/exit ')).toBeNull()
     expect(composeSlashSpaceCommit('/compact')).toBeNull()
+  })
+})
+
+describe('composeSlashBackspaceClearsCommand', () => {
+  it('clears when the draft is empty and a command is selected', () => {
+    expect(
+      composeSlashBackspaceClearsCommand({
+        draft: '',
+        command: '/compact',
+        key: 'Backspace',
+      }),
+    ).toBe(true)
+    expect(
+      composeSlashBackspaceClearsCommand({
+        draft: '',
+        command: '/goal',
+        key: 'Delete',
+      }),
+    ).toBe(true)
+  })
+
+  it('does not clear while there is still text, no command, or other keys', () => {
+    expect(
+      composeSlashBackspaceClearsCommand({
+        draft: '/',
+        command: '/compact',
+        key: 'Backspace',
+      }),
+    ).toBe(false)
+    expect(
+      composeSlashBackspaceClearsCommand({
+        draft: '',
+        command: null,
+        key: 'Backspace',
+      }),
+    ).toBe(false)
+    expect(
+      composeSlashBackspaceClearsCommand({
+        draft: '',
+        command: '/compact',
+        key: 'Enter',
+      }),
+    ).toBe(false)
+    expect(
+      composeSlashBackspaceClearsCommand({
+        draft: '',
+        command: '/compact',
+        key: 'Backspace',
+        isComposing: true,
+      }),
+    ).toBe(false)
   })
 })
 

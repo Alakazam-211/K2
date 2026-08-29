@@ -312,6 +312,19 @@ export function composeSlashMenuKeyAction(input: {
   return null
 }
 
+/** Empty draft + selected slash command + Backspace/Delete → clear the command. */
+export function composeSlashBackspaceClearsCommand(input: {
+  draft: string
+  command: string | null | undefined
+  key: string
+  isComposing?: boolean
+}): boolean {
+  if (input.isComposing) return false
+  if (input.key !== 'Backspace' && input.key !== 'Delete') return false
+  if (input.draft.length > 0) return false
+  return normalizeComposeSlashCommand(input.command) != null
+}
+
 /** Send is allowed when the draft is non-empty OR a command is selected. */
 export function composeCanSend(input: {
   draft: string

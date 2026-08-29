@@ -443,6 +443,7 @@ export function TerminalComposeBar({
     const text = draft.trim()
     const command = slashCommand
     if (!composeCanSend({ draft, sending, command }) || sending) return
+    if (sessionChrome?.viewTab === 'chatter') return
     if (sendOnThread) {
       if (!threadAddr.trim()) return
     } else if (!sessionId) {
@@ -495,7 +496,7 @@ export function TerminalComposeBar({
     } finally {
       setSending(false)
     }
-  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand])
+  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab])
 
   const slashTypeaheadQuery = composeSlashTypeaheadQuery(draft)
   const slashMatches =

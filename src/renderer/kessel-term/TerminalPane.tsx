@@ -81,6 +81,7 @@ import {
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
+import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
 import {
   bracketPaste,
@@ -564,7 +565,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const sessionChrome = useSessionViewChrome()
   const viewTab = sessionChrome?.viewTab ?? 'terminal'
   const showThreadOnly = viewTab === 'thread'
+  const showChatterOnly = viewTab === 'chatter'
   const showSplit = viewTab === 'split'
+  const hidePty = showThreadOnly || showChatterOnly
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
   // / Cmd+Shift+- menu events (wired via listen('terminal:zoom-*')
@@ -5371,10 +5374,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     >
     <div
       style={{
-        flex: showThreadOnly ? undefined : 1,
+        flex: hidePty ? undefined : 1,
         minWidth: 0,
         minHeight: 0,
-        display: showThreadOnly ? 'none' : 'flex',
+        display: hidePty ? 'none' : 'flex',
         flexDirection: 'column',
       }}
     >
@@ -5761,12 +5764,29 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           )}
         </div>
       )}
+      {sessionChrome && (
+        <div
+          className={
+            showChatterOnly ? 'flex-1 min-w-0 min-h-0 flex flex-col' : undefined
+          }
+          style={!showChatterOnly ? { display: 'none' } : undefined}
+          data-testid="agent-session-chatter"
+        >
+          <div className="flex-1 min-h-0 min-w-0">
+            <ChatterOverlayPane
+              addr={sessionChrome.overlayAddr}
+              conversationId={sessionChrome.conversationId}
+            />
+          </div>
+        </div>
+      )}
     </div>
 
       {/* Terminal-tab composer docks under the PTY column (in-flow). Thread
        *  tab uses the overlay column above so DevTools/viewport shrinks
-       *  chat + Message-the-agent together. Split keeps one bar per column. */}
-      {!showSplit && !showThreadOnly && showComposeBar && shouldShowTerminalComposeBar(phase) && (
+       *  chat + Message-the-agent together. Split keeps one bar per column.
+       *  Chatter is mailbox-only — no compose under PTY or overlay. */}
+      {!showSplit && !showThreadOnly && !showChatterOnly && showComposeBar && shouldShowTerminalComposeBar(phase) && (
         <TerminalComposeBar
           sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
           workspacePath={cwd}

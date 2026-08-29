@@ -1,6 +1,6 @@
 /** Per-window remembered Thread vs Terminal tab (C8). Not daemon-canonical. */
 
-export type SessionViewTab = 'terminal' | 'thread' | 'split'
+export type SessionViewTab = 'terminal' | 'thread' | 'chatter' | 'split'
 
 export const SESSION_VIEW_TAB_DEFAULT: SessionViewTab = 'terminal'
 
@@ -11,7 +11,7 @@ export function sessionViewTabStorageKey(hostKey: string, sessionKey: string): s
 }
 
 export function parseSessionViewTab(raw: string | null | undefined): SessionViewTab {
-  if (raw === 'thread' || raw === 'split') return raw
+  if (raw === 'thread' || raw === 'chatter' || raw === 'split') return raw
   return 'terminal'
 }
 

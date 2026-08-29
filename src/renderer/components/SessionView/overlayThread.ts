@@ -102,6 +102,56 @@ export function applyOverlayFrame(
   return next
 }
 
+/** Chatter tab walks the Chatter collection only. Never mix in Thread. */
+export function isChatterSurfaceItem(item: OverlayThreadItem): boolean {
+  return item.collection === 'chatter'
+}
+
+export function chatterItemsFromSnapshot(raw: unknown): OverlaySnapshot {
+  const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const conversation_id =
+    typeof obj.conversation_id === 'string' ? obj.conversation_id : ''
+  const rawItems = Array.isArray(obj.items) ? obj.items : []
+  const items: OverlayThreadItem[] = []
+  for (const row of rawItems) {
+    const item = coerceItem(row)
+    if (item && isChatterSurfaceItem(item)) items.push(item)
+  }
+  items.sort((a, b) => a.seq - b.seq)
+  return { conversation_id, items }
+}
+
+export function applyChatterFrame(
+  items: OverlayThreadItem[],
+  frame: OverlayWsFrame,
+  snapshotSeq: number,
+): OverlayThreadItem[] {
+  if (frame.collection !== 'chatter') return items
+  const seq = typeof frame.seq === 'number' ? frame.seq : Number.NaN
+  const id = typeof frame.id === 'string' ? frame.id : ''
+  if (!id) return items
+  const doc = frame.doc
+  if (!doc) return items
+  const existing = items.findIndex((it) => it.id === id)
+  if (existing >= 0) {
+    const next = items.slice()
+    next[existing] = {
+      ...items[existing],
+      seq: Number.isFinite(seq) ? seq : items[existing].seq,
+      doc,
+      collection: 'chatter',
+    }
+    return next
+  }
+  if (!Number.isFinite(seq) || seq <= snapshotSeq) return items
+  const next = [
+    ...items,
+    { collection: 'chatter', seq, id, doc },
+  ]
+  next.sort((a, b) => a.seq - b.seq)
+  return next
+}
+
 /**
  * Tear down an overlay events socket without aborting a CONNECTING
  * handshake (WebKit logs that as "The network connection was lost").

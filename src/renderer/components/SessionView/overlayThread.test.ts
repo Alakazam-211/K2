@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyChatterFrame,
   applyOverlayFrame,
+  chatterItemsFromSnapshot,
+  isChatterSurfaceItem,
   isThreadSurfaceItem,
   releaseOverlayWebSocket,
   threadItemsFromSnapshot,
@@ -117,6 +120,87 @@ describe('overlay Thread list never includes chatter', () => {
         seq: 1,
         id: 'x',
         doc: chatterDoc,
+      }),
+    ).toBe(false)
+  })
+})
+
+describe('overlay Chatter list never includes thread', () => {
+  it('snapshot GET chatter items appear; thread rows are dropped', () => {
+    const snap = chatterItemsFromSnapshot({
+      conversation_id: 'conv-1',
+      items: [
+        { collection: 'thread', seq: 1, id: 'doc-1', doc: textDoc },
+        { collection: 'chatter', seq: 2, id: 'doc-c', doc: chatterDoc },
+        { collection: 'chatter', seq: 1, id: 'doc-c2', doc: { ...chatterDoc, id: 'doc-c2', from: 'ops' } },
+      ],
+    })
+    expect(snap.conversation_id).toBe('conv-1')
+    expect(snap.items).toHaveLength(2)
+    expect(snap.items.map((i) => i.id)).toEqual(['doc-c2', 'doc-c'])
+    expect(snap.items.every((i) => i.collection === 'chatter')).toBe(true)
+    expect(snap.items.some((i) => i.collection === 'thread')).toBe(false)
+  })
+
+  it('thread frames do not appear on the Chatter pane', () => {
+    const start: OverlayThreadItem[] = [
+      { collection: 'chatter', seq: 1, id: 'doc-c', doc: chatterDoc },
+    ]
+    const afterThread = applyChatterFrame(
+      start,
+      { collection: 'thread', seq: 9, id: 'doc-1', doc: textDoc },
+      1,
+    )
+    expect(afterThread).toEqual(start)
+  })
+
+  it('chatter WS frames apply (append + upsert by id)', () => {
+    const start: OverlayThreadItem[] = [
+      { collection: 'chatter', seq: 1, id: 'doc-c', doc: chatterDoc },
+    ]
+    const afterNew = applyChatterFrame(
+      start,
+      {
+        collection: 'chatter',
+        seq: 2,
+        id: 'doc-c3',
+        doc: { id: 'doc-c3', kind: 'chatter', from: 'ops', to: 'sales', body: 'ack', via: 'talk' },
+      },
+      1,
+    )
+    expect(afterNew).toHaveLength(2)
+    expect(afterNew[1].id).toBe('doc-c3')
+    expect(afterNew[1].doc.body).toBe('ack')
+
+    const afterUpsert = applyChatterFrame(
+      afterNew,
+      {
+        collection: 'chatter',
+        seq: 2,
+        id: 'doc-c',
+        doc: { ...chatterDoc, body: 'pong' },
+      },
+      1,
+    )
+    expect(afterUpsert).toHaveLength(2)
+    expect(afterUpsert[0].doc.body).toBe('pong')
+  })
+
+  it('isChatterSurfaceItem accepts collection chatter', () => {
+    expect(
+      isChatterSurfaceItem({
+        collection: 'chatter',
+        seq: 1,
+        id: 'x',
+        doc: chatterDoc,
+      }),
+    ).toBe(true)
+    expect(
+      isChatterSurfaceItem({
+        collection: 'thread',
+        seq: 1,
+        id: 'x',
+        doc: textDoc,
       }),
     ).toBe(false)
   })

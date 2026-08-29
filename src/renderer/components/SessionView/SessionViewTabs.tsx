@@ -13,7 +13,7 @@ const TAB_CLASS = (active: boolean) =>
       : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
   }`
 
-/** Feedback-style underline tabs. Order: Terminal | Thread | split. */
+/** Feedback-style underline tabs. Order: Terminal | Thread | Chatter | split. */
 export function SessionViewTabs({ value, onChange }: SessionViewTabsProps): JSX.Element {
   return (
     <div
@@ -40,6 +40,16 @@ export function SessionViewTabs({ value, onChange }: SessionViewTabsProps): JSX.
         className={TAB_CLASS(value === 'thread')}
       >
         Thread
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={value === 'chatter'}
+        data-testid="session-view-tab-chatter"
+        onClick={() => onChange('chatter')}
+        className={TAB_CLASS(value === 'chatter')}
+      >
+        Chatter
       </button>
       <button
         type="button"

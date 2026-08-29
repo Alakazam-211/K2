@@ -18,6 +18,7 @@ import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-se
 import { SessionViewTabs } from '@/components/SessionView/SessionViewTabs'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
+import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
 import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import {
@@ -714,11 +715,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     return (
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        {viewTab === 'thread' ? (
-          <div className="flex-1 min-h-0">
-            <ThreadOverlayPane addr={overlayAddr} conversationId={overlayConv} />
-          </div>
-        ) : (
+        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             Chat session failed to start
@@ -728,7 +725,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           </div>
           <RetryButton onClick={handleRefresh} refreshing={refreshing} />
         </div>
-        )}
+        </OverlayTabBody>
       </div>
     )
   }
@@ -737,11 +734,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     return (
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        {viewTab === 'thread' ? (
-          <div className="flex-1 min-h-0">
-            <ThreadOverlayPane addr={overlayAddr} conversationId={overlayConv} />
-          </div>
-        ) : (
+        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             Chat session ended
@@ -751,7 +744,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           </div>
           <RetryButton onClick={handleRefresh} refreshing={refreshing} />
         </div>
-        )}
+        </OverlayTabBody>
       </div>
     )
   }
@@ -799,6 +792,34 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       </PinnedSessionBody>
     </div>
   )
+}
+
+function OverlayTabBody({
+  viewTab,
+  overlayAddr,
+  overlayConv,
+  children,
+}: {
+  viewTab: SessionViewTab
+  overlayAddr: string
+  overlayConv: string | null
+  children: React.ReactNode
+}): React.JSX.Element {
+  if (viewTab === 'thread') {
+    return (
+      <div className="flex-1 min-h-0">
+        <ThreadOverlayPane addr={overlayAddr} conversationId={overlayConv} />
+      </div>
+    )
+  }
+  if (viewTab === 'chatter') {
+    return (
+      <div className="flex-1 min-h-0">
+        <ChatterOverlayPane addr={overlayAddr} conversationId={overlayConv} />
+      </div>
+    )
+  }
+  return <>{children}</>
 }
 
 // Small shared retry button used by the daemon-owned error/idle panes.
@@ -1189,11 +1210,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     return (
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        {viewTab === 'thread' ? (
-          <div className="flex-1 min-h-0">
-            <ThreadOverlayPane addr={overlayAddr} conversationId={overlayConv} />
-          </div>
-        ) : (
+        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             Chat session failed to start
@@ -1204,7 +1221,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
           </div>
           <RetryButton onClick={() => void handleRefresh()} refreshing={refreshing} />
         </div>
-        )}
+        </OverlayTabBody>
       </div>
     )
   }

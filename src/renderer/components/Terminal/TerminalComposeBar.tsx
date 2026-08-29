@@ -49,6 +49,7 @@ import {
   composeHistoryKeyAction,
   composeInterruptSequence,
   composeSlashBackspaceClearsCommand,
+  composeSlashInitialHighlight,
   composeSlashMenuKeyAction,
   composeSlashMenuOpenFromDraft,
   composeSlashSpaceCommit,
@@ -652,13 +653,14 @@ export function TerminalComposeBar({
     }
     placeSlashMenu()
     setSlashMenuFromTypeahead(false)
-    setSlashHighlight(0)
+    setSlashHighlight(composeSlashInitialHighlight(COMPOSE_SLASH_COMMANDS, slashCommand))
     setSlashMenuOpen(true)
-  }, [closeSlashMenu, placeSlashMenu, slashMenuOpen])
+  }, [closeSlashMenu, placeSlashMenu, slashCommand, slashMenuOpen])
 
   useEffect(() => {
-    setSlashHighlight(0)
-  }, [slashMatchKey])
+    setSlashHighlight(composeSlashInitialHighlight(slashMatches, slashCommand))
+    // slashMatchKey stands in for slashMatches identity (filter rebuilds the array).
+  }, [slashCommand, slashMatchKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!slashMenuOpen) return
@@ -824,10 +826,9 @@ export function TerminalComposeBar({
                   <span
                     className="font-mono text-[11px]"
                     style={{
-                      color:
-                        selected || highlighted
-                          ? 'var(--color-accent)'
-                          : 'var(--color-text-primary)',
+                      color: selected
+                        ? 'var(--color-accent)'
+                        : 'var(--color-text-primary)',
                     }}
                   >
                     {item.command}
@@ -902,7 +903,11 @@ export function TerminalComposeBar({
               if (!slashMenuOpen || slashMenuFromTypeahead) {
                 placeSlashMenu()
                 setSlashMenuFromTypeahead(true)
-                if (!slashMenuOpen) setSlashHighlight(0)
+                if (!slashMenuOpen) {
+                  setSlashHighlight(
+                    composeSlashInitialHighlight(matches, slashCommand),
+                  )
+                }
                 setSlashMenuOpen(true)
               }
             } else if (slashMenuFromTypeahead) {

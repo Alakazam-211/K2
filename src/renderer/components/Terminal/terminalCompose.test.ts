@@ -30,6 +30,7 @@ import {
   composeSlashExactCommand,
   composeSlashSpaceCommit,
   composeSlashBackspaceClearsCommand,
+  composeSlashInitialHighlight,
   composeSlashMenuKeyAction,
 } from './terminalCompose'
 
@@ -346,6 +347,20 @@ describe('composeSlashExactCommand / space-commit', () => {
     expect(composeSlashSpaceCommit('/c ')).toBeNull()
     expect(composeSlashSpaceCommit('/exit ')).toBeNull()
     expect(composeSlashSpaceCommit('/compact')).toBeNull()
+  })
+})
+
+describe('composeSlashInitialHighlight', () => {
+  const matches = [{ command: '/compact' }, { command: '/goal' }]
+
+  it('starts on the already-selected command, not always the first row', () => {
+    expect(composeSlashInitialHighlight(matches, '/goal')).toBe(1)
+    expect(composeSlashInitialHighlight(matches, '/compact')).toBe(0)
+  })
+
+  it('falls back to 0 when nothing is selected or the selection is filtered out', () => {
+    expect(composeSlashInitialHighlight(matches, null)).toBe(0)
+    expect(composeSlashInitialHighlight([{ command: '/compact' }], '/goal')).toBe(0)
   })
 })
 

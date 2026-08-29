@@ -312,6 +312,17 @@ export function composeSlashMenuKeyAction(input: {
   return null
 }
 
+/** Keyboard highlight when the menu opens: the already-selected command, else 0. */
+export function composeSlashInitialHighlight(
+  matches: readonly { command: string }[],
+  selected: string | null | undefined,
+): number {
+  if (matches.length === 0) return 0
+  if (!selected) return 0
+  const i = matches.findIndex((m) => m.command === selected)
+  return i >= 0 ? i : 0
+}
+
 /** Empty draft + selected slash command + Backspace/Delete → clear the command. */
 export function composeSlashBackspaceClearsCommand(input: {
   draft: string

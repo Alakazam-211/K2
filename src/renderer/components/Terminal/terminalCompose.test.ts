@@ -10,6 +10,7 @@ import {
   type MsgResponse,
   applyComposeHistoryNav,
   composeHistoryKeyAction,
+  composeEmptyEnterSequence,
   composeInterruptSequence,
   composerPermitted,
   mapMsgResponseToStatus,
@@ -86,6 +87,23 @@ describe('composeInterruptSequence', () => {
   it('plain letters and Enter are not interrupts', () => {
     expect(composeInterruptSequence({ ...idle, key: 'a' })).toBeNull()
     expect(composeInterruptSequence({ ...idle, key: 'Enter' })).toBeNull()
+  })
+})
+
+describe('composeEmptyEnterSequence', () => {
+  const enter = { key: 'Enter', shiftKey: false, isComposing: false }
+
+  it('empty Enter injects CR', () => {
+    expect(composeEmptyEnterSequence({ ...enter, canSend: false })).toBe('\r')
+  })
+
+  it('does not steal a real send', () => {
+    expect(composeEmptyEnterSequence({ ...enter, canSend: true })).toBeNull()
+  })
+
+  it('Shift+Enter and IME are not CR', () => {
+    expect(composeEmptyEnterSequence({ ...enter, shiftKey: true, canSend: false })).toBeNull()
+    expect(composeEmptyEnterSequence({ ...enter, isComposing: true, canSend: false })).toBeNull()
   })
 })
 

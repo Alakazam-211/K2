@@ -6,8 +6,8 @@
 // POST /cli/terminal/send-message (attributed `[from <name>] `, submitted
 // once through the per-session injection lock). Esc / Ctrl+C inject the
 // same PTY bytes as the terminal (cancel the current turn) without
-// stealing compose focus. Other raw TUI control (arrows, menu nav)
-// still goes through the terminal itself. Renderer-hide is gated by
+// stealing compose focus; empty Enter/Return injects CR. Other raw TUI
+// control (arrows, menu nav) still goes through the terminal itself. Renderer-hide is gated by
 // composerPermitted (1c); the daemon enforces the same gate server-side.
 //
 // File drops: local paths are inserted into the draft; on a remote host the
@@ -47,6 +47,7 @@ import {
   COMPOSE_TEXTAREA_MAX_HEIGHT,
   composeCanSend,
   composeHistoryKeyAction,
+  composeEmptyEnterSequence,
   composeInterruptSequence,
   composeSlashBackspaceClearsCommand,
   composeSlashInitialHighlight,
@@ -80,7 +81,8 @@ interface TerminalComposeBarProps {
   workspacePath?: string
   /**
    * Inject raw PTY bytes into this pane's session (same path as
-   * typing in the grid). Used for Esc / Ctrl+C turn-cancel.
+   * typing in the grid). Used for Esc / Ctrl+C turn-cancel and
+   * empty Enter/Return.
    */
   onInjectInput?: (data: string) => void
   /**
@@ -597,7 +599,19 @@ export function TerminalComposeBar({
       }
       if (shouldSendOnKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) {
         e.preventDefault()
-        void send()
+        const canSend = composeCanSend({ draft, sending, command: slashCommand })
+        const cr = composeEmptyEnterSequence({
+          key: e.key,
+          shiftKey: e.shiftKey,
+          isComposing: e.nativeEvent.isComposing,
+          canSend,
+        })
+        if (cr) {
+          e.stopPropagation()
+          onInjectInput?.(cr)
+        } else {
+          void send()
+        }
       } else {
         const histAction = composeHistoryKeyAction({
           key: e.key,
@@ -640,6 +654,7 @@ export function TerminalComposeBar({
       onInjectInput,
       selectSlashCommand,
       send,
+      sending,
       slashCommand,
       slashHighlight,
       slashMatches,

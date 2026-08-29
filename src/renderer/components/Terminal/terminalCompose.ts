@@ -67,6 +67,7 @@ export function shouldSendOnKey(e: {
  * Esc / Ctrl+C from the compose box cancel the agent's current turn
  * by injecting the same PTY bytes the terminal would send. Compose
  * stays focused — no focus flip. Cmd+C is copy (not interrupt).
+ * Empty Enter/Return is a separate PTY CR (`composeEmptyEnterSequence`).
  * Mid-IME composition must not fire.
  */
 export function composeInterruptSequence(e: {
@@ -82,6 +83,22 @@ export function composeInterruptSequence(e: {
     return '\x03'
   }
   return null
+}
+
+/**
+ * Empty Enter/Return from compose injects CR into the PTY (confirm a
+ * TUI prompt) without sending a message. Shift+Enter stays a newline;
+ * a non-empty draft (or a selected slash command) still sends.
+ */
+export function composeEmptyEnterSequence(e: {
+  key: string
+  shiftKey: boolean
+  isComposing: boolean
+  canSend: boolean
+}): string | null {
+  if (e.canSend) return null
+  if (!shouldSendOnKey(e)) return null
+  return '\r'
 }
 
 /**

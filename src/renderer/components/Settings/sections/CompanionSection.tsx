@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import QRCode from 'qrcode'
+import React, { useEffect, useMemo, useState } from 'react'
+import { renderSVG } from 'uqr'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useSettingsStore } from '@/stores/settings'
 import { serverSupports } from '@/lib/server-capabilities'
@@ -177,21 +177,16 @@ export function CompanionSection(): React.JSX.Element {
 }
 
 function StoreQrCard({ url, label }: { url: string; label: string }): React.JSX.Element {
-  const [src, setSrc] = useState<string | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    void QRCode.toDataURL(url, {
-      width: 160,
-      margin: 1,
-      color: { dark: '#111111', light: '#ffffff' },
-      errorCorrectionLevel: 'M',
-    }).then((dataUrl) => {
-      if (!cancelled) setSrc(dataUrl)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [url])
+  const svg = useMemo(
+    () =>
+      renderSVG(url, {
+        border: 1,
+        ecc: 'M',
+        blackColor: '#111111',
+        whiteColor: '#ffffff',
+      }),
+    [url],
+  )
   return (
     <a
       href={url}
@@ -200,13 +195,12 @@ function StoreQrCard({ url, label }: { url: string; label: string }): React.JSX.
       className="flex flex-col items-center gap-1.5 no-drag cursor-pointer group"
     >
       <div
-        className="bg-white p-1.5 border border-[var(--color-border)]"
+        className="bg-white p-1.5 border border-[var(--color-border)] [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
         style={{ width: 136, height: 136 }}
-      >
-        {src ? (
-          <img src={src} alt={`${label} QR code`} width={124} height={124} className="block" />
-        ) : null}
-      </div>
+        role="img"
+        aria-label={`${label} QR code`}
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
       <span className="text-[11px] text-[var(--color-accent)] group-hover:underline">{label}</span>
     </a>
   )

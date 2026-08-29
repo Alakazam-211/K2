@@ -101,7 +101,7 @@ const BTN_ORANGE =
 export const CONNECTIONS_MANIFEST: SettingEntry[] = [
   { id: 'connections.add', section: 'connections', label: 'Add a Server', description: 'Save a remote K2 daemon to connect to', keywords: ['server', 'remote', 'connect', 'host', 'add', 'k2 connect', 'address book'] },
   { id: 'connections.remember-password', section: 'connections', label: 'Remember Password', description: 'Store a server token in your OS keychain', keywords: ['token', 'password', 'keychain', 'remember', 'credentials'] },
-  { id: 'connections.list', section: 'connections', label: 'Saved Servers', description: 'Edit or remove saved K2 servers', keywords: ['servers', 'hosts', 'edit', 'remove', 'list'] },
+  { id: 'connections.list', section: 'connections', label: 'Saved Servers', description: 'Edit or remove saved K2 servers', keywords: ['servers', 'hosts', 'edit', 'remove', 'list', 'search', 'filter'] },
   {
     id: 'connections.pair-federated-peer',
     section: 'connections',
@@ -161,6 +161,7 @@ export function ConnectionsSection(): React.JSX.Element {
   const [draft, setDraft] = useState<DraftHost | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [serverQuery, setServerQuery] = useState('')
   // Bumped after a successful "Pair as federated peer" so FederationOverview
   // reloads peers without a full Settings remount.
   const [fedRefreshKey, setFedRefreshKey] = useState(0)
@@ -333,45 +334,8 @@ export function ConnectionsSection(): React.JSX.Element {
 
       {isLocalActive ? (
       <>
-      {/* Local — always present, never editable. */}
-      <div className="flex items-center gap-2 mb-2 px-3 py-2 border border-[var(--color-border)]">
-        <span
-          className="w-2 h-2 flex-shrink-0 rounded-full"
-          style={{ backgroundColor: statusColor(connectionStatus) }}
-        />
-        <div className="flex flex-col min-w-0">
-          <span className="text-xs text-[var(--color-text-primary)]">Local</span>
-          <span className="text-[10px] text-[var(--color-text-muted)]">This Mac · bundled daemon</span>
-        </div>
-        <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">Active</span>
-      </div>
-
-      {/* Saved hosts — sorted alphabetically by display label (case-insensitive). */}
-      <div className="space-y-2" data-settings-id="connections.list">
-        {(Array.isArray(hosts) ? hosts.slice() : [])
-          .sort((a, b) =>
-            (a.label || a.hostname).localeCompare(b.label || b.hostname, undefined, { sensitivity: 'base' })
-          )
-          .map((h) => (
-            <HostTile
-              key={h.id}
-              host={h}
-              isActive={false}
-              connectionStatus={connectionStatus}
-              activePeerSideLabel={activeHostLabel}
-              onEdit={() => beginEdit(h)}
-              onRemove={() => removeHost(h.id)}
-              onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
-            />
-          ))}
-        {hosts.length === 0 && (
-          <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">No saved servers yet.</div>
-        )}
-      </div>
-
-      {/* Add / Edit form */}
       {draft ? (
-        <div ref={formRef} className="mt-4 px-3 py-3 border border-[var(--color-border)] space-y-2" data-settings-id="connections.add">
+        <div ref={formRef} className="mb-3 px-3 py-3 border border-[var(--color-border)] space-y-2" data-settings-id="connections.add">
           <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
             {draft.id ? 'Edit server' : 'Add server'}
           </div>
@@ -431,10 +395,72 @@ export function ConnectionsSection(): React.JSX.Element {
           </div>
         </div>
       ) : (
-        <button onClick={beginAdd} className="mt-4 px-3 py-1.5 text-[11px] text-[var(--color-accent)] border border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/10 no-drag cursor-pointer">
+        <button onClick={beginAdd} className="mb-3 px-3 py-1.5 text-[11px] text-[var(--color-accent)] border border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/10 no-drag cursor-pointer">
           + Add a server
         </button>
       )}
+
+      <input
+        type="search"
+        value={serverQuery}
+        onChange={(e) => setServerQuery(e.target.value)}
+        placeholder="Search servers"
+        aria-label="Search servers"
+        className={`${inputCls} mb-3`}
+        data-settings-id="connections.search"
+      />
+
+      {/* Local — always present, never editable. */}
+      <div className="flex items-center gap-2 mb-2 px-3 py-2 border border-[var(--color-border)]">
+        <span
+          className="w-2 h-2 flex-shrink-0 rounded-full"
+          style={{ backgroundColor: statusColor(connectionStatus) }}
+        />
+        <div className="flex flex-col min-w-0">
+          <span className="text-xs text-[var(--color-text-primary)]">Local</span>
+          <span className="text-[10px] text-[var(--color-text-muted)]">This Mac · bundled daemon</span>
+        </div>
+        <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">Active</span>
+      </div>
+
+      {/* Saved hosts — sorted alphabetically by display label (case-insensitive). */}
+      <div className="space-y-2" data-settings-id="connections.list">
+        {(() => {
+          const q = serverQuery.trim().toLowerCase()
+          const rows = (Array.isArray(hosts) ? hosts.slice() : [])
+            .filter((h) => {
+              if (!q) return true
+              const hay = [h.label, h.hostname, h.username, `${h.hostname}:${h.port}`]
+                .join(' ')
+                .toLowerCase()
+              return hay.includes(q)
+            })
+            .sort((a, b) =>
+              (a.label || a.hostname).localeCompare(b.label || b.hostname, undefined, { sensitivity: 'base' }),
+            )
+          if (rows.length === 0) {
+            return (
+              <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">
+                {hosts.length === 0
+                  ? 'No saved servers yet.'
+                  : 'No matching servers.'}
+              </div>
+            )
+          }
+          return rows.map((h) => (
+            <HostTile
+              key={h.id}
+              host={h}
+              isActive={false}
+              connectionStatus={connectionStatus}
+              activePeerSideLabel={activeHostLabel}
+              onEdit={() => beginEdit(h)}
+              onRemove={() => removeHost(h.id)}
+              onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
+            />
+          ))
+        })()}
+      </div>
       </>
       ) : (
         <ActiveHostPeersPanel

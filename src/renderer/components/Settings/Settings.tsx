@@ -55,11 +55,12 @@ type NavLeaf = {
   hide?: boolean
 }
 type NavBlock =
-  | { kind: 'item'; id: SettingsSection; label: string }
+  | { kind: 'item'; id: SettingsSection; label: string; children?: NavLeaf[] }
   | { kind: 'group'; title: string; items: NavLeaf[] }
 
 function settingsNav(): NavBlock[] {
   const hideTunnel = isAirgap()
+  const dictationLab: NavLeaf = { id: 'dictation-lab', label: 'Dictation Lab (dev)' }
   const blocks: NavBlock[] = [
     { kind: 'item', id: 'general', label: 'General' },
     { kind: 'item', id: 'styles', label: 'Styles' },
@@ -70,8 +71,15 @@ function settingsNav(): NavBlock[] {
     { kind: 'item', id: 'email-link', label: 'Email Link' },
     { kind: 'item', id: 'keybindings', label: 'Key Bindings' },
     ...(webFeatures.permissions
-      ? ([{ kind: 'item', id: 'permissions' as const, label: 'Accessibility' }] satisfies NavBlock[])
-      : []),
+      ? ([{
+          kind: 'item' as const,
+          id: 'permissions' as const,
+          label: 'Accessibility',
+          ...(import.meta.env.DEV ? { children: [dictationLab] } : {}),
+        }] satisfies NavBlock[])
+      : import.meta.env.DEV
+        ? ([{ kind: 'item' as const, id: 'dictation-lab' as const, label: dictationLab.label }] satisfies NavBlock[])
+        : []),
     {
       kind: 'group',
       title: 'K2 Server',
@@ -110,9 +118,6 @@ function settingsNav(): NavBlock[] {
       ],
     },
   ]
-  if (import.meta.env.DEV) {
-    blocks.push({ kind: 'item', id: 'dictation-lab', label: 'Dictation Lab (dev)' })
-  }
   return blocks
 }
 
@@ -156,7 +161,7 @@ export default function Settings(): React.JSX.Element {
       ...DATA_MANIFEST,
       ...WAKE_SCHEDULER_MANIFEST,
       ...(webFeatures.permissions ? PERMISSIONS_MANIFEST : []),
-      ...DICTATION_LAB_MANIFEST,
+      ...(import.meta.env.DEV ? DICTATION_LAB_MANIFEST : []),
     ],
     [],
   )
@@ -276,14 +281,29 @@ export default function Settings(): React.JSX.Element {
         <nav className="flex-1 py-1 overflow-y-auto">
           {settingsNav().map((block) => {
             if (block.kind === 'item') {
+              const kids = (block.children ?? []).filter((it) => !it.hide && it.id && !it.soon)
               return (
-                <SettingsNavButton
-                  key={block.id}
-                  id={block.id}
-                  label={block.label}
-                  active={activeSection === block.id}
-                  onClick={() => setSection(block.id)}
-                />
+                <div key={block.id}>
+                  <SettingsNavButton
+                    id={block.id}
+                    label={block.label}
+                    active={activeSection === block.id}
+                    onClick={() => setSection(block.id)}
+                  />
+                  {kids.map((it) => {
+                    const id = it.id!
+                    return (
+                      <SettingsNavButton
+                        key={id}
+                        id={id}
+                        label={it.label}
+                        nested
+                        active={activeSection === id}
+                        onClick={() => setSection(id)}
+                      />
+                    )
+                  })}
+                </div>
               )
             }
             const items = block.items.filter((it) => !it.hide)

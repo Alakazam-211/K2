@@ -25,6 +25,7 @@ import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
+import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
 // The Projects (project GROUPS) section — §6.5 relocation. NOT to be
 // confused with ProjectsSection above, the LEGACY workspaces section
 // (id 'projects', label "Workspaces").
@@ -109,7 +110,7 @@ function settingsNav(): NavBlock[] {
       items: [
         { id: 'email-hosting', label: 'Email Hosting' },
         { id: 'data', label: 'Database' },
-        { label: 'Skin Access', soon: true },
+        { id: 'skin-access', label: 'Skin Access' },
       ],
     },
   ]
@@ -154,6 +155,7 @@ export default function Settings(): React.JSX.Element {
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
+      ...SKIN_ACCESS_MANIFEST,
       ...WAKE_SCHEDULER_MANIFEST,
       ...(webFeatures.permissions ? PERMISSIONS_MANIFEST : []),
       ...(import.meta.env.DEV ? DICTATION_LAB_MANIFEST : []),
@@ -348,7 +350,8 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'agents' ||
           activeSection === 'email-hosting' ||
           activeSection === 'email-link' ||
-          activeSection === 'data'
+          activeSection === 'data' ||
+          activeSection === 'skin-access'
             ? 'overflow-hidden p-0'
             : activeSection === 'dictation-lab'
               ? 'overflow-hidden p-6'
@@ -444,6 +447,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'data' && (
           <SectionErrorBoundary>
             <DataSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'skin-access' && (
+          <SectionErrorBoundary>
+            <SkinAccessSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'wake-scheduler' && (

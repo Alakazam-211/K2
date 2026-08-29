@@ -121,6 +121,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'email-hosting': 'Email Hosting',
   'email-link': 'Email Link',
   data: 'Database',
+  'skin-access': 'Skin Access',
 }
 
 /** Suppress unused-type warning since IndexedEntry is reserved for future optimization. */

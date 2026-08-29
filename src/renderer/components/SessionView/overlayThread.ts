@@ -102,6 +102,39 @@ export function applyOverlayFrame(
   return next
 }
 
+/**
+ * Tear down an overlay events socket without aborting a CONNECTING
+ * handshake (WebKit logs that as "The network connection was lost").
+ */
+export function releaseOverlayWebSocket(ws: {
+  readyState: number
+  close: () => void
+  onmessage: ((ev: MessageEvent) => void) | null
+  onerror: ((ev: Event) => void) | null
+  onopen: ((ev: Event) => void) | null
+}): void {
+  ws.onmessage = null
+  ws.onerror = null
+  if (ws.readyState === 0) {
+    ws.onopen = () => {
+      try {
+        ws.close()
+      } catch {
+        /* ignore */
+      }
+    }
+    return
+  }
+  ws.onopen = null
+  if (ws.readyState === 1) {
+    try {
+      ws.close()
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 export function isVoidedHitl(doc: OverlayDoc): boolean {
   if (doc.kind === 'choice' && doc.choice?.status === 'voided') return true
   if (doc.kind === 'secret' && doc.secret?.status === 'voided') return true

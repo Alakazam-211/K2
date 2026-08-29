@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   applyOverlayFrame,
   isThreadSurfaceItem,
+  releaseOverlayWebSocket,
   threadItemsFromSnapshot,
   type OverlayThreadItem,
 } from './overlayThread'
@@ -118,5 +119,41 @@ describe('overlay Thread list never includes chatter', () => {
         doc: chatterDoc,
       }),
     ).toBe(false)
+  })
+})
+
+describe('releaseOverlayWebSocket', () => {
+  it('does not close a CONNECTING socket (defers to onopen)', () => {
+    let closed = false
+    const ws = {
+      readyState: 0,
+      close: () => {
+        closed = true
+      },
+      onmessage: (() => {}) as ((ev: MessageEvent) => void) | null,
+      onerror: (() => {}) as ((ev: Event) => void) | null,
+      onopen: null as ((ev: Event) => void) | null,
+    }
+    releaseOverlayWebSocket(ws)
+    expect(closed).toBe(false)
+    expect(ws.onmessage).toBeNull()
+    expect(typeof ws.onopen).toBe('function')
+    ws.onopen?.({} as Event)
+    expect(closed).toBe(true)
+  })
+
+  it('closes an OPEN socket immediately', () => {
+    let closed = false
+    const ws = {
+      readyState: 1,
+      close: () => {
+        closed = true
+      },
+      onmessage: (() => {}) as ((ev: MessageEvent) => void) | null,
+      onerror: null,
+      onopen: null,
+    }
+    releaseOverlayWebSocket(ws)
+    expect(closed).toBe(true)
   })
 })

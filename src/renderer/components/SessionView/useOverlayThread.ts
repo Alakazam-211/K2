@@ -3,6 +3,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { getDaemonWs, daemonWsBase } from '@/kessel/daemon-ws'
 import {
   applyOverlayFrame,
+  releaseOverlayWebSocket,
   threadItemsFromSnapshot,
   type OverlayThreadItem,
   type OverlayWsFrame,
@@ -54,6 +55,11 @@ export function useOverlayThread(opts: {
         if (cancelled) return
         const url = `${daemonWsBase(creds)}/cli/overlay/events?conversation=${encodeURIComponent(conv)}&token=${encodeURIComponent(creds.token)}`
         ws = new WebSocket(url)
+        if (cancelled) {
+          releaseOverlayWebSocket(ws)
+          ws = null
+          return
+        }
         ws.onmessage = (ev) => {
           const rawFrame = typeof ev.data === 'string' ? ev.data : null
           if (!rawFrame) return
@@ -75,14 +81,7 @@ export function useOverlayThread(opts: {
     void boot()
     return () => {
       cancelled = true
-      if (ws) {
-        try {
-          ws.onmessage = null
-          ws.close()
-        } catch {
-          /* ignore */
-        }
-      }
+      if (ws) releaseOverlayWebSocket(ws)
     }
   }, [addr, conversationId, enabled])
 

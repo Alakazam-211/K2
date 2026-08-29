@@ -565,7 +565,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const viewTab = sessionChrome?.viewTab ?? 'terminal'
   const showThreadOnly = viewTab === 'thread'
   const showSplit = viewTab === 'split'
-  const showOverlay = showThreadOnly || showSplit
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
   // / Cmd+Shift+- menu events (wired via listen('terminal:zoom-*')
@@ -5732,13 +5731,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         />
       )}
     </div>
-      {showOverlay && sessionChrome && (
+      {sessionChrome && (
         <div
           className={
             showSplit
               ? 'flex-1 min-w-0 min-h-0 border-l border-[var(--color-border)] flex flex-col'
-              : 'flex-1 min-w-0 min-h-0 flex flex-col'
+              : showThreadOnly
+                ? 'flex-1 min-w-0 min-h-0 flex flex-col'
+                : undefined
           }
+          style={!showSplit && !showThreadOnly ? { display: 'none' } : undefined}
           data-testid="agent-session-thread"
         >
           <div className="flex-1 min-h-0 min-w-0">

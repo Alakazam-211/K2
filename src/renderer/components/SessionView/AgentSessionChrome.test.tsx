@@ -38,9 +38,7 @@ function ProbeTerminal() {
   const chrome = useSessionViewChrome()
   return (
     <div data-testid="terminal-pane">
-      {(chrome?.viewTab === 'thread' || chrome?.viewTab === 'split') && (
-        <div data-testid="thread-overlay-pane" />
-      )}
+      {chrome ? <div data-testid="thread-overlay-pane" /> : null}
       {chrome?.viewTab === 'split' ? (
         <>
           <div data-testid="message-compose" data-compose-bar="" data-compose-destination="pty">
@@ -110,6 +108,9 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     expect(screen.getByTestId('message-compose')).not.toBeNull()
     expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
     expect(screen.queryByTestId('thread-compose')).toBeNull()
+    fireEvent.click(screen.getByTestId('session-view-tab-terminal'))
+    expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.getByTestId('terminal-pane')).not.toBeNull()
   })
 
   it('split shows two Message-the-agent bars with different destinations', () => {

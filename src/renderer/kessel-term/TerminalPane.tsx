@@ -5372,10 +5372,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     >
     <div
       style={{
-        flex: 1,
+        flex: showThreadOnly ? undefined : 1,
         minWidth: 0,
         minHeight: 0,
-        display: 'flex',
+        display: showThreadOnly ? 'none' : 'flex',
         flexDirection: 'column',
       }}
     >
@@ -5408,8 +5408,6 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         ...finalContainerStyle,
         flex: 1,
         minWidth: 0,
-        visibility: showThreadOnly ? 'hidden' : 'visible',
-        pointerEvents: showThreadOnly ? 'none' : undefined,
       }}
       onFocus={() => {
         // 0.37.9 — App.tsx's global click handler + 200ms refocus
@@ -5739,7 +5737,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           className={
             showSplit
               ? 'flex-1 min-w-0 min-h-0 border-l border-[var(--color-border)] flex flex-col'
-              : 'absolute inset-0'
+              : 'flex-1 min-w-0 min-h-0 flex flex-col'
           }
           data-testid="agent-session-thread"
         >
@@ -5749,7 +5747,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               conversationId={sessionChrome.conversationId}
             />
           </div>
-          {showSplit && showComposeBar && shouldShowTerminalComposeBar(phase) && (
+          {(showSplit || showThreadOnly) &&
+            showComposeBar &&
+            shouldShowTerminalComposeBar(phase) && (
             <TerminalComposeBar
               sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
               workspacePath={cwd}
@@ -5761,15 +5761,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       )}
     </div>
 
-      {/* Composer — mount on first paint so measure-first spawn sees the
-       *  bar's live height (font size is not a constant). Hide on exited.
-       *  Send no-ops until the daemon sessionId exists. */}
-      {!showSplit && showComposeBar && shouldShowTerminalComposeBar(phase) && (
+      {/* Terminal-tab composer docks under the PTY column (in-flow). Thread
+       *  tab uses the overlay column above so DevTools/viewport shrinks
+       *  chat + Message-the-agent together. Split keeps one bar per column. */}
+      {!showSplit && !showThreadOnly && showComposeBar && shouldShowTerminalComposeBar(phase) && (
         <TerminalComposeBar
           sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
           workspacePath={cwd}
           onInjectInput={sendInput}
-          sendDestination={showThreadOnly ? 'thread' : 'pty'}
+          sendDestination="pty"
         />
       )}
     </div>

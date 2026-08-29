@@ -5,6 +5,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { serverSupports } from '@/lib/server-capabilities'
 import { onTunnelStatusChanged, onAppHello } from '@/stores/session-events'
 import type { SettingEntry } from '../searchManifest'
+import appStoreBadge from '@/assets/app-store-badge.svg?url'
+import googlePlayBadge from '@/assets/google-play-badge.png'
 
 // K2 Companion (task #615) — the mobile app and K2 Connect now share ONE
 // tunnel (the frpc reverse tunnel exposed by K2 Connect at <sub>.k2.dev).
@@ -126,8 +128,8 @@ export function CompanionSection(): React.JSX.Element {
           to your daemon&apos;s public address (shown below).
         </p>
         <div className="flex flex-wrap gap-6">
-          <StoreQrCard url={APP_STORE_URL} label="App Store" />
-          <StoreQrCard url={PLAY_STORE_URL} label="Google Play" />
+          <StoreQrCard url={APP_STORE_URL} label="App Store" badgeSrc={appStoreBadge} />
+          <StoreQrCard url={PLAY_STORE_URL} label="Google Play" badgeSrc={googlePlayBadge} />
         </div>
       </div>
 
@@ -176,7 +178,15 @@ export function CompanionSection(): React.JSX.Element {
   )
 }
 
-function StoreQrCard({ url, label }: { url: string; label: string }): React.JSX.Element {
+function StoreQrCard({
+  url,
+  label,
+  badgeSrc,
+}: {
+  url: string
+  label: string
+  badgeSrc: string
+}): React.JSX.Element {
   const svg = useMemo(
     () =>
       renderSVG(url, {
@@ -192,16 +202,16 @@ function StoreQrCard({ url, label }: { url: string; label: string }): React.JSX.
       href={url}
       target="_blank"
       rel="noreferrer"
-      className="flex flex-col items-center gap-1.5 no-drag cursor-pointer group"
+      className="flex flex-col items-center gap-2 no-drag cursor-pointer"
     >
       <div
         className="bg-white p-1.5 border border-[var(--color-border)] [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
-        style={{ width: 272, height: 272 }}
+        style={{ width: 136, height: 136 }}
         role="img"
         aria-label={`${label} QR code`}
         dangerouslySetInnerHTML={{ __html: svg }}
       />
-      <span className="text-[11px] text-[var(--color-accent)] group-hover:underline">{label}</span>
+      <img src={badgeSrc} alt={label} className="block w-[136px] h-auto" />
     </a>
   )
 }

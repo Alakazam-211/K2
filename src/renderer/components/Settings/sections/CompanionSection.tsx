@@ -196,7 +196,7 @@ function StoreQrCard({ url, label }: { url: string; label: string }): React.JSX.
     >
       <div
         className="bg-white p-1.5 border border-[var(--color-border)] [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
-        style={{ width: 136, height: 136 }}
+        style={{ width: 272, height: 272 }}
         role="img"
         aria-label={`${label} QR code`}
         dangerouslySetInnerHTML={{ __html: svg }}

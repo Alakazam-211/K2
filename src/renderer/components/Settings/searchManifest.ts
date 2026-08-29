@@ -119,7 +119,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'api-tokens': 'K2 API Tokens',
   'email-hosting': 'Email Hosting',
   'email-link': 'Email Link',
-  data: 'Data',
+  data: 'Database',
 }
 
 /** Suppress unused-type warning since IndexedEntry is reserved for future optimization. */

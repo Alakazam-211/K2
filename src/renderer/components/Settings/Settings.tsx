@@ -60,7 +60,7 @@ const SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: 'companion', label: 'K2 Companion' },
   { id: 'email-hosting', label: 'Email Hosting' },
   { id: 'email-link', label: 'Email Link' },
-  { id: 'data', label: 'Data' },
+  { id: 'data', label: 'Database' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'code-editor', label: 'Code Editor' },
   { id: 'editors', label: 'Editors' },

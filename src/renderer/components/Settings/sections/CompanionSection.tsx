@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import QRCode from 'qrcode'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useSettingsStore } from '@/stores/settings'
 import { serverSupports } from '@/lib/server-capabilities'
@@ -13,8 +14,10 @@ import type { SettingEntry } from '../searchManifest'
 // Connect tunnel status (GET /cli/tunnel/status), reusing the same
 // direct-daemon fetch pattern as K2ConnectSection.tsx.
 
-// Real App Store listing found on https://k2so.sh ("Mobile — Available Now").
-const APP_DOWNLOAD_URL = 'https://apps.apple.com/us/app/k2so/id6762076766'
+// Store listings linked from https://k2.dev (home footer badges).
+export const APP_STORE_URL = 'https://apps.apple.com/us/app/k2so/id6762076766'
+export const PLAY_STORE_URL =
+  'https://play.google.com/store/apps/details?id=com.alakazamlabs.k2so.companion'
 
 interface TunnelStatus {
   running: boolean
@@ -33,7 +36,7 @@ async function tunnelStatus(): Promise<TunnelStatus> {
 }
 
 export const COMPANION_MANIFEST: SettingEntry[] = [
-  { id: 'companion.get-app', section: 'companion', label: 'Get the K2 mobile app', description: 'Install the K2 Companion app on your phone', keywords: ['mobile', 'companion', 'app', 'download', 'install', 'iphone', 'ios', 'app store'] },
+  { id: 'companion.get-app', section: 'companion', label: 'Get the K2 mobile app', description: 'Install the K2 Companion app on iPhone or Android', keywords: ['mobile', 'companion', 'app', 'download', 'install', 'iphone', 'ios', 'app store', 'android', 'google play', 'qr'] },
   { id: 'companion.status', section: 'companion', label: 'K2 Connect Status', description: 'Whether your daemon is reachable for the mobile app', keywords: ['status', 'tunnel', 'connect', 'reachable', 'subdomain', 'k2.dev', 'pair'] },
 ]
 
@@ -117,22 +120,14 @@ export function CompanionSection(): React.JSX.Element {
         className="mb-4 px-3 py-3 border border-[var(--color-border)]"
         data-settings-id="companion.get-app"
       >
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs text-[var(--color-text-primary)]">Get the K2 mobile app</div>
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-              Install K2 Companion on your phone, then pair it to your daemon&apos;s
-              public address (shown below).
-            </p>
-          </div>
-          <a
-            href={APP_DOWNLOAD_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="flex-shrink-0 px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer"
-          >
-            Get the app
-          </a>
+        <div className="text-xs text-[var(--color-text-primary)]">Get the K2 mobile app</div>
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-3">
+          Scan a code with your phone, or open the store page. Then pair the app
+          to your daemon&apos;s public address (shown below).
+        </p>
+        <div className="flex flex-wrap gap-6">
+          <StoreQrCard url={APP_STORE_URL} label="App Store" />
+          <StoreQrCard url={PLAY_STORE_URL} label="Google Play" />
         </div>
       </div>
 
@@ -178,5 +173,41 @@ export function CompanionSection(): React.JSX.Element {
         )}
       </div>
     </div>
+  )
+}
+
+function StoreQrCard({ url, label }: { url: string; label: string }): React.JSX.Element {
+  const [src, setSrc] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void QRCode.toDataURL(url, {
+      width: 160,
+      margin: 1,
+      color: { dark: '#111111', light: '#ffffff' },
+      errorCorrectionLevel: 'M',
+    }).then((dataUrl) => {
+      if (!cancelled) setSrc(dataUrl)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [url])
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="flex flex-col items-center gap-1.5 no-drag cursor-pointer group"
+    >
+      <div
+        className="bg-white p-1.5 border border-[var(--color-border)]"
+        style={{ width: 136, height: 136 }}
+      >
+        {src ? (
+          <img src={src} alt={`${label} QR code`} width={124} height={124} className="block" />
+        ) : null}
+      </div>
+      <span className="text-[11px] text-[var(--color-accent)] group-hover:underline">{label}</span>
+    </a>
   )
 }

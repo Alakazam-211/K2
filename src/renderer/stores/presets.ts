@@ -28,6 +28,65 @@ function emitPresetsChanged(): void {
 
 // ── Types ────────────────────────────────────────────────────────────────
 
+export type InjectFlowKey = 'paste' | 'esc' | 'space' | 'return'
+
+export interface InjectFlowStep {
+  key: InjectFlowKey
+  waitMs: number
+}
+
+/** D5 — visual/runtime default when `inject_flow` is NULL. */
+export const DEFAULT_INJECT_FLOW: InjectFlowStep[] = [
+  { key: 'paste', waitMs: 150 },
+  { key: 'return', waitMs: 250 },
+  { key: 'return', waitMs: 120 },
+]
+
+export function cloneDefaultInjectFlow(): InjectFlowStep[] {
+  return DEFAULT_INJECT_FLOW.map((s) => ({ ...s }))
+}
+
+export function isDefaultInjectFlow(steps: InjectFlowStep[]): boolean {
+  return JSON.stringify(steps) === JSON.stringify(DEFAULT_INJECT_FLOW)
+}
+
+/** GET is snake_case `inject_flow`; accept camelCase if a caller has it. */
+export function readPresetInjectFlowJson(preset: {
+  inject_flow?: string | null
+  injectFlow?: string | null
+}): string | null {
+  if (typeof preset.inject_flow === 'string' && preset.inject_flow.length > 0) {
+    return preset.inject_flow
+  }
+  if (typeof preset.injectFlow === 'string' && preset.injectFlow.length > 0) {
+    return preset.injectFlow
+  }
+  return null
+}
+
+export function parseInjectFlowOrDefault(raw: string | null | undefined): InjectFlowStep[] {
+  if (!raw) return cloneDefaultInjectFlow()
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed) || parsed.length === 0) return cloneDefaultInjectFlow()
+    const steps: InjectFlowStep[] = []
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') return cloneDefaultInjectFlow()
+      const rec = item as { key?: unknown; waitMs?: unknown }
+      if (rec.key !== 'paste' && rec.key !== 'esc' && rec.key !== 'space' && rec.key !== 'return') {
+        return cloneDefaultInjectFlow()
+      }
+      if (typeof rec.waitMs !== 'number' || !Number.isInteger(rec.waitMs)) {
+        return cloneDefaultInjectFlow()
+      }
+      steps.push({ key: rec.key, waitMs: rec.waitMs })
+    }
+    return steps
+  } catch {
+    return cloneDefaultInjectFlow()
+  }
+}
+
 export interface AgentPreset {
   id: string
   label: string
@@ -37,6 +96,8 @@ export interface AgentPreset {
   sortOrder: number
   isBuiltIn: number
   createdAt: number
+  /** GET snake_case. NULL = default paste/return/return. */
+  inject_flow?: string | null
 }
 
 interface PresetsState {
@@ -47,7 +108,7 @@ interface PresetsState {
   launchPreset: (presetId: string, cwd: string, mode: 'tab' | 'split') => void
   // Mutations — each posts to the daemon then emits `sync:presets` on
   // success and refreshes the local list (mirrors the old Tauri shims).
-  createPreset: (input: { label: string; command: string; icon?: string }) => Promise<void>
+  createPreset: (input: { label: string; command: string; icon?: string }) => Promise<AgentPreset>
   updatePreset: (input: {
     id: string
     label?: string
@@ -55,6 +116,8 @@ interface PresetsState {
     icon?: string
     enabled?: number
     sortOrder?: number
+    /** POST camelCase. `""` = NULL (Reset). Omitted = unchanged. */
+    injectFlow?: string
   }) => Promise<void>
   deletePreset: (id: string) => Promise<void>
   reorderPresets: (ids: string[]) => Promise<void>
@@ -90,9 +153,10 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
   // POST body is camelCase (the daemon's PresetsCreateBody/PresetsUpdateBody
   // deserialize `sortOrder` etc.). Omit `icon` to leave it unset on create.
   createPreset: async (input) => {
-    await daemonCliPost('presets/create', input)
+    const created = await daemonCliPost<AgentPreset>('presets/create', input)
     emitPresetsChanged()
     await get().fetchPresets()
+    return created
   },
 
   updatePreset: async (input) => {

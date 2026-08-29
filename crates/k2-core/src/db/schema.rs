@@ -642,6 +642,9 @@ pub struct AgentPreset {
     /// 'bracketed-paste' | 'settle:<ms>'. NULL = unknown (default
     /// injection profile).
     pub readiness: Option<String>,
+    /// Migration 0111 — RAW JSON array of `{key, waitMs}` inject steps.
+    /// NULL = default paste/150/CR/250/CR/120. GET is snake_case.
+    pub inject_flow: Option<String>,
 }
 
 impl AgentPreset {
@@ -658,13 +661,14 @@ impl AgentPreset {
             danger_flags: row.get(8)?,
             env: row.get(9)?,
             readiness: row.get(10)?,
+            inject_flow: row.get(11)?,
         })
     }
 
     pub fn list(conn: &Connection) -> Result<Vec<AgentPreset>> {
         let mut stmt = conn.prepare(
             "SELECT id, label, command, icon, enabled, sort_order, is_built_in, created_at, \
-                    danger_flags, env, readiness \
+                    danger_flags, env, readiness, inject_flow \
              FROM agent_presets ORDER BY sort_order",
         )?;
         let rows = stmt.query_map([], AgentPreset::from_row)?;
@@ -674,7 +678,7 @@ impl AgentPreset {
     pub fn get(conn: &Connection, id: &str) -> Result<AgentPreset> {
         conn.query_row(
             "SELECT id, label, command, icon, enabled, sort_order, is_built_in, created_at, \
-                    danger_flags, env, readiness \
+                    danger_flags, env, readiness, inject_flow \
              FROM agent_presets WHERE id = ?1",
             params![id],
             AgentPreset::from_row,
@@ -738,6 +742,7 @@ impl AgentPreset {
         danger_flags: Option<Option<&str>>,
         env: Option<Option<&str>>,
         readiness: Option<Option<&str>>,
+        inject_flow: Option<Option<&str>>,
     ) -> Result<()> {
         if let Some(v) = danger_flags {
             conn.execute(
@@ -751,6 +756,12 @@ impl AgentPreset {
         if let Some(v) = readiness {
             conn.execute(
                 "UPDATE agent_presets SET readiness = ?1 WHERE id = ?2",
+                params![v, id],
+            )?;
+        }
+        if let Some(v) = inject_flow {
+            conn.execute(
+                "UPDATE agent_presets SET inject_flow = ?1 WHERE id = ?2",
                 params![v, id],
             )?;
         }

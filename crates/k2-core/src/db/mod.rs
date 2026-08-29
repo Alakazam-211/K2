@@ -92,6 +92,14 @@ pub fn shared() -> Arc<ReentrantMutex<Connection>> {
     }
 }
 
+/// Like [`shared`], but `None` when the process-wide DB has not been
+/// initialized (lib tests in downstream crates that never called
+/// `init_database`). Callers that can fall back (inject flow) use this
+/// instead of panicking.
+pub fn try_shared() -> Option<Arc<ReentrantMutex<Connection>>> {
+    SHARED.get().cloned()
+}
+
 /// Test-only: populate SHARED with an in-memory SQLite that's been
 /// through the full migration + seed sequence. Idempotent across test
 /// threads because OnceLock::set is atomic — losers drop their handle
@@ -924,6 +932,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0110_overlay_conversations",
             include_str!("../../drizzle_sql/0110_overlay_conversations.sql"),
         ),
+        // 0111 — per-LLM inject keystroke flow on agent_presets (NULL = default).
+        (
+            "0111_preset_inject_flow",
+            include_str!("../../drizzle_sql/0111_preset_inject_flow.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1517,7 +1530,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0110_overlay_conversations",
+            last_name, "0111_preset_inject_flow",
             "unexpected last migration name: {last_name}"
         );
     }

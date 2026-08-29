@@ -37,7 +37,14 @@ vi.mock('./tabs', () => ({
   registerPresetsStore: vi.fn(),
 }))
 
-import { usePresetsStore, type AgentPreset } from './presets'
+import {
+  usePresetsStore,
+  cloneDefaultInjectFlow,
+  isDefaultInjectFlow,
+  parseInjectFlowOrDefault,
+  readPresetInjectFlowJson,
+  type AgentPreset,
+} from './presets'
 
 function resetStore(): void {
   usePresetsStore.setState({ presets: [], showPresetsBar: true })
@@ -148,5 +155,46 @@ describe('presets store — Plan B host-aware migration', () => {
     expect(emitMock).not.toHaveBeenCalledWith('sync:presets')
     // No refetch fired after the failed mutation.
     expect(daemonCliGet).not.toHaveBeenCalled()
+  })
+
+  it('updatePreset POSTs camelCase injectFlow when provided', async () => {
+    daemonCliPost.mockResolvedValueOnce({})
+    daemonCliGet.mockResolvedValueOnce([])
+    const flow = '[{"key":"paste","waitMs":10},{"key":"return","waitMs":10}]'
+
+    await usePresetsStore.getState().updatePreset({ id: 'p1', injectFlow: flow })
+
+    expect(daemonCliPost).toHaveBeenCalledWith('presets/update', {
+      id: 'p1',
+      injectFlow: flow,
+    })
+  })
+})
+
+describe('inject flow helpers', () => {
+  it('prefills D5 when the column is NULL and accepts both spellings', () => {
+    const d5 = cloneDefaultInjectFlow()
+    expect(parseInjectFlowOrDefault(null)).toEqual(d5)
+    expect(isDefaultInjectFlow(parseInjectFlowOrDefault(undefined))).toBe(true)
+    expect(readPresetInjectFlowJson({ inject_flow: null })).toBeNull()
+    expect(
+      readPresetInjectFlowJson({ injectFlow: '[{"key":"paste","waitMs":1},{"key":"return","waitMs":1}]' }),
+    ).toBe('[{"key":"paste","waitMs":1},{"key":"return","waitMs":1}]')
+    expect(
+      readPresetInjectFlowJson({
+        inject_flow: '[{"key":"esc","waitMs":0},{"key":"paste","waitMs":1}]',
+      }),
+    ).toBe('[{"key":"esc","waitMs":0},{"key":"paste","waitMs":1}]')
+  })
+
+  it('parses a stored grok experiment and falls back on garbage', () => {
+    const grok =
+      '[{"key":"esc","waitMs":0},{"key":"space","waitMs":50},{"key":"paste","waitMs":150},{"key":"return","waitMs":250},{"key":"return","waitMs":120}]'
+    const parsed = parseInjectFlowOrDefault(grok)
+    expect(parsed[0]).toEqual({ key: 'esc', waitMs: 0 })
+    expect(parsed[1]).toEqual({ key: 'space', waitMs: 50 })
+    expect(parsed[2]?.key).toBe('paste')
+    expect(isDefaultInjectFlow(parsed)).toBe(false)
+    expect(parseInjectFlowOrDefault('not-json')).toEqual(cloneDefaultInjectFlow())
   })
 })

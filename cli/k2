@@ -11808,7 +11808,7 @@ cmd_schema() {
     },
     {
       "name": "preset set",
-      "usage": "k2 preset set <preset> [--command '<argv>'] [--label <l>] [--icon <e>] [--enable|--disable] [--danger-flag <f>]... [--env K=V]... [--readiness <v>] [--clear-danger-flags] [--clear-env] [--clear-readiness] [--json]",
+      "usage": "k2 preset set <preset> [--command '<argv>'] [--label <l>] [--icon <e>] [--enable|--disable] [--danger-flag <f>]... [--env K=V]... [--readiness <v>] [--inject-flow '<json>'] [--clear-danger-flags] [--clear-env] [--clear-readiness] [--clear-inject-flow] [--json]",
       "description": "Edit a preset (custom or built-in; built-in metadata is editable). Only passed flags change; --danger-flag/--env REPLACE the stored set wholesale; --clear-* resets a metadata column to undeclared.",
       "args": [{"name": "preset", "required": true}],
       "flags": [
@@ -11820,9 +11820,11 @@ cmd_schema() {
         {"name": "--danger-flag", "arg": "flag", "description": "Replace the declared auto-approve flags (repeatable)."},
         {"name": "--env", "arg": "K=V", "description": "Replace the spawn env (repeatable)."},
         {"name": "--readiness", "arg": "v", "description": "'bracketed-paste' | 'settle:<ms>'."},
+        {"name": "--inject-flow", "arg": "json", "description": "Replace the submit-keys flow (JSON array of {key, waitMs}; keys paste|esc|space|return)."},
         {"name": "--clear-danger-flags", "arg": null, "description": "Clear back to undeclared (fail-closed floor)."},
         {"name": "--clear-env", "arg": null, "description": "Clear the spawn env."},
         {"name": "--clear-readiness", "arg": null, "description": "Clear back to the default injection profile."},
+        {"name": "--clear-inject-flow", "arg": null, "description": "Reset submit keys to the default paste/return/return."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -23732,6 +23734,7 @@ _preset_py() {
     PR_DANGER="${PR_DANGER:-}" PR_ENV_KV="${PR_ENV_KV:-}" \
     PR_ENABLE="${PR_ENABLE:-}" PR_CLEAR_DANGER="${PR_CLEAR_DANGER:-false}" \
     PR_CLEAR_ENV="${PR_CLEAR_ENV:-false}" PR_CLEAR_READY="${PR_CLEAR_READY:-false}" \
+    PR_INJECT_FLOW="${PR_INJECT_FLOW:-}" PR_CLEAR_INJECT="${PR_CLEAR_INJECT:-false}" \
     python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
@@ -23896,6 +23899,8 @@ if verb == "show":
             print("  %s=%s" % (k, env[k]))
     elif isinstance(env, str):
         print("env:       %s" % env)
+    flow = p.get("inject_flow")
+    print("inject_flow: %s" % (flow if flow else "(default — paste / return / return)"))
     sys.exit(0)
 
 # ── add / set ────────────────────────────────────────────────────
@@ -23913,6 +23918,12 @@ if verb in ("add", "set"):
         body["env"] = dumps(parse_env_pairs(json.loads(os.environ["PR_ENV_KV"])))
     if os.environ.get("PR_READINESS"):
         body["readiness"] = os.environ["PR_READINESS"]
+    if os.environ.get("PR_INJECT_FLOW"):
+        try:
+            parsed_flow = json.loads(os.environ["PR_INJECT_FLOW"])
+        except Exception:
+            die("usage", "--inject-flow must be a JSON array of {key, waitMs} steps")
+        body["injectFlow"] = dumps(parsed_flow)
 
     if verb == "add":
         body["id"] = os.environ["PR_ID"]
@@ -23934,6 +23945,8 @@ if verb in ("add", "set"):
         body["env"] = ""
     if os.environ.get("PR_CLEAR_READY") == "true":
         body["readiness"] = ""
+    if os.environ.get("PR_CLEAR_INJECT") == "true":
+        body["injectFlow"] = ""
     if os.environ.get("PR_ENABLE"):
         body["enabled"] = 1 if os.environ["PR_ENABLE"] == "1" else 0
     if len(body) == 1:
@@ -23979,6 +23992,9 @@ command string plus metadata the daemon uses at spawn time:
                  (e.g. OPENAI_BASE_URL for a local-LLM harness).
   readiness      when prompt injection may fire: 'bracketed-paste'
                  (TUI readiness signal is trustworthy) or 'settle:<ms>'.
+  inject-flow    keystroke sequence used to deliver a message into this
+                 LLM's terminal (paste|esc|space|return). NULL = default
+                 paste / return / return.
 
 USAGE
   k2 preset list [--json]
@@ -24064,12 +24080,15 @@ FLAGS
   --clear-danger-flags    Clear back to undeclared (fail-closed floor)
   --clear-env             Clear the spawn env
   --clear-readiness       Clear back to the default injection profile
+  --inject-flow '<json>'  Replace the submit-keys flow (paste|esc|space|return)
+  --clear-inject-flow     Reset submit keys to the default paste/return/return
   --json                  JSON output
 
 EXAMPLES
   k2 preset set aider-ollama --readiness settle:3000
   k2 preset set Gemini --danger-flag --yolo
   k2 preset set my-agent --disable
+  k2 preset set grok --inject-flow '[{"key":"esc","waitMs":0},{"key":"space","waitMs":50},{"key":"paste","waitMs":150},{"key":"return","waitMs":250},{"key":"return","waitMs":120}]'
 EOF
 }
 
@@ -24167,6 +24186,7 @@ cmd_preset_set() {
     if _wants_help "$@"; then cmd_help_preset_set; exit 0; fi
     local selector="" command_str="" label="" icon="" readiness="" enable="" as_json=false
     local clear_danger=false clear_env=false clear_ready=false
+    local inject_flow="" clear_inject=false
     local danger_flags=() env_pairs=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -24188,11 +24208,15 @@ cmd_preset_set() {
             --readiness)
                 [ $# -ge 2 ] || { _preset_err "usage" "--readiness requires 'bracketed-paste' or 'settle:<ms>'"; exit 2; }
                 readiness="$2"; shift 2 ;;
+            --inject-flow)
+                [ $# -ge 2 ] || { _preset_err "usage" "--inject-flow requires a JSON array"; exit 2; }
+                inject_flow="$2"; shift 2 ;;
             --enable)  enable="1"; shift ;;
             --disable) enable="0"; shift ;;
             --clear-danger-flags) clear_danger=true; shift ;;
             --clear-env)          clear_env=true; shift ;;
             --clear-readiness)    clear_ready=true; shift ;;
+            --clear-inject-flow)  clear_inject=true; shift ;;
             --json) as_json=true; shift ;;
             -*)
                 _preset_err "usage" "unknown flag '$1' — see: k2 preset set --help"
@@ -24211,7 +24235,8 @@ cmd_preset_set() {
     fi
     if { [ ${#danger_flags[@]} -gt 0 ] && $clear_danger; } \
         || { [ ${#env_pairs[@]} -gt 0 ] && $clear_env; } \
-        || { [ -n "$readiness" ] && $clear_ready; }; then
+        || { [ -n "$readiness" ] && $clear_ready; } \
+        || { [ -n "$inject_flow" ] && $clear_inject; }; then
         _preset_err "usage" "a --clear-* flag and its value flag are mutually exclusive"
         exit 2
     fi
@@ -24226,7 +24251,8 @@ cmd_preset_set() {
           PR_LABEL="$label" PR_COMMAND="$command_str" PR_ICON="$icon" \
           PR_READINESS="$readiness" PR_DANGER="$danger_json" PR_ENV_KV="$env_json" \
           PR_ENABLE="$enable" PR_CLEAR_DANGER="$clear_danger" \
-          PR_CLEAR_ENV="$clear_env" PR_CLEAR_READY="$clear_ready"
+          PR_CLEAR_ENV="$clear_env" PR_CLEAR_READY="$clear_ready" \
+          PR_INJECT_FLOW="$inject_flow" PR_CLEAR_INJECT="$clear_inject"
     _preset_py
 }
 

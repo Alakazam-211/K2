@@ -607,10 +607,10 @@ pub fn resolve_owner_from() -> String {
 
 /// Composer 1a (D2) — max time a waiting injector blocks for the
 /// per-session lock before giving up with a truthful `pty_stalled`.
-/// Generously exceeds a single injection's ~520ms of timed sleeps so
-/// legitimately-serialized sends (composer + `k2 msg`) all land in
-/// order, while a truly stuck holder still releases the waiter instead
-/// of pinning it forever.
+/// Generously exceeds a single injection's timed sleeps (default ~520ms,
+/// cap 5000ms sum(waitMs)) so legitimately-serialized sends (composer +
+/// `k2 msg`) all land in order, while a truly stuck holder still
+/// releases the waiter instead of pinning it forever.
 const INJECT_LOCK_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Outcome of a single locked injection attempt (Composer 1a).
@@ -1268,7 +1268,8 @@ fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str) -> In
         return InjectOutcome::GateHold;
     }
     // D5 — strip raw ESC BEFORE framing so an embedded `ESC[201~` can't
-    // close the paste early and splice live keystrokes.
+    // close the paste early and splice live keystrokes. Sanitize at the
+    // paste payload, not at Return; grok_gate_open ran once before step 1.
     let clean = sanitize_inject_text(payload);
     let body: Vec<u8> = if live.bracketed_paste_active() {
         let mut b = Vec::with_capacity(clean.len() + 12);
@@ -1279,27 +1280,36 @@ fn inject_framed_locked(live: &session_lookup::LiveSession, payload: &str) -> In
     } else {
         clean.into_bytes()
     };
-    if live.write(&body).is_err() {
-        return InjectOutcome::PtyDied;
-    }
-    // Let the TUI ingest + render the body before the submit keystroke.
-    std::thread::sleep(Duration::from_millis(150));
 
-    // Submit. The second CR after a settle is the latency insurance: if
-    // the first landed before the paste finished ingesting, this one
-    // submits it; if the first already submitted, this hits an empty
-    // input box and no-ops.
-    if live.write(b"\r").is_err() {
-        return InjectOutcome::PtyDied;
-    }
-    std::thread::sleep(Duration::from_millis(250));
-    if !live.is_child_alive() {
-        return InjectOutcome::PtyDied;
-    }
-    let _ = live.write(b"\r");
-    std::thread::sleep(Duration::from_millis(120));
-    if !live.is_child_alive() {
-        return InjectOutcome::PtyDied;
+    let flow = match k2_core::db_ops::resolve_inject_flow_for_program(live.command().as_deref()) {
+        Ok(steps) => steps,
+        Err(e) => {
+            log_debug!(
+                "[msg/inject] session={} inject_flow resolve failed ({e}) — using default",
+                live.session_id()
+            );
+            k2_core::inject_flow::default_inject_flow()
+        }
+    };
+    let actions = k2_core::inject_flow::compile_inject_flow(&flow, &body);
+    for action in actions {
+        match action {
+            k2_core::inject_flow::InjectAction::Write(bytes) => {
+                if live.write(&bytes).is_err() {
+                    return InjectOutcome::PtyDied;
+                }
+            }
+            k2_core::inject_flow::InjectAction::Sleep(ms) => {
+                if ms > 0 {
+                    std::thread::sleep(Duration::from_millis(ms));
+                }
+            }
+            k2_core::inject_flow::InjectAction::CheckAlive => {
+                if !live.is_child_alive() {
+                    return InjectOutcome::PtyDied;
+                }
+            }
+        }
     }
     InjectOutcome::Delivered
 }
@@ -3833,6 +3843,126 @@ mod tests {
             vec![0, body.len() - 6],
             "exactly the two frame markers may contain ESC"
         );
+    }
+
+    #[test]
+    fn inject_flow_compiler_default_is_paste_body_then_two_crs() {
+        use k2_core::inject_flow::{compile_inject_flow, default_inject_flow, InjectAction};
+        let actions = compile_inject_flow(&default_inject_flow(), b"hello");
+        assert_eq!(actions.len(), 9);
+        match &actions[0] {
+            InjectAction::Write(b) => assert_eq!(b, b"hello"),
+            other => panic!("expected paste Write, got {other:?}"),
+        }
+        match &actions[1] {
+            InjectAction::Sleep(150) => {}
+            other => panic!("expected Sleep(150), got {other:?}"),
+        }
+        match &actions[3] {
+            InjectAction::Write(b) => assert_eq!(b.as_slice(), &[0x0d]),
+            other => panic!("expected CR Write, got {other:?}"),
+        }
+        match &actions[4] {
+            InjectAction::Sleep(250) => {}
+            other => panic!("expected Sleep(250), got {other:?}"),
+        }
+        match &actions[6] {
+            InjectAction::Write(b) => assert_eq!(b.as_slice(), &[0x0d]),
+            other => panic!("expected second CR Write, got {other:?}"),
+        }
+        match &actions[7] {
+            InjectAction::Sleep(120) => {}
+            other => panic!("expected Sleep(120), got {other:?}"),
+        }
+        match actions.last() {
+            Some(InjectAction::CheckAlive) => {}
+            other => panic!("last step waitMs is the trailing alive-check, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inject_flow_compiler_grok_experiment_is_esc_space_paste_crs() {
+        use k2_core::inject_flow::{compile_inject_flow, validate_inject_flow_json, InjectAction};
+        let json = r#"[{"key":"esc","waitMs":0},{"key":"space","waitMs":50},{"key":"paste","waitMs":150},{"key":"return","waitMs":250},{"key":"return","waitMs":120}]"#;
+        let flow = validate_inject_flow_json(json).expect("grok experiment");
+        let actions = compile_inject_flow(&flow, b"hi");
+        match &actions[0] {
+            InjectAction::Write(b) => assert_eq!(b.as_slice(), &[0x1b]),
+            other => panic!("expected ESC, got {other:?}"),
+        }
+        match &actions[3] {
+            InjectAction::Write(b) => assert_eq!(b.as_slice(), &[0x20]),
+            other => panic!("expected space, got {other:?}"),
+        }
+        match &actions[6] {
+            InjectAction::Write(b) => assert_eq!(b.as_slice(), b"hi"),
+            other => panic!("expected paste, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inject_flow_d9_basename_matching_table() {
+        use k2_core::inject_flow::{
+            match_preset_inject_flow, resolve_inject_flow_for_program, InjectFlowCandidate,
+            InjectKey,
+        };
+        let claude_flow = r#"[{"key":"paste","waitMs":11},{"key":"return","waitMs":11}]"#;
+        let grok_flow = r#"[{"key":"esc","waitMs":0},{"key":"paste","waitMs":10},{"key":"return","waitMs":10}]"#;
+        let presets = [
+            InjectFlowCandidate {
+                command: "claude --dangerously-skip-permissions",
+                inject_flow: Some(claude_flow),
+                sort_order: 0,
+                label: "Claude",
+            },
+            InjectFlowCandidate {
+                command: "grok --always-approve",
+                inject_flow: Some(grok_flow),
+                sort_order: 1,
+                label: "Grok",
+            },
+        ];
+        assert_eq!(
+            match_preset_inject_flow(Some("/usr/bin/claude"), &presets),
+            Some(Some(claude_flow))
+        );
+        assert_eq!(
+            match_preset_inject_flow(Some("claude"), &presets),
+            Some(Some(claude_flow))
+        );
+        assert_eq!(
+            match_preset_inject_flow(Some("grok"), &presets),
+            Some(Some(grok_flow))
+        );
+        let two_claude = [
+            InjectFlowCandidate {
+                command: "claude --yolo",
+                inject_flow: Some(grok_flow),
+                sort_order: 1,
+                label: "Z Claude",
+            },
+            InjectFlowCandidate {
+                command: "claude --dangerously-skip-permissions",
+                inject_flow: Some(claude_flow),
+                sort_order: 1,
+                label: "A Claude",
+            },
+        ];
+        assert_eq!(
+            match_preset_inject_flow(Some("/usr/bin/claude"), &two_claude),
+            Some(Some(claude_flow)),
+            "first by sort_order,label"
+        );
+        let malformed = [InjectFlowCandidate {
+            command: "claude",
+            inject_flow: Some(r#"[{"key":"paste","waitMs":1,"extra":true}]"#),
+            sort_order: 0,
+            label: "Claude",
+        }];
+        let resolved = resolve_inject_flow_for_program(Some("/usr/bin/claude"), &malformed);
+        assert_eq!(resolved[0].key, InjectKey::Paste);
+        assert_eq!(resolved[0].wait_ms, 150);
+        assert_eq!(resolved.len(), 3);
     }
 
     #[test]

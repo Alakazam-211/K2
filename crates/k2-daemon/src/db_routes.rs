@@ -677,6 +677,9 @@ struct PresetsUpdateBody {
     danger_flags: Option<String>,
     env: Option<String>,
     readiness: Option<String>,
+    /// Migration 0111. POST camelCase `injectFlow` like `dangerFlags`.
+    /// Omitted = unchanged, `""` = NULL (Reset), other string = JSON array.
+    inject_flow: Option<String>,
 }
 
 /// Map the wire convention onto the db_ops one: absent → unchanged,
@@ -701,6 +704,7 @@ pub fn handle_presets_update(body: &[u8]) -> CliResponse {
         set_or_clear(&b.danger_flags),
         set_or_clear(&b.env),
         set_or_clear(&b.readiness),
+        set_or_clear(&b.inject_flow),
     ))
 }
 

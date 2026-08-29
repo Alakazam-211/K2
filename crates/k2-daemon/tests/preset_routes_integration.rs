@@ -225,6 +225,11 @@ async fn presets_list_and_get_serve_metadata() {
         "truthful seed: {flags}"
     );
     assert_eq!(claude["readiness"], serde_json::json!("bracketed-paste"));
+    assert_eq!(
+        claude["inject_flow"],
+        serde_json::Value::Null,
+        "built-ins stay NULL inject_flow"
+    );
 
     // get by id — same row, metadata included.
     let id = claude["id"].as_str().expect("id");
@@ -312,6 +317,48 @@ async fn owner_crud_with_metadata_end_to_end() {
         Some(&format!(r#"{{"id":"{slug}","readiness":"sentinel:hi"}}"#)),
     );
     assert_eq!(r.status, 400, "bad readiness; body={}", r.body);
+
+    // injectFlow: camelCase POST, snake_case GET; extra property 400;
+    // "" clears back to NULL (default flow).
+    let grok_flow = r#"[{"key":"esc","waitMs":0},{"key":"space","waitMs":50},{"key":"paste","waitMs":150},{"key":"return","waitMs":250},{"key":"return","waitMs":120}]"#;
+    let grok_flow_escaped = grok_flow.replace('"', "\\\"");
+    let r = http(
+        d.port,
+        "POST",
+        &format!("/cli/presets/update?token={OWNER_TOKEN}"),
+        Some(&format!(
+            r#"{{"id":"{slug}","injectFlow":"{grok_flow_escaped}"}}"#
+        )),
+    );
+    assert_eq!(r.status, 200, "set injectFlow; body={}", r.body);
+    let p = json(&r.body);
+    assert_eq!(
+        p["inject_flow"].as_str().expect("inject_flow string"),
+        grok_flow
+    );
+    assert!(p.get("injectFlow").is_none(), "GET stays snake_case: {p}");
+
+    let bad_flow = r#"[{"key":"paste","waitMs":10,"extra":true}]"#;
+    let bad_escaped = bad_flow.replace('"', "\\\"");
+    let r = http(
+        d.port,
+        "POST",
+        &format!("/cli/presets/update?token={OWNER_TOKEN}"),
+        Some(&format!(
+            r#"{{"id":"{slug}","injectFlow":"{bad_escaped}"}}"#
+        )),
+    );
+    assert_eq!(r.status, 400, "extra property; body={}", r.body);
+
+    let r = http(
+        d.port,
+        "POST",
+        &format!("/cli/presets/update?token={OWNER_TOKEN}"),
+        Some(&format!(r#"{{"id":"{slug}","injectFlow":""}}"#)),
+    );
+    assert_eq!(r.status, 200, "clear injectFlow; body={}", r.body);
+    let p = json(&r.body);
+    assert_eq!(p["inject_flow"], serde_json::Value::Null);
 
     // Built-in: metadata editable, delete refused.
     let r = http(

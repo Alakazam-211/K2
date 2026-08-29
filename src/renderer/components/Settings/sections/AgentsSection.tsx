@@ -1,7 +1,15 @@
 import React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
-import { usePresetsStore } from '@/stores/presets'
+import {
+  usePresetsStore,
+  cloneDefaultInjectFlow,
+  isDefaultInjectFlow,
+  parseInjectFlowOrDefault,
+  readPresetInjectFlowJson,
+  type InjectFlowKey,
+  type InjectFlowStep,
+} from '@/stores/presets'
 import { matchAgentPreset } from '@/lib/agent-resolve'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { KeyCombo } from '@/components/KeySymbol'
@@ -38,6 +46,13 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
     label: 'Add Custom Preset',
     description: 'Register your own AI agent command',
     keywords: ['preset', 'custom', 'add', 'cli'],
+  },
+  {
+    id: 'agents.submit-keys',
+    section: 'agents',
+    label: 'Submit keys',
+    description: 'How K2 delivers a message into this LLM’s terminal',
+    keywords: ['inject', 'paste', 'keystroke', 'submit', 'esc', 'return'],
   },
   {
     id: 'agents.credentials',
@@ -159,6 +174,148 @@ interface PresetFormState {
   label: string
   command: string
   icon: string
+  injectFlow: InjectFlowStep[]
+  injectFlowTouched: boolean
+}
+
+const INJECT_KEY_OPTIONS: { value: InjectFlowKey; label: string }[] = [
+  { value: 'paste', label: 'Paste message' },
+  { value: 'return', label: 'Return' },
+  { value: 'esc', label: 'Esc' },
+  { value: 'space', label: 'Space' },
+]
+
+const EMPTY_PRESET_FORM: PresetFormState = {
+  visible: false,
+  editingId: null,
+  label: '',
+  command: '',
+  icon: '',
+  injectFlow: cloneDefaultInjectFlow(),
+  injectFlowTouched: false,
+}
+
+function SubmitKeysEditor({
+  steps,
+  onChange,
+}: {
+  steps: InjectFlowStep[]
+  onChange: (next: InjectFlowStep[]) => void
+}): React.JSX.Element {
+  const setStep = (i: number, patch: Partial<InjectFlowStep>): void => {
+    onChange(steps.map((s, j) => (j === i ? { ...s, ...patch } : s)))
+  }
+  const remove = (i: number): void => {
+    if (steps.length <= 1) return
+    onChange(steps.filter((_, j) => j !== i))
+  }
+  const move = (i: number, dir: -1 | 1): void => {
+    const j = i + dir
+    if (j < 0 || j >= steps.length) return
+    const next = [...steps]
+    const a = next[i]
+    const b = next[j]
+    if (a === undefined || b === undefined) return
+    next[i] = b
+    next[j] = a
+    onChange(next)
+  }
+  const add = (): void => {
+    if (steps.length >= 16) return
+    const hasPaste = steps.some((s) => s.key === 'paste')
+    onChange([...steps, { key: hasPaste ? 'return' : 'paste', waitMs: 150 }])
+  }
+
+  return (
+    <div className="space-y-2" data-settings-id="agents.submit-keys">
+      <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+        Submit keys
+      </div>
+      <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+        How K2 delivers a message into this LLM’s terminal.{' '}
+        <span className="text-[var(--color-text-secondary)] font-medium">Paste message</span> writes
+        the text (not Cmd+V). Return submits. Esc / Space are extra TUI keys (e.g. Grok). Wait is
+        milliseconds <span className="font-medium">after</span> that step.
+      </p>
+      <div className="space-y-1">
+        {steps.map((step, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <select
+              value={step.key}
+              onChange={(e) => setStep(i, { key: e.target.value as InjectFlowKey })}
+              className="px-1.5 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
+            >
+              {INJECT_KEY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={0}
+              max={10000}
+              data-inject-wait=""
+              value={step.waitMs}
+              onChange={(e) => {
+                const n = Number.parseInt(e.target.value, 10)
+                setStep(i, { waitMs: Number.isFinite(n) ? Math.max(0, Math.min(10000, n)) : 0 })
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.stopPropagation()
+              }}
+              className="w-16 px-1.5 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
+            />
+            <span className="text-[10px] text-[var(--color-text-muted)] font-mono">ms</span>
+            <button
+              type="button"
+              onClick={() => move(i, -1)}
+              disabled={i === 0}
+              className="px-1 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
+              aria-label="Move step up"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              onClick={() => move(i, 1)}
+              disabled={i === steps.length - 1}
+              className="px-1 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
+              aria-label="Move step down"
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              disabled={steps.length <= 1}
+              className="px-1 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
+              aria-label="Remove step"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={add}
+          disabled={steps.length >= 16}
+          className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] disabled:opacity-30 no-drag cursor-pointer font-mono"
+        >
+          Add step
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange(cloneDefaultInjectFlow())}
+          className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer font-mono"
+        >
+          Reset to default
+        </button>
+      </div>
+    </div>
+  )
 }
 
 /** The “big 7” agent CLIs for credential auto-refresh — Claude is live. */
@@ -259,13 +416,7 @@ export function AgentsSection(): React.JSX.Element {
     reorderPresets,
     resetPresetsToBuiltIns,
   } = usePresetsStore()
-  const [presetForm, setPresetForm] = useState<PresetFormState>({
-    visible: false,
-    editingId: null,
-    label: '',
-    command: '',
-    icon: '',
-  })
+  const [presetForm, setPresetForm] = useState<PresetFormState>({ ...EMPTY_PRESET_FORM })
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
   const presetDragFromRef = useRef<number | null>(null)
@@ -296,6 +447,8 @@ export function AgentsSection(): React.JSX.Element {
       label: preset.label,
       command: preset.command,
       icon: preset.icon ?? '',
+      injectFlow: parseInjectFlowOrDefault(readPresetInjectFlowJson(preset)),
+      injectFlowTouched: false,
     })
   }, [])
 
@@ -311,32 +464,41 @@ export function AgentsSection(): React.JSX.Element {
   )
 
   const openAddForm = useCallback(() => {
-    setPresetForm({ visible: false, editingId: null, label: '', command: '', icon: '' })
+    setPresetForm({ ...EMPTY_PRESET_FORM })
     requestAnimationFrame(() => {
-      setPresetForm({ visible: true, editingId: null, label: '', command: '', icon: '' })
+      setPresetForm({ ...EMPTY_PRESET_FORM, visible: true, injectFlow: cloneDefaultInjectFlow() })
     })
   }, [])
 
   const cancelForm = useCallback(() => {
-    setPresetForm({ visible: false, editingId: null, label: '', command: '', icon: '' })
+    setPresetForm({ ...EMPTY_PRESET_FORM })
   }, [])
 
   const submitForm = useCallback(async () => {
     if (!presetForm.label.trim() || !presetForm.command.trim()) return
     try {
+      const injectPayload = presetForm.injectFlowTouched
+        ? isDefaultInjectFlow(presetForm.injectFlow)
+          ? ''
+          : JSON.stringify(presetForm.injectFlow)
+        : undefined
       if (presetForm.editingId) {
         await updatePreset({
           id: presetForm.editingId,
           label: presetForm.label.trim(),
           command: presetForm.command.trim(),
           icon: presetForm.icon.trim() || '',
+          ...(injectPayload !== undefined ? { injectFlow: injectPayload } : {}),
         })
       } else {
-        await createPreset({
+        const created = await createPreset({
           label: presetForm.label.trim(),
           command: presetForm.command.trim(),
           icon: presetForm.icon.trim() || undefined,
         })
+        if (injectPayload) {
+          await updatePreset({ id: created.id, injectFlow: injectPayload })
+        }
       }
       cancelForm()
     } catch (err) {
@@ -347,6 +509,7 @@ export function AgentsSection(): React.JSX.Element {
   const handleFormKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Enter') {
+        if ((e.target as HTMLElement).dataset.injectWait !== undefined) return
         e.preventDefault()
         void submitForm()
       } else if (e.key === 'Escape') {
@@ -559,6 +722,12 @@ export function AgentsSection(): React.JSX.Element {
                   className="flex-1 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
                 />
               </div>
+              <SubmitKeysEditor
+                steps={presetForm.injectFlow}
+                onChange={(injectFlow) =>
+                  setPresetForm((s) => ({ ...s, injectFlow, injectFlowTouched: true }))
+                }
+              />
               <div className="flex items-center gap-2 justify-end">
                 <button
                   type="button"

@@ -21,6 +21,7 @@ use crate::db;
 use crate::db::schema::{
     AgentPreset, FocusGroup, Project, TimeEntry, Workspace, WorkspaceSection,
 };
+use crate::inject_flow::{self, InjectFlowCandidate, InjectStep};
 use crate::project_config;
 
 // ── Built-in agent presets ──────────────────────────────────────────────
@@ -958,6 +959,13 @@ fn validate_preset_metadata(
     Ok(())
 }
 
+/// Write-side validator for `agent_presets.inject_flow`. HTTP / CLI / tests
+/// share this so a 400 never persists garbage. NULL is not passed here
+/// (omitted = unchanged, `""` is mapped to NULL by the route layer).
+pub fn validate_inject_flow(raw: &str) -> Result<(), String> {
+    inject_flow::validate_inject_flow_json(raw).map(|_| ())
+}
+
 pub fn presets_create(
     label: &str,
     command: &str,
@@ -1015,6 +1023,7 @@ pub fn presets_create_full(
         Some(danger_flags),
         Some(env),
         Some(readiness),
+        None,
     )
     .map_err(|e| e.to_string())?;
     AgentPreset::get(&conn, &id).map_err(|e| e.to_string())
@@ -1028,7 +1037,18 @@ pub fn presets_update(
     enabled: Option<i64>,
     sort_order: Option<i64>,
 ) -> Result<AgentPreset, String> {
-    presets_update_full(id, label, command, icon, enabled, sort_order, None, None, None)
+    presets_update_full(
+        id,
+        label,
+        command,
+        icon,
+        enabled,
+        sort_order,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 /// Full update — W6 (0.40.30). Metadata params: outer `None` = leave
@@ -1047,12 +1067,16 @@ pub fn presets_update_full(
     danger_flags: Option<Option<&str>>,
     env: Option<Option<&str>>,
     readiness: Option<Option<&str>>,
+    inject_flow: Option<Option<&str>>,
 ) -> Result<AgentPreset, String> {
     validate_preset_metadata(
         danger_flags.flatten(),
         env.flatten(),
         readiness.flatten(),
     )?;
+    if let Some(Some(raw)) = inject_flow {
+        validate_inject_flow(raw)?;
+    }
     if matches!(label, Some(l) if l.trim().is_empty()) {
         return Err("preset label must not be empty".to_string());
     }
@@ -1073,9 +1097,52 @@ pub fn presets_update_full(
     }
     AgentPreset::update(&conn, id, label, command, icon, enabled, sort_order)
         .map_err(|e| e.to_string())?;
-    AgentPreset::update_metadata(&conn, id, danger_flags, env, readiness)
+    AgentPreset::update_metadata(&conn, id, danger_flags, env, readiness, inject_flow)
         .map_err(|e| e.to_string())?;
     AgentPreset::get(&conn, id).map_err(|e| e.to_string())
+}
+
+/// D9 — resolve the inject flow for a live PTY program (basename of
+/// `LiveSession::command()`, program only). First matching preset
+/// `ORDER BY sort_order, label`, including disabled. DB error is
+/// returned so the interpreter can log and fall back to the default.
+pub fn resolve_inject_flow_for_program(
+    live_program: Option<&str>,
+) -> Result<Vec<InjectStep>, String> {
+    let db = db::try_shared().ok_or_else(|| "database not initialized".to_string())?;
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT command, inject_flow, sort_order, label \
+             FROM agent_presets ORDER BY sort_order, label",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let owned: Vec<(String, Option<String>, i64, String)> = rows
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let candidates: Vec<InjectFlowCandidate<'_>> = owned
+        .iter()
+        .map(|(command, inject_flow, sort_order, label)| InjectFlowCandidate {
+            command,
+            inject_flow: inject_flow.as_deref(),
+            sort_order: *sort_order,
+            label,
+        })
+        .collect();
+    Ok(inject_flow::resolve_inject_flow_for_program(
+        live_program,
+        &candidates,
+    ))
 }
 
 pub fn presets_delete(id: &str) -> Result<(), String> {
@@ -2058,6 +2125,7 @@ mod preset_metadata_ops_tests {
             Some(Some(r#"["--yolo-mode"]"#)),
             Some(Some(r#"{"K":"v"}"#)),
             Some(Some("bracketed-paste")),
+            None,
         )
         .expect("set metadata");
         assert_eq!(p.danger_flags.as_deref(), Some(r#"["--yolo-mode"]"#));
@@ -2066,7 +2134,7 @@ mod preset_metadata_ops_tests {
 
         // Outer None leaves untouched.
         let p = presets_update_full(
-            &id, Some("Renamed"), None, None, None, None, None, None, None,
+            &id, Some("Renamed"), None, None, None, None, None, None, None, None,
         )
         .expect("label-only update");
         assert_eq!(p.label, "Renamed");
@@ -2075,7 +2143,7 @@ mod preset_metadata_ops_tests {
         // Inner None clears back to NULL.
         let p = presets_update_full(
             &id, None, None, None, None, None,
-            Some(None), Some(None), Some(None),
+            Some(None), Some(None), Some(None), None,
         )
         .expect("clear metadata");
         assert_eq!(p.danger_flags, None);
@@ -2084,7 +2152,7 @@ mod preset_metadata_ops_tests {
 
         // Invalid metadata on update is rejected before any write.
         assert!(presets_update_full(
-            &id, None, None, None, None, None, None, None, Some(Some("settle:none")),
+            &id, None, None, None, None, None, None, None, Some(Some("settle:none")), None,
         )
         .is_err());
     }
@@ -2093,7 +2161,7 @@ mod preset_metadata_ops_tests {
     fn update_unknown_id_errors_and_built_in_delete_still_guarded() {
         let missing = uid("ghost");
         let err = presets_update_full(
-            &missing, None, None, None, None, None, None, None, None,
+            &missing, None, None, None, None, None, None, None, None, None,
         )
         .unwrap_err();
         assert!(err.contains("no preset"), "unknown id must be loud: {err}");
@@ -2107,7 +2175,7 @@ mod preset_metadata_ops_tests {
         let before = built_in.danger_flags.clone();
         let p = presets_update_full(
             &built_in.id, None, None, None, None, None,
-            Some(Some(r#"["--w6-test-flag"]"#)), None, None,
+            Some(Some(r#"["--w6-test-flag"]"#)), None, None, None,
         )
         .expect("metadata edit on a built-in is allowed");
         assert_eq!(p.danger_flags.as_deref(), Some(r#"["--w6-test-flag"]"#));
@@ -2120,8 +2188,154 @@ mod preset_metadata_ops_tests {
         // see truthful metadata.
         presets_update_full(
             &built_in.id, None, None, None, None, None,
-            Some(before.as_deref()), None, None,
+            Some(before.as_deref()), None, None, None,
         )
         .expect("restore");
+    }
+}
+
+#[cfg(test)]
+mod preset_inject_flow_ops_tests {
+    use super::*;
+
+    const GROK_FLOW: &str = r#"[{"key":"esc","waitMs":0},{"key":"space","waitMs":50},{"key":"paste","waitMs":150},{"key":"return","waitMs":250},{"key":"return","waitMs":120}]"#;
+    const CUSTOM_FLOW: &str = r#"[{"key":"paste","waitMs":11},{"key":"return","waitMs":11}]"#;
+
+    fn uid(tag: &str) -> String {
+        format!(
+            "inj-{tag}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        )
+    }
+
+    #[test]
+    fn create_leaves_inject_flow_null() {
+        let id = uid("create-null");
+        let p = presets_create_full(Some(&id), "Inj Null", "inj-null-bin", None, None, None, None)
+            .expect("create");
+        assert_eq!(p.inject_flow, None, "new presets stay NULL");
+    }
+
+    #[test]
+    fn update_sets_clears_and_rejects_inject_flow() {
+        let id = uid("upd");
+        presets_create_full(Some(&id), "Inj Upd", "inj-upd-bin", None, None, None, None)
+            .expect("create");
+
+        let p = presets_update_full(
+            &id, None, None, None, None, None, None, None, None, Some(Some(GROK_FLOW)),
+        )
+        .expect("set inject_flow");
+        assert_eq!(p.inject_flow.as_deref(), Some(GROK_FLOW));
+
+        let p = presets_update_full(
+            &id, Some("Renamed Inj"), None, None, None, None, None, None, None, None,
+        )
+        .expect("label-only");
+        assert_eq!(p.inject_flow.as_deref(), Some(GROK_FLOW), "untouched");
+
+        let p = presets_update_full(
+            &id, None, None, None, None, None, None, None, None, Some(None),
+        )
+        .expect("clear");
+        assert_eq!(p.inject_flow, None);
+
+        let extra = r#"[{"key":"paste","waitMs":10,"extra":true}]"#;
+        let err = presets_update_full(
+            &id, None, None, None, None, None, None, None, None, Some(Some(extra)),
+        )
+        .unwrap_err();
+        assert!(err.contains("inject_flow"), "extra property 400: {err}");
+        let still = presets_get(&id).expect("get").expect("row");
+        assert_eq!(still.inject_flow, None, "rejected write must not persist");
+    }
+
+    #[test]
+    fn resolve_matches_basename_including_disabled_and_falls_back() {
+        let claude_a = uid("claude-a");
+        let claude_z = uid("claude-z");
+        let grok = uid("grok");
+        presets_create_full(
+            Some(&claude_z),
+            "Z Claude",
+            "injclaude --yolo",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("z");
+        presets_create_full(
+            Some(&claude_a),
+            "A Claude",
+            "injclaude --dangerously-skip-permissions",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("a");
+        presets_create_full(
+            Some(&grok),
+            "Grok Custom",
+            "injgrok --always-approve",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("grok");
+
+        presets_update_full(
+            &claude_a,
+            None,
+            None,
+            None,
+            Some(0),
+            Some(1),
+            None,
+            None,
+            None,
+            Some(Some(CUSTOM_FLOW)),
+        )
+        .expect("a flow + disable + sort");
+        presets_update_full(
+            &claude_z,
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+            None,
+            None,
+            None,
+            Some(Some(GROK_FLOW)),
+        )
+        .expect("z flow");
+        presets_update_full(
+            &grok,
+            None,
+            None,
+            None,
+            None,
+            Some(2),
+            None,
+            None,
+            None,
+            Some(Some(GROK_FLOW)),
+        )
+        .expect("grok flow");
+
+        let for_claude = resolve_inject_flow_for_program(Some("/usr/bin/injclaude"))
+            .expect("resolve claude");
+        assert_eq!(for_claude[0].wait_ms, 11, "A Claude wins by label at same sort_order");
+        assert_eq!(for_claude.len(), 2);
+
+        let for_grok = resolve_inject_flow_for_program(Some("injgrok")).expect("resolve grok");
+        assert_eq!(for_grok[0].key, crate::inject_flow::InjectKey::Esc);
+
+        let for_cat = resolve_inject_flow_for_program(Some("cat")).expect("no match");
+        assert_eq!(for_cat, crate::inject_flow::default_inject_flow());
     }
 }

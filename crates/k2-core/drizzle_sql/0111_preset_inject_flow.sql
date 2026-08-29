@@ -1,0 +1,11 @@
+-- Per-LLM inject keystroke flow (prd-llm-inject-keystroke-flow-v1).
+--
+-- `inject_flow` — JSON array of `{ "key": "paste"|"esc"|"space"|"return",
+--   "waitMs": <int> }` steps the daemon plays when delivering a message
+--   into this preset's live TUI. Exactly one `paste` per saved flow.
+--
+-- NULLABLE, NO DEFAULT: NULL = today's hardcoded paste/150/CR/250/CR/120
+-- sequence. Shipping the column is a no-op for existing and built-in rows.
+-- Built-ins stay NULL (do not seed Grok Esc+Space). Reset built-ins
+-- recreates rows → flow back to NULL.
+ALTER TABLE agent_presets ADD COLUMN inject_flow TEXT;

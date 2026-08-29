@@ -42,11 +42,17 @@ import {
   composeCanSend,
   composeHistoryKeyAction,
   composeInterruptSequence,
+  composeSlashMenuKeyAction,
+  composeSlashMenuOpenFromDraft,
+  composeSlashSpaceCommit,
+  composeSlashTypeaheadQuery,
   composeTextareaHeight,
+  consumeComposeSlashToken,
   composeAgentNameFromProjects,
   composeMessagePlaceholder,
   composerPermitted,
   extractImagePathsFromDraft,
+  filterComposeSlashCommands,
   mapMsgResponseToStatus,
   readComposeCaret,
   removePathFromDraft,
@@ -145,6 +151,8 @@ export function TerminalComposeBar({
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [slashCommand, setSlashCommand] = useState<ComposeSlashCommand | null>(null)
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
+  const [slashMenuFromTypeahead, setSlashMenuFromTypeahead] = useState(false)
+  const [slashHighlight, setSlashHighlight] = useState(0)
   const [slashMenuPos, setSlashMenuPos] = useState<{ left: number; bottom: number } | null>(null)
   const historyDraftRef = useRef('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -163,6 +171,8 @@ export function TerminalComposeBar({
       historyDraftRef.current = ''
       setSlashCommand(null)
       setSlashMenuOpen(false)
+      setSlashMenuFromTypeahead(false)
+      setSlashHighlight(0)
       return
     }
     try {
@@ -174,6 +184,8 @@ export function TerminalComposeBar({
     historyDraftRef.current = ''
     setSlashCommand(null)
     setSlashMenuOpen(false)
+    setSlashMenuFromTypeahead(false)
+    setSlashHighlight(0)
   }, [draftKey, sessionId])
 
   // Persist on every change (localStorage writes are cheap + synchronous — this
@@ -422,6 +434,7 @@ export function TerminalComposeBar({
     setSending(true)
     setDraft('') // optimistic clear (PRD 1b); restored below only on failure
     setSlashMenuOpen(false)
+    setSlashMenuFromTypeahead(false)
 
     try {
       if (sendOnThread) {
@@ -466,12 +479,74 @@ export function TerminalComposeBar({
     }
   }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand])
 
+  const slashTypeaheadQuery = composeSlashTypeaheadQuery(draft)
+  const slashMatches =
+    slashMenuFromTypeahead && slashTypeaheadQuery != null
+      ? filterComposeSlashCommands(slashTypeaheadQuery)
+      : COMPOSE_SLASH_COMMANDS
+  const slashMatchKey = slashMatches.map((item) => item.command).join(',')
+
+  const placeSlashMenu = useCallback(() => {
+    const rect = slashBtnRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const width = 200
+    const left = Math.max(4, Math.min(rect.left, window.innerWidth - width - 4))
+    setSlashMenuPos({
+      left,
+      bottom: window.innerHeight - rect.top + 4,
+    })
+  }, [])
+
+  const closeSlashMenu = useCallback(() => {
+    setSlashMenuOpen(false)
+    setSlashMenuFromTypeahead(false)
+  }, [])
+
+  const selectSlashCommand = useCallback(
+    (cmd: ComposeSlashCommand, opts?: { toggle?: boolean }) => {
+      const nextCmd = opts?.toggle && slashCommand === cmd ? null : cmd
+      setSlashCommand(nextCmd)
+      if (nextCmd != null && composeSlashMenuOpenFromDraft(draft)) {
+        const nextDraft = consumeComposeSlashToken(draft)
+        setDraft(nextDraft)
+        requestAnimationFrame(() => {
+          const ta = textareaRef.current
+          if (!ta) return
+          ta.focus()
+          ta.setSelectionRange(nextDraft.length, nextDraft.length)
+          writeComposeCaret(sessionId, nextDraft.length, nextDraft.length, nextDraft.length)
+        })
+      }
+      closeSlashMenu()
+    },
+    [closeSlashMenu, draft, sessionId, slashCommand],
+  )
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (slashMenuOpen && e.key === 'Escape') {
+      // Menu path first: Enter selects (does not send); arrows move
+      // highlight (do not walk compose send-history). 0 matches / menu
+      // closed falls through to send then history.
+      const menuAction = composeSlashMenuKeyAction({
+        menuOpen: slashMenuOpen,
+        matchCount: slashMatches.length,
+        highlight: slashHighlight,
+        key: e.key,
+        shiftKey: e.shiftKey,
+        isComposing: e.nativeEvent.isComposing,
+      })
+      if (menuAction) {
         e.preventDefault()
         e.stopPropagation()
-        setSlashMenuOpen(false)
+        if (menuAction.kind === 'close') {
+          closeSlashMenu()
+        } else if (menuAction.kind === 'move') {
+          setSlashHighlight(menuAction.highlight)
+        } else {
+          const cmd =
+            slashMatches[slashHighlight]?.command ?? slashMatches[0]?.command
+          if (cmd) selectSlashCommand(cmd)
+        }
         return
       }
       const interrupt = composeInterruptSequence({
@@ -524,42 +599,47 @@ export function TerminalComposeBar({
         e.stopPropagation()
       }
     },
-    [send, draft, history, historyIndex, onInjectInput, slashMenuOpen]
+    [
+      closeSlashMenu,
+      draft,
+      history,
+      historyIndex,
+      onInjectInput,
+      selectSlashCommand,
+      send,
+      slashHighlight,
+      slashMatches,
+      slashMenuOpen,
+    ],
   )
 
   const toggleSlashMenu = useCallback(() => {
-    setSlashMenuOpen((open) => {
-      if (open) return false
-      const rect = slashBtnRef.current?.getBoundingClientRect()
-      if (rect) {
-        const width = 200
-        const left = Math.max(4, Math.min(rect.left, window.innerWidth - width - 4))
-        setSlashMenuPos({
-          left,
-          bottom: window.innerHeight - rect.top + 4,
-        })
-      }
-      return true
-    })
-  }, [])
+    if (slashMenuOpen) {
+      closeSlashMenu()
+      return
+    }
+    placeSlashMenu()
+    setSlashMenuFromTypeahead(false)
+    setSlashHighlight(0)
+    setSlashMenuOpen(true)
+  }, [closeSlashMenu, placeSlashMenu, slashMenuOpen])
 
-  const pickSlashCommand = useCallback((cmd: ComposeSlashCommand) => {
-    setSlashCommand((cur) => (cur === cmd ? null : cmd))
-    setSlashMenuOpen(false)
-  }, [])
+  useEffect(() => {
+    setSlashHighlight(0)
+  }, [slashMatchKey])
 
   useEffect(() => {
     if (!slashMenuOpen) return
     const onDown = (e: MouseEvent): void => {
       const t = e.target as Node
       if (slashBtnRef.current?.contains(t) || slashMenuRef.current?.contains(t)) return
-      setSlashMenuOpen(false)
+      closeSlashMenu()
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       e.preventDefault()
       e.stopPropagation()
-      setSlashMenuOpen(false)
+      closeSlashMenu()
     }
     document.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey, true)
@@ -567,7 +647,7 @@ export function TerminalComposeBar({
       document.removeEventListener('mousedown', onDown)
       window.removeEventListener('keydown', onKey, true)
     }
-  }, [slashMenuOpen])
+  }, [closeSlashMenu, slashMenuOpen])
 
   // 1c renderer-hide (after all hooks): not permitted → render nothing.
   if (!permitted) return null
@@ -672,6 +752,7 @@ export function TerminalComposeBar({
         </button>
       {slashMenuOpen &&
         slashMenuPos &&
+        slashMatches.length > 0 &&
         createPortal(
           <div
             ref={slashMenuRef}
@@ -687,22 +768,34 @@ export function TerminalComposeBar({
               minWidth: 180,
             }}
           >
-            {COMPOSE_SLASH_COMMANDS.map((item) => {
+            {slashMatches.map((item, index) => {
               const selected = slashCommand === item.command
+              const highlighted =
+                index === Math.min(slashHighlight, slashMatches.length - 1)
               return (
                 <button
                   key={item.command}
                   type="button"
                   role="menuitem"
                   aria-checked={selected}
-                  onClick={() => pickSlashCommand(item.command)}
-                  className="flex w-full items-baseline gap-2 px-2 py-1 text-left hover:bg-[var(--color-bg-hover)]"
+                  aria-selected={highlighted}
+                  onClick={() =>
+                    selectSlashCommand(item.command, { toggle: !slashMenuFromTypeahead })
+                  }
+                  className={`flex w-full items-baseline gap-2 px-2 py-1 text-left ${
+                    highlighted
+                      ? 'bg-[var(--color-bg-hover)]'
+                      : 'hover:bg-[var(--color-bg-hover)]'
+                  }`}
                   style={{ borderRadius: 0 }}
                 >
                   <span
                     className="font-mono text-[11px]"
                     style={{
-                      color: selected ? 'var(--color-accent)' : 'var(--color-text-primary)',
+                      color:
+                        selected || highlighted
+                          ? 'var(--color-accent)'
+                          : 'var(--color-text-primary)',
                     }}
                   >
                     {item.command}
@@ -718,16 +811,55 @@ export function TerminalComposeBar({
         ref={textareaRef}
         value={draft}
         onChange={(e) => {
-          setDraft(e.target.value)
+          const value = e.target.value
           writeComposeCaret(
             sessionId,
             e.target.selectionStart,
             e.target.selectionEnd,
-            e.target.value.length,
+            value.length,
           )
           if (historyIndex !== -1) {
             setHistoryIndex(-1)
             historyDraftRef.current = ''
+          }
+          const spaceCommit = composeSlashSpaceCommit(value)
+          if (spaceCommit) {
+            setSlashCommand(spaceCommit.command)
+            setDraft(spaceCommit.remainder)
+            closeSlashMenu()
+            requestAnimationFrame(() => {
+              const ta = textareaRef.current
+              if (!ta) return
+              ta.focus()
+              ta.setSelectionRange(
+                spaceCommit.remainder.length,
+                spaceCommit.remainder.length,
+              )
+              writeComposeCaret(
+                sessionId,
+                spaceCommit.remainder.length,
+                spaceCommit.remainder.length,
+                spaceCommit.remainder.length,
+              )
+            })
+            return
+          }
+          setDraft(value)
+          const query = composeSlashTypeaheadQuery(value)
+          if (query != null) {
+            const matches = filterComposeSlashCommands(query)
+            if (matches.length > 0) {
+              if (!slashMenuOpen || slashMenuFromTypeahead) {
+                placeSlashMenu()
+                setSlashMenuFromTypeahead(true)
+                if (!slashMenuOpen) setSlashHighlight(0)
+                setSlashMenuOpen(true)
+              }
+            } else if (slashMenuFromTypeahead) {
+              closeSlashMenu()
+            }
+          } else if (slashMenuFromTypeahead) {
+            closeSlashMenu()
           }
         }}
         onSelect={persistCaret}

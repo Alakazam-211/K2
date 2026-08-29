@@ -23,6 +23,13 @@ import {
   COMPOSE_SLASH_COMMANDS,
   normalizeComposeSlashCommand,
   composeCanSend,
+  composeSlashTypeaheadQuery,
+  filterComposeSlashCommands,
+  composeSlashMenuOpenFromDraft,
+  consumeComposeSlashToken,
+  composeSlashExactCommand,
+  composeSlashSpaceCommit,
+  composeSlashMenuKeyAction,
 } from './terminalCompose'
 
 // ── Enter = send, Shift+Enter = newline ──────────────────────────────
@@ -232,6 +239,216 @@ describe('COMPOSE_SLASH_COMMANDS / normalizeComposeSlashCommand', () => {
     expect(normalizeComposeSlashCommand('/loop')).toBeNull()
     expect(normalizeComposeSlashCommand('/compact now')).toBeNull()
     expect(normalizeComposeSlashCommand('garbage')).toBeNull()
+  })
+})
+
+describe('composeSlashTypeaheadQuery', () => {
+  it('opens only on a leading first-token slash', () => {
+    expect(composeSlashTypeaheadQuery('/')).toBe('/')
+    expect(composeSlashTypeaheadQuery('/comp')).toBe('/comp')
+    expect(composeSlashTypeaheadQuery('/compact')).toBe('/compact')
+    expect(composeSlashTypeaheadQuery('/c')).toBe('/c')
+  })
+
+  it('does not open mid-sentence, with a leading space, or after whitespace', () => {
+    expect(composeSlashTypeaheadQuery('hello')).toBeNull()
+    expect(composeSlashTypeaheadQuery(' /c')).toBeNull()
+    expect(composeSlashTypeaheadQuery('/c more')).toBeNull()
+    expect(composeSlashTypeaheadQuery('see /compact')).toBeNull()
+    expect(composeSlashTypeaheadQuery('/compact please')).toBeNull()
+    expect(composeSlashTypeaheadQuery('')).toBeNull()
+  })
+})
+
+describe('filterComposeSlashCommands', () => {
+  it('shows both commands for empty / lone slash', () => {
+    expect(filterComposeSlashCommands('/').map((c) => c.command)).toEqual([
+      '/compact',
+      '/goal',
+    ])
+    expect(filterComposeSlashCommands('').map((c) => c.command)).toEqual([
+      '/compact',
+      '/goal',
+    ])
+  })
+
+  it('filters by case-insensitive prefix, with or without repeating the slash', () => {
+    expect(filterComposeSlashCommands('/c').map((c) => c.command)).toEqual(['/compact'])
+    expect(filterComposeSlashCommands('/C').map((c) => c.command)).toEqual(['/compact'])
+    expect(filterComposeSlashCommands('/g').map((c) => c.command)).toEqual(['/goal'])
+    expect(filterComposeSlashCommands('comp').map((c) => c.command)).toEqual(['/compact'])
+    expect(filterComposeSlashCommands('/comp').map((c) => c.command)).toEqual(['/compact'])
+  })
+
+  it('unknown prefixes including /exit yield no matches', () => {
+    expect(filterComposeSlashCommands('/x')).toEqual([])
+    expect(filterComposeSlashCommands('/exit')).toEqual([])
+    expect(filterComposeSlashCommands('/e')).toEqual([])
+  })
+})
+
+describe('composeSlashMenuOpenFromDraft', () => {
+  it('is open for / and matching prefixes, closed for /x and non-queries', () => {
+    expect(composeSlashMenuOpenFromDraft('/')).toBe(true)
+    expect(composeSlashMenuOpenFromDraft('/c')).toBe(true)
+    expect(composeSlashMenuOpenFromDraft('/x')).toBe(false)
+    expect(composeSlashMenuOpenFromDraft('/exit')).toBe(false)
+    expect(composeSlashMenuOpenFromDraft('see /compact')).toBe(false)
+    expect(composeSlashTypeaheadQuery('/tmp/foo')).toBe('/tmp/foo')
+    expect(composeSlashMenuOpenFromDraft('/tmp/foo')).toBe(false)
+  })
+})
+
+describe('consumeComposeSlashToken', () => {
+  it('consumes the first /token and trims leftover leading space', () => {
+    expect(consumeComposeSlashToken('/c')).toBe('')
+    expect(consumeComposeSlashToken('/compact')).toBe('')
+    expect(consumeComposeSlashToken('/compact please')).toBe('please')
+    expect(consumeComposeSlashToken('/compact  please')).toBe('please')
+    expect(consumeComposeSlashToken('/goal hello')).toBe('hello')
+  })
+
+  it('leaves a non-slash draft untouched', () => {
+    expect(consumeComposeSlashToken('hello')).toBe('hello')
+    expect(consumeComposeSlashToken('')).toBe('')
+    expect(consumeComposeSlashToken('see /compact')).toBe('see /compact')
+  })
+})
+
+describe('composeSlashExactCommand / space-commit', () => {
+  it('returns the canonical command only for an exact unique token', () => {
+    expect(composeSlashExactCommand('/compact')).toBe('/compact')
+    expect(composeSlashExactCommand('/goal')).toBe('/goal')
+    expect(composeSlashExactCommand('/COMPACT')).toBe('/compact')
+    expect(composeSlashExactCommand('/compact please')).toBe('/compact')
+    expect(composeSlashExactCommand('/c')).toBeNull()
+    expect(composeSlashExactCommand('/')).toBeNull()
+    expect(composeSlashExactCommand('/exit')).toBeNull()
+  })
+
+  it('space-commits exact /compact or /goal and leaves the remainder', () => {
+    expect(composeSlashSpaceCommit('/compact ')).toEqual({
+      command: '/compact',
+      remainder: '',
+    })
+    expect(composeSlashSpaceCommit('/compact please')).toEqual({
+      command: '/compact',
+      remainder: 'please',
+    })
+    expect(composeSlashSpaceCommit('/goal hello')).toEqual({
+      command: '/goal',
+      remainder: 'hello',
+    })
+  })
+
+  it('does not space-commit a non-exact prefix; caller leaves /c in the draft', () => {
+    expect(composeSlashSpaceCommit('/c ')).toBeNull()
+    expect(composeSlashSpaceCommit('/exit ')).toBeNull()
+    expect(composeSlashSpaceCommit('/compact')).toBeNull()
+  })
+})
+
+describe('composeSlashMenuKeyAction', () => {
+  it('Enter with matches selects (does not send)', () => {
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: true,
+        matchCount: 2,
+        highlight: 0,
+        key: 'Enter',
+      }),
+    ).toEqual({ kind: 'select' })
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: true,
+        matchCount: 1,
+        highlight: 0,
+        key: 'Enter',
+        isComposing: true,
+      }),
+    ).toBeNull()
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: true,
+        matchCount: 1,
+        highlight: 0,
+        key: 'Enter',
+        shiftKey: true,
+      }),
+    ).toBeNull()
+  })
+
+  it('Enter with 0 matches or menu closed does not steal send', () => {
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: true,
+        matchCount: 0,
+        highlight: 0,
+        key: 'Enter',
+      }),
+    ).toBeNull()
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: false,
+        matchCount: 2,
+        highlight: 0,
+        key: 'Enter',
+      }),
+    ).toBeNull()
+  })
+
+  it('arrows move highlight with clamp and no wrap (not send-history)', () => {
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: true,
+        matchCount: 2,
+        highlight: 0,
+        key: 'ArrowDown',
+      }),
+    ).toEqual({ kind: 'move', highlight: 1 })
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: true,
+        matchCount: 2,
+        highlight: 1,
+        key: 'ArrowDown',
+      }),
+    ).toEqual({ kind: 'move', highlight: 1 })
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: true,
+        matchCount: 2,
+        highlight: 1,
+        key: 'ArrowUp',
+      }),
+    ).toEqual({ kind: 'move', highlight: 0 })
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: true,
+        matchCount: 2,
+        highlight: 0,
+        key: 'ArrowUp',
+      }),
+    ).toEqual({ kind: 'move', highlight: 0 })
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: false,
+        matchCount: 2,
+        highlight: 0,
+        key: 'ArrowUp',
+      }),
+    ).toBeNull()
+  })
+
+  it('Escape closes the menu', () => {
+    expect(
+      composeSlashMenuKeyAction({
+        menuOpen: true,
+        matchCount: 2,
+        highlight: 0,
+        key: 'Escape',
+      }),
+    ).toEqual({ kind: 'close' })
   })
 })
 

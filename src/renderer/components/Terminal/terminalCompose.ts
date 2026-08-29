@@ -186,7 +186,8 @@ export const COMPOSE_SLASH_COMMANDS = [
   { command: '/goal', title: 'set a goal' },
 ] as const
 
-export type ComposeSlashCommand = (typeof COMPOSE_SLASH_COMMANDS)[number]['command']
+export type ComposeSlashCommandItem = (typeof COMPOSE_SLASH_COMMANDS)[number]
+export type ComposeSlashCommand = ComposeSlashCommandItem['command']
 
 /**
  * Normalize a composer slash-command. Empty/whitespace → null. Optional
@@ -202,6 +203,111 @@ export function normalizeComposeSlashCommand(
   const withSlash = (trimmed.startsWith('/') ? trimmed : `/${trimmed}`).toLowerCase()
   for (const item of COMPOSE_SLASH_COMMANDS) {
     if (item.command === withSlash) return item.command
+  }
+  return null
+}
+
+/**
+ * First-token typeahead query. Menu opens only when the draft starts
+ * with `/` and the user is still typing that token (no whitespace):
+ * `^/[^\s]*$`. Mid-sentence `/tmp/foo` after other text, a leading
+ * space (` /c`), or `/c more` must not open the picker.
+ */
+export function composeSlashTypeaheadQuery(draft: string): string | null {
+  if (!/^\/[^\s]*$/.test(draft)) return null
+  return draft
+}
+
+/**
+ * Case-insensitive prefix filter on the command string. `'/'` and
+ * empty → both commands. `'/c'` / `'comp'` → `/compact`. Unknown
+ * prefixes (`'/x'`, `'/exit'`) → no matches.
+ */
+export function filterComposeSlashCommands(
+  query: string,
+): readonly ComposeSlashCommandItem[] {
+  const q = query.trim().toLowerCase()
+  if (!q || q === '/') return COMPOSE_SLASH_COMMANDS
+  const needle = q.startsWith('/') ? q : `/${q}`
+  return COMPOSE_SLASH_COMMANDS.filter((item) => item.command.startsWith(needle))
+}
+
+/** True when the draft is a typeahead query with at least one match. */
+export function composeSlashMenuOpenFromDraft(draft: string): boolean {
+  const query = composeSlashTypeaheadQuery(draft)
+  if (query == null) return false
+  return filterComposeSlashCommands(query).length > 0
+}
+
+/**
+ * Strip the leading first-token slash word and any following
+ * whitespace. Leaves a non-slash draft untouched.
+ */
+export function consumeComposeSlashToken(draft: string): string {
+  return draft.replace(/^\/[^\s]*/, '').replace(/^\s+/, '')
+}
+
+/**
+ * Exact unique command for the space-commit path. `/compact` / `/goal`
+ * (optional trailing rest is ignored) → canonical command. Prefixes
+ * (`/c`) and unknowns (`/exit`) → null.
+ */
+export function composeSlashExactCommand(query: string): ComposeSlashCommand | null {
+  const token = query.match(/^\/[^\s]*/)?.[0]
+  if (!token || token === '/') return null
+  return normalizeComposeSlashCommand(token)
+}
+
+/**
+ * Space after an exact unique command (/compact or /goal plus a
+ * trailing space and optional remainder). A non-exact prefix plus
+ * space (e.g. /c) does not commit.
+ */
+export function composeSlashSpaceCommit(draft: string): {
+  command: ComposeSlashCommand
+  remainder: string
+} | null {
+  if (!/^\/[^\s]+ /.test(draft)) return null
+  const command = composeSlashExactCommand(draft)
+  if (!command) return null
+  return { command, remainder: consumeComposeSlashToken(draft) }
+}
+
+export type ComposeSlashMenuKeyResult =
+  | { kind: 'close' }
+  | { kind: 'move'; highlight: number }
+  | { kind: 'select' }
+
+/**
+ * Menu-open key path. Must run before send (Enter) and before
+ * compose send-history (ArrowUp/ArrowDown). No wrap; 0 matches does
+ * not steal Enter.
+ */
+export function composeSlashMenuKeyAction(input: {
+  menuOpen: boolean
+  matchCount: number
+  highlight: number
+  key: string
+  shiftKey?: boolean
+  isComposing?: boolean
+}): ComposeSlashMenuKeyResult | null {
+  if (!input.menuOpen) return null
+  if (input.key === 'Escape') return { kind: 'close' }
+  if (input.matchCount < 1) return null
+  if (input.key === 'ArrowDown') {
+    return {
+      kind: 'move',
+      highlight: Math.min(input.highlight + 1, input.matchCount - 1),
+    }
+  }
+  if (input.key === 'ArrowUp') {
+    return {
+      kind: 'move',
+      highlight: Math.max(input.highlight - 1, 0),
+    }
+  }
+  if (input.key === 'Enter' && !input.shiftKey && !input.isComposing) {
+    return { kind: 'select' }
   }
   return null
 }

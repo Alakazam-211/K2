@@ -240,17 +240,13 @@ function SubmitKeysEditor({
       <div className="space-y-1">
         {steps.map((step, i) => (
           <div key={i} className="flex items-center gap-1.5">
-            <select
+            <SettingDropdown
               value={step.key}
-              onChange={(e) => setStep(i, { key: e.target.value as InjectFlowKey })}
-              className="px-1.5 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
-            >
-              {INJECT_KEY_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+              options={INJECT_KEY_OPTIONS}
+              onChange={(key) => setStep(i, { key: key as InjectFlowKey })}
+              menuAlign="left"
+              className="min-w-[10rem]"
+            />
             <input
               type="number"
               min={0}

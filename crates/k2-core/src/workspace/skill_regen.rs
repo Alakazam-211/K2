@@ -103,8 +103,10 @@ This workspace is managed by **K2**. You have the `k2` CLI — load the **k2-cli
 skill (`.k2/skills/k2-cli/SKILL.md`) for the full command reference \
 (`msg`, `inbox`, `activity`, `connections`, `heartbeat`, `thread` for the overlay \
 side channel with your human (`k2 thread <addr> \"...\"` / `ask` / `secret` — not \
-PTY inject), `feedback` to ask your human a durable question, `project` for your \
-project group's shared chat — reply to a `[project:<name>]`-prefixed message with \
+PTY inject; a message prefixed `[thread:<addr>]` is from the Thread tab — reply \
+with `k2 thread <addr> \"...\"`, do not answer in this terminal), `feedback` to \
+ask your human a durable question, `project` for your project group's shared \
+chat — reply to a `[project:<name>]`-prefixed message with \
 `k2 project msg <name> \"...\"`, never `k2 msg` — and `mail` for your agent email: \
 mint/read/wait, send under your human's governance).\n";
 
@@ -369,6 +371,8 @@ k2 thread secret <addr> --name NAME             # secret field; you never see th
 `sales` is whoever is pinned Chat *now*. `sales/reviewer` is durable.
 Post and continue. The human may tap later or just chat; the card marks or voids; you get a later turn.
 Do not `--wait`. Do not emit widget JSON.
+
+**If a message arrives prefixed `[thread:<addr>]`, the human wrote on the Thread tab.** Reply with `k2 thread <addr> "your reply"`. Do **not** answer in this terminal — they are not looking at the TUI. Never `k2 msg` for this (that is agent-to-agent). Use the `<addr>` in the stamp (`ghostbird`, `sales`, `sales/reviewer`).
 
 ## View activity
 ```
@@ -1791,6 +1795,16 @@ mod tests {
                 && body.contains("k2 thread secret <addr> --name NAME")
                 && body.contains("do not wait"),
             "k2-cli skill must document k2 thread write/read/ask/secret; body missing overlay lines"
+        );
+        assert!(
+            body.contains("[thread:<addr>]")
+                && body.contains("Do **not** answer in this terminal"),
+            "k2-cli skill must teach the `[thread:<addr>]` reply rule (not TUI)"
+        );
+        assert!(
+            AGENTS_MD_TOOLING_SECTION.contains("[thread:<addr>]")
+                && AGENTS_MD_TOOLING_SECTION.contains("k2 thread <addr>"),
+            "always-on AGENTS.md Tooling must teach [thread:] → k2 thread (new agents may not load k2-cli)"
         );
         assert!(
             !body.contains("`thrd`") && !body.contains("k2 thrd"),

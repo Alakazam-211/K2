@@ -111,7 +111,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 20: overlay `k2 thread ask` / `k2 thread secret` (do not wait).
 /// Bumped to 21: loadable k2-cli skill gains Database (`k2 db` / `k2 store`).
 /// Bumped to 22: restore + publish-subdomain off-box hint (D30).
-pub const SKILL_VERSION_WORKSPACE: u32 = 22;
+/// Bumped to 23: `[thread:<addr>]` reply rule — answer with `k2 thread`,
+/// not the TUI (same shape as `[project:<name>]` → `k2 project msg`).
+pub const SKILL_VERSION_WORKSPACE: u32 = 23;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

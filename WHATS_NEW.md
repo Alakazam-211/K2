@@ -3,9 +3,15 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.120 — Workspace Postgres sidecar; hostmail enable needs a hostname
+## 0.40.120 — Chatter tab, database sidecar, compose slash, Settings regroup
 
-Linux boxes can grow a **database sidecar** the way they grew mail: `k2 db enable` supervises distro Postgres (loopback only — not a static-IP feature). Agents mint a per-workspace DB with `k2 db create`, apply `.k2/db/migrations`, dump/restore inside the workspace, and store JSON documents with `k2 store`. Settings → **Data** is the owner surface.
+Agent sessions are now **Terminal | Thread | Chatter | split**. Chatter is the agent-to-agent mailbox (`k2 msg` / `k2 talk`) with the same bubbles as Thread and **no** compose box. Thread is still the human overlay.
+
+**Message the agent:** `/` typeahead for `/compact` and `/goal`; **+** uses the native file picker. Esc and Ctrl+C from the box cancel the current turn (PTY bytes); empty Return confirms a TUI prompt. Typed Return still sends. Settings → LLMs **Submit keys** is per-model (which keys finish a live inject).
+
+Settings sidebar is grouped: **K2 Server** (Tunnel, Server Access, Connected Servers, API Keys, Companion), Editors / Fonts, Logs, Sidecars (**Database**). Companion has App Store and Play QR codes. Connected Servers: add at the top, then search. Server Access: search the user list; pick a starting role when adding a user.
+
+Linux boxes can grow a **database sidecar** the way they grew mail: `k2 db enable` supervises distro Postgres (loopback only — not a static-IP feature). Agents mint a per-workspace DB with `k2 db create`, apply `.k2/db/migrations`, dump/restore inside the workspace, and store JSON documents with `k2 store`. Settings → **Database** is the owner surface.
 
 Off-box `*.k2.dev` is the existing publish door: `k2 publish subdomain create <label> --target localhost:<port>` (the port is already listening — do not `k2 publish run` Postgres). `k2 db status --json` reports `port` and that hint. There is no `k2 db expose`.
 

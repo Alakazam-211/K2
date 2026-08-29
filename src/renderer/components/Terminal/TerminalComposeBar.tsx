@@ -824,6 +824,7 @@ export function TerminalComposeBar({
           </div>,
           document.body,
         )}
+      <div className="min-w-0 w-full flex-1 self-end">
       <textarea
         ref={textareaRef}
         value={draft}
@@ -892,11 +893,11 @@ export function TerminalComposeBar({
         spellCheck={false}
         placeholder={messagePlaceholder}
         title="Enter to send, Shift+Enter for newline. Drop files for paths."
-        className="min-w-0 w-full flex-1 resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+        className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         style={{
-          flex: '1 1 0%',
-          minWidth: 0,
+          display: 'block',
           width: '100%',
+          minWidth: 0,
           fontFamily:
             "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
           fontSize: editorFontSize,
@@ -912,6 +913,7 @@ export function TerminalComposeBar({
           wordBreak: 'break-word',
         }}
       />
+      </div>
       <button
         type="button"
         aria-label="Send message"

@@ -1672,6 +1672,7 @@ pub fn run() {
             // window). All DB-backed project CRUD moved off the Tauri
             // surface; the renderer reaches it host-aware via `/cli/*`.
             commands::projects::projects_pick_folder,
+            commands::projects::pick_local_files,
             commands::projects::projects_open_in_finder,
             commands::projects::projects_upload_icon,
             commands::projects::projects_open_in_editor,

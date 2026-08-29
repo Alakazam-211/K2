@@ -54,6 +54,23 @@ pub async fn projects_pick_folder(app: tauri::AppHandle) -> Result<Option<String
         .map_or(Ok(None), |p| Ok(Some(p)))
 }
 
+/// HOST: native multi-file picker. WKWebView `<input type=file>` has no
+/// `File.path` and ignores `.click()` on `display:none` — compose attach
+/// uses this so the draft gets real filesystem paths.
+#[tauri::command]
+pub async fn pick_local_files(app: tauri::AppHandle) -> Result<Option<Vec<String>>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("Attach a file or image")
+        .pick_files(move |paths| {
+            let mapped = paths.map(|ps| ps.into_iter().map(|p| p.to_string()).collect::<Vec<_>>());
+            let _ = tx.send(mapped);
+        });
+    rx.recv().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn projects_open_in_finder(path: String) -> Result<(), String> {
     daemon()?

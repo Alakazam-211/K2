@@ -27,7 +27,13 @@ import {
   filesFromDataTransfer,
 } from '@/lib/external-drop-router'
 import { executeBrowserFileDrop, executeRemoteDrop } from '@/lib/handle-remote-drop'
+import {
+  composeAttachPlan,
+  pickLocalComposeFiles,
+  pickRemoteComposeFile,
+} from '@/lib/pick-compose-files'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { useToastStore } from '@/stores/toast'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
@@ -61,7 +67,6 @@ import {
 } from './terminalCompose'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
-import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 
 interface TerminalComposeBarProps {
   /** Resolved PTY SessionId for this pane — the pane's `terminalId`. */
@@ -380,16 +385,27 @@ export function TerminalComposeBar({
   )
 
   const handleAttachClick = useCallback(() => {
-    if (useConnectHostStore.getState().activeHost === 'local') {
+    const plan = composeAttachPlan()
+    if (plan.kind === 'native') {
+      void pickLocalComposeFiles()
+        .then((paths) => {
+          if (paths && paths.length > 0) insertPathsText(buildComposeDropPayload(paths))
+        })
+        .catch((err) => {
+          useToastStore.getState().addToast(
+            `Couldn't attach: ${err instanceof Error ? err.message : String(err)}`,
+            'error',
+          )
+        })
+      return
+    }
+    if (plan.kind === 'web-input') {
       fileInputRef.current?.click()
       return
     }
-    void useRemoteFolderPickerStore
-      .getState()
-      .open({ mode: 'file', title: 'Attach a file on the host' })
-      .then((path) => {
-        if (path) insertPathsText(buildComposeDropPayload([path]))
-      })
+    void pickRemoteComposeFile().then((path) => {
+      if (path) insertPathsText(buildComposeDropPayload([path]))
+    })
   }, [insertPathsText])
 
   const handleLocalFiles = useCallback(
@@ -681,7 +697,7 @@ export function TerminalComposeBar({
         ref={fileInputRef}
         type="file"
         multiple
-        className="hidden"
+        className="sr-only"
         aria-hidden="true"
         tabIndex={-1}
         onChange={handleLocalFiles}

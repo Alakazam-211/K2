@@ -122,7 +122,7 @@ export function SettingDropdown({
       </button>
 
       {isOpen && (
-        <div className={`absolute top-full ${menuAlign === 'left' ? 'left-0' : 'right-0'} z-50 mt-0.5 min-w-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto`}>
+        <div className={`absolute top-full ${menuAlign === 'left' ? 'left-0' : 'right-0'} z-50 mt-0.5 w-max min-w-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-xl max-h-60 overflow-y-auto`}>
           {options.map((option) => {
             const isActive = option.value === value
             const isDisabled = option.disabled === true
@@ -144,7 +144,7 @@ export function SettingDropdown({
                       : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] cursor-pointer'
                 }`}
               >
-                <span className="truncate flex-1">{option.label}</span>
+                <span className="whitespace-nowrap flex-1">{option.label}</span>
                 {isActive && (
                   <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />

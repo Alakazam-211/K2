@@ -240,6 +240,12 @@ function SubmitKeysEditor({
       <div className="space-y-1">
         {steps.map((step, i) => (
           <div key={i} className="flex items-center gap-1.5">
+            <span
+              className="w-4 shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono text-right tabular-nums"
+              aria-hidden="true"
+            >
+              {i + 1}
+            </span>
             <SettingDropdown
               value={step.key}
               options={INJECT_KEY_OPTIONS}

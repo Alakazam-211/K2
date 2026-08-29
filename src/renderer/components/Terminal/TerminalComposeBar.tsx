@@ -531,11 +531,12 @@ export function TerminalComposeBar({
           ta.focus()
           ta.setSelectionRange(nextDraft.length, nextDraft.length)
           writeComposeCaret(sessionId, nextDraft.length, nextDraft.length, nextDraft.length)
+          autoGrow()
         })
       }
       closeSlashMenu()
     },
-    [closeSlashMenu, draft, sessionId, slashCommand],
+    [autoGrow, closeSlashMenu, draft, sessionId, slashCommand],
   )
 
   const handleKeyDown = useCallback(
@@ -857,6 +858,7 @@ export function TerminalComposeBar({
                 spaceCommit.remainder.length,
                 spaceCommit.remainder.length,
               )
+              autoGrow()
             })
             return
           }
@@ -892,6 +894,9 @@ export function TerminalComposeBar({
         title="Enter to send, Shift+Enter for newline. Drop files for paths."
         className="min-w-0 w-full flex-1 resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         style={{
+          flex: '1 1 0%',
+          minWidth: 0,
+          width: '100%',
           fontFamily:
             "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
           fontSize: editorFontSize,

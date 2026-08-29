@@ -206,12 +206,12 @@ function StoreQrCard({
     >
       <div
         className="bg-white p-1.5 border border-[var(--color-border)] [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
-        style={{ width: 136, height: 136 }}
+        style={{ width: 163, height: 163 }}
         role="img"
         aria-label={`${label} QR code`}
         dangerouslySetInnerHTML={{ __html: svg }}
       />
-      <img src={badgeSrc} alt={label} className="block w-[136px] h-auto" />
+      <img src={badgeSrc} alt={label} className="block w-[163px] h-auto" />
     </a>
   )
 }

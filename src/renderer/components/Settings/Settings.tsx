@@ -44,41 +44,77 @@ import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { webFeatures } from '@/web/features'
+import { isAirgap } from '@/lib/airgap'
 
-// ── Section nav items ────────────────────────────────────────────────
-// Agentic systems are always on. Canonical Agent Flow lives under
-// General → Workspaces (not a top-level nav item).
-const SECTIONS: { id: SettingsSection; label: string }[] = [
-  { id: 'general', label: 'General' },
-  { id: 'styles', label: 'Styles' },
-  { id: 'agents', label: 'LLMs' },
-  { id: 'projects', label: 'Workspaces / Agents' },
-  { id: 'project-groups', label: 'Projects' },
-  { id: 'context-catalog', label: 'Context Catalog' },
-  { id: 'k2-connect', label: 'K2 Connect' },
-  { id: 'api-tokens', label: 'K2 API Tokens' },
-  { id: 'companion', label: 'K2 Companion' },
-  { id: 'email-hosting', label: 'Email Hosting' },
-  { id: 'email-link', label: 'Email Link' },
-  { id: 'data', label: 'Database' },
-  { id: 'terminal', label: 'Terminal' },
-  { id: 'code-editor', label: 'Code Editor' },
-  { id: 'editors', label: 'Editors' },
-  { id: 'wake-scheduler', label: 'Heartbeats' },
-  { id: 'keybindings', label: 'Keybindings' },
-  { id: 'timer', label: 'Timer' },
-  // Hosted web: macOS FDA / Accessibility etc. do not apply — omit nav entry.
-  ...(webFeatures.permissions
-    ? ([{ id: 'permissions' as const, label: 'Permissions' }] as const)
-    : []),
-  // 0.37.9 — DEV-only Dictation Lab. Filtered out at render time
-  // when `import.meta.env.DEV` is false so production users never
-  // see it. Lets us isolate which input config makes Apple
-  // Dictation engage cleanly vs. hang.
-  ...(import.meta.env.DEV
-    ? ([{ id: 'dictation-lab', label: 'Dictation Lab (dev)' }] as const)
-    : []),
-]
+// ── Section nav ──────────────────────────────────────────────────────
+// Top-level items, then titled groups with indented children.
+type NavLeaf = {
+  id?: SettingsSection
+  label: string
+  soon?: boolean
+  hide?: boolean
+}
+type NavBlock =
+  | { kind: 'item'; id: SettingsSection; label: string }
+  | { kind: 'group'; title: string; items: NavLeaf[] }
+
+function settingsNav(): NavBlock[] {
+  const hideTunnel = isAirgap()
+  const blocks: NavBlock[] = [
+    { kind: 'item', id: 'general', label: 'General' },
+    { kind: 'item', id: 'styles', label: 'Styles' },
+    { kind: 'item', id: 'agents', label: 'LLMs' },
+    { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
+    { kind: 'item', id: 'project-groups', label: 'Projects' },
+    { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
+    { kind: 'item', id: 'email-link', label: 'Email Link' },
+    { kind: 'item', id: 'keybindings', label: 'Key Bindings' },
+    ...(webFeatures.permissions
+      ? ([{ kind: 'item', id: 'permissions' as const, label: 'Accessibility' }] satisfies NavBlock[])
+      : []),
+    {
+      kind: 'group',
+      title: 'K2 Server',
+      items: [
+        { id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },
+        { id: 'k2-access', label: 'Server Access' },
+        { id: 'connections', label: 'Connected Servers' },
+        { id: 'api-tokens', label: 'API Keys' },
+        { id: 'companion', label: 'K2 Companion' },
+      ],
+    },
+    {
+      kind: 'group',
+      title: 'Editors / Fonts',
+      items: [
+        { id: 'terminal', label: 'Terminal' },
+        { id: 'code-editor', label: 'Code' },
+        { id: 'editors', label: 'Defaults' },
+      ],
+    },
+    {
+      kind: 'group',
+      title: 'Logs',
+      items: [
+        { id: 'wake-scheduler', label: 'Heartbeats' },
+        { id: 'timer', label: 'Timer' },
+      ],
+    },
+    {
+      kind: 'group',
+      title: 'Sidecars',
+      items: [
+        { id: 'email-hosting', label: 'Email Hosting' },
+        { id: 'data', label: 'Database' },
+        { label: 'Skin Access', soon: true },
+      ],
+    },
+  ]
+  if (import.meta.env.DEV) {
+    blocks.push({ kind: 'item', id: 'dictation-lab', label: 'Dictation Lab (dev)' })
+  }
+  return blocks
+}
 
 // ── Main Settings component ──────────────────────────────────────────
 // This component is a router only — each section lives in its own file
@@ -127,9 +163,13 @@ export default function Settings(): React.JSX.Element {
 
   // Hosted web: if a prior session left activeSection on amputated
   // Permissions, bounce to General so the content pane isn't blank.
+  // Air-gap: Tunnel (k2-connect) hits Supabase — land on Connected Servers.
   useEffect(() => {
     if (!webFeatures.permissions && activeSection === 'permissions') {
       setSection('general')
+    }
+    if (isAirgap() && activeSection === 'k2-connect') {
+      setSection('connections')
     }
   }, [activeSection, setSection])
 
@@ -234,19 +274,54 @@ export default function Settings(): React.JSX.Element {
           </button>
         </div>
         <nav className="flex-1 py-1 overflow-y-auto">
-          {SECTIONS.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setSection(s.id)}
-              className={`w-full text-left px-4 py-1.5 text-xs no-drag cursor-pointer transition-colors ${
-                activeSection === s.id
-                  ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
+          {settingsNav().map((block) => {
+            if (block.kind === 'item') {
+              return (
+                <SettingsNavButton
+                  key={block.id}
+                  id={block.id}
+                  label={block.label}
+                  active={activeSection === block.id}
+                  onClick={() => setSection(block.id)}
+                />
+              )
+            }
+            const items = block.items.filter((it) => !it.hide)
+            if (items.length === 0) return null
+            return (
+              <div key={block.title} className="mt-2 first:mt-0">
+                <div className="px-4 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                  {block.title}
+                </div>
+                {items.map((it) => {
+                  if (it.soon || !it.id) {
+                    return (
+                      <div
+                        key={it.label}
+                        className="w-full text-left pl-7 pr-4 py-1.5 text-xs text-[var(--color-text-muted)] flex items-center gap-2"
+                      >
+                        <span>{it.label}</span>
+                        <span className="text-[8px] uppercase tracking-wider font-semibold px-1 py-0.5 border border-[var(--color-border)]">
+                          soon
+                        </span>
+                      </div>
+                    )
+                  }
+                  const id = it.id
+                  return (
+                    <SettingsNavButton
+                      key={id}
+                      id={id}
+                      label={it.label}
+                      nested
+                      active={activeSection === id}
+                      onClick={() => setSection(id)}
+                    />
+                  )
+                })}
+              </div>
+            )
+          })}
         </nav>
         <div className="px-4 py-3 border-t border-[var(--color-border)] flex-shrink-0">
           <button
@@ -268,6 +343,7 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'project-groups' ||
           activeSection === 'context-catalog' ||
           activeSection === 'k2-connect' ||
+          activeSection === 'k2-access' ||
           activeSection === 'connections' ||
           activeSection === 'agents' ||
           activeSection === 'email-hosting' ||
@@ -323,7 +399,9 @@ export default function Settings(): React.JSX.Element {
             <CompanionSection />
           </SectionErrorBoundary>
         )}
-        {(activeSection === 'k2-connect' || activeSection === 'connections') && (
+        {(activeSection === 'k2-connect' ||
+          activeSection === 'k2-access' ||
+          activeSection === 'connections') && (
           <SectionErrorBoundary>
             {/* Host | Servers primary tabs (full width). Deep-link
                 `connections` opens Servers; `k2-connect` opens Host. */}
@@ -394,6 +472,35 @@ export default function Settings(): React.JSX.Element {
         />
       )}
     </div>
+  )
+}
+
+function SettingsNavButton({
+  id,
+  label,
+  active,
+  nested,
+  onClick,
+}: {
+  id: SettingsSection
+  label: string
+  active: boolean
+  nested?: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-settings-nav={id}
+      onClick={onClick}
+      className={`w-full text-left ${nested ? 'pl-7 pr-4' : 'px-4'} py-1.5 text-xs no-drag cursor-pointer transition-colors ${
+        active
+          ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
+          : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'
+      }`}
+    >
+      {label}
+    </button>
   )
 }
 

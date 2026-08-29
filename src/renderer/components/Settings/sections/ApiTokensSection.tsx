@@ -18,7 +18,7 @@ export const API_TOKENS_MANIFEST: SettingEntry[] = [
   {
     id: 'api-tokens.inventory',
     section: 'api-tokens',
-    label: 'K2 API Tokens',
+    label: 'API Keys',
     description: 'Mint, disable, and revoke top-level k2sk_ keys for the public /v1 API',
     keywords: [
       'api',
@@ -97,7 +97,7 @@ export function ApiTokensSection(): React.JSX.Element {
   return (
     <div className="max-w-4xl space-y-6">
       <div>
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">K2 API Tokens</h2>
+        <h2 className="text-base font-medium text-[var(--color-text-primary)]">API Keys</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1 max-w-2xl">
           Top-level <code className="text-[10px]">k2sk_…</code> keys for the public{' '}
           <code className="text-[10px]">/v1</code> API (host-sessions, sandboxes, …). The raw secret
@@ -428,7 +428,7 @@ export function WorkspaceApiKeysPanel({
       if (action === 'revoke') {
         if (
           !window.confirm(
-            'Permanently revoke this API key? It cannot be re-enabled — mint a new secret under K2 API Tokens.',
+            'Permanently revoke this API key? It cannot be re-enabled — mint a new secret under Settings → API Keys.',
           )
         ) {
           return
@@ -468,7 +468,7 @@ export function WorkspaceApiKeysPanel({
         <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
       ) : keys.length === 0 ? (
         <p className="text-[11px] text-[var(--color-text-muted)]">
-          No API keys grant this workspace. Mint one under Settings → K2 API Tokens (or{' '}
+          No API keys grant this workspace. Mint one under Settings → API Keys (or{' '}
           <code className="text-[10px]">k2 api-key create --workspaces &apos;{workspaceSlug}&apos;</code>
           ).
         </p>

@@ -174,7 +174,7 @@ export function PermissionsSection(): React.JSX.Element {
     <div className="max-w-2xl">
       <div className="mb-4">
         <h3 className="text-xs font-medium text-[var(--color-text-primary)]">
-          Permissions
+          Accessibility
         </h3>
         <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
           OS-level access K2 needs to function. Grants are managed by

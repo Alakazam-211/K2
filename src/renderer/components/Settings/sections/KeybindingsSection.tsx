@@ -76,7 +76,7 @@ export function KeybindingsSection(): React.JSX.Element {
   return (
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Keybindings</h2>
+        <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Key Bindings</h2>
         <button
           onClick={resetAllKeybindings}
           className="px-3 py-1 text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"

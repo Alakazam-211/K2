@@ -18,7 +18,7 @@ import {
   clearStuckBodyUserSelect,
 } from './SelectableText'
 
-const REMARK_GFM = [remarkGfm] as const
+const REMARK_GFM = [remarkGfm]
 
 function onBodyPointerDown(e: PointerEvent | MouseEvent): void {
   if ('button' in e && e.button !== 0) return

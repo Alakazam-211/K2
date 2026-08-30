@@ -6,7 +6,12 @@ import { OVERLAY_PAGE_SIZE } from './overlayThread'
 const daemonCliGet = vi.hoisted(() => vi.fn())
 const daemonCliPost = vi.hoisted(() => vi.fn())
 const getDaemonWs = vi.hoisted(() =>
-  vi.fn(async () => {
+  vi.fn(async (): Promise<{
+    host: string
+    port: number
+    token: string
+    secure: boolean
+  }> => {
     throw new Error('ws unused when conversation_id is empty')
   }),
 )

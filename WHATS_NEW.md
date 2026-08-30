@@ -3,6 +3,16 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.123 — Skin SPA door, migrate that sticks, Hydra toggle
+
+**Skin Direct** can serve an on-box UI: if you set a UI port, Caddy proxies `/`, `/assets`, `/_next`, and `/app` to that loopback app (not the whole daemon). Grid, login, and `/v1` stay 403. Mail Enable re-applies Caddy so the mail hostname shows up without a second front-door click. Direct custom domains still need **:80** (or dns-01) for certificates.
+
+**Database.** `k2 db migrate` applies `0001_name.sql` files and says so; empty or `init.sql` is a loud error, not “already applied.” A second run with unchanged files skips. A rewritten already-applied file is refused. The workspace agent role can SELECT `_k2_store` and the migration ledger (repair GRANT on put/migrate).
+
+**OIDC.** Settings → Skin Access **Hydra** toggle starts a Linux sidecar if `hydra` is on PATH (loopback 4444/4445). Enabling skins does not start it. Mac shows the Linux banner. Login/consent UI and public OIDC on :443 are next.
+
+---
+
 ## 0.40.122 — Database passport, Skin Direct + mail on one :443
 
 **Database.** The workspace flag **Agents can create databases** (Settings → Data) only gates `k2 db create`. If a workspace already owns a DB — or has a grant — its agent can list, fetch a DSN, migrate, dump/restore, and use `k2 store` without flipping that flag. Cross-workspace **read** grants stay read (write still 403). Email Hosting Enable now pulls the Stalwart tarball from Alakazam Labs' pin (same 0.16.10).

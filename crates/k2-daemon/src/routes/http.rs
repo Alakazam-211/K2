@@ -132,7 +132,7 @@ pub(crate) const HINT_WEB_CLIENT_DISABLED: &str =
     "Hosted web access is OFF on this device. Ask the owner to enable Settings → webClientEnabled (or: k2 settings update '{\"webClientEnabled\":true}').";
 
 /// First `Host:` header value (trim; may include port).
-fn extract_host(headers_blob: &str) -> Option<&str> {
+pub(crate) fn extract_host(headers_blob: &str) -> Option<&str> {
     for line in headers_blob.lines() {
         let Some(colon) = line.find(':') else { continue };
         let (name, rest) = line.split_at(colon);
@@ -151,16 +151,36 @@ fn has_session_cookie(headers_blob: &str) -> bool {
     extract_session_cookie(headers_blob).is_some()
 }
 
+/// Hostname without a trailing `:port` (IPv4 / DNS). Skin Host matching
+/// does not need IPv6 — `skin.*` is always a DNS label.
+fn host_no_port(host: &str) -> &str {
+    if let Some(stripped) = host.strip_prefix('[') {
+        return stripped.split(']').next().unwrap_or(host);
+    }
+    host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host)
+}
+
 /// True when Host is (or is under) the hosted web path — contains
 /// `.app.k2.dev` (case-insensitive; port stripped for match).
 pub(crate) fn host_is_web_app(headers_blob: &str) -> bool {
     let Some(host) = extract_host(headers_blob) else {
         return false;
     };
-    let host_no_port = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
-    host_no_port
+    host_no_port(host)
         .to_ascii_lowercase()
         .contains(WEB_APP_HOST_MARKER)
+}
+
+/// Nested Skin door (`skin.<sub>.k2.dev`) forwarded by Caddy. Dual filter
+/// with the Caddy path-allow list: even a Connect token on this Host must
+/// not get grid / PTY / login / `/v1`.
+pub(crate) fn host_is_skin_front_door(headers_blob: &str) -> bool {
+    let Some(host) = extract_host(headers_blob) else {
+        return false;
+    };
+    host_no_port(host)
+        .to_ascii_lowercase()
+        .starts_with("skin.")
 }
 
 /// True when this request should be treated as the hosted web client for
@@ -2110,5 +2130,24 @@ mod tests {
         let owner = "owner-token-xyz";
         assert_eq!(api_principal(&format!("token={owner}"), None), None);
         assert_eq!(api_principal("", Some(owner)), None);
+    }
+
+    #[test]
+    fn host_is_skin_front_door_matches_skin_dot_prefix() {
+        assert!(host_is_skin_front_door(
+            "GET /cli/thread HTTP/1.1\r\nHost: skin.rosson.k2.dev\r\n\r\n"
+        ));
+        assert!(host_is_skin_front_door(
+            "GET /cli/thread HTTP/1.1\r\nHost: Skin.RossOn.k2.dev:443\r\n\r\n"
+        ));
+        assert!(!host_is_skin_front_door(
+            "GET /cli/thread HTTP/1.1\r\nHost: rosson.k2.dev\r\n\r\n"
+        ));
+        assert!(!host_is_skin_front_door(
+            "GET /cli/thread HTTP/1.1\r\nHost: notskin.rosson.k2.dev\r\n\r\n"
+        ));
+        assert!(!host_is_skin_front_door(
+            "GET /cli/thread HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        ));
     }
 }

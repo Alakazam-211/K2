@@ -1,7 +1,7 @@
 // Settings → Sidecars → Skin Access (prd-skin-system-v1 U3, prd-skin-auth-v1 S8/S11/S12).
-// Owner surface: front-door stub, skin-user roster (NOT Server Access),
+// Owner surface: front-door (Caddy path-filter), skin-user roster (NOT Server Access),
 // k2skn_ keys with scopes (secret once at mint), Hydra toggle visible off.
-// Does not start Caddy or Hydra.
+// Applying a mode writes ~/.k2/skin/Caddyfile and supervises Caddy. Hydra stays off.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -351,8 +351,8 @@ export function SkinAccessSection(): React.JSX.Element {
         <SettingsGroup title="Front door">
           <div data-settings-id="skin-access.front-door" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              How packets arrive. Same pass / rooms either way. Stub URLs only — this does not
-              start Caddy.
+              How packets arrive. Same pass / rooms either way. Saves and applies the Caddy
+              path-filter (Thread only — never grid / PTY).
             </p>
             <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
               <input

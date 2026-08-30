@@ -233,6 +233,8 @@ pub struct SkinFrontDoor {
     pub mode: String,
     pub url: Option<String>,
     pub hint: Option<String>,
+    /// Optional same-origin UI reverse-proxy target for Caddy `handle /`.
+    pub ui_port: Option<u16>,
 }
 
 impl SkinFrontDoor {
@@ -244,6 +246,7 @@ impl SkinFrontDoor {
                 "Nested hostname on the existing tunnel. Operator URL stays the kingdom door."
                     .to_string(),
             ),
+            ui_port: None,
         }
     }
 }
@@ -313,6 +316,7 @@ fn open_db(path: &Path) -> Result<Connection, String> {
          );",
     )
     .map_err(|e| format!("skin.db schema: {e}"))?;
+    let _ = conn.execute("ALTER TABLE front_door ADD COLUMN ui_port INTEGER", []);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -572,13 +576,15 @@ pub fn get_front_door() -> Result<SkinFrontDoor, String> {
     with_conn(|conn| {
         let stored = conn
             .query_row(
-                "SELECT mode, url, hint FROM front_door WHERE id = 1",
+                "SELECT mode, url, hint, ui_port FROM front_door WHERE id = 1",
                 [],
                 |r| {
+                    let ui: Option<i64> = r.get(3)?;
                     Ok(SkinFrontDoor {
                         mode: r.get(0)?,
                         url: r.get(1)?,
                         hint: r.get(2)?,
+                        ui_port: ui.and_then(|n| u16::try_from(n).ok()),
                     })
                 },
             )
@@ -588,10 +594,24 @@ pub fn get_front_door() -> Result<SkinFrontDoor, String> {
     })
 }
 
+/// True when a front-door row has been persisted (boot apply uses this).
+pub fn front_door_is_stored() -> bool {
+    with_conn(|conn| {
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM front_door WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap_or(0);
+        Ok(n > 0)
+    })
+    .unwrap_or(false)
+}
+
 pub fn set_front_door(
     mode: &str,
     url: Option<&str>,
     hint: Option<&str>,
+    ui_port: Option<u16>,
 ) -> Result<SkinFrontDoor, String> {
     let mode = parse_front_door_mode(mode)?;
     let url_stored = url.map(str::trim).filter(|s| !s.is_empty());
@@ -600,22 +620,25 @@ pub fn set_front_door(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| default_hint_for_mode(mode).to_string());
+    let ui_stored: Option<i64> = ui_port.map(|p| p as i64);
     with_conn(|conn| {
         conn.execute(
-            "INSERT INTO front_door (id, mode, url, hint, updated_at)
-             VALUES (1, ?1, ?2, ?3, ?4)
+            "INSERT INTO front_door (id, mode, url, hint, ui_port, updated_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
                mode = excluded.mode,
                url = excluded.url,
                hint = excluded.hint,
+               ui_port = excluded.ui_port,
                updated_at = excluded.updated_at",
-            params![mode, url_stored, hint_stored, now_secs()],
+            params![mode, url_stored, hint_stored, ui_stored, now_secs()],
         )
         .map_err(|e| format!("skin front-door persist: {e}"))?;
         Ok(SkinFrontDoor {
             mode: mode.to_string(),
             url: url_stored.map(|s| s.to_string()),
             hint: Some(hint_stored),
+            ui_port,
         })
     })
 }
@@ -775,13 +798,21 @@ mod tests {
         with_temp_home(|| {
             let d = effective_front_door().expect("default");
             assert_eq!(d.mode, "connect");
-            let saved =
-                set_front_door("direct", Some("https://skin.app.com"), Some("LAN")).expect("save");
+            let saved = set_front_door(
+                "direct",
+                Some("https://skin.app.com"),
+                Some("LAN"),
+                Some(5173),
+            )
+            .expect("save");
             assert_eq!(saved.mode, "direct");
             assert_eq!(saved.url.as_deref(), Some("https://skin.app.com"));
+            assert_eq!(saved.ui_port, Some(5173));
             let loaded = get_front_door().expect("load");
             assert_eq!(loaded.mode, "direct");
             assert_eq!(loaded.url.as_deref(), Some("https://skin.app.com"));
+            assert_eq!(loaded.ui_port, Some(5173));
+            assert!(front_door_is_stored());
             assert_eq!(parse_front_door_mode("CONNECT").unwrap(), "connect");
             assert!(parse_front_door_mode("lan").is_err());
         });

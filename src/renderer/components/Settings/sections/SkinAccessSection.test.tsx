@@ -122,7 +122,7 @@ describe('SkinAccessSection', () => {
     expect(screen.getAllByText('thread:read').length).toBeGreaterThan(0)
   })
 
-  it('POSTs front-door connect|direct and does not start Caddy', async () => {
+  it('POSTs front-door connect|direct (daemon applies Caddy)', async () => {
     render(<SkinAccessSection />)
     await loaded()
     fireEvent.click(screen.getByRole('radio', { name: /Direct \/ this box/i }))

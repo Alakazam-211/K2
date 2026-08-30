@@ -815,7 +815,7 @@ async fn handle_one_request(
             | "/cli/api-keys/revoke"
             | "/cli/api-keys/disable"
             | "/cli/api-keys/enable"
-            // Skin slice 1+2 — guest list + k2skn_ passes + front-door stub.
+            // Skin slice 1+2+3 — guest list + k2skn_ passes + Caddy front door.
             // Owner-tier (owner_role_identity). GET twins for mutations 405.
             | "/cli/skin/users"
             | "/cli/skin/users/remove"
@@ -996,6 +996,18 @@ async fn handle_one_request(
         let _ = stream.read(&mut buf).await;
         super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         return DispatchOutcome::Done;
+    }
+
+    // Skin Host belt (slice 3): nested `skin.*` forwarded by Caddy is
+    // Thread-only. Dual filter with the Caddy path-allow list — even a
+    // Connect / owner token on this Host must not get grid, bytes,
+    // terminal, login, or `/v1`. Overlay + `/cli/thread` pass through.
+    if super::http::host_is_skin_front_door(&headers_blob) {
+        if let Some(r) = crate::skin_routes::skin_host_forbidden(&path) {
+            let _ = stream.read(&mut buf).await;
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+            return DispatchOutcome::Done;
+        }
     }
 
     match path.as_str() {
@@ -5013,7 +5025,7 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
-        // Skin slice 1+2 — guest list, k2skn_ passes, front-door stub.
+        // Skin slice 1+2+3 — guest list, k2skn_ passes, Caddy front door.
         // OWNER-TIER (`owner_role_identity`). Skin tokens themselves never
         // manage the roster (they are not token_ok and not Owner-role).
         // Mutations POST-only; GET twins 405.
@@ -5162,8 +5174,9 @@ async fn handle_one_request(
                         return DispatchOutcome::Done;
                     };
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let daemon_port = state.port;
                     tokio::task::spawn_blocking(move || {
-                        crate::skin_routes::handle_front_door_post(&body, &actor)
+                        crate::skin_routes::handle_front_door_post(&body, &actor, daemon_port)
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))

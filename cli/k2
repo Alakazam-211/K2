@@ -5248,7 +5248,7 @@ Usage: k2 skin <user|front-door> ...
   k2 skin user add <username>           Add a skin principal (not a Connect user)
   k2 skin user list                     Roster (no secrets)
   k2 skin user remove <username>        Drop principal + their passes
-  k2 skin front-door [connect|direct]   Show or persist the Skin front door
+  k2 skin front-door [connect|direct]   Show or persist+apply the Skin front door
   k2 skin-token create <username> [--caps thread:read,thread:post]
                                         Mint k2skn_ pass (secret once)
   k2 skin-token list                    Live/revoked passes (prefix + caps)
@@ -5318,55 +5318,110 @@ except Exception as e:
             esac
             ;;
         front-door|frontdoor)
-            local mode="${1:-}"
-            if [ -z "$mode" ]; then
-                cli_request "/cli/skin/front-door" | python3 -c '
-import json,sys
-try:
-    d=json.load(sys.stdin)
-    if isinstance(d,dict) and "error" in d:
-        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
-    print("mode:  %s" % (d.get("mode") or "-"))
-    print("url:   %s" % (d.get("url") or "(none)"))
-    if d.get("hint"):
-        print("hint:  %s" % d["hint"])
-except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
-                return 0
-            fi
-            case "$mode" in
-                connect|direct) ;;
-                *) echo "Usage: k2 skin front-door [connect|direct]" >&2; exit 1 ;;
-            esac
-            shift || true
-            local url="" hint=""
+            local json_out=0 mode="" url="" hint="" ui_port=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
+                    --json) json_out=1; shift ;;
                     --url) url="${2:-}"; shift 2 ;;
                     --hint) hint="${2:-}"; shift 2 ;;
+                    --ui-port|--uiPort) ui_port="${2:-}"; shift 2 ;;
+                    connect|direct)
+                        if [ -n "$mode" ]; then
+                            echo "Usage: k2 skin front-door [connect|direct] [--json]" >&2
+                            exit 1
+                        fi
+                        mode="$1"; shift ;;
+                    --help|-h)
+                        echo "Usage: k2 skin front-door [connect|direct] [--url URL] [--hint TEXT] [--ui-port N] [--json]" >&2
+                        exit 0 ;;
                     *) echo "Unknown flag: $1" >&2; exit 1 ;;
                 esac
             done
+            if [ -z "$mode" ]; then
+                local raw
+                raw=$(cli_request "/cli/skin/front-door")
+                if [ "$json_out" = 1 ]; then
+                    printf '%s\n' "$raw"
+                    return 0
+                fi
+                printf '%s' "$raw" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+err=d.get("error")
+if isinstance(err,str) and err.strip() and not d.get("mode"):
+    print("Error: %s" % err, file=sys.stderr); sys.exit(1)
+print("mode:     %s" % (d.get("mode") or "-"))
+print("url:      %s" % (d.get("url") or d.get("connectUrl") or "(none)"))
+print("listen:   %s" % (d.get("listen") or "-"))
+print("applied:  %s" % d.get("applied"))
+c=d.get("caddy") or {}
+if c.get("missing"):
+    print("caddy:    missing — brew install caddy  or  sudo apt install caddy")
+else:
+    print("caddy:    running=%s pid=%s" % (c.get("running"), c.get("pid")))
+n=d.get("nested") or {}
+print("nested:   %s registered=%s" % (n.get("host") or n.get("label") or "-", n.get("registered")))
+if d.get("hint"):
+    print("hint:     %s" % d["hint"])
+if isinstance(err,str) and err.strip():
+    print("error:    %s" % err, file=sys.stderr)
+'
+                return 0
+            fi
             local body
-            body=$(K2_SKIN_MODE="$mode" K2_SKIN_URL="$url" K2_SKIN_HINT="$hint" python3 -c '
+            body=$(K2_SKIN_MODE="$mode" K2_SKIN_URL="$url" K2_SKIN_HINT="$hint" K2_SKIN_UI="$ui_port" python3 -c '
 import json,os
-b={"mode": os.environ.get("K2_SKIN_MODE","")}
+b={"mode": os.environ.get("K2_SKIN_MODE",""), "apply": True}
 u=os.environ.get("K2_SKIN_URL","").strip()
 if u: b["url"]=u
 h=os.environ.get("K2_SKIN_HINT","").strip()
 if h: b["hint"]=h
+p=os.environ.get("K2_SKIN_UI","").strip()
+if p:
+    try: b["uiPort"]=int(p)
+    except ValueError: b["uiPort"]=p
 print(json.dumps(b))')
-            cli_post_json "/cli/skin/front-door" "$body" | python3 -c '
+            local raw
+            raw=$(cli_post_json "/cli/skin/front-door" "$body")
+            if [ "$json_out" = 1 ]; then
+                printf '%s\n' "$raw"
+                printf '%s' "$raw" | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
-    if "error" in d:
-        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
-    print("Front door: %s  %s" % (d.get("mode","?"), d.get("url") or "(no url yet)"))
-    if d.get("hint"):
-        print(d["hint"])
+except Exception:
+    sys.exit(1)
+err=d.get("error")
+if isinstance(err,str) and err.strip() and not d.get("applied"):
+    sys.exit(1)
+' || exit 1
+                return 0
+            fi
+            printf '%s' "$raw" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
 except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+err=d.get("error")
+if isinstance(err,str) and err.strip() and not d.get("applied") and not d.get("mode"):
+    print("Error: %s" % err, file=sys.stderr); sys.exit(1)
+if isinstance(err,str) and err.strip() and (
+    "caddy_missing" in err or "bind_failed" in err or "pro_required" in err or "no_token" in err
+) and not d.get("applied"):
+    print("Error: %s" % err, file=sys.stderr); sys.exit(1)
+print("Front door: %s  %s" % (d.get("mode","?"), d.get("url") or d.get("connectUrl") or "(no url yet)"))
+print("listen:  %s  applied=%s" % (d.get("listen") or "-", d.get("applied")))
+if d.get("hint"):
+    print(d["hint"])
+if isinstance(err,str) and err.strip():
+    print(err, file=sys.stderr)
+    if not d.get("applied"):
+        sys.exit(1)
+'
             ;;
         --help|-h|"")
             _skin_usage
@@ -12853,12 +12908,14 @@ cmd_schema() {
     },
     {
       "name": "skin front-door",
-      "usage": "k2 skin front-door [connect|direct] [--url URL] [--hint TEXT]",
-      "description": "Show or persist the Skin front door. connect derives https://skin.<sub>.k2.dev from the tunnel public URL.",
+      "usage": "k2 skin front-door [connect|direct] [--url URL] [--hint TEXT] [--ui-port N] [--json]",
+      "description": "Show or persist+apply the Skin front door (Caddy path-filter). connect registers nested https://skin.<sub>.k2.dev on the existing tunnel.",
       "args": [{"name": "mode", "required": false}],
       "flags": [
         {"name": "--url", "arg": "URL", "description": "Optional public URL."},
-        {"name": "--hint", "arg": "TEXT", "description": "Optional operator hint."}
+        {"name": "--hint", "arg": "TEXT", "description": "Optional operator hint."},
+        {"name": "--ui-port", "arg": "N", "description": "Optional same-origin UI reverse-proxy port."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
       ]
     },
     {
@@ -17304,7 +17361,7 @@ USERS (local daemon connect-user accounts)
 SKIN (guest list + k2skn_ passes — Thread rooms, never grid)
   skin user add|list|remove                     Skin principals (not Connect users)
   skin-token create|list|revoke                 Capability pass (secret once at create)
-  skin front-door [connect|direct]              Persist front door; connect URL is https://skin.<sub>.k2.dev
+  skin front-door [connect|direct]              Persist+apply Caddy path-filter; nested https://skin.<sub>.k2.dev
 
 REMOTE SESSION (owner/admin Layer 0 + grants + shell PTY)
   remote-session status [--json]                Master switch + grants/sessions/denials

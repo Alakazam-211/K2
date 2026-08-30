@@ -1256,6 +1256,12 @@ async fn async_main() {
     // (see `maybe_autostart_tunnel`).
     maybe_autostart_tunnel(port);
 
+    // Skin front door — re-apply Caddy if the operator already persisted a
+    // mode. Fault-isolated (missing caddy is a log, never a boot crash).
+    let _ = tokio::task::spawn_blocking(move || {
+        k2_core::skin_door::maybe_apply_on_boot(port);
+    });
+
     // Keep the process alive until shutdown; the accept loop runs as its
     // own task (spawned above). A Ctrl+C during the migration sweep was
     // buffered on `main_shutdown_rx`, so this returns promptly then too.
@@ -1279,6 +1285,10 @@ async fn async_main() {
         Ok(Ok(())) => log_debug!("[daemon] tunnel released for shutdown"),
         Ok(Err(e)) => log_debug!("[daemon] tunnel stop on shutdown: {e}"),
         Err(e) => log_debug!("[daemon] tunnel stop join error: {e}"),
+    }
+    match tokio::task::spawn_blocking(k2_core::skin_door::stop_caddy).await {
+        Ok(()) => log_debug!("[daemon] skin Caddy stopped for shutdown"),
+        Err(e) => log_debug!("[daemon] skin Caddy stop join error: {e}"),
     }
 
     log_debug!("[daemon] async_main exiting");

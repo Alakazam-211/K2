@@ -5,6 +5,7 @@
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::{self, CAP_THREAD_POST, CAP_THREAD_READ};
+use k2_core::skin_door;
 
 fn json_body(body: &[u8]) -> Result<serde_json::Value, CliResponse> {
     match serde_json::from_slice(body) {
@@ -37,6 +38,43 @@ fn caps_field(v: &serde_json::Value) -> Option<Vec<String>> {
                 .filter(|s| !s.is_empty())
                 .collect()
         })
+}
+
+fn apply_field(v: &serde_json::Value) -> bool {
+    match v.get("apply").or_else(|| v.get("Apply")) {
+        None => true,
+        Some(x) if x.is_null() => true,
+        Some(x) => x.as_bool().unwrap_or(true),
+    }
+}
+
+fn ui_port_field(v: &serde_json::Value, current: Option<u16>) -> Option<u16> {
+    let raw = v.get("uiPort").or_else(|| v.get("ui_port"));
+    match raw {
+        None => current,
+        Some(x) if x.is_null() => None,
+        Some(x) => {
+            if let Some(n) = x.as_u64() {
+                u16::try_from(n).ok()
+            } else if let Some(s) = x.as_str() {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    t.parse().ok()
+                }
+            } else {
+                current
+            }
+        }
+    }
+}
+
+fn status_json() -> CliResponse {
+    match skin_door::status() {
+        Ok(d) => CliResponse::ok_json(serde_json::to_string(&d).unwrap_or_else(|_| "{}".into())),
+        Err(e) => CliResponse::internal_error(e),
+    }
 }
 
 pub fn handle_users_get() -> CliResponse {
@@ -140,13 +178,10 @@ pub fn handle_tokens_revoke(body: &[u8], actor: &str) -> CliResponse {
 }
 
 pub fn handle_front_door_get() -> CliResponse {
-    match skin::effective_front_door() {
-        Ok(d) => CliResponse::ok_json(serde_json::to_string(&d).unwrap_or_else(|_| "{}".into())),
-        Err(e) => CliResponse::internal_error(e),
-    }
+    status_json()
 }
 
-pub fn handle_front_door_post(body: &[u8], actor: &str) -> CliResponse {
+pub fn handle_front_door_post(body: &[u8], actor: &str, daemon_port: u16) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -156,16 +191,25 @@ pub fn handle_front_door_post(body: &[u8], actor: &str) -> CliResponse {
     };
     let url = str_field(&v, &["url"]);
     let hint = str_field(&v, &["hint"]);
-    match skin::set_front_door(mode, url, hint) {
-        Ok(mut d) => {
-            if d.mode == "connect" && d.url.as_deref().map(str::trim).unwrap_or("").is_empty() {
-                d.url = k2_core::tunnel::config::load()
-                    .ok()
-                    .and_then(|c| c.public_url())
-                    .and_then(|u| skin::skin_url_from_public(&u));
+    let current = skin::get_front_door().ok().and_then(|d| d.ui_port);
+    let ui_port = ui_port_field(&v, current);
+    let apply = apply_field(&v);
+    match skin::set_front_door(mode, url, hint, ui_port) {
+        Ok(d) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} front-door mode={} apply={apply}",
+                d.mode
+            );
+            if apply {
+                match skin_door::apply(daemon_port) {
+                    Ok(st) => CliResponse::ok_json(
+                        serde_json::to_string(&st).unwrap_or_else(|_| "{}".into()),
+                    ),
+                    Err(e) => CliResponse::bad_request(e),
+                }
+            } else {
+                status_json()
             }
-            k2_core::log_debug!("[skin] actor={actor} front-door mode={}", d.mode);
-            CliResponse::ok_json(serde_json::to_string(&d).unwrap_or_else(|_| "{}".into()))
         }
         Err(e) => CliResponse::bad_request(e),
     }
@@ -193,6 +237,28 @@ pub fn skin_terminal_forbidden() -> CliResponse {
         content_type: "application/json",
         body: r#"{"error":"skin tokens cannot use the terminal"}"#.to_string(),
     }
+}
+
+/// Host belt: `Host: skin.*` must never be a kingdom door even for
+/// `token_ok` / Connect sessions. Teaching JSON, fail loud.
+pub fn skin_host_forbidden(path: &str) -> Option<CliResponse> {
+    let blocked = path == "/cli/sessions/grid"
+        || path == "/cli/sessions/bytes"
+        || path.starts_with("/cli/terminal/")
+        || path == "/cli/auth/login"
+        || path.starts_with("/v1/");
+    if !blocked {
+        return None;
+    }
+    Some(CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": skin_door::PATH_FILTER_ERROR,
+            "hint": "https://skin.<sub>.k2.dev is Thread-only. Grid/PTY stays on the operator <sub>.k2.dev kingdom door.",
+        })
+        .to_string(),
+    })
 }
 
 pub const THREAD_READ: &str = CAP_THREAD_READ;

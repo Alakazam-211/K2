@@ -46,6 +46,16 @@ struct Resp {
 }
 
 fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Resp {
+    http_host(port, method, path_and_query, body, "127.0.0.1")
+}
+
+fn http_host(
+    port: u16,
+    method: &str,
+    path_and_query: &str,
+    body: Option<&str>,
+    host: &str,
+) -> Resp {
     let mut stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
@@ -53,14 +63,14 @@ fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Re
     let req = match body {
         Some(b) => format!(
             "{method} {path_and_query} HTTP/1.1\r\n\
-             Host: 127.0.0.1\r\n\
+             Host: {host}\r\n\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\r\n{b}",
             b.len()
         ),
         None => format!(
             "{method} {path_and_query} HTTP/1.1\r\n\
-             Host: 127.0.0.1\r\n\r\n"
+             Host: {host}\r\n\r\n"
         ),
     };
     stream.write_all(req.as_bytes()).expect("write request");
@@ -499,12 +509,16 @@ async fn skin_front_door_persists_connect_url_from_tunnel() {
             port,
             "POST",
             &format!("/cli/skin/front-door?token={OWNER_TOKEN}"),
-            Some(r#"{"mode":"connect"}"#),
+            Some(r#"{"mode":"connect","apply":false}"#),
         );
         assert_eq!(set.status, 200, "{}", set.body);
         let v = json(&set.body);
         assert_eq!(v["mode"], "connect");
         assert_eq!(v["url"], "https://skin.rosson.k2.dev");
+        assert_eq!(v["connectUrl"], "https://skin.rosson.k2.dev");
+        assert_eq!(v["listen"], "127.0.0.1:38472");
+        assert_eq!(v["nested"]["label"], "skin");
+        assert_eq!(v["applied"], false);
 
         let get = http(
             port,
@@ -513,17 +527,147 @@ async fn skin_front_door_persists_connect_url_from_tunnel() {
             None,
         );
         assert_eq!(get.status, 200, "{}", get.body);
-        assert_eq!(json(&get.body)["url"], "https://skin.rosson.k2.dev");
+        let g = json(&get.body);
+        assert_eq!(g["url"], "https://skin.rosson.k2.dev");
+        assert_eq!(g["connectUrl"], "https://skin.rosson.k2.dev");
+        assert!(g.get("caddy").is_some(), "{}", get.body);
 
         let direct = http(
             port,
             "POST",
             &format!("/cli/skin/front-door?token={OWNER_TOKEN}"),
-            Some(r#"{"mode":"direct","url":"https://skin.app.com","hint":"Caddy"}"#),
+            Some(r#"{"mode":"direct","url":"https://skin.app.com","hint":"Caddy","apply":false}"#),
         );
         assert_eq!(direct.status, 200, "{}", direct.body);
         assert_eq!(json(&direct.body)["mode"], "direct");
         assert_eq!(json(&direct.body)["url"], "https://skin.app.com");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_front_door_apply_without_caddy_is_400() {
+    let _g = lock();
+    with_temp_home(|| {
+        let prev_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", "");
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let r = http(
+            port,
+            "POST",
+            &format!("/cli/skin/front-door?token={OWNER_TOKEN}"),
+            Some(r#"{"mode":"connect"}"#),
+        );
+        match prev_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        assert_eq!(r.status, 400, "apply without caddy must 400; {}", r.body);
+        assert!(
+            r.body.contains("caddy_missing"),
+            "must name caddy_missing: {}",
+            r.body
+        );
+        assert!(
+            r.body.contains("brew install caddy") || r.body.contains("apt install"),
+            "must teach install: {}",
+            r.body
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_host_belt_403s_grid_login_v1_not_thread() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("skindoor{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+        add_user(port, "guest");
+        let (_id, tok) = mint(port, "guest", &["thread:read"]);
+        let skin_host = "skin.rosson.k2.dev";
+
+        let grid = http_host(
+            port,
+            "GET",
+            &format!("/cli/sessions/grid?token={OWNER_TOKEN}&session=nope"),
+            None,
+            skin_host,
+        );
+        assert_eq!(
+            grid.status, 403,
+            "skin Host + owner token grid; {}",
+            grid.body
+        );
+        assert!(
+            grid.body
+                .contains("skin front door does not proxy this path"),
+            "{}",
+            grid.body
+        );
+
+        let bytes = http_host(
+            port,
+            "GET",
+            &format!("/cli/sessions/bytes?token={OWNER_TOKEN}&session=nope"),
+            None,
+            skin_host,
+        );
+        assert_eq!(bytes.status, 403, "skin Host + bytes; {}", bytes.body);
+
+        let login = http_host(
+            port,
+            "POST",
+            "/cli/auth/login",
+            Some(r#"{"username":"x","password":"y"}"#),
+            skin_host,
+        );
+        assert_eq!(login.status, 403, "skin Host + login; {}", login.body);
+
+        let v1 = http_host(
+            port,
+            "GET",
+            &format!("/v1/ping?token={OWNER_TOKEN}"),
+            None,
+            skin_host,
+        );
+        assert_eq!(v1.status, 403, "skin Host + /v1; {}", v1.body);
+
+        let term = http_host(
+            port,
+            "GET",
+            &format!("/cli/terminal/write?token={OWNER_TOKEN}&id=nope"),
+            None,
+            skin_host,
+        );
+        assert_eq!(term.status, 403, "skin Host + terminal; {}", term.body);
+
+        let thread = http_host(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok}&addr={handle}"),
+            None,
+            skin_host,
+        );
+        assert_eq!(
+            thread.status, 200,
+            "skin Host must still allow thread: {}",
+            thread.body
+        );
+
+        assert!(
+            k2_daemon::skin_routes::skin_host_forbidden("/cli/thread").is_none(),
+            "Host belt must not 403 /cli/thread"
+        );
+        assert!(
+            k2_daemon::skin_routes::skin_host_forbidden("/cli/overlay/events").is_none(),
+            "Host belt must not 403 overlay"
+        );
+        assert!(
+            k2_daemon::skin_routes::skin_host_forbidden("/cli/terminal/write").is_some(),
+            "Host belt must 403 terminal write"
+        );
     });
 }
 

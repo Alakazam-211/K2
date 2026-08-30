@@ -63,6 +63,9 @@ pub mod api_keys;
 // Skin capability passes (prd-skin-auth-v1): guest list + hashed `k2skn_`
 // tokens in `~/.k2/skin.db`. Overlay Thread rooms; never grid. See module docs.
 pub mod skin;
+// Skin front door (slice 3): Caddy path-filter renderer + apply (nested
+// `skin.<sub>.k2.dev` on the existing tunnel; never a second frpc).
+pub mod skin_door;
 // Phase 1 (prd-wiki-public-chat-api-loopback-v1): daemon-held host_sessions
 // API key for public wiki chat (`~/.k2/wiki-public-chat/`). See module docs.
 pub mod wiki_public_chat;

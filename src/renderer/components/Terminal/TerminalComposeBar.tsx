@@ -69,6 +69,10 @@ import {
   writeComposeCaret,
 } from './terminalCompose'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
+import {
+  ingestOverlayThreadItem,
+  overlayItemFromThreadPost,
+} from '@/components/SessionView/overlayThread'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
 
 interface TerminalComposeBarProps {
@@ -465,10 +469,12 @@ export function TerminalComposeBar({
           via: 'compose',
         }
         if (command) body.command = command
-        const resp = await daemonCliPost<{ ok?: boolean }>('thread/post', body)
+        const resp = await daemonCliPost<Record<string, unknown>>('thread/post', body)
         if (resp?.ok === false) {
           setDraft((cur) => (cur.length === 0 ? text : cur))
         } else {
+          const item = overlayItemFromThreadPost(resp, text)
+          if (item) ingestOverlayThreadItem(item)
           if (text) setHistory((prev) => [text, ...prev].slice(0, 50))
           setHistoryIndex(-1)
           historyDraftRef.current = ''

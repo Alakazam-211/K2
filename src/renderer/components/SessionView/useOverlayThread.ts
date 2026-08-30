@@ -6,6 +6,7 @@ import {
   mergeOlderOverlayItems,
   OVERLAY_PAGE_SIZE,
   releaseOverlayWebSocket,
+  subscribeOverlayThreadLive,
   threadItemsFromSnapshot,
   type OverlayThreadItem,
   type OverlayWsFrame,
@@ -105,6 +106,25 @@ export function useOverlayThread(opts: {
       if (ws) releaseOverlayWebSocket(ws)
     }
   }, [addr, conversationId, enabled])
+
+  useEffect(() => {
+    return subscribeOverlayThreadLive((item) => {
+      const conv = resolvedConv || conversationId || ''
+      if (item.conversation_id && conv && item.conversation_id !== conv) {
+        return
+      }
+      snapshotSeqRef.current = Math.max(snapshotSeqRef.current, item.seq)
+      setItems((prev) => {
+        const existing = prev.findIndex((it) => it.id === item.id)
+        if (existing >= 0) {
+          const next = prev.slice()
+          next[existing] = { ...prev[existing], ...item, collection: 'thread' }
+          return next
+        }
+        return [...prev, { ...item, collection: 'thread' }].sort((a, b) => a.seq - b.seq)
+      })
+    })
+  }, [conversationId, resolvedConv])
 
   const loadOlder = useCallback(async () => {
     if (!addr.trim() || !hasMoreRef.current || loadingOlderRef.current) return

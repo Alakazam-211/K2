@@ -18,6 +18,7 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonWsBase: () => 'ws://test',
 }))
 
+import { ingestOverlayThreadItem } from './overlayThread'
 import { useOverlayThread } from './useOverlayThread'
 import { useOverlayChatter } from './useOverlayChatter'
 
@@ -94,6 +95,29 @@ describe('useOverlayThread paging', () => {
       await result.current.loadOlder()
     })
     expect(daemonCliGet).toHaveBeenCalledTimes(1)
+  })
+
+  it('compose ingest appends a new thread row without waiting on WS', async () => {
+    daemonCliGet.mockResolvedValueOnce({
+      conversation_id: 'conv-1',
+      has_more: false,
+      items: pageItems(1, 2, 'thread'),
+    })
+    const { result } = renderHook(() =>
+      useOverlayThread({ addr: 'sales', conversationId: 'conv-1', enabled: true }),
+    )
+    await waitFor(() => expect(result.current.items).toHaveLength(2))
+    act(() => {
+      ingestOverlayThreadItem({
+        collection: 'thread',
+        seq: 3,
+        id: 'thread-3',
+        conversation_id: 'conv-1',
+        doc: { id: 'thread-3', kind: 'text', from: 'rosson', body: 'from compose', via: 'compose' },
+      })
+    })
+    expect(result.current.items).toHaveLength(3)
+    expect(result.current.items[2].doc.body).toBe('from compose')
   })
 })
 

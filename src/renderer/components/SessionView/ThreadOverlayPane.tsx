@@ -41,9 +41,11 @@ export function ThreadOverlayPane({
   const listRef = useRef<HTMLDivElement>(null)
   const didInitialScroll = useRef(false)
   const prevHeightRef = useRef<number | null>(null)
+  const pinBottomRef = useRef(true)
 
   useEffect(() => {
     didInitialScroll.current = false
+    pinBottomRef.current = true
   }, [addr])
 
   useLayoutEffect(() => {
@@ -52,11 +54,16 @@ export function ThreadOverlayPane({
     if (!didInitialScroll.current && items.length > 0) {
       el.scrollTop = el.scrollHeight
       didInitialScroll.current = true
+      pinBottomRef.current = true
       return
     }
     if (prevHeightRef.current != null) {
       el.scrollTop += el.scrollHeight - prevHeightRef.current
       prevHeightRef.current = null
+      return
+    }
+    if (pinBottomRef.current) {
+      el.scrollTop = el.scrollHeight
     }
   }, [items])
 
@@ -76,7 +83,10 @@ export function ThreadOverlayPane({
         ref={listRef}
         className="flex-1 min-h-0 overflow-y-auto px-2 py-2"
         onScroll={(e) => {
-          if (e.currentTarget.scrollTop <= 16) requestOlder()
+          const el = e.currentTarget
+          if (el.scrollTop <= 16) requestOlder()
+          pinBottomRef.current =
+            el.scrollHeight - el.scrollTop - el.clientHeight <= 32
         }}
       >
         {hasMore && (

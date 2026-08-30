@@ -3,11 +3,15 @@ import {
   applyChatterFrame,
   applyOverlayFrame,
   chatterItemsFromSnapshot,
+  ingestOverlayThreadItem,
   isChatterSurfaceItem,
   isThreadSurfaceItem,
   mergeOlderOverlayItems,
+  overlayItemFromThreadPost,
   OVERLAY_PAGE_SIZE,
+  overlaySeq,
   releaseOverlayWebSocket,
+  subscribeOverlayThreadLive,
   threadItemsFromSnapshot,
   type OverlayThreadItem,
 } from './overlayThread'
@@ -247,6 +251,70 @@ describe('mergeOlderOverlayItems', () => {
     const merged = mergeOlderOverlayItems(current, older)
     expect(merged.map((i) => i.id)).toEqual(['t10', 't11', 't12'])
     expect(merged.map((i) => i.seq)).toEqual([10, 11, 12])
+  })
+})
+
+describe('compose thread/post ingest', () => {
+  it('overlaySeq accepts numeric strings', () => {
+    expect(overlaySeq(7)).toBe(7)
+    expect(overlaySeq('8')).toBe(8)
+    expect(Number.isFinite(overlaySeq(undefined))).toBe(false)
+  })
+
+  it('applyOverlayFrame accepts string seq from the wire', () => {
+    const start: OverlayThreadItem[] = [
+      { collection: 'thread', seq: 1, id: 'doc-1', doc: textDoc },
+    ]
+    const after = applyOverlayFrame(
+      start,
+      {
+        collection: 'thread',
+        seq: '2' as unknown as number,
+        id: 'doc-2',
+        doc: { id: 'doc-2', kind: 'text', from: 'k2', body: 'later' },
+      },
+      1,
+    )
+    expect(after).toHaveLength(2)
+    expect(after[1].seq).toBe(2)
+  })
+
+  it('overlayItemFromThreadPost builds a thread row from POST JSON', () => {
+    const item = overlayItemFromThreadPost(
+      {
+        ok: true,
+        id: 'new-1',
+        seq: 3,
+        from: 'rosson',
+        body: 'hello thread',
+        kind: 'text',
+        via: 'compose',
+        conversation_id: 'conv-1',
+      },
+      'hello thread',
+    )
+    expect(item).not.toBeNull()
+    expect(item?.collection).toBe('thread')
+    expect(item?.id).toBe('new-1')
+    expect(item?.seq).toBe(3)
+    expect(item?.doc.body).toBe('hello thread')
+    expect(item?.doc.via).toBe('compose')
+  })
+
+  it('ingestOverlayThreadItem notifies live subscribers', () => {
+    const seen: OverlayThreadItem[] = []
+    const unsub = subscribeOverlayThreadLive((item) => {
+      seen.push(item)
+    })
+    const item = overlayItemFromThreadPost(
+      { ok: true, id: 'live-1', seq: 1, from: 'k2', body: 'hi', conversation_id: 'c' },
+      'hi',
+    )
+    expect(item).not.toBeNull()
+    ingestOverlayThreadItem(item!)
+    unsub()
+    expect(seen).toHaveLength(1)
+    expect(seen[0].id).toBe('live-1')
   })
 })
 

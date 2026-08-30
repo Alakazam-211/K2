@@ -86,13 +86,65 @@ export function mergeOlderOverlayItems(
   return [...prepend, ...current].sort((a, b) => a.seq - b.seq)
 }
 
+export function overlaySeq(raw: unknown): number {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw)
+    if (Number.isFinite(n)) return n
+  }
+  return Number.NaN
+}
+
+type OverlayLiveListener = (item: OverlayThreadItem) => void
+const threadLiveListeners = new Set<OverlayLiveListener>()
+
+/** Compose `thread/post` is a sibling of the overlay hook — push the
+ *  returned row in so the Thread list does not wait on overlay WS. */
+export function ingestOverlayThreadItem(item: OverlayThreadItem): void {
+  if (item.collection !== 'thread' || !item.id) return
+  for (const listener of threadLiveListeners) listener(item)
+}
+
+export function subscribeOverlayThreadLive(listener: OverlayLiveListener): () => void {
+  threadLiveListeners.add(listener)
+  return () => {
+    threadLiveListeners.delete(listener)
+  }
+}
+
+export function overlayItemFromThreadPost(
+  resp: Record<string, unknown> | null | undefined,
+  fallbackBody: string,
+): OverlayThreadItem | null {
+  if (!resp || resp.ok === false) return null
+  const id = typeof resp.id === 'string' ? resp.id : ''
+  if (!id) return null
+  const seq = overlaySeq(resp.seq)
+  const conversation_id =
+    typeof resp.conversation_id === 'string' ? resp.conversation_id : null
+  return {
+    collection: 'thread',
+    seq: Number.isFinite(seq) ? seq : 0,
+    id,
+    conversation_id,
+    doc: {
+      id,
+      kind: typeof resp.kind === 'string' ? resp.kind : 'text',
+      from: typeof resp.from === 'string' ? resp.from : '',
+      to: typeof resp.to === 'string' ? resp.to : null,
+      body: typeof resp.body === 'string' ? resp.body : fallbackBody,
+      via: typeof resp.via === 'string' ? resp.via : 'compose',
+    },
+  }
+}
+
 export function applyOverlayFrame(
   items: OverlayThreadItem[],
   frame: OverlayWsFrame,
   snapshotSeq: number,
 ): OverlayThreadItem[] {
   if (frame.collection !== 'thread') return items
-  const seq = typeof frame.seq === 'number' ? frame.seq : Number.NaN
+  const seq = overlaySeq(frame.seq)
   const id = typeof frame.id === 'string' ? frame.id : ''
   if (!id) return items
   const doc = frame.doc
@@ -108,10 +160,12 @@ export function applyOverlayFrame(
     }
     return next
   }
-  if (!Number.isFinite(seq) || seq <= snapshotSeq) return items
+  // New id: drop only true replays (seq already in the snapshot). Missing
+  // seq still appends — compose ingest must not vanish if seq is omitted.
+  if (Number.isFinite(seq) && seq <= snapshotSeq) return items
   const next = [
     ...items,
-    { collection: 'thread', seq, id, doc },
+    { collection: 'thread', seq: Number.isFinite(seq) ? seq : snapshotSeq + 1, id, doc },
   ]
   next.sort((a, b) => a.seq - b.seq)
   return next

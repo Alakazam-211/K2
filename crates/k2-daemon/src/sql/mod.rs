@@ -163,8 +163,22 @@ mod tests {
         let pid = insert_project("sql-mig", &path);
         let ops = FakeSystemOps::baked();
         let secrets = MemSecretStore::default();
-        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().unwrap().to_string();
+        let n_helper_before = ops.pg.lock().unwrap().helper_sql.len();
         let first = ops::migrate(&ops, &secrets, &pid, &path, None).expect("migrate");
+        let helper = ops.pg.lock().unwrap().helper_sql[n_helper_before..].join("\n");
+        assert!(
+            helper.contains("GRANT USAGE ON SCHEMA public TO")
+                && helper.contains(
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO"
+                ),
+            "ensure GRANT via helper missing: {helper}"
+        );
+        assert!(
+            helper.contains(&format!("{db_name}_agent")),
+            "GRANT must target DSN user {{db}}_agent; helper={helper}"
+        );
         assert_eq!(first["noop"], false);
         assert_eq!(first["discovered"], 1, "{first}");
         assert!(first["applied"]
@@ -234,6 +248,111 @@ mod tests {
             "hint names the file: {}",
             err.hint()
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_pipe_ledger_second_run_noop_tamper_is_checksum_mismatch() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-pipe-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        let body = b"CREATE TABLE t (id int);\n";
+        std::fs::write(mig.join("0001_init.sql"), body).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-pipe", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().unwrap().to_string();
+        let checksum = ops::migration_checksum(body);
+        {
+            let mut pg = ops.pg.lock().unwrap();
+            pg.migrations.insert(
+                db_name.clone(),
+                vec![("0001_init".into(), checksum.clone())],
+            );
+            let out = pg
+                .exec_sql(
+                    Some(&db_name),
+                    "SELECT version, checksum FROM _k2_migrations;",
+                )
+                .expect("select");
+            assert_eq!(out, format!("0001_init|{checksum}"));
+            assert!(
+                !out.contains('\t'),
+                "fake -tA default must be pipe: {out:?}"
+            );
+        }
+        let second = ops::migrate(&ops, &secrets, &pid, &path, None).expect("pipe ledger skip");
+        assert_eq!(second["noop"], true, "{second}");
+        assert!(second["applied"].as_array().unwrap().is_empty(), "{second}");
+        std::fs::write(
+            mig.join("0001_init.sql"),
+            b"CREATE TABLE t (id int, n int);\n",
+        )
+        .unwrap();
+        let err = ops::migrate(&ops, &secrets, &pid, &path, None).expect_err("mismatch");
+        assert_eq!(err.code(), "checksum_mismatch", "{}", err.hint());
+        let ledger = ops
+            .pg
+            .lock()
+            .unwrap()
+            .migrations
+            .get(&db_name)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            ledger,
+            vec![("0001_init".into(), checksum)],
+            "tamper must not INSERT a duplicate ledger row"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_tab_ledger_still_skips_and_refuses_tamper() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-tab-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        let body = b"CREATE TABLE t (id int);\n";
+        std::fs::write(mig.join("0001_init.sql"), body).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-tab", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().unwrap().to_string();
+        let checksum = ops::migration_checksum(body);
+        {
+            let mut pg = ops.pg.lock().unwrap();
+            pg.select_field_sep = "\t";
+            pg.migrations.insert(
+                db_name.clone(),
+                vec![("0001_init".into(), checksum.clone())],
+            );
+            let out = pg
+                .exec_sql(
+                    Some(&db_name),
+                    "SELECT version, checksum FROM _k2_migrations;",
+                )
+                .expect("select");
+            assert_eq!(out, format!("0001_init\t{checksum}"));
+        }
+        let second = ops::migrate(&ops, &secrets, &pid, &path, None).expect("tab ledger skip");
+        assert_eq!(second["noop"], true, "{second}");
+        std::fs::write(
+            mig.join("0001_init.sql"),
+            b"CREATE TABLE t (id int, n int);\n",
+        )
+        .unwrap();
+        let err = ops::migrate(&ops, &secrets, &pid, &path, None).expect_err("mismatch");
+        assert_eq!(err.code(), "checksum_mismatch");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -410,8 +529,22 @@ mod tests {
         let pid = insert_project("sql-store", &path);
         let ops = FakeSystemOps::baked();
         let secrets = MemSecretStore::default();
-        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().unwrap().to_string();
+        let n_helper_before = ops.pg.lock().unwrap().helper_sql.len();
         ops::store_create(&ops, &secrets, &pid, "items").expect("coll");
+        let helper = ops.pg.lock().unwrap().helper_sql[n_helper_before..].join("\n");
+        assert!(
+            helper.contains("GRANT USAGE ON SCHEMA public TO")
+                && helper.contains(
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO"
+                ),
+            "store ensure GRANT via helper missing: {helper}"
+        );
+        assert!(
+            helper.contains(&format!("{db_name}_agent")),
+            "GRANT must target DSN user {{db}}_agent; helper={helper}"
+        );
         let doc = serde_json::json!({"n": 1});
         ops::store_put(&ops, &secrets, &pid, "items", "a", &doc).expect("put");
         let got = ops::store_get(&ops, &secrets, &pid, "items", "a").expect("get");

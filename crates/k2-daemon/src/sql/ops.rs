@@ -552,6 +552,9 @@ fn exec_as(
     password: &str,
     sql: &str,
 ) -> Result<String, OpsError> {
+    // `-tA` without `-F` uses `|` as the unaligned field separator.
+    // Force tab so SELECT version, checksum is unambiguous; the parser
+    // still accepts `|` for older fakes / forgotten `-F`.
     let out = ops
         .run_cmd(
             PSQL_PATH,
@@ -565,6 +568,8 @@ fn exec_as(
                 "-v",
                 "ON_ERROR_STOP=1",
                 "-tA",
+                "-F",
+                "\t",
             ],
             &[("PGPASSWORD", password)],
             Some(sql.as_bytes()),
@@ -573,31 +578,55 @@ fn exec_as(
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
 
+/// Split a `psql -tA` row. Tabs first (exec_as `-F`); `|` is the unaligned default.
+fn split_psql_fields(line: &str) -> Vec<&str> {
+    if line.contains('\t') {
+        line.split('\t').map(str::trim).collect()
+    } else {
+        line.split('|').map(str::trim).collect()
+    }
+}
+
+/// Repair agent DML on catalog tables as helper superuser. Migrator GRANT
+/// is a no-op when OWNER TO did not stick (tables created by helper).
+fn grant_agent_k2_tables(ops: &dyn SystemOps, db: &str) -> Result<(), OpsError> {
+    let agent = pg_quote_ident(&agent_role_for_db(db));
+    let sql = format!(
+        "GRANT USAGE ON SCHEMA public TO {agent};\n\
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};"
+    );
+    ops.run_helper(
+        &["psql", "-d", db, "-v", "ON_ERROR_STOP=1"],
+        Some(sql.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
+    Ok(())
+}
+
 fn ensure_migrations_table(
     ops: &dyn SystemOps,
     db: &str,
     user: &str,
     password: &str,
 ) -> Result<(), OpsError> {
-    let agent = pg_quote_ident(&agent_role_for_db(db));
     exec_as(
         ops,
         db,
         user,
         password,
-        &format!(
-            "CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
-               version TEXT PRIMARY KEY,\n\
-               checksum TEXT NOT NULL DEFAULT '',\n\
-               applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
-             );\n\
-             DO $$\nBEGIN\n\
-               ALTER TABLE _k2_migrations ADD COLUMN checksum TEXT;\n\
-             EXCEPTION WHEN duplicate_column THEN NULL;\n\
-             END $$;\n\
-             GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations TO {agent};"
-        ),
+        "CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
+           version TEXT PRIMARY KEY,\n\
+           checksum TEXT NOT NULL DEFAULT '',\n\
+           applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
+         );\n\
+         DO $$\nBEGIN\n\
+           ALTER TABLE _k2_migrations ADD COLUMN checksum TEXT;\n\
+         EXCEPTION WHEN duplicate_column THEN NULL;\n\
+         END $$;",
     )?;
+    // Helper GRANT even when CREATE is IF NOT EXISTS. Before migrate SQL so
+    // a later checksum/apply failure still leaves the agent DSN usable.
+    grant_agent_k2_tables(ops, db)?;
     Ok(())
 }
 
@@ -620,9 +649,9 @@ fn load_applied_checksums(
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(2, '\t');
-        let ver = parts.next().unwrap_or("").trim();
-        let sum = parts.next().unwrap_or("").trim();
+        let parts = split_psql_fields(line);
+        let ver = parts.first().copied().unwrap_or("");
+        let sum = parts.get(1).copied().unwrap_or("");
         if !ver.is_empty() {
             applied.insert(ver.to_string(), sum.to_string());
         }
@@ -770,13 +799,13 @@ pub fn database_status(
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.split('\t');
-        let version = parts.next().unwrap_or("").trim();
+        let parts = split_psql_fields(line);
+        let version = parts.first().copied().unwrap_or("");
         if version.is_empty() {
             continue;
         }
-        let checksum = parts.next().unwrap_or("").trim();
-        let applied_at = parts.next().unwrap_or("").trim();
+        let checksum = parts.get(1).copied().unwrap_or("");
+        let applied_at = parts.get(2).copied().unwrap_or("");
         migrations.push(serde_json::json!({
             "version": version,
             "checksum": checksum,
@@ -1414,25 +1443,21 @@ fn ensure_store_table(
     db: &str,
     user: &str,
     password: &str,
-    agent: &str,
 ) -> Result<(), OpsError> {
     exec_as(
         ops,
         db,
         user,
         password,
-        &format!(
-            "CREATE TABLE IF NOT EXISTS _k2_store (\n\
-               collection TEXT NOT NULL,\n\
-               id TEXT NOT NULL,\n\
-               doc JSONB NOT NULL,\n\
-               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\
-               PRIMARY KEY (collection, id)\n\
-             );\n\
-             GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_store TO {agent};",
-            agent = pg_quote_ident(agent),
-        ),
+        "CREATE TABLE IF NOT EXISTS _k2_store (\n\
+           collection TEXT NOT NULL,\n\
+           id TEXT NOT NULL,\n\
+           doc JSONB NOT NULL,\n\
+           updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\
+           PRIMARY KEY (collection, id)\n\
+         );",
     )?;
+    grant_agent_k2_tables(ops, db)?;
     Ok(())
 }
 
@@ -1444,7 +1469,7 @@ pub fn store_create(
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
     let (row, user, pw) = require_store_db(secrets, project_id)?;
-    ensure_store_table(ops, &row.name, &user, &pw, &agent_role_for_db(&row.name))?;
+    ensure_store_table(ops, &row.name, &user, &pw)?;
     Ok(serde_json::json!({ "ok": true, "collection": name }))
 }
 
@@ -1484,7 +1509,7 @@ pub fn store_put(
         return Err(OpsError::Usage("missing document id".into()));
     }
     let (row, user, pw) = require_store_db(secrets, project_id)?;
-    ensure_store_table(ops, &row.name, &user, &pw, &agent_role_for_db(&row.name))?;
+    ensure_store_table(ops, &row.name, &user, &pw)?;
     let sql = format!(
         "INSERT INTO _k2_store (collection, id, doc) VALUES ({coll}, {id}, {doc}::jsonb) \
          ON CONFLICT (collection, id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = now();",
@@ -1645,5 +1670,25 @@ mod tests {
         assert!(!is_versioned_sql_filename("1_init.sql"));
         assert!(!is_versioned_sql_filename("0001.sql"));
         assert!(!is_versioned_sql_filename("0001_init.sql.bak"));
+    }
+
+    #[test]
+    fn split_psql_fields_accepts_pipe_and_tab() {
+        assert_eq!(
+            split_psql_fields("0001_dogfood|deadbeef"),
+            vec!["0001_dogfood", "deadbeef"]
+        );
+        assert_eq!(
+            split_psql_fields("0001_dogfood\tdeadbeef"),
+            vec!["0001_dogfood", "deadbeef"]
+        );
+        assert_eq!(
+            split_psql_fields("0001_init|abc|2026-01-01 00:00:00+00"),
+            vec!["0001_init", "abc", "2026-01-01 00:00:00+00"]
+        );
+        assert_eq!(
+            split_psql_fields("0001_init\tabc\t2026-01-01 00:00:00+00"),
+            vec!["0001_init", "abc", "2026-01-01 00:00:00+00"]
+        );
     }
 }

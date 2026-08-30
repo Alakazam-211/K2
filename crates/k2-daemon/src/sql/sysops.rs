@@ -288,6 +288,9 @@ pub struct FakePg {
     pub helper_sql: Vec<String>,
     /// (version, checksum) rows per database name.
     pub migrations: HashMap<String, Vec<(String, String)>>,
+    /// Unaligned `psql -tA` field separator. Real psql defaults to `|`
+    /// when `-F` is omitted; tests must not hide the tab-split bug.
+    pub select_field_sep: &'static str,
     pub store: HashMap<(String, String), HashMap<String, serde_json::Value>>,
     pub dump_marker: Vec<u8>,
     /// Live GUC map (`current_setting`). Defaults look like stock Postgres
@@ -312,6 +315,7 @@ impl Default for FakePg {
             role_sql: Vec::new(),
             helper_sql: Vec::new(),
             migrations: HashMap::new(),
+            select_field_sep: "|",
             store: HashMap::new(),
             dump_marker: Vec::new(),
             gucs,
@@ -328,7 +332,7 @@ pub fn pin_k2_gucs(gucs: &mut HashMap<String, String>) {
 
 #[cfg(test)]
 impl FakePg {
-    fn exec_sql(&mut self, db: Option<&str>, sql: &str) -> Result<String, String> {
+    pub(crate) fn exec_sql(&mut self, db: Option<&str>, sql: &str) -> Result<String, String> {
         let trimmed = sql.trim();
         if trimmed.is_empty() {
             return Ok(String::new());
@@ -390,15 +394,16 @@ impl FakePg {
         if trimmed.contains("_k2_migrations") {
             let up = trimmed.to_ascii_uppercase();
             if up.starts_with("SELECT") {
+                let sep = self.select_field_sep;
                 let vers = self.migrations.entry(db_name.to_string()).or_default();
                 if up.contains("CHECKSUM") {
                     return Ok(vers
                         .iter()
                         .map(|(v, c)| {
                             if up.contains("APPLIED_AT") {
-                                format!("{v}\t{c}\t2026-01-01 00:00:00+00")
+                                format!("{v}{sep}{c}{sep}2026-01-01 00:00:00+00")
                             } else {
-                                format!("{v}\t{c}")
+                                format!("{v}{sep}{c}")
                             }
                         })
                         .collect::<Vec<_>>()
@@ -414,9 +419,12 @@ impl FakePg {
                 if let Some(ver) = nth_sql_string(trimmed, 0) {
                     let checksum = nth_sql_string(trimmed, 1).unwrap_or_default();
                     let vers = self.migrations.entry(db_name.to_string()).or_default();
-                    if !vers.iter().any(|(v, _)| v == &ver) {
-                        vers.push((ver, checksum));
+                    if vers.iter().any(|(v, _)| v == &ver) {
+                        return Err(format!(
+                            "duplicate key value violates unique constraint \"_k2_migrations_pkey\""
+                        ));
                     }
+                    vers.push((ver, checksum));
                 }
                 return Ok(String::new());
             }

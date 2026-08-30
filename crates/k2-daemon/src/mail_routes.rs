@@ -202,8 +202,14 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
 /// `/cli/mail/` arm) has already enforced require_post + token_ok +
 /// the owner-or-admin gate for owner-level paths.
 pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
+    dispatch_post_at(path, body, None)
+}
+
+/// Same as [`dispatch_post`], with the live daemon HTTP port for mail
+/// Enable → `skin_door::apply` (dispatcher `state.port`).
+pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> CliResponse {
     match path {
-        "/cli/mail/server/enable" => routes_server::handle_server_enable(body),
+        "/cli/mail/server/enable" => routes_server::handle_server_enable_at(body, daemon_port),
         "/cli/mail/server/disable" => routes_server::handle_server_disable(body),
         "/cli/mail/server/uninstall" => routes_server::handle_server_uninstall(body),
         "/cli/mail/config/set" => routes_server::handle_config_set(body),

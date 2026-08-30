@@ -152,8 +152,10 @@ fn ensure_skin_dir() -> Result<PathBuf, String> {
 // ── Pure renderer ────────────────────────────────────────────────────
 
 /// Render a Caddyfile that reverse-proxies Thread + overlay + boot-status
-/// to the daemon on loopback, and **403s everything else** (especially grid,
-/// PTY, login, `/v1`). Never copies the air-gap whole-daemon proxy.
+/// to the daemon on loopback (and, when `ui_port` is set, `/` + SPA prefixes
+/// `/assets*` `/_next*` `/app*` to that port — never `/*`), and **403s
+/// everything else** (especially grid, PTY, login, `/v1`). Never copies the
+/// air-gap whole-daemon proxy.
 ///
 /// Loopback `http://127.0.0.1:{loopback}` is always HTTP (`http://` prefix;
 /// `auto_https off` globally when there are no :443 Host sites). Direct Host
@@ -224,7 +226,9 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     push_handle(out, "/cli/thread/*", daemon);
     push_handle(out, "/cli/overlay/events*", daemon);
     if let Some(ui) = ui_port {
-        out.push_str("\t@skinUi path_regexp ^/$\n");
+        // Exact `/` plus SPA prefixes. Never `/*` — catch-all stays 403.
+        // Grid / login / `/v1` are not in this matcher.
+        out.push_str("\t@skinUi path / /assets* /_next* /app*\n");
         out.push_str("\thandle @skinUi {\n");
         out.push_str("\t\treverse_proxy 127.0.0.1:");
         out.push_str(&ui.to_string());
@@ -277,9 +281,11 @@ fn extra_is_all_ifaces(extra: Option<&str>) -> bool {
     hostport.starts_with("0.0.0.0:")
 }
 
+/// Named Host site. `:443` only when we could not bind :80.
+/// With `bind_http80`, include `:80` so Caddy HTTP-01 ACME can answer.
 fn host_site_address(host: &str, bind_http80: bool) -> String {
     if bind_http80 {
-        host.to_string()
+        format!("{host}:443, http://{host}:80")
     } else {
         format!("{host}:443")
     }
@@ -969,8 +975,59 @@ mod tests {
         let file = render_caddyfile(&spec(Some(5173), None));
         assert!(file.contains("127.0.0.1:5173"), "{file}");
         assert!(file.contains("@skinUi"), "{file}");
+        assert!(file.contains("path / /assets* /_next* /app*"), "{file}");
+        assert!(file.contains("/assets*"), "{file}");
+        assert!(file.contains("/_next*"), "{file}");
+        assert!(file.contains("/app*"), "{file}");
         assert!(file.contains(PATH_FILTER_ERROR), "{file}");
         assert!(!file.contains("/cli/sessions/grid"), "{file}");
+        assert!(!file.contains("/v1"), "{file}");
+        assert!(
+            !file.contains("handle /*"),
+            "must not catch-all proxy to UI or daemon: {file}"
+        );
+        let lowered = file.to_ascii_lowercase();
+        assert!(
+            !lowered.contains("reverse_proxy") || !file.contains("/cli/sessions/grid"),
+            "must not reverse_proxy grid: {file}"
+        );
+        for line in file.lines() {
+            if line.contains("reverse_proxy") {
+                assert!(
+                    !line.contains("/cli/sessions/grid")
+                        && !line.contains("/cli/auth/login")
+                        && !line.contains("/v1"),
+                    "forbidden reverse_proxy line: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn render_without_ui_port_spa_prefixes_are_403_not_proxied() {
+        let file = render_caddyfile(&spec(None, None));
+        assert!(!file.contains("@skinUi"), "{file}");
+        assert!(!file.contains("/assets*"), "{file}");
+        assert!(!file.contains("/_next*"), "{file}");
+        assert!(!file.contains("/app*"), "{file}");
+        assert!(file.contains(PATH_FILTER_ERROR), "{file}");
+        assert!(file.contains("403"), "{file}");
+        assert!(
+            !file.contains("handle /*"),
+            "must not catch-all proxy without ui_port: {file}"
+        );
+        for line in file.lines() {
+            if line.contains("reverse_proxy") {
+                assert!(
+                    !line.contains("/assets")
+                        && !line.contains("/_next")
+                        && !line.contains("/app")
+                        && !line.contains("/cli/sessions/grid")
+                        && !line.contains("/v1"),
+                    "SPA/grid prefixes must not reverse_proxy without ui_port: {line}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1009,6 +1066,14 @@ mod tests {
         ));
         assert!(file.contains("box.example.com"), "{file}");
         assert!(file.contains("mail.acme.dev"), "{file}");
+        assert!(
+            file.contains("http://box.example.com:80"),
+            "HTTP-01 needs :80 on the skin Host: {file}"
+        );
+        assert!(
+            file.contains("http://mail.acme.dev:80"),
+            "HTTP-01 needs :80 on the mail Host: {file}"
+        );
         assert!(
             file.contains("127.0.0.1:60710"),
             "skin handles → daemon: {file}"
@@ -1117,6 +1182,24 @@ mod tests {
         ));
         assert!(file.contains("box.example.com:443"), "{file}");
         assert!(file.contains("mail.acme.dev:443"), "{file}");
+        assert!(!file.contains("http://box.example.com:80"), "{file}");
+        assert!(!file.contains("http://mail.acme.dev:80"), "{file}");
+        assert!(!file.contains("http://:443"), "{file}");
+        assert_no_daemon_loop_via_38472(&file);
+    }
+
+    #[test]
+    fn render_claiming_443_with_bind80_includes_acme_port_80() {
+        let file = render_caddyfile(&spec_hosts(
+            Some("box.example.com"),
+            Some("mail.acme.dev"),
+            ":443",
+            true,
+        ));
+        assert!(file.contains("box.example.com:443"), "{file}");
+        assert!(file.contains("mail.acme.dev:443"), "{file}");
+        assert!(file.contains("http://box.example.com:80"), "{file}");
+        assert!(file.contains("http://mail.acme.dev:80"), "{file}");
         assert!(!file.contains("http://:443"), "{file}");
         assert_no_daemon_loop_via_38472(&file);
     }

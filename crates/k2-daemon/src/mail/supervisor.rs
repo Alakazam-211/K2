@@ -393,6 +393,12 @@ fn progress_extra(key: &str) -> Option<String> {
     progress_load()[key].as_str().map(str::to_string)
 }
 
+/// Persist a non-fatal hint on enable progress (e.g. Caddy apply after
+/// Enable). Does not change `mail_server.status`.
+pub(crate) fn note_enable_progress_hint(key: &str, value: &str) {
+    progress_extra_set(key, value);
+}
+
 /// Emit the standard daemon event on a supervised-state transition
 /// (PRD §4.1: failures raise the standard event → app notification).
 fn emit_state_change(previous: &str, state: &str, detail: Option<&str>) {

@@ -25,9 +25,10 @@
 //!   (unauthenticated MAIL/RCPT to a foreign domain must 5xx; never a
 //!   DATA). Cannot-run is a FAIL, not a skip (pre-mortem #3).
 //! - `starttls-25` / `starttls-587` — STARTTLS advertised.
-//! - `tls-cert` — plan A: a default-verifying HTTPS handshake against
-//!   the mail hostname (never `danger_accept_invalid_certs`); plans
-//!   B/C report info (the cert lives behind the owner's proxy).
+//! - `tls-cert` — plan A (`tls-alpn`): a default-verifying HTTPS handshake
+//!   against the mail hostname (never `danger_accept_invalid_certs`);
+//!   non-tls-alpn plans report info — the public cert is Caddy's on the
+//!   mail hostname, not Stalwart tls-alpn.
 //! - `disk` — headroom for mail storage (pre-mortem #12).
 //!
 //! Plus, for a DOMAIN run (`domain = Some`): `mx`/`spf`/`dkim`/`dmarc`
@@ -364,7 +365,8 @@ pub fn run_checks(
     let ehlo587 = env.smtp_ehlo("127.0.0.1", 587);
     checks.push(starttls_check("starttls-587", 587, &ehlo587));
 
-    // TLS cert (plan A only — B/C certs live behind the owner's proxy).
+    // TLS cert (plan A = tls-alpn handshake; otherwise Caddy owns the
+    // public cert on the mail hostname — not Stalwart tls-alpn).
     checks.push(match ctx.port_plan.as_deref() {
         Some("tls-alpn") => match env.https_cert(&ctx.hostname) {
             Ok(()) => DoctorCheck {
@@ -391,9 +393,10 @@ pub fn run_checks(
             label: "TLS certificate valid".into(),
             status: ST_INFO,
             detail: format!(
-                "port plan {} — the public certificate is served behind your existing \
-                 proxy; Stalwart re-verifies it at each ACME renewal",
-                plan.unwrap_or("unset")
+                "port plan {} — the public certificate is Caddy's on the mail hostname \
+                 ({}); not Stalwart tls-alpn",
+                plan.unwrap_or("unset"),
+                ctx.hostname
             ),
             gates_direct: false,
         },
@@ -1543,10 +1546,27 @@ mod tests {
         assert_eq!(check(&r, "tls-cert").status, ST_WARN);
         assert_eq!(check(&r, "disk").status, ST_WARN);
 
-        // Plans B/C report the cert as info (owner's proxy owns it).
+        // Non-tls-alpn: public cert is Caddy's on the mail hostname, not
+        // Stalwart tls-alpn. INFO — does not gate direct.
         let ctx_c = ServerCtx { port_plan: Some("http-01".into()), ..ctx() };
         let r = run_checks(&healthy_dns(), &FakeEnv::default(), &ctx_c, None, 1000);
-        assert_eq!(check(&r, "tls-cert").status, ST_INFO);
+        let tls = check(&r, "tls-cert");
+        assert_eq!(tls.status, ST_INFO);
+        assert!(tls.detail.contains("Caddy"), "{}", tls.detail);
+        assert!(tls.detail.contains("mail.acme.dev"), "{}", tls.detail);
+        assert!(tls.detail.contains("tls-alpn"), "{}", tls.detail);
+        assert!(tls.detail.contains("http-01"), "{}", tls.detail);
+
+        let ctx_dns = ServerCtx { port_plan: Some("dns-01".into()), ..ctx() };
+        let r = run_checks(&healthy_dns(), &FakeEnv::default(), &ctx_dns, None, 1000);
+        let tls = check(&r, "tls-cert");
+        assert_eq!(tls.status, ST_INFO);
+        assert!(tls.detail.contains("Caddy"), "{}", tls.detail);
+        assert!(
+            tls.detail.contains("not Stalwart tls-alpn"),
+            "{}",
+            tls.detail
+        );
     }
 
     // ── Domain checks ──

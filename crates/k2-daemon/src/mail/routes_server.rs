@@ -140,6 +140,61 @@ pub fn handle_preflight(_params: &HashMap<String, String>) -> CliResponse {
     )
 }
 
+/// Live daemon HTTP port published in `~/.k2/daemon.port` — same value
+/// front-door POST / boot apply pass to `skin_door::apply`.
+fn live_daemon_http_port() -> Option<u16> {
+    k2_core::port_claim::read_port_file(&k2_core::paths::k2_home().join("daemon.port"))
+        .filter(|&p| p != 0 && p != k2_core::skin_door::LOOPBACK_PORT)
+}
+
+/// Direct mode, or this process already applied/running Skin Caddy.
+fn skin_door_should_reapply_after_mail(mode: &str, caddy_applied: bool) -> bool {
+    mode == "direct" || caddy_applied
+}
+
+fn live_skin_door_should_reapply() -> bool {
+    let direct = k2_core::skin::effective_front_door()
+        .map(|d| d.mode == "direct")
+        .unwrap_or(false);
+    let applied = k2_core::skin_door::status()
+        .ok()
+        .map(|st| st.applied || st.caddy.running)
+        .unwrap_or(false);
+    skin_door_should_reapply_after_mail(if direct { "direct" } else { "connect" }, applied)
+}
+
+/// Re-apply Skin Caddy so the mail Host site appears. Never fails Enable;
+/// returns a hint when apply fails (logged + Enable JSON / enableProgress).
+fn reapply_skin_door_after_mail_enable(daemon_port: Option<u16>) -> Option<String> {
+    if !live_skin_door_should_reapply() {
+        return None;
+    }
+    // Unit tests share the process DB/HOME; never restart a live Caddy here.
+    if cfg!(test) {
+        return None;
+    }
+    let Some(port) = daemon_port.or_else(live_daemon_http_port) else {
+        k2_core::log_debug!(
+            "[mail] skin-door apply skipped after enable: daemon HTTP port unknown"
+        );
+        return Some(
+            "mail is enabled; Skin Caddy was not re-applied (daemon HTTP port unknown). \
+             POST /cli/skin/front-door with apply to attach the mail Host."
+                .into(),
+        );
+    };
+    match k2_core::skin_door::apply(port) {
+        Ok(_) => None,
+        Err(e) => {
+            k2_core::log_debug!("[mail] skin-door apply after enable failed: {e}");
+            Some(format!(
+                "mail is enabled; Skin Caddy did not pick up the mail Host ({e}). \
+                 POST /cli/skin/front-door with apply."
+            ))
+        }
+    }
+}
+
 /// POST `/cli/mail/server/enable` — S1: preflight-gate → spawn the
 /// resumable install+bootstrap state machine (owner-or-admin,
 /// dispatcher-enforced). Body: `{"hostname": "mail.acme.dev"}`.
@@ -151,6 +206,14 @@ pub fn handle_preflight(_params: &HashMap<String, String>) -> CliResponse {
 /// polled via GET /cli/mail/status (`enableProgress`), the house
 /// persisted-steps pattern. Re-POST after a failure RESUMES.
 pub fn handle_server_enable(body: &[u8]) -> CliResponse {
+    handle_server_enable_at(body, live_daemon_http_port())
+}
+
+/// Enable with an explicit live daemon HTTP port (dispatcher `state.port`).
+pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> CliResponse {
+    let daemon_port = daemon_port
+        .filter(|&p| p != 0 && p != k2_core::skin_door::LOOPBACK_PORT)
+        .or_else(live_daemon_http_port);
     let parsed: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -169,12 +232,14 @@ pub fn handle_server_enable(body: &[u8]) -> CliResponse {
     };
 
     // Idempotency short-circuit first (a DB read, platform-safe):
-    // already running → nothing to do.
+    // already running → nothing to do. Re-apply Skin Caddy so the mail
+    // Host appears if Direct is already on (do not wait for a front-door POST).
     if supervisor::current_status().as_deref() == Some("running") {
-        return CliResponse::ok_json(
-            serde_json::json!({ "ok": true, "state": "running", "alreadyEnabled": true })
-                .to_string(),
-        );
+        let mut body = serde_json::json!({ "ok": true, "state": "running", "alreadyEnabled": true });
+        if let Some(hint) = reapply_skin_door_after_mail_enable(daemon_port) {
+            body["hint"] = serde_json::json!(hint);
+        }
+        return CliResponse::ok_json(body.to_string());
     }
     if !mail_supported() {
         return unsupported();
@@ -220,8 +285,15 @@ pub fn handle_server_enable(body: &[u8]) -> CliResponse {
         let mut api = crate::mail::jmap::StalwartBootstrap::new();
         let result =
             supervisor::run_enable(&ops, &mut api, &secrets, artifact, &hostname, &port_plan);
-        if let Err(e) = result {
-            k2_core::log_debug!("[mail/supervisor] enable failed: {e}");
+        match result {
+            Ok(()) => {
+                if let Some(hint) = reapply_skin_door_after_mail_enable(daemon_port) {
+                    supervisor::note_enable_progress_hint("caddyHint", &hint);
+                }
+            }
+            Err(e) => {
+                k2_core::log_debug!("[mail/supervisor] enable failed: {e}");
+            }
         }
         supervisor::end_enable();
     });
@@ -711,7 +783,39 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
         assert_eq!(v["ok"], true);
         assert_eq!(v["alreadyEnabled"], true);
+        assert_eq!(v["state"], "running");
+        // Caddy apply must not swallow Enable success (ok stays true).
+        assert_ne!(v["ok"], false);
         clean_row();
+    }
+
+    #[test]
+    fn skin_door_reapply_after_mail_when_direct_or_caddy_applied() {
+        assert!(skin_door_should_reapply_after_mail("direct", false));
+        assert!(skin_door_should_reapply_after_mail("direct", true));
+        assert!(skin_door_should_reapply_after_mail("connect", true));
+        assert!(!skin_door_should_reapply_after_mail("connect", false));
+    }
+
+    #[test]
+    fn enable_json_keeps_ok_when_caddy_apply_hint_present() {
+        let mut body = serde_json::json!({ "ok": true, "state": "running", "alreadyEnabled": true });
+        body["hint"] = serde_json::json!(
+            "mail is enabled; Skin Caddy did not pick up the mail Host (caddy_missing). \
+             POST /cli/skin/front-door with apply."
+        );
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["alreadyEnabled"], true);
+        assert!(
+            body["hint"].as_str().unwrap_or("").contains("Skin Caddy"),
+            "{}",
+            body["hint"]
+        );
+        assert!(
+            body["hint"].as_str().unwrap_or("").contains("front-door"),
+            "{}",
+            body["hint"]
+        );
     }
 
     /// Disable / uninstall: not-installed answers the structured 409;

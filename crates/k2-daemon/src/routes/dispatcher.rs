@@ -4165,9 +4165,10 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
+            let daemon_port = state.port;
             let result = tokio::task::spawn_blocking(move || {
                 crate::caller_workspace::with_request_principal(scoped_principal, || {
-                    crate::mail_routes::dispatch_post(&p_owned, &body_bytes)
+                    crate::mail_routes::dispatch_post_at(&p_owned, &body_bytes, Some(daemon_port))
                 })
             })
             .await

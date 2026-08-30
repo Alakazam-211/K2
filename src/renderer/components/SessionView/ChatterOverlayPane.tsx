@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react'
 import { ChatMessage } from '@/components/common/ChatMessage'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { useSettingsStore } from '@/stores/settings'
@@ -8,12 +8,12 @@ import type { OverlayDoc, OverlayThreadItem } from './overlayThread'
 interface ChatterOverlayPaneProps {
   addr: string
   conversationId: string | null
-  /** Pause the relative-time interval when the pane is display:none. */
+  /** Pause GET/WS and the relative-time interval when the pane is hidden. */
   active?: boolean
 }
 
 /** A2A mailbox — no compose. Thread vs Terminal still own Message-the-agent. */
-export function ChatterOverlayPane({
+export const ChatterOverlayPane = memo(function ChatterOverlayPane({
   addr,
   conversationId,
   active = true,
@@ -21,7 +21,7 @@ export function ChatterOverlayPane({
   const { items, error, hasMore, loadOlder, loadingOlder } = useOverlayChatter({
     addr,
     conversationId,
-    enabled: true,
+    enabled: active,
   })
 
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
@@ -107,7 +107,7 @@ export function ChatterOverlayPane({
       </div>
     </div>
   )
-}
+})
 
 export function chatterAuthor(doc: OverlayDoc): string {
   const from = doc.from.trim() || 'unknown'

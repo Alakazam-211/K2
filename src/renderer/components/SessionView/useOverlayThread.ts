@@ -108,6 +108,7 @@ export function useOverlayThread(opts: {
   }, [addr, conversationId, enabled])
 
   useEffect(() => {
+    if (!enabled) return
     return subscribeOverlayThreadLive((item) => {
       const conv = resolvedConv || conversationId || ''
       if (item.conversation_id && conv && item.conversation_id !== conv) {
@@ -124,7 +125,7 @@ export function useOverlayThread(opts: {
         return [...prev, { ...item, collection: 'thread' }].sort((a, b) => a.seq - b.seq)
       })
     })
-  }, [conversationId, resolvedConv])
+  }, [conversationId, resolvedConv, enabled])
 
   const loadOlder = useCallback(async () => {
     if (!addr.trim() || !hasMoreRef.current || loadingOlderRef.current) return

@@ -3,6 +3,7 @@
 // chat already use — WKWebView otherwise swallows selection.
 
 import {
+  memo,
   useCallback,
   type CSSProperties,
   type JSX,
@@ -17,13 +18,15 @@ import {
   clearStuckBodyUserSelect,
 } from './SelectableText'
 
+const REMARK_GFM = [remarkGfm] as const
+
 function onBodyPointerDown(e: PointerEvent | MouseEvent): void {
   if ('button' in e && e.button !== 0) return
   clearStuckBodyUserSelect()
   e.stopPropagation()
 }
 
-export function ChatMessageBody({
+export const ChatMessageBody = memo(function ChatMessageBody({
   text,
   className = '',
   style,
@@ -48,12 +51,12 @@ export function ChatMessageBody({
       onPointerDown={onBodyPointerDown}
       onMouseDown={onBodyPointerDown}
     >
-      <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+      <Markdown remarkPlugins={REMARK_GFM}>{text}</Markdown>
     </div>
   )
-}
+})
 
-export function ChatMessage({
+export const ChatMessage = memo(function ChatMessage({
   author,
   isOwner,
   timeLabel,
@@ -92,4 +95,4 @@ export function ChatMessage({
       {footer}
     </div>
   )
-}
+})

@@ -15,6 +15,19 @@ export function parseSessionViewTab(raw: string | null | undefined): SessionView
   return 'terminal'
 }
 
+/** Overlay UI is a viewer. Mount Thread/Chatter only while that tab is selected. */
+export function overlayViewer(tab: SessionViewTab): {
+  thread: boolean
+  chatter: boolean
+  hidePty: boolean
+} {
+  return {
+    thread: tab === 'thread' || tab === 'split',
+    chatter: tab === 'chatter',
+    hidePty: tab === 'thread' || tab === 'chatter',
+  }
+}
+
 export function readSessionViewTab(storageKey: string): SessionViewTab {
   if (typeof localStorage === 'undefined') return SESSION_VIEW_TAB_DEFAULT
   try {

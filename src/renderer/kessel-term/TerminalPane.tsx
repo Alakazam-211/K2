@@ -83,6 +83,7 @@ import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalComp
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
+import { overlayViewer } from '@/components/SessionView/sessionViewTab'
 import {
   bracketPaste,
   isImagePath,
@@ -564,10 +565,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   } = props
   const sessionChrome = useSessionViewChrome()
   const viewTab = sessionChrome?.viewTab ?? 'terminal'
+  const { thread: showThreadOverlay, chatter: showChatterOverlay, hidePty } =
+    overlayViewer(viewTab)
   const showThreadOnly = viewTab === 'thread'
   const showChatterOnly = viewTab === 'chatter'
   const showSplit = viewTab === 'split'
-  const hidePty = showThreadOnly || showChatterOnly
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
   // / Cmd+Shift+- menu events (wired via listen('terminal:zoom-*')
@@ -5734,27 +5736,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         />
       )}
     </div>
-      {sessionChrome && (
+      {sessionChrome && showThreadOverlay && (
         <div
           className={
             showSplit
               ? 'flex-1 min-w-0 min-h-0 border-l border-[var(--color-border)] flex flex-col'
-              : showThreadOnly
-                ? 'flex-1 min-w-0 min-h-0 flex flex-col'
-                : undefined
+              : 'flex-1 min-w-0 min-h-0 flex flex-col'
           }
-          style={!showSplit && !showThreadOnly ? { display: 'none' } : undefined}
           data-testid="agent-session-thread"
         >
           <div className="flex-1 min-h-0 min-w-0">
             <ThreadOverlayPane
               addr={sessionChrome.overlayAddr}
               conversationId={sessionChrome.conversationId}
-              active={showThreadOnly || showSplit}
+              active={showThreadOverlay}
             />
           </div>
-          {(showSplit || showThreadOnly) &&
-            showComposeBar &&
+          {showComposeBar &&
             shouldShowTerminalComposeBar(phase) && (
             <TerminalComposeBar
               sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
@@ -5765,19 +5763,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           )}
         </div>
       )}
-      {sessionChrome && (
+      {sessionChrome && showChatterOverlay && (
         <div
-          className={
-            showChatterOnly ? 'flex-1 min-w-0 min-h-0 flex flex-col' : undefined
-          }
-          style={!showChatterOnly ? { display: 'none' } : undefined}
+          className="flex-1 min-w-0 min-h-0 flex flex-col"
           data-testid="agent-session-chatter"
         >
           <div className="flex-1 min-h-0 min-w-0">
             <ChatterOverlayPane
               addr={sessionChrome.overlayAddr}
               conversationId={sessionChrome.conversationId}
-              active={showChatterOnly}
+              active={showChatterOverlay}
             />
           </div>
         </div>

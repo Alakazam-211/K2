@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react'
 import { ChatMessage } from '@/components/common/ChatMessage'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { useSettingsStore } from '@/stores/settings'
@@ -12,12 +12,12 @@ import {
 interface ThreadOverlayPaneProps {
   addr: string
   conversationId: string | null
-  /** Pause the relative-time interval when the pane is display:none. */
+  /** Pause GET/WS and the relative-time interval when the pane is hidden. */
   active?: boolean
 }
 
 /** Overlay log only — Message-the-agent compose stays on TerminalPane. */
-export function ThreadOverlayPane({
+export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   addr,
   conversationId,
   active = true,
@@ -25,7 +25,7 @@ export function ThreadOverlayPane({
   const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder } = useOverlayThread({
     addr,
     conversationId,
-    enabled: true,
+    enabled: active,
   })
 
   const visible = items.filter((it) => !isVoidedHitl(it.doc))
@@ -124,7 +124,7 @@ export function ThreadOverlayPane({
       </div>
     </div>
   )
-}
+})
 
 function isHumanPost(doc: OverlayDoc): boolean {
   return doc.via === 'compose' || doc.from === 'owner'

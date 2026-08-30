@@ -33,13 +33,15 @@ vi.stubGlobal('WebSocket', FakeWS)
 
 import { AgentSessionChrome } from './AgentSessionChrome'
 import { useSessionViewChrome } from './sessionViewChrome'
+import { overlayViewer } from './sessionViewTab'
 
 function ProbeTerminal() {
   const chrome = useSessionViewChrome()
+  const viewer = overlayViewer(chrome?.viewTab ?? 'terminal')
   return (
     <div data-testid="terminal-pane">
-      {chrome ? <div data-testid="thread-overlay-pane" /> : null}
-      {chrome ? <div data-testid="chatter-overlay-pane" /> : null}
+      {chrome && viewer.thread ? <div data-testid="thread-overlay-pane" /> : null}
+      {chrome && viewer.chatter ? <div data-testid="chatter-overlay-pane" /> : null}
       {chrome?.viewTab === 'split' ? (
         <>
           <div data-testid="message-compose" data-compose-bar="" data-compose-destination="pty">
@@ -104,18 +106,21 @@ describe('sidecar chrome (C4/C6/C10)', () => {
       </AgentSessionChrome>,
     )
     expect(screen.getByTestId('agent-session-terminal')).not.toBeNull()
+    expect(screen.queryByTestId('thread-overlay-pane')).toBeNull()
+    expect(screen.queryByTestId('chatter-overlay-pane')).toBeNull()
     fireEvent.click(screen.getByTestId('session-view-tab-thread'))
     expect(screen.getByTestId('terminal-pane')).not.toBeNull()
     expect(screen.getByTestId('message-compose')).not.toBeNull()
     expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.queryByTestId('chatter-overlay-pane')).toBeNull()
     expect(screen.queryByTestId('thread-compose')).toBeNull()
     fireEvent.click(screen.getByTestId('session-view-tab-terminal'))
-    expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
-    expect(screen.getByTestId('chatter-overlay-pane')).not.toBeNull()
+    expect(screen.queryByTestId('thread-overlay-pane')).toBeNull()
+    expect(screen.queryByTestId('chatter-overlay-pane')).toBeNull()
     expect(screen.getByTestId('terminal-pane')).not.toBeNull()
   })
 
-  it('keeps overlays mounted after switching to Chatter', () => {
+  it('shows Chatter overlay only after switching to Chatter', () => {
     render(
       <AgentSessionChrome
         title="sales/reviewer"
@@ -131,7 +136,7 @@ describe('sidecar chrome (C4/C6/C10)', () => {
       'true',
     )
     expect(screen.getByTestId('terminal-pane')).not.toBeNull()
-    expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.queryByTestId('thread-overlay-pane')).toBeNull()
     expect(screen.getByTestId('chatter-overlay-pane')).not.toBeNull()
   })
 
@@ -148,6 +153,7 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     )
     fireEvent.click(screen.getByTestId('session-view-tab-split'))
     expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
+    expect(screen.queryByTestId('chatter-overlay-pane')).toBeNull()
     expect(screen.getByTestId('message-compose').getAttribute('data-compose-destination')).toBe(
       'pty',
     )

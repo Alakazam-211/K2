@@ -1240,6 +1240,14 @@ pub(crate) fn backfill_built_in_preset_metadata(conn: &Connection) -> Result<()>
             params![label, danger_flags, env, readiness],
         )?;
     }
+    // Grok submit is paste + one Return (steer). Only fills NULL so a
+    // user-edited flow is left alone. Reset built-ins recreates NULL rows
+    // and this pass stamps the Grok default again.
+    conn.execute(
+        "UPDATE agent_presets SET inject_flow = ?1 \
+         WHERE is_built_in = 1 AND label = 'Grok' AND inject_flow IS NULL",
+        params![crate::inject_flow::GROK_INJECT_FLOW_JSON],
+    )?;
     Ok(())
 }
 
@@ -1747,6 +1755,17 @@ mod tests {
         assert_eq!(
             row("Grok"),
             (Some(r#"["--always-approve"]"#.into()), None, Some("bracketed-paste".into()))
+        );
+        let grok_flow: Option<String> = conn
+            .query_row(
+                "SELECT inject_flow FROM agent_presets WHERE label = 'Grok' AND is_built_in = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            grok_flow.as_deref(),
+            Some(crate::inject_flow::GROK_INJECT_FLOW_JSON)
         );
         assert_eq!(row("Cursor Agent"), (None, None, Some("bracketed-paste".into())));
         assert_eq!(row("Pi"), (None, None, Some("settle:1500".into())));

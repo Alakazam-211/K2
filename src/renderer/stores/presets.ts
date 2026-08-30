@@ -42,12 +42,40 @@ export const DEFAULT_INJECT_FLOW: InjectFlowStep[] = [
   { key: 'return', waitMs: 120 },
 ]
 
+/** Grok: paste then one Return. Steer made the second CR a new turn. */
+export const GROK_INJECT_FLOW: InjectFlowStep[] = [
+  { key: 'paste', waitMs: 150 },
+  { key: 'return', waitMs: 250 },
+]
+
 export function cloneDefaultInjectFlow(): InjectFlowStep[] {
   return DEFAULT_INJECT_FLOW.map((s) => ({ ...s }))
 }
 
+export function cloneGrokInjectFlow(): InjectFlowStep[] {
+  return GROK_INJECT_FLOW.map((s) => ({ ...s }))
+}
+
+export function programIsGrok(command: string | null | undefined): boolean {
+  const token = (command ?? '').trim().split(/\s+/)[0] ?? ''
+  const base = token.split(/[/\\]/).pop()?.toLowerCase() ?? ''
+  return base === 'grok' || base === 'grok.exe' || base === 'grok.cmd'
+}
+
+export function cloneDefaultInjectFlowForCommand(command: string): InjectFlowStep[] {
+  return programIsGrok(command) ? cloneGrokInjectFlow() : cloneDefaultInjectFlow()
+}
+
 export function isDefaultInjectFlow(steps: InjectFlowStep[]): boolean {
   return JSON.stringify(steps) === JSON.stringify(DEFAULT_INJECT_FLOW)
+}
+
+export function isDefaultInjectFlowForCommand(
+  steps: InjectFlowStep[],
+  command: string,
+): boolean {
+  const expected = programIsGrok(command) ? GROK_INJECT_FLOW : DEFAULT_INJECT_FLOW
+  return JSON.stringify(steps) === JSON.stringify(expected)
 }
 
 /** GET is snake_case `inject_flow`; accept camelCase if a caller has it. */
@@ -64,26 +92,30 @@ export function readPresetInjectFlowJson(preset: {
   return null
 }
 
-export function parseInjectFlowOrDefault(raw: string | null | undefined): InjectFlowStep[] {
-  if (!raw) return cloneDefaultInjectFlow()
+export function parseInjectFlowOrDefault(
+  raw: string | null | undefined,
+  command?: string,
+): InjectFlowStep[] {
+  const fallback = cloneDefaultInjectFlowForCommand(command ?? '')
+  if (!raw) return fallback
   try {
     const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed) || parsed.length === 0) return cloneDefaultInjectFlow()
+    if (!Array.isArray(parsed) || parsed.length === 0) return fallback
     const steps: InjectFlowStep[] = []
     for (const item of parsed) {
-      if (!item || typeof item !== 'object') return cloneDefaultInjectFlow()
+      if (!item || typeof item !== 'object') return fallback
       const rec = item as { key?: unknown; waitMs?: unknown }
       if (rec.key !== 'paste' && rec.key !== 'esc' && rec.key !== 'space' && rec.key !== 'return') {
-        return cloneDefaultInjectFlow()
+        return fallback
       }
       if (typeof rec.waitMs !== 'number' || !Number.isInteger(rec.waitMs)) {
-        return cloneDefaultInjectFlow()
+        return fallback
       }
       steps.push({ key: rec.key, waitMs: rec.waitMs })
     }
     return steps
   } catch {
-    return cloneDefaultInjectFlow()
+    return fallback
   }
 }
 
@@ -96,7 +128,7 @@ export interface AgentPreset {
   sortOrder: number
   isBuiltIn: number
   createdAt: number
-  /** GET snake_case. NULL = default paste/return/return. */
+  /** GET snake_case. NULL = program default (Grok: one Return; else paste/return/return). */
   inject_flow?: string | null
 }
 

@@ -40,8 +40,11 @@ vi.mock('./tabs', () => ({
 import {
   usePresetsStore,
   cloneDefaultInjectFlow,
+  cloneDefaultInjectFlowForCommand,
   isDefaultInjectFlow,
+  isDefaultInjectFlowForCommand,
   parseInjectFlowOrDefault,
+  programIsGrok,
   readPresetInjectFlowJson,
   type AgentPreset,
 } from './presets'
@@ -196,5 +199,20 @@ describe('inject flow helpers', () => {
     expect(parsed[2]?.key).toBe('paste')
     expect(isDefaultInjectFlow(parsed)).toBe(false)
     expect(parseInjectFlowOrDefault('not-json')).toEqual(cloneDefaultInjectFlow())
+  })
+
+  it('uses paste plus one Return as the Grok default', () => {
+    expect(programIsGrok('grok --always-approve')).toBe(true)
+    expect(programIsGrok('/opt/homebrew/bin/grok')).toBe(true)
+    expect(programIsGrok('claude --dangerously-skip-permissions')).toBe(false)
+    const grokDefault = cloneDefaultInjectFlowForCommand('grok --always-approve')
+    expect(grokDefault).toEqual([
+      { key: 'paste', waitMs: 150 },
+      { key: 'return', waitMs: 250 },
+    ])
+    expect(isDefaultInjectFlowForCommand(grokDefault, 'grok')).toBe(true)
+    expect(isDefaultInjectFlow(grokDefault)).toBe(false)
+    expect(parseInjectFlowOrDefault(null, 'grok --always-approve')).toEqual(grokDefault)
+    expect(parseInjectFlowOrDefault(null, 'claude')).toEqual(cloneDefaultInjectFlow())
   })
 })

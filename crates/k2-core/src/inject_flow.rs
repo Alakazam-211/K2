@@ -72,12 +72,53 @@ pub const DEFAULT_INJECT_FLOW: [InjectStep; 3] = [
     },
 ];
 
+/// Grok default: paste then one Return. The second CR was insurance
+/// before steer; an extra Return now starts a new turn.
+pub const GROK_INJECT_FLOW: [InjectStep; 2] = [
+    InjectStep {
+        key: InjectKey::Paste,
+        wait_ms: 150,
+    },
+    InjectStep {
+        key: InjectKey::Return,
+        wait_ms: 250,
+    },
+];
+
+/// JSON twin of [`GROK_INJECT_FLOW`] for the built-in Grok seed/backfill.
+pub const GROK_INJECT_FLOW_JSON: &str =
+    r#"[{"key":"paste","waitMs":150},{"key":"return","waitMs":250}]"#;
+
 pub const MAX_STEPS: usize = 16;
 pub const MAX_WAIT_MS: u64 = 10_000;
 pub const MAX_WAIT_SUM_MS: u64 = 5_000;
 
 pub fn default_inject_flow() -> Vec<InjectStep> {
     DEFAULT_INJECT_FLOW.to_vec()
+}
+
+pub fn grok_inject_flow() -> Vec<InjectStep> {
+    GROK_INJECT_FLOW.to_vec()
+}
+
+/// Basename of a live PTY or preset first token is Grok.
+pub fn program_is_grok(live_program: Option<&str>) -> bool {
+    match command_basename(live_program.unwrap_or("")) {
+        Some(base) => {
+            let b = base.to_ascii_lowercase();
+            b == "grok" || b == "grok.exe" || b == "grok.cmd"
+        }
+        None => false,
+    }
+}
+
+/// NULL / no-match default: Grok is paste+one Return; everyone else D5.
+pub fn default_inject_flow_for_program(live_program: Option<&str>) -> Vec<InjectStep> {
+    if program_is_grok(live_program) {
+        grok_inject_flow()
+    } else {
+        default_inject_flow()
+    }
 }
 
 #[derive(Deserialize)]
@@ -217,14 +258,23 @@ pub fn match_preset_inject_flow<'a>(
 }
 
 /// Resolve the flow the interpreter should play for `live_program`.
-/// No match / NULL column / malformed JSON → [`default_inject_flow`].
+/// No match / NULL column / malformed JSON → [`default_inject_flow_for_program`].
 pub fn resolve_inject_flow_for_program(
     live_program: Option<&str>,
     presets: &[InjectFlowCandidate<'_>],
 ) -> Vec<InjectStep> {
     match match_preset_inject_flow(live_program, presets) {
-        None => default_inject_flow(),
-        Some(raw) => parse_inject_flow_or_default(raw),
+        None => default_inject_flow_for_program(live_program),
+        Some(None) => default_inject_flow_for_program(live_program),
+        Some(Some(raw)) => match validate_inject_flow_json(raw) {
+            Ok(steps) => steps,
+            Err(e) => {
+                crate::log_debug!(
+                    "[inject_flow] malformed or out of range ({e}) — using program default"
+                );
+                default_inject_flow_for_program(live_program)
+            }
+        },
     }
 }
 
@@ -516,6 +566,44 @@ mod tests {
         );
         assert_eq!(
             resolve_inject_flow_for_program(Some("claude"), &presets),
+            default_inject_flow()
+        );
+    }
+
+    #[test]
+    fn grok_default_is_paste_then_one_cr() {
+        let flow = grok_inject_flow();
+        assert_eq!(flow.len(), 2);
+        assert_eq!(flow[0].key, InjectKey::Paste);
+        assert_eq!(flow[0].wait_ms, 150);
+        assert_eq!(flow[1].key, InjectKey::Return);
+        assert_eq!(flow[1].wait_ms, 250);
+        let parsed = validate_inject_flow_json(GROK_INJECT_FLOW_JSON).expect("grok json");
+        assert_eq!(parsed, flow);
+        assert!(program_is_grok(Some("grok")));
+        assert!(program_is_grok(Some("/opt/homebrew/bin/grok")));
+        assert!(program_is_grok(Some("grok.exe")));
+        assert!(!program_is_grok(Some("claude")));
+    }
+
+    #[test]
+    fn grok_null_column_and_unmatched_grok_use_one_cr() {
+        let presets = [InjectFlowCandidate {
+            command: "grok --always-approve",
+            inject_flow: None,
+            sort_order: 0,
+            label: "Grok",
+        }];
+        assert_eq!(
+            resolve_inject_flow_for_program(Some("grok"), &presets),
+            grok_inject_flow()
+        );
+        assert_eq!(
+            resolve_inject_flow_for_program(Some("/usr/bin/grok"), &[]),
+            grok_inject_flow()
+        );
+        assert_eq!(
+            resolve_inject_flow_for_program(Some("claude"), &[]),
             default_inject_flow()
         );
     }

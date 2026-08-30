@@ -4,7 +4,8 @@ import { useSettingsStore } from '@/stores/settings'
 import {
   usePresetsStore,
   cloneDefaultInjectFlow,
-  isDefaultInjectFlow,
+  cloneDefaultInjectFlowForCommand,
+  isDefaultInjectFlowForCommand,
   parseInjectFlowOrDefault,
   readPresetInjectFlowJson,
   type InjectFlowKey,
@@ -197,9 +198,11 @@ const EMPTY_PRESET_FORM: PresetFormState = {
 
 function SubmitKeysEditor({
   steps,
+  command,
   onChange,
 }: {
   steps: InjectFlowStep[]
+  command: string
   onChange: (next: InjectFlowStep[]) => void
 }): React.JSX.Element {
   const setStep = (i: number, patch: Partial<InjectFlowStep>): void => {
@@ -310,7 +313,7 @@ function SubmitKeysEditor({
         </button>
         <button
           type="button"
-          onClick={() => onChange(cloneDefaultInjectFlow())}
+          onClick={() => onChange(cloneDefaultInjectFlowForCommand(command))}
           className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer font-mono"
         >
           Reset to default
@@ -449,7 +452,7 @@ export function AgentsSection(): React.JSX.Element {
       label: preset.label,
       command: preset.command,
       icon: preset.icon ?? '',
-      injectFlow: parseInjectFlowOrDefault(readPresetInjectFlowJson(preset)),
+      injectFlow: parseInjectFlowOrDefault(readPresetInjectFlowJson(preset), preset.command),
       injectFlowTouched: false,
     })
   }, [])
@@ -480,7 +483,7 @@ export function AgentsSection(): React.JSX.Element {
     if (!presetForm.label.trim() || !presetForm.command.trim()) return
     try {
       const injectPayload = presetForm.injectFlowTouched
-        ? isDefaultInjectFlow(presetForm.injectFlow)
+        ? isDefaultInjectFlowForCommand(presetForm.injectFlow, presetForm.command)
           ? ''
           : JSON.stringify(presetForm.injectFlow)
         : undefined
@@ -726,6 +729,7 @@ export function AgentsSection(): React.JSX.Element {
               </div>
               <SubmitKeysEditor
                 steps={presetForm.injectFlow}
+                command={presetForm.command}
                 onChange={(injectFlow) =>
                   setPresetForm((s) => ({ ...s, injectFlow, injectFlowTouched: true }))
                 }

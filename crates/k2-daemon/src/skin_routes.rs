@@ -184,6 +184,35 @@ pub fn handle_front_door_get() -> CliResponse {
     status_json()
 }
 
+pub fn handle_hydra_get() -> CliResponse {
+    CliResponse::ok_json(crate::skin_hydra::status_json().to_string())
+}
+
+pub fn handle_hydra_post(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let enabled = match v.get("enabled").or_else(|| v.get("Enabled")) {
+        Some(x) => match x.as_bool() {
+            Some(b) => b,
+            None => return CliResponse::bad_request("enabled must be true or false"),
+        },
+        None => return CliResponse::bad_request("missing enabled (true|false)"),
+    };
+    let apply = apply_field(&v);
+    match crate::skin_hydra::apply(enabled, apply) {
+        Ok(st) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} hydra enabled={enabled} apply={apply} running={}",
+                st.get("running").and_then(|x| x.as_bool()).unwrap_or(false)
+            );
+            CliResponse::ok_json(st.to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 pub fn handle_front_door_post(body: &[u8], actor: &str, daemon_port: u16) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
@@ -279,7 +308,7 @@ pub fn owner_only_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "owner_only",
-                "hint": "requires owner/admin — ask your human (k2 skin user add/remove, skin-token create/revoke, and front-door apply are owner surfaces; use k2 skin user list / k2 skin-token list to read the roster)",
+                "hint": "requires owner/admin — ask your human (k2 skin user add/remove, skin-token create/revoke, front-door apply, and hydra on/off are owner surfaces; use k2 skin user list / k2 skin-token list to read the roster)",
             },
         })
         .to_string(),
@@ -307,5 +336,52 @@ mod tests {
             "must not look like a broken passport: {}",
             r.body
         );
+    }
+
+    #[test]
+    fn hydra_get_unsupported_on_non_linux() {
+        let _g = crate::skin_hydra::hydra_test_lock();
+        k2_core::db::init_for_tests();
+        {
+            let db = k2_core::db::shared();
+            let _ = db.lock().execute("DELETE FROM skin_hydra", []);
+        }
+        crate::skin_hydra::stop();
+        if cfg!(target_os = "linux") {
+            return;
+        }
+        let r = handle_hydra_get();
+        assert_eq!(r.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["supported"], false, "{}", r.body);
+        assert_eq!(v["enabled"], false, "{}", r.body);
+        assert_eq!(v["running"], false, "{}", r.body);
+        assert!(
+            v["hint"].as_str().unwrap_or("").contains("LINUX"),
+            "{}",
+            r.body
+        );
+    }
+
+    #[test]
+    fn hydra_post_off_is_not_running() {
+        let _g = crate::skin_hydra::hydra_test_lock();
+        k2_core::db::init_for_tests();
+        {
+            let db = k2_core::db::shared();
+            let _ = db.lock().execute("DELETE FROM skin_hydra", []);
+        }
+        let r = handle_hydra_post(br#"{"enabled":false,"apply":true}"#, "owner");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["enabled"], false, "{}", r.body);
+        assert_eq!(v["running"], false, "{}", r.body);
+    }
+
+    #[test]
+    fn hydra_post_requires_enabled() {
+        let r = handle_hydra_post(br#"{}"#, "owner");
+        assert_eq!(r.status, "400 Bad Request");
+        assert!(r.body.contains("enabled"), "{}", r.body);
     }
 }

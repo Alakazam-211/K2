@@ -815,15 +815,16 @@ async fn handle_one_request(
             | "/cli/api-keys/revoke"
             | "/cli/api-keys/disable"
             | "/cli/api-keys/enable"
-            // Skin slice 1+2+3 — guest list + k2skn_ passes + Caddy front door.
-            // GET users/tokens: owner_role_identity OR scoped hook.
-            // Mutations + front-door: owner_role_identity (valid hooks get
-            // teaching owner_only). GET twins for mutations 405.
+            // Skin slice 1+2+3+123 — guest list + k2skn_ passes + Caddy front
+            // door + Hydra OIDC sidecar. GET users/tokens: owner_role_identity
+            // OR scoped hook. Mutations + front-door + hydra: owner_role_identity
+            // (valid hooks get teaching owner_only). GET twins for mutations 405.
             | "/cli/skin/users"
             | "/cli/skin/users/remove"
             | "/cli/skin-tokens"
             | "/cli/skin-tokens/revoke"
             | "/cli/skin/front-door"
+            | "/cli/skin/hydra"
             // F2 host read-back (prd-v1-api-completion §4) — the in-session
             // agent's RESPONSE egress over loopback TCP (`k2 respond` from a
             // HOST session, which has no per-cell UDS worth of jail). Auth is
@@ -5028,11 +5029,11 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
-        // Skin slice 1+2+3 — guest list, k2skn_ passes, Caddy front door.
-        // GET users/tokens: owner_role_identity OR scoped hook (workspace
-        // agent passport). Admin/Member connect sessions stay 403.
-        // Mutations + GET/POST front-door: owner_role_identity; a valid
-        // scoped hook gets teaching `owner_only` (never the opaque
+        // Skin slice 1+2+3+123 — guest list, k2skn_ passes, Caddy front door,
+        // Hydra OIDC sidecar. GET users/tokens: owner_role_identity OR scoped
+        // hook (workspace agent passport). Admin/Member connect sessions stay
+        // 403. Mutations + GET/POST front-door + hydra: owner_role_identity;
+        // a valid scoped hook gets teaching `owner_only` (never the opaque
         // invalid-token string). Skin tokens themselves never manage the
         // roster. Mutations POST-only; GET twins 405.
         p if p.starts_with("/cli/skin") => {
@@ -5205,6 +5206,43 @@ async fn handle_one_request(
                         skin_dual_auth_failure(&query, bearer_token.as_deref())
                     } else {
                         tokio::task::spawn_blocking(crate::skin_routes::handle_front_door_get)
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                    }
+                }
+                "/cli/skin/hydra" if is_post => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_hydra_post(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/hydra" => {
+                    let _ = stream.read(&mut buf).await;
+                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+                        skin_dual_auth_failure(&query, bearer_token.as_deref())
+                    } else {
+                        tokio::task::spawn_blocking(crate::skin_routes::handle_hydra_get)
                             .await
                             .unwrap_or_else(|e| {
                                 crate::cli_response::CliResponse::internal_error(e)

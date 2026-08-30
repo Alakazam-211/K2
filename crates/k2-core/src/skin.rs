@@ -777,6 +777,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_caps_still_rejects_store_write() {
+        let err = parse_caps(Some(&["store:write".into()])).unwrap_err();
+        assert!(err.contains("unknown capability"), "{err}");
+        assert!(err.contains("store:write"), "{err}");
+        assert!(
+            parse_caps(Some(&["thread:read".into()])).is_ok(),
+            "thread:read remains accepted"
+        );
+        let err = parse_caps(Some(&["thread:read".into(), "store:write".into()])).unwrap_err();
+        assert!(err.contains("store:write"), "{err}");
+    }
+
+    #[test]
     fn mint_requires_principal_and_rejects_unknown_caps() {
         with_temp_home(|| {
             let err = create_token("ghost", None).unwrap_err();

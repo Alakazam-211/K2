@@ -25003,6 +25003,9 @@ Postgres stays loopback. Off-box *.k2.dev:
 
 Documents: k2 store … (same DB). Files: workspace FS. No k2 hostdb.
 
+Skin RLS (optional, not auto-applied; no FORCE RLS / no SET ROLE):
+  crates/k2-daemon/src/sql/skin_rls_template.sql — commented CREATE ROLE skin_<id> NOLOGIN + POLICY.
+
 Exit: 0 ok · 1 error · 2 usage · 3 owner-only / gated
 EOF
 }

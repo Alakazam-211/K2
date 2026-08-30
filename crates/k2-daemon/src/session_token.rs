@@ -531,8 +531,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         // free for any authenticated agent principal.
         "/cli/connections",
         // Skin roster GET (`k2 skin user list` / `k2 skin-token list`).
-        // Exact paths only — do not prefix `/cli/skin/` (front-door and
-        // users/remove stay owner). POST on these same paths is still
+        // Exact paths only — do not prefix `/cli/skin/` (front-door, hydra,
+        // and users/remove stay owner). POST on these same paths is still
         // owner-gated in the dispatcher (teaching `owner_only`).
         "/cli/skin/users",
         "/cli/skin-tokens",
@@ -1283,6 +1283,10 @@ mod tests {
         assert!(
             !is_agent_verb("/cli/skin/front-door"),
             "must not allow-prefix /cli/skin/ (front-door is owner-only)"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin/hydra"),
+            "hydra sidecar is owner-only"
         );
         assert!(
             !is_agent_verb("/cli/skin/"),

@@ -12,6 +12,14 @@ pub mod secrets;
 pub mod supervisor;
 pub mod sysops;
 
+/// Optional `skin_*` dump template (not auto-applied by create_database).
+/// Commented `CREATE ROLE skin_<id> NOLOGIN` + POLICY; no FORCE RLS.
+#[allow(dead_code)]
+pub const SKIN_RLS_TEMPLATE: &str = include_str!("skin_rls_template.sql");
+
+/// Help/doctor pointer — copy into `.k2/db/migrations` only if wanted.
+pub const SKIN_RLS_TEMPLATE_HINT: &str = "crates/k2-daemon/src/sql/skin_rls_template.sql — commented CREATE ROLE skin_<id> NOLOGIN + POLICY; no FORCE RLS; not auto-applied; no SET ROLE.";
+
 /// The single capability gate for the SQL sidecar (D4): V1 runs on
 /// **Linux deployments only**. RUNTIME `cfg!`, not a compile-time
 /// `#[cfg]` on the module — compiles + unit-tests on macOS.
@@ -53,6 +61,29 @@ mod tests {
     #[test]
     fn sql_supported_matches_target_os() {
         assert_eq!(sql_supported(), cfg!(target_os = "linux"));
+    }
+
+    #[test]
+    fn skin_rls_template_is_commented_nologin_policy_without_force() {
+        let t = SKIN_RLS_TEMPLATE;
+        let up = t.to_ascii_uppercase();
+        assert!(t.contains("CREATE ROLE skin_<id> NOLOGIN"), "{t}");
+        assert!(up.contains("NOLOGIN"), "{t}");
+        assert!(up.contains("CREATE POLICY"), "{t}");
+        assert!(t.contains("principal_id"), "{t}");
+        assert!(
+            !up.contains("FORCE ROW LEVEL"),
+            "template must not contain FORCE ROW LEVEL (migrate refuses that substring even in comments): {t}"
+        );
+        assert!(t.contains("Do not FORCE RLS"), "{t}");
+        assert!(
+            SKIN_RLS_TEMPLATE_HINT.contains("skin_rls_template.sql"),
+            "{SKIN_RLS_TEMPLATE_HINT}"
+        );
+        assert!(
+            SKIN_RLS_TEMPLATE_HINT.contains("no FORCE RLS"),
+            "{SKIN_RLS_TEMPLATE_HINT}"
+        );
     }
 
     #[test]
@@ -133,6 +164,18 @@ mod tests {
             "explicit GRANT on _k2_store missing from helper_sql: {helper}"
         );
         assert!(helper.contains("_k2_store"), "{helper}");
+        assert!(
+            helper.contains("_agent"),
+            "create_database GRANT path must still target ws_*_agent: {helper}"
+        );
+        assert!(
+            !helper.to_ascii_uppercase().contains("CREATE ROLE SKIN_"),
+            "create_database must not mint skin_* roles: {helper}"
+        );
+        assert!(
+            !helper.to_ascii_uppercase().contains("FORCE ROW LEVEL"),
+            "{helper}"
+        );
         let cat = ops::catalog_json(None);
         let dbs = cat["databases"].as_array().expect("databases");
         let row = dbs.iter().find(|d| d["name"] == v["name"]).expect("listed");
@@ -438,6 +481,34 @@ mod tests {
         assert!(
             err.hint().contains(&mig.to_string_lossy().into_owned()),
             "hint names the dir: {}",
+            err.hint()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_refuses_force_rls() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-force-rls-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        std::fs::write(
+            mig.join("0001_init.sql"),
+            b"ALTER TABLE t FORCE ROW LEVEL SECURITY;\n",
+        )
+        .unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-force-rls", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let err = ops::migrate(&ops, &secrets, &pid, &path, None).expect_err("force rls");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        assert!(
+            err.hint().contains("FORCE RLS"),
+            "must refuse FORCE RLS: {}",
             err.hint()
         );
         let _ = std::fs::remove_dir_all(dir);

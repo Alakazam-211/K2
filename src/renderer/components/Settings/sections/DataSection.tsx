@@ -1,9 +1,10 @@
 // Settings → Data (prd-workspace-data-sidecar-v1 D23) — owner surface:
 // supervised Postgres sidecar, workspace databases, and sql_grants
 // (manage / read / write). Mail-shaped master-detail. Thin client:
-// daemon `/cli/db/*` is the only catalog. No fetchProjects in render
-// paths (workspace picker reads the already-loaded store; mutations
-// are optimistic). Headless CLI still works with no UI.
+// daemon `/cli/db/*` is the only catalog. Grants are workspaces, never
+// skin people. No fetchProjects in render paths (workspace picker reads
+// the already-loaded store; mutations are optimistic). Headless CLI
+// still works with no UI.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
@@ -50,7 +51,7 @@ export const DATA_MANIFEST: SettingEntry[] = [
     id: 'data.grants',
     section: 'data',
     label: 'Database access',
-    description: 'Grant other workspaces manage / read / write',
+    description: 'Grant other workspaces manage / read / write (not skin people)',
     keywords: ['grant', 'access', 'read', 'write', 'manage', 'workspace'],
   },
   {

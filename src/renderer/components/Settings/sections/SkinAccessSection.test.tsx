@@ -23,6 +23,7 @@ import {
   parseFrontDoor,
   parseSkinUsers,
   parseSkinTokens,
+  parseHydra,
   mintSecretFrom,
   prefixLabel,
 } from './SkinAccessSection'
@@ -36,6 +37,24 @@ const KEY_ROW = {
   caps: ['thread:read', 'thread:post'],
 }
 
+const HYDRA_UNSUPPORTED = {
+  supported: false,
+  enabled: false,
+  running: false,
+  publicUrl: 'http://127.0.0.1:4444/',
+  adminUrl: 'http://127.0.0.1:4445/',
+  hint: 'THIS FEATURE ONLY WORKS ON LINUX DEPLOYMENTS, THIS PAGE IS JUST HERE FOR EXAMPLE PURPOSES.',
+}
+
+const HYDRA_SUPPORTED = {
+  supported: true,
+  enabled: false,
+  running: false,
+  publicUrl: 'http://127.0.0.1:4444/',
+  adminUrl: 'http://127.0.0.1:4445/',
+  hint: 'Off. Enabling skins does not start Hydra. Subject = skin principal id; no users in Hydra.',
+}
+
 function mockOk(): void {
   h.daemonCliGet.mockImplementation(async (route: string) => {
     if (route === 'skin/front-door') {
@@ -43,6 +62,7 @@ function mockOk(): void {
     }
     if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
     if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+    if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
     throw new Error(`unexpected GET ${route}`)
   })
   h.daemonCliPost.mockResolvedValue({ ok: true })
@@ -156,6 +176,18 @@ describe('parsers', () => {
     expect(parseSkinUsers([USER_BOB])).toEqual([{ username: 'bob', createdAt: null }])
   })
 
+  it('parseHydra reads supported/enabled/running and URLs', () => {
+    expect(parseHydra(HYDRA_UNSUPPORTED)).toEqual({
+      supported: false,
+      enabled: false,
+      running: false,
+      publicUrl: 'http://127.0.0.1:4444/',
+      adminUrl: 'http://127.0.0.1:4445/',
+      hint: HYDRA_UNSUPPORTED.hint,
+    })
+    expect(parseHydra({ supported: true, enabled: true, running: false }).supported).toBe(true)
+  })
+
   it('parseSkinTokens keeps prefix + caps; mintSecretFrom is once-only', () => {
     expect(parseSkinTokens({ tokens: [KEY_ROW] })[0]).toEqual({
       id: 'tok-1',
@@ -201,6 +233,7 @@ describe('SkinAccessSection', () => {
       if (route === 'skin/front-door') return { mode: 'direct', listen: ':443' }
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -243,6 +276,7 @@ describe('SkinAccessSection', () => {
       if (route === 'skin/front-door') return CADDY_MISSING_FIXTURE
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -258,6 +292,7 @@ describe('SkinAccessSection', () => {
       if (route === 'skin/front-door') return NESTED_REGISTERED_FIXTURE
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -273,6 +308,7 @@ describe('SkinAccessSection', () => {
       }
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -365,13 +401,42 @@ describe('SkinAccessSection', () => {
     confirm.mockRestore()
   })
 
-  it('shows Hydra toggle disabled and off — never POSTs hydra', async () => {
+  it('unsupported Hydra toggle is disabled and does not POST', async () => {
     render(<SkinAccessSection />)
     await loaded()
+    expect(h.daemonCliGet.mock.calls.map((c) => c[0])).toContain('skin/hydra')
+    expect(screen.getByText(/THIS FEATURE ONLY WORKS ON LINUX DEPLOYMENTS/i)).not.toBeNull()
     const sw = screen.getByRole('switch', { name: 'Turn on Hydra OIDC issuer' })
     expect(sw.getAttribute('aria-checked')).toBe('false')
     expect((sw as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(sw)
     expect(h.daemonCliPost.mock.calls.map((c) => String(c[0])).join(' ')).not.toMatch(/hydra/i)
+  })
+
+  it('supported Hydra toggle POSTs {enabled, apply:true} when owner', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/front-door') {
+        return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
+      }
+      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      if (route === 'skin/hydra') return HYDRA_SUPPORTED
+      throw new Error(`unexpected GET ${route}`)
+    })
+    h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
+      if (route === 'skin/hydra') {
+        const rec = (body ?? {}) as { enabled?: boolean }
+        return { ...HYDRA_SUPPORTED, enabled: rec.enabled === true, running: rec.enabled === true }
+      }
+      return { ok: true }
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    const sw = screen.getByRole('switch', { name: 'Turn on Hydra OIDC issuer' })
+    expect((sw as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(sw)
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/hydra', { enabled: true, apply: true })
+    })
   })
 })

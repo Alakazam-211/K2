@@ -1,6 +1,7 @@
 // Settings → Sidecars → Skin Access (prd-skin-system-v1 U3, prd-skin-auth-v1 S8/S11/S12).
 // Owner surface: front door (POST apply + live Caddy/nested status), skin-user
-// roster (NOT Server Access), k2skn_ keys (secret once at mint). Hydra stays off.
+// roster (NOT Server Access), k2skn_ keys (secret once at mint). Hydra is
+// opt-in (Linux sidecar; Mac supported=false). Enable skins ≠ start Hydra.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -47,7 +48,7 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
     id: 'skin-access.hydra',
     section: 'skin-access',
     label: 'OIDC issuer (Hydra)',
-    description: 'Opt-in Hydra sidecar — off; enabling skins does not start Hydra',
+    description: 'Opt-in Hydra sidecar — Linux loopback 4444/4445; enabling skins does not start Hydra',
     keywords: ['oidc', 'hydra', 'issuer', 'openid'],
     group: 'OIDC issuer (Hydra)',
   },
@@ -96,6 +97,27 @@ export type SkinTokenRow = {
   prefix: string
   username: string
   caps: string[]
+}
+
+export type SkinHydra = {
+  supported: boolean
+  enabled: boolean
+  running: boolean
+  publicUrl: string | null
+  adminUrl: string | null
+  hint: string | null
+}
+
+const HYDRA_LINUX_BANNER =
+  'THIS FEATURE ONLY WORKS ON LINUX DEPLOYMENTS, THIS PAGE IS JUST HERE FOR EXAMPLE PURPOSES.'
+
+export const DEFAULT_HYDRA: SkinHydra = {
+  supported: false,
+  enabled: false,
+  running: false,
+  publicUrl: 'http://127.0.0.1:4444/',
+  adminUrl: 'http://127.0.0.1:4445/',
+  hint: HYDRA_LINUX_BANNER,
 }
 
 const CONNECT_URL_STUB = 'https://skin.<sub>.k2.dev'
@@ -266,6 +288,18 @@ export function parseSkinTokens(raw: unknown): SkinTokenRow[] {
   })
 }
 
+export function parseHydra(raw: unknown): SkinHydra {
+  const rec = asRecord(raw)
+  return {
+    supported: asBool(rec.supported) ?? false,
+    enabled: asBool(rec.enabled) ?? false,
+    running: asBool(rec.running) ?? false,
+    publicUrl: asString(rec.publicUrl) ?? asString(rec.public_url),
+    adminUrl: asString(rec.adminUrl) ?? asString(rec.admin_url),
+    hint: asString(rec.hint),
+  }
+}
+
 export function mintSecretFrom(raw: unknown): string | null {
   const rec = asRecord(raw)
   for (const k of ['secret', 'key', 'token']) {
@@ -350,6 +384,8 @@ export function SkinAccessSection(): React.JSX.Element {
   const [mintedSecret, setMintedSecret] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [doorBusy, setDoorBusy] = useState(false)
+  const [hydra, setHydra] = useState<SkinHydra>(DEFAULT_HYDRA)
+  const [hydraBusy, setHydraBusy] = useState(false)
 
   const refresh = useCallback(async () => {
     setError(null)
@@ -375,6 +411,13 @@ export function SkinAccessSection(): React.JSX.Element {
     } catch (e) {
       failures.push(`keys: ${errText(e)}`)
       setTokens([])
+    }
+    try {
+      const h = await daemonCliGet<unknown>('skin/hydra')
+      setHydra(parseHydra(h))
+    } catch (e) {
+      failures.push(`hydra: ${errText(e)}`)
+      setHydra(DEFAULT_HYDRA)
     }
     if (failures.length) setError(failures.join(' · '))
     setLoading(false)
@@ -507,6 +550,29 @@ export function SkinAccessSection(): React.JSX.Element {
       setMintBusy(false)
     }
   }, [mintUsername, mintCaps, refresh])
+
+  const persistHydra = useCallback(
+    async (enabled: boolean) => {
+      if (!hydra.supported) {
+        setError(hydra.hint ?? HYDRA_LINUX_BANNER)
+        return
+      }
+      setHydraBusy(true)
+      setError(null)
+      const prev = hydra
+      setHydra((h) => ({ ...h, enabled }))
+      try {
+        const posted = await daemonCliPost<unknown>('skin/hydra', { enabled, apply: true })
+        setHydra(parseHydra(posted))
+      } catch (e) {
+        setHydra(prev)
+        setError(`hydra: ${errText(e)}`)
+      } finally {
+        setHydraBusy(false)
+      }
+    },
+    [hydra],
+  )
 
   const revokeKey = useCallback(
     async (id: string) => {
@@ -850,21 +916,36 @@ export function SkinAccessSection(): React.JSX.Element {
 
         <SettingsGroup title="OIDC issuer (Hydra)">
           <div data-settings-id="skin-access.hydra" className="space-y-2">
+            {!hydra.supported ? (
+              <p className="text-[10px] text-[var(--color-status-warn)] leading-relaxed">
+                {HYDRA_LINUX_BANNER}
+              </p>
+            ) : null}
             <div className="flex items-center justify-between py-2">
               <div className="flex-1 min-w-0 mr-3">
                 <span className="text-xs text-[var(--color-text-secondary)]">
                   Turn on — this box issues standard OIDC tickets
                 </span>
                 <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-                  Off. Enabling skins does not start Hydra. Subject = skin principal id; no users
-                  in Hydra.
+                  {hydra.supported
+                    ? hydra.hint ??
+                      'Off. Enabling skins does not start Hydra. Subject = skin principal id; no users in Hydra.'
+                    : 'Off. Enabling skins does not start Hydra. Subject = skin principal id; no users in Hydra.'}
                 </p>
+                {hydra.publicUrl || hydra.adminUrl ? (
+                  <p className="text-[10px] font-mono text-[var(--color-text-muted)] mt-1">
+                    {hydra.publicUrl ? `public ${hydra.publicUrl}` : null}
+                    {hydra.publicUrl && hydra.adminUrl ? ' · ' : null}
+                    {hydra.adminUrl ? `admin ${hydra.adminUrl}` : null}
+                    {hydra.running ? ' · running' : ' · not running'}
+                  </p>
+                ) : null}
               </div>
               <Toggle
-                checked={false}
-                disabled
-                onChange={() => {
-                  /* Hydra sidecar is a later slice — toggle stays off. */
+                checked={hydra.enabled}
+                disabled={!hydra.supported || hydraBusy || loading}
+                onChange={(on) => {
+                  void persistHydra(on)
                 }}
                 aria-label="Turn on Hydra OIDC issuer"
               />

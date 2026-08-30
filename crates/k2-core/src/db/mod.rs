@@ -937,6 +937,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0111_preset_inject_flow",
             include_str!("../../drizzle_sql/0111_preset_inject_flow.sql"),
         ),
+        // 0112 — Skin Hydra sidecar singleton (enabled on/off). Enable skins
+        // does not start Hydra. Absence of the row is off.
+        (
+            "0112_skin_hydra",
+            include_str!("../../drizzle_sql/0112_skin_hydra.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1538,7 +1544,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0111_preset_inject_flow",
+            last_name, "0112_skin_hydra",
             "unexpected last migration name: {last_name}"
         );
     }

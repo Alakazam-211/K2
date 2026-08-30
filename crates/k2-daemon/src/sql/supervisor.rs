@@ -740,6 +740,7 @@ pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
             .map(|(k, v)| (*k, *v))
             .collect::<std::collections::BTreeMap<_, _>>(),
         "hint": hint,
+        "skinRlsTemplate": super::SKIN_RLS_TEMPLATE_HINT,
     })
 }
 

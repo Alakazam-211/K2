@@ -35,6 +35,15 @@ describe('data-api helpers', () => {
     expect(sales.dbAgentAccess).toBe('off')
   })
 
+  it('Settings → Data does not list skin people', () => {
+    const blob = JSON.stringify({ SAMPLE_STATUS, SAMPLE_DATABASES }).toLowerCase()
+    expect(blob).not.toContain('skin user')
+    expect(blob).not.toContain('k2skn')
+    expect(blob).not.toContain('skin_')
+    const sales = SAMPLE_DATABASES.find((d) => d.name === 'ws_sales') as SqlDatabase
+    expect(sales.grants.every((g) => g.workspace && g.projectId)).toBe(true)
+  })
+
   it('formatSqlListen does not double-append port', () => {
     expect(formatSqlListen('localhost', 5432)).toBe('localhost:5432')
     expect(formatSqlListen('localhost:15432', 15432)).toBe('localhost:15432')

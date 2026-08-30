@@ -483,12 +483,7 @@ async fn skin_workspace_agent_hook_can_list_but_not_mint() {
         let (_id, raw_secret) = mint(port, "guest", &["thread:read"]);
         let hook = mint_scoped_hook();
 
-        let users = http(
-            port,
-            "GET",
-            &format!("/cli/skin/users?token={hook}"),
-            None,
-        );
+        let users = http(port, "GET", &format!("/cli/skin/users?token={hook}"), None);
         assert_eq!(
             users.status, 200,
             "workspace-agent hook GET users; {}",
@@ -502,12 +497,7 @@ async fn skin_workspace_agent_hook_can_list_but_not_mint() {
             users.body
         );
 
-        let tokens = http(
-            port,
-            "GET",
-            &format!("/cli/skin-tokens?token={hook}"),
-            None,
-        );
+        let tokens = http(port, "GET", &format!("/cli/skin-tokens?token={hook}"), None);
         assert_eq!(
             tokens.status, 200,
             "workspace-agent hook GET tokens; {}",
@@ -573,7 +563,11 @@ async fn skin_workspace_agent_hook_can_list_but_not_mint() {
             &format!("/cli/skin/front-door?token={hook}"),
             None,
         );
-        assert_eq!(door.status, 403, "front-door stays owner-only; {}", door.body);
+        assert_eq!(
+            door.status, 403,
+            "front-door stays owner-only; {}",
+            door.body
+        );
         assert!(
             door.body.contains("owner_only"),
             "valid hook on GET front-door must teach owner_only: {}",
@@ -708,6 +702,54 @@ async fn skin_front_door_apply_without_caddy_is_400() {
             "must teach install: {}",
             r.body
         );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_hydra_get_owner_status_and_post_off_not_running() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let missing = http(port, "GET", "/cli/skin/hydra", None);
+        assert_eq!(missing.status, 403, "{}", missing.body);
+
+        let get = http(
+            port,
+            "GET",
+            &format!("/cli/skin/hydra?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(get.status, 200, "{}", get.body);
+        let v = json(&get.body);
+        assert_eq!(v["supported"], cfg!(target_os = "linux"), "{}", get.body);
+        assert_eq!(v["enabled"], false, "{}", get.body);
+        assert_eq!(v["running"], false, "{}", get.body);
+        assert!(v.get("publicUrl").is_some(), "{}", get.body);
+        assert!(v.get("adminUrl").is_some(), "{}", get.body);
+        assert!(
+            v.get("hint").and_then(|h| h.as_str()).is_some(),
+            "{}",
+            get.body
+        );
+        if !cfg!(target_os = "linux") {
+            assert!(
+                v["hint"].as_str().unwrap_or("").contains("LINUX"),
+                "Mac banner: {}",
+                get.body
+            );
+        }
+
+        let off = http(
+            port,
+            "POST",
+            &format!("/cli/skin/hydra?token={OWNER_TOKEN}"),
+            Some(r#"{"enabled":false,"apply":true}"#),
+        );
+        assert_eq!(off.status, 200, "{}", off.body);
+        let o = json(&off.body);
+        assert_eq!(o["enabled"], false, "{}", off.body);
+        assert_eq!(o["running"], false, "{}", off.body);
     });
 }
 

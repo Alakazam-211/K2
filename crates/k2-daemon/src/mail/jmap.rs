@@ -335,8 +335,9 @@ impl StalwartClient {
     ///   to the LOOPBACK mgmt bind (`127.0.0.1:8180`) — this is both
     ///   "setup listener off" (pre-mortem #13) and the permanent mgmt
     ///   endpoint in one move;
-    /// - bind `https` per the port plan (`[::]:443` for `tls-alpn`,
-    ///   loopback `127.0.0.1:8443` otherwise);
+    /// - bind `https` per the port plan (`[::]:443` for `tls-alpn` only
+    ///   when Caddy is not the box :443 Host router; loopback
+    ///   `127.0.0.1:8443` for http-01 / dns-01 — never `[::]:443` then);
     /// - create the missing STARTTLS `submission` listener on :587.
     /// NOTE (✔ live-verified): the set succeeds but sockets only move
     /// on the supervisor's final RESTART.
@@ -345,7 +346,7 @@ impl StalwartClient {
         port_plan: &str,
         listeners: &[ListenerInfo],
     ) -> Result<(), String> {
-        let https_bind = if port_plan == "tls-alpn" { "[::]:443" } else { "127.0.0.1:8443" };
+        let https_bind = super::preflight::https_listener_bind(port_plan);
         let mut destroy: Vec<String> = Vec::new();
         let mut update = serde_json::Map::new();
         let mut create = serde_json::Map::new();

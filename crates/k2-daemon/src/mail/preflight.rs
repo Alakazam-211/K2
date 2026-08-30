@@ -60,6 +60,11 @@ pub struct PreflightCheck {
 /// `tls-alpn` when :443 is free (plan A), else `http-01` (plan C, the
 /// no-assumptions default; the wizard upgrades to `dns-01`/plan B if
 /// the owner supplies a DNS-API token in a later slice).
+///
+/// When Skin Direct is on or box Caddy owns/will own :443, plan A is
+/// skipped even if :443 looks free — Caddy is the :443 Host router,
+/// Stalwart HTTPS stays on `127.0.0.1:8443`, `requestTlsCertificate`
+/// is false.
 #[derive(Debug, Clone)]
 pub struct PreflightReport {
     pub checks: Vec<PreflightCheck>,
@@ -99,6 +104,32 @@ pub trait PreflightEnv {
     fn outbound_25(&self) -> Result<(), String>;
     fn disk_free_bytes(&self) -> Option<u64>;
     fn total_ram_bytes(&self) -> Option<u64>;
+    /// Skin Direct is on, or box Caddy already/will own :443. Tests
+    /// inject this flag — never bind a real privileged port.
+    fn router_owns_443(&self) -> bool {
+        false
+    }
+    /// DNS-01 provider token already stored (keep plan B).
+    fn dns01_token_present(&self) -> bool {
+        false
+    }
+}
+
+/// Stalwart asks ACME for a cert itself only on plan A (tls-alpn).
+/// http-01 / dns-01: Caddy (or DNS) owns issuance; this is always false
+/// when the box :443 Host router is in play.
+pub fn request_tls_certificate(port_plan: &str) -> bool {
+    port_plan == "tls-alpn"
+}
+
+/// HTTPS bind for the Stalwart `https` listener. Never `[::]:443` on
+/// http-01 / dns-01 — Caddy reverse-proxies the mail Host to loopback.
+pub fn https_listener_bind(port_plan: &str) -> &'static str {
+    if port_plan == "tls-alpn" {
+        "[::]:443"
+    } else {
+        "127.0.0.1:8443"
+    }
 }
 
 const MIN_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GB (soft)
@@ -138,7 +169,11 @@ pub fn run_preflight(env: &dyn PreflightEnv) -> PreflightReport {
                 detail: "skipped — not a Linux host".into(),
             });
         }
-        return PreflightReport { checks, port_plan: None, ok: false };
+        return PreflightReport {
+            checks,
+            port_plan: None,
+            ok: false,
+        };
     }
     checks.push(PreflightCheck {
         id: "os",
@@ -185,32 +220,65 @@ pub fn run_preflight(env: &dyn PreflightEnv) -> PreflightReport {
         }
     }
 
-    // :443 → port plan (§5.3; never a stop).
-    let port_plan = match env.port_listener(443) {
-        None => {
-            checks.push(PreflightCheck {
-                id: "port-443",
-                label: "TLS / port plan",
-                status: CheckStatus::Info,
-                detail: ":443 is free — plan A: Stalwart binds :443, certificates via \
-                         ACME TLS-ALPN-01 (zero-config)"
-                    .into(),
-            });
-            "tls-alpn"
-        }
-        Some(who) => {
-            checks.push(PreflightCheck {
-                id: "port-443",
-                label: "TLS / port plan",
-                status: CheckStatus::Info,
-                detail: format!(
-                    ":443 is taken ({who}) — Stalwart's HTTPS moves to 127.0.0.1:8443 \
-                     (never exposed off-box); certificates via HTTP-01 behind your \
-                     existing proxy (plan C), upgradable to DNS-01 (plan B) with a DNS \
-                     provider API token"
-                ),
-            });
-            "http-01"
+    // :443 → port plan (§5.3; never a stop). Skin Direct / box Caddy
+    // owning :443 forces http-01 (or dns-01 if a token already exists)
+    // even when the port reports free — Stalwart must not bind [::]:443.
+    let router_owns = env.router_owns_443();
+    let dns01 = env.dns01_token_present();
+    let taken = env.port_listener(443);
+    let port_plan = if router_owns && dns01 {
+        checks.push(PreflightCheck {
+            id: "port-443",
+            label: "TLS / port plan",
+            status: CheckStatus::Info,
+            detail: "Skin Direct / box Caddy owns :443 — plan B: DNS-01 (token present); \
+                     Stalwart HTTPS stays on 127.0.0.1:8443; requestTlsCertificate=false"
+                .into(),
+        });
+        "dns-01"
+    } else if router_owns {
+        let extra = match &taken {
+            None => ":443 reports free but Caddy will claim it".to_string(),
+            Some(who) => format!(":443 is taken ({who})"),
+        };
+        checks.push(PreflightCheck {
+            id: "port-443",
+            label: "TLS / port plan",
+            status: CheckStatus::Info,
+            detail: format!(
+                "{extra} — Skin Direct / box Caddy owns :443; Stalwart HTTPS moves to \
+                 127.0.0.1:8443 (never [::]:443); certificates via HTTP-01 (plan C), \
+                 requestTlsCertificate=false"
+            ),
+        });
+        "http-01"
+    } else {
+        match taken {
+            None => {
+                checks.push(PreflightCheck {
+                    id: "port-443",
+                    label: "TLS / port plan",
+                    status: CheckStatus::Info,
+                    detail: ":443 is free — plan A: Stalwart binds :443, certificates via \
+                             ACME TLS-ALPN-01 (zero-config)"
+                        .into(),
+                });
+                "tls-alpn"
+            }
+            Some(who) => {
+                checks.push(PreflightCheck {
+                    id: "port-443",
+                    label: "TLS / port plan",
+                    status: CheckStatus::Info,
+                    detail: format!(
+                        ":443 is taken ({who}) — Stalwart's HTTPS moves to 127.0.0.1:8443 \
+                         (never exposed off-box); certificates via HTTP-01 behind your \
+                         existing proxy (plan C), upgradable to DNS-01 (plan B) with a DNS \
+                         provider API token"
+                    ),
+                });
+                "http-01"
+            }
         }
     };
 
@@ -322,7 +390,11 @@ pub fn run_preflight(env: &dyn PreflightEnv) -> PreflightReport {
     }
 
     let ok = !checks.iter().any(|c| c.status == CheckStatus::Fail);
-    PreflightReport { checks, port_plan: Some(port_plan), ok }
+    PreflightReport {
+        checks,
+        port_plan: Some(port_plan),
+        ok,
+    }
 }
 
 // ── The real environment ────────────────────────────────────────────────
@@ -400,10 +472,7 @@ impl PreflightEnv for RealPreflightEnv {
             match host.to_socket_addrs() {
                 Ok(mut addrs) => {
                     if let Some(addr) = addrs.next() {
-                        match std::net::TcpStream::connect_timeout(
-                            &addr,
-                            Duration::from_secs(5),
-                        ) {
+                        match std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
                             Ok(_) => return Ok(()),
                             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
                                 last = format!("connection to {host} timed out");
@@ -427,6 +496,33 @@ impl PreflightEnv for RealPreflightEnv {
     fn total_ram_bytes(&self) -> Option<u64> {
         let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
         parse_meminfo_total(&meminfo)
+    }
+
+    fn router_owns_443(&self) -> bool {
+        if let Ok(door) = k2_core::skin::effective_front_door() {
+            if door.mode == "direct" {
+                return true;
+            }
+        }
+        k2_core::skin_door::status()
+            .ok()
+            .map(|st| st.caddy.running && st.listen.contains(":443"))
+            .unwrap_or(false)
+    }
+
+    fn dns01_token_present(&self) -> bool {
+        let db = k2_core::db::try_shared();
+        let Some(db) = db else {
+            return false;
+        };
+        let conn = db.lock();
+        conn.query_row("SELECT port_plan FROM mail_server WHERE id = 1", [], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .ok()
+        .flatten()
+        .as_deref()
+            == Some("dns-01")
     }
 }
 
@@ -475,6 +571,8 @@ pub(crate) mod tests {
         pub outbound_25: Result<(), &'static str>,
         pub disk: Option<u64>,
         pub ram: Option<u64>,
+        pub router_owns_443: bool,
+        pub dns01_token: bool,
     }
 
     impl Default for FakeEnv {
@@ -487,6 +585,8 @@ pub(crate) mod tests {
                 outbound_25: Ok(()),
                 disk: Some(40 * 1024 * 1024 * 1024),
                 ram: Some(4 * 1024 * 1024 * 1024),
+                router_owns_443: false,
+                dns01_token: false,
             }
         }
     }
@@ -515,6 +615,12 @@ pub(crate) mod tests {
         }
         fn total_ram_bytes(&self) -> Option<u64> {
             self.ram
+        }
+        fn router_owns_443(&self) -> bool {
+            self.router_owns_443
+        }
+        fn dns01_token_present(&self) -> bool {
+            self.dns01_token
         }
     }
 
@@ -555,8 +661,17 @@ pub(crate) mod tests {
         let r = run_preflight(&FakeEnv::default());
         assert!(r.ok);
         assert_eq!(r.port_plan, Some("tls-alpn"));
-        for id in ["os", "mta", "port-465", "port-587", "public-ip", "rdns", "outbound-25", "disk", "ram"]
-        {
+        for id in [
+            "os",
+            "mta",
+            "port-465",
+            "port-587",
+            "public-ip",
+            "rdns",
+            "outbound-25",
+            "disk",
+            "ram",
+        ] {
             assert_eq!(check(&r, id).status, CheckStatus::Pass, "{id}");
         }
         assert_eq!(check(&r, "port-443").status, CheckStatus::Info);
@@ -569,11 +684,47 @@ pub(crate) mod tests {
 
     #[test]
     fn taken_443_selects_plan_c_not_a_stop() {
-        let env = FakeEnv { listeners: vec![(443, "caddy")], ..FakeEnv::default() };
+        let env = FakeEnv {
+            listeners: vec![(443, "caddy")],
+            ..FakeEnv::default()
+        };
         let r = run_preflight(&env);
         assert!(r.ok, ":443 taken is never a stop");
         assert_eq!(r.port_plan, Some("http-01"));
         assert!(check(&r, "port-443").detail.contains("caddy"));
+    }
+
+    #[test]
+    fn router_owns_443_forces_http01_even_when_443_free() {
+        let env = FakeEnv {
+            router_owns_443: true,
+            ..FakeEnv::default()
+        };
+        let r = run_preflight(&env);
+        assert!(r.ok);
+        assert_eq!(r.port_plan, Some("http-01"));
+        let d = &check(&r, "port-443").detail;
+        assert!(d.contains("8443"), "{d}");
+        assert!(d.contains("requestTlsCertificate=false"), "{d}");
+        assert!(!d.contains("TLS-ALPN-01"), "{d}");
+        assert_eq!(https_listener_bind("http-01"), "127.0.0.1:8443");
+        assert!(!request_tls_certificate("http-01"));
+        assert_eq!(https_listener_bind("tls-alpn"), "[::]:443");
+    }
+
+    #[test]
+    fn router_owns_443_with_dns01_token_keeps_plan_b() {
+        let env = FakeEnv {
+            router_owns_443: true,
+            dns01_token: true,
+            listeners: vec![],
+            ..FakeEnv::default()
+        };
+        let r = run_preflight(&env);
+        assert!(r.ok);
+        assert_eq!(r.port_plan, Some("dns-01"));
+        assert!(!request_tls_certificate("dns-01"));
+        assert_eq!(https_listener_bind("dns-01"), "127.0.0.1:8443");
     }
 
     #[test]
@@ -607,7 +758,11 @@ pub(crate) mod tests {
         assert!(r.ok, "warns never block");
         assert_eq!(check(&r, "public-ip").status, CheckStatus::Warn);
         assert!(check(&r, "public-ip").detail.contains("NAT/CGNAT"));
-        assert_eq!(check(&r, "rdns").status, CheckStatus::Skipped, "no IP → nothing to look up");
+        assert_eq!(
+            check(&r, "rdns").status,
+            CheckStatus::Skipped,
+            "no IP → nothing to look up"
+        );
         let ob = check(&r, "outbound-25");
         assert_eq!(ob.status, CheckStatus::Warn);
         assert!(ob.detail.contains("timed out"), "{}", ob.detail);
@@ -646,7 +801,10 @@ LISTEN 0      4096            [::]:443          [::]:*    users:((\"caddy\",pid=
         );
         assert_eq!(parse_ss_listener(fixture, 587), None);
         // ":25" must not match ":2525"-style suffix collisions.
-        assert_eq!(parse_ss_listener("LISTEN 0 1 0.0.0.0:2525 0.0.0.0:*", 25), None);
+        assert_eq!(
+            parse_ss_listener("LISTEN 0 1 0.0.0.0:2525 0.0.0.0:*", 25),
+            None
+        );
     }
 
     #[test]

@@ -3,6 +3,11 @@
 //! Pure Caddyfile renderer plus apply orchestration (write config, supervise
 //! Caddy, register the reserved nested label). The daemon HTTP listener stays
 //! on loopback; this never sets `K2_LISTEN=lan`.
+//!
+//! One Caddy child. Box :443 is a Host table (Skin Direct + mail), never a
+//! catch-all skin allowlist. Connect nested stays HTTP on 127.0.0.1:38472
+//! (TLS at the edge / frpc). Caddy is the daemon child — not user `stalwart`,
+//! no Stalwart CAP_NET_BIND.
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -33,10 +38,21 @@ Do not bind k2-daemon to the world (never K2_LISTEN=lan).";
 
 const DIRECT_443_FALLBACK_HINT: &str = "Could not bind :443 (need root/CAP_NET_BIND_SERVICE). \
 Skin Direct is listening on 0.0.0.0:38472. DNS has no port; production Direct wants 443. \
-Do not bind k2-daemon to the world.";
+Mail stays on 127.0.0.1:8443 — never on 38472. Do not bind k2-daemon to the world.";
+
+const DIRECT_80_HINT: &str = "Could not bind :80 (need root/CAP_NET_BIND_SERVICE). \
+HTTP-01 ACME needs :80; Caddy is still claiming :443. Direct Host is :443 only until :80 is free.";
+
+const MAIL_TLS_ALPN_BLOCKS_DIRECT: &str = "mail already binds :443 via tls-alpn. \
+Disable mail tls-alpn / re-enable mail after Caddy owns 443. Direct apply will not silent-steal :443.";
 
 const NO_PUBLIC_NESTED_HINT: &str = "No public nested URL (air-gap or no Connect token). \
 Loopback Caddy is up at 127.0.0.1:38472. Operator <sub>.k2.dev stays the kingdom door.";
+
+pub const UNKNOWN_HOST_ERROR: &str = "unknown host";
+
+/// Stalwart HTTPS upstream for the mail Host (http-01 / dns-01). Not SMTP.
+pub const MAIL_HTTPS_UPSTREAM: &str = "127.0.0.1:8443";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -79,9 +95,16 @@ pub struct SkinFrontDoorStatus {
 pub struct CaddyfileSpec {
     pub daemon_port: u16,
     pub loopback_port: u16,
-    /// Direct-mode extra bind. `None` = connect (loopback only).
+    /// Extra bind. `None` = connect (loopback only). `:443` = Host table.
+    /// `0.0.0.0:38472` = Direct fallback (no mail Host on that bind).
     pub extra_listen: Option<String>,
     pub ui_port: Option<u16>,
+    /// Skin Direct Host (hostname only). Box Caddy, not Connect `*.k2.dev`.
+    pub skin_host: Option<String>,
+    /// Mail Host from `mail_server.hostname`. Reverse-proxied to :8443.
+    pub mail_host: Option<String>,
+    /// Also bind :80 on Host sites so Caddy HTTP-01 can work.
+    pub bind_http80: bool,
 }
 
 struct LiveCaddy {
@@ -131,21 +154,76 @@ fn ensure_skin_dir() -> Result<PathBuf, String> {
 /// Render a Caddyfile that reverse-proxies Thread + overlay + boot-status
 /// to the daemon on loopback, and **403s everything else** (especially grid,
 /// PTY, login, `/v1`). Never copies the air-gap whole-daemon proxy.
+///
+/// Loopback `http://127.0.0.1:{loopback}` is always HTTP (`http://` prefix;
+/// `auto_https off` globally when there are no :443 Host sites). Direct Host
+/// and mail Host are named sites on :443 — unknown Host 403s, never the
+/// skin allowlist. Mail is never attached to the 38472 fallback bind.
 pub fn render_caddyfile(spec: &CaddyfileSpec) -> String {
     let daemon = format!("127.0.0.1:{}", spec.daemon_port);
-    let addrs = site_addresses(spec.loopback_port, spec.extra_listen.as_deref());
+    let claiming_443 = extra_is_443(spec.extra_listen.as_deref());
+    let fallback = extra_is_all_ifaces(spec.extra_listen.as_deref());
+    let skin_host = spec.skin_host.as_deref().and_then(host_from_front_door_url);
+    let mail_host = spec
+        .mail_host
+        .as_deref()
+        .and_then(host_from_front_door_url)
+        .filter(|h| skin_host.as_ref() != Some(h));
+    let https_hosts = claiming_443 && (skin_host.is_some() || mail_host.is_some());
+
     let mut out = String::new();
     out.push_str("{\n");
     out.push_str("\tadmin off\n");
-    out.push_str("\tauto_https off\n");
+    if !https_hosts {
+        out.push_str("\tauto_https off\n");
+    }
     out.push_str("}\n\n");
-    out.push_str(&addrs);
+
+    if fallback {
+        out.push_str("http://0.0.0.0:");
+        out.push_str(&spec.loopback_port.to_string());
+        push_path_filter_site(&mut out, &daemon, spec.ui_port);
+    } else {
+        out.push_str("http://127.0.0.1:");
+        out.push_str(&spec.loopback_port.to_string());
+        push_path_filter_site(&mut out, &daemon, spec.ui_port);
+    }
+
+    if claiming_443 {
+        if let Some(host) = skin_host.as_deref() {
+            out.push('\n');
+            out.push_str(&host_site_address(host, spec.bind_http80));
+            push_path_filter_site(&mut out, &daemon, spec.ui_port);
+        }
+        if let Some(host) = mail_host.as_deref() {
+            out.push('\n');
+            out.push_str(&host_site_address(host, spec.bind_http80));
+            out.push_str(" {\n");
+            out.push_str("\treverse_proxy ");
+            out.push_str(MAIL_HTTPS_UPSTREAM);
+            out.push_str(" {\n");
+            out.push_str("\t\ttransport http {\n");
+            out.push_str("\t\t\ttls\n");
+            out.push_str("\t\t\ttls_insecure_skip_verify\n");
+            out.push_str("\t\t}\n");
+            out.push_str("\t}\n");
+            out.push_str("}\n");
+        }
+        // Unknown Host on :443 → 403. Not `http://:443` skin allowlist.
+        out.push_str("\n:443 {\n");
+        push_unknown_host_handle(&mut out);
+        out.push_str("}\n");
+    }
+    out
+}
+
+fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     out.push_str(" {\n");
-    push_handle(&mut out, "/boot-status*", &daemon);
-    push_handle(&mut out, "/cli/thread", &daemon);
-    push_handle(&mut out, "/cli/thread/*", &daemon);
-    push_handle(&mut out, "/cli/overlay/events*", &daemon);
-    if let Some(ui) = spec.ui_port {
+    push_handle(out, "/boot-status*", daemon);
+    push_handle(out, "/cli/thread", daemon);
+    push_handle(out, "/cli/thread/*", daemon);
+    push_handle(out, "/cli/overlay/events*", daemon);
+    if let Some(ui) = ui_port {
         out.push_str("\t@skinUi path_regexp ^/$\n");
         out.push_str("\thandle @skinUi {\n");
         out.push_str("\t\treverse_proxy 127.0.0.1:");
@@ -160,7 +238,15 @@ pub fn render_caddyfile(spec: &CaddyfileSpec) -> String {
     out.push_str("\"}` 403\n");
     out.push_str("\t}\n");
     out.push_str("}\n");
-    out
+}
+
+fn push_unknown_host_handle(out: &mut String) {
+    out.push_str("\thandle {\n");
+    out.push_str("\t\theader Content-Type application/json\n");
+    out.push_str("\t\trespond `{\"error\":\"");
+    out.push_str(UNKNOWN_HOST_ERROR);
+    out.push_str("\"}` 403\n");
+    out.push_str("\t}\n");
 }
 
 fn push_handle(out: &mut String, matcher: &str, daemon: &str) {
@@ -173,23 +259,50 @@ fn push_handle(out: &mut String, matcher: &str, daemon: &str) {
     out.push_str("\t}\n\n");
 }
 
-fn site_addresses(loopback_port: u16, extra_listen: Option<&str>) -> String {
-    let loopback = format!("http://127.0.0.1:{loopback_port}");
-    match extra_listen.map(str::trim).filter(|s| !s.is_empty()) {
-        None => loopback,
-        Some(extra) if extra == ":443" || extra == "http://:443" => {
-            format!("{loopback}, http://:443")
-        }
-        Some(extra) => {
-            // 0.0.0.0:38472 covers loopback on the same port — do not bind twice.
-            let hostport = extra.strip_prefix("http://").unwrap_or(extra);
-            if hostport.starts_with("0.0.0.0:") {
-                format!("http://{hostport}")
-            } else {
-                format!("{loopback}, http://{hostport}")
-            }
-        }
+fn extra_is_443(extra: Option<&str>) -> bool {
+    matches!(
+        extra.map(str::trim).filter(|s| !s.is_empty()),
+        Some(":443") | Some("http://:443")
+    )
+}
+
+fn extra_is_all_ifaces(extra: Option<&str>) -> bool {
+    let Some(extra) = extra.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    if extra_is_443(Some(extra)) {
+        return false;
     }
+    let hostport = extra.strip_prefix("http://").unwrap_or(extra);
+    hostport.starts_with("0.0.0.0:")
+}
+
+fn host_site_address(host: &str, bind_http80: bool) -> String {
+    if bind_http80 {
+        host.to_string()
+    } else {
+        format!("{host}:443")
+    }
+}
+
+/// Host label for a Direct-mode URL. None for empty, loopback, or Connect
+/// edge hosts (`*.k2.dev`) — those stay on frpc, not box Caddy.
+pub fn host_from_front_door_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let parsed = url::Url::parse(raw)
+        .ok()
+        .or_else(|| url::Url::parse(&format!("https://{raw}")).ok())?;
+    let host = parsed.host_str()?.trim().to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host == "127.0.0.1" || host == "::1" {
+        return None;
+    }
+    if host == "k2.dev" || host.ends_with(".k2.dev") {
+        return None;
+    }
+    Some(host)
 }
 
 // ── Bind probe ───────────────────────────────────────────────────────
@@ -202,15 +315,62 @@ pub fn can_bind_443() -> bool {
     can_bind("0.0.0.0:443") || can_bind("[::]:443")
 }
 
-fn direct_extra_listen() -> (String, Option<String>) {
+pub fn can_bind_80() -> bool {
+    can_bind("0.0.0.0:80") || can_bind("[::]:80")
+}
+
+/// Direct extra bind: claim :443 when possible; still claim :443 if :80
+/// fails (HTTP-01 needs :80 — documented in the hint). Fallback is
+/// 0.0.0.0:38472 — mail never rides that bind.
+fn direct_listen_plan() -> (String, bool, Option<String>) {
     if can_bind_443() {
-        (":443".to_string(), None)
+        if can_bind_80() {
+            (":443".to_string(), true, None)
+        } else {
+            (":443".to_string(), false, Some(DIRECT_80_HINT.to_string()))
+        }
     } else {
         (
             format!("0.0.0.0:{LOOPBACK_PORT}"),
+            false,
             Some(DIRECT_443_FALLBACK_HINT.to_string()),
         )
     }
+}
+
+fn mail_server_row() -> Option<(String, String, String)> {
+    let db = crate::db::try_shared()?;
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT hostname, status, COALESCE(port_plan, '') FROM mail_server WHERE id = 1",
+        [],
+        |r| {
+            let hostname: Option<String> = r.get(0)?;
+            let status: String = r.get(1)?;
+            let plan: String = r.get(2)?;
+            Ok((hostname.unwrap_or_default(), status, plan))
+        },
+    )
+    .ok()
+}
+
+fn mail_hostname_if_enabled() -> Option<String> {
+    let (hostname, status, _) = mail_server_row()?;
+    if status == "disabled" {
+        return None;
+    }
+    host_from_front_door_url(&hostname)
+}
+
+fn mail_tls_alpn_holds_443() -> bool {
+    match mail_server_row() {
+        Some((_, status, plan)) => mail_tls_alpn_blocks_direct(&status, &plan),
+        None => false,
+    }
+}
+
+fn mail_tls_alpn_blocks_direct(status: &str, plan: &str) -> bool {
+    plan == "tls-alpn" && matches!(status, "running" | "installing" | "degraded")
 }
 
 // ── Caddy binary ─────────────────────────────────────────────────────
@@ -335,6 +495,8 @@ fn write_pid_file(pid: u32) {
 }
 
 fn spawn_caddy(bin: &Path, cfg: &Path) -> Result<Child, String> {
+    // Daemon child, same uid as k2-daemon. Do not run as user stalwart
+    // and do not inherit Stalwart CAP_NET_BIND.
     let log_path = caddy_log_path();
     let mut cmd = Command::new(bin);
     cmd.arg("run")
@@ -584,23 +746,45 @@ fn write_caddyfile(contents: &str) -> Result<PathBuf, String> {
 
 /// Persist is the caller's job. This writes the Caddyfile, (re)starts Caddy,
 /// and registers nested `skin` when mode is connect and a tunnel token exists.
+/// Caddy is spawned as this process's child (the daemon user) — never as
+/// `stalwart`, never with Stalwart's CAP_NET_BIND.
 pub fn apply(daemon_port: u16) -> Result<SkinFrontDoorStatus, String> {
     if daemon_port == 0 {
         return Err("bind_failed: daemon port is 0".into());
     }
-    let bin = resolve_caddy()?;
+    if daemon_port == LOOPBACK_PORT {
+        return Err("bind_failed: daemon port must not be the Caddy loopback (38472)".into());
+    }
     let door = skin::effective_front_door()?;
-    let (extra, direct_hint) = if door.mode == "direct" {
-        let (listen, hint) = direct_extra_listen();
-        (Some(listen), hint)
+    if door.mode == "direct" && mail_tls_alpn_holds_443() {
+        return Err(MAIL_TLS_ALPN_BLOCKS_DIRECT.to_string());
+    }
+    let bin = resolve_caddy()?;
+    let skin_host = if door.mode == "direct" {
+        door.url.as_deref().and_then(host_from_front_door_url)
     } else {
-        (None, None)
+        None
+    };
+    let (extra, bind_http80, direct_hint) = if door.mode == "direct" {
+        let (listen, bind80, hint) = direct_listen_plan();
+        (Some(listen), bind80, hint)
+    } else {
+        (None, false, None)
+    };
+    let claiming_443 = extra_is_443(extra.as_deref());
+    let mail_host = if claiming_443 {
+        mail_hostname_if_enabled()
+    } else {
+        None
     };
     let spec = CaddyfileSpec {
         daemon_port,
         loopback_port: LOOPBACK_PORT,
         extra_listen: extra.clone(),
         ui_port: door.ui_port,
+        skin_host,
+        mail_host,
+        bind_http80,
     };
     let rendered = render_caddyfile(&spec);
     let cfg_path = write_caddyfile(&rendered)?;
@@ -702,6 +886,37 @@ mod tests {
             loopback_port: LOOPBACK_PORT,
             extra_listen: extra.map(|s| s.to_string()),
             ui_port: ui,
+            skin_host: None,
+            mail_host: None,
+            bind_http80: extra == Some(":443"),
+        }
+    }
+
+    fn spec_hosts(
+        skin: Option<&str>,
+        mail: Option<&str>,
+        extra: &str,
+        bind80: bool,
+    ) -> CaddyfileSpec {
+        CaddyfileSpec {
+            daemon_port: 60710,
+            loopback_port: LOOPBACK_PORT,
+            extra_listen: Some(extra.to_string()),
+            ui_port: None,
+            skin_host: skin.map(|s| s.to_string()),
+            mail_host: mail.map(|s| s.to_string()),
+            bind_http80: bind80,
+        }
+    }
+
+    fn assert_no_daemon_loop_via_38472(file: &str) {
+        for line in file.lines() {
+            if line.contains("reverse_proxy") {
+                assert!(
+                    !line.contains(":38472"),
+                    "must not reverse_proxy to 38472 as daemon: {line}"
+                );
+            }
         }
     }
 
@@ -717,10 +932,12 @@ mod tests {
         );
         assert!(file.contains("403"), "{file}");
         assert!(file.contains("admin off"), "{file}");
+        assert!(file.contains("auto_https off"), "{file}");
         assert!(
             file.contains(&format!("127.0.0.1:{LOOPBACK_PORT}")),
             "{file}"
         );
+        assert_no_daemon_loop_via_38472(&file);
         assert!(
             !file.contains(":38471"),
             "must not use air-gap port: {file}"
@@ -759,17 +976,149 @@ mod tests {
     #[test]
     fn render_direct_443_and_fallback_listen() {
         let with_443 = render_caddyfile(&spec(None, Some(":443")));
-        assert!(with_443.contains("http://:443"), "{with_443}");
         assert!(
-            with_443.contains(&format!("127.0.0.1:{LOOPBACK_PORT}")),
+            !with_443.contains("http://:443"),
+            "catch-all http://:443 is not the skin allowlist: {with_443}"
+        );
+        assert!(
+            with_443.contains(&format!("http://127.0.0.1:{LOOPBACK_PORT}")),
             "{with_443}"
         );
+        assert!(
+            with_443.contains(":443 {"),
+            "unknown Host 403 site: {with_443}"
+        );
+        assert!(with_443.contains(UNKNOWN_HOST_ERROR), "{with_443}");
+        assert_no_daemon_loop_via_38472(&with_443);
         let fallback = render_caddyfile(&spec(None, Some("0.0.0.0:38472")));
         assert!(fallback.contains("http://0.0.0.0:38472"), "{fallback}");
         assert!(
             !fallback.contains("http://127.0.0.1:38472, http://0.0.0.0:38472"),
             "same port twice would fail to bind: {fallback}"
         );
+        assert_no_daemon_loop_via_38472(&fallback);
+    }
+
+    #[test]
+    fn render_host_table_direct_and_mail() {
+        let file = render_caddyfile(&spec_hosts(
+            Some("https://box.example.com"),
+            Some("mail.acme.dev"),
+            ":443",
+            true,
+        ));
+        assert!(file.contains("box.example.com"), "{file}");
+        assert!(file.contains("mail.acme.dev"), "{file}");
+        assert!(
+            file.contains("127.0.0.1:60710"),
+            "skin handles → daemon: {file}"
+        );
+        assert!(file.contains(MAIL_HTTPS_UPSTREAM), "mail → 8443: {file}");
+        assert!(file.contains("tls_insecure_skip_verify"), "{file}");
+        assert!(
+            !file.contains("http://:443"),
+            "must not use catch-all http://:443 as the only :443 site: {file}"
+        );
+        assert!(
+            file.contains(&format!("http://127.0.0.1:{LOOPBACK_PORT}")),
+            "loopback site remains: {file}"
+        );
+        assert!(
+            !file.contains("auto_https off"),
+            "Host TLS is at box Caddy: {file}"
+        );
+        assert_no_daemon_loop_via_38472(&file);
+        assert!(!file.contains(":38471"), "{file}");
+        assert!(
+            !file.contains("skin.rosson.k2.dev"),
+            "no Connect nested on box: {file}"
+        );
+        let mut saw_skin_proxy = false;
+        let mut saw_mail_proxy = false;
+        for line in file.lines() {
+            if line.contains("reverse_proxy") && line.contains("127.0.0.1:60710") {
+                saw_skin_proxy = true;
+            }
+            if line.contains("reverse_proxy") && line.contains("8443") {
+                saw_mail_proxy = true;
+            }
+        }
+        assert!(saw_skin_proxy, "{file}");
+        assert!(saw_mail_proxy, "{file}");
+    }
+
+    #[test]
+    fn render_fallback_38472_has_no_mail_host() {
+        let file = render_caddyfile(&spec_hosts(
+            Some("box.example.com"),
+            Some("mail.acme.dev"),
+            "0.0.0.0:38472",
+            false,
+        ));
+        assert!(file.contains("http://0.0.0.0:38472"), "{file}");
+        assert!(
+            !file.contains("mail.acme.dev"),
+            "mail never on 38472: {file}"
+        );
+        assert!(!file.contains("8443"), "mail never on 38472: {file}");
+        assert!(file.contains("auto_https off"), "{file}");
+        assert_no_daemon_loop_via_38472(&file);
+    }
+
+    #[test]
+    fn render_skips_connect_edge_hosts_on_box_caddy() {
+        let file = render_caddyfile(&spec_hosts(
+            Some("https://skin.rosson.k2.dev"),
+            Some("mail.k2.dev"),
+            ":443",
+            true,
+        ));
+        assert!(!file.contains("skin.rosson.k2.dev"), "{file}");
+        assert!(!file.contains("mail.k2.dev {\n"), "{file}");
+        assert!(
+            file.contains(&format!("http://127.0.0.1:{LOOPBACK_PORT}")),
+            "{file}"
+        );
+    }
+
+    #[test]
+    fn host_from_url_strips_scheme_and_rejects_edge() {
+        assert_eq!(
+            host_from_front_door_url("https://Box.Example.com/path"),
+            Some("box.example.com".into())
+        );
+        assert_eq!(
+            host_from_front_door_url("box.example.com"),
+            Some("box.example.com".into())
+        );
+        assert_eq!(host_from_front_door_url("https://skin.rosson.k2.dev"), None);
+        assert_eq!(host_from_front_door_url("https://127.0.0.1"), None);
+        assert_eq!(host_from_front_door_url(""), None);
+    }
+
+    #[test]
+    fn mail_tls_alpn_blocks_direct_loud() {
+        assert!(mail_tls_alpn_blocks_direct("running", "tls-alpn"));
+        assert!(mail_tls_alpn_blocks_direct("installing", "tls-alpn"));
+        assert!(mail_tls_alpn_blocks_direct("degraded", "tls-alpn"));
+        assert!(!mail_tls_alpn_blocks_direct("running", "http-01"));
+        assert!(!mail_tls_alpn_blocks_direct("disabled", "tls-alpn"));
+        assert!(MAIL_TLS_ALPN_BLOCKS_DIRECT.contains("silent-steal"));
+        assert!(MAIL_TLS_ALPN_BLOCKS_DIRECT.contains("re-enable mail"));
+    }
+
+    #[test]
+    fn render_host_sites_without_port_80_use_host_443() {
+        let file = render_caddyfile(&spec_hosts(
+            Some("box.example.com"),
+            Some("mail.acme.dev"),
+            ":443",
+            false,
+        ));
+        assert!(file.contains("box.example.com:443"), "{file}");
+        assert!(file.contains("mail.acme.dev:443"), "{file}");
+        assert!(!file.contains("http://:443"), "{file}");
+        assert_no_daemon_loop_via_38472(&file);
     }
 
     #[test]

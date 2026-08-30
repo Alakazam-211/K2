@@ -617,7 +617,11 @@ pub fn run_enable(
         authenticate_with_retry(ops, api, STALWART_SETUP_URL, "admin", &recovery_pw)
             .map_err(|e| fail("bootstrap", e))?;
         let creds = api
-            .complete_bootstrap(hostname, &default_domain, port_plan == "tls-alpn")
+            .complete_bootstrap(
+                hostname,
+                &default_domain,
+                super::preflight::request_tls_certificate(port_plan),
+            )
             .map_err(|e| fail("bootstrap", e))?;
         let sref = secrets
             .store("admin", &creds.secret)

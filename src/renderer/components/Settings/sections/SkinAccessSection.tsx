@@ -1,7 +1,6 @@
 // Settings → Sidecars → Skin Access (prd-skin-system-v1 U3, prd-skin-auth-v1 S8/S11/S12).
-// Owner surface: front-door (Caddy path-filter), skin-user roster (NOT Server Access),
-// k2skn_ keys with scopes (secret once at mint), Hydra toggle visible off.
-// Applying a mode writes ~/.k2/skin/Caddyfile and supervises Caddy. Hydra stays off.
+// Owner surface: front door (POST apply + live Caddy/nested status), skin-user
+// roster (NOT Server Access), k2skn_ keys (secret once at mint). Hydra stays off.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -15,7 +14,17 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
     section: 'skin-access',
     label: 'Front door',
     description: 'Use K2 Connect (skin.<sub>.k2.dev) or Direct/this box (Caddy → daemon loopback)',
-    keywords: ['front door', 'connect', 'caddy', 'direct', 'localhost', 'skin subdomain', 'tunnel'],
+    keywords: [
+      'front door',
+      'connect',
+      'caddy',
+      'direct',
+      'localhost',
+      'skin subdomain',
+      'tunnel',
+      'ui port',
+      'listen',
+    ],
     group: 'Front door',
   },
   {
@@ -48,10 +57,32 @@ export const DEFAULT_SKIN_CAPS = ['thread:read', 'thread:post'] as const
 
 export type FrontDoorMode = 'connect' | 'direct'
 
+export type SkinFrontDoorCaddy = {
+  running?: boolean
+  pid?: number | null
+  binary?: string | null
+  configPath?: string | null
+  missing?: boolean
+}
+
+export type SkinFrontDoorNested = {
+  label?: string | null
+  host?: string | null
+  target?: string | null
+  registered?: boolean
+}
+
 export type SkinFrontDoor = {
   mode: FrontDoorMode
+  url: string | null
+  hint: string | null
   connectUrl: string
-  directListen: string
+  listen: string
+  uiPort: number | null
+  applied?: boolean
+  caddy?: SkinFrontDoorCaddy
+  nested?: SkinFrontDoorNested
+  error: string | null
   subdomain: string | null
 }
 
@@ -69,6 +100,7 @@ export type SkinTokenRow = {
 
 const CONNECT_URL_STUB = 'https://skin.<sub>.k2.dev'
 const DIRECT_LISTEN_STUB = 'Caddy :443 (or LAN port) → 127.0.0.1:daemon'
+const CADDY_INSTALL_HINT = 'brew install caddy / distro package'
 
 const INPUT_CLS =
   'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
@@ -79,6 +111,66 @@ function asRecord(raw: unknown): Record<string, unknown> {
 
 function asString(v: unknown): string | null {
   return typeof v === 'string' && v.trim() ? v.trim() : null
+}
+
+function asBool(v: unknown): boolean | undefined {
+  return typeof v === 'boolean' ? v : undefined
+}
+
+function asInt(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v)
+  if (typeof v === 'string' && v.trim()) {
+    const n = Number(v.trim())
+    if (Number.isFinite(n)) return Math.trunc(n)
+  }
+  return null
+}
+
+function hostFromUrl(url: string): string | null {
+  try {
+    const host = new URL(url).hostname.trim()
+    return host || null
+  } catch {
+    return null
+  }
+}
+
+function deriveConnectUrl(rec: Record<string, unknown>, subdomain: string | null): string {
+  const explicit = asString(rec.connectUrl) ?? asString(rec.connect_url)
+  if (explicit) return explicit
+  if (subdomain) return `https://skin.${subdomain}.k2.dev`
+  const url = asString(rec.url)
+  if (url) {
+    const host = hostFromUrl(url)
+    if (host?.endsWith('.k2.dev')) {
+      return host.startsWith('skin.') ? `https://${host}` : `https://skin.${host}`
+    }
+  }
+  return CONNECT_URL_STUB
+}
+
+function parseCaddy(raw: unknown): SkinFrontDoorCaddy | undefined {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const rec = asRecord(raw)
+  const pidRaw = rec.pid
+  return {
+    running: asBool(rec.running),
+    pid: pidRaw === null ? null : asInt(pidRaw),
+    binary: asString(rec.binary),
+    configPath: asString(rec.configPath) ?? asString(rec.config_path),
+    missing: asBool(rec.missing),
+  }
+}
+
+function parseNested(raw: unknown): SkinFrontDoorNested | undefined {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const rec = asRecord(raw)
+  return {
+    label: asString(rec.label),
+    host: asString(rec.host),
+    target: asString(rec.target),
+    registered: asBool(rec.registered),
+  }
 }
 
 function asList(raw: unknown, keys: string[]): unknown[] {
@@ -103,16 +195,39 @@ function parseMode(raw: unknown): FrontDoorMode {
 export function parseFrontDoor(raw: unknown): SkinFrontDoor {
   const rec = asRecord(raw)
   const subdomain = asString(rec.subdomain) ?? asString(rec.sub)
-  const connectUrl =
-    asString(rec.connectUrl) ??
-    asString(rec.connect_url) ??
-    (subdomain ? `https://skin.${subdomain}.k2.dev` : CONNECT_URL_STUB)
-  const directListen =
+  const listen =
+    asString(rec.listen) ??
     asString(rec.directListen) ??
     asString(rec.direct_listen) ??
-    asString(rec.listen) ??
     DIRECT_LISTEN_STUB
-  return { mode: parseMode(raw), connectUrl, directListen, subdomain }
+  const uiPortRaw = rec.uiPort ?? rec.ui_port
+  const applied = asBool(rec.applied)
+  const caddy = parseCaddy(rec.caddy)
+  const nested = parseNested(rec.nested)
+  return {
+    mode: parseMode(raw),
+    url: asString(rec.url),
+    hint: asString(rec.hint),
+    connectUrl: deriveConnectUrl(rec, subdomain),
+    listen,
+    uiPort: uiPortRaw === null || uiPortRaw === undefined ? null : asInt(uiPortRaw),
+    ...(applied !== undefined ? { applied } : {}),
+    ...(caddy ? { caddy } : {}),
+    ...(nested ? { nested } : {}),
+    error: asString(rec.error),
+    subdomain,
+  }
+}
+
+export const DEFAULT_FRONT_DOOR: SkinFrontDoor = {
+  mode: 'connect',
+  url: null,
+  hint: null,
+  connectUrl: CONNECT_URL_STUB,
+  listen: DIRECT_LISTEN_STUB,
+  uiPort: null,
+  error: null,
+  subdomain: null,
 }
 
 export function parseSkinUsers(raw: unknown): SkinUser[] {
@@ -167,13 +282,58 @@ export function prefixLabel(prefix: string): string {
   return prefix
 }
 
+function FrontDoorStatus({ door }: { door: SkinFrontDoor }): React.JSX.Element {
+  const caddy = door.caddy
+  const nested = door.mode === 'connect' ? door.nested : undefined
+  return (
+    <div className="space-y-1.5">
+      <div>
+        <div className="text-[10px] text-[var(--color-text-muted)]">Connect URL</div>
+        <code className="block text-[10px] font-mono text-[var(--color-text-secondary)] mt-0.5">
+          {door.connectUrl}
+        </code>
+      </div>
+      <div>
+        <div className="text-[10px] text-[var(--color-text-muted)]">Listen</div>
+        <span className="block text-[10px] font-mono text-[var(--color-text-secondary)] mt-0.5">
+          {door.listen}
+        </span>
+      </div>
+      {caddy?.missing ? (
+        <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+          Caddy is not installed — {CADDY_INSTALL_HINT}.
+        </p>
+      ) : caddy ? (
+        <div>
+          <div className="text-[10px] text-[var(--color-text-muted)]">Caddy</div>
+          <span className="block text-[10px] text-[var(--color-text-secondary)] mt-0.5">
+            {caddy.running
+              ? `running${caddy.pid != null ? ` (pid ${caddy.pid})` : ''}`
+              : 'not running'}
+          </span>
+        </div>
+      ) : null}
+      {nested ? (
+        <div>
+          <div className="text-[10px] text-[var(--color-text-muted)]">Nested</div>
+          <span className="block text-[10px] text-[var(--color-text-secondary)] mt-0.5">
+            {nested.registered ? 'registered' : 'not registered'}
+            {nested.host ? (
+              <>
+                {' · '}
+                <code className="font-mono">{nested.host}</code>
+              </>
+            ) : null}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function SkinAccessSection(): React.JSX.Element {
-  const [frontDoor, setFrontDoor] = useState<SkinFrontDoor>({
-    mode: 'connect',
-    connectUrl: CONNECT_URL_STUB,
-    directListen: DIRECT_LISTEN_STUB,
-    subdomain: null,
-  })
+  const [frontDoor, setFrontDoor] = useState<SkinFrontDoor>(DEFAULT_FRONT_DOOR)
+  const [uiPortText, setUiPortText] = useState('')
   const [users, setUsers] = useState<SkinUser[]>([])
   const [tokens, setTokens] = useState<SkinTokenRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -196,7 +356,9 @@ export function SkinAccessSection(): React.JSX.Element {
     const failures: string[] = []
     try {
       const door = await daemonCliGet<unknown>('skin/front-door')
-      setFrontDoor(parseFrontDoor(door))
+      const parsed = parseFrontDoor(door)
+      setFrontDoor(parsed)
+      if (parsed.error) failures.push(parsed.error)
     } catch (e) {
       failures.push(`front-door: ${errText(e)}`)
     }
@@ -222,35 +384,73 @@ export function SkinAccessSection(): React.JSX.Element {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    setUiPortText(frontDoor.uiPort == null ? '' : String(frontDoor.uiPort))
+  }, [frontDoor.uiPort])
+
   const visibleUsers = useMemo(() => {
     const q = userQuery.trim().toLowerCase()
     if (!q) return users
     return users.filter((u) => u.username.toLowerCase().includes(q))
   }, [users, userQuery])
 
-  const setMode = useCallback(
-    async (mode: FrontDoorMode) => {
-      const prev = frontDoor.mode
-      setFrontDoor((d) => ({ ...d, mode }))
+  const persistDoor = useCallback(
+    async (body: { mode: FrontDoorMode; uiPort?: number | null; apply: true }) => {
       setDoorBusy(true)
       setError(null)
       try {
-        await daemonCliPost('skin/front-door', { mode })
+        const posted = await daemonCliPost<unknown>('skin/front-door', body)
+        const postErr = parseFrontDoor(posted).error
         try {
           const door = await daemonCliGet<unknown>('skin/front-door')
-          setFrontDoor(parseFrontDoor(door))
+          const parsed = parseFrontDoor(door)
+          setFrontDoor(parsed)
+          setError(parsed.error ?? postErr)
         } catch {
-          /* POST succeeded; keep the optimistic mode if re-read fails */
+          if (postErr) setError(postErr)
         }
       } catch (e) {
-        setFrontDoor((d) => ({ ...d, mode: prev }))
         setError(`front-door: ${errText(e)}`)
+        throw e
       } finally {
         setDoorBusy(false)
       }
     },
-    [frontDoor.mode],
+    [],
   )
+
+  const setMode = useCallback(
+    async (mode: FrontDoorMode) => {
+      if (mode === frontDoor.mode) return
+      const prev = frontDoor.mode
+      setFrontDoor((d) => ({ ...d, mode }))
+      try {
+        await persistDoor({ mode, apply: true })
+      } catch {
+        setFrontDoor((d) => ({ ...d, mode: prev }))
+      }
+    },
+    [frontDoor.mode, persistDoor],
+  )
+
+  const commitUiPort = useCallback(async () => {
+    const trimmed = uiPortText.trim()
+    let next: number | null = null
+    if (trimmed) {
+      const n = Number(trimmed)
+      if (!Number.isInteger(n) || n < 1 || n > 65535) {
+        setError('front-door: UI port must be 1–65535')
+        return
+      }
+      next = n
+    }
+    if (next === (frontDoor.uiPort ?? null)) return
+    try {
+      await persistDoor({ mode: frontDoor.mode, uiPort: next, apply: true })
+    } catch {
+      /* persistDoor already set the alert */
+    }
+  }, [uiPortText, frontDoor.mode, frontDoor.uiPort, persistDoor])
 
   const addUser = useCallback(async () => {
     const username = newUsername.trim().toLowerCase()
@@ -351,8 +551,7 @@ export function SkinAccessSection(): React.JSX.Element {
         <SettingsGroup title="Front door">
           <div data-settings-id="skin-access.front-door" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              How packets arrive. Same pass / rooms either way. Saves and applies the Caddy
-              path-filter (Thread only — never grid / PTY).
+              How packets arrive. Same pass / rooms either way.
             </p>
             <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
               <input
@@ -364,12 +563,7 @@ export function SkinAccessSection(): React.JSX.Element {
                 onChange={() => void setMode('connect')}
                 className="mt-0.5"
               />
-              <span>
-                <span className="text-[11px] text-[var(--color-text-secondary)]">Use K2 Connect</span>
-                <code className="block text-[10px] font-mono text-[var(--color-text-muted)] mt-0.5">
-                  {frontDoor.connectUrl}
-                </code>
-              </span>
+              <span className="text-[11px] text-[var(--color-text-secondary)]">Use K2 Connect</span>
             </label>
             <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
               <input
@@ -385,14 +579,39 @@ export function SkinAccessSection(): React.JSX.Element {
                 <span className="text-[11px] text-[var(--color-text-secondary)]">
                   Direct / this box
                 </span>
-                <span className="block text-[10px] font-mono text-[var(--color-text-muted)] mt-0.5">
-                  {frontDoor.directListen}
-                </span>
-                <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5">
-                  Optional domain A/AAAA or CNAME (no port in DNS). Localhost skin: Caddy also
-                  serves the UI (same origin).
+                <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+                  Caddy on this box → daemon loopback. DNS A/AAAA has no port (use :443 in
+                  production). Do not bind k2-daemon to the LAN. Pretty names on the tunnel are
+                  CNAME to <code className="text-[10px]">{'skin.<sub>.k2.dev'}</code>, not this
+                  radio.
                 </span>
               </span>
+            </label>
+            <FrontDoorStatus door={frontDoor} />
+            <label className="flex items-center gap-2">
+              <span className="text-[10px] text-[var(--color-text-muted)]">
+                UI port (optional, same-origin /)
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={65535}
+                step={1}
+                inputMode="numeric"
+                placeholder=""
+                aria-label="UI port (optional, same-origin /)"
+                disabled={doorBusy}
+                value={uiPortText}
+                onChange={(e) => setUiPortText(e.target.value)}
+                onBlur={() => void commitUiPort()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    ;(e.target as HTMLInputElement).blur()
+                  }
+                }}
+                className="w-20 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
+              />
             </label>
           </div>
         </SettingsGroup>

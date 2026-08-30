@@ -19,6 +19,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 import {
   SkinAccessSection,
   SKIN_ACCESS_MANIFEST,
+  DEFAULT_FRONT_DOOR,
   parseFrontDoor,
   parseSkinUsers,
   parseSkinTokens,
@@ -61,18 +62,91 @@ beforeEach(() => {
   mockOk()
 })
 
+function lastFrontDoorPost(): Record<string, unknown> {
+  const call = [...h.daemonCliPost.mock.calls].reverse().find((c) => c[0] === 'skin/front-door')
+  expect(call).toBeTruthy()
+  return (call?.[1] ?? {}) as Record<string, unknown>
+}
+
+const CADDY_MISSING_FIXTURE = {
+  mode: 'direct' as const,
+  listen: 'Caddy :443 → 127.0.0.1:18789',
+  connectUrl: 'https://skin.acme.k2.dev',
+  caddy: { missing: true, running: false, pid: null, binary: null },
+}
+
+const NESTED_REGISTERED_FIXTURE = {
+  mode: 'connect' as const,
+  connectUrl: 'https://skin.acme.k2.dev',
+  nested: {
+    label: 'skin',
+    host: 'skin.acme.k2.dev',
+    target: '127.0.0.1:18789',
+    registered: true,
+  },
+}
+
 describe('parsers', () => {
   it('parseFrontDoor defaults to connect stub URLs', () => {
-    expect(parseFrontDoor({})).toEqual({
-      mode: 'connect',
-      connectUrl: 'https://skin.<sub>.k2.dev',
-      directListen: 'Caddy :443 (or LAN port) → 127.0.0.1:daemon',
-      subdomain: null,
-    })
+    expect(parseFrontDoor({})).toEqual(DEFAULT_FRONT_DOOR)
     expect(parseFrontDoor({ mode: 'direct', subdomain: 'acme' }).connectUrl).toBe(
       'https://skin.acme.k2.dev',
     )
     expect(parseFrontDoor({ mode: 'direct' }).mode).toBe('direct')
+  })
+
+  it('parseFrontDoor accepts old daemon {mode,url,hint} and ignores extra keys', () => {
+    expect(
+      parseFrontDoor({
+        mode: 'connect',
+        url: 'https://skin.acme.k2.dev',
+        hint: 'Nested hostname',
+      }),
+    ).toMatchObject({
+      mode: 'connect',
+      url: 'https://skin.acme.k2.dev',
+      hint: 'Nested hostname',
+      connectUrl: 'https://skin.acme.k2.dev',
+      uiPort: null,
+      error: null,
+    })
+    expect(parseFrontDoor({ mode: 'direct', url: 'https://skin.app.com' }).connectUrl).toBe(
+      'https://skin.<sub>.k2.dev',
+    )
+    const parsed = parseFrontDoor({
+      mode: 'direct',
+      listen: 'Caddy :443 → 127.0.0.1:9',
+      uiPort: 5173,
+      applied: true,
+      caddy: {
+        running: false,
+        missing: true,
+        pid: null,
+        binary: null,
+        configPath: '/tmp/Caddyfile',
+      },
+      nested: {
+        label: 'skin',
+        host: 'skin.acme.k2.dev',
+        target: '127.0.0.1:9',
+        registered: true,
+      },
+      error: 'caddy: not installed',
+      extraFuture: { foo: 1 },
+    })
+    expect(parsed.listen).toBe('Caddy :443 → 127.0.0.1:9')
+    expect(parsed.uiPort).toBe(5173)
+    expect(parsed.applied).toBe(true)
+    expect(parsed.caddy).toEqual({
+      running: false,
+      missing: true,
+      pid: null,
+      binary: null,
+      configPath: '/tmp/Caddyfile',
+    })
+    expect(parsed.nested?.host).toBe('skin.acme.k2.dev')
+    expect(parsed.nested?.registered).toBe(true)
+    expect(parsed.error).toBe('caddy: not installed')
   })
 
   it('parseSkinUsers reads roster, never invents connect-users fields', () => {
@@ -119,18 +193,91 @@ describe('SkinAccessSection', () => {
     expect(screen.getByText('https://skin.acme.k2.dev')).not.toBeNull()
     expect(screen.getAllByText('alice').length).toBeGreaterThan(0)
     expect(screen.getAllByText('thread:read').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('thread:read').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/Stub URLs only/i)).toBeNull()
   })
 
-  it('POSTs front-door connect|direct (daemon applies Caddy)', async () => {
+  it("Connect radio POSTs {mode:'connect'} (apply may be true)", async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/front-door') return { mode: 'direct', listen: ':443' }
+      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      throw new Error(`unexpected GET ${route}`)
+    })
     render(<SkinAccessSection />)
     await loaded()
+    const doorGets = () => h.daemonCliGet.mock.calls.filter((c) => c[0] === 'skin/front-door').length
+    const getsBefore = doorGets()
+    fireEvent.click(screen.getByRole('radio', { name: /Use K2 Connect/i }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalled()
+    })
+    const body = lastFrontDoorPost()
+    expect(body.mode).toBe('connect')
+    if (body.apply !== undefined) expect(body.apply).toBe(true)
+    await waitFor(() => {
+      expect(doorGets()).toBeGreaterThan(getsBefore)
+    })
+  })
+
+  it("Direct radio POSTs {mode:'direct'}", async () => {
+    render(<SkinAccessSection />)
+    await loaded()
+    const doorGets = () => h.daemonCliGet.mock.calls.filter((c) => c[0] === 'skin/front-door').length
+    const getsBefore = doorGets()
     fireEvent.click(screen.getByRole('radio', { name: /Direct \/ this box/i }))
     await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/front-door', { mode: 'direct' })
+      expect(h.daemonCliPost).toHaveBeenCalled()
+    })
+    const body = lastFrontDoorPost()
+    expect(body.mode).toBe('direct')
+    if (body.apply !== undefined) expect(body.apply).toBe(true)
+    await waitFor(() => {
+      expect(doorGets()).toBeGreaterThan(getsBefore)
     })
     const posts = h.daemonCliPost.mock.calls.map((c) => String(c[0]))
     expect(posts.some((r) => /caddy/i.test(r))).toBe(false)
+  })
+
+  it('renders listen + caddy missing hint from fixture', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/front-door') return CADDY_MISSING_FIXTURE
+      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(screen.getByText('Caddy :443 → 127.0.0.1:18789')).not.toBeNull()
+    expect(screen.getByText(/brew install caddy/)).not.toBeNull()
+    expect(screen.getByText(/distro package/)).not.toBeNull()
+    expect(screen.queryByRole('switch', { name: /caddy/i })).toBeNull()
+  })
+
+  it('renders nested host when registered', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/front-door') return NESTED_REGISTERED_FIXTURE
+      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(screen.getByText('skin.acme.k2.dev')).not.toBeNull()
+    expect(screen.getByText(/registered/i)).not.toBeNull()
+  })
+
+  it('surfaces GET error on the existing alert', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/front-door') {
+        return { mode: 'connect', error: 'caddy: binary missing' }
+      }
+      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(screen.getByRole('alert').textContent).toMatch(/caddy: binary missing/)
   })
 
   it('search filters the skin roster', async () => {

@@ -64,9 +64,9 @@ export function shouldSendOnKey(e: {
 }
 
 /**
- * Esc / Ctrl+C from the compose box cancel the agent's current turn
- * by injecting the same PTY bytes the terminal would send. Compose
- * stays focused — no focus flip. Cmd+C is copy (not interrupt).
+ * Esc / Ctrl+C / Ctrl+B from the compose box inject the same PTY bytes
+ * the terminal would send. Compose stays focused — no focus flip.
+ * Cmd+C is copy (not interrupt). Cmd+B is not STX.
  * Empty Enter/Return is a separate PTY CR (`composeEmptyEnterSequence`).
  * Mid-IME composition must not fire.
  */
@@ -81,6 +81,9 @@ export function composeInterruptSequence(e: {
   if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey) return '\x1b'
   if ((e.key === 'c' || e.key === 'C') && e.ctrlKey && !e.metaKey && !e.altKey) {
     return '\x03'
+  }
+  if ((e.key === 'b' || e.key === 'B') && e.ctrlKey && !e.metaKey && !e.altKey) {
+    return '\x02'
   }
   return null
 }

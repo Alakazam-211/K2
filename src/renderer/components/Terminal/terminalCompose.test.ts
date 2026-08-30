@@ -70,6 +70,18 @@ describe('composeInterruptSequence', () => {
     expect(composeInterruptSequence({ ...idle, key: 'C', ctrlKey: true })).toBe('\x03')
   })
 
+  it('Ctrl+B injects STX', () => {
+    expect(composeInterruptSequence({ ...idle, key: 'b', ctrlKey: true })).toBe('\x02')
+    expect(composeInterruptSequence({ ...idle, key: 'B', ctrlKey: true })).toBe('\x02')
+  })
+
+  it('Cmd+B is not STX', () => {
+    expect(composeInterruptSequence({ ...idle, key: 'b', metaKey: true })).toBeNull()
+    expect(
+      composeInterruptSequence({ ...idle, key: 'b', ctrlKey: true, metaKey: true }),
+    ).toBeNull()
+  })
+
   it('Cmd+C is copy — not interrupt', () => {
     expect(composeInterruptSequence({ ...idle, key: 'c', metaKey: true })).toBeNull()
     expect(
@@ -81,6 +93,9 @@ describe('composeInterruptSequence', () => {
     expect(composeInterruptSequence({ ...idle, key: 'Escape', isComposing: true })).toBeNull()
     expect(
       composeInterruptSequence({ ...idle, key: 'c', ctrlKey: true, isComposing: true }),
+    ).toBeNull()
+    expect(
+      composeInterruptSequence({ ...idle, key: 'b', ctrlKey: true, isComposing: true }),
     ).toBeNull()
   })
 

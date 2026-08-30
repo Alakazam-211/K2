@@ -15,9 +15,9 @@
 //!    about the AGPL server: `mail-parser`, a standalone
 //!    Apache-2.0/MIT LIBRARY that happens to share an author, is
 //!    linked for S9's RFC 822 parsing and is fine.)
-//! 2. **Binaries come from upstream at install time.** The supervisor
-//!    downloads the PINNED release tarball from Stalwart's own GitHub
-//!    releases (sha256-verified); K2 never redistributes the binary.
+//! 2. **Binaries come from the Alakazam fork at install time.** The
+//!    supervisor downloads the PINNED tarball from Alakazam-211/stalwart
+//!    GitHub releases (sha256-verified); K2 does not rebuild Stalwart.
 //! 3. **K2-relevant state lives in K2's DB.** Agent↔address ownership,
 //!    approvals, caps, doctor history → the `mail_*` tables (migration
 //!    0075). Stalwart holds only what a mail server holds: domains,

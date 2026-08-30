@@ -112,12 +112,11 @@ pub fn artifact_for_arch(arch: &str) -> Result<&'static StalwartArtifact, String
     Ok(art)
 }
 
-/// Upstream release-tarball URL for the pinned version (PRD §4.1 —
-/// fetched from Stalwart's own GitHub releases at install time; K2
-/// never redistributes the binary).
+/// Enable fetches from the Alakazam fork release; pin still 0.16.10;
+/// K2 does not rebuild Stalwart.
 pub fn tarball_url(triple: &str) -> String {
     format!(
-        "https://github.com/stalwartlabs/stalwart/releases/download/v{STALWART_PINNED_VERSION}/stalwart-{triple}.tar.gz"
+        "https://github.com/Alakazam-211/stalwart/releases/download/v{STALWART_PINNED_VERSION}/stalwart-{triple}.tar.gz"
     )
 }
 
@@ -1011,7 +1010,7 @@ mod tests {
         let art = artifact_for_arch("x86_64").expect("x86_64 supported");
         assert_eq!(
             tarball_url(art.triple),
-            "https://github.com/stalwartlabs/stalwart/releases/download/v0.16.10/stalwart-x86_64-unknown-linux-gnu.tar.gz"
+            "https://github.com/Alakazam-211/stalwart/releases/download/v0.16.10/stalwart-x86_64-unknown-linux-gnu.tar.gz"
         );
         assert!(artifact_for_arch("aarch64").is_ok());
         let err = artifact_for_arch("riscv64").expect_err("unsupported arch");

@@ -5239,7 +5239,47 @@ except Exception as e:
 
 # Skin Access (slice 1+2) — guest list + k2skn_ capability passes + front-door
 # stub. Separate from Connect users (`k2 users`) and `/v1` `k2sk_` API keys.
-# Owner-tier daemon routes. Secret shown once on skin-token create.
+# Owner-tier daemon mutations. GET list admits a workspace-agent scoped hook.
+# Secret shown once on skin-token create.
+#
+# stdin: raw JSON body. Teaching mapper (mirrors _hb_print_err / _db_py.die):
+# string "Invalid or missing auth token" → stderr + exit 3;
+# {code,hint} owner_only/forbidden/gated → 3; other errors → 1.
+# Success (no error) exits 0 silently. Callers capture the body, run this,
+# then format — never rely on pipe last-status.
+_skin_die_if_err() {
+    python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    print("Error: empty response from daemon (is it running?)", file=sys.stderr)
+    sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: " + raw[:200], file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.exit(0)
+err = d.get("error")
+if err is None and d.get("ok") is False:
+    err = d
+if err is None:
+    sys.exit(0)
+if isinstance(err, dict):
+    code = err.get("code") or "error"
+    hint = err.get("hint") or err.get("message") or code
+    if code in ("owner_only", "forbidden", "gated") and "ask your human" not in hint:
+        hint = (hint + " — " if hint else "") + "requires owner/admin — ask your human"
+    print("Error: " + hint, file=sys.stderr)
+    sys.exit(3 if code in ("owner_only", "forbidden", "gated") else 2 if code == "usage" else 1)
+print("Error: %s" % err, file=sys.stderr)
+if isinstance(err, str) and ("token" in err.lower() or "forbidden" in err.lower() or "owner" in err.lower()):
+    sys.exit(3)
+sys.exit(1)
+'
+}
+
 _skin_usage() {
     cat >&2 <<'EOF'
 Usage: k2 skin <user|front-door> ...
@@ -5270,47 +5310,39 @@ cmd_skin() {
                 add)
                     local username="${1:-}"
                     [[ -z "$username" ]] && { echo "Usage: k2 skin user add <username>" >&2; exit 1; }
-                    local body
+                    local body raw
                     body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
-                    cli_post_json "/cli/skin/users" "$body" | python3 -c '
+                    raw=$(cli_post_json "/cli/skin/users" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
 import json,sys
-try:
-    d=json.load(sys.stdin)
-    if "error" in d:
-        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
-    print("Skin user added: %s" % d.get("username",""))
-except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+d=json.load(sys.stdin)
+print("Skin user added: %s" % d.get("username",""))'
                     ;;
                 list|"")
-                    cli_request "/cli/skin/users" | python3 -c '
+                    local raw
+                    raw=$(cli_request "/cli/skin/users")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
 import json,sys
-try:
-    d=json.load(sys.stdin)
-    if isinstance(d,dict) and "error" in d:
-        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
-    users=d.get("users",[])
-    if not users:
-        print("No skin users."); sys.exit(0)
-    for u in users:
-        print("%s  %s" % (u.get("username",""), u.get("id","")))
-except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+d=json.load(sys.stdin)
+users=d.get("users",[])
+if not users:
+    print("No skin users."); sys.exit(0)
+for u in users:
+    print("%s  %s" % (u.get("username",""), u.get("id","")))'
                     ;;
                 remove|rm)
                     local username="${1:-}"
                     [[ -z "$username" ]] && { echo "Usage: k2 skin user remove <username>" >&2; exit 1; }
-                    local body
+                    local body raw
                     body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
-                    cli_post_json "/cli/skin/users/remove" "$body" | python3 -c '
+                    raw=$(cli_post_json "/cli/skin/users/remove" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
 import json,sys
-try:
-    d=json.load(sys.stdin)
-    if "error" in d:
-        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
-    print("Skin user removed." if d.get("success") else "No matching skin user.")
-except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+d=json.load(sys.stdin)
+print("Skin user removed." if d.get("success") else "No matching skin user.")'
                     ;;
                 *)
                     echo "Usage: k2 skin user <add|list|remove>" >&2
@@ -5340,19 +5372,15 @@ except Exception as e:
             if [ -z "$mode" ]; then
                 local raw
                 raw=$(cli_request "/cli/skin/front-door")
+                printf '%s' "$raw" | _skin_die_if_err
                 if [ "$json_out" = 1 ]; then
                     printf '%s\n' "$raw"
                     return 0
                 fi
                 printf '%s' "$raw" | python3 -c '
 import json,sys
-try:
-    d=json.load(sys.stdin)
-except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+d=json.load(sys.stdin)
 err=d.get("error")
-if isinstance(err,str) and err.strip() and not d.get("mode"):
-    print("Error: %s" % err, file=sys.stderr); sys.exit(1)
 print("mode:     %s" % (d.get("mode") or "-"))
 print("url:      %s" % (d.get("url") or d.get("connectUrl") or "(none)"))
 print("listen:   %s" % (d.get("listen") or "-"))
@@ -5395,9 +5423,13 @@ try:
 except Exception:
     sys.exit(1)
 err=d.get("error")
+if isinstance(err, dict):
+    code=(err.get("code") or "")
+    sys.exit(3 if code in ("owner_only","forbidden","gated") else 1)
 if isinstance(err,str) and err.strip() and not d.get("applied"):
-    sys.exit(1)
-' || exit 1
+    low=err.lower()
+    sys.exit(3 if ("token" in low or "forbidden" in low or "owner" in low) else 1)
+' || exit $?
                 return 0
             fi
             printf '%s' "$raw" | python3 -c '
@@ -5407,8 +5439,17 @@ try:
 except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)
 err=d.get("error")
+if isinstance(err, dict):
+    code=err.get("code") or "error"
+    hint=err.get("hint") or err.get("message") or code
+    if code in ("owner_only","forbidden","gated") and "ask your human" not in hint:
+        hint=(hint+" — " if hint else "")+"requires owner/admin — ask your human"
+    print("Error: %s" % hint, file=sys.stderr)
+    sys.exit(3 if code in ("owner_only","forbidden","gated") else 1)
 if isinstance(err,str) and err.strip() and not d.get("applied") and not d.get("mode"):
-    print("Error: %s" % err, file=sys.stderr); sys.exit(1)
+    print("Error: %s" % err, file=sys.stderr)
+    low=err.lower()
+    sys.exit(3 if ("token" in low or "forbidden" in low or "owner" in low) else 1)
 if isinstance(err,str) and err.strip() and (
     "caddy_missing" in err or "bind_failed" in err or "pro_required" in err or "no_token" in err
 ) and not d.get("applied"):
@@ -5449,7 +5490,7 @@ cmd_skin_token() {
                 esac
             done
             [[ -z "$username" ]] && { echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post]" >&2; exit 1; }
-            local body
+            local body raw
             body=$(K2_SKIN_USER="$username" K2_SKIN_CAPS="$caps" python3 -c '
 import json,os
 b={"username": os.environ.get("K2_SKIN_USER","")}
@@ -5457,53 +5498,45 @@ c=os.environ.get("K2_SKIN_CAPS","").strip()
 if c:
     b["caps"]=[s.strip() for s in c.split(",") if s.strip()]
 print(json.dumps(b))')
-            cli_post_json "/cli/skin-tokens" "$body" | python3 -c '
+            raw=$(cli_post_json "/cli/skin-tokens" "$body")
+            printf '%s' "$raw" | _skin_die_if_err
+            printf '%s' "$raw" | python3 -c '
 import json,sys
-try:
-    d=json.load(sys.stdin)
-    if "error" in d:
-        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
-    print("Skin token created (id: %s) for %s." % (d.get("id",""), d.get("username","")))
-    caps=d.get("caps") or []
-    print("Capabilities: %s" % (", ".join(caps) if caps else "(none)"))
-    print("")
-    print("  %s" % d.get("token",""))
-    print("")
-    print("STORE THIS KEY NOW — it is shown only once and cannot be retrieved again.")
-except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+d=json.load(sys.stdin)
+print("Skin token created (id: %s) for %s." % (d.get("id",""), d.get("username","")))
+caps=d.get("caps") or []
+print("Capabilities: %s" % (", ".join(caps) if caps else "(none)"))
+print("")
+print("  %s" % d.get("token",""))
+print("")
+print("STORE THIS KEY NOW — it is shown only once and cannot be retrieved again.")'
             ;;
         list)
-            cli_request "/cli/skin-tokens" | python3 -c '
+            local raw
+            raw=$(cli_request "/cli/skin-tokens")
+            printf '%s' "$raw" | _skin_die_if_err
+            printf '%s' "$raw" | python3 -c '
 import json,sys
-try:
-    d=json.load(sys.stdin)
-    if isinstance(d,dict) and "error" in d:
-        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
-    tokens=d.get("tokens",[])
-    if not tokens:
-        print("No skin tokens."); sys.exit(0)
-    for t in tokens:
-        state="revoked" if t.get("revokedAt") else "active"
-        caps=",".join(t.get("caps") or []) or "none"
-        print("%s  [%s]  %s  %s  caps=%s" % (t.get("id",""), state, t.get("username",""), t.get("prefix",""), caps))
-except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+d=json.load(sys.stdin)
+tokens=d.get("tokens",[])
+if not tokens:
+    print("No skin tokens."); sys.exit(0)
+for t in tokens:
+    state="revoked" if t.get("revokedAt") else "active"
+    caps=",".join(t.get("caps") or []) or "none"
+    print("%s  [%s]  %s  %s  caps=%s" % (t.get("id",""), state, t.get("username",""), t.get("prefix",""), caps))'
             ;;
         revoke)
             local id="${1:-}"
             [[ -z "$id" ]] && { echo "Usage: k2 skin-token revoke <id>" >&2; exit 1; }
-            local body
+            local body raw
             body=$(K2_SKIN_ID="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["K2_SKIN_ID"]}))')
-            cli_post_json "/cli/skin-tokens/revoke" "$body" | python3 -c '
+            raw=$(cli_post_json "/cli/skin-tokens/revoke" "$body")
+            printf '%s' "$raw" | _skin_die_if_err
+            printf '%s' "$raw" | python3 -c '
 import json,sys
-try:
-    d=json.load(sys.stdin)
-    if "error" in d:
-        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
-    print("Skin token revoked." if d.get("success") else "No matching active token (unknown or already revoked).")
-except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
+d=json.load(sys.stdin)
+print("Skin token revoked." if d.get("success") else "No matching active token (unknown or already revoked).")'
             ;;
         --help|-h|"")
             echo "Usage: k2 skin-token <create|list|revoke>" >&2

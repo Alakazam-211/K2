@@ -1,7 +1,10 @@
-//! Owner-tier Skin roster / passes / front-door (`/cli/skin*`).
+//! Skin roster / passes / front-door (`/cli/skin*`).
 //!
-//! Mint is `owner_role_identity` only. Mutations are POST-only (GET twins
-//! 405). Raw `k2skn_…` secret is returned once on create.
+//! GET `/cli/skin/users` and GET `/cli/skin-tokens` admit owner-tier
+//! (`owner_role_identity`) **or** a workspace-agent scoped hook. Mint and
+//! other mutations stay `owner_role_identity` only (valid hooks get teaching
+//! `owner_only`). Mutations are POST-only (GET twins 405). Raw `k2skn_…`
+//! secret is returned once on create.
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::{self, CAP_THREAD_POST, CAP_THREAD_READ};
@@ -263,3 +266,46 @@ pub fn skin_host_forbidden(path: &str) -> Option<CliResponse> {
 
 pub const THREAD_READ: &str = CAP_THREAD_READ;
 pub const THREAD_POST: &str = CAP_THREAD_POST;
+
+/// Stable teaching response for a valid scoped agent passport on a
+/// skin owner surface (mint / remove / revoke / front-door). CLI maps
+/// `owner_only` + 403 → exit 3. Missing/garbage credentials stay
+/// [`CliResponse::forbidden`].
+pub fn owner_only_response() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "owner_only",
+                "hint": "requires owner/admin — ask your human (k2 skin user add/remove, skin-token create/revoke, and front-door apply are owner surfaces; use k2 skin user list / k2 skin-token list to read the roster)",
+            },
+        })
+        .to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owner_only_response_has_stable_code_and_403() {
+        let r = owner_only_response();
+        assert_eq!(r.status, "403 Forbidden");
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "owner_only");
+        let hint = v["error"]["hint"].as_str().unwrap_or("");
+        assert!(
+            hint.contains("owner") || hint.contains("human"),
+            "hint should teach owner/human: {hint}"
+        );
+        assert!(
+            !r.body.contains("Invalid or missing auth token"),
+            "must not look like a broken passport: {}",
+            r.body
+        );
+    }
+}

@@ -25,7 +25,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use k2_core::db::schema::WorkspaceSession;
 use k2_core::overlay::OverlayDoc;
+use k2_core::session::SessionId;
 use k2_daemon::overlay_ws::{self, OverlayFrame};
+use k2_daemon::session_token::{CredMode, HookPrincipal, Provider};
 use k2_daemon::test_harness;
 use rusqlite::params;
 use tokio::time::timeout;
@@ -265,6 +267,21 @@ fn mint(port: u16, username: &str, caps: &[&str]) -> (String, String) {
     (v["id"].as_str().expect("id").to_string(), token)
 }
 
+/// Workspace-agent passport — same registry mint as K2_HOOK_SCOPED spawn.
+fn mint_scoped_hook() -> String {
+    let sid = SessionId::new();
+    k2_daemon::session_token::mint_session_token(
+        &sid,
+        &sid.to_string(),
+        HookPrincipal {
+            workspace_uuid: "skin-it-ws".to_string(),
+            agent_address: "skin-it-agent".to_string(),
+        },
+        CredMode::ApiKey,
+        Provider::Anthropic,
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skin_slice12_thread_rooms_grid_403() {
     let _g = lock();
@@ -453,6 +470,124 @@ async fn skin_mint_is_owner_tier_admin_member_403() {
         let minted = json(&r.body);
         let raw = minted["token"].as_str().expect("token");
         assert!(raw.starts_with("k2skn_"));
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_workspace_agent_hook_can_list_but_not_mint() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        add_user(port, "guest");
+        let (_id, raw_secret) = mint(port, "guest", &["thread:read"]);
+        let hook = mint_scoped_hook();
+
+        let users = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users?token={hook}"),
+            None,
+        );
+        assert_eq!(
+            users.status, 200,
+            "workspace-agent hook GET users; {}",
+            users.body
+        );
+        let u = json(&users.body);
+        assert!(u["users"].is_array(), "{}", users.body);
+        assert!(
+            !users.body.contains("Invalid or missing auth token"),
+            "{}",
+            users.body
+        );
+
+        let tokens = http(
+            port,
+            "GET",
+            &format!("/cli/skin-tokens?token={hook}"),
+            None,
+        );
+        assert_eq!(
+            tokens.status, 200,
+            "workspace-agent hook GET tokens; {}",
+            tokens.body
+        );
+        let t = json(&tokens.body);
+        let list = t["tokens"].as_array().expect("tokens array");
+        assert!(!list.is_empty(), "{}", tokens.body);
+        for row in list {
+            assert!(
+                row.get("token").is_none(),
+                "list must not return raw secret: {row}"
+            );
+            let prefix = row["prefix"].as_str().unwrap_or("");
+            assert!(
+                prefix.starts_with("k2skn_"),
+                "prefix is the public stub: {prefix}"
+            );
+        }
+        assert!(
+            !tokens.body.contains(&raw_secret),
+            "list must not echo the raw k2skn_ secret"
+        );
+
+        let mint_denied = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={hook}"),
+            Some(r#"{"username":"guest","caps":["thread:read"]}"#),
+        );
+        assert_eq!(
+            mint_denied.status, 403,
+            "hook must not mint; {}",
+            mint_denied.body
+        );
+        assert!(
+            mint_denied.body.contains("owner_only"),
+            "valid hook on mutation must teach owner_only: {}",
+            mint_denied.body
+        );
+        assert!(
+            !mint_denied.body.contains("Invalid or missing auth token"),
+            "must not look like a broken passport: {}",
+            mint_denied.body
+        );
+
+        let add_denied = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={hook}"),
+            Some(r#"{"username":"intruder"}"#),
+        );
+        assert_eq!(add_denied.status, 403, "{}", add_denied.body);
+        assert!(
+            add_denied.body.contains("owner_only"),
+            "{}",
+            add_denied.body
+        );
+
+        let door = http(
+            port,
+            "GET",
+            &format!("/cli/skin/front-door?token={hook}"),
+            None,
+        );
+        assert_eq!(door.status, 403, "front-door stays owner-only; {}", door.body);
+        assert!(
+            door.body.contains("owner_only"),
+            "valid hook on GET front-door must teach owner_only: {}",
+            door.body
+        );
+
+        let missing = http(port, "GET", "/cli/skin/users", None);
+        assert_eq!(missing.status, 403, "{}", missing.body);
+        assert!(
+            missing.body.contains("Invalid or missing auth token"),
+            "missing credential stays classic forbidden: {}",
+            missing.body
+        );
+        assert!(!missing.body.contains("owner_only"));
     });
 }
 

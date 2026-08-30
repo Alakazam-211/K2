@@ -530,6 +530,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         // always bypasses; agents need the effective toggle ON). List is
         // free for any authenticated agent principal.
         "/cli/connections",
+        // Skin roster GET (`k2 skin user list` / `k2 skin-token list`).
+        // Exact paths only — do not prefix `/cli/skin/` (front-door and
+        // users/remove stay owner). POST on these same paths is still
+        // owner-gated in the dispatcher (teaching `owner_only`).
+        "/cli/skin/users",
+        "/cli/skin-tokens",
         // PR1 federation dual-auth under passports: agents may list peers,
         // pull a paired peer's roster, and send. pair/confirm/outbox/pubkey
         // stay owner-or-admin only (not on this allowlist). send forces
@@ -1260,6 +1266,27 @@ mod tests {
         assert!(
             !is_agent_verb("/cli/auth/whoami"),
             "/cli/auth/whoami is connect-user identity — not an agent verb"
+        );
+        // Skin roster GET for workspace-agent passports. Mutations and
+        // front-door stay off the allowlist (dispatcher owner-gates POST
+        // on the GET paths and teaches owner_only).
+        assert!(is_agent_verb("/cli/skin/users"));
+        assert!(is_agent_verb("/cli/skin-tokens"));
+        assert!(
+            !is_agent_verb("/cli/skin/users/remove"),
+            "skin user remove is owner-only"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin-tokens/revoke"),
+            "skin token revoke is owner-only"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin/front-door"),
+            "must not allow-prefix /cli/skin/ (front-door is owner-only)"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin/"),
+            "must not allow-prefix all of /cli/skin/"
         );
     }
 

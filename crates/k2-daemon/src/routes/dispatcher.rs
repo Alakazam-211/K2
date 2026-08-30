@@ -816,7 +816,9 @@ async fn handle_one_request(
             | "/cli/api-keys/disable"
             | "/cli/api-keys/enable"
             // Skin slice 1+2+3 — guest list + k2skn_ passes + Caddy front door.
-            // Owner-tier (owner_role_identity). GET twins for mutations 405.
+            // GET users/tokens: owner_role_identity OR scoped hook.
+            // Mutations + front-door: owner_role_identity (valid hooks get
+            // teaching owner_only). GET twins for mutations 405.
             | "/cli/skin/users"
             | "/cli/skin/users/remove"
             | "/cli/skin-tokens"
@@ -5026,9 +5028,12 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // Skin slice 1+2+3 — guest list, k2skn_ passes, Caddy front door.
-        // OWNER-TIER (`owner_role_identity`). Skin tokens themselves never
-        // manage the roster (they are not token_ok and not Owner-role).
-        // Mutations POST-only; GET twins 405.
+        // GET users/tokens: owner_role_identity OR scoped hook (workspace
+        // agent passport). Admin/Member connect sessions stay 403.
+        // Mutations + GET/POST front-door: owner_role_identity; a valid
+        // scoped hook gets teaching `owner_only` (never the opaque
+        // invalid-token string). Skin tokens themselves never manage the
+        // roster. Mutations POST-only; GET twins 405.
         p if p.starts_with("/cli/skin") => {
             let r = match p {
                 "/cli/skin/users" if is_post => {
@@ -5039,7 +5044,7 @@ async fn handle_one_request(
                         super::http::owner_role_identity(&query, state.token.as_str())
                     else {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-                        let f = crate::cli_response::CliResponse::forbidden();
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
                         super::http::send_response(
                             &mut *stream,
                             f.status,
@@ -5058,8 +5063,14 @@ async fn handle_one_request(
                 }
                 "/cli/skin/users" => {
                     let _ = stream.read(&mut buf).await;
-                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
-                        crate::cli_response::CliResponse::forbidden()
+                    let (ok, _) = owner_or_scoped_hook_auth(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    );
+                    if !ok {
+                        skin_dual_auth_failure(&query, bearer_token.as_deref())
                     } else {
                         tokio::task::spawn_blocking(crate::skin_routes::handle_users_get)
                             .await
@@ -5076,7 +5087,7 @@ async fn handle_one_request(
                         super::http::owner_role_identity(&query, state.token.as_str())
                     else {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-                        let f = crate::cli_response::CliResponse::forbidden();
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
                         super::http::send_response(
                             &mut *stream,
                             f.status,
@@ -5101,7 +5112,7 @@ async fn handle_one_request(
                         super::http::owner_role_identity(&query, state.token.as_str())
                     else {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-                        let f = crate::cli_response::CliResponse::forbidden();
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
                         super::http::send_response(
                             &mut *stream,
                             f.status,
@@ -5120,8 +5131,14 @@ async fn handle_one_request(
                 }
                 "/cli/skin-tokens" => {
                     let _ = stream.read(&mut buf).await;
-                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
-                        crate::cli_response::CliResponse::forbidden()
+                    let (ok, _) = owner_or_scoped_hook_auth(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    );
+                    if !ok {
+                        skin_dual_auth_failure(&query, bearer_token.as_deref())
                     } else {
                         tokio::task::spawn_blocking(crate::skin_routes::handle_tokens_get)
                             .await
@@ -5138,7 +5155,7 @@ async fn handle_one_request(
                         super::http::owner_role_identity(&query, state.token.as_str())
                     else {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-                        let f = crate::cli_response::CliResponse::forbidden();
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
                         super::http::send_response(
                             &mut *stream,
                             f.status,
@@ -5163,7 +5180,7 @@ async fn handle_one_request(
                         super::http::owner_role_identity(&query, state.token.as_str())
                     else {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-                        let f = crate::cli_response::CliResponse::forbidden();
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
                         super::http::send_response(
                             &mut *stream,
                             f.status,
@@ -5184,7 +5201,7 @@ async fn handle_one_request(
                 "/cli/skin/front-door" => {
                     let _ = stream.read(&mut buf).await;
                     if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
-                        crate::cli_response::CliResponse::forbidden()
+                        skin_dual_auth_failure(&query, bearer_token.as_deref())
                     } else {
                         tokio::task::spawn_blocking(crate::skin_routes::handle_front_door_get)
                             .await
@@ -6730,6 +6747,22 @@ fn token_or_scoped_hook_auth(
     scoped_hook_auth(path, query, bearer)
 }
 
+/// Skin roster GET dual-auth: **owner-role** (owner token or Owner-ROLE
+/// connect session) OR a scoped passport on an agent-verb path. Stricter
+/// than [`token_or_scoped_hook_auth`] — Admin/Member sessions do NOT pass
+/// (existing `skin_mint_is_owner_tier_admin_member_403` GET list 403).
+fn owner_or_scoped_hook_auth(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+) -> (bool, Option<crate::session_token::HookPrincipal>) {
+    if super::http::owner_role_identity(query, owner_token).is_some() {
+        return (true, None);
+    }
+    scoped_hook_auth(path, query, bearer)
+}
+
 /// PR1 federation dual-auth: **owner-or-admin** OR a scoped passport on an
 /// agent-verb path. Stricter than [`token_or_scoped_hook_auth`] — Member
 /// connect-user sessions do NOT pass (pair/peers/send historically barred
@@ -6789,6 +6822,20 @@ fn sql_dual_auth_failure(
         && crate::sql_routes::is_sql_owner_surface(path)
     {
         return crate::sql_routes::owner_only_response();
+    }
+    crate::cli_response::CliResponse::forbidden()
+}
+
+/// Skin mutations / front-door: a **valid scoped agent passport** gets
+/// teaching `owner_only` (exit 3) instead of the opaque invalid-token
+/// string. Missing/garbage credentials stay classic forbidden.
+fn skin_dual_auth_failure(
+    query: &str,
+    bearer: Option<&str>,
+) -> crate::cli_response::CliResponse {
+    let presented = presented_bearer(query, bearer);
+    if !presented.is_empty() && crate::session_token::validate_hook(presented).is_some() {
+        return crate::skin_routes::owner_only_response();
     }
     crate::cli_response::CliResponse::forbidden()
 }
@@ -6884,6 +6931,30 @@ mod tests {
             "garbage credential must stay classic forbidden: {}",
             r.body
         );
+    }
+
+    #[test]
+    fn skin_dual_auth_failure_missing_token_is_classic_forbidden() {
+        let r = skin_dual_auth_failure("", None);
+        assert_eq!(r.status, "403 Forbidden");
+        assert!(
+            r.body.contains("Invalid or missing auth token"),
+            "missing credential must stay classic forbidden: {}",
+            r.body
+        );
+        assert!(!r.body.contains("owner_only"));
+    }
+
+    #[test]
+    fn skin_dual_auth_failure_garbage_token_is_classic_forbidden() {
+        let r = skin_dual_auth_failure("token=not-a-real-passport", None);
+        assert_eq!(r.status, "403 Forbidden");
+        assert!(
+            r.body.contains("Invalid or missing auth token"),
+            "garbage credential must stay classic forbidden: {}",
+            r.body
+        );
+        assert!(!r.body.contains("owner_only"));
     }
 
     #[test]

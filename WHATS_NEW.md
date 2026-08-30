@@ -3,6 +3,18 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.121 — Skin Access, quieter Thread/Chatter, Grok one Return
+
+**Skin Access** is a guest list for custom UIs that talk to agents **without** a terminal. Settings → **Skin Access**: add a username, mint a `k2skn_` pass with Thread read/post. Those tokens never open the grid. A Caddy **front door** (Caddy on PATH) path-filters Thread/overlay/`/boot-status` and can listen as nested `skin.<your-sub>.k2.dev`. Opt-in catalog pack: `k2 agent context add skin:roster`.
+
+**Thread and Chatter** no longer stay rendered behind Terminal. The PTY keeps running when you leave it; overlay tabs load on demand, **25** messages at a time (Load older / scroll up). A message you send on Thread shows in the Thread list (it still wakes the agent in the terminal with `[thread:…]`).
+
+**Message the agent:** Ctrl+B injects STX (with Esc / Ctrl+C / empty Return). **Grok**’s default submit is paste + **one** Return — the extra Return was starting a new turn after steer. Other models stay two Returns unless you changed Submit keys.
+
+Agents told `[thread:addr]` should reply with `k2 thread`, not the TUI. Generated `.k2/agent/SKILL.md` is no longer planted (leftovers on disk are left alone).
+
+---
+
 ## 0.40.120 — Chatter tab, database sidecar, compose slash, Settings regroup
 
 Agent sessions are now **Terminal | Thread | Chatter | split**. Chatter is the agent-to-agent mailbox (`k2 msg` / `k2 talk`) with the same bubbles as Thread and **no** compose box. Thread is still the human overlay.

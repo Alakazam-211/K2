@@ -205,6 +205,7 @@ fn reapply_skin_door_after_mail_enable(daemon_port: Option<u16>) -> Option<Strin
 /// Passing → the machine runs on a background thread; progress is
 /// polled via GET /cli/mail/status (`enableProgress`), the house
 /// persisted-steps pattern. Re-POST after a failure RESUMES.
+#[cfg(test)]
 pub fn handle_server_enable(body: &[u8]) -> CliResponse {
     handle_server_enable_at(body, live_daemon_http_port())
 }

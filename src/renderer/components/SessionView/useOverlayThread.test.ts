@@ -49,27 +49,27 @@ describe('useOverlayThread paging', () => {
     daemonCliPost.mockReset()
   })
 
-  it('initial GET uses limit 50; loadOlder prepends unique items', async () => {
+  it('initial GET uses limit 25; loadOlder prepends unique items', async () => {
     daemonCliGet
       .mockResolvedValueOnce({
         conversation_id: '',
         has_more: true,
-        items: pageItems(11, 60, 'thread'),
+        items: pageItems(16, 40, 'thread'),
       })
       .mockResolvedValueOnce({
         conversation_id: '',
         has_more: false,
-        items: pageItems(1, 10, 'thread'),
+        items: pageItems(1, 15, 'thread'),
       })
 
     const { result } = renderHook(() =>
       useOverlayThread({ addr: 'sales', conversationId: null, enabled: true }),
     )
-    await waitFor(() => expect(result.current.items).toHaveLength(50))
+    await waitFor(() => expect(result.current.items).toHaveLength(25))
     expect(daemonCliGet).toHaveBeenCalledWith('thread', { addr: 'sales', limit: OVERLAY_PAGE_SIZE })
     expect(result.current.hasMore).toBe(true)
-    expect(result.current.items[0].seq).toBe(11)
-    expect(result.current.items[49].seq).toBe(60)
+    expect(result.current.items[0].seq).toBe(16)
+    expect(result.current.items[24].seq).toBe(40)
 
     await act(async () => {
       await result.current.loadOlder()
@@ -77,9 +77,9 @@ describe('useOverlayThread paging', () => {
     expect(daemonCliGet).toHaveBeenCalledWith('thread', {
       addr: 'sales',
       limit: OVERLAY_PAGE_SIZE,
-      before_seq: 11,
+      before_seq: 16,
     })
-    expect(result.current.items).toHaveLength(60)
+    expect(result.current.items).toHaveLength(40)
     expect(result.current.items[0].seq).toBe(1)
     expect(result.current.hasMore).toBe(false)
   })
@@ -129,23 +129,23 @@ describe('useOverlayChatter paging', () => {
     daemonCliGet.mockReset()
   })
 
-  it('initial GET uses limit 50; loadOlder prepends', async () => {
+  it('initial GET uses limit 25; loadOlder prepends', async () => {
     daemonCliGet
       .mockResolvedValueOnce({
         conversation_id: '',
         has_more: true,
-        items: pageItems(11, 60, 'chatter'),
+        items: pageItems(16, 40, 'chatter'),
       })
       .mockResolvedValueOnce({
         conversation_id: '',
         has_more: false,
-        items: pageItems(1, 10, 'chatter'),
+        items: pageItems(1, 15, 'chatter'),
       })
 
     const { result } = renderHook(() =>
       useOverlayChatter({ addr: 'sales', conversationId: null, enabled: true }),
     )
-    await waitFor(() => expect(result.current.items).toHaveLength(50))
+    await waitFor(() => expect(result.current.items).toHaveLength(25))
     expect(daemonCliGet).toHaveBeenCalledWith('chatter', { addr: 'sales', limit: OVERLAY_PAGE_SIZE })
     expect(result.current.hasMore).toBe(true)
 
@@ -155,9 +155,9 @@ describe('useOverlayChatter paging', () => {
     expect(daemonCliGet).toHaveBeenCalledWith('chatter', {
       addr: 'sales',
       limit: OVERLAY_PAGE_SIZE,
-      before_seq: 11,
+      before_seq: 16,
     })
-    expect(result.current.items).toHaveLength(60)
+    expect(result.current.items).toHaveLength(40)
     expect(result.current.items[0].id).toBe('chatter-1')
     expect(result.current.hasMore).toBe(false)
   })

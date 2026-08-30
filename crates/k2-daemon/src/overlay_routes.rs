@@ -190,7 +190,7 @@ fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, page: OverlayPage
     .to_string()
 }
 
-const OVERLAY_PAGE_DEFAULT: usize = 50;
+const OVERLAY_PAGE_DEFAULT: usize = 25;
 const OVERLAY_PAGE_MAX: usize = 500;
 
 /// Absent `since_seq` = initial/tail page. Present (including 0) = seq > since_seq.
@@ -202,7 +202,7 @@ fn parse_before_seq(params: &HashMap<String, String>) -> Option<i64> {
     opt_param(params, "before_seq").and_then(|s| s.parse::<i64>().ok())
 }
 
-/// Default 50. Explicit `limit=0` is unbounded (CLI `--all`). Else clamp 1..=500.
+/// Default 25. Explicit `limit=0` is unbounded (CLI `--all`). Else clamp 1..=500.
 fn parse_overlay_limit(params: &HashMap<String, String>) -> usize {
     match opt_param(params, "limit") {
         None => OVERLAY_PAGE_DEFAULT,
@@ -1679,7 +1679,7 @@ mod tests {
     }
 
     #[test]
-    fn get_thread_defaults_to_newest_50_with_has_more() {
+    fn get_thread_defaults_to_newest_25_with_has_more() {
         let handle = format!("ovlpage{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         let conv = uuid::Uuid::new_v4().to_string();
@@ -1688,7 +1688,7 @@ mod tests {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            for i in 1..=60 {
+            for i in 1..=40 {
                 overlay::post_thread(
                     &conn,
                     &conv,
@@ -1707,18 +1707,18 @@ mod tests {
         assert_eq!(get.status, "200 OK", "{}", get.body);
         let snap = json_body(&get);
         assert_eq!(snap["ok"], true, "{snap}");
-        assert_eq!(snap["has_more"], true, "60 items default page 50: {snap}");
+        assert_eq!(snap["has_more"], true, "40 items default page 25: {snap}");
         let items = snap["items"].as_array().expect("items array");
-        assert_eq!(items.len(), 50, "{snap}");
-        assert_eq!(items[0]["seq"], 11);
-        assert_eq!(items[49]["seq"], 60);
+        assert_eq!(items.len(), 25, "{snap}");
+        assert_eq!(items[0]["seq"], 16);
+        assert_eq!(items[24]["seq"], 40);
 
         let older = dispatch(
             "/cli/thread",
             &params_of(&[
                 ("addr", handle.as_str()),
-                ("before_seq", "11"),
-                ("limit", "50"),
+                ("before_seq", "16"),
+                ("limit", "25"),
             ]),
         )
         .expect("GET older");
@@ -1726,8 +1726,8 @@ mod tests {
         let snap2 = json_body(&older);
         assert_eq!(snap2["has_more"], false, "{snap2}");
         let items2 = snap2["items"].as_array().expect("older items");
-        assert_eq!(items2.len(), 10, "{snap2}");
+        assert_eq!(items2.len(), 15, "{snap2}");
         assert_eq!(items2[0]["seq"], 1);
-        assert_eq!(items2[9]["seq"], 10);
+        assert_eq!(items2[14]["seq"], 15);
     }
 }

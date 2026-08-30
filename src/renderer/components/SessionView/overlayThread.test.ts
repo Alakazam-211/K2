@@ -51,7 +51,7 @@ describe('overlay Thread list never includes chatter', () => {
   })
 
   it('parses has_more from snapshot; missing defaults false', () => {
-    expect(OVERLAY_PAGE_SIZE).toBe(50)
+    expect(OVERLAY_PAGE_SIZE).toBe(25)
     const withFlag = threadItemsFromSnapshot({
       conversation_id: 'conv-1',
       has_more: true,

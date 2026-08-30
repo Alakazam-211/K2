@@ -1,6 +1,6 @@
 /** Overlay Thread snapshot + WS frame helpers. Thread pane never shows chatter. */
 
-export const OVERLAY_PAGE_SIZE = 50
+export const OVERLAY_PAGE_SIZE = 25
 
 export interface OverlayChoice {
   prompt: string

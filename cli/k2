@@ -6943,7 +6943,7 @@ cmd_help_thread() {
 k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
 
   k2 thread <addr> "text"                         # overlay text (not PTY; that's k2 msg)
-  k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 50
+  k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 25
   k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
 
@@ -11802,7 +11802,7 @@ cmd_schema() {
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output (ask: {id,prompt,options}; secret never includes the value)."},
-        {"name": "--limit", "arg": "N", "description": "Read page size (daemon default 50, max 500)."},
+        {"name": "--limit", "arg": "N", "description": "Read page size (daemon default 25, max 500)."},
         {"name": "--all", "arg": null, "description": "Read the full overlay (unbounded)."},
         {"name": "--before-seq", "arg": "N", "description": "Load older items with seq < N."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},

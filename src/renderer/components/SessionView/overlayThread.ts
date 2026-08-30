@@ -1,5 +1,7 @@
 /** Overlay Thread snapshot + WS frame helpers. Thread pane never shows chatter. */
 
+export const OVERLAY_PAGE_SIZE = 50
+
 export interface OverlayChoice {
   prompt: string
   options: { label: string }[]
@@ -37,6 +39,7 @@ export interface OverlayThreadItem {
 export interface OverlaySnapshot {
   conversation_id: string
   items: OverlayThreadItem[]
+  has_more: boolean
 }
 
 export interface OverlayWsFrame {
@@ -68,7 +71,19 @@ export function threadItemsFromSnapshot(raw: unknown): OverlaySnapshot {
     if (item && isThreadSurfaceItem(item)) items.push(item)
   }
   items.sort((a, b) => a.seq - b.seq)
-  return { conversation_id, items }
+  return { conversation_id, items, has_more: obj.has_more === true }
+}
+
+/** Prepend unique older items (by id); keep ascending seq. */
+export function mergeOlderOverlayItems(
+  current: OverlayThreadItem[],
+  older: OverlayThreadItem[],
+): OverlayThreadItem[] {
+  if (older.length === 0) return current
+  const seen = new Set(current.map((it) => it.id))
+  const prepend = older.filter((it) => !seen.has(it.id))
+  if (prepend.length === 0) return current
+  return [...prepend, ...current].sort((a, b) => a.seq - b.seq)
 }
 
 export function applyOverlayFrame(
@@ -118,7 +133,7 @@ export function chatterItemsFromSnapshot(raw: unknown): OverlaySnapshot {
     if (item && isChatterSurfaceItem(item)) items.push(item)
   }
   items.sort((a, b) => a.seq - b.seq)
-  return { conversation_id, items }
+  return { conversation_id, items, has_more: obj.has_more === true }
 }
 
 export function applyChatterFrame(

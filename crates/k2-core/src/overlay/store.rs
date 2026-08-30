@@ -59,12 +59,10 @@ fn db() -> Result<&'static Database, String> {
     match DB.get_or_init(|| {
         let path = store_path();
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!("overlay redb mkdir {}: {e}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("overlay redb mkdir {}: {e}", parent.display()))?;
         }
-        Database::create(&path)
-            .map_err(|e| format!("overlay redb create {}: {e}", path.display()))
+        Database::create(&path).map_err(|e| format!("overlay redb create {}: {e}", path.display()))
     }) {
         Ok(db) => Ok(db),
         Err(e) => Err(e.clone()),
@@ -226,12 +224,53 @@ pub fn commit_write(
     Ok(())
 }
 
+/// Newest-N page of a conversation collection (HTTP `/cli/thread` + `/cli/chatter`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlayPage {
+    /// Ascending seq.
+    pub items: Vec<OverlayItem>,
+    /// Older items exist than this page's minimum seq (range truncated).
+    pub has_more: bool,
+}
+
 pub fn read_thread(conversation_id: &str, since_seq: i64) -> Result<Vec<OverlayItem>, String> {
     read_conv(THREAD, "thread", conversation_id, since_seq)
 }
 
 pub fn read_chatter(conversation_id: &str, since_seq: i64) -> Result<Vec<OverlayItem>, String> {
     read_conv(CHATTER, "chatter", conversation_id, since_seq)
+}
+
+pub fn read_thread_page(
+    conversation_id: &str,
+    since_seq: Option<i64>,
+    before_seq: Option<i64>,
+    limit: usize,
+) -> Result<OverlayPage, String> {
+    read_conv_page(
+        THREAD,
+        "thread",
+        conversation_id,
+        since_seq,
+        before_seq,
+        limit,
+    )
+}
+
+pub fn read_chatter_page(
+    conversation_id: &str,
+    since_seq: Option<i64>,
+    before_seq: Option<i64>,
+    limit: usize,
+) -> Result<OverlayPage, String> {
+    read_conv_page(
+        CHATTER,
+        "chatter",
+        conversation_id,
+        since_seq,
+        before_seq,
+        limit,
+    )
 }
 
 pub fn read_chatterlog(since_seq: i64) -> Result<Vec<OverlayItem>, String> {
@@ -302,13 +341,7 @@ fn read_conv(
             .map_err(|e| format!("overlay {collection} range: {e}"))?;
         for entry in range {
             let (k, v) = entry.map_err(|e| format!("overlay {collection} iter: {e}"))?;
-            let key = k.value().to_string();
-            let seq = key
-                .rsplit('/')
-                .next()
-                .and_then(|s| s.parse::<i64>().ok())
-                .ok_or_else(|| format!("overlay {collection} bad key '{key}'"))?;
-            pointers.push((seq, v.value().to_string()));
+            pointers.push(parse_conv_pointer(collection, k.value(), v.value())?);
         }
         pointers
     };
@@ -330,10 +363,91 @@ fn read_conv(
     Ok(items)
 }
 
-fn point_get_doc(
-    txn: &redb::ReadTransaction,
-    id: &str,
-) -> Result<Option<OverlayDoc>, String> {
+fn parse_conv_pointer(collection: &str, key: &str, id: &str) -> Result<(i64, String), String> {
+    let seq = key
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.parse::<i64>().ok())
+        .ok_or_else(|| format!("overlay {collection} bad key '{key}'"))?;
+    Ok((seq, id.to_string()))
+}
+
+fn read_conv_page(
+    def: TableDefinition<&str, &str>,
+    collection: &str,
+    conversation_id: &str,
+    since_seq: Option<i64>,
+    before_seq: Option<i64>,
+    limit: usize,
+) -> Result<OverlayPage, String> {
+    let db = db()?;
+    let txn = db
+        .begin_read()
+        .map_err(|e| format!("overlay redb read: {e}"))?;
+    let (pointers, has_more) = {
+        let table = match txn.open_table(def) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => {
+                return Ok(OverlayPage {
+                    items: Vec::new(),
+                    has_more: false,
+                });
+            }
+            Err(e) => return Err(format!("overlay open {collection}: {e}")),
+        };
+        // seq > since_seq (omit = no lower bound); seq < before_seq (omit = no upper).
+        let start = match since_seq {
+            Some(s) => conv_key(conversation_id, s.saturating_add(1)),
+            None => format!("{conversation_id}/"),
+        };
+        let end = match before_seq {
+            Some(b) => conv_key(conversation_id, b),
+            None => conv_end(conversation_id),
+        };
+        let range = table
+            .range(start.as_str()..end.as_str())
+            .map_err(|e| format!("overlay {collection} range: {e}"))?;
+        let mut pointers = Vec::new();
+        let mut has_more = false;
+        if limit == 0 {
+            for entry in range {
+                let (k, v) = entry.map_err(|e| format!("overlay {collection} iter: {e}"))?;
+                pointers.push(parse_conv_pointer(collection, k.value(), v.value())?);
+            }
+        } else {
+            // Newest-N: reverse the prefix range so a 10k mailbox does not
+            // load 10k pointers to take 50.
+            for entry in range.rev() {
+                if pointers.len() >= limit {
+                    has_more = true;
+                    break;
+                }
+                let (k, v) = entry.map_err(|e| format!("overlay {collection} iter: {e}"))?;
+                pointers.push(parse_conv_pointer(collection, k.value(), v.value())?);
+            }
+            pointers.reverse();
+        }
+        (pointers, has_more)
+    };
+    let mut items = Vec::with_capacity(pointers.len());
+    for (seq, id) in pointers {
+        let Some(doc) = point_get_doc(&txn, &id)? else {
+            return Err(format!(
+                "overlay {collection} seq {seq} points at missing docs/{id}"
+            ));
+        };
+        items.push(OverlayItem {
+            collection: collection.to_string(),
+            seq,
+            id,
+            doc,
+            conversation_id: Some(conversation_id.to_string()),
+        });
+    }
+    Ok(OverlayPage { items, has_more })
+}
+
+fn point_get_doc(txn: &redb::ReadTransaction, id: &str) -> Result<Option<OverlayDoc>, String> {
     let table = txn
         .open_table(DOCS)
         .map_err(|e| format!("overlay open docs: {e}"))?;

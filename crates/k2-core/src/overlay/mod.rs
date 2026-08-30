@@ -16,6 +16,7 @@ use rusqlite::Connection;
 
 pub use doc::{ChoiceBody, ChoiceOption, OverlayDoc, OverlayItem, OverlayLink, SecretBody};
 pub use options::{parse_options_value, split_options_csv};
+pub use store::OverlayPage;
 
 static WRITE: Mutex<()> = Mutex::new(());
 
@@ -103,7 +104,10 @@ pub fn post_secret(
     let _guard = WRITE.lock();
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
     let id = uuid::Uuid::new_v4().to_string();
-    let prompt = prompt.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let prompt = prompt
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let doc = OverlayDoc::secret_card(
         id.clone(),
         from.trim().to_string(),
@@ -173,12 +177,7 @@ pub fn answer_card(
         format!("chose {answer}")
     } else if doc.is_pending_secret() {
         let bytes = secret_bytes.ok_or_else(|| "secret value required".to_string())?;
-        let name = doc
-            .secret
-            .as_ref()
-            .expect("pending secret")
-            .name
-            .clone();
+        let name = doc.secret.as_ref().expect("pending secret").name.clone();
         vault::put(project_id, &name, bytes)?;
         if let Some(s) = doc.secret.as_mut() {
             s.status = "set".to_string();
@@ -213,12 +212,7 @@ pub fn void_card(
         }
         "card voided — human replied in chat".to_string()
     } else if doc.is_pending_secret() {
-        let name = doc
-            .secret
-            .as_ref()
-            .expect("pending secret")
-            .name
-            .clone();
+        let name = doc.secret.as_ref().expect("pending secret").name.clone();
         vault::delete(project_id, &name)?;
         if let Some(s) = doc.secret.as_mut() {
             s.status = "voided".to_string();
@@ -371,18 +365,32 @@ pub fn record_chatter(
     Ok((doc, links))
 }
 
-pub fn read_thread(
-    conversation_id: &str,
-    since_seq: i64,
-) -> Result<Vec<OverlayItem>, String> {
+pub fn read_thread(conversation_id: &str, since_seq: i64) -> Result<Vec<OverlayItem>, String> {
     store::read_thread(conversation_id, since_seq)
 }
 
-pub fn read_chatter(
-    conversation_id: &str,
-    since_seq: i64,
-) -> Result<Vec<OverlayItem>, String> {
+pub fn read_chatter(conversation_id: &str, since_seq: i64) -> Result<Vec<OverlayItem>, String> {
     store::read_chatter(conversation_id, since_seq)
+}
+
+/// Newest `limit` items with `seq > since_seq` (if set) and `seq < before_seq`
+/// (if set), ascending seq. `limit == 0` is unbounded.
+pub fn read_thread_page(
+    conversation_id: &str,
+    since_seq: Option<i64>,
+    before_seq: Option<i64>,
+    limit: usize,
+) -> Result<OverlayPage, String> {
+    store::read_thread_page(conversation_id, since_seq, before_seq, limit)
+}
+
+pub fn read_chatter_page(
+    conversation_id: &str,
+    since_seq: Option<i64>,
+    before_seq: Option<i64>,
+    limit: usize,
+) -> Result<OverlayPage, String> {
+    store::read_chatter_page(conversation_id, since_seq, before_seq, limit)
 }
 
 pub fn read_chatterlog(since_seq: i64) -> Result<Vec<OverlayItem>, String> {
@@ -420,7 +428,11 @@ mod tests {
         let (item, links) = post_thread(&c, &conv, &project_id, "k2", "ovl-thread", "hi", "thread")
             .expect("post_thread");
         assert_eq!(item.seq, 1, "first thread seq must be 1, got {}", item.seq);
-        assert_eq!(item.doc.from, "k2", "from must be stamped, got {:?}", item.doc.from);
+        assert_eq!(
+            item.doc.from, "k2",
+            "from must be stamped, got {:?}",
+            item.doc.from
+        );
         assert_eq!(item.doc.kind, "text");
         assert_eq!(item.doc.body.as_deref(), Some("hi"));
         assert_eq!(links.len(), 1, "thread write links Thread only: {links:?}");
@@ -467,19 +479,30 @@ mod tests {
         .expect("record_chatter");
 
         assert_eq!(doc.kind, "chatter");
-        assert_eq!(doc.via.as_deref(), Some("msg"), "via must be msg, got {:?}", doc.via);
+        assert_eq!(
+            doc.via.as_deref(),
+            Some("msg"),
+            "via must be msg, got {:?}",
+            doc.via
+        );
         assert!(
             store::debug_doc_exists(&doc.id).expect("doc exists"),
             "exactly one docs/{{id}} body must exist"
         );
         let (thread_n, chatter_n, log_n) =
             store::debug_pointer_count(&doc.id).expect("pointer count");
-        assert_eq!(thread_n, 0, "A2A must not auto-link Thread, got {thread_n} thread pointers");
+        assert_eq!(
+            thread_n, 0,
+            "A2A must not auto-link Thread, got {thread_n} thread pointers"
+        );
         assert_eq!(
             chatter_n, 2,
             "Chatter links on reviewer + sender, got {chatter_n} (links={links:?})"
         );
-        assert_eq!(log_n, 1, "ChatterLog must have exactly one pointer, got {log_n}");
+        assert_eq!(
+            log_n, 1,
+            "ChatterLog must have exactly one pointer, got {log_n}"
+        );
 
         let thread_items = read_thread(&reviewer, 0).expect("read thread");
         assert!(
@@ -487,7 +510,11 @@ mod tests {
             "GET thread must not contain the ping, got {thread_items:?}"
         );
         let chatter_items = read_chatter(&reviewer, 0).expect("read chatter");
-        assert_eq!(chatter_items.len(), 1, "reviewer mailbox: {chatter_items:?}");
+        assert_eq!(
+            chatter_items.len(),
+            1,
+            "reviewer mailbox: {chatter_items:?}"
+        );
         assert_eq!(chatter_items[0].doc.body.as_deref(), Some("ping"));
         let sender_box = read_chatter(&sender, 0).expect("sender mailbox");
         assert_eq!(sender_box.len(), 1, "sender mailbox: {sender_box:?}");
@@ -546,8 +573,16 @@ mod tests {
             "running",
         )
         .expect("pin");
-        post_thread(&c, session_id, &project_id, "k2", "ovl-named", "pinned", "thread")
-            .expect("post");
+        post_thread(
+            &c,
+            session_id,
+            &project_id,
+            "k2",
+            "ovl-named",
+            "pinned",
+            "thread",
+        )
+        .expect("post");
         let row = catalog::get(&c, session_id)
             .expect("get")
             .expect("catalog row for pinned session_id");
@@ -618,16 +653,8 @@ mod tests {
             false,
         )
         .expect("choice");
-        let (secret, _) = post_secret(
-            &c,
-            &conv,
-            &project_id,
-            "k2",
-            "ovl-prose",
-            "API_TOKEN",
-            None,
-        )
-        .expect("secret");
+        let (secret, _) = post_secret(&c, &conv, &project_id, "k2", "ovl-prose", "API_TOKEN", None)
+            .expect("secret");
 
         let voided = apply_prose(&conv, &project_id, "never mind").expect("prose");
         assert_eq!(voided.len(), 2, "both pending cards void: {voided:?}");
@@ -726,10 +753,7 @@ mod tests {
         )
         .expect("post_secret");
         assert_eq!(item.doc.kind, "secret");
-        assert_eq!(
-            item.doc.secret.as_ref().expect("secret").status,
-            "pending"
-        );
+        assert_eq!(item.doc.secret.as_ref().expect("secret").status, "pending");
         let secret_bytes = b"s3cr3t-NEVER-IN-REDB-xyz";
         let cb = answer_card(
             &conv,
@@ -781,5 +805,104 @@ mod tests {
             !vault::exists(&project_id, "OTHER_TOKEN"),
             "dismiss/void must leave vault empty"
         );
+    }
+
+    #[test]
+    fn thread_page_newest_50_then_older_before_seq() {
+        let project_id = seed_project("ovl-page-t");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        for i in 1..=60 {
+            post_thread(
+                &c,
+                &conv,
+                &project_id,
+                "k2",
+                "ovl-page-t",
+                &format!("t{i}"),
+                "thread",
+            )
+            .expect("post");
+        }
+        let page = read_thread_page(&conv, None, None, 50).expect("page");
+        assert_eq!(
+            page.items.len(),
+            50,
+            "newest 50, got {:?}",
+            page.items.len()
+        );
+        assert_eq!(page.items[0].seq, 11, "tail starts at seq 11");
+        assert_eq!(page.items[49].seq, 60);
+        assert!(
+            page.items.windows(2).all(|w| w[0].seq < w[1].seq),
+            "page must be ascending seq"
+        );
+        assert!(page.has_more, "60 items, page of 50 must set has_more");
+
+        let older = read_thread_page(&conv, None, Some(11), 50).expect("older");
+        assert_eq!(
+            older.items.len(),
+            10,
+            "seq 1..=10, got {}",
+            older.items.len()
+        );
+        assert_eq!(older.items[0].seq, 1);
+        assert_eq!(older.items[9].seq, 10);
+        assert!(!older.has_more, "no items below seq 1: {older:?}");
+
+        let all = read_thread(&conv, 0).expect("unbounded helper");
+        assert_eq!(all.len(), 60, "read_thread(_, 0) stays unbounded");
+
+        let unbounded = read_thread_page(&conv, None, None, 0).expect("limit 0");
+        assert_eq!(unbounded.items.len(), 60);
+        assert!(!unbounded.has_more);
+    }
+
+    #[test]
+    fn chatter_page_newest_50_then_older_before_seq() {
+        let project_id = seed_project("ovl-page-c");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        for i in 1..=60 {
+            record_chatter(
+                &c,
+                &conv,
+                &project_id,
+                None,
+                "sales",
+                "sales/reviewer",
+                &format!("c{i}"),
+                "msg",
+                "accepted",
+            )
+            .expect("chatter");
+        }
+        let page = read_chatter_page(&conv, None, None, 50).expect("page");
+        assert_eq!(page.items.len(), 50);
+        assert_eq!(page.items[0].seq, 11);
+        assert_eq!(page.items[49].seq, 60);
+        assert!(page.has_more);
+
+        let older = read_chatter_page(&conv, None, Some(11), 50).expect("older");
+        assert_eq!(older.items.len(), 10);
+        assert_eq!(older.items[0].seq, 1);
+        assert_eq!(older.items[9].seq, 10);
+        assert!(!older.has_more);
+
+        let all = read_chatter(&conv, 0).expect("unbounded helper");
+        assert_eq!(all.len(), 60);
+    }
+
+    #[test]
+    fn empty_conv_page_is_empty_no_has_more() {
+        let conv = uuid::Uuid::new_v4().to_string();
+        let thread = read_thread_page(&conv, None, None, 50).expect("thread empty");
+        assert!(thread.items.is_empty(), "{thread:?}");
+        assert!(!thread.has_more);
+        let chatter = read_chatter_page(&conv, None, None, 50).expect("chatter empty");
+        assert!(chatter.items.is_empty(), "{chatter:?}");
+        assert!(!chatter.has_more);
     }
 }

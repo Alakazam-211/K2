@@ -5750,6 +5750,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             <ThreadOverlayPane
               addr={sessionChrome.overlayAddr}
               conversationId={sessionChrome.conversationId}
+              active={showThreadOnly || showSplit}
             />
           </div>
           {(showSplit || showThreadOnly) &&
@@ -5776,6 +5777,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             <ChatterOverlayPane
               addr={sessionChrome.overlayAddr}
               conversationId={sessionChrome.conversationId}
+              active={showChatterOnly}
             />
           </div>
         </div>

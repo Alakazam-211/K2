@@ -5,6 +5,8 @@ import {
   chatterItemsFromSnapshot,
   isChatterSurfaceItem,
   isThreadSurfaceItem,
+  mergeOlderOverlayItems,
+  OVERLAY_PAGE_SIZE,
   releaseOverlayWebSocket,
   threadItemsFromSnapshot,
   type OverlayThreadItem,
@@ -37,10 +39,26 @@ describe('overlay Thread list never includes chatter', () => {
       ],
     })
     expect(snap.conversation_id).toBe('conv-1')
+    expect(snap.has_more).toBe(false)
     expect(snap.items).toHaveLength(1)
     expect(snap.items[0].id).toBe('doc-1')
     expect(snap.items[0].doc.kind).toBe('text')
     expect(snap.items.some((i) => i.doc.kind === 'chatter')).toBe(false)
+  })
+
+  it('parses has_more from snapshot; missing defaults false', () => {
+    expect(OVERLAY_PAGE_SIZE).toBe(50)
+    const withFlag = threadItemsFromSnapshot({
+      conversation_id: 'conv-1',
+      has_more: true,
+      items: [{ collection: 'thread', seq: 1, id: 'doc-1', doc: textDoc }],
+    })
+    expect(withFlag.has_more).toBe(true)
+    const missing = threadItemsFromSnapshot({
+      conversation_id: 'conv-1',
+      items: [{ collection: 'thread', seq: 1, id: 'doc-1', doc: textDoc }],
+    })
+    expect(missing.has_more).toBe(false)
   })
 
   it('WS chatter frames do not appear on the Thread pane', () => {
@@ -136,6 +154,7 @@ describe('overlay Chatter list never includes thread', () => {
       ],
     })
     expect(snap.conversation_id).toBe('conv-1')
+    expect(snap.has_more).toBe(false)
     expect(snap.items).toHaveLength(2)
     expect(snap.items.map((i) => i.id)).toEqual(['doc-c2', 'doc-c'])
     expect(snap.items.every((i) => i.collection === 'chatter')).toBe(true)
@@ -186,6 +205,15 @@ describe('overlay Chatter list never includes thread', () => {
     expect(afterUpsert[0].doc.body).toBe('pong')
   })
 
+  it('parses chatter has_more from snapshot', () => {
+    const snap = chatterItemsFromSnapshot({
+      conversation_id: 'conv-1',
+      has_more: true,
+      items: [{ collection: 'chatter', seq: 1, id: 'doc-c', doc: chatterDoc }],
+    })
+    expect(snap.has_more).toBe(true)
+  })
+
   it('isChatterSurfaceItem accepts collection chatter', () => {
     expect(
       isChatterSurfaceItem({
@@ -203,6 +231,22 @@ describe('overlay Chatter list never includes thread', () => {
         doc: textDoc,
       }),
     ).toBe(false)
+  })
+})
+
+describe('mergeOlderOverlayItems', () => {
+  it('prepends unique older items by id and keeps ascending seq', () => {
+    const current: OverlayThreadItem[] = [
+      { collection: 'thread', seq: 11, id: 't11', doc: { ...textDoc, id: 't11' } },
+      { collection: 'thread', seq: 12, id: 't12', doc: { ...textDoc, id: 't12' } },
+    ]
+    const older: OverlayThreadItem[] = [
+      { collection: 'thread', seq: 10, id: 't10', doc: { ...textDoc, id: 't10' } },
+      { collection: 'thread', seq: 11, id: 't11', doc: { ...textDoc, id: 't11' } },
+    ]
+    const merged = mergeOlderOverlayItems(current, older)
+    expect(merged.map((i) => i.id)).toEqual(['t10', 't11', 't12'])
+    expect(merged.map((i) => i.seq)).toEqual([10, 11, 12])
   })
 })
 

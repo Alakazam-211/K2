@@ -6630,7 +6630,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq)
                 skip_next=1
                 continue
                 ;;
@@ -6650,10 +6650,16 @@ cmd_thread() {
     local text=""
     local json="false"
     local explicit_from=""
+    local limit=""
+    local all="false"
+    local before_seq=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --json) json="true"; shift ;;
             --from) explicit_from="$2"; shift 2 ;;
+            --limit) limit="$2"; shift 2 ;;
+            --all) all="true"; shift ;;
+            --before-seq) before_seq="$2"; shift 2 ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
                 exit 1 ;;
@@ -6668,7 +6674,7 @@ cmd_thread() {
     [[ -z "$target" ]] && {
         echo "Error: address required" >&2
         echo "Usage: k2 thread <addr> \"text\"     # write overlay text" >&2
-        echo "       k2 thread <addr> [--json]   # read / tail" >&2
+        echo "       k2 thread <addr> [--json] [--limit N|--all] [--before-seq N]" >&2
         echo "       k2 thread ask <addr> \"prompt\" --options \"a,b,c\"" >&2
         echo "       k2 thread secret <addr> --name NAME" >&2
         exit 1
@@ -6710,6 +6716,14 @@ print("%s  seq=%s  from=%s" % (d.get("id",""), d.get("seq",""), d.get("from","")
     fi
 
     local params="addr=$(urlencode "$target")"
+    if [[ "$all" == "true" ]]; then
+        params="${params}&limit=0"
+    elif [[ -n "$limit" ]]; then
+        params="${params}&limit=$(urlencode "$limit")"
+    fi
+    if [[ -n "$before_seq" ]]; then
+        params="${params}&before_seq=$(urlencode "$before_seq")"
+    fi
     local response
     response=$(cli_send cli_request "/cli/thread" "$params")
     local rc=$?
@@ -6929,7 +6943,7 @@ cmd_help_thread() {
 k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
 
   k2 thread <addr> "text"                         # overlay text (not PTY; that's k2 msg)
-  k2 thread <addr>                                # read / tail
+  k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 50
   k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
 
@@ -11783,11 +11797,14 @@ cmd_schema() {
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--json] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME",
+      "usage": "k2 thread <addr> [\"text\"] [--json] [--limit N|--all] [--before-seq N] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME",
       "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output (ask: {id,prompt,options}; secret never includes the value)."},
+        {"name": "--limit", "arg": "N", "description": "Read page size (daemon default 50, max 500)."},
+        {"name": "--all", "arg": null, "description": "Read the full overlay (unbounded)."},
+        {"name": "--before-seq", "arg": "N", "description": "Load older items with seq < N."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
         {"name": "--options", "arg": "a,b,c", "description": "Choice labels (comma list; \\, = literal comma). Mix with --option is 400."},
         {"name": "--option", "arg": "label", "description": "Repeatable choice label. Mix with --options is 400."},

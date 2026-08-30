@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use k2_core::db::schema::WorkspaceSession;
-use k2_core::overlay::{self, CardCallback, OverlayItem};
+use k2_core::overlay::{self, CardCallback, OverlayPage};
 use k2_core::workspace::agent_identity::resolve_project_id;
 
 use crate::cli::{bool_param, opt_param, str_param};
@@ -178,15 +178,41 @@ fn authorize_write(
     Ok(())
 }
 
-fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, items: Vec<OverlayItem>) -> String {
+fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, page: OverlayPage) -> String {
     serde_json::json!({
         "ok": true,
         "collection": collection,
         "addr": resolved.addr,
         "conversation_id": resolved.conversation_id,
-        "items": items,
+        "items": page.items,
+        "has_more": page.has_more,
     })
     .to_string()
+}
+
+const OVERLAY_PAGE_DEFAULT: usize = 50;
+const OVERLAY_PAGE_MAX: usize = 500;
+
+/// Absent `since_seq` = initial/tail page. Present (including 0) = seq > since_seq.
+fn parse_since_opt(params: &HashMap<String, String>) -> Option<i64> {
+    opt_param(params, "since_seq").and_then(|s| s.parse::<i64>().ok())
+}
+
+fn parse_before_seq(params: &HashMap<String, String>) -> Option<i64> {
+    opt_param(params, "before_seq").and_then(|s| s.parse::<i64>().ok())
+}
+
+/// Default 50. Explicit `limit=0` is unbounded (CLI `--all`). Else clamp 1..=500.
+fn parse_overlay_limit(params: &HashMap<String, String>) -> usize {
+    match opt_param(params, "limit") {
+        None => OVERLAY_PAGE_DEFAULT,
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(0) => 0,
+            Ok(n) if n < 0 => OVERLAY_PAGE_DEFAULT,
+            Ok(n) => (n as usize).clamp(1, OVERLAY_PAGE_MAX),
+            Err(_) => OVERLAY_PAGE_DEFAULT,
+        },
+    }
 }
 
 fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
@@ -202,9 +228,11 @@ fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
     if let Err(e) = authorize_read(principal.as_ref(), &resolved) {
         return e;
     }
-    let since = parse_since(params);
-    match overlay::read_thread(&resolved.conversation_id, since) {
-        Ok(items) => CliResponse::ok_json(snapshot_json("thread", &resolved, items)),
+    let since = parse_since_opt(params);
+    let before = parse_before_seq(params);
+    let limit = parse_overlay_limit(params);
+    match overlay::read_thread_page(&resolved.conversation_id, since, before, limit) {
+        Ok(page) => CliResponse::ok_json(snapshot_json("thread", &resolved, page)),
         Err(e) => error_json("500 Internal Server Error", "store", e),
     }
 }
@@ -222,9 +250,11 @@ fn handle_get_chatter(params: &HashMap<String, String>) -> CliResponse {
     if let Err(e) = authorize_read(principal.as_ref(), &resolved) {
         return e;
     }
-    let since = parse_since(params);
-    match overlay::read_chatter(&resolved.conversation_id, since) {
-        Ok(items) => CliResponse::ok_json(snapshot_json("chatter", &resolved, items)),
+    let since = parse_since_opt(params);
+    let before = parse_before_seq(params);
+    let limit = parse_overlay_limit(params);
+    match overlay::read_chatter_page(&resolved.conversation_id, since, before, limit) {
+        Ok(page) => CliResponse::ok_json(snapshot_json("chatter", &resolved, page)),
         Err(e) => error_json("500 Internal Server Error", "store", e),
     }
 }
@@ -1646,5 +1676,58 @@ mod tests {
             !k2_core::overlay::vault::exists(&project_id2, "OTHER_TOKEN"),
             "vault empty after chat-instead void"
         );
+    }
+
+    #[test]
+    fn get_thread_defaults_to_newest_50_with_has_more() {
+        let handle = format!("ovlpage{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for i in 1..=60 {
+                overlay::post_thread(
+                    &conn,
+                    &conv,
+                    &project_id,
+                    "k2",
+                    &handle,
+                    &format!("m{i}"),
+                    "thread",
+                )
+                .expect("post");
+            }
+        }
+
+        let get =
+            dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread");
+        assert_eq!(get.status, "200 OK", "{}", get.body);
+        let snap = json_body(&get);
+        assert_eq!(snap["ok"], true, "{snap}");
+        assert_eq!(snap["has_more"], true, "60 items default page 50: {snap}");
+        let items = snap["items"].as_array().expect("items array");
+        assert_eq!(items.len(), 50, "{snap}");
+        assert_eq!(items[0]["seq"], 11);
+        assert_eq!(items[49]["seq"], 60);
+
+        let older = dispatch(
+            "/cli/thread",
+            &params_of(&[
+                ("addr", handle.as_str()),
+                ("before_seq", "11"),
+                ("limit", "50"),
+            ]),
+        )
+        .expect("GET older");
+        assert_eq!(older.status, "200 OK", "{}", older.body);
+        let snap2 = json_body(&older);
+        assert_eq!(snap2["has_more"], false, "{snap2}");
+        let items2 = snap2["items"].as_array().expect("older items");
+        assert_eq!(items2.len(), 10, "{snap2}");
+        assert_eq!(items2[0]["seq"], 1);
+        assert_eq!(items2[9]["seq"], 10);
     }
 }

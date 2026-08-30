@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 import { describe, expect, it, afterEach, vi } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import type { OverlayThreadItem } from './overlayThread'
 
 const chatterHook = vi.hoisted(() => ({
   items: [] as OverlayThreadItem[],
   conversationId: 'c',
   error: null as string | null,
+  hasMore: false,
+  loadingOlder: false,
+  loadOlder: async () => {},
 }))
 
 vi.mock('./useOverlayChatter', () => ({
@@ -25,6 +28,9 @@ describe('Chatter overlay pane', () => {
     cleanup()
     chatterHook.items = []
     chatterHook.error = null
+    chatterHook.hasMore = false
+    chatterHook.loadingOlder = false
+    chatterHook.loadOlder = async () => {}
   })
 
   it('has no compose / send / textarea', () => {
@@ -83,5 +89,14 @@ describe('Chatter overlay pane', () => {
     expect(screen.queryByTestId('thread-choice-card')).toBeNull()
     expect(screen.queryByTestId('thread-secret-card')).toBeNull()
     expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it('shows Load older when hasMore and click calls loadOlder', () => {
+    const loadOlder = vi.fn(async () => {})
+    chatterHook.hasMore = true
+    chatterHook.loadOlder = loadOlder
+    render(<ChatterOverlayPane addr="sales" conversationId="c" />)
+    fireEvent.click(screen.getByTestId('overlay-load-older'))
+    expect(loadOlder).toHaveBeenCalledTimes(1)
   })
 })

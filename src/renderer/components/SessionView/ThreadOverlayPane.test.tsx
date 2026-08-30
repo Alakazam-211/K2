@@ -8,16 +8,21 @@ import {
 } from './ThreadOverlayPane'
 import type { OverlayThreadItem } from './overlayThread'
 
+const threadHook = vi.hoisted(() => ({
+  items: [] as OverlayThreadItem[],
+  conversationId: 'c',
+  error: null as string | null,
+  posting: false,
+  post: async () => {},
+  answer: async () => {},
+  voidCard: async () => {},
+  hasMore: false,
+  loadingOlder: false,
+  loadOlder: async () => {},
+}))
+
 vi.mock('./useOverlayThread', () => ({
-  useOverlayThread: () => ({
-    items: [],
-    conversationId: 'c',
-    error: null,
-    posting: false,
-    post: async () => {},
-    answer: async () => {},
-    voidCard: async () => {},
-  }),
+  useOverlayThread: () => threadHook,
 }))
 
 vi.mock('@/stores/settings', () => ({
@@ -26,12 +31,33 @@ vi.mock('@/stores/settings', () => ({
 }))
 
 describe('Thread overlay pane', () => {
-  afterEach(() => cleanup())
+  afterEach(() => {
+    cleanup()
+    threadHook.items = []
+    threadHook.error = null
+    threadHook.hasMore = false
+    threadHook.loadingOlder = false
+    threadHook.loadOlder = async () => {}
+  })
 
   it('has no compose box — Message-the-agent stays on the terminal bar', () => {
     render(<ThreadOverlayPane addr="sales" conversationId="c" />)
     expect(screen.getByTestId('thread-overlay-pane')).not.toBeNull()
     expect(screen.queryByTestId('thread-compose')).toBeNull()
+  })
+
+  it('shows Load older when hasMore and click calls loadOlder', () => {
+    const loadOlder = vi.fn(async () => {})
+    threadHook.hasMore = true
+    threadHook.loadOlder = loadOlder
+    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    fireEvent.click(screen.getByTestId('overlay-load-older'))
+    expect(loadOlder).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides Load older when hasMore is false', () => {
+    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    expect(screen.queryByTestId('overlay-load-older')).toBeNull()
   })
 })
 

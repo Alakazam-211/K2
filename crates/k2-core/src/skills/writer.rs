@@ -34,7 +34,9 @@ use crate::skills::version::{
     ensure_skill_up_to_date, SKILL_VERSION_CUSTOM_AGENT, SKILL_VERSION_K2SO_AGENT,
     SKILL_VERSION_MANAGER, SKILL_VERSION_TEMPLATE,
 };
-use crate::workspace::agent_identity::{agent_dir, agents_dir, parse_frontmatter};
+use crate::workspace::agent_identity::{
+    agent_dir, agents_dir, parse_frontmatter, workspace_agent_path,
+};
 use crate::fs_atomic::{atomic_symlink, atomic_write_str, log_if_err};
 
 /// Markers that delimit the K2-managed section inside marker-injected
@@ -271,16 +273,21 @@ pub fn write_agent_skill_file(project_path: &str, agent_name: &str, agent_type: 
     skill_content.push('\n');
     skill_content.push_str(&skill_update_footer(project_path, Some(agent_name)));
 
-    // Agent-dir SKILL.md (for harnesses that launch in the agent's
-    // cwd). Same upgrade protocol so user edits survive.
-    let agent_skill_path = agent_dir(project_path, agent_name).join("SKILL.md");
-    ensure_skill_up_to_date(
-        &agent_skill_path,
-        skill_type_tag,
-        skill_version,
-        &skill_content,
-        None,
-    );
+    // Workspace primary is ROLE.md + composed AGENTS.md; do not plant
+    // generated SKILL.md there. Leftovers stay on disk. Non-primary
+    // resolved dirs (legacy `.k2/skills/<name>/`, etc.) still get
+    // the upgrade-tracked agent-dir SKILL.md.
+    let resolved_agent_dir = agent_dir(project_path, agent_name);
+    if resolved_agent_dir != workspace_agent_path(project_path) {
+        let agent_skill_path = resolved_agent_dir.join("SKILL.md");
+        ensure_skill_up_to_date(
+            &agent_skill_path,
+            skill_type_tag,
+            skill_version,
+            &skill_content,
+            None,
+        );
+    }
 
     // Harness-specific symlinks + marker-injected files share the
     // same canonical source, also upgrade-tracked.
@@ -460,6 +467,68 @@ mod tests {
         assert!(s.contains(K2SO_SECTION_BEGIN));
         assert!(s.contains("injected"));
         std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn write_agent_skill_file_does_not_plant_skill_md_on_workspace_primary() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        let primary = workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(
+            primary.join("ROLE.md"),
+            "---\nname: k2\ntype: manager\n---\n\nYou are the workspace manager.\n",
+        )
+        .unwrap();
+        write_agent_skill_file(path, "k2so-__lead__", "agent-template");
+        write_agent_skill_file(path, "cli-eng", "agent-template");
+        assert!(
+            !primary.join("SKILL.md").exists(),
+            "must not plant SKILL.md on workspace primary"
+        );
+        std::fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn write_agent_skill_file_does_not_rewrite_leftover_primary_skill_md() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        let primary = workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(
+            primary.join("ROLE.md"),
+            "---\nname: k2\ntype: manager\n---\n\nYou are the workspace manager.\n",
+        )
+        .unwrap();
+        let leftover = b"LEFTOVER-SKILL-BODY-DO-NOT-TOUCH\n";
+        let leftover_path = primary.join("SKILL.md");
+        fs::write(&leftover_path, leftover).unwrap();
+        write_agent_skill_file(path, "k2so-__lead__", "agent-template");
+        write_agent_skill_file(path, "cli-eng", "agent-template");
+        let after = fs::read(&leftover_path).unwrap();
+        assert_eq!(
+            after, leftover,
+            "must not rewrite leftover SKILL.md on workspace primary"
+        );
+        std::fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn write_agent_skill_file_still_writes_non_primary_agent_dir() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        write_agent_skill_file(path, "cli-eng", "agent-template");
+        let resolved = agent_dir(path, "cli-eng");
+        assert_ne!(
+            resolved,
+            workspace_agent_path(path),
+            "this fixture must not collapse onto the workspace primary"
+        );
+        assert!(
+            resolved.join("SKILL.md").exists(),
+            "non-primary agent dir SKILL.md must still be written"
+        );
+        std::fs::remove_dir_all(&proj).ok();
     }
 }
 

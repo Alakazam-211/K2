@@ -8,8 +8,9 @@
 //! to reflect what it actually returns: the full `--append-system-prompt`
 //! text an agent sees on wake) composes identity + project context +
 //! standing orders + tier skill body into the final system prompt
-//! string, and as a side effect writes the tier skill body to the
-//! agent's SKILL.md.
+//! string. It no longer writes that body into the unified `.k2/agent/`
+//! primary (workspace primary is ROLE.md + AGENTS.md). Non-primary
+//! resolved dirs may still receive SKILL.md.
 //!
 //! The SKILL wrapping / versioning / checksum protocol itself lives in
 //! [`crate::skills::version`]; this module is the content side.
@@ -24,7 +25,7 @@ use std::path::PathBuf;
 
 use crate::skills::version::ensure_skill_up_to_date;
 use crate::workspace::agent_identity::{
-    agent_dir, agents_dir, parse_frontmatter,
+    agent_dir, agents_dir, parse_frontmatter, workspace_agent_path,
 };
 use crate::workspace::scheduler::agent_work_dir;
 use crate::workspace::wake_prompts::strip_frontmatter;
@@ -1265,13 +1266,18 @@ pub fn compose_agent_wake_context(
         generate_template_skill_content(&project_name, agent_name)
     };
 
-    // Write SKILL.md to agent directory
-    let skill_path = agent_dir(project_path, agent_name).join("SKILL.md");
-    log_if_err(
-        "agent skill write",
-        &skill_path,
-        atomic_write_str(&skill_path, &skill_content),
-    );
+    // Workspace primary is ROLE.md + composed AGENTS.md; do not plant
+    // generated SKILL.md there. Leftovers stay on disk. Still inject
+    // skill_content into the returned wake prompt below.
+    let resolved_agent_dir = agent_dir(project_path, agent_name);
+    if resolved_agent_dir != workspace_agent_path(project_path) {
+        let skill_path = resolved_agent_dir.join("SKILL.md");
+        log_if_err(
+            "agent skill write",
+            &skill_path,
+            atomic_write_str(&skill_path, &skill_content),
+        );
+    }
 
     // Inject skill content directly into the system prompt so it's always available
     // (no extra tool call needed to read SKILL.md)
@@ -1283,8 +1289,9 @@ pub fn compose_agent_wake_context(
 
 /// Legacy name retained to keep the src-tauri `pub use` re-export
 /// short. New code should use [`compose_agent_wake_context`]; the
-/// symbol still ends up writing SKILL.md + composing the wake system
-/// prompt, but the new name matches what it actually does.
+/// symbol still composes the wake system prompt (and may write SKILL.md
+/// into non-primary resolved dirs), but the new name matches what it
+/// actually does.
 pub fn generate_agent_claude_md_content(
     project_path: &str,
     agent_name: &str,
@@ -2223,6 +2230,35 @@ mod tests {
         let again = write_opt_in_skill(path, OptInSkill::K2CanonicalAgent);
         assert_eq!(again, written);
 
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn compose_agent_wake_context_does_not_plant_skill_md_on_workspace_primary() {
+        let proj = std::env::temp_dir().join(format!(
+            "k2so-compose-primary-skill-{}-{}",
+            std::process::id(),
+            Uuid::new_v4(),
+        ));
+        fs::create_dir_all(&proj).unwrap();
+        let path = proj.to_str().unwrap();
+        let primary = workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(
+            primary.join("ROLE.md"),
+            "---\nname: k2\ntype: manager\n---\n\nYou are the workspace manager.\n",
+        )
+        .unwrap();
+        let wake = compose_agent_wake_context(path, "k2", None)
+            .expect("compose should succeed when primary ROLE.md exists");
+        assert!(
+            !primary.join("SKILL.md").exists(),
+            "must not plant SKILL.md on workspace primary"
+        );
+        assert!(
+            !wake.is_empty(),
+            "wake prompt must still include injected skill content"
+        );
         fs::remove_dir_all(&proj).ok();
     }
 }

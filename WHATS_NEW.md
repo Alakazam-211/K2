@@ -3,6 +3,16 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.122 — Database passport, Skin Direct + mail on one :443
+
+**Database.** The workspace flag **Agents can create databases** (Settings → Data) only gates `k2 db create`. If a workspace already owns a DB — or has a grant — its agent can list, fetch a DSN, migrate, dump/restore, and use `k2 store` without flipping that flag. Cross-workspace **read** grants stay read (write still 403). Email Hosting Enable now pulls the Stalwart tarball from Alakazam Labs' pin (same 0.16.10).
+
+**Skin roster.** Workspace agents can `k2 skin user list` / `k2 skin-token list` (no raw secrets). Minting and the front-door stay owner-only; a valid agent passport gets `owner_only` (exit 3), not “invalid token.”
+
+**Box :443.** Skin Direct and Email Hosting no longer coin-flip for the box's port 443. One Caddy (the Skin front door) Host-routes Direct to the daemon (Thread path-filter) and the mail hostname to Stalwart on loopback 8443. Nested `skin.<your-sub>.k2.dev` is still Connect. Mail Enable uses HTTP-01 (not tls-alpn on 443) when Skin Direct will own 443. Do not Enable mail tls-alpn and Skin Direct on the same 443 until you apply this cut.
+
+---
+
 ## 0.40.121 — Skin Access, quieter Thread/Chatter, Grok one Return
 
 **Skin Access** is a guest list for custom UIs that talk to agents **without** a terminal. Settings → **Skin Access**: add a username, mint a `k2skn_` pass with Thread read/post. Those tokens never open the grid. A Caddy **front door** (Caddy on PATH) path-filters Thread/overlay/`/boot-status` and can listen as nested `skin.<your-sub>.k2.dev`. Opt-in catalog pack: `k2 agent context add skin:roster`.

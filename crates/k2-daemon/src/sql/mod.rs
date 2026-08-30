@@ -101,10 +101,42 @@ mod tests {
         assert!(helper.contains("NOCREATEDB"));
         assert!(helper.contains("NOBYPASSRLS"));
         assert!(!helper.contains("FORCE ROW LEVEL"));
+        assert!(
+            helper.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE")
+                && helper.contains("_K2_STORE"),
+            "create_database must GRANT DML on _k2_store to agent; helper_sql={helper}"
+        );
         // Idempotent --id
         let v2 = ops::create_database(&ops, &secrets, &pid, 1, Some("idem-1"), None)
             .expect("idempotent");
         assert_eq!(v2["existing"], true);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_database_grants_agent_on_k2_store() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-grant-store-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-grant-store", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let v = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let helper = ops.pg.lock().unwrap().helper_sql.join("\n");
+        assert!(
+            helper.contains(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO"
+            ),
+            "explicit GRANT on _k2_store missing from helper_sql: {helper}"
+        );
+        assert!(helper.contains("_k2_store"), "{helper}");
+        let cat = ops::catalog_json(None);
+        let dbs = cat["databases"].as_array().expect("databases");
+        let row = dbs.iter().find(|d| d["name"] == v["name"]).expect("listed");
+        assert_eq!(row["documents"], true, "{row}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -134,6 +166,7 @@ mod tests {
         ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
         let first = ops::migrate(&ops, &secrets, &pid, &path, None).expect("migrate");
         assert_eq!(first["noop"], false);
+        assert_eq!(first["discovered"], 1, "{first}");
         assert!(first["applied"]
             .as_array()
             .unwrap()
@@ -141,6 +174,8 @@ mod tests {
             .any(|v| v.as_str() == Some("0001_init")));
         let second = ops::migrate(&ops, &secrets, &pid, &path, None).expect("second");
         assert_eq!(second["noop"], true);
+        assert_eq!(second["discovered"], 1, "{second}");
+        assert!(second["applied"].as_array().unwrap().is_empty(), "{second}");
         let status = ops::database_status(&ops, &secrets, &pid).expect("status");
         let migrations = status["migrations"].as_array().expect("migrations");
         assert!(
@@ -186,12 +221,104 @@ mod tests {
         ops::migrate(&ops, &secrets, &pid, &path, None).expect("first");
         let again = ops::migrate(&ops, &secrets, &pid, &path, None).expect("same checksum");
         assert_eq!(again["noop"], true, "{again}");
-        std::fs::write(mig.join("0001_init.sql"), b"CREATE TABLE t (id int, n int);\n").unwrap();
+        assert_eq!(again["discovered"], 1, "{again}");
+        std::fs::write(
+            mig.join("0001_init.sql"),
+            b"CREATE TABLE t (id int, n int);\n",
+        )
+        .unwrap();
         let err = ops::migrate(&ops, &secrets, &pid, &path, None).expect_err("mismatch");
         assert_eq!(err.code(), "checksum_mismatch");
         assert!(
             err.hint().contains("0001_init"),
             "hint names the file: {}",
+            err.hint()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_ws_path_with_space_applies_0001_init() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir()
+            .join("AI Projects")
+            .join(format!("k2-sql-space-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        std::fs::write(mig.join("0001_init.sql"), b"CREATE TABLE t (id int);\n").unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        assert!(path.contains("AI Projects"), "{path}");
+        let pid = insert_project("sql-space", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let first = ops::migrate(&ops, &secrets, &pid, &path, None).expect("migrate");
+        assert_eq!(first["noop"], false, "{first}");
+        assert_eq!(first["discovered"], 1, "{first}");
+        assert!(
+            first["applied"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("0001_init")),
+            "{first}"
+        );
+        let abs = mig.to_string_lossy().into_owned();
+        assert!(std::path::Path::new(&abs).is_absolute(), "{abs}");
+        let via_abs = ops::migrate(&ops, &secrets, &pid, "/tmp/not the workspace", Some(&abs))
+            .expect("absolute dir replaces ws_path");
+        assert_eq!(via_abs["noop"], true, "{via_abs}");
+        assert_eq!(via_abs["discovered"], 1, "{via_abs}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_init_sql_without_nnnn_is_usage_not_noop() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-init-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        std::fs::write(mig.join("init.sql"), b"CREATE TABLE t (id int);\n").unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-init-only", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let err = ops::migrate(&ops, &secrets, &pid, &path, None).expect_err("init.sql");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        assert!(err.hint().contains("0001_init.sql"), "{}", err.hint());
+        assert!(err.hint().contains("init.sql"), "{}", err.hint());
+        assert!(
+            err.hint().contains(&mig.to_string_lossy().into_owned()),
+            "hint names the dir: {}",
+            err.hint()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_empty_matching_set_is_usage_not_noop() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-empty-mig-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-empty-mig", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let err = ops::migrate(&ops, &secrets, &pid, &path, None).expect_err("empty");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        assert!(err.hint().contains("0001_init.sql"), "{}", err.hint());
+        assert!(
+            err.hint().contains(&mig.to_string_lossy().into_owned()),
+            "hint names the dir: {}",
             err.hint()
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -509,7 +636,8 @@ mod tests {
         let id_b = insert_project("sql-gtc-b", &dir_b.to_string_lossy());
         let ops = FakeSystemOps::baked();
         let secrets = MemSecretStore::default();
-        let created_a = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create A");
+        let created_a =
+            ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create A");
         let db_a = created_a["name"].as_str().unwrap().to_string();
         ops::grant_access(&ops, None, &db_a, &id_b, "write", false).expect("grant B");
         let n_helper_before = ops.pg.lock().unwrap().helper_sql.len();
@@ -554,8 +682,15 @@ mod tests {
         let secrets = crate::sql::secrets::FileSecretStore::default();
         ops::create_database(fake, &secrets, &pid, 1, None, None).expect("create");
         ops::store_create(fake, &secrets, &pid, "items").expect("coll");
-        ops::store_put(fake, &secrets, &pid, "items", "a", &serde_json::json!({"n": 1}))
-            .expect("seed put");
+        ops::store_put(
+            fake,
+            &secrets,
+            &pid,
+            "items",
+            "a",
+            &serde_json::json!({"n": 1}),
+        )
+        .expect("seed put");
         let principal = HookPrincipal {
             workspace_uuid: pid.clone(),
             agent_address: "julie".into(),
@@ -589,7 +724,9 @@ mod tests {
                 assert_eq!(put.status, "200 OK", "{}", put.body);
 
                 let create = routes::handle_create(
-                    serde_json::json!({ "project": path }).to_string().as_bytes(),
+                    serde_json::json!({ "project": path })
+                        .to_string()
+                        .as_bytes(),
                 );
                 assert_eq!(create.status, "403 Forbidden", "{}", create.body);
                 let err = json_body(&create);
@@ -624,8 +761,15 @@ mod tests {
         let created = ops::create_database(fake, &secrets, &id_a, 1, None, None).expect("create");
         let db_name = created["name"].as_str().expect("name").to_string();
         ops::store_create(fake, &secrets, &id_a, "items").expect("coll");
-        ops::store_put(fake, &secrets, &id_a, "items", "a", &serde_json::json!({"n": 1}))
-            .expect("seed put");
+        ops::store_put(
+            fake,
+            &secrets,
+            &id_a,
+            "items",
+            "a",
+            &serde_json::json!({"n": 1}),
+        )
+        .expect("seed put");
         ops::grant_access(fake, None, &db_name, &id_b, "read", false).expect("grant");
         let principal = HookPrincipal {
             workspace_uuid: id_b.clone(),
@@ -664,7 +808,9 @@ mod tests {
                 assert!(!put_hint.contains("db_agent_access"), "{put_hint}");
 
                 let mig = routes::handle_migrate(
-                    serde_json::json!({ "project": path_b }).to_string().as_bytes(),
+                    serde_json::json!({ "project": path_b })
+                        .to_string()
+                        .as_bytes(),
                 );
                 assert_eq!(mig.status, "403 Forbidden", "{}", mig.body);
                 let mig_err = json_body(&mig);

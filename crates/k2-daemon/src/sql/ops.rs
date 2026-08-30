@@ -75,12 +75,8 @@ pub fn persist_db_access(project_path: &str, access: Option<&str>) -> Result<(),
             "access must be 'off', 'read', or 'write'".into(),
         ));
     }
-    k2_core::workspace::settings::update_project_setting(
-        project_path,
-        "db_agent_access",
-        access,
-    )
-    .map_err(OpsError::Engine)
+    k2_core::workspace::settings::update_project_setting(project_path, "db_agent_access", access)
+        .map_err(OpsError::Engine)
 }
 
 fn now_secs() -> i64 {
@@ -140,9 +136,7 @@ pub fn ensure_role_sql(role: &str, password: &str) -> String {
     let create = create_role_sql(role, password);
     // CREATE ROLE must keep its trailing semicolon so PL/pgSQL does not
     // parse EXCEPTION as a role option (AX41: "unrecognized role option").
-    format!(
-        "DO $$\nBEGIN\n  {create}\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;"
-    )
+    format!("DO $$\nBEGIN\n  {create}\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;")
 }
 
 /// Reset LOGIN + password on an existing role (grant-then-create). The
@@ -439,7 +433,8 @@ pub fn create_database(
            PRIMARY KEY (collection, id)\n\
          );\n\
          ALTER TABLE _k2_migrations OWNER TO {migrator};\n\
-         ALTER TABLE _k2_store OWNER TO {migrator};\n",
+         ALTER TABLE _k2_store OWNER TO {migrator};\n\
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};\n",
         db = pg_quote_ident(&name),
         agent = pg_quote_ident(&agent),
         migrator = pg_quote_ident(&migrator),
@@ -631,6 +626,15 @@ fn load_applied_checksums(
     Ok(applied)
 }
 
+/// `0001_init.sql` — four digits, underscore, rest, `.sql`. Never `init.sql`.
+fn is_versioned_sql_filename(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".sql") else {
+        return false;
+    };
+    let b = stem.as_bytes();
+    b.len() >= 5 && b[..4].iter().all(|c| c.is_ascii_digit()) && b[4] == b'_'
+}
+
 pub fn migrate(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -642,34 +646,63 @@ pub fn migrate(
     let row = active_row(project_id)?;
     let (user, pw) = migrator_creds(secrets, &row)?;
     let rel = dir.unwrap_or(".k2/db/migrations");
+    // Absolute `dir` replaces `ws_path` (std::path::Path::join).
     let mig_dir = Path::new(ws_path).join(rel);
-    if !mig_dir.is_dir() {
-        return Err(OpsError::NotFound(format!(
-            "migrations directory not found: {rel}"
+    if mig_dir.exists() && !mig_dir.is_dir() {
+        return Err(OpsError::Usage(format!(
+            "migrations path is not a directory: {}",
+            mig_dir.display()
         )));
     }
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&mig_dir)
-        .map_err(|e| OpsError::Engine(format!("read migrations: {e}")))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension().and_then(|x| x.to_str()) == Some("sql")
-                && p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| {
-                        n.len() >= 5
-                            && n.as_bytes().iter().take(4).all(|b| b.is_ascii_digit())
-                            && n.as_bytes().get(4) == Some(&b'_')
-                    })
-                    .unwrap_or(false)
-        })
-        .collect();
-    files.sort();
+    if !mig_dir.is_dir() {
+        return Err(OpsError::NotFound(format!(
+            "migrations directory not found: {}",
+            mig_dir.display()
+        )));
+    }
+    let mut matching: Vec<PathBuf> = Vec::new();
+    let mut non_matching_sql: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(&mig_dir)
+        .map_err(|e| OpsError::Engine(format!("read migrations {}: {e}", mig_dir.display())))?
+    {
+        let entry = entry
+            .map_err(|e| OpsError::Engine(format!("read migrations {}: {e}", mig_dir.display())))?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            return Err(OpsError::Usage(format!(
+                "non-utf8 filename in {}",
+                mig_dir.display()
+            )));
+        };
+        if path.extension().and_then(|x| x.to_str()) != Some("sql") {
+            continue;
+        }
+        if is_versioned_sql_filename(name) {
+            matching.push(path);
+        } else {
+            non_matching_sql.push(name.to_string());
+        }
+    }
+    matching.sort();
+    if matching.is_empty() {
+        non_matching_sql.sort();
+        let found = if non_matching_sql.is_empty() {
+            "none".to_string()
+        } else {
+            non_matching_sql.join(", ")
+        };
+        return Err(OpsError::Usage(format!(
+            "no NNNN_name.sql migrations in {} (expected 0001_init.sql); found: {found}",
+            mig_dir.display()
+        )));
+    }
+    let discovered = matching.len();
 
     ensure_migrations_table(ops, &row.name, &user, &pw)?;
     let applied = load_applied_checksums(ops, &row.name, &user, &pw)?;
 
     let mut ran = Vec::new();
-    for path in files {
+    for path in matching {
         let version = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -704,6 +737,7 @@ pub fn migrate(
     Ok(serde_json::json!({
         "ok": true,
         "applied": ran,
+        "discovered": discovered,
         "noop": ran.is_empty(),
     }))
 }
@@ -1367,6 +1401,37 @@ fn require_store_db(
     Ok((row, user, pw))
 }
 
+fn agent_role_for_db(db_name: &str) -> String {
+    format!("{db_name}_agent")
+}
+
+fn ensure_store_table(
+    ops: &dyn SystemOps,
+    db: &str,
+    user: &str,
+    password: &str,
+    agent: &str,
+) -> Result<(), OpsError> {
+    exec_as(
+        ops,
+        db,
+        user,
+        password,
+        &format!(
+            "CREATE TABLE IF NOT EXISTS _k2_store (\n\
+               collection TEXT NOT NULL,\n\
+               id TEXT NOT NULL,\n\
+               doc JSONB NOT NULL,\n\
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\
+               PRIMARY KEY (collection, id)\n\
+             );\n\
+             GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_store TO {agent};",
+            agent = pg_quote_ident(agent),
+        ),
+    )?;
+    Ok(())
+}
+
 pub fn store_create(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -1375,19 +1440,7 @@ pub fn store_create(
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
     let (row, user, pw) = require_store_db(secrets, project_id)?;
-    exec_as(
-        ops,
-        &row.name,
-        &user,
-        &pw,
-        "CREATE TABLE IF NOT EXISTS _k2_store (\n\
-           collection TEXT NOT NULL,\n\
-           id TEXT NOT NULL,\n\
-           doc JSONB NOT NULL,\n\
-           updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n\
-           PRIMARY KEY (collection, id)\n\
-         );",
-    )?;
+    ensure_store_table(ops, &row.name, &user, &pw, &agent_role_for_db(&row.name))?;
     Ok(serde_json::json!({ "ok": true, "collection": name }))
 }
 
@@ -1427,6 +1480,7 @@ pub fn store_put(
         return Err(OpsError::Usage("missing document id".into()));
     }
     let (row, user, pw) = require_store_db(secrets, project_id)?;
+    ensure_store_table(ops, &row.name, &user, &pw, &agent_role_for_db(&row.name))?;
     let sql = format!(
         "INSERT INTO _k2_store (collection, id, doc) VALUES ({coll}, {id}, {doc}::jsonb) \
          ON CONFLICT (collection, id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = now();",
@@ -1577,5 +1631,15 @@ mod tests {
         let id = pg_ident_for_project("01234567-89ab-cdef-0123-456789abcdef");
         assert!(id.starts_with("ws_"));
         assert!(!id.contains('-'));
+    }
+
+    #[test]
+    fn versioned_sql_filename_requires_four_digits_and_underscore() {
+        assert!(is_versioned_sql_filename("0001_init.sql"));
+        assert!(is_versioned_sql_filename("0099_add_users.sql"));
+        assert!(!is_versioned_sql_filename("init.sql"));
+        assert!(!is_versioned_sql_filename("1_init.sql"));
+        assert!(!is_versioned_sql_filename("0001.sql"));
+        assert!(!is_versioned_sql_filename("0001_init.sql.bak"));
     }
 }

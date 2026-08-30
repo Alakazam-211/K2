@@ -24922,7 +24922,10 @@ elif verb == "list":
         print("  %s  %s" % (row.get("name"), row.get("status")))
 elif verb == "migrate":
     applied = d.get("applied") or []
-    if d.get("noop"):
+    discovered = d.get("discovered") or 0
+    if applied:
+        print("applied: %s" % ", ".join(applied))
+    elif d.get("noop") and discovered > 0:
         print("migrations: already applied")
     else:
         print("applied: %s" % ", ".join(applied))

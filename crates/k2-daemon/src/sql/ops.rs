@@ -579,20 +579,24 @@ fn ensure_migrations_table(
     user: &str,
     password: &str,
 ) -> Result<(), OpsError> {
+    let agent = pg_quote_ident(&agent_role_for_db(db));
     exec_as(
         ops,
         db,
         user,
         password,
-        "CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
-           version TEXT PRIMARY KEY,\n\
-           checksum TEXT NOT NULL DEFAULT '',\n\
-           applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
-         );\n\
-         DO $$\nBEGIN\n\
-           ALTER TABLE _k2_migrations ADD COLUMN checksum TEXT;\n\
-         EXCEPTION WHEN duplicate_column THEN NULL;\n\
-         END $$;",
+        &format!(
+            "CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
+               version TEXT PRIMARY KEY,\n\
+               checksum TEXT NOT NULL DEFAULT '',\n\
+               applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\n\
+             );\n\
+             DO $$\nBEGIN\n\
+               ALTER TABLE _k2_migrations ADD COLUMN checksum TEXT;\n\
+             EXCEPTION WHEN duplicate_column THEN NULL;\n\
+             END $$;\n\
+             GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations TO {agent};"
+        ),
     )?;
     Ok(())
 }

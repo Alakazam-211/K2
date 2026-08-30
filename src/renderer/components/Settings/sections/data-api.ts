@@ -46,6 +46,8 @@ export interface SqlDatabase {
   owner: SqlParticipant
   grants: SqlParticipant[]
   yourLevel: SqlLevel | null
+  /** Owner workspace create-only passport (`off`/`read`/`write`). */
+  dbAgentAccess?: 'off' | 'read' | 'write'
 }
 
 export function sqlErrorInfo(err: unknown): { code?: string; hint?: string } {
@@ -133,6 +135,17 @@ export async function bindSqlRole(body: {
   return daemonCliPost('db/bind', body)
 }
 
+/** Owner/admin: agents may create new DBs on this owning workspace. */
+export async function setSqlDbAgentAccess(
+  ownerPath: string,
+  canCreate: boolean,
+): Promise<void> {
+  await daemonCliPost('workspace/set', {
+    project: ownerPath,
+    fields: { db_agent_access: canCreate ? 'write' : 'off' },
+  })
+}
+
 // ── Sample fixture (unsupported / Mac example mode) ──────────────────
 
 export const SAMPLE_STATUS: SqlStatus = {
@@ -174,6 +187,7 @@ export const SAMPLE_DATABASES: SqlDatabase[] = [
       },
     ],
     yourLevel: 'write',
+    dbAgentAccess: 'off',
   },
   {
     id: 'db_ops',
@@ -194,5 +208,6 @@ export const SAMPLE_DATABASES: SqlDatabase[] = [
     },
     grants: [],
     yourLevel: 'write',
+    dbAgentAccess: 'off',
   },
 ]

@@ -43,7 +43,7 @@ mod tests {
         let db = k2_core::db::shared();
         let conn = db.lock();
         conn.execute(
-            "INSERT INTO projects (id, name, path, db_agent_access) VALUES (?1, ?2, ?3, 'write')",
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
             rusqlite::params![id, name, path],
         )
         .expect("insert project");
@@ -394,6 +394,7 @@ mod tests {
         assert_eq!(row["grants"].as_array().unwrap().len(), 1);
         assert_eq!(row["grants"][0]["projectId"], id_b);
         assert_eq!(row["grants"][0]["level"], "read");
+        assert_eq!(row["dbAgentAccess"], "off", "{row}");
         ops::revoke_access(&ops, None, &db_name, &id_b).expect("revoke");
         let cat2 = ops::catalog_json(None);
         let row2 = cat2["databases"]
@@ -530,5 +531,184 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(dir_a);
         let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    fn json_body(r: &crate::cli_response::CliResponse) -> serde_json::Value {
+        serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json {}: {}", e, r.body))
+    }
+
+    #[test]
+    fn agent_off_who_owns_db_lists_and_stores_create_still_403() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-off-own-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-off-own", &path);
+        assert_eq!(
+            k2_core::workspace::settings::db_agent_access_for_path(&path),
+            "off"
+        );
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        ops::create_database(fake, &secrets, &pid, 1, None, None).expect("create");
+        ops::store_create(fake, &secrets, &pid, "items").expect("coll");
+        ops::store_put(fake, &secrets, &pid, "items", "a", &serde_json::json!({"n": 1}))
+            .expect("seed put");
+        let principal = HookPrincipal {
+            workspace_uuid: pid.clone(),
+            agent_address: "julie".into(),
+        };
+        with_request_principal(Some(principal), || {
+            routes::with_fake_ops(fake, || {
+                let mut params = std::collections::HashMap::new();
+                params.insert("project".into(), path.clone());
+                let list = routes::handle_list(&params);
+                assert_eq!(list.status, "200 OK", "{}", list.body);
+                let listed = json_body(&list);
+                let dbs = listed["databases"].as_array().expect("databases");
+                assert_eq!(dbs.len(), 1, "{listed}");
+                assert_eq!(dbs[0]["ownerProjectId"], pid, "{listed}");
+                assert_eq!(dbs[0]["dbAgentAccess"], "off", "{listed}");
+
+                params.insert("name".into(), "items".into());
+                params.insert("id".into(), "a".into());
+                let got = routes::handle_store_get(&params);
+                assert_eq!(got.status, "200 OK", "{}", got.body);
+                let doc = json_body(&got);
+                assert_eq!(doc["doc"]["n"], 1, "{doc}");
+
+                let put_body = serde_json::json!({
+                    "project": path,
+                    "name": "items",
+                    "id": "b",
+                    "json": {"n": 2},
+                });
+                let put = routes::handle_store_put(put_body.to_string().as_bytes());
+                assert_eq!(put.status, "200 OK", "{}", put.body);
+
+                let create = routes::handle_create(
+                    serde_json::json!({ "project": path }).to_string().as_bytes(),
+                );
+                assert_eq!(create.status, "403 Forbidden", "{}", create.body);
+                let err = json_body(&create);
+                let hint = err["error"]["hint"].as_str().expect("hint");
+                assert!(hint.contains("db_agent_access"), "{hint}");
+                assert!(hint.contains("need write"), "{hint}");
+                assert!(hint.contains("create new databases"), "{hint}");
+            });
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grant_read_lists_and_gets_put_migrate_are_grant_403() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-gr-a-{}", std::process::id()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-gr-b-{}", std::process::id()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let path_a = dir_a.to_string_lossy().into_owned();
+        let path_b = dir_b.to_string_lossy().into_owned();
+        let id_a = insert_project("sql-gr-a", &path_a);
+        let id_b = insert_project("sql-gr-b", &path_b);
+        assert_eq!(
+            k2_core::workspace::settings::db_agent_access_for_path(&path_b),
+            "off"
+        );
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        let created = ops::create_database(fake, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::store_create(fake, &secrets, &id_a, "items").expect("coll");
+        ops::store_put(fake, &secrets, &id_a, "items", "a", &serde_json::json!({"n": 1}))
+            .expect("seed put");
+        ops::grant_access(fake, None, &db_name, &id_b, "read", false).expect("grant");
+        let principal = HookPrincipal {
+            workspace_uuid: id_b.clone(),
+            agent_address: "grantee".into(),
+        };
+        with_request_principal(Some(principal), || {
+            routes::with_fake_ops(fake, || {
+                let mut params = std::collections::HashMap::new();
+                params.insert("project".into(), path_b.clone());
+                let list = routes::handle_list(&params);
+                assert_eq!(list.status, "200 OK", "{}", list.body);
+                let listed = json_body(&list);
+                let dbs = listed["databases"].as_array().expect("databases");
+                assert_eq!(dbs.len(), 1, "{listed}");
+                assert_eq!(dbs[0]["name"], db_name, "{listed}");
+                assert_eq!(dbs[0]["yourLevel"], "read", "{listed}");
+
+                params.insert("name".into(), "items".into());
+                params.insert("id".into(), "a".into());
+                let got = routes::handle_store_get(&params);
+                assert_eq!(got.status, "200 OK", "{}", got.body);
+                let doc = json_body(&got);
+                assert_eq!(doc["doc"]["n"], 1, "{doc}");
+
+                let put_body = serde_json::json!({
+                    "project": path_b,
+                    "name": "items",
+                    "id": "b",
+                    "json": {"n": 2},
+                });
+                let put = routes::handle_store_put(put_body.to_string().as_bytes());
+                assert_eq!(put.status, "403 Forbidden", "{}", put.body);
+                let put_err = json_body(&put);
+                let put_hint = put_err["error"]["hint"].as_str().expect("put hint");
+                assert!(put_hint.contains("sql_grants"), "{put_hint}");
+                assert!(!put_hint.contains("db_agent_access"), "{put_hint}");
+
+                let mig = routes::handle_migrate(
+                    serde_json::json!({ "project": path_b }).to_string().as_bytes(),
+                );
+                assert_eq!(mig.status, "403 Forbidden", "{}", mig.body);
+                let mig_err = json_body(&mig);
+                let mig_hint = mig_err["error"]["hint"].as_str().expect("mig hint");
+                assert!(mig_hint.contains("sql_grants"), "{mig_hint}");
+                assert!(!mig_hint.contains("db_agent_access"), "{mig_hint}");
+            });
+        });
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn agent_off_with_no_db_lists_empty_not_passport_403() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-off-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-off-empty", &path);
+        let principal = HookPrincipal {
+            workspace_uuid: pid,
+            agent_address: "empty".into(),
+        };
+        with_request_principal(Some(principal), || {
+            let mut params = std::collections::HashMap::new();
+            params.insert("project".into(), path.clone());
+            let list = routes::handle_list(&params);
+            assert_eq!(list.status, "200 OK", "{}", list.body);
+            let listed = json_body(&list);
+            let dbs = listed["databases"].as_array().expect("databases");
+            assert!(dbs.is_empty(), "{listed}");
+            assert!(!list.body.contains("db_agent_access"), "{}", list.body);
+
+            params.insert("name".into(), "items".into());
+            params.insert("id".into(), "a".into());
+            let got = routes::handle_store_get(&params);
+            assert_eq!(got.status, "404 Not Found", "{}", got.body);
+            let err = json_body(&got);
+            let hint = err["error"]["hint"].as_str().expect("hint");
+            assert!(hint.contains("ask your human to create one"), "{hint}");
+            assert!(!hint.contains("db_agent_access"), "{hint}");
+        });
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

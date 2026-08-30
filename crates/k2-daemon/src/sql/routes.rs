@@ -43,6 +43,8 @@ fn unsupported() -> CliResponse {
     )
 }
 
+/// Create-only passport. `db_agent_access=write` is required for
+/// `k2 db create`; list/dsn/store use [`interact_for`] instead.
 fn access_for(path: &str, need: &str) -> Result<(), CliResponse> {
     // Owner / no principal: always allowed.
     if request_principal().is_none() {
@@ -60,8 +62,43 @@ fn access_for(path: &str, need: &str) -> Result<(), CliResponse> {
         Err(err_json(
             "403 Forbidden",
             "forbidden",
-            format!("workspace db_agent_access is '{mode}' (need {need}) — ask your human"),
+            format!(
+                "workspace db_agent_access is '{mode}' (need {need} to create new databases) — ask your human"
+            ),
         ))
+    }
+}
+
+/// Interaction gate (list is ungated). Owner token always; else the
+/// workspace must own an active DB (implicit write) or hold an
+/// `sql_grants` row covering `need`. No owned DB and no grant → 404,
+/// never a passport 403.
+fn interact_for(project_id: &str, need: &str) -> Result<(), CliResponse> {
+    if request_principal().is_none() {
+        return Ok(());
+    }
+    match ops::project_sql_level(project_id) {
+        Some(level) => {
+            let ok = match need {
+                "read" => level == "read" || level == "write",
+                "write" => level == "write",
+                _ => false,
+            };
+            if ok {
+                Ok(())
+            } else {
+                Err(err_json(
+                    "403 Forbidden",
+                    "forbidden",
+                    format!("sql_grants level is '{level}' (need {need}) — ask your human"),
+                ))
+            }
+        }
+        None => Err(err_json(
+            "404 Not Found",
+            "not_found",
+            "no database for this workspace — ask your human to create one",
+        )),
     }
 }
 
@@ -167,7 +204,7 @@ struct CreateBody {
     project: String,
     client_id: Option<String>,
     name: Option<String>,
-    /// `off` | `read` | `write` — persist `db_agent_access` (D21 hire/create).
+    /// `off` | `read` | `write` — persist create-only `db_agent_access`.
     #[serde(alias = "dbAccess", alias = "db_access")]
     access: Option<String>,
 }
@@ -220,9 +257,7 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
 pub fn handle_list(params: &HashMap<String, String>) -> CliResponse {
     match resolve_caller_params(params) {
         Ok((path, project_id)) => {
-            if let Err(resp) = access_for(&path, "read") {
-                return resp;
-            }
+            // Passport does not gate list — owned + granted rows, or empty.
             let mut v = ops::list_databases(&project_id);
             v["cap"] = serde_json::json!(cap_for(&path));
             ok_json(v)
@@ -248,7 +283,7 @@ pub fn handle_dsn(params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = access_for(&path, "read") {
+    if let Err(resp) = interact_for(&project_id, "read") {
         return resp;
     }
     let secrets = FileSecretStore::default();
@@ -284,7 +319,7 @@ pub fn handle_migrate(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = access_for(&path, "write") {
+    if let Err(resp) = interact_for(&project_id, "write") {
         return resp;
     }
     let secrets = FileSecretStore::default();
@@ -309,7 +344,7 @@ pub fn handle_dump(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = access_for(&path, "write") {
+    if let Err(resp) = interact_for(&project_id, "write") {
         return resp;
     }
     let secrets = FileSecretStore::default();
@@ -338,7 +373,7 @@ pub fn handle_restore(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = access_for(&path, "write") {
+    if let Err(resp) = interact_for(&project_id, "write") {
         return resp;
     }
     let secrets = FileSecretStore::default();
@@ -366,11 +401,11 @@ pub fn handle_drop(body: &[u8]) -> CliResponse {
             "drop requires {\"yes\": true} (CLI: k2 db drop --yes)",
         );
     }
-    let (path, project_id) = match resolve_caller(&b.project) {
+    let (_path, project_id) = match resolve_caller(&b.project) {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = access_for(&path, "write") {
+    if let Err(resp) = interact_for(&project_id, "write") {
         return resp;
     }
     match ops::drop_database(ops(), &project_id) {
@@ -404,11 +439,11 @@ fn store_ident(body: &[u8]) -> Result<(String, String, StoreBody), CliResponse> 
 }
 
 pub fn handle_store_create(body: &[u8]) -> CliResponse {
-    let (path, project_id, b) = match store_ident(body) {
+    let (_path, project_id, b) = match store_ident(body) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(resp) = access_for(&path, "write") {
+    if let Err(resp) = interact_for(&project_id, "write") {
         return resp;
     }
     let name = b.name.as_deref().unwrap_or("");
@@ -420,11 +455,11 @@ pub fn handle_store_create(body: &[u8]) -> CliResponse {
 }
 
 pub fn handle_store_list(params: &HashMap<String, String>) -> CliResponse {
-    let (path, project_id) = match resolve_caller_params(params) {
+    let (_path, project_id) = match resolve_caller_params(params) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(resp) = access_for(&path, "read") {
+    if let Err(resp) = interact_for(&project_id, "read") {
         return resp;
     }
     let secrets = FileSecretStore::default();
@@ -435,11 +470,11 @@ pub fn handle_store_list(params: &HashMap<String, String>) -> CliResponse {
 }
 
 pub fn handle_store_put(body: &[u8]) -> CliResponse {
-    let (path, project_id, b) = match store_ident(body) {
+    let (_path, project_id, b) = match store_ident(body) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(resp) = access_for(&path, "write") {
+    if let Err(resp) = interact_for(&project_id, "write") {
         return resp;
     }
     let name = b.name.as_deref().unwrap_or("");
@@ -453,11 +488,11 @@ pub fn handle_store_put(body: &[u8]) -> CliResponse {
 }
 
 pub fn handle_store_get(params: &HashMap<String, String>) -> CliResponse {
-    let (path, project_id) = match resolve_caller_params(params) {
+    let (_path, project_id) = match resolve_caller_params(params) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(resp) = access_for(&path, "read") {
+    if let Err(resp) = interact_for(&project_id, "read") {
         return resp;
     }
     let name = params.get("name").map(String::as_str).unwrap_or("");
@@ -470,11 +505,11 @@ pub fn handle_store_get(params: &HashMap<String, String>) -> CliResponse {
 }
 
 pub fn handle_store_query(params: &HashMap<String, String>) -> CliResponse {
-    let (path, project_id) = match resolve_caller_params(params) {
+    let (_path, project_id) = match resolve_caller_params(params) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(resp) = access_for(&path, "read") {
+    if let Err(resp) = interact_for(&project_id, "read") {
         return resp;
     }
     let name = params.get("name").map(String::as_str).unwrap_or("");
@@ -490,11 +525,11 @@ pub fn handle_store_query(params: &HashMap<String, String>) -> CliResponse {
 }
 
 pub fn handle_store_rm(body: &[u8]) -> CliResponse {
-    let (path, project_id, b) = match store_ident(body) {
+    let (_path, project_id, b) = match store_ident(body) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(resp) = access_for(&path, "write") {
+    if let Err(resp) = interact_for(&project_id, "write") {
         return resp;
     }
     let secrets = FileSecretStore::default();
@@ -511,11 +546,11 @@ pub fn handle_store_rm(body: &[u8]) -> CliResponse {
 }
 
 pub fn handle_store_drop(body: &[u8]) -> CliResponse {
-    let (path, project_id, b) = match store_ident(body) {
+    let (_path, project_id, b) = match store_ident(body) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(resp) = access_for(&path, "write") {
+    if let Err(resp) = interact_for(&project_id, "write") {
         return resp;
     }
     let secrets = FileSecretStore::default();

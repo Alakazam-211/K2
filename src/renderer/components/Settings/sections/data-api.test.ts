@@ -32,6 +32,7 @@ describe('data-api helpers', () => {
     expect(sales.owner.canManage).toBe(true)
     expect(sales.grants[0]?.level).toBe('read')
     expect(sales.bindRole).toBeTruthy()
+    expect(sales.dbAgentAccess).toBe('off')
   })
 
   it('formatSqlListen does not double-append port', () => {

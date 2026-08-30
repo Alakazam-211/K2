@@ -102,8 +102,9 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // resolver: `mail_address_cap_for_path`.
         "mail_address_cap",
         // Workspace data sidecar (prd-workspace-data-sidecar-v1 D21) —
-        // per-workspace agent passport. Values: 'off' | 'read' | 'write'
-        // (write-validated below); NULL = fail-closed 'off'.
+        // create-only agent passport (`k2 db create`). Values:
+        // 'off' | 'read' | 'write' (write-validated below); NULL =
+        // fail-closed 'off'. List/dsn/store use ownership or sql_grants.
         "db_agent_access",
         // D9: per-workspace ACTIVE-DB cap. Non-negative integer, 0 =
         // unlimited (write-validated below); NULL = inherit default 1.
@@ -900,8 +901,9 @@ pub fn mail_address_cap_for_path(project_path: &str) -> u32 {
 
 /// EFFECTIVE `db_agent_access` for `project_path`: `off` | `read` | `write`.
 ///
-/// NULL / unknown / unrecognized → `'off'` (fail-closed). Owner tokens
-/// bypass this at the route layer; agents cannot create unless `'write'`.
+/// NULL / unknown / unrecognized → `'off'` (fail-closed). Create-only
+/// passport: owner tokens always create; agents cannot create unless
+/// `'write'`. Interaction (list/dsn/store) uses ownership or sql_grants.
 pub fn db_agent_access_for_path(project_path: &str) -> String {
     let per_workspace: Option<String> = {
         let db = crate::db::shared();

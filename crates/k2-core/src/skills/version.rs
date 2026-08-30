@@ -73,9 +73,11 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// `k2 db` / `k2 store` sidecar (Linux; fail-closed `db_agent_access`;
 /// owner enable; create/dsn/migrate/dump/store).
 /// Bumped to 10: restore + publish-subdomain off-box hint (D30).
-pub const SKILL_VERSION_MANAGER: u32 = 10;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 10;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 10;
+/// Bumped to 11: `db_agent_access` is create-only; list/dsn/store use
+/// ownership or sql_grants.
+pub const SKILL_VERSION_MANAGER: u32 = 11;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 11;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 11;
 pub const SKILL_VERSION_TEMPLATE: u32 = 3;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 /// v2 = authored persona file is `.k2/agent/ROLE.md`.
@@ -114,7 +116,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 23: `[thread:<addr>]` reply rule — answer with `k2 thread`,
 /// not the TUI (same shape as `[project:<name>]` → `k2 project msg`).
 /// Bumped to 24: `k2 agent context add skin:roster` (opt-in Skin Access guests).
-pub const SKILL_VERSION_WORKSPACE: u32 = 24;
+/// Bumped to 25: `db_agent_access` is create-only; list/dsn/store use
+/// ownership or sql_grants.
+pub const SKILL_VERSION_WORKSPACE: u32 = 25;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

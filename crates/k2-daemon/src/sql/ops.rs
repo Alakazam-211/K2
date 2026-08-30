@@ -64,7 +64,8 @@ pub fn migration_checksum(bytes: &[u8]) -> String {
 }
 
 /// Persist `projects.db_agent_access` (`off`/`read`/`write`). Empty = no-op
-/// (default stays fail-closed `off`).
+/// (default stays fail-closed `off`). This flag only gates **creating**
+/// new databases (`k2 db create`); list/dsn/store use ownership or grants.
 pub fn persist_db_access(project_path: &str, access: Option<&str>) -> Result<(), OpsError> {
     let Some(access) = access.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(());
@@ -226,6 +227,68 @@ fn load_active_default(conn: &rusqlite::Connection, project_id: &str) -> Option<
         db_row_from,
     )
     .ok()
+}
+
+/// First active database this workspace is granted (not owned).
+fn load_granted_active(conn: &rusqlite::Connection, project_id: &str) -> Option<DbRow> {
+    conn.query_row(
+        "SELECT d.id, d.name, d.project_id, d.agent_secret_ref, d.migrator_secret_ref, \
+                d.status, d.bind_role \
+         FROM sql_databases d \
+         JOIN sql_grants g ON g.database_id = d.id \
+         WHERE g.project_id = ?1 AND d.status = 'active' \
+         ORDER BY g.created_at ASC LIMIT 1",
+        rusqlite::params![project_id],
+        db_row_from,
+    )
+    .ok()
+}
+
+/// Effective SQL interaction level for a workspace: `write` if it owns an
+/// active DB, else the highest `sql_grants.level` on an active DB, else None.
+/// Does **not** consult `projects.db_agent_access` (that flag is create-only).
+pub fn project_sql_level(project_id: &str) -> Option<&'static str> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if count_active(&conn, project_id) > 0 {
+        return Some("write");
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT g.level FROM sql_grants g \
+             JOIN sql_databases d ON d.id = g.database_id \
+             WHERE g.project_id = ?1 AND d.status = 'active'",
+        )
+        .ok()?;
+    let rows = stmt
+        .query_map(rusqlite::params![project_id], |r| r.get::<_, String>(0))
+        .ok()?;
+    let mut saw_read = false;
+    for level in rows.filter_map(Result::ok) {
+        if level == "write" {
+            return Some("write");
+        }
+        if level == "read" {
+            saw_read = true;
+        }
+    }
+    if saw_read {
+        Some("read")
+    } else {
+        None
+    }
+}
+
+fn project_db_agent_access(conn: &rusqlite::Connection, project_id: &str) -> String {
+    conn.query_row(
+        "SELECT db_agent_access FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+    .filter(|v| k2_core::workspace::settings::DB_AGENT_ACCESS_MODES.contains(&v.as_str()))
+    .unwrap_or_else(|| "off".to_string())
 }
 
 fn dsn_for(name: &str, user: &str, password: &str) -> String {
@@ -452,21 +515,27 @@ pub fn dsn_for_project(
     cap: u32,
 ) -> Result<serde_json::Value, OpsError> {
     require_running()?;
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let row = load_active_default(&conn, project_id).ok_or_else(|| {
-        OpsError::NotFound("no database for this workspace — run 'k2 db create' first".into())
-    })?;
-    let used = count_active(&conn, project_id);
+    let row = active_row(project_id)?;
+    let used = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        count_active(&conn, project_id)
+    };
     dsn_json(secrets, &row, true, used, cap)
 }
 
 fn active_row(project_id: &str) -> Result<DbRow, OpsError> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    load_active_default(&conn, project_id).ok_or_else(|| {
-        OpsError::NotFound("no database for this workspace — run 'k2 db create' first".into())
-    })
+    if let Some(row) = load_active_default(&conn, project_id) {
+        return Ok(row);
+    }
+    if let Some(row) = load_granted_active(&conn, project_id) {
+        return Ok(row);
+    }
+    Err(OpsError::NotFound(
+        "no database for this workspace — run 'k2 db create' first".into(),
+    ))
 }
 
 fn migrator_creds(secrets: &dyn SecretStore, row: &DbRow) -> Result<(String, String), OpsError> {
@@ -1282,6 +1351,7 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
             "owner": participant_json(&conn, &row.project_id, "write", true),
             "grants": grant_json,
             "yourLevel": your,
+            "dbAgentAccess": project_db_agent_access(&conn, &row.project_id),
         }));
     }
     serde_json::json!({ "ok": true, "databases": out })

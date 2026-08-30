@@ -280,8 +280,8 @@ struct HireBody {
     default_model: Option<String>,
     #[serde(default)]
     no_wiki: Option<bool>,
-    /// Persist `db_agent_access` (`off`/`read`/`write`). Default stays off.
-    /// Does NOT mint a database — hire calls create separately.
+    /// Persist create-only `db_agent_access` (`off`/`read`/`write`). Default
+    /// stays off. Does NOT mint a database — hire calls create separately.
     #[serde(default)]
     db_access: Option<String>,
 }

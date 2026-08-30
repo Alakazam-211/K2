@@ -24,6 +24,7 @@ import {
   fetchSqlStatus,
   grantSqlAccess,
   revokeSqlAccess,
+  setSqlDbAgentAccess,
   sqlErrorMessage,
   type SqlDatabase,
   type SqlLevel,
@@ -58,6 +59,13 @@ export const DATA_MANIFEST: SettingEntry[] = [
     label: 'Bind role',
     description: 'Postgres role the workspace assistant uses',
     keywords: ['bind', 'role', 'pg_role', 'rls', 'agent'],
+  },
+  {
+    id: 'data.agent-create',
+    section: 'data',
+    label: 'Agents can create databases',
+    description: 'Allow the owning workspace agent to run k2 db create',
+    keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write'],
   },
 ]
 
@@ -191,9 +199,49 @@ function AccessPanel({
     [db.grants, db.id, patchDb],
   )
 
+  const ownerProject = projects.find((p) => p.id === db.ownerProjectId)
+  const ownerPath = ownerProject?.path
+  const agentCanCreate = db.dbAgentAccess === 'write'
+
+  const toggleAgentCreate = useCallback(
+    async (next: boolean): Promise<void> => {
+      if (!ownerPath) return
+      setError(null)
+      const before = db.dbAgentAccess
+      patchDb(db.id, (row) => ({ ...row, dbAgentAccess: next ? 'write' : 'off' }))
+      try {
+        await setSqlDbAgentAccess(ownerPath, next)
+      } catch (e) {
+        patchDb(db.id, (row) => ({ ...row, dbAgentAccess: before }))
+        setError(sqlErrorMessage(e))
+      }
+    },
+    [db.dbAgentAccess, db.id, ownerPath, patchDb],
+  )
+
   return (
     <div className="space-y-3" data-settings-id="data.grants">
       <SectionTitle>Access</SectionTitle>
+      <div
+        className="border border-[var(--color-border)] px-3 py-2 space-y-1.5"
+        data-settings-id="data.agent-create"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs text-[var(--color-text-primary)]">Agents can create databases</p>
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+              Existing databases this workspace owns or is granted are usable without this toggle;
+              it only gates <span className="font-mono">k2 db create</span>.
+            </p>
+          </div>
+          <Toggle
+            checked={agentCanCreate}
+            disabled={!canMutate || !ownerPath}
+            onChange={(next) => void toggleAgentCreate(next)}
+            aria-label="Agents can create databases"
+          />
+        </div>
+      </div>
       <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
         <div className="px-3 py-2 space-y-1.5">
           <div className="flex items-center gap-2 min-w-0">
@@ -640,6 +688,7 @@ export function DataSection(): React.JSX.Element {
         },
         grants: [],
         yourLevel: 'write',
+        dbAgentAccess: 'off',
       }
       setDatabases((prev) => [...(prev ?? []), optimistic])
       setCreateWs('')

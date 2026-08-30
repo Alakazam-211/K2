@@ -356,7 +356,7 @@ pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
     let username = normalize_username(username)?;
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = now_secs();
-    with_conn(|conn| {
+    let r = with_conn(|conn| {
         let exists: Option<String> = conn
             .query_row(
                 "SELECT id FROM principals WHERE username = ?1",
@@ -378,7 +378,9 @@ pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
             username,
             created_at,
         })
-    })
+    })?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok(r)
 }
 
 pub fn list_principals() -> Result<Vec<SkinPrincipal>, String> {
@@ -407,7 +409,7 @@ pub fn list_principals() -> Result<Vec<SkinPrincipal>, String> {
 
 pub fn remove_principal(username: &str) -> Result<bool, String> {
     let username = normalize_username(username)?;
-    with_conn(|conn| {
+    let r = with_conn(|conn| {
         let id: Option<String> = conn
             .query_row(
                 "SELECT id FROM principals WHERE username = ?1",
@@ -425,7 +427,11 @@ pub fn remove_principal(username: &str) -> Result<bool, String> {
             .execute("DELETE FROM principals WHERE id = ?1", params![id])
             .map_err(|e| format!("skin principal delete: {e}"))?;
         Ok(n > 0)
-    })
+    })?;
+    if r {
+        crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    }
+    Ok(r)
 }
 
 fn principal_by_username(
@@ -466,7 +472,7 @@ pub fn create_token(
     let prefix = display_prefix(&raw);
     let created_at = now_secs();
     let caps_stored = caps_json(&caps);
-    with_conn(|conn| {
+    let r = with_conn(|conn| {
         let Some(principal) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
@@ -487,7 +493,9 @@ pub fn create_token(
             },
             raw,
         ))
-    })
+    })?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok(r)
 }
 
 pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
@@ -527,7 +535,7 @@ pub fn revoke_token(id: &str) -> Result<bool, String> {
     if id.is_empty() {
         return Err("missing token id".to_string());
     }
-    with_conn(|conn| {
+    let r = with_conn(|conn| {
         let n = conn
             .execute(
                 "UPDATE tokens SET revoked_at = ?1 WHERE id = ?2 AND revoked_at IS NULL",
@@ -535,7 +543,11 @@ pub fn revoke_token(id: &str) -> Result<bool, String> {
             )
             .map_err(|e| format!("skin token revoke: {e}"))?;
         Ok(n > 0)
-    })
+    })?;
+    if r {
+        crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    }
+    Ok(r)
 }
 
 /// Resolve a presented raw key. Revoked / unknown / wrong prefix → `None`.

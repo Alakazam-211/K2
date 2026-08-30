@@ -113,7 +113,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 22: restore + publish-subdomain off-box hint (D30).
 /// Bumped to 23: `[thread:<addr>]` reply rule — answer with `k2 thread`,
 /// not the TUI (same shape as `[project:<name>]` → `k2 project msg`).
-pub const SKILL_VERSION_WORKSPACE: u32 = 23;
+/// Bumped to 24: `k2 agent context add skin:roster` (opt-in Skin Access guests).
+pub const SKILL_VERSION_WORKSPACE: u32 = 24;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

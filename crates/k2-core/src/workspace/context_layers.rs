@@ -177,6 +177,10 @@ pub const USERS_ROSTER_PATH: &str = ".k2/context/catalog/users-roster.md";
 pub const USERS_ROSTER_SOURCE: &str = "catalog:users-roster";
 pub const USERS_ROSTER_ID: &str = "users:roster";
 
+pub const SKIN_ROSTER_PATH: &str = ".k2/context/catalog/skin-roster.md";
+pub const SKIN_ROSTER_SOURCE: &str = "catalog:skin-roster";
+pub const SKIN_ROSTER_ID: &str = "skin:roster";
+
 pub const WIKI_HYGIENE_PATH: &str = ".k2/context/catalog/wiki-hygiene.md";
 pub const WIKI_HYGIENE_SOURCE: &str = "catalog:wiki-hygiene";
 pub const WIKI_HYGIENE_ID: &str = "wiki:hygiene";
@@ -192,6 +196,7 @@ pub enum LiveKind {
     Heartbeats,
     Skills,
     Users,
+    Skin,
 }
 
 fn builtin_catalog_entry(
@@ -223,7 +228,7 @@ fn builtin_catalog_entry(
 
 /// Built-in catalog entries: wiki seeds + lean packs + live rosters.
 ///
-/// Live rosters (connections / heartbeats / skills / users) rebuild on every
+/// Live rosters (connections / heartbeats / skills / users / skin) rebuild on every
 /// AGENTS.md compose so always-on context tracks a changing workspace.
 pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
     vec![
@@ -337,6 +342,17 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             false,
             &["live", "roster", "users"],
         ),
+        builtin_catalog_entry(
+            SKIN_ROSTER_ID,
+            SKIN_ROSTER_PATH,
+            "Skin user roster",
+            SKIN_ROSTER_SOURCE,
+            "live",
+            "Live list of Skin Access guests (username, live keys, scopes). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.",
+            None,
+            false,
+            &["live", "roster", "skin"],
+        ),
     ]
 }
 
@@ -366,6 +382,7 @@ const RESERVED_ID_PREFIXES: &[&str] = &[
     "heartbeats:",
     "skills:",
     "users:",
+    "skin:",
     "subagents:",
     "catalog:",
     "pinned:",
@@ -394,6 +411,9 @@ const RESERVED_ALIASES: &[&str] = &[
     "users-roster",
     "people-roster",
     "user-roster",
+    "skin-roster",
+    "skins-roster",
+    "skin-users",
     "wiki-hygiene",
     "always-use-subagents",
     "use-subagents",
@@ -413,6 +433,7 @@ const RESERVED_PATH_STEMS: &[&str] = &[
     "heartbeats-roster",
     "skills-roster",
     "users-roster",
+    "skin-roster",
 ];
 
 /// Host library root: `~/.k2/context/catalog/packs`.
@@ -866,6 +887,7 @@ fn live_kind_for_source(source: &str) -> Option<LiveKind> {
         HEARTBEATS_ROSTER_SOURCE => Some(LiveKind::Heartbeats),
         SKILLS_ROSTER_SOURCE => Some(LiveKind::Skills),
         USERS_ROSTER_SOURCE => Some(LiveKind::Users),
+        SKIN_ROSTER_SOURCE => Some(LiveKind::Skin),
         _ => None,
     }
 }
@@ -881,6 +903,8 @@ fn live_kind_for_path(path: &str) -> Option<LiveKind> {
         Some(LiveKind::Skills)
     } else if path == USERS_ROSTER_PATH || path.ends_with("users-roster.md") {
         Some(LiveKind::Users)
+    } else if path == SKIN_ROSTER_PATH || path.ends_with("skin-roster.md") {
+        Some(LiveKind::Skin)
     } else {
         None
     }
@@ -902,6 +926,7 @@ pub fn render_live_layer_body(project_path: &str, layer: &ContextLayer) -> Optio
         LiveKind::Heartbeats => Some(render_heartbeats_roster_body(project_path)),
         LiveKind::Skills => Some(render_skills_roster_body(project_path)),
         LiveKind::Users => Some(render_users_roster_body(project_path)),
+        LiveKind::Skin => Some(render_skin_roster_body(project_path)),
     }
 }
 
@@ -1101,6 +1126,55 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
     out
 }
 
+/// Live list of Skin Access guests (not Connect / Server Access).
+///
+/// Username + live (non-revoked) key count + scopes. Never the raw `k2skn_`
+/// secret. Same people as `k2 skin user list`.
+pub fn render_skin_roster_body(_project_path: &str) -> String {
+    let users = crate::skin::list_principals().unwrap_or_default();
+    let tokens = crate::skin::list_tokens().unwrap_or_default();
+
+    let mut out = String::new();
+    out.push_str(
+        "These are **Skin Access** guests (capability passes for custom UIs) — \
+         not Connect / Server Access operators, and not workspace-agents.\n\
+         Do **not** `k2 msg` these names. CLI lookup: `k2 skin user list` / \
+         `k2 skin-token list`. Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+    );
+    if users.is_empty() {
+        out.push_str("### No skin users yet\n\n");
+        out.push_str("Add a guest in Settings → Skin Access, or:\n\n");
+        out.push_str("    k2 skin user add <username>\n");
+        out.push_str("    k2 skin-token create <username>\n");
+        return out;
+    }
+    out.push_str("| USERNAME | LIVE KEYS | SCOPES |\n");
+    out.push_str("| --- | --- | --- |\n");
+    for u in users {
+        let live: Vec<&crate::skin::SkinTokenMeta> = tokens
+            .iter()
+            .filter(|t| t.username == u.username && t.revoked_at.is_none())
+            .collect();
+        let n = live.len();
+        let mut caps: Vec<String> = Vec::new();
+        for t in live {
+            for c in &t.caps {
+                if !caps.iter().any(|x| x == c) {
+                    caps.push(c.clone());
+                }
+            }
+        }
+        caps.sort();
+        let scopes = if caps.is_empty() {
+            "—".to_string()
+        } else {
+            caps.join(", ")
+        };
+        out.push_str(&format!("| {} | {n} | {scopes} |\n", u.username));
+    }
+    out
+}
+
 struct RemoteConnSummary {
     agent: String,
     host: String,
@@ -1156,6 +1230,7 @@ fn live_kind_meta(kind: LiveKind) -> (&'static str, &'static str, &'static str) 
         ),
         LiveKind::Skills => (SKILLS_ROSTER_PATH, "Skills roster", SKILLS_ROSTER_SOURCE),
         LiveKind::Users => (USERS_ROSTER_PATH, "User roster", USERS_ROSTER_SOURCE),
+        LiveKind::Skin => (SKIN_ROSTER_PATH, "Skin user roster", SKIN_ROSTER_SOURCE),
     }
 }
 
@@ -1166,6 +1241,7 @@ fn render_live_file(project_path: &str, kind: LiveKind) -> String {
         LiveKind::Heartbeats => render_heartbeats_roster_body(project_path),
         LiveKind::Skills => render_skills_roster_body(project_path),
         LiveKind::Users => render_users_roster_body(project_path),
+        LiveKind::Skin => render_skin_roster_body(project_path),
     };
     format!("# {title}\n\n{body}")
 }
@@ -1207,7 +1283,7 @@ pub fn sync_live_generated_layers(project_path: &str) {
     let Ok(layers) = list_layers(project_path) else {
         return;
     };
-    let mut seen = [false; 4];
+    let mut seen = [false; 5];
     for layer in &layers {
         if let Some(kind) = live_kind_for_layer(layer) {
             let idx = match kind {
@@ -1215,6 +1291,7 @@ pub fn sync_live_generated_layers(project_path: &str) {
                 LiveKind::Heartbeats => 1,
                 LiveKind::Skills => 2,
                 LiveKind::Users => 3,
+                LiveKind::Skin => 4,
             };
             if !seen[idx] {
                 seen[idx] = true;
@@ -1284,6 +1361,49 @@ fn list_project_paths_with_users_roster() -> Result<Vec<String>, ContextError> {
             Ok(p) if !p.trim().is_empty() => out.push(p),
             Ok(_) => {}
             Err(e) => crate::log_debug!("[context] users roster path row skipped: {e}"),
+        }
+    }
+    Ok(out)
+}
+
+/// After skin-user / pass mutations: rewrite AGENTS.md only on workspaces
+/// that stack the Skin user roster. Host-wide guests, stacked workspaces only.
+/// Best-effort — never fail the skin mutation.
+pub fn refresh_skin_roster_after_people_change() {
+    let paths = match list_project_paths_with_skin_roster() {
+        Ok(p) => p,
+        Err(e) => {
+            crate::log_debug!("[context] skin roster refresh skipped: {e}");
+            return;
+        }
+    };
+    if paths.is_empty() {
+        return;
+    }
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    refresh_roster_after_live_kind_change(&refs, LiveKind::Skin);
+}
+
+fn list_project_paths_with_skin_roster() -> Result<Vec<String>, ContextError> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT p.path \
+             FROM project_context_layers l \
+             JOIN projects p ON p.id = l.project_id \
+             WHERE l.source = ?1 OR l.path LIKE '%skin-roster.md'",
+        )
+        .map_err(|e| ContextError::Db(e.to_string()))?;
+    let rows = stmt
+        .query_map(params![SKIN_ROSTER_SOURCE], |r| r.get::<_, String>(0))
+        .map_err(|e| ContextError::Db(e.to_string()))?;
+    let mut out = Vec::new();
+    for row in rows {
+        match row {
+            Ok(p) if !p.trim().is_empty() => out.push(p),
+            Ok(_) => {}
+            Err(e) => crate::log_debug!("[context] skin roster path row skipped: {e}"),
         }
     }
     Ok(out)
@@ -1404,6 +1524,11 @@ fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextEr
         | "people-roster"
         | "user-roster"
         | "catalog:users-roster" => USERS_ROSTER_ID,
+        "skin:roster"
+        | "skin-roster"
+        | "skins-roster"
+        | "skin-users"
+        | "catalog:skin-roster" => SKIN_ROSTER_ID,
         "wiki-hygiene" | "hygiene" | "catalog:wiki-hygiene" => WIKI_HYGIENE_ID,
         "subagents"
         | "subagents:pack"
@@ -2573,8 +2698,8 @@ mod tests {
         let catalog = list_catalog();
         assert_eq!(
             catalog.len(),
-            10,
-            "ten builtins only in an empty host catalog; got {:?}",
+            11,
+            "eleven builtins only in an empty host catalog; got {:?}",
             catalog.iter().map(|p| p.id.as_str()).collect::<Vec<_>>()
         );
         assert!(catalog.iter().any(|p| p.id == "wiki:index"));
@@ -2595,6 +2720,15 @@ mod tests {
         assert_eq!(users.label, "User roster");
         assert_eq!(users.source, USERS_ROSTER_SOURCE);
         assert_eq!(users.path, USERS_ROSTER_PATH);
+        let skin = catalog
+            .iter()
+            .find(|p| p.id == SKIN_ROSTER_ID)
+            .expect("skin:roster catalog entry");
+        assert_eq!(skin.kind, "live");
+        assert!(!skin.recommended, "skin:roster is opt-in");
+        assert_eq!(skin.label, "Skin user roster");
+        assert_eq!(skin.source, SKIN_ROSTER_SOURCE);
+        assert_eq!(skin.path, SKIN_ROSTER_PATH);
         for p in &catalog {
             assert!(
                 matches!(p.kind.as_str(), "live" | "static" | "path"),
@@ -2645,6 +2779,8 @@ mod tests {
         assert!(!recommended.contains(&"skills:roster"));
         assert!(!recommended.contains(&USERS_ROSTER_ID));
         assert!(!recommended.contains(&"users:roster"));
+        assert!(!recommended.contains(&SKIN_ROSTER_ID));
+        assert!(!recommended.contains(&"skin:roster"));
         assert!(!recommended.contains(&"manager:pack"));
         });
     }
@@ -2775,6 +2911,118 @@ mod tests {
 
             cleanup_project(path, &pid);
         });
+    }
+
+    #[test]
+    fn skin_roster_catalog_is_live_not_recommended_and_alias() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let catalog = list_catalog();
+            let skin = catalog
+                .iter()
+                .find(|p| p.id == SKIN_ROSTER_ID)
+                .expect("skin:roster");
+            assert_eq!(skin.kind, "live");
+            assert!(!skin.recommended);
+            assert_eq!(skin.label, "Skin user roster");
+
+            let root = unique_root("skin-roster-alias");
+            let path = root.to_str().unwrap();
+            let pid = register_project(path);
+            let layer = add_layer(path, None, Some("skin-users"), None).expect("skin-users alias");
+            assert_eq!(layer.source, SKIN_ROSTER_SOURCE);
+            assert_eq!(layer.path, SKIN_ROSTER_PATH);
+            cleanup_project(path, &pid);
+        });
+    }
+
+    #[test]
+    fn skin_roster_catalog_materializes_and_composes_live() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let root = unique_root("skin-roster");
+            let path = root.to_str().unwrap();
+            let pid = register_project(path);
+
+            let layer = add_layer(path, None, Some("skin:roster"), None).expect("skin roster");
+            assert_eq!(layer.source, SKIN_ROSTER_SOURCE);
+            assert_eq!(layer.path, SKIN_ROSTER_PATH);
+            assert!(layer.exists);
+            let abs = root.join(".k2/context/catalog/skin-roster.md");
+            assert!(abs.is_file(), "skin roster file must materialize");
+            let file_body = fs::read_to_string(&abs).unwrap();
+            assert!(
+                file_body.contains("No skin users yet") && file_body.contains("k2 skin user add"),
+                "empty roster should teach add; first 400:\n{}",
+                &file_body[..file_body.len().min(400)]
+            );
+
+            crate::skin::add_principal("ghostbird").expect("add guest");
+            let (_meta, raw) = crate::skin::create_token("ghostbird", None).expect("mint");
+            assert!(raw.starts_with("k2skn_"), "secret prefix");
+
+            fs::remove_file(&abs).ok();
+            let composed = show_composed(path).expect("compose");
+            assert!(
+                composed.contains("Skin user roster")
+                    && composed.contains("ghostbird")
+                    && composed.contains("USERNAME")
+                    && composed.contains("thread:read"),
+                "composed AGENTS.md must inline live skin roster; first 600:\n{}",
+                &composed[..composed.len().min(600)]
+            );
+            assert!(
+                !composed.contains(&raw),
+                "must not leak the raw secret; first 600:\n{}",
+                &composed[..composed.len().min(600)]
+            );
+            assert!(
+                !composed.contains("k2skn_"),
+                "roster table must not show key prefix; first 600:\n{}",
+                &composed[..composed.len().min(600)]
+            );
+
+            cleanup_project(path, &pid);
+        });
+    }
+
+    #[test]
+    fn render_skin_roster_body_teaches_cli_and_no_msg() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let body = render_skin_roster_body("/unused");
+            assert!(
+                body.contains("Do **not** `k2 msg`") || body.contains("do not `k2 msg`"),
+                "must say do not k2 msg skin guests; body:\n{body}"
+            );
+            assert!(
+                body.contains("k2 skin user list"),
+                "must teach k2 skin user list; body:\n{body}"
+            );
+            assert!(
+                body.contains("Skin Access") || body.contains("not Connect"),
+                "must distinguish from Connect users; body:\n{body}"
+            );
+        });
+    }
+
+    #[test]
+    fn skin_roster_not_in_default_empty_stack() {
+        let root = unique_root("skin-empty-stack");
+        let path = root.to_str().unwrap();
+        let pid = register_project(path);
+
+        let stack = list_stack(path).expect("list_stack");
+        assert!(
+            !stack.layers.iter().any(|l| l.source == SKIN_ROSTER_SOURCE
+                || l.path.ends_with("skin-roster.md")),
+            "skin:roster must not be seeded"
+        );
+        let composed = show_composed(path).expect("compose");
+        assert!(
+            !composed.contains("## Skin user roster"),
+            "default compose must not inline Skin user roster; first 400:\n{}",
+            &composed[..composed.len().min(400)]
+        );
+
+        cleanup_project(path, &pid);
     }
 
     fn set_test_owner_display(name: &str) {
@@ -3153,7 +3401,7 @@ mod tests {
             assert!(!hit.recommended);
             assert_eq!(hit.source, "catalog:user:on-call");
             assert_eq!(hit.tags, vec!["ops".to_string()]);
-            assert_eq!(catalog.iter().filter(|p| p.id.starts_with("wiki:") || p.id.ends_with(":roster") || p.id.ends_with(":pack")).count(), 10);
+            assert_eq!(catalog.iter().filter(|p| p.id.starts_with("wiki:") || p.id.ends_with(":roster") || p.id.ends_with(":pack")).count(), 11);
         });
     }
 
@@ -3169,6 +3417,8 @@ mod tests {
                 "k2-agent",
                 "wiki-hygiene",
                 "users-roster",
+                "skin:roster",
+                "skin-users",
             ] {
                 let err = create_user_pack(id, None, &[]).expect_err(id);
                 assert_eq!(err.code(), "bad_usage", "{id} → {}", err);

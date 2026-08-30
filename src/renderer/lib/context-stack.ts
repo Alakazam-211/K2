@@ -475,6 +475,18 @@ export const DEFAULT_CATALOG_ENTRIES: ContextCatalogEntry[] = [
     author: 'K2',
     tags: ['live', 'roster', 'users'],
   },
+  {
+    id: 'skin:roster',
+    path: '.k2/context/catalog/skin-roster.md',
+    label: 'Skin user roster',
+    source: 'catalog:skin-roster',
+    kind: 'live',
+    recommended: false,
+    description:
+      'Live list of Skin Access guests (username, live keys, scopes). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.',
+    author: 'K2',
+    tags: ['live', 'roster', 'skin'],
+  },
 ]
 
 /** Merge API catalog with known defaults (order + client metadata fill). */

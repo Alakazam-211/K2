@@ -536,6 +536,7 @@ k2 agent hire <dir> --context wiki:hygiene --context connections:roster
 k2 agent context catalog                                    # local context catalog
 k2 agent context add manager:pack                           # day-2 stack
 k2 agent context add users:roster                           # humans on this box; do not k2 msg
+k2 agent context add skin:roster                            # Skin Access guests; do not k2 msg
 ```
 Optional path layers compose into `.k2/AGENTS.md` with Agent / Project /
 Tooling. Prefer short standing orders; load skills for depth.
@@ -1914,6 +1915,10 @@ mod tests {
         assert!(
             body.contains("k2 agent context add users:roster"),
             "k2-cli skill must mention `k2 agent context add users:roster`"
+        );
+        assert!(
+            body.contains("k2 agent context add skin:roster"),
+            "k2-cli skill must mention `k2 agent context add skin:roster`"
         );
         // File send is `k2 msg --inbox-wake`, not `k2 inbox` / `k2 mail`.
         assert!(

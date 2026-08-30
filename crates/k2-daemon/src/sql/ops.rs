@@ -1095,13 +1095,14 @@ fn apply_pg_grant(
         format!(
             "GRANT USAGE ON SCHEMA public TO {role};\n\
              GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role};\n\
-             GRANT SELECT, INSERT, UPDATE, DELETE ON ALL SEQUENCES IN SCHEMA public TO {role};",
+             GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {role};",
             role = pg_quote_ident(role),
         )
     } else {
         format!(
             "GRANT USAGE ON SCHEMA public TO {role};\n\
-             GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role};",
+             GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role};\n\
+             GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO {role};",
             role = pg_quote_ident(role),
         )
     };

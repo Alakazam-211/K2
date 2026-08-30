@@ -302,6 +302,7 @@ function AccessPanel({
               placeholder="Add workspace…"
               options={[{ value: '', label: 'Add workspace…' }, ...addOptions]}
               onChange={(v) => setNewProject(v)}
+              menuAlign="left"
             />
             <SettingDropdown
               value={newLevel}

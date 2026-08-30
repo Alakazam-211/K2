@@ -865,6 +865,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir_b);
     }
 
+    #[test]
+    fn write_grant_uses_usage_select_update_on_sequences() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-seq-a-{}", std::process::id()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-seq-b-{}", std::process::id()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let id_a = insert_project("sql-seq-a", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-seq-b", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"]
+            .as_str()
+            .expect("create_database must return name")
+            .to_string();
+        let granted =
+            ops::grant_access(&ops, None, &db_name, &id_b, "write", false).expect("grant write");
+        assert_eq!(granted["level"], "write", "{granted}");
+        let helper = ops
+            .pg
+            .lock()
+            .expect("pg lock")
+            .helper_sql
+            .join("\n")
+            .to_ascii_uppercase();
+        assert!(
+            helper.contains("GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES"),
+            "write grant must use sequence privileges USAGE/SELECT/UPDATE (not INSERT/DELETE), got {helper}"
+        );
+        assert!(
+            !helper.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL SEQUENCES"),
+            "Postgres sequences reject INSERT/DELETE; helper_sql must not GRANT them, got {helper}"
+        );
+        assert!(
+            helper.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES"),
+            "write grant must still DML tables, got {helper}"
+        );
+        for stmt in helper.split(';') {
+            let grant_on_sequences = stmt.contains("GRANT") && stmt.contains("ON ALL SEQUENCES");
+            assert!(
+                !grant_on_sequences || (!stmt.contains("INSERT") && !stmt.contains("DELETE")),
+                "sequence GRANT must not include INSERT/DELETE: {stmt}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
     fn json_body(r: &crate::cli_response::CliResponse) -> serde_json::Value {
         serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json {}: {}", e, r.body))
     }

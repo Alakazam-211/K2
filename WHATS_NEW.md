@@ -5,7 +5,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.40.125 — Skin files read/write + live events
 
-A customer key can list, read, write, and watch **that agent's folder** when you mint `files:read` / `files:write` — same rooms as Thread. Missing files cap stays Thread-only. Empty rooms stay dark. Grid/PTY still never. Not host-wide `/cli/sessions/events`.
+A customer key can list, read, write, and watch **that agent's folder** when you mint `files:read` / `files:write` — same rooms as Thread. Missing files cap stays Thread-only. Empty rooms stay dark. Grid/PTY still never. Not host-wide `/cli/sessions/events`. Skin Thread posts inject `[from <username>] [thread:<addr>]` into the agent's terminal; `via=compose` stays 403.
 
 ---
 

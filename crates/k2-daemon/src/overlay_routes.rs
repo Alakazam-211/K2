@@ -387,6 +387,16 @@ fn parse_since(params: &HashMap<String, String>) -> i64 {
         .unwrap_or(0)
 }
 
+/// Skin overlay + PTY stamp: `SkinPass.username`, never body `from`.
+fn skin_from_stamp(pass: &SkinPass) -> String {
+    let u = pass.username.trim();
+    if u.is_empty() {
+        "skin".to_string()
+    } else {
+        u.to_string()
+    }
+}
+
 /// Human Message-the-agent on Thread: token identity, never body `from`.
 /// Owner token (`"owner"`) → `owner_display_name`. Connect-user → username.
 fn compose_from_for_session(session_author: &str) -> String {
@@ -420,7 +430,11 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         Err(e) => return e,
     };
     let principal = crate::caller_workspace::principal_from_params(params);
-    let from = if via == "compose" {
+    // Skin: authenticated pass username only (never body `from`). Overlay
+    // store and PTY stamp must match.
+    let from = if let Some(pass) = request_skin() {
+        skin_from_stamp(&pass)
+    } else if via == "compose" {
         compose_from_for_session(session_author)
     } else {
         let explicit = opt_param(params, "from").unwrap_or_default();
@@ -471,6 +485,8 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                     &text,
                     &from,
                 );
+            } else if request_skin().is_some() {
+                inject_skin_thread(&resolved, &from, &text);
             }
             CliResponse::ok_json(
                 serde_json::json!({
@@ -785,6 +801,21 @@ fn inject_thread_compose(resolved: &ResolvedOverlay, from: &str, text: &str, com
     // Same throat as k2 talk / Projects Chat / Feedback: wake a dormant
     // session, then inject+submit. `via=compose` skips Chatter (already on Thread).
     deliver_thread_to_pty(&resolved.addr, &payload, from, "compose", command);
+}
+
+/// Skin Thread post (default `via=thread`): same `[from user] [thread:addr]`
+/// line as compose, delivered as `via=thread` so it is not compose-bar
+/// (no slash-command, no compose-history). Skin `via=compose` stays 403.
+fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str) {
+    let line = format_thread_compose_pty_line(from, &resolved.addr, text);
+    record_test_inject(&line);
+    deliver_thread_to_pty(
+        &resolved.addr,
+        &format!("[thread:{}] {text}", resolved.addr),
+        from,
+        "thread",
+        "",
+    );
 }
 
 fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>) {
@@ -1904,5 +1935,75 @@ mod tests {
             )
         });
         assert_eq!(compose.status, "403 Forbidden", "{}", compose.body);
+    }
+
+    #[test]
+    fn skin_thread_post_injects_agent_pty_and_stamps_pass_username() {
+        let handle = format!("ovlskinj{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let pin_id = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &pin_id);
+        let body = format!("skin-pty-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let pass = skin_pass(&[project_id]);
+
+        let post = with_request_skin(Some(pass.clone()), || {
+            dispatch_post(
+                "/cli/thread/post",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": handle,
+                    "text": body,
+                    "from": "owner",
+                })
+                .to_string()
+                .as_bytes(),
+            )
+        });
+        assert_eq!(post.status, "200 OK", "skin post failed: {}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(
+            posted["from"].as_str().expect("from"),
+            "guest",
+            "must stamp SkinPass.username, not body from; {posted}"
+        );
+        let want = format_thread_compose_pty_line("guest", &handle, &body);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &want),
+            "skin Thread post must inject [from guest] [thread:addr] into the agent PTY; want {want:?} got {injects:?}"
+        );
+        assert!(
+            injects
+                .iter()
+                .filter(|l| l.contains(&body))
+                .all(|l| l.contains("[from guest]") && !l.contains("[from owner]")),
+            "must not stamp spoofed body from; got {injects:?}"
+        );
+
+        let before = recorded_injects();
+        let compose_text = format!("compose-blocked-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let compose = with_request_skin(Some(pass), || {
+            dispatch_post(
+                "/cli/thread/post",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": handle,
+                    "text": compose_text,
+                    "via": "compose",
+                })
+                .to_string()
+                .as_bytes(),
+            )
+        });
+        assert_eq!(compose.status, "403 Forbidden", "{}", compose.body);
+        let after = recorded_injects();
+        assert_eq!(
+            after, before,
+            "via=compose 403 must not add a compose inject; after={after:?}"
+        );
+        assert!(
+            after.iter().all(|l| !l.contains(&compose_text)),
+            "via=compose 403 must not inject the compose body; got {after:?}"
+        );
     }
 }

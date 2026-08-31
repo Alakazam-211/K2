@@ -208,7 +208,7 @@ fn provision_role(port: u16, username: &str, password: &str, role: &str) -> Stri
     login(port, username, password)
 }
 
-fn seed_thread_addr(handle: &str) -> String {
+fn seed_thread_addr(handle: &str) -> (String, String) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let id = uuid::Uuid::new_v4().to_string();
@@ -230,7 +230,45 @@ fn seed_thread_addr(handle: &str) -> String {
         "running",
     )
     .expect("pin");
-    conv
+    (id, conv)
+}
+
+fn seed_sidecar(project_id: &str, conv: &str, slug: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::workspace_session_handles::allocate_ordinal(&conn, project_id, conv).expect("ordinal");
+    conn.execute(
+        "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+         VALUES ('claude', ?1, ?2, 0, unixepoch()) \
+         ON CONFLICT(provider, session_id) DO UPDATE SET custom_name = ?2",
+        params![conv, slug],
+    )
+    .expect("name");
+    conn.execute(
+        "INSERT INTO workspace_tab_sessions \
+         (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+         VALUES (?1, ?2, ?3, ?4, 'claude', unixepoch()) \
+         ON CONFLICT(project_id, pane_group_id) DO UPDATE SET session_id = excluded.session_id",
+        params![
+            project_id,
+            format!("pane-{conv}"),
+            format!("tab-pane-{conv}"),
+            conv
+        ],
+    )
+    .expect("tab");
+}
+
+fn assert_skin_room(r: &Resp) {
+    assert_eq!(r.status, 403, "skin_room status; {}", r.body);
+    let v = json(&r.body);
+    assert_eq!(v["ok"], false, "{}", r.body);
+    assert_eq!(v["error"]["code"], "skin_room", "{}", r.body);
+    assert_eq!(
+        v["error"]["hint"], "this pass cannot use that agent",
+        "{}",
+        r.body
+    );
 }
 
 fn add_user(port: u16, username: &str) {
@@ -243,14 +281,15 @@ fn add_user(port: u16, username: &str) {
     assert_eq!(r.status, 200, "skin user add; {}", r.body);
 }
 
-fn mint(port: u16, username: &str, caps: &[&str]) -> (String, String) {
+fn mint(port: u16, username: &str, caps: &[&str], rooms: &[&str]) -> (String, String) {
     let caps_json = serde_json::to_string(&caps).unwrap();
+    let rooms_json = serde_json::to_string(&rooms).unwrap();
     let r = http(
         port,
         "POST",
         &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
         Some(&format!(
-            r#"{{"username":"{username}","caps":{caps_json}}}"#
+            r#"{{"username":"{username}","caps":{caps_json},"rooms":{rooms_json}}}"#
         )),
     );
     assert_eq!(r.status, 200, "mint; {}", r.body);
@@ -292,7 +331,7 @@ async fn skin_slice12_thread_rooms_grid_403() {
         seed_thread_addr(&handle);
         add_user(port, "guest");
 
-        let (_id, read_tok) = mint(port, "guest", &["thread:read"]);
+        let (_id, read_tok) = mint(port, "guest", &["thread:read"], &[&handle]);
 
         let get = http(
             port,
@@ -341,7 +380,7 @@ async fn skin_slice12_thread_rooms_grid_403() {
             post.body
         );
 
-        let (_pid, post_tok) = mint(port, "guest", &["thread:read", "thread:post"]);
+        let (_pid, post_tok) = mint(port, "guest", &["thread:read", "thread:post"], &[&handle]);
         let posted = http(
             port,
             "POST",
@@ -388,7 +427,7 @@ async fn skin_revoke_is_401_and_mutations_are_post_only() {
         let handle = format!("skinrev{}", &uuid::Uuid::new_v4().to_string()[..8]);
         seed_thread_addr(&handle);
         add_user(port, "revokee");
-        let (id, tok) = mint(port, "revokee", &["thread:read"]);
+        let (id, tok) = mint(port, "revokee", &["thread:read"], &[&handle]);
 
         let ok = http(
             port,
@@ -444,6 +483,8 @@ async fn skin_mint_is_owner_tier_admin_member_403() {
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
         add_user(port, "stay");
+        let handle = format!("skinown{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
         let admin = provision_role(port, "skinadmin", "hunter2-strong-1", "admin");
         let member = provision_role(port, "skinmember", "hunter2-strong-2", "member");
 
@@ -464,7 +505,9 @@ async fn skin_mint_is_owner_tier_admin_member_403() {
             port,
             "POST",
             &format!("/cli/skin-tokens?token={owner_role}"),
-            Some(r#"{"username":"stay","caps":["thread:read"]}"#),
+            Some(&format!(
+                r#"{{"username":"stay","caps":["thread:read"],"rooms":["{handle}"]}}"#
+            )),
         );
         assert_eq!(r.status, 200, "Owner-ROLE may mint; {}", r.body);
         let minted = json(&r.body);
@@ -480,7 +523,9 @@ async fn skin_workspace_agent_hook_can_list_but_not_mint() {
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
         add_user(port, "guest");
-        let (_id, raw_secret) = mint(port, "guest", &["thread:read"]);
+        let handle = format!("skinhook{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+        let (_id, raw_secret) = mint(port, "guest", &["thread:read"], &[&handle]);
         let hook = mint_scoped_hook();
 
         let users = http(port, "GET", &format!("/cli/skin/users?token={hook}"), None);
@@ -762,7 +807,7 @@ async fn skin_host_belt_403s_grid_login_v1_not_thread() {
         let handle = format!("skindoor{}", &uuid::Uuid::new_v4().to_string()[..8]);
         seed_thread_addr(&handle);
         add_user(port, "guest");
-        let (_id, tok) = mint(port, "guest", &["thread:read"]);
+        let (_id, tok) = mint(port, "guest", &["thread:read"], &[&handle]);
         let skin_host = "skin.rosson.k2.dev";
 
         let grid = http_host(
@@ -855,8 +900,9 @@ async fn overlay_ws_accepts_skin_read_and_filters_chatterlog() {
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
         add_user(port, "wsguest");
-        let (_id, tok) = mint(port, "wsguest", &["thread:read"]);
-        let conv = uuid::Uuid::new_v4().to_string();
+        let handle = format!("skinws{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_project_id, conv) = seed_thread_addr(&handle);
+        let (_id, tok) = mint(port, "wsguest", &["thread:read"], &[&handle]);
 
         futures_block(async {
             let url =
@@ -914,4 +960,405 @@ async fn overlay_ws_accepts_skin_read_and_filters_chatterlog() {
             }
         });
     });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_mint_rooms_required_and_unknown_handle_400() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        add_user(port, "guest");
+        let handle = format!("skinsales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+
+        let missing = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"guest","caps":["thread:read"]}"#),
+        );
+        assert_eq!(missing.status, 400, "mint without rooms; {}", missing.body);
+        assert!(
+            missing
+                .body
+                .contains("rooms must include at least one workspace"),
+            "{}",
+            missing.body
+        );
+
+        let empty = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"guest","caps":["thread:read"],"rooms":[]}"#),
+        );
+        assert_eq!(empty.status, 400, "mint empty rooms; {}", empty.body);
+
+        let unknown = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"guest","caps":["thread:read"],"rooms":["not-a-handle"]}"#),
+        );
+        assert_eq!(unknown.status, 400, "unknown handle; {}", unknown.body);
+        assert!(
+            unknown.body.contains("unknown workspace handle"),
+            "{}",
+            unknown.body
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_rooms_acl_http_ws_list_and_compose() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let sales = format!("sales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("other{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (sales_id, sales_pin) = seed_thread_addr(&sales);
+        let (_other_id, _other_pin) = seed_thread_addr(&other);
+        let sidecar_conv = uuid::Uuid::new_v4().to_string();
+        seed_sidecar(&sales_id, &sidecar_conv, "reviewer");
+        add_user(port, "guest");
+        let (_id, tok) = mint(port, "guest", &["thread:read", "thread:post"], &[&sales]);
+
+        let ok = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok}&addr={sales}"),
+            None,
+        );
+        assert_eq!(ok.status, 200, "sales handle; {}", ok.body);
+
+        let pin_ok = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok}&addr={sales_pin}"),
+            None,
+        );
+        assert_eq!(pin_ok.status, 200, "pinned Chat uuid; {}", pin_ok.body);
+
+        let deny_other = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok}&addr={other}"),
+            None,
+        );
+        assert_skin_room(&deny_other);
+        assert!(
+            !deny_other.body.contains(&other),
+            "must not echo the other handle: {}",
+            deny_other.body
+        );
+
+        let unknown = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok}&addr=no-such-agent"),
+            None,
+        );
+        assert_skin_room(&unknown);
+
+        let sidecar_addr = format!("{sales}/reviewer");
+        let deny_sidecar = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok}&addr={sidecar_addr}"),
+            None,
+        );
+        assert_skin_room(&deny_sidecar);
+
+        let deny_sidecar_uuid = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok}&addr={sidecar_conv}"),
+            None,
+        );
+        assert_skin_room(&deny_sidecar_uuid);
+
+        let posted = http(
+            port,
+            "POST",
+            &format!("/cli/thread/post?token={tok}"),
+            Some(&format!(r#"{{"addr":"{sales}","text":"hello-skin"}}"#)),
+        );
+        assert_eq!(posted.status, 200, "post sales; {}", posted.body);
+
+        let post_other = http(
+            port,
+            "POST",
+            &format!("/cli/thread/post?token={tok}"),
+            Some(&format!(r#"{{"addr":"{other}","text":"nope"}}"#)),
+        );
+        assert_skin_room(&post_other);
+
+        let compose = http(
+            port,
+            "POST",
+            &format!("/cli/thread/post?token={tok}"),
+            Some(&format!(
+                r#"{{"addr":"{sales}","text":"pty","via":"compose"}}"#
+            )),
+        );
+        assert_eq!(compose.status, 403, "via=compose; {}", compose.body);
+
+        let grid = http(
+            port,
+            "GET",
+            &format!("/cli/sessions/grid?token={tok}&session=nope"),
+            None,
+        );
+        assert_eq!(grid.status, 403, "grid; {}", grid.body);
+        assert_eq!(grid.body.trim(), TERMINAL_403);
+
+        let chatter = http(port, "GET", &format!("/cli/chatterlog?token={tok}"), None);
+        assert_eq!(chatter.status, 403, "chatter; {}", chatter.body);
+
+        let agents = http(port, "GET", &format!("/cli/skin/agents?token={tok}"), None);
+        assert_eq!(agents.status, 200, "{}", agents.body);
+        let av = json(&agents.body);
+        let list = av["agents"].as_array().expect("agents array");
+        assert_eq!(list.len(), 1, "{}", agents.body);
+        assert_eq!(list[0]["handle"], sales, "{}", agents.body);
+        assert_eq!(list[0]["projectId"], sales_id, "{}", agents.body);
+        assert!(
+            !agents.body.contains(&other),
+            "list must not contain other handle: {}",
+            agents.body
+        );
+
+        let owner_agents = http(
+            port,
+            "GET",
+            &format!("/cli/skin/agents?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(
+            owner_agents.status, 403,
+            "owner agents; {}",
+            owner_agents.body
+        );
+
+        let owner_other = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={OWNER_TOKEN}&addr={other}"),
+            None,
+        );
+        assert_eq!(
+            owner_other.status, 200,
+            "owner still reads other; {}",
+            owner_other.body
+        );
+
+        futures_block(async {
+            let url = format!(
+                "ws://127.0.0.1:{port}/cli/overlay/events?conversation={sales_pin}&token={tok}"
+            );
+            let (_ws, resp) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("pinned Chat WS must upgrade");
+            assert_eq!(resp.status(), 101, "upgrade; {resp:?}");
+        });
+
+        let ws_other = http(
+            port,
+            "GET",
+            &format!("/cli/overlay/events?conversation={sidecar_conv}&token={tok}"),
+            None,
+        );
+        assert_eq!(ws_other.status, 403, "sidecar WS; {}", ws_other.body);
+        assert_skin_room(&ws_other);
+
+        let random = uuid::Uuid::new_v4().to_string();
+        let ws_rand = http(
+            port,
+            "GET",
+            &format!("/cli/overlay/events?conversation={random}&token={tok}"),
+            None,
+        );
+        assert_eq!(ws_rand.status, 403, "random UUID WS; {}", ws_rand.body);
+        assert_ne!(ws_rand.status, 101, "must not upgrade");
+
+        let missing_conv = http(
+            port,
+            "GET",
+            &format!("/cli/overlay/events?token={tok}"),
+            None,
+        );
+        assert_eq!(
+            missing_conv.status, 400,
+            "missing conversation; {}",
+            missing_conv.body
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_empty_rooms_dark_rename_delete_apply_hook() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let sales = format!("sales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("other{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (sales_id, sales_pin) = seed_thread_addr(&sales);
+        seed_thread_addr(&other);
+        add_user(port, "guest");
+        let (id_a, tok_a) = mint(port, "guest", &["thread:read"], &[&sales]);
+        let (_id_b, tok_b) = mint(port, "guest", &["thread:read"], &[&sales]);
+
+        let clear = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens/rooms?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"id":"{id_a}","rooms":[]}}"#)),
+        );
+        assert_eq!(clear.status, 200, "{}", clear.body);
+        let dark = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok_a}&addr={sales}"),
+            None,
+        );
+        assert_skin_room(&dark);
+        let dark_ws = http(
+            port,
+            "GET",
+            &format!("/cli/overlay/events?conversation={sales_pin}&token={tok_a}"),
+            None,
+        );
+        assert_eq!(dark_ws.status, 403, "empty rooms WS; {}", dark_ws.body);
+        assert_ne!(dark_ws.status, 101);
+        assert_skin_room(&dark_ws);
+
+        let path = format!("/tmp/skin-it-{sales}-{sales_id}");
+        let new_handle = format!("renamed{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        k2_core::workspace::handle::set_workspace_handle(&path, &new_handle)
+            .expect("rename handle");
+        let renamed = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok_b}&addr={new_handle}"),
+            None,
+        );
+        assert_eq!(renamed.status, 200, "rename still allows; {}", renamed.body);
+
+        let apply = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/rooms?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"username":"guest","rooms":["{other}"],"applyTokens":true}}"#
+            )),
+        );
+        assert_eq!(apply.status, 200, "{}", apply.body);
+        let listed = http(
+            port,
+            "GET",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(listed.status, 200, "{}", listed.body);
+        let listed_v = json(&listed.body);
+        let tokens = listed_v["tokens"].as_array().expect("tokens");
+        for row in tokens {
+            if row["revokedAt"].is_null() {
+                let handles = row["roomHandles"].as_array().expect("roomHandles");
+                assert!(
+                    handles.iter().any(|h| h == &other),
+                    "apply-tokens must copy other: {row}"
+                );
+            }
+        }
+
+        add_user(port, "otherguest");
+        let (id_c, tok_c) = mint(port, "otherguest", &["thread:read"], &[&new_handle]);
+        let (id_d, _tok_d) = mint(port, "otherguest", &["thread:read"], &[&new_handle]);
+        let no_apply = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/rooms?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"username":"otherguest","rooms":["{other}"]}}"#
+            )),
+        );
+        assert_eq!(no_apply.status, 200, "{}", no_apply.body);
+        let listed2 = http(
+            port,
+            "GET",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            None,
+        );
+        let listed2_v = json(&listed2.body);
+        let tokens2 = listed2_v["tokens"].as_array().expect("tokens");
+        let row_c = tokens2.iter().find(|t| t["id"] == id_c).expect("c");
+        let row_d = tokens2.iter().find(|t| t["id"] == id_d).expect("d");
+        let handles_c = row_c["roomHandles"].as_array().expect("c handles");
+        let handles_d = row_d["roomHandles"].as_array().expect("d handles");
+        assert!(
+            handles_c.iter().any(|h| h == &new_handle),
+            "without applyTokens key c stays renamed sales: {row_c}"
+        );
+        assert!(
+            handles_d.iter().any(|h| h == &new_handle),
+            "without applyTokens key d stays renamed sales: {row_d}"
+        );
+
+        let hook = mint_scoped_hook_for(&sales_id);
+        let hook_sales = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={hook}&addr={new_handle}"),
+            None,
+        );
+        assert_eq!(
+            hook_sales.status, 200,
+            "hook same-workspace overlay; {}",
+            hook_sales.body
+        );
+
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("DELETE FROM projects WHERE id = ?1", params![sales_id])
+                .expect("delete workspace");
+        }
+        let gone = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={tok_c}&addr={new_handle}"),
+            None,
+        );
+        assert_skin_room(&gone);
+        let agents = http(
+            port,
+            "GET",
+            &format!("/cli/skin/agents?token={tok_c}"),
+            None,
+        );
+        assert_eq!(agents.status, 200, "{}", agents.body);
+        assert!(
+            !agents.body.contains(&new_handle) && !agents.body.contains(&sales),
+            "deleted workspace omitted: {}",
+            agents.body
+        );
+    });
+}
+
+fn mint_scoped_hook_for(workspace_uuid: &str) -> String {
+    let sid = SessionId::new();
+    k2_daemon::session_token::mint_session_token(
+        &sid,
+        &sid.to_string(),
+        HookPrincipal {
+            workspace_uuid: workspace_uuid.to_string(),
+            agent_address: "skin-it-agent".to_string(),
+        },
+        CredMode::ApiKey,
+        Provider::Anthropic,
+    )
 }

@@ -90,6 +90,8 @@ export type SkinFrontDoor = {
 export type SkinUser = {
   username: string
   createdAt?: string | null
+  defaultRooms: string[]
+  defaultRoomHandles: string[]
 }
 
 export type SkinTokenRow = {
@@ -97,6 +99,14 @@ export type SkinTokenRow = {
   prefix: string
   username: string
   caps: string[]
+  rooms: string[]
+  roomHandles: string[]
+}
+
+export type SkinWorkspace = {
+  id: string
+  handle: string
+  name: string
 }
 
 export type SkinHydra = {
@@ -252,12 +262,33 @@ export const DEFAULT_FRONT_DOOR: SkinFrontDoor = {
   subdomain: null,
 }
 
+function parseStringList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter((c): c is string => typeof c === 'string' && Boolean(c.trim())).map((s) => s.trim())
+}
+
 export function parseSkinUsers(raw: unknown): SkinUser[] {
   return asList(raw, ['users', 'roster']).flatMap((row) => {
     const rec = asRecord(row)
     const username = asString(rec.username) ?? asString(rec.id) ?? asString(rec.principal)
     if (!username) return []
-    return [{ username, createdAt: asString(rec.createdAt) ?? asString(rec.created_at) }]
+    return [{
+      username,
+      createdAt: asString(rec.createdAt) ?? asString(rec.created_at),
+      defaultRooms: parseStringList(rec.defaultRooms ?? rec.default_rooms),
+      defaultRoomHandles: parseStringList(rec.defaultRoomHandles ?? rec.default_room_handles),
+    }]
+  })
+}
+
+export function parseWorkspaces(raw: unknown): SkinWorkspace[] {
+  const list = Array.isArray(raw) ? raw : asList(raw, ['projects', 'items'])
+  return list.flatMap((row) => {
+    const rec = asRecord(row)
+    const id = asString(rec.id)
+    const handle = asString(rec.handle)
+    if (!id || !handle) return []
+    return [{ id, handle, name: asString(rec.name) ?? handle }]
   })
 }
 
@@ -284,7 +315,14 @@ export function parseSkinTokens(raw: unknown): SkinTokenRow[] {
     const prefix =
       asString(rec.prefix) ??
       (id.startsWith('k2skn_') ? id : `k2skn_…${id.slice(-4)}`)
-    return [{ id, prefix, username, caps }]
+    return [{
+      id,
+      prefix,
+      username,
+      caps,
+      rooms: parseStringList(rec.rooms),
+      roomHandles: parseStringList(rec.roomHandles ?? rec.room_handles),
+    }]
   })
 }
 
@@ -370,6 +408,7 @@ export function SkinAccessSection(): React.JSX.Element {
   const [uiPortText, setUiPortText] = useState('')
   const [users, setUsers] = useState<SkinUser[]>([])
   const [tokens, setTokens] = useState<SkinTokenRow[]>([])
+  const [workspaces, setWorkspaces] = useState<SkinWorkspace[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [userQuery, setUserQuery] = useState('')
@@ -379,6 +418,7 @@ export function SkinAccessSection(): React.JSX.Element {
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null)
   const [mintUsername, setMintUsername] = useState('')
   const [mintCaps, setMintCaps] = useState<Set<string>>(() => new Set(DEFAULT_SKIN_CAPS))
+  const [mintRooms, setMintRooms] = useState<Set<string>>(() => new Set())
   const [mintBusy, setMintBusy] = useState(false)
   const [mintError, setMintError] = useState<string | null>(null)
   const [mintedSecret, setMintedSecret] = useState<string | null>(null)
@@ -386,6 +426,10 @@ export function SkinAccessSection(): React.JSX.Element {
   const [doorBusy, setDoorBusy] = useState(false)
   const [hydra, setHydra] = useState<SkinHydra>(DEFAULT_HYDRA)
   const [hydraBusy, setHydraBusy] = useState(false)
+  const [applyToAll, setApplyToAll] = useState<Record<string, boolean>>({})
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [editKeyId, setEditKeyId] = useState<string | null>(null)
+  const [editKeyRooms, setEditKeyRooms] = useState<Set<string>>(() => new Set())
 
   const refresh = useCallback(async () => {
     setError(null)
@@ -413,6 +457,13 @@ export function SkinAccessSection(): React.JSX.Element {
       setTokens([])
     }
     try {
+      const projects = await daemonCliGet<unknown>('projects/list')
+      setWorkspaces(parseWorkspaces(projects))
+    } catch (e) {
+      failures.push(`workspaces: ${errText(e)}`)
+      setWorkspaces([])
+    }
+    try {
       const h = await daemonCliGet<unknown>('skin/hydra')
       setHydra(parseHydra(h))
     } catch (e) {
@@ -430,6 +481,13 @@ export function SkinAccessSection(): React.JSX.Element {
   useEffect(() => {
     setUiPortText(frontDoor.uiPort == null ? '' : String(frontDoor.uiPort))
   }, [frontDoor.uiPort])
+
+  useEffect(() => {
+    const u = users.find((x) => x.username === mintUsername.trim().toLowerCase())
+    if (!u) return
+    const fromUser = u.defaultRoomHandles.length ? u.defaultRoomHandles : u.defaultRooms
+    setMintRooms(new Set(fromUser))
+  }, [mintUsername, users])
 
   const visibleUsers = useMemo(() => {
     const q = userQuery.trim().toLowerCase()
@@ -536,10 +594,15 @@ export function SkinAccessSection(): React.JSX.Element {
       setMintError('Pick at least one scope')
       return
     }
+    const rooms = [...mintRooms]
+    if (rooms.length === 0) {
+      setMintError('Pick at least one agent')
+      return
+    }
     setMintBusy(true)
     setMintError(null)
     try {
-      const res = await daemonCliPost<unknown>('skin-tokens', { username, caps })
+      const res = await daemonCliPost<unknown>('skin-tokens', { username, caps, rooms })
       const secret = mintSecretFrom(res)
       if (!secret) throw new Error('mint returned no secret')
       setMintedSecret(secret)
@@ -549,7 +612,46 @@ export function SkinAccessSection(): React.JSX.Element {
     } finally {
       setMintBusy(false)
     }
-  }, [mintUsername, mintCaps, refresh])
+  }, [mintUsername, mintCaps, mintRooms, refresh])
+
+  const saveUserRooms = useCallback(
+    async (username: string, handles: string[], applyTokens: boolean) => {
+      setAddError(null)
+      try {
+        await daemonCliPost('skin/users/rooms', {
+          username,
+          rooms: handles,
+          applyTokens,
+        })
+        await refresh()
+      } catch (e) {
+        setAddError(errText(e))
+      }
+    },
+    [refresh],
+  )
+
+  const saveKeyRooms = useCallback(
+    async (id: string, handles: string[]) => {
+      setMintError(null)
+      setBusyId(id)
+      try {
+        await daemonCliPost('skin-tokens/rooms', { id, rooms: handles })
+        setEditKeyId(null)
+        await refresh()
+      } catch (e) {
+        setMintError(errText(e))
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [refresh],
+  )
+
+  const darkKeys = useMemo(
+    () => tokens.filter((t) => t.rooms.length === 0 && t.roomHandles.length === 0),
+    [tokens],
+  )
 
   const persistHydra = useCallback(
     async (enabled: boolean) => {
@@ -613,6 +715,24 @@ export function SkinAccessSection(): React.JSX.Element {
             {error}
           </p>
         )}
+
+        {!bannerDismissed && darkKeys.length > 0 ? (
+          <div
+            role="status"
+            className="border border-[var(--color-status-warning-soft)]/40 bg-[var(--color-status-warning-soft)]/10 p-3 space-y-2"
+          >
+            <p className="text-[11px] text-[var(--color-text-primary)]">
+              Assign agents or these guests go dark. Live keys with no rooms cannot Thread.
+            </p>
+            <button
+              type="button"
+              className="text-[10px] text-[var(--color-accent)] cursor-pointer"
+              onClick={() => setBannerDismissed(true)}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
 
         <SettingsGroup title="Front door">
           <div data-settings-id="skin-access.front-door" className="space-y-3">
@@ -741,8 +861,13 @@ export function SkinAccessSection(): React.JSX.Element {
               </div>
             ) : (
               <div className="divide-y divide-[var(--color-border)]">
-                {visibleUsers.map((u) => (
-                  <div key={u.username} className="py-2 flex items-center justify-between gap-3">
+                {visibleUsers.map((u) => {
+                  const selected = new Set(
+                    u.defaultRoomHandles.length ? u.defaultRoomHandles : u.defaultRooms,
+                  )
+                  return (
+                  <div key={u.username} className="py-2 space-y-2">
+                    <div className="flex items-center justify-between gap-3">
                     <span className="text-xs text-[var(--color-text-primary)] font-mono truncate">
                       {u.username}
                     </span>
@@ -772,8 +897,59 @@ export function SkinAccessSection(): React.JSX.Element {
                         Remove
                       </button>
                     )}
+                    </div>
+                    {workspaces.length > 0 ? (
+                      <div className="flex flex-wrap gap-x-3 gap-y-1">
+                        {workspaces.map((ws) => (
+                          <label
+                            key={`${u.username}-${ws.id}`}
+                            className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                          >
+                            <input
+                              type="checkbox"
+                              aria-label={`${u.username} agent ${ws.handle}`}
+                              checked={selected.has(ws.handle) || selected.has(ws.id)}
+                              onChange={(e) => {
+                                const next = new Set(selected)
+                                if (e.target.checked) next.add(ws.handle)
+                                else {
+                                  next.delete(ws.handle)
+                                  next.delete(ws.id)
+                                }
+                                void saveUserRooms(
+                                  u.username,
+                                  [...next].filter((h) => workspaces.some((w) => w.handle === h || w.id === h)),
+                                  applyToAll[u.username] === true,
+                                )
+                              }}
+                            />
+                            <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                              {ws.handle}
+                            </span>
+                            {ws.name && ws.name !== ws.handle ? (
+                              <span className="text-[10px] text-[var(--color-text-muted)]">
+                                {ws.name}
+                              </span>
+                            ) : null}
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                    <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
+                      <input
+                        type="checkbox"
+                        checked={applyToAll[u.username] === true}
+                        onChange={(e) =>
+                          setApplyToAll((prev) => ({ ...prev, [u.username]: e.target.checked }))
+                        }
+                      />
+                      <span className="text-[10px] text-[var(--color-text-muted)]">
+                        Apply to all keys
+                      </span>
+                    </label>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -822,9 +998,46 @@ export function SkinAccessSection(): React.JSX.Element {
                   </label>
                 ))}
               </div>
+              {workspaces.length > 0 ? (
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {workspaces.map((ws) => (
+                    <label
+                      key={`mint-${ws.id}`}
+                      className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`Mint agent ${ws.handle}`}
+                        checked={mintRooms.has(ws.handle) || mintRooms.has(ws.id)}
+                        onChange={(e) => {
+                          setMintRooms((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(ws.handle)
+                            else {
+                              next.delete(ws.handle)
+                              next.delete(ws.id)
+                            }
+                            return next
+                          })
+                        }}
+                      />
+                      <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                        {ws.handle}
+                      </span>
+                      {ws.name && ws.name !== ws.handle ? (
+                        <span className="text-[10px] text-[var(--color-text-muted)]">{ws.name}</span>
+                      ) : null}
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[10px] text-[var(--color-text-muted)]">
+                  No workspaces on this box yet — add one before minting a key.
+                </p>
+              )}
               <button
                 type="button"
-                disabled={mintBusy || !mintUsername.trim()}
+                disabled={mintBusy || !mintUsername.trim() || mintRooms.size === 0}
                 onClick={() => void mintKey()}
                 className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
               >
@@ -897,6 +1110,81 @@ export function SkinAccessSection(): React.JSX.Element {
                             ))
                           )}
                         </div>
+                        <div className="flex flex-wrap gap-1">
+                          {k.roomHandles.length === 0 ? (
+                            <span className="text-[10px] text-[var(--color-text-muted)]">
+                              no rooms
+                            </span>
+                          ) : (
+                            k.roomHandles.map((h) => (
+                              <span
+                                key={h}
+                                className="text-[9px] font-mono px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)]"
+                              >
+                                {h}
+                              </span>
+                            ))
+                          )}
+                        </div>
+                        {editKeyId === k.id ? (
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap gap-x-3 gap-y-1">
+                              {workspaces.map((ws) => (
+                                <label
+                                  key={`edit-${k.id}-${ws.id}`}
+                                  className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`Key ${k.id} agent ${ws.handle}`}
+                                    checked={editKeyRooms.has(ws.handle) || editKeyRooms.has(ws.id)}
+                                    onChange={(e) => {
+                                      setEditKeyRooms((prev) => {
+                                        const next = new Set(prev)
+                                        if (e.target.checked) next.add(ws.handle)
+                                        else {
+                                          next.delete(ws.handle)
+                                          next.delete(ws.id)
+                                        }
+                                        return next
+                                      })
+                                    }}
+                                  />
+                                  <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                                    {ws.handle}
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                className="text-[10px] text-[var(--color-accent)] cursor-pointer"
+                                onClick={() => void saveKeyRooms(k.id, [...editKeyRooms])}
+                              >
+                                Save rooms
+                              </button>
+                              <button
+                                type="button"
+                                className="text-[10px] text-[var(--color-text-muted)] cursor-pointer"
+                                onClick={() => setEditKeyId(null)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="text-[10px] text-[var(--color-accent)] cursor-pointer"
+                            onClick={() => {
+                              setEditKeyId(k.id)
+                              setEditKeyRooms(new Set(k.roomHandles))
+                            }}
+                          >
+                            Edit rooms
+                          </button>
+                        )}
                       </div>
                       <button
                         type="button"

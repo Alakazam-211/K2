@@ -821,8 +821,10 @@ async fn handle_one_request(
             // (valid hooks get teaching owner_only). GET twins for mutations 405.
             | "/cli/skin/users"
             | "/cli/skin/users/remove"
+            | "/cli/skin/users/rooms"
             | "/cli/skin-tokens"
             | "/cli/skin-tokens/revoke"
+            | "/cli/skin-tokens/rooms"
             | "/cli/skin/front-door"
             | "/cli/skin/hydra"
             // F2 host read-back (prd-v1-api-completion §4) — the in-session
@@ -1343,7 +1345,7 @@ async fn handle_one_request(
             {
                 match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
                 {
-                    Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => true,
+                    Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => Some(pass),
                     Some(_) => {
                         let _ = stream.read(&mut buf).await;
                         let r = crate::skin_routes::missing_cap_response(
@@ -1372,7 +1374,7 @@ async fn handle_one_request(
                     }
                 }
             } else if super::http::token_ok(&query, state.token.as_str()) {
-                false
+                None
             } else {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
@@ -3945,6 +3947,7 @@ async fn handle_one_request(
             } else {
                 None
             };
+            let mut bound_skin = None;
             let (auth_ok, scoped_principal, skin_author) = if skin_presented {
                 match skin_pass {
                     None => {
@@ -3963,7 +3966,9 @@ async fn handle_one_request(
                         if p == "/cli/thread/post"
                             && pass.has_cap(crate::skin_routes::THREAD_POST) =>
                     {
-                        (true, None, Some(pass.username.clone()))
+                        let name = pass.username.clone();
+                        bound_skin = Some(pass);
+                        (true, None, Some(name))
                     }
                     Some(_) if p == "/cli/thread/post" => {
                         let _ = stream.read(&mut buf).await;
@@ -4036,13 +4041,15 @@ async fn handle_one_request(
                     .unwrap_or_else(|| "owner".to_string())
             };
             let resp = tokio::task::spawn_blocking(move || {
-                crate::caller_workspace::with_request_principal(scoped_principal, || {
-                    crate::overlay_routes::dispatch_post_as(
-                        &p_owned,
-                        &params,
-                        &body_bytes,
-                        &session_author,
-                    )
+                crate::overlay_routes::with_request_skin(bound_skin, || {
+                    crate::caller_workspace::with_request_principal(scoped_principal, || {
+                        crate::overlay_routes::dispatch_post_as(
+                            &p_owned,
+                            &params,
+                            &body_bytes,
+                            &session_author,
+                        )
+                    })
                 })
             })
             .await
@@ -5038,6 +5045,29 @@ async fn handle_one_request(
         // roster. Mutations POST-only; GET twins 405.
         p if p.starts_with("/cli/skin") => {
             let r = match p {
+                "/cli/skin/agents" => {
+                    let _ = stream.read(&mut buf).await;
+                    let presented = super::http::extract_token(&query);
+                    if presented.is_some_and(k2_core::skin::is_skin_token) {
+                        match presented.and_then(k2_core::skin::resolve_skin_token) {
+                            Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => {
+                                tokio::task::spawn_blocking(move || {
+                                    crate::skin_routes::handle_agents_get(&pass)
+                                })
+                                .await
+                                .unwrap_or_else(|e| {
+                                    crate::cli_response::CliResponse::internal_error(e)
+                                })
+                            }
+                            Some(_) => crate::skin_routes::missing_cap_response(
+                                crate::skin_routes::THREAD_READ,
+                            ),
+                            None => crate::skin_routes::revoked_skin_response(),
+                        }
+                    } else {
+                        crate::skin_routes::skin_agents_forbidden()
+                    }
+                }
                 "/cli/skin/users" if is_post => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
@@ -5080,6 +5110,31 @@ async fn handle_one_request(
                                 crate::cli_response::CliResponse::internal_error(e)
                             })
                     }
+                }
+                "/cli/skin/users/rooms" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_users_rooms(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
                 "/cli/skin/users/remove" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
@@ -5148,6 +5203,31 @@ async fn handle_one_request(
                                 crate::cli_response::CliResponse::internal_error(e)
                             })
                     }
+                }
+                "/cli/skin-tokens/rooms" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_tokens_rooms(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
                 "/cli/skin-tokens/revoke" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
@@ -6367,10 +6447,14 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
+            let mut bound_skin = None;
             let (auth_ok, scoped_principal) = if skin_presented && p == "/cli/thread" {
                 match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
                 {
-                    Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => (true, None),
+                    Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => {
+                        bound_skin = Some(pass);
+                        (true, None)
+                    }
                     Some(_) => {
                         let r = crate::skin_routes::missing_cap_response(
                             crate::skin_routes::THREAD_READ,
@@ -6428,8 +6512,10 @@ async fn handle_one_request(
             }
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {
-                crate::caller_workspace::with_request_principal(scoped_principal, || {
-                    crate::cli::dispatch(&p_owned, &params)
+                crate::overlay_routes::with_request_skin(bound_skin, || {
+                    crate::caller_workspace::with_request_principal(scoped_principal, || {
+                        crate::cli::dispatch(&p_owned, &params)
+                    })
                 })
             })
             .await

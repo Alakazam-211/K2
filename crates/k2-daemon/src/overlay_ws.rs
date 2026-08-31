@@ -14,6 +14,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use k2_core::log_debug;
 use k2_core::overlay::OverlayDoc;
+use k2_core::skin::SkinPass;
 
 /// Wire path. Tests assert this is not `session_events`.
 pub const OVERLAY_WS_PATH: &str = "/cli/overlay/events";
@@ -69,13 +70,37 @@ pub fn skin_may_see_frame(frame: &OverlayFrame, conversation: &str, skin: bool) 
     }
 }
 
+fn skin_conversation_allowed(pass: &SkinPass, conversation: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Ok(Some(project_id)) =
+        k2_core::workspace_session_handles::project_id_for_session_id(&conn, conversation)
+    else {
+        return false;
+    };
+    if !pass.has_room(&project_id) {
+        return false;
+    }
+    let Ok(Some(session)) = k2_core::db::schema::WorkspaceSession::get(&conn, &project_id) else {
+        return false;
+    };
+    session
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some_and(|pin| pin == conversation)
+}
+
 /// WS handler. Dispatcher already token-authed. Requires `conversation=`.
-/// `skin` filters chatterlog frames (prd-skin-auth-v1 non-goal).
+/// Skin: pass `Some(SkinPass)` so rooms + pinned-Chat are checked **before**
+/// `accept_async`. Owner/Connect: `None`.
 pub async fn serve_overlay_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
-    skin: bool,
+    skin_pass: Option<SkinPass>,
 ) {
+    let skin = skin_pass.is_some();
     let conversation = params
         .get("conversation")
         .map(|s| s.trim().to_string())
@@ -89,6 +114,18 @@ pub async fn serve_overlay_events_connection(
         .await;
         return;
     };
+
+    if let Some(ref pass) = skin_pass {
+        if !skin_conversation_allowed(pass, &conversation) {
+            let body = crate::skin_routes::SKIN_ROOM_JSON;
+            let resp = format!(
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
+            return;
+        }
+    }
 
     let ws = match tokio_tungstenite::accept_async(&mut *stream).await {
         Ok(ws) => ws,

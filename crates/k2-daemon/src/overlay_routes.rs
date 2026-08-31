@@ -4,10 +4,12 @@
 //! GET mutations 405. Overlay is keyed by named conversation_id
 //! (handles / pinned Chat), never `v2_session_map`.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use k2_core::db::schema::WorkspaceSession;
 use k2_core::overlay::{self, CardCallback, OverlayPage};
+use k2_core::skin::SkinPass;
 use k2_core::workspace::agent_identity::resolve_project_id;
 
 use crate::cli::{bool_param, opt_param, str_param};
@@ -15,6 +17,24 @@ use crate::cli_response::CliResponse;
 use crate::overlay_ws::OverlayFrame;
 use crate::session_token::HookPrincipal;
 use crate::workspace_msg::{self, MsgTarget};
+
+thread_local! {
+    static REQUEST_SKIN: RefCell<Option<SkinPass>> = const { RefCell::new(None) };
+}
+
+/// Bind a skin pass for the duration of overlay GET/POST dispatch.
+pub fn with_request_skin<T>(pass: Option<SkinPass>, f: impl FnOnce() -> T) -> T {
+    REQUEST_SKIN.with(|slot| {
+        let prev = slot.replace(pass);
+        let out = f();
+        slot.replace(prev);
+        out
+    })
+}
+
+fn request_skin() -> Option<SkinPass> {
+    REQUEST_SKIN.with(|slot| slot.borrow().clone())
+}
 
 #[cfg(test)]
 static TEST_INJECTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
@@ -63,6 +83,93 @@ fn not_found(hint: impl std::fmt::Display) -> CliResponse {
 
 fn forbidden(hint: impl std::fmt::Display) -> CliResponse {
     error_json("403 Forbidden", "forbidden", hint)
+}
+
+fn skin_room_denied() -> CliResponse {
+    crate::skin_routes::skin_room_response()
+}
+
+fn pinned_chat_id(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> Result<Option<String>, CliResponse> {
+    let Some(session) = WorkspaceSession::get(conn, project_id)
+        .map_err(|e| error_json("500 Internal Server Error", "db", e))?
+    else {
+        return Ok(None);
+    };
+    Ok(session
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string))
+}
+
+/// Skin HTTP: resolve `addr` → project_id without requiring pinned Chat first
+/// (no existence oracle). In-rooms + no pin → today's 404. Sidecar / other
+/// UUID → `skin_room`. Do not use `canonical_alias`.
+fn resolve_skin_thread_addr(addr: &str, pass: &SkinPass) -> Result<ResolvedOverlay, CliResponse> {
+    let addr = addr.trim();
+    if addr.is_empty() {
+        return Err(usage("missing addr"));
+    }
+    if k2_core::workspace_session_handles::split_workspace_handle(addr).is_some() {
+        return Err(skin_room_denied());
+    }
+
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+
+    if k2_core::workspace_session_handles::is_uuid_shape(addr) {
+        let Some(project_id) =
+            k2_core::workspace_session_handles::project_id_for_session_id(&conn, addr)
+                .map_err(|e| error_json("500 Internal Server Error", "db", e))?
+        else {
+            return Err(skin_room_denied());
+        };
+        if !pass.has_room(&project_id) {
+            return Err(skin_room_denied());
+        }
+        let Some(pin) = pinned_chat_id(&conn, &project_id)? else {
+            return Err(skin_room_denied());
+        };
+        if pin != addr {
+            return Err(skin_room_denied());
+        }
+        return Ok(ResolvedOverlay {
+            conversation_id: pin,
+            project_id,
+            addr: addr.to_string(),
+            canonical_alias: true,
+        });
+    }
+
+    let project_id = match k2_core::skin::resolve_room_tokens(&[addr.to_string()]) {
+        Ok(ids) if ids.len() == 1 => ids.into_iter().next().unwrap(),
+        _ => return Err(skin_room_denied()),
+    };
+    if !pass.has_room(&project_id) {
+        return Err(skin_room_denied());
+    }
+    let Some(pin) = pinned_chat_id(&conn, &project_id)? else {
+        return Err(not_found(format!(
+            "no pinned Chat conversation for '{addr}'"
+        )));
+    };
+    Ok(ResolvedOverlay {
+        conversation_id: pin,
+        project_id,
+        addr: addr.to_string(),
+        canonical_alias: true,
+    })
+}
+
+fn resolve_thread_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
+    if let Some(pass) = request_skin() {
+        return resolve_skin_thread_addr(addr, &pass);
+    }
+    resolve_addr(addr)
 }
 
 fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
@@ -220,7 +327,7 @@ fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
     if addr.is_empty() {
         return usage("missing addr");
     }
-    let resolved = match resolve_addr(&addr) {
+    let resolved = match resolve_thread_addr(&addr) {
         Ok(r) => r,
         Err(e) => return e,
     };
@@ -300,12 +407,19 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     if text.is_empty() {
         return usage("missing text");
     }
-    let resolved = match resolve_addr(&addr) {
+    let via = opt_param(params, "via").unwrap_or_else(|| "thread".to_string());
+    if request_skin().is_some() && via == "compose" {
+        return error_json(
+            "403 Forbidden",
+            "forbidden",
+            "skin tokens cannot use via=compose",
+        );
+    }
+    let resolved = match resolve_thread_addr(&addr) {
         Ok(r) => r,
         Err(e) => return e,
     };
     let principal = crate::caller_workspace::principal_from_params(params);
-    let via = opt_param(params, "via").unwrap_or_else(|| "thread".to_string());
     let from = if via == "compose" {
         compose_from_for_session(session_author)
     } else {
@@ -1729,5 +1843,65 @@ mod tests {
         assert_eq!(items2.len(), 15, "{snap2}");
         assert_eq!(items2[0]["seq"], 1);
         assert_eq!(items2[14]["seq"], 15);
+    }
+
+    fn skin_pass(rooms: &[String]) -> k2_core::skin::SkinPass {
+        k2_core::skin::SkinPass {
+            id: "skin-pass".into(),
+            principal_id: "prin".into(),
+            username: "guest".into(),
+            caps: vec!["thread:read".into(), "thread:post".into()],
+            rooms: rooms.to_vec(),
+        }
+    }
+
+    #[test]
+    fn skin_thread_rooms_pinned_only() {
+        let handle = format!("ovlskin{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("ovloth{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let (other_id, _) = seed(&other);
+        let pin_id = uuid::Uuid::new_v4().to_string();
+        let side = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &pin_id);
+        pin(&other_id, &uuid::Uuid::new_v4().to_string());
+        sidecar(&project_id, &side, "reviewer");
+
+        let pass = skin_pass(&[project_id.clone()]);
+        let get = with_request_skin(Some(pass.clone()), || {
+            dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET")
+        });
+        assert_eq!(get.status, "200 OK", "{}", get.body);
+
+        let other_get = with_request_skin(Some(pass.clone()), || {
+            dispatch("/cli/thread", &params_of(&[("addr", other.as_str())])).expect("GET other")
+        });
+        assert_eq!(other_get.status, "403 Forbidden", "{}", other_get.body);
+        assert!(other_get.body.contains("skin_room"), "{}", other_get.body);
+
+        let sidecar_addr = format!("{handle}/reviewer");
+        let side_get = with_request_skin(Some(pass.clone()), || {
+            dispatch(
+                "/cli/thread",
+                &params_of(&[("addr", sidecar_addr.as_str())]),
+            )
+            .expect("GET sidecar")
+        });
+        assert_eq!(side_get.status, "403 Forbidden", "{}", side_get.body);
+
+        let compose = with_request_skin(Some(pass), || {
+            dispatch_post(
+                "/cli/thread/post",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": handle,
+                    "text": "nope",
+                    "via": "compose",
+                })
+                .to_string()
+                .as_bytes(),
+            )
+        });
+        assert_eq!(compose.status, "403 Forbidden", "{}", compose.body);
     }
 }

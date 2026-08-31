@@ -158,6 +158,53 @@ fn caps_from_json(raw: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
 }
 
+/// Missing/empty/unparseable rooms JSON → `[]` (deny all Thread).
+/// **Never** copy [`parse_caps`] (empty caps → both verbs).
+pub fn parse_rooms_json(raw: Option<&str>) -> Vec<String> {
+    let Some(s) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+    match serde_json::from_str::<Vec<serde_json::Value>>(s) {
+        Ok(v) => v
+            .into_iter()
+            .filter_map(|x| match x {
+                serde_json::Value::String(s) => {
+                    let t = s.trim().to_string();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t)
+                    }
+                }
+                _ => None,
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn rooms_json(rooms: &[String]) -> String {
+    serde_json::to_string(rooms).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn rooms_from_json(raw: &str) -> Vec<String> {
+    parse_rooms_json(Some(raw))
+}
+
+fn normalize_room_ids(rooms: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in rooms {
+        let t = raw.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if !out.iter().any(|x| x == t) {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
 /// Nested label reserved for U7 (`https://skin.<sub>.k2.dev`).
 pub const RESERVED_NESTED_LABEL: &str = "skin";
 
@@ -197,6 +244,10 @@ pub struct SkinPrincipal {
     pub id: String,
     pub username: String,
     pub created_at: i64,
+    #[serde(default)]
+    pub default_rooms: Vec<String>,
+    #[serde(default)]
+    pub default_room_handles: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,8 +258,22 @@ pub struct SkinTokenMeta {
     /// Display prefix (`k2skn_…ab12`). Never the secret.
     pub prefix: String,
     pub caps: Vec<String>,
+    /// Stored ACL: `projects.id` UUIDs.
+    #[serde(default)]
+    pub rooms: Vec<String>,
+    /// Display-only, resolved live from `projects.handle`. Skip missing.
+    #[serde(default)]
+    pub room_handles: Vec<String>,
     pub created_at: i64,
     pub revoked_at: Option<i64>,
+}
+
+/// One workspace a skin pass may Thread. Wire `{handle, projectId}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkinAgent {
+    pub handle: String,
+    pub project_id: String,
 }
 
 /// Resolved live pass. Safe to log `id` / `username` / `caps` — never a secret.
@@ -218,11 +283,24 @@ pub struct SkinPass {
     pub principal_id: String,
     pub username: String,
     pub caps: Vec<String>,
+    pub rooms: Vec<String>,
 }
 
 impl SkinPass {
     pub fn has_cap(&self, cap: &str) -> bool {
         self.caps.iter().any(|c| c == cap)
+    }
+
+    pub fn has_room(&self, project_id: &str) -> bool {
+        let id = project_id.trim();
+        if id.is_empty() {
+            return false;
+        }
+        self.rooms.iter().any(|r| r == id)
+    }
+
+    pub fn rooms_empty(&self) -> bool {
+        self.rooms.is_empty()
     }
 }
 
@@ -317,6 +395,14 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     )
     .map_err(|e| format!("skin.db schema: {e}"))?;
     let _ = conn.execute("ALTER TABLE front_door ADD COLUMN ui_port INTEGER", []);
+    let _ = conn.execute(
+        "ALTER TABLE tokens ADD COLUMN rooms TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE principals ADD COLUMN default_rooms TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -377,6 +463,8 @@ pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
             id,
             username,
             created_at,
+            default_rooms: Vec::new(),
+            default_room_handles: Vec::new(),
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -387,15 +475,19 @@ pub fn list_principals() -> Result<Vec<SkinPrincipal>, String> {
     with_conn(|conn| {
         let mut stmt = conn
             .prepare(
-                "SELECT id, username, created_at FROM principals ORDER BY username COLLATE NOCASE",
+                "SELECT id, username, created_at, default_rooms FROM principals ORDER BY username COLLATE NOCASE",
             )
             .map_err(|e| format!("skin principal list: {e}"))?;
         let rows = stmt
             .query_map([], |r| {
+                let rooms_raw: String = r.get(3)?;
+                let default_rooms = rooms_from_json(&rooms_raw);
                 Ok(SkinPrincipal {
                     id: r.get(0)?,
                     username: r.get(1)?,
                     created_at: r.get(2)?,
+                    default_room_handles: Vec::new(),
+                    default_rooms,
                 })
             })
             .map_err(|e| format!("skin principal list: {e}"))?;
@@ -404,6 +496,12 @@ pub fn list_principals() -> Result<Vec<SkinPrincipal>, String> {
             out.push(row.map_err(|e| format!("skin principal row: {e}"))?);
         }
         Ok(out)
+    })
+    .map(|mut users| {
+        for u in &mut users {
+            u.default_room_handles = handles_for_project_ids(&u.default_rooms);
+        }
+        users
     })
 }
 
@@ -439,13 +537,16 @@ fn principal_by_username(
     username: &str,
 ) -> Result<Option<SkinPrincipal>, String> {
     conn.query_row(
-        "SELECT id, username, created_at FROM principals WHERE username = ?1",
+        "SELECT id, username, created_at, default_rooms FROM principals WHERE username = ?1",
         params![username],
         |r| {
+            let rooms_raw: String = r.get(3)?;
             Ok(SkinPrincipal {
                 id: r.get(0)?,
                 username: r.get(1)?,
                 created_at: r.get(2)?,
+                default_rooms: rooms_from_json(&rooms_raw),
+                default_room_handles: Vec::new(),
             })
         },
     )
@@ -453,15 +554,31 @@ fn principal_by_username(
     .map_err(|e| format!("skin principal lookup: {e}"))
 }
 
+fn attach_principal_handles(mut p: SkinPrincipal) -> SkinPrincipal {
+    p.default_room_handles = handles_for_project_ids(&p.default_rooms);
+    p
+}
+
+fn attach_token_handles(mut meta: SkinTokenMeta) -> SkinTokenMeta {
+    meta.room_handles = handles_for_project_ids(&meta.rooms);
+    meta
+}
+
 // ── Tokens ───────────────────────────────────────────────────────────
 
 /// Mint a pass. Returns `(meta, raw_secret)` — the secret is shown once.
+/// `rooms` are already-canonical `project_id` UUIDs. Empty → error (R5).
 pub fn create_token(
     username: &str,
     caps: Option<&[String]>,
+    rooms: &[String],
 ) -> Result<(SkinTokenMeta, String), String> {
     let username = normalize_username(username)?;
     let caps = parse_caps(caps)?;
+    let rooms = normalize_room_ids(rooms);
+    if rooms.is_empty() {
+        return Err("rooms must include at least one workspace".to_string());
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let raw = generate_raw_key();
     debug_assert!(
@@ -472,14 +589,15 @@ pub fn create_token(
     let prefix = display_prefix(&raw);
     let created_at = now_secs();
     let caps_stored = caps_json(&caps);
+    let rooms_stored = rooms_json(&rooms);
     let r = with_conn(|conn| {
         let Some(principal) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
         conn.execute(
-            "INSERT INTO tokens (id, principal_id, key_hash, key_prefix, caps, created_at, revoked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
-            params![id, principal.id, key_hash, prefix, caps_stored, created_at],
+            "INSERT INTO tokens (id, principal_id, key_hash, key_prefix, caps, rooms, created_at, revoked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+            params![id, principal.id, key_hash, prefix, caps_stored, rooms_stored, created_at],
         )
         .map_err(|e| format!("skin token insert: {e}"))?;
         Ok((
@@ -488,6 +606,8 @@ pub fn create_token(
                 username: principal.username,
                 prefix,
                 caps,
+                rooms,
+                room_handles: Vec::new(),
                 created_at,
                 revoked_at: None,
             },
@@ -495,14 +615,14 @@ pub fn create_token(
         ))
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
-    Ok(r)
+    Ok((attach_token_handles(r.0), r.1))
 }
 
 pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
     with_conn(|conn| {
         let mut stmt = conn
             .prepare(
-                "SELECT t.id, p.username, t.key_prefix, t.caps, t.created_at, t.revoked_at
+                "SELECT t.id, p.username, t.key_prefix, t.caps, t.rooms, t.created_at, t.revoked_at
                  FROM tokens t
                  JOIN principals p ON p.id = t.principal_id
                  ORDER BY t.created_at DESC",
@@ -511,13 +631,16 @@ pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
         let rows = stmt
             .query_map([], |r| {
                 let caps_raw: String = r.get(3)?;
+                let rooms_raw: String = r.get(4)?;
                 Ok(SkinTokenMeta {
                     id: r.get(0)?,
                     username: r.get(1)?,
                     prefix: r.get(2)?,
                     caps: caps_from_json(&caps_raw),
-                    created_at: r.get(4)?,
-                    revoked_at: r.get(5)?,
+                    rooms: rooms_from_json(&rooms_raw),
+                    room_handles: Vec::new(),
+                    created_at: r.get(5)?,
+                    revoked_at: r.get(6)?,
                 })
             })
             .map_err(|e| format!("skin token list: {e}"))?;
@@ -526,6 +649,12 @@ pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
             out.push(row.map_err(|e| format!("skin token row: {e}"))?);
         }
         Ok(out)
+    })
+    .map(|mut tokens| {
+        for t in &mut tokens {
+            t.room_handles = handles_for_project_ids(&t.rooms);
+        }
+        tokens
     })
 }
 
@@ -550,6 +679,208 @@ pub fn revoke_token(id: &str) -> Result<bool, String> {
     Ok(r)
 }
 
+fn token_meta_from_row(conn: &Connection, id: &str) -> Result<Option<SkinTokenMeta>, String> {
+    conn.query_row(
+        "SELECT t.id, p.username, t.key_prefix, t.caps, t.rooms, t.created_at, t.revoked_at
+         FROM tokens t
+         JOIN principals p ON p.id = t.principal_id
+         WHERE t.id = ?1",
+        params![id],
+        |r| {
+            let caps_raw: String = r.get(3)?;
+            let rooms_raw: String = r.get(4)?;
+            Ok(SkinTokenMeta {
+                id: r.get(0)?,
+                username: r.get(1)?,
+                prefix: r.get(2)?,
+                caps: caps_from_json(&caps_raw),
+                rooms: rooms_from_json(&rooms_raw),
+                room_handles: Vec::new(),
+                created_at: r.get(5)?,
+                revoked_at: r.get(6)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("skin token lookup: {e}"))
+}
+
+/// PATCH rooms on a live (or revoked) key. Does **not** touch `key_hash`.
+/// Empty `rooms` is allowed (Thread dark, keep secret).
+pub fn set_token_rooms(id: &str, rooms: &[String]) -> Result<SkinTokenMeta, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("missing token id".to_string());
+    }
+    let rooms = normalize_room_ids(rooms);
+    let stored = rooms_json(&rooms);
+    with_conn(|conn| {
+        let n = conn
+            .execute(
+                "UPDATE tokens SET rooms = ?1 WHERE id = ?2",
+                params![stored, id],
+            )
+            .map_err(|e| format!("skin token rooms: {e}"))?;
+        if n == 0 {
+            return Err("unknown token id".to_string());
+        }
+        let Some(meta) = token_meta_from_row(conn, id)? else {
+            return Err("unknown token id".to_string());
+        };
+        Ok(meta)
+    })
+    .map(attach_token_handles)
+}
+
+/// Set principal mint template. `apply_tokens` copies onto **all live** keys.
+pub fn set_principal_default_rooms(
+    username: &str,
+    rooms: &[String],
+    apply_tokens: bool,
+) -> Result<SkinPrincipal, String> {
+    let username = normalize_username(username)?;
+    let rooms = normalize_room_ids(rooms);
+    let stored = rooms_json(&rooms);
+    with_conn(|conn| {
+        let Some(p) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        conn.execute(
+            "UPDATE principals SET default_rooms = ?1 WHERE id = ?2",
+            params![stored, p.id],
+        )
+        .map_err(|e| format!("skin user rooms: {e}"))?;
+        if apply_tokens {
+            conn.execute(
+                "UPDATE tokens SET rooms = ?1 WHERE principal_id = ?2 AND revoked_at IS NULL",
+                params![stored, p.id],
+            )
+            .map_err(|e| format!("skin apply-tokens: {e}"))?;
+        }
+        Ok(SkinPrincipal {
+            id: p.id,
+            username: p.username,
+            created_at: p.created_at,
+            default_rooms: rooms,
+            default_room_handles: Vec::new(),
+        })
+    })
+    .map(attach_principal_handles)
+}
+
+/// Handle + `project_handle_aliases` + project_id UUID only.
+/// Display-name / folder-basename fallback is **not** accepted.
+/// Unknown or ambiguous → error (400 at HTTP).
+pub fn resolve_room_tokens(tokens: &[String]) -> Result<Vec<String>, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut out: Vec<String> = Vec::new();
+    for raw in tokens {
+        let t = raw.trim();
+        if t.is_empty() {
+            continue;
+        }
+        match resolve_room_token(&conn, t)? {
+            Some(id) => {
+                if !out.iter().any(|x| x == &id) {
+                    out.push(id);
+                }
+            }
+            None => {
+                return Err(format!("unknown workspace handle {t:?}"));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn resolve_room_token(conn: &Connection, token: &str) -> Result<Option<String>, String> {
+    use crate::workspace_session_handles::is_uuid_shape;
+    if is_uuid_shape(token) {
+        let found: Option<String> = conn
+            .query_row(
+                "SELECT id FROM projects WHERE id = ?1",
+                params![token],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("room lookup: {e}"))?;
+        return Ok(found);
+    }
+
+    let mut handles: Vec<String> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM projects WHERE handle = ?1 COLLATE NOCASE \
+                 AND handle IS NOT NULL AND TRIM(handle) != ''",
+            )
+            .map_err(|e| format!("room handle lookup: {e}"))?;
+        let rows = stmt
+            .query_map(params![token], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("room handle lookup: {e}"))?;
+        for row in rows {
+            handles.push(row.map_err(|e| format!("room handle row: {e}"))?);
+        }
+    }
+    match handles.len() {
+        1 => return Ok(Some(handles.remove(0))),
+        n if n > 1 => {
+            return Err(format!("ambiguous workspace handle {token:?}"));
+        }
+        _ => {}
+    }
+
+    let mut aliases: Vec<String> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.project_id FROM project_handle_aliases a \
+                 WHERE a.alias = ?1 COLLATE NOCASE",
+            )
+            .map_err(|e| format!("room alias lookup: {e}"))?;
+        let rows = stmt
+            .query_map(params![token], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("room alias lookup: {e}"))?;
+        for row in rows {
+            aliases.push(row.map_err(|e| format!("room alias row: {e}"))?);
+        }
+    }
+    match aliases.len() {
+        1 => Ok(Some(aliases.remove(0))),
+        n if n > 1 => Err(format!("ambiguous workspace handle {token:?}")),
+        _ => Ok(None),
+    }
+}
+
+/// Live handles for stored room UUIDs. Missing/retired projects are skipped.
+pub fn handles_for_project_ids(ids: &[String]) -> Vec<String> {
+    live_agents(ids).into_iter().map(|a| a.handle).collect()
+}
+
+/// Allowed agents whose `project_id` still exists. Skip missing.
+pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut out = Vec::new();
+    for id in ids {
+        let id = id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        if let Ok(h) = crate::workspace::handle::project_handle(&conn, id) {
+            let h = h.trim().to_string();
+            if !h.is_empty() {
+                out.push(SkinAgent {
+                    handle: h,
+                    project_id: id.to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Resolve a presented raw key. Revoked / unknown / wrong prefix → `None`.
 pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
     if !is_skin_token(presented_raw) || is_api_key_prefix(presented_raw) {
@@ -559,18 +890,20 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
     with_conn(|conn| {
         let row = conn
             .query_row(
-                "SELECT t.id, t.principal_id, p.username, t.caps
+                "SELECT t.id, t.principal_id, p.username, t.caps, t.rooms
                  FROM tokens t
                  JOIN principals p ON p.id = t.principal_id
                  WHERE t.key_hash = ?1 AND t.revoked_at IS NULL",
                 params![key_hash],
                 |r| {
                     let caps_raw: String = r.get(3)?;
+                    let rooms_raw: String = r.get(4)?;
                     Ok(SkinPass {
                         id: r.get(0)?,
                         principal_id: r.get(1)?,
                         username: r.get(2)?,
                         caps: caps_from_json(&caps_raw),
+                        rooms: rooms_from_json(&rooms_raw),
                     })
                 },
             )
@@ -746,12 +1079,19 @@ mod tests {
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].username, "ada");
 
-            let (meta, raw) = create_token("ada", Some(&["thread:read".into()])).expect("mint");
+            let room = uuid::Uuid::new_v4().to_string();
+            let (meta, raw) = create_token(
+                "ada",
+                Some(&["thread:read".into()]),
+                std::slice::from_ref(&room),
+            )
+            .expect("mint");
             assert!(raw.starts_with(SKIN_KEY_PREFIX), "got {raw}");
             assert!(!raw.starts_with("k2sk_"), "never k2sk_: {raw}");
             assert_eq!(raw.len(), SKIN_KEY_PREFIX.len() + KEY_BODY_LEN);
             assert!(meta.prefix.starts_with("k2skn_…"), "{}", meta.prefix);
             assert_eq!(meta.caps, vec!["thread:read"]);
+            assert_eq!(meta.rooms, vec![room.clone()]);
             let tokens = list_tokens().expect("list tokens");
             assert_eq!(tokens.len(), 1);
             assert!(
@@ -764,6 +1104,9 @@ mod tests {
             assert_eq!(pass.username, "ada");
             assert!(pass.has_cap(CAP_THREAD_READ));
             assert!(!pass.has_cap(CAP_THREAD_POST));
+            assert!(pass.has_room(&room));
+            assert!(!pass.rooms_empty());
+            assert!(!pass.has_room("00000000-0000-0000-0000-000000000000"));
             assert!(resolve_skin_token("k2skn_not-a-real-key").is_none());
             assert!(resolve_skin_token("k2sk_pretend").is_none());
 
@@ -792,16 +1135,29 @@ mod tests {
     #[test]
     fn mint_requires_principal_and_rejects_unknown_caps() {
         with_temp_home(|| {
-            let err = create_token("ghost", None).unwrap_err();
+            let room = uuid::Uuid::new_v4().to_string();
+            let err = create_token("ghost", None, std::slice::from_ref(&room)).unwrap_err();
             assert!(err.contains("unknown skin user"), "{err}");
             add_principal("bob").unwrap();
-            let err = create_token("bob", Some(&["pty:write".into()])).unwrap_err();
+            let err = create_token(
+                "bob",
+                Some(&["pty:write".into()]),
+                std::slice::from_ref(&room),
+            )
+            .unwrap_err();
             assert!(err.contains("unknown capability"), "{err}");
             assert!(err.contains("pty:write"), "{err}");
-            let (_meta, raw) = create_token("bob", None).expect("default caps");
+            let err = create_token("bob", None, &[]).unwrap_err();
+            assert!(
+                err.contains("rooms must include at least one workspace"),
+                "{err}"
+            );
+            let (_meta, raw) =
+                create_token("bob", None, std::slice::from_ref(&room)).expect("default caps");
             let pass = resolve_skin_token(&raw).expect("resolve");
             assert!(pass.has_cap(CAP_THREAD_READ));
             assert!(pass.has_cap(CAP_THREAD_POST));
+            assert_eq!(pass.rooms, vec![room]);
         });
     }
 
@@ -809,7 +1165,8 @@ mod tests {
     fn remove_principal_drops_tokens() {
         with_temp_home(|| {
             add_principal("cara").unwrap();
-            let (_meta, raw) = create_token("cara", None).unwrap();
+            let room = uuid::Uuid::new_v4().to_string();
+            let (_meta, raw) = create_token("cara", None, std::slice::from_ref(&room)).unwrap();
             assert!(resolve_skin_token(&raw).is_some());
             assert!(remove_principal("cara").unwrap());
             assert!(resolve_skin_token(&raw).is_none());
@@ -841,6 +1198,83 @@ mod tests {
             assert_eq!(parse_front_door_mode("CONNECT").unwrap(), "connect");
             assert!(parse_front_door_mode("lan").is_err());
         });
+    }
+
+    #[test]
+    fn parse_rooms_json_empty_is_deny_not_all_agents() {
+        assert!(parse_rooms_json(None).is_empty());
+        assert!(parse_rooms_json(Some("")).is_empty());
+        assert!(parse_rooms_json(Some("[]")).is_empty());
+        assert!(parse_rooms_json(Some("not-json")).is_empty());
+        assert!(parse_rooms_json(Some("{}")).is_empty());
+        assert_eq!(
+            parse_rooms_json(Some(r#"["a"," ","b"]"#)),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        let empty_caps = parse_caps(None).expect("caps default");
+        assert_eq!(empty_caps.len(), 2, "empty caps still default both verbs");
+        assert!(
+            parse_rooms_json(None).is_empty(),
+            "rooms must not copy parse_caps default-all"
+        );
+    }
+
+    #[test]
+    fn set_token_rooms_does_not_touch_secret() {
+        with_temp_home(|| {
+            add_principal("ada").unwrap();
+            let a = uuid::Uuid::new_v4().to_string();
+            let b = uuid::Uuid::new_v4().to_string();
+            let (meta, raw) = create_token("ada", None, std::slice::from_ref(&a)).unwrap();
+            let updated = set_token_rooms(&meta.id, std::slice::from_ref(&b)).expect("patch");
+            assert_eq!(updated.rooms, vec![b.clone()]);
+            let pass = resolve_skin_token(&raw).expect("same secret");
+            assert_eq!(pass.rooms, vec![b]);
+            let cleared = set_token_rooms(&meta.id, &[]).expect("clear");
+            assert!(cleared.rooms.is_empty());
+            let dark = resolve_skin_token(&raw).expect("still live");
+            assert!(dark.rooms_empty());
+        });
+    }
+
+    #[test]
+    fn resolve_room_tokens_handle_alias_uuid_not_display_name() {
+        crate::db::init_for_tests();
+        let db = crate::db::shared();
+        let conn = db.lock();
+        use rusqlite::params;
+        let id = uuid::Uuid::new_v4().to_string();
+        let handle = format!("sales{}", &id[..8]);
+        let pretty = format!("Wallpaper {handle}");
+        let path = format!("/tmp/skin-room-{id}");
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+            params![id, pretty, path, handle],
+        )
+        .expect("project");
+        conn.execute(
+            "INSERT OR IGNORE INTO project_handle_aliases (project_id, alias) VALUES (?1, ?2)",
+            params![id, "old-sales-alias"],
+        )
+        .ok();
+        drop(conn);
+
+        assert_eq!(
+            resolve_room_tokens(&[handle.clone()]).expect("handle"),
+            vec![id.clone()]
+        );
+        assert_eq!(
+            resolve_room_tokens(&[id.clone()]).expect("uuid"),
+            vec![id.clone()]
+        );
+        assert_eq!(
+            resolve_room_tokens(&["old-sales-alias".into()]).expect("alias"),
+            vec![id.clone()]
+        );
+        let err = resolve_room_tokens(&[pretty]).unwrap_err();
+        assert!(err.contains("unknown workspace handle"), "{err}");
+        let err = resolve_room_tokens(&["not-a-handle".into()]).unwrap_err();
+        assert!(err.contains("unknown workspace handle"), "{err}");
     }
 
     #[test]

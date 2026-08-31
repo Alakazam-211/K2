@@ -225,6 +225,7 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     push_handle(out, "/cli/thread", daemon);
     push_handle(out, "/cli/thread/*", daemon);
     push_handle(out, "/cli/overlay/events*", daemon);
+    push_handle(out, "/cli/skin/agents", daemon);
     if let Some(ui) = ui_port {
         // Exact `/` plus SPA prefixes. Never `/*` — catch-all stays 403.
         // Grid / login / `/v1` are not in this matcher.
@@ -931,6 +932,7 @@ mod tests {
         let file = render_caddyfile(&spec(None, None));
         assert!(file.contains("/cli/thread"), "{file}");
         assert!(file.contains("/cli/overlay/events"), "{file}");
+        assert!(file.contains("/cli/skin/agents"), "{file}");
         assert!(file.contains("/boot-status"), "{file}");
         assert!(
             file.contains(PATH_FILTER_ERROR),

@@ -43,6 +43,43 @@ fn caps_field(v: &serde_json::Value) -> Option<Vec<String>> {
         })
 }
 
+fn rooms_field(v: &serde_json::Value) -> Option<Vec<String>> {
+    v.get("rooms")
+        .or_else(|| v.get("agents"))
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+}
+
+fn apply_tokens_field(v: &serde_json::Value) -> bool {
+    match v
+        .get("applyTokens")
+        .or_else(|| v.get("apply_tokens"))
+        .or_else(|| v.get("apply-tokens"))
+    {
+        None => false,
+        Some(x) if x.is_null() => false,
+        Some(x) => x.as_bool().unwrap_or(false),
+    }
+}
+
+fn resolve_rooms_or_400(raw: Option<Vec<String>>) -> Result<Vec<String>, CliResponse> {
+    let Some(list) = raw else {
+        return Err(CliResponse::bad_request(
+            "rooms must include at least one workspace",
+        ));
+    };
+    match skin::resolve_room_tokens(&list) {
+        Ok(ids) => Ok(ids),
+        Err(e) => Err(CliResponse::bad_request(e)),
+    }
+}
+
 fn apply_field(v: &serde_json::Value) -> bool {
     match v.get("apply").or_else(|| v.get("Apply")) {
         None => true,
@@ -138,13 +175,29 @@ pub fn handle_tokens_post(body: &[u8], actor: &str) -> CliResponse {
         return CliResponse::bad_request("missing username");
     };
     let caps = caps_field(&v);
-    match skin::create_token(username, caps.as_deref()) {
+    let rooms = match rooms_field(&v) {
+        None => {
+            return CliResponse::bad_request("rooms must include at least one workspace");
+        }
+        Some(list) if list.is_empty() => {
+            return CliResponse::bad_request("rooms must include at least one workspace");
+        }
+        Some(list) => match resolve_rooms_or_400(Some(list)) {
+            Ok(ids) if ids.is_empty() => {
+                return CliResponse::bad_request("rooms must include at least one workspace");
+            }
+            Ok(ids) => ids,
+            Err(e) => return e,
+        },
+    };
+    match skin::create_token(username, caps.as_deref(), &rooms) {
         Ok((meta, raw)) => {
             k2_core::log_debug!(
-                "[skin] actor={actor} minted token {} for {} caps={:?}",
+                "[skin] actor={actor} minted token {} for {} caps={:?} rooms={:?}",
                 meta.id,
                 meta.username,
-                meta.caps
+                meta.caps,
+                meta.rooms
             );
             CliResponse::ok_json(
                 serde_json::json!({
@@ -152,6 +205,8 @@ pub fn handle_tokens_post(body: &[u8], actor: &str) -> CliResponse {
                     "username": meta.username,
                     "prefix": meta.prefix,
                     "caps": meta.caps,
+                    "rooms": meta.rooms,
+                    "roomHandles": meta.room_handles,
                     "createdAt": meta.created_at,
                     "token": raw,
                 })
@@ -160,6 +215,68 @@ pub fn handle_tokens_post(body: &[u8], actor: &str) -> CliResponse {
         }
         Err(e) => CliResponse::bad_request(e),
     }
+}
+
+pub fn handle_tokens_rooms(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id", "tokenId", "token_id"]) else {
+        return CliResponse::bad_request("missing id");
+    };
+    let Some(list) = rooms_field(&v) else {
+        return CliResponse::bad_request("missing rooms");
+    };
+    let rooms = match resolve_rooms_or_400(Some(list)) {
+        Ok(ids) => ids,
+        Err(e) => return e,
+    };
+    match skin::set_token_rooms(id, &rooms) {
+        Ok(meta) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} token {} rooms={:?}",
+                meta.id,
+                meta.rooms
+            );
+            CliResponse::ok_json(serde_json::to_string(&meta).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_users_rooms(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = str_field(&v, &["username", "name"]) else {
+        return CliResponse::bad_request("missing username");
+    };
+    let Some(list) = rooms_field(&v) else {
+        return CliResponse::bad_request("missing rooms");
+    };
+    let rooms = match resolve_rooms_or_400(Some(list)) {
+        Ok(ids) => ids,
+        Err(e) => return e,
+    };
+    let apply = apply_tokens_field(&v);
+    match skin::set_principal_default_rooms(username, &rooms, apply) {
+        Ok(p) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} user {} default_rooms={:?} apply_tokens={apply}",
+                p.username,
+                p.default_rooms
+            );
+            CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_agents_get(pass: &skin::SkinPass) -> CliResponse {
+    let agents = skin::live_agents(&pass.rooms);
+    CliResponse::ok_json(serde_json::json!({ "agents": agents }).to_string())
 }
 
 pub fn handle_tokens_revoke(body: &[u8], actor: &str) -> CliResponse {
@@ -260,6 +377,33 @@ pub fn revoked_skin_response() -> CliResponse {
         status: "401 Unauthorized",
         content_type: "application/json",
         body: r#"{"error":"invalid or revoked skin token"}"#.to_string(),
+    }
+}
+
+pub const SKIN_ROOM_JSON: &str =
+    r#"{"ok":false,"error":{"code":"skin_room","hint":"this pass cannot use that agent"}}"#;
+
+pub fn skin_room_response() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: SKIN_ROOM_JSON.to_string(),
+    }
+}
+
+/// Owner/Connect/hook on `GET /cli/skin/agents` — that list is skin-token only.
+pub fn skin_agents_forbidden() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "skin_token",
+                "hint": "GET /cli/skin/agents is for a skin pass with thread:read",
+            },
+        })
+        .to_string(),
     }
 }
 

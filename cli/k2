@@ -5342,19 +5342,24 @@ sys.exit(1)
 _skin_usage() {
     cat >&2 <<'EOF'
 Usage: k2 skin <user|front-door|hydra> ...
-       k2 skin-token <create|list|revoke> ...
+       k2 skin-token <create|list|revoke|rooms> ...
 
   k2 skin user add <username>           Add a skin principal (not a Connect user)
   k2 skin user list                     Roster (no secrets)
   k2 skin user remove <username>        Drop principal + their passes
+  k2 skin user rooms <username> --agent sales [--apply-tokens]
+                                        Set default rooms (mint template)
   k2 skin front-door [connect|direct]   Show or persist+apply the Skin front door
   k2 skin hydra [on|off] [--json]       OIDC issuer sidecar (Linux; owner/admin)
-  k2 skin-token create <username> [--caps thread:read,thread:post]
-                                        Mint k2skn_ pass (secret once)
-  k2 skin-token list                    Live/revoked passes (prefix + caps)
+  k2 skin-token create <username> [--caps thread:read,thread:post] --agent sales
+                                        Mint k2skn_ pass (secret once; ≥1 --agent)
+  k2 skin-token list                    Live/revoked passes (prefix + caps + rooms)
+  k2 skin-token rooms <id> --agent sales
+  k2 skin-token rooms <id> --clear      Empty rooms (Thread dark, keep secret)
   k2 skin-token revoke <id>
 
 Caps: thread:read (GET /cli/thread + overlay WS), thread:post (POST /cli/thread/post).
+Rooms: workspace handles this guest may Thread. Empty = no Thread, not all agents.
 Grid/PTY is never a skin room.
 EOF
 }
@@ -5404,8 +5409,40 @@ import json,sys
 d=json.load(sys.stdin)
 print("Skin user removed." if d.get("success") else "No matching skin user.")'
                     ;;
+                rooms)
+                    local username="" apply_tokens=0 agents=()
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --agent|--agents) agents+=("${2:-}"); shift 2 ;;
+                            --apply-tokens|--applyTokens) apply_tokens=1; shift ;;
+                            --help|-h) echo "Usage: k2 skin user rooms <username> --agent sales [--apply-tokens]" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$username" ]] && username="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" ]] && { echo "Usage: k2 skin user rooms <username> --agent sales [--apply-tokens]" >&2; exit 1; }
+                    local agents_nl="" a
+                    for a in "${agents[@]}"; do
+                        agents_nl="${agents_nl}${a}"$'\n'
+                    done
+                    local body raw
+                    body=$(K2_SKIN_USER="$username" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_APPLY="$apply_tokens" python3 -c '
+import json,os
+b={"username": os.environ.get("K2_SKIN_USER","")}
+b["rooms"]=[s.strip() for s in os.environ.get("K2_SKIN_AGENTS","").splitlines() if s.strip()]
+if os.environ.get("K2_SKIN_APPLY","0") == "1":
+    b["applyTokens"]=True
+print(json.dumps(b))')
+                    raw=$(cli_post_json "/cli/skin/users/rooms" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+handles=d.get("defaultRoomHandles") or d.get("default_room_handles") or []
+print("Skin user %s default rooms: %s" % (d.get("username",""), ", ".join(handles) if handles else "(none)"))'
+                    ;;
                 *)
-                    echo "Usage: k2 skin user <add|list|remove>" >&2
+                    echo "Usage: k2 skin user <add|list|remove|rooms>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -5588,23 +5625,29 @@ cmd_skin_token() {
     shift || true
     case "$sub" in
         create)
-            local username="" caps=""
+            local username="" caps="" agents=()
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --caps|--cap) caps="${2:-}"; shift 2 ;;
-                    --help|-h) echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post]" >&2; exit 0 ;;
+                    --agent|--agents) agents+=("${2:-}"); shift 2 ;;
+                    --help|-h) echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post] --agent sales" >&2; exit 0 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                     *) [[ -z "$username" ]] && username="$1"; shift ;;
                 esac
             done
-            [[ -z "$username" ]] && { echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post]" >&2; exit 1; }
+            [[ -z "$username" ]] && { echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post] --agent sales" >&2; exit 1; }
+            local agents_nl="" a
+            for a in "${agents[@]}"; do
+                agents_nl="${agents_nl}${a}"$'\n'
+            done
             local body raw
-            body=$(K2_SKIN_USER="$username" K2_SKIN_CAPS="$caps" python3 -c '
+            body=$(K2_SKIN_USER="$username" K2_SKIN_CAPS="$caps" K2_SKIN_AGENTS="$agents_nl" python3 -c '
 import json,os
 b={"username": os.environ.get("K2_SKIN_USER","")}
 c=os.environ.get("K2_SKIN_CAPS","").strip()
 if c:
     b["caps"]=[s.strip() for s in c.split(",") if s.strip()]
+b["rooms"]=[s.strip() for s in os.environ.get("K2_SKIN_AGENTS","").splitlines() if s.strip()]
 print(json.dumps(b))')
             raw=$(cli_post_json "/cli/skin-tokens" "$body")
             printf '%s' "$raw" | _skin_die_if_err
@@ -5614,6 +5657,8 @@ d=json.load(sys.stdin)
 print("Skin token created (id: %s) for %s." % (d.get("id",""), d.get("username","")))
 caps=d.get("caps") or []
 print("Capabilities: %s" % (", ".join(caps) if caps else "(none)"))
+handles=d.get("roomHandles") or d.get("room_handles") or []
+print("Rooms: %s" % (", ".join(handles) if handles else "(none)"))
 print("")
 print("  %s" % d.get("token",""))
 print("")
@@ -5632,7 +5677,42 @@ if not tokens:
 for t in tokens:
     state="revoked" if t.get("revokedAt") else "active"
     caps=",".join(t.get("caps") or []) or "none"
-    print("%s  [%s]  %s  %s  caps=%s" % (t.get("id",""), state, t.get("username",""), t.get("prefix",""), caps))'
+    handles=t.get("roomHandles") or t.get("room_handles") or []
+    rooms=",".join(handles) if handles else "(none)"
+    print("%s  [%s]  %s  %s  caps=%s  rooms=%s" % (t.get("id",""), state, t.get("username",""), t.get("prefix",""), caps, rooms))'
+            ;;
+        rooms)
+            local id="" clear=0 agents=()
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --agent|--agents) agents+=("${2:-}"); shift 2 ;;
+                    --clear) clear=1; shift ;;
+                    --help|-h) echo "Usage: k2 skin-token rooms <id> --agent sales  |  --clear" >&2; exit 0 ;;
+                    -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                    *) [[ -z "$id" ]] && id="$1"; shift ;;
+                esac
+            done
+            [[ -z "$id" ]] && { echo "Usage: k2 skin-token rooms <id> --agent sales  |  --clear" >&2; exit 1; }
+            if [ "$clear" = 1 ]; then
+                agents=()
+            fi
+            local agents_nl="" a
+            for a in "${agents[@]}"; do
+                agents_nl="${agents_nl}${a}"$'\n'
+            done
+            local body raw
+            body=$(K2_SKIN_ID="$id" K2_SKIN_AGENTS="$agents_nl" python3 -c '
+import json,os
+b={"id": os.environ.get("K2_SKIN_ID","")}
+b["rooms"]=[s.strip() for s in os.environ.get("K2_SKIN_AGENTS","").splitlines() if s.strip()]
+print(json.dumps(b))')
+            raw=$(cli_post_json "/cli/skin-tokens/rooms" "$body")
+            printf '%s' "$raw" | _skin_die_if_err
+            printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+handles=d.get("roomHandles") or d.get("room_handles") or []
+print("Skin token %s rooms: %s" % (d.get("id",""), ", ".join(handles) if handles else "(none)"))'
             ;;
         revoke)
             local id="${1:-}"
@@ -5647,15 +5727,17 @@ d=json.load(sys.stdin)
 print("Skin token revoked." if d.get("success") else "No matching active token (unknown or already revoked).")'
             ;;
         --help|-h|"")
-            echo "Usage: k2 skin-token <create|list|revoke>" >&2
-            echo "  create <username> [--caps thread:read,thread:post]" >&2
+            echo "Usage: k2 skin-token <create|list|revoke|rooms>" >&2
+            echo "  create <username> [--caps thread:read,thread:post] --agent sales" >&2
             echo "  list" >&2
+            echo "  rooms <id> --agent sales" >&2
+            echo "  rooms <id> --clear" >&2
             echo "  revoke <id>" >&2
             [[ -z "$sub" ]] && exit 1
             exit 0
             ;;
         *)
-            echo "Usage: k2 skin-token <create|list|revoke>" >&2
+            echo "Usage: k2 skin-token <create|list|revoke|rooms>" >&2
             exit 1 ;;
     esac
 }

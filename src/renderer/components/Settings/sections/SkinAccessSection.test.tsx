@@ -35,7 +35,11 @@ const KEY_ROW = {
   prefix: 'k2skn_deadbeefab12',
   username: 'alice',
   caps: ['thread:read', 'thread:post'],
+  rooms: ['proj-sales'],
+  roomHandles: ['sales'],
 }
+const WS_SALES = { id: 'proj-sales', handle: 'sales', name: 'Sales' }
+const WS_SUPPORT = { id: 'proj-support', handle: 'support', name: 'Support' }
 
 const HYDRA_UNSUPPORTED = {
   supported: false,
@@ -63,6 +67,7 @@ function mockOk(): void {
     if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
     if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
     if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+    if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
     throw new Error(`unexpected GET ${route}`)
   })
   h.daemonCliPost.mockResolvedValue({ ok: true })
@@ -171,9 +176,16 @@ describe('parsers', () => {
 
   it('parseSkinUsers reads roster, never invents connect-users fields', () => {
     expect(parseSkinUsers({ users: [USER_ALICE] })).toEqual([
-      { username: 'alice', createdAt: '2026-08-01T00:00:00Z' },
+      {
+        username: 'alice',
+        createdAt: '2026-08-01T00:00:00Z',
+        defaultRooms: [],
+        defaultRoomHandles: [],
+      },
     ])
-    expect(parseSkinUsers([USER_BOB])).toEqual([{ username: 'bob', createdAt: null }])
+    expect(parseSkinUsers([USER_BOB])).toEqual([
+      { username: 'bob', createdAt: null, defaultRooms: [], defaultRoomHandles: [] },
+    ])
   })
 
   it('parseHydra reads supported/enabled/running and URLs', () => {
@@ -194,6 +206,8 @@ describe('parsers', () => {
       prefix: 'k2skn_deadbeefab12',
       username: 'alice',
       caps: ['thread:read', 'thread:post'],
+      rooms: ['proj-sales'],
+      roomHandles: ['sales'],
     })
     expect(mintSecretFrom({ secret: 'k2skn_once' })).toBe('k2skn_once')
     expect(mintSecretFrom({ id: 'tok-1' })).toBeNull()
@@ -234,6 +248,7 @@ describe('SkinAccessSection', () => {
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -277,6 +292,7 @@ describe('SkinAccessSection', () => {
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -293,6 +309,7 @@ describe('SkinAccessSection', () => {
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -309,6 +326,7 @@ describe('SkinAccessSection', () => {
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
@@ -355,6 +373,7 @@ describe('SkinAccessSection', () => {
     render(<SkinAccessSection />)
     await loaded()
     fireEvent.change(screen.getByLabelText('Mint key username'), { target: { value: 'alice' } })
+    fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
     await waitFor(() => {
       expect(screen.getByText('k2skn_ONCESECRET')).not.toBeNull()
@@ -362,6 +381,7 @@ describe('SkinAccessSection', () => {
     expect(h.daemonCliPost).toHaveBeenCalledWith('skin-tokens', {
       username: 'alice',
       caps: ['thread:read', 'thread:post'],
+      rooms: ['sales'],
     })
     expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
@@ -372,6 +392,7 @@ describe('SkinAccessSection', () => {
     render(<SkinAccessSection />)
     await loaded()
     fireEvent.change(screen.getByLabelText('Mint key username'), { target: { value: 'alice' } })
+    fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
     await waitFor(() => {
       expect(screen.getByRole('alert').textContent).toMatch(/mint returned no secret/)
@@ -421,6 +442,7 @@ describe('SkinAccessSection', () => {
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_SUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
       throw new Error(`unexpected GET ${route}`)
     })
     h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
@@ -438,5 +460,39 @@ describe('SkinAccessSection', () => {
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/hydra', { enabled: true, apply: true })
     })
+  })
+
+  it('banners live keys with empty rooms and dismiss does not POST rooms', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/front-door') {
+        return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
+      }
+      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin-tokens') {
+        return { tokens: [{ ...KEY_ROW, rooms: [], roomHandles: [] }] }
+      }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(screen.getByText(/Assign agents or these guests go dark/i)).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByText(/Assign agents or these guests go dark/i)).toBeNull()
+    expect(h.daemonCliPost.mock.calls.map((c) => String(c[0])).join(' ')).not.toMatch(/rooms/)
+  })
+
+  it('mints disabled until an agent is checked', async () => {
+    render(<SkinAccessSection />)
+    await loaded()
+    fireEvent.change(screen.getByLabelText('Mint key username'), { target: { value: 'alice' } })
+    expect((screen.getByRole('button', { name: 'Mint key' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+    fireEvent.click(screen.getByLabelText('Mint agent sales'))
+    expect((screen.getByRole('button', { name: 'Mint key' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    )
   })
 })

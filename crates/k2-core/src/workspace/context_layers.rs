@@ -2956,7 +2956,10 @@ mod tests {
             );
 
             crate::skin::add_principal("ghostbird").expect("add guest");
-            let (_meta, raw) = crate::skin::create_token("ghostbird", None).expect("mint");
+            let room = uuid::Uuid::new_v4().to_string();
+            let (_meta, raw) =
+                crate::skin::create_token("ghostbird", None, std::slice::from_ref(&room))
+                    .expect("mint");
             assert!(raw.starts_with("k2skn_"), "secret prefix");
 
             fs::remove_file(&abs).ok();

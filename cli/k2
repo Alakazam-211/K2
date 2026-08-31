@@ -5354,15 +5354,17 @@ Usage: k2 skin <user|front-door|hydra> ...
                                         Set default rooms (mint template)
   k2 skin front-door [connect|direct]   Show or persist+apply the Skin front door
   k2 skin hydra [on|off] [--json]       OIDC issuer sidecar (Linux; owner/admin)
-  k2 skin-token create <username> [--caps thread:read,thread:post] --agent sales
+  k2 skin-token create <username> [--caps thread:read,thread:post,files:read] --agent sales
                                         Mint k2skn_ pass (secret once; ≥1 --agent)
   k2 skin-token list                    Live/revoked passes (prefix + caps + rooms)
   k2 skin-token rooms <id> --agent sales
   k2 skin-token rooms <id> --clear      Empty rooms (Thread dark, keep secret)
   k2 skin-token revoke <id>
 
-Caps: thread:read (GET /cli/thread + overlay WS), thread:post (POST /cli/thread/post).
-Rooms: workspace handles this guest may Thread. Empty = no Thread, not all agents.
+Caps: thread:read (GET /cli/thread + overlay WS), thread:post (POST /cli/thread/post),
+files:read (GET /cli/fs/read-dir|read-file + WS /cli/fs/events), files:write (POST /cli/fs/write-file).
+Write-only does not grant list. Empty --caps stays Thread-only (never silent-add files).
+Rooms: workspace handles this guest may Thread / files. Empty = no Thread, not all agents.
 Grid/PTY is never a skin room.
 EOF
 }
@@ -5675,12 +5677,12 @@ cmd_skin_token() {
                 case "$1" in
                     --caps|--cap) caps="${2:-}"; shift 2 ;;
                     --agent|--agents) agents+=("${2:-}"); shift 2 ;;
-                    --help|-h) echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post] --agent sales" >&2; exit 0 ;;
+                    --help|-h) echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2; exit 0 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                     *) [[ -z "$username" ]] && username="$1"; shift ;;
                 esac
             done
-            [[ -z "$username" ]] && { echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post] --agent sales" >&2; exit 1; }
+            [[ -z "$username" ]] && { echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2; exit 1; }
             local agents_nl="" a
             for a in "${agents[@]}"; do
                 agents_nl="${agents_nl}${a}"$'\n'
@@ -5773,7 +5775,7 @@ print("Skin token revoked." if d.get("success") else "No matching active token (
             ;;
         --help|-h|"")
             echo "Usage: k2 skin-token <create|list|revoke|rooms>" >&2
-            echo "  create <username> [--caps thread:read,thread:post] --agent sales" >&2
+            echo "  create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2
             echo "  list" >&2
             echo "  rooms <id> --agent sales" >&2
             echo "  rooms <id> --clear" >&2
@@ -13218,16 +13220,16 @@ cmd_schema() {
     {
       "name": "skin-token",
       "usage": "k2 skin-token <create|list|revoke> ...",
-      "description": "Mint/list/revoke k2skn_ capability passes (thread:read / thread:post). Secret shown once.",
+      "description": "Mint/list/revoke k2skn_ capability passes (thread:read / thread:post / files:read / files:write). Secret shown once.",
       "args": [],
       "flags": []
     },
     {
       "name": "skin-token create",
-      "usage": "k2 skin-token create <username> [--caps thread:read,thread:post]",
-      "description": "Mint a k2skn_ pass for a skin principal. Raw secret printed once. Default caps: thread:read + thread:post.",
+      "usage": "k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write]",
+      "description": "Mint a k2skn_ pass for a skin principal. Raw secret printed once. Default caps: thread:read + thread:post (never silent-add files).",
       "args": [{"name": "username", "required": true}],
-      "flags": [{"name": "--caps", "arg": "list", "description": "Comma-separated rooms (thread:read, thread:post)."}]
+      "flags": [{"name": "--caps", "arg": "list", "description": "Comma-separated verbs (thread:read, thread:post, files:read, files:write)."}]
     },
     {
       "name": "skin-token list",
@@ -14232,7 +14234,7 @@ ROSTER
 
 NOT THIS PAGE
   No Caddyfile dump. No raw pass material. No login-provider runbook.
-  Caps today: thread:read, thread:post. Grid/PTY is never a skin room.
+  Caps today: thread:read, thread:post, files:read, files:write. Grid/PTY is never a skin room.
 
 OWNER VS AGENT
   List roster / list tokens: workspace agent ok (no secrets).

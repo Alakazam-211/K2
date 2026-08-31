@@ -1705,3 +1705,271 @@ fn mint_scoped_hook_for(workspace_uuid: &str) -> String {
         Provider::Anthropic,
     )
 }
+
+fn seed_files_workspace(handle: &str) -> (String, std::path::PathBuf) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = std::env::temp_dir().join(format!("k2-skin-fs-{handle}-{id}"));
+    std::fs::create_dir_all(&dir).expect("mkdir workspace");
+    std::fs::write(dir.join("README.md"), b"hello sales\n").expect("readme");
+    let path = dir
+        .canonicalize()
+        .unwrap_or(dir.clone())
+        .to_string_lossy()
+        .into_owned();
+    conn.execute(
+        "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+        params![id, handle, path],
+    )
+    .expect("seed files project");
+    (id, dir)
+}
+
+fn assert_missing_cap(r: &Resp, cap: &str) {
+    assert_eq!(r.status, 403, "missing cap status; {}", r.body);
+    assert_ne!(r.status, 200, "must not be 200; {}", r.body);
+    assert!(
+        r.body.contains(cap),
+        "403 body should name {cap}: {}",
+        r.body
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_files_http_ws_rooms_and_jail() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let sales = format!("sales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let julie = format!("julie{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_sales_id, sales_dir) = seed_files_workspace(&sales);
+        let (_julie_id, julie_dir) = seed_files_workspace(&julie);
+        add_user(port, "guest");
+
+        let (_id, thread_tok) = mint(port, "guest", &["thread:read"], &[&sales]);
+        let thread_dir = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={thread_tok}&workspace={sales}&path=."),
+            None,
+        );
+        assert_missing_cap(&thread_dir, "files:read");
+        assert!(
+            !thread_dir.body.contains("skin_room"),
+            "thread-only must be missing cap, not skin_room: {}",
+            thread_dir.body
+        );
+
+        let (_id, write_only) = mint(port, "guest", &["files:write"], &[&sales]);
+        let write_only_dir = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={write_only}&workspace={sales}&path=."),
+            None,
+        );
+        assert_missing_cap(&write_only_dir, "files:read");
+
+        let (_id, read_tok) = mint(port, "guest", &["files:read"], &[&sales]);
+        let ok = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={read_tok}&workspace={sales}&path=."),
+            None,
+        );
+        assert_eq!(ok.status, 200, "files:read sales; {}", ok.body);
+        let entries = json(&ok.body)
+            .as_array()
+            .unwrap_or_else(|| panic!("read-dir array; {}", ok.body))
+            .clone();
+        assert!(
+            entries.iter().any(|e| e["name"] == "README.md"),
+            "sales tree; {}",
+            ok.body
+        );
+        for e in &entries {
+            let p = e["path"].as_str().unwrap_or("");
+            assert!(
+                !p.starts_with('/'),
+                "skin read-dir paths must be workspace-relative, got {p}; {}",
+                ok.body
+            );
+        }
+
+        let other = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={read_tok}&workspace={julie}&path=."),
+            None,
+        );
+        assert_skin_room(&other);
+
+        let unknown = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={read_tok}&workspace=not-a-handle&path=."),
+            None,
+        );
+        assert_skin_room(&unknown);
+
+        let jail = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={read_tok}&workspace={sales}&path=../"),
+            None,
+        );
+        assert!(
+            jail.status == 400 || jail.status == 403,
+            "jail ../ status; {}",
+            jail.body
+        );
+        assert_ne!(jail.status, 200);
+
+        let abs = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-file?token={read_tok}&workspace={sales}&path=/etc/passwd"),
+            None,
+        );
+        assert!(
+            abs.status == 400 || abs.status == 403,
+            "jail abs; {}",
+            abs.body
+        );
+        assert!(!abs.body.contains("root:"), "must never leak /etc/passwd");
+
+        let readme = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-file?token={read_tok}&workspace={sales}&path=README.md"),
+            None,
+        );
+        assert_eq!(readme.status, 200, "{}", readme.body);
+        let rv = json(&readme.body);
+        assert!(
+            rv["content"].as_str().unwrap_or("").contains("hello sales"),
+            "{}",
+            readme.body
+        );
+
+        let no_write = http(
+            port,
+            "POST",
+            &format!("/cli/fs/write-file?token={read_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{sales}","path":"notes.md","content":"n"}}"#
+            )),
+        );
+        assert_missing_cap(&no_write, "files:write");
+
+        let (_id, rw_tok) = mint(port, "guest", &["files:read", "files:write"], &[&sales]);
+
+        let missing_ws = http(port, "GET", &format!("/cli/fs/events?token={rw_tok}"), None);
+        assert_eq!(
+            missing_ws.status, 400,
+            "missing workspace; {}",
+            missing_ws.body
+        );
+
+        let ws_wrong = http(
+            port,
+            "GET",
+            &format!("/cli/fs/events?workspace={julie}&token={rw_tok}"),
+            None,
+        );
+        assert_eq!(ws_wrong.status, 403, "wrong ws; {}", ws_wrong.body);
+        assert_ne!(ws_wrong.status, 101);
+        assert_skin_room(&ws_wrong);
+
+        futures_block(async {
+            let url =
+                format!("ws://127.0.0.1:{port}/cli/fs/events?workspace={sales}&token={rw_tok}");
+            let (mut ws, resp) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("allowed files WS must upgrade");
+            assert_eq!(resp.status(), 101, "upgrade; {resp:?}");
+            tokio::time::sleep(Duration::from_millis(80)).await;
+
+            let write_path = format!("/cli/fs/write-file?token={rw_tok}");
+            let write_body =
+                format!(r#"{{"workspace":"{sales}","path":"notes.md","content":"from-skin"}}"#);
+            let wrote = tokio::task::spawn_blocking(move || {
+                http(port, "POST", &write_path, Some(&write_body))
+            })
+            .await
+            .expect("write join");
+            assert_eq!(wrote.status, 200, "write; {}", wrote.body);
+            let notes = sales_dir.join("notes.md");
+            assert_eq!(
+                std::fs::read_to_string(&notes).expect("notes on disk"),
+                "from-skin"
+            );
+            assert!(
+                !julie_dir.join("notes.md").exists(),
+                "must not write julie's tree"
+            );
+
+            let frame = timeout(Duration::from_secs(3), ws.next())
+                .await
+                .expect("timed out waiting for fs_changed")
+                .expect("ws closed")
+                .expect("ws error");
+            let Message::Text(text) = frame else {
+                panic!("expected text frame, got {frame:?}");
+            };
+            let v: serde_json::Value =
+                serde_json::from_str(&text).unwrap_or_else(|e| panic!("json {e}: {text}"));
+            assert_eq!(v["kind"], "fs_changed", "{text}");
+            assert_eq!(v["workspace"], sales, "{text}");
+            let paths = v["paths"].as_array().expect("paths");
+            assert!(
+                paths.iter().any(|p| p.as_str() == Some("notes.md")),
+                "relative notes.md; {text}"
+            );
+            assert!(
+                !text.contains(julie_dir.to_string_lossy().as_ref()),
+                "must not leak julie path: {text}"
+            );
+        });
+
+        let owner_dir = http(
+            port,
+            "GET",
+            &format!(
+                "/cli/fs/read-dir?token={OWNER_TOKEN}&path={}",
+                sales_dir.to_string_lossy()
+            ),
+            None,
+        );
+        assert_eq!(
+            owner_dir.status, 200,
+            "owner read-dir without workspace=; {}",
+            owner_dir.body
+        );
+
+        let grid = http(
+            port,
+            "GET",
+            &format!("/cli/sessions/grid?token={rw_tok}&session=nope"),
+            None,
+        );
+        assert_eq!(grid.status, 403, "grid; {}", grid.body);
+        assert_eq!(grid.body.trim(), TERMINAL_403);
+
+        let events = http(
+            port,
+            "GET",
+            &format!("/cli/sessions/events?token={rw_tok}"),
+            None,
+        );
+        assert_eq!(events.status, 403, "sessions/events; {}", events.body);
+        assert_ne!(events.status, 101);
+
+        let info = http(port, "GET", &format!("/cli/fs/info?token={rw_tok}"), None);
+        assert_eq!(info.status, 403, "fs/info; {}", info.body);
+
+        let _ = std::fs::remove_dir_all(&sales_dir);
+        let _ = std::fs::remove_dir_all(&julie_dir);
+    });
+}

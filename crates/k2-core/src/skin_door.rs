@@ -228,6 +228,12 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     push_handle(out, "/cli/thread/*", daemon);
     push_handle(out, "/cli/overlay/events*", daemon);
     push_handle(out, "/cli/skin/agents", daemon);
+    // Files cut: exact matchers only. Never `/cli/fs/*` (would punch
+    // open-finder / upload / info through Direct).
+    push_handle(out, "/cli/fs/events*", daemon);
+    push_handle(out, "/cli/fs/read-dir*", daemon);
+    push_handle(out, "/cli/fs/read-file*", daemon);
+    push_handle(out, "/cli/fs/write-file*", daemon);
     if let Some(ui) = ui_port {
         // Exact `/` plus SPA prefixes. Never `/*` — catch-all stays 403.
         // Grid / login / `/v1` are not in this matcher.
@@ -933,6 +939,18 @@ mod tests {
         assert!(file.contains("/cli/thread"), "{file}");
         assert!(file.contains("/cli/overlay/events"), "{file}");
         assert!(file.contains("/cli/skin/agents"), "{file}");
+        assert!(file.contains("/cli/fs/events"), "{file}");
+        assert!(file.contains("/cli/fs/read-dir"), "{file}");
+        assert!(file.contains("/cli/fs/read-file"), "{file}");
+        assert!(file.contains("/cli/fs/write-file"), "{file}");
+        assert!(
+            !file.contains("handle /cli/fs/*"),
+            "must not glob all fs: {file}"
+        );
+        assert!(
+            !file.contains("/cli/fs/info"),
+            "info stays closed at the door: {file}"
+        );
         assert!(file.contains("/boot-status"), "{file}");
         assert!(!file.contains("handle /login\n") && !file.contains("handle /login {"), "{file}");
         assert!(file.contains("handle /cli/skin/login"), "{file}");

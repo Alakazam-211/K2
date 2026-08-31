@@ -7,7 +7,7 @@
 //! secret is returned once on create.
 
 use crate::cli_response::CliResponse;
-use k2_core::skin::{self, CAP_THREAD_POST, CAP_THREAD_READ};
+use k2_core::skin::{self, CAP_FILES_READ, CAP_FILES_WRITE, CAP_THREAD_POST, CAP_THREAD_READ};
 use k2_core::skin_door;
 
 fn json_body(body: &[u8]) -> Result<serde_json::Value, CliResponse> {
@@ -476,6 +476,8 @@ pub fn skin_host_forbidden(path: &str) -> Option<CliResponse> {
 
 pub const THREAD_READ: &str = CAP_THREAD_READ;
 pub const THREAD_POST: &str = CAP_THREAD_POST;
+pub const FILES_READ: &str = CAP_FILES_READ;
+pub const FILES_WRITE: &str = CAP_FILES_WRITE;
 
 /// Stable teaching response for a valid scoped agent passport on a
 /// skin owner surface (mint / remove / revoke / front-door). CLI maps

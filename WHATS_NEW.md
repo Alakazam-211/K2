@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.125 — Skin files read/write + live events
+
+A customer key can list, read, write, and watch **that agent's folder** when you mint `files:read` / `files:write` — same rooms as Thread. Missing files cap stays Thread-only. Empty rooms stay dark. Grid/PTY still never. Not host-wide `/cli/sessions/events`.
+
+---
+
 ## 0.40.124 — Skin agent rooms, study, store 403 names the DB
 
 **Skin Access keys name which agents may use Thread.** Empty list is no Thread, not every agent on the box. New mint requires `--agent`. Existing keys go dark on Thread until you assign rooms (same secret). Overlay WS 403s before upgrade if that conversation is not the allowed agent’s pinned Chat. Sidecar chats (`sales/reviewer`) stay 403. Grid still never.

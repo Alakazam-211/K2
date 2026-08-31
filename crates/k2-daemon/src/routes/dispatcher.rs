@@ -1395,6 +1395,61 @@ async fn handle_one_request(
             crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws).await;
             return DispatchOutcome::Done;
         }
+        p if p == crate::fs_events_ws::FS_EVENTS_WS_PATH => {
+            // Dedicated files WS. Never `/cli/sessions/events`. Skin: live
+            // `k2skn_` + files:read; rooms 403 before accept_async in the
+            // handler. Missing workspace= is 400 in the handler. Owner/Connect
+            // token_ok still requires workspace=.
+            let skin_ws = if super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token)
+            {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    Some(pass) if pass.has_cap(crate::skin_routes::FILES_READ) => Some(pass),
+                    Some(_) => {
+                        let _ = stream.read(&mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::FILES_READ,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {
+                        let _ = stream.read(&mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let params = super::http::parse_params(&path, &query);
+            crate::fs_events_ws::serve_fs_events_connection(stream, params, skin_ws).await;
+            return DispatchOutcome::Done;
+        }
         "/cli/sessions/events" => {
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let _ = stream.read(&mut buf).await;
@@ -3976,6 +4031,69 @@ async fn handle_one_request(
         // for these paths. Functionally equivalent to Unit 5/7a's
         // explicit 405s; the response code differs but no silent
         // mutation is possible either way.
+        p if is_post && post_allowed && p == "/cli/fs/write-file" => {
+            // Skin files write: dedicated arm before the host-wide `/cli/fs/`
+            // catch. Owner/Connect unchanged (no workspace= required).
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    None => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    Some(pass) if pass.has_cap(crate::skin_routes::FILES_WRITE) => Some(pass),
+                    Some(_) => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::FILES_WRITE,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::fs_routes::handle_write_file_gated(&body_bytes, skin_pass)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         p if is_post && post_allowed && (
             p.starts_with("/cli/fs/")
                 || p.starts_with("/cli/chat/")
@@ -6740,6 +6858,65 @@ async fn handle_one_request(
                 crate::caller_workspace::with_request_principal(scoped_principal, || {
                     crate::cli::dispatch(&p_owned, &params)
                 })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // Skin files GET — dedicated arms before the catchall. Do not fall
+        // through to host-wide `validate_path`. Owner/Connect unchanged
+        // (no `workspace=` required).
+        p if p == "/cli/fs/read-dir" || p == "/cli/fs/read-file" => {
+            let _ = stream.read(&mut buf).await;
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    Some(pass) if pass.has_cap(crate::skin_routes::FILES_READ) => Some(pass),
+                    Some(_) => {
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::FILES_READ,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            };
+            let params = super::http::parse_params(&path, &query);
+            let is_dir = p == "/cli/fs/read-dir";
+            let resp = tokio::task::spawn_blocking(move || {
+                if is_dir {
+                    crate::fs_routes::handle_read_dir_gated(&params, skin_pass)
+                } else {
+                    crate::fs_routes::handle_read_file_gated(&params, skin_pass)
+                }
             })
             .await
             .unwrap_or_else(|e| {

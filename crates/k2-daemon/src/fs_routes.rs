@@ -11,12 +11,14 @@
 //! anything larger.
 
 use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Deserialize;
 
 use crate::cli_response::CliResponse;
 use k2_core::fs_commands as fsc;
+use k2_core::skin::SkinPass;
 
 // ── GET handlers (query-string) ───────────────────────────────────────
 
@@ -129,9 +131,9 @@ pub fn handle_info(_params: &HashMap<String, String>) -> CliResponse {
 
 pub fn handle_clipboard_paths(_params: &HashMap<String, String>) -> CliResponse {
     match fsc::clipboard_read_file_paths() {
-        Ok(paths) => CliResponse::ok_json(
-            serde_json::to_string(&paths).unwrap_or_else(|_| "[]".to_string()),
-        ),
+        Ok(paths) => {
+            CliResponse::ok_json(serde_json::to_string(&paths).unwrap_or_else(|_| "[]".to_string()))
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -176,6 +178,299 @@ pub fn handle_write_file(body: &[u8]) -> CliResponse {
     match fsc::write_file(&parsed.path, &parsed.content) {
         Ok(()) => {
             crate::session_events::emit_fs_changed_for_paths([parsed.path]);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+// ── Skin jail (workspace-relative; never host-wide validate_path) ─────
+
+/// Resolved workspace for a skin/owner files request.
+pub struct SkinWorkspace {
+    #[allow(dead_code)]
+    pub project_id: String,
+    pub path: String,
+    pub handle: String,
+}
+
+/// Jail `rel` under `ws_root`. Relative only; reject empty, abs, `..`,
+/// symlink escape. `for_write` allows a not-yet-created leaf whose parent
+/// stays inside the root.
+pub fn jail_rel_path(ws_root: &str, rel: &str, for_write: bool) -> Result<PathBuf, String> {
+    let rel = rel.trim();
+    if rel.is_empty() {
+        return Err("empty path".to_string());
+    }
+    let p = Path::new(rel);
+    if p.is_absolute() {
+        return Err("path must be relative to the workspace".to_string());
+    }
+    if p.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    }) {
+        return Err("path must not contain '..'".to_string());
+    }
+    let root = Path::new(ws_root)
+        .canonicalize()
+        .map_err(|e| format!("workspace root unavailable: {e}"))?;
+    let target = root.join(p);
+    if for_write {
+        let parent = target
+            .parent()
+            .ok_or_else(|| "path has no parent directory".to_string())?;
+        if parent.exists() {
+            let parent = parent
+                .canonicalize()
+                .map_err(|e| format!("Invalid path: {e}"))?;
+            if !parent.starts_with(&root) {
+                return Err("path escapes the workspace".to_string());
+            }
+        } else if parent != root && !parent.starts_with(&root) {
+            return Err("path escapes the workspace".to_string());
+        }
+        Ok(target)
+    } else {
+        let canon = target
+            .canonicalize()
+            .map_err(|e| format!("Invalid path: {e}"))?;
+        if !canon.starts_with(&root) {
+            return Err("path escapes the workspace".to_string());
+        }
+        Ok(canon)
+    }
+}
+
+fn relative_under(root: &Path, abs: &str) -> String {
+    Path::new(abs)
+        .strip_prefix(root)
+        .map(|p| {
+            let s = p.to_string_lossy().replace('\\', "/");
+            if s.is_empty() {
+                ".".to_string()
+            } else {
+                s
+            }
+        })
+        .unwrap_or_else(|_| abs.replace('\\', "/"))
+}
+
+fn lookup_project(id: &str) -> Option<(String, String)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match k2_core::db::schema::Project::get(&conn, id) {
+        Ok(p) => {
+            let path = p.path.trim().to_string();
+            if path.is_empty() {
+                None
+            } else {
+                Some((path, p.handle.trim().to_string()))
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+/// Skin: unresolvable or not in rooms → 403 `skin_room` (no existence oracle).
+pub fn resolve_skin_workspace(pass: &SkinPass, token: &str) -> Result<SkinWorkspace, CliResponse> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(crate::skin_routes::skin_room_response());
+    }
+    let ids = match k2_core::skin::resolve_room_tokens(&[token.to_string()]) {
+        Ok(ids) if ids.len() == 1 => ids,
+        _ => return Err(crate::skin_routes::skin_room_response()),
+    };
+    let project_id = ids[0].clone();
+    if !pass.has_room(&project_id) {
+        return Err(crate::skin_routes::skin_room_response());
+    }
+    let Some((path, handle)) = lookup_project(&project_id) else {
+        return Err(crate::skin_routes::skin_room_response());
+    };
+    Ok(SkinWorkspace {
+        project_id,
+        path,
+        handle,
+    })
+}
+
+/// Owner/Connect files WS: unknown workspace is 400 (existence is fine).
+pub fn resolve_owner_workspace(token: &str) -> Result<SkinWorkspace, CliResponse> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(CliResponse::bad_request(
+            "missing workspace query parameter",
+        ));
+    }
+    let ids = match k2_core::skin::resolve_room_tokens(&[token.to_string()]) {
+        Ok(ids) if ids.len() == 1 => ids,
+        Ok(_) => return Err(CliResponse::bad_request("unknown workspace")),
+        Err(_) => return Err(CliResponse::bad_request("unknown workspace")),
+    };
+    let project_id = ids[0].clone();
+    let Some((path, handle)) = lookup_project(&project_id) else {
+        return Err(CliResponse::bad_request("unknown workspace"));
+    };
+    Ok(SkinWorkspace {
+        project_id,
+        path,
+        handle,
+    })
+}
+
+fn need_workspace(params: &HashMap<String, String>) -> Result<String, CliResponse> {
+    params
+        .get("workspace")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| CliResponse::bad_request("missing workspace query parameter"))
+}
+
+fn need_rel_path(params: &HashMap<String, String>) -> Result<String, CliResponse> {
+    params
+        .get("path")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| CliResponse::bad_request("Missing 'path' parameter"))
+}
+
+pub fn handle_read_dir_gated(
+    params: &HashMap<String, String>,
+    skin: Option<SkinPass>,
+) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_read_dir(params, &pass),
+        None => handle_read_dir(params),
+    }
+}
+
+pub fn handle_read_file_gated(
+    params: &HashMap<String, String>,
+    skin: Option<SkinPass>,
+) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_read_file(params, &pass),
+        None => handle_read_file(params),
+    }
+}
+
+pub fn handle_write_file_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_write_file(body, &pass),
+        None => handle_write_file(body),
+    }
+}
+
+fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let ws = match need_workspace(params) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let resolved = match resolve_skin_workspace(pass, &ws) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let rel = match need_rel_path(params) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let show_hidden = matches!(
+        params.get("show_hidden").map(|v| v.as_str()),
+        Some("1") | Some("true") | Some("on")
+    );
+    let abs = jailed.to_string_lossy().to_string();
+    match fsc::read_dir(&abs, show_hidden) {
+        Ok(mut entries) => {
+            let root = Path::new(&resolved.path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&resolved.path));
+            for e in &mut entries {
+                e.path = relative_under(&root, &e.path);
+            }
+            CliResponse::ok_json(
+                serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string()),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn handle_skin_read_file(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let ws = match need_workspace(params) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let resolved = match resolve_skin_workspace(pass, &ws) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let rel = match need_rel_path(params) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let abs = jailed.to_string_lossy().to_string();
+    match fsc::read_file(&abs) {
+        Ok(mut content) => {
+            content.path = rel.replace('\\', "/");
+            CliResponse::ok_json(
+                serde_json::to_string(&content).unwrap_or_else(|_| "{}".to_string()),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn handle_skin_write_file(body: &[u8], pass: &SkinPass) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let workspace = v
+        .get("workspace")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if workspace.is_empty() {
+        return CliResponse::bad_request("missing workspace");
+    }
+    let rel = v
+        .get("path")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if rel.is_empty() {
+        return CliResponse::bad_request("Missing 'path' parameter");
+    }
+    let content = match v.get("content").and_then(|x| x.as_str()) {
+        Some(s) => s.to_string(),
+        None => return CliResponse::bad_request("Missing 'content' parameter"),
+    };
+    let resolved = match resolve_skin_workspace(pass, &workspace) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let jailed = match jail_rel_path(&resolved.path, &rel, true) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let abs = jailed.to_string_lossy().to_string();
+    match fsc::write_file(&abs, &content) {
+        Ok(()) => {
+            crate::session_events::emit_fs_changed_for_paths([abs]);
             CliResponse::ok_json(r#"{"success":true}"#.to_string())
         }
         Err(e) => CliResponse::bad_request(e),
@@ -253,10 +548,7 @@ pub fn handle_rename(body: &[u8]) -> CliResponse {
     };
     match fsc::rename(&parsed.old_path, &parsed.new_name) {
         Ok(new_path) => {
-            crate::session_events::emit_fs_changed_for_paths([
-                parsed.old_path,
-                new_path.clone(),
-            ]);
+            crate::session_events::emit_fs_changed_for_paths([parsed.old_path, new_path.clone()]);
             CliResponse::ok_json(serde_json::json!({ "path": new_path }).to_string())
         }
         Err(e) => CliResponse::bad_request(e),
@@ -312,12 +604,8 @@ pub fn handle_upload_binary(body: &[u8]) -> CliResponse {
     };
     match fsc::write_upload(&parsed.dir, &parsed.filename, &bytes) {
         Ok(path) => {
-            crate::session_events::emit_fs_changed_for_paths([
-                path.to_string_lossy().to_string(),
-            ]);
-            CliResponse::ok_json(
-                serde_json::json!({ "path": path.to_string_lossy() }).to_string(),
-            )
+            crate::session_events::emit_fs_changed_for_paths([path.to_string_lossy().to_string()]);
+            CliResponse::ok_json(serde_json::json!({ "path": path.to_string_lossy() }).to_string())
         }
         Err(e) => CliResponse::bad_request(e),
     }
@@ -369,9 +657,7 @@ pub fn handle_upload_chunk(body: &[u8]) -> CliResponse {
     ) {
         Ok(Some(path)) => {
             // Final chunk only — intermediate appends are not user-visible.
-            crate::session_events::emit_fs_changed_for_paths([
-                path.to_string_lossy().to_string(),
-            ]);
+            crate::session_events::emit_fs_changed_for_paths([path.to_string_lossy().to_string()]);
             CliResponse::ok_json(
                 serde_json::json!({ "path": path.to_string_lossy(), "done": true }).to_string(),
             )
@@ -522,9 +808,7 @@ pub fn handle_compress(body: &[u8]) -> CliResponse {
                 crate::session_events::emit_fs_changed_for_paths([src, zip]);
             }
             Err(e) => {
-                k2_core::log_debug!(
-                    "[daemon] fs/compress — job {worker_job_id} FAILED: {e}"
-                );
+                k2_core::log_debug!("[daemon] fs/compress — job {worker_job_id} FAILED: {e}");
                 update_compress_job(&worker_job_id, |j| {
                     j.phase = "failed";
                     j.error = Some(e);
@@ -543,9 +827,9 @@ pub fn handle_compress_status(params: &HashMap<String, String>) -> CliResponse {
         _ => return CliResponse::bad_request("Missing 'job_id' parameter"),
     };
     match get_compress_job(job_id) {
-        Some(job) => CliResponse::ok_json(
-            serde_json::to_string(&job).unwrap_or_else(|_| "{}".to_string()),
-        ),
+        Some(job) => {
+            CliResponse::ok_json(serde_json::to_string(&job).unwrap_or_else(|_| "{}".to_string()))
+        }
         None => CliResponse::bad_request(format!("unknown job_id: {job_id}")),
     }
 }
@@ -586,9 +870,8 @@ pub fn handle_zip_list(params: &HashMap<String, String>) -> CliResponse {
     };
     match k2_core::fs_extract::list_zip_entries(&path) {
         Ok(result) => CliResponse::ok_json(
-            serde_json::to_string(&result).unwrap_or_else(|_| {
-                r#"{"entries":[],"truncated":false}"#.to_string()
-            }),
+            serde_json::to_string(&result)
+                .unwrap_or_else(|_| r#"{"entries":[],"truncated":false}"#.to_string()),
         ),
         Err(e) => CliResponse::bad_request(e),
     }
@@ -722,9 +1005,7 @@ pub fn handle_extract(body: &[u8]) -> CliResponse {
                 j.dest_path = Some(path.to_string_lossy().to_string());
             }),
             Err(e) => {
-                k2_core::log_debug!(
-                    "[daemon] fs/extract — job {worker_job_id} FAILED: {e}"
-                );
+                k2_core::log_debug!("[daemon] fs/extract — job {worker_job_id} FAILED: {e}");
                 update_extract_job(&worker_job_id, |j| {
                     j.phase = "failed";
                     j.error = Some(e);
@@ -743,9 +1024,9 @@ pub fn handle_extract_status(params: &HashMap<String, String>) -> CliResponse {
         _ => return CliResponse::bad_request("Missing 'job_id' parameter"),
     };
     match get_extract_job(job_id) {
-        Some(job) => CliResponse::ok_json(
-            serde_json::to_string(&job).unwrap_or_else(|_| "{}".to_string()),
-        ),
+        Some(job) => {
+            CliResponse::ok_json(serde_json::to_string(&job).unwrap_or_else(|_| "{}".to_string()))
+        }
         None => CliResponse::bad_request(format!("unknown job_id: {job_id}")),
     }
 }
@@ -851,9 +1132,9 @@ pub fn handle_open_external(body: &[u8]) -> CliResponse {
     }
 
     match fsc::open_external(&parsed.target) {
-        Ok(msg) => CliResponse::ok_json(
-            serde_json::json!({ "success": true, "message": msg }).to_string(),
-        ),
+        Ok(msg) => {
+            CliResponse::ok_json(serde_json::json!({ "success": true, "message": msg }).to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -896,19 +1177,16 @@ mod tests {
 
             // The subscriber received the event (drain past contamination
             // from other tests on the global bus).
-            let deadline =
-                std::time::Instant::now() + std::time::Duration::from_millis(500);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
             loop {
-                let remaining =
-                    deadline.saturating_duration_since(std::time::Instant::now());
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 if remaining.is_zero() {
                     panic!("did not receive probe open_url in time");
                 }
                 match tokio::time::timeout(remaining, rx.recv()).await {
-                    Ok(Ok(crate::session_events::SessionEvent::OpenUrl {
-                        url,
-                        source,
-                    })) if url == probe => {
+                    Ok(Ok(crate::session_events::SessionEvent::OpenUrl { url, source }))
+                        if url == probe =>
+                    {
                         assert_eq!(source, "terminal-link");
                         break;
                     }
@@ -975,9 +1253,16 @@ mod tests {
                 _ => break j,
             }
         };
-        assert_eq!(final_status["phase"].as_str(), Some("done"), "{final_status}");
+        assert_eq!(
+            final_status["phase"].as_str(),
+            Some("done"),
+            "{final_status}"
+        );
         let zip_path = final_status["zip_path"].as_str().expect("zip_path");
-        assert!(std::path::Path::new(zip_path).exists(), "zip missing: {zip_path}");
+        assert!(
+            std::path::Path::new(zip_path).exists(),
+            "zip missing: {zip_path}"
+        );
         assert!(zip_path.ends_with(".zip"), "got: {zip_path}");
 
         let _ = std::fs::remove_dir_all(&src);
@@ -1067,7 +1352,11 @@ mod tests {
                 _ => break j,
             }
         };
-        assert_eq!(final_status["phase"].as_str(), Some("done"), "{final_status}");
+        assert_eq!(
+            final_status["phase"].as_str(),
+            Some("done"),
+            "{final_status}"
+        );
         let dest_path = final_status["dest_path"].as_str().expect("dest_path");
         assert!(
             std::path::Path::new(dest_path).is_dir(),
@@ -1075,10 +1364,9 @@ mod tests {
         );
         // compress stores parent-relative entries (`bundle/hello.txt`), so
         // extract reproduces that layout under the sibling dest.
-        let content = std::fs::read_to_string(
-            std::path::Path::new(dest_path).join("bundle/hello.txt"),
-        )
-        .expect("bundle/hello.txt");
+        let content =
+            std::fs::read_to_string(std::path::Path::new(dest_path).join("bundle/hello.txt"))
+                .expect("bundle/hello.txt");
         assert_eq!(content, "world");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1103,10 +1391,7 @@ mod tests {
         )
         .expect("compress fixture");
 
-        let params = HashMap::from([(
-            "path".to_string(),
-            zip_path.to_string_lossy().to_string(),
-        )]);
+        let params = HashMap::from([("path".to_string(), zip_path.to_string_lossy().to_string())]);
         let resp = handle_zip_list(&params);
         assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
@@ -1171,5 +1456,36 @@ mod tests {
             "home must be a string, got {:?}",
             v["home"],
         );
+    }
+
+    fn jail_temp_root() -> (PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-skin-fs-jail-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("README.md"), b"hi").expect("readme");
+        let s = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+        (dir, s)
+    }
+
+    #[test]
+    fn skin_jail_rejects_dotdot_abs_and_empty() {
+        let (keep, root_s) = jail_temp_root();
+        let ok = jail_rel_path(&root_s, ".", false).expect("dot");
+        assert!(ok.starts_with(&root_s), "{ok:?}");
+        let file = jail_rel_path(&root_s, "README.md", false).expect("file");
+        assert!(file.ends_with("README.md"), "{file:?}");
+        assert!(jail_rel_path(&root_s, "", false).is_err());
+        assert!(jail_rel_path(&root_s, "/etc/passwd", false).is_err());
+        assert!(jail_rel_path(&root_s, "../", false).is_err());
+        assert!(jail_rel_path(&root_s, "../outside", false).is_err());
+        assert!(jail_rel_path(&root_s, "a/../../outside", false).is_err());
+        assert!(jail_rel_path(&root_s, "notes.md", true).is_ok());
+        let _ = std::fs::remove_dir_all(keep);
     }
 }

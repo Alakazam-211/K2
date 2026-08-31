@@ -51,7 +51,17 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
     section: 'skin-access',
     label: 'Keys',
     description: 'Mint k2skn_ capability passes with scopes / rooms; secret shown once',
-    keywords: ['skin token', 'k2skn', 'scopes', 'caps', 'thread', 'overlay', 'revoke', 'mint'],
+    keywords: [
+      'skin token',
+      'k2skn',
+      'scopes',
+      'caps',
+      'thread',
+      'overlay',
+      'files',
+      'revoke',
+      'mint',
+    ],
     group: 'Keys',
   },
   {
@@ -65,6 +75,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
 ]
 
 export const DEFAULT_SKIN_CAPS = ['thread:read', 'thread:post'] as const
+export const SKIN_FILE_CAPS = ['files:read', 'files:write'] as const
+export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS] as const
 
 export type FrontDoorMode = 'connect' | 'direct'
 
@@ -1030,7 +1042,10 @@ export function SkinAccessSection(): React.JSX.Element {
               Each live key shows scopes / rooms. The raw secret is shown only once when minted.
               Prefix <code className="text-[10px]">k2skn_</code> — not{' '}
               <code className="text-[10px]">k2sk_</code> API keys.{' '}
-              <code className="text-[10px]">thread:read</code> includes overlay WS.
+              <code className="text-[10px]">thread:read</code> includes overlay WS.{' '}
+              <code className="text-[10px]">files:read</code> lists/reads that agent's folder
+              and <code className="text-[10px]">/cli/fs/events</code>. Write-only does not
+              grant list.
             </p>
             <div className="space-y-2">
               <input
@@ -1044,13 +1059,14 @@ export function SkinAccessSection(): React.JSX.Element {
                 aria-label="Mint key username"
               />
               <div className="flex flex-wrap gap-x-4 gap-y-1">
-                {DEFAULT_SKIN_CAPS.map((cap) => (
+                {SKIN_CAP_CHOICES.map((cap) => (
                   <label
                     key={cap}
                     className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                   >
                     <input
                       type="checkbox"
+                      aria-label={`Mint cap ${cap}`}
                       checked={mintCaps.has(cap)}
                       onChange={(e) => {
                         setMintCaps((prev) => {

@@ -11,7 +11,8 @@
 //! hex SHA-256 of the presented key (same construction as API keys /
 //! connect-user session tokens — high-entropy CSPRNG, not argon2).
 //!
-//! Caps in v1: `thread:read`, `thread:post`. Never `pty:*`.
+//! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`.
+//! Empty/missing caps stay Thread-only — never silent-add files. Never `pty:*`.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -31,11 +32,26 @@ pub const SKIN_KEY_PREFIX: &str = "k2skn_";
 pub const CAP_THREAD_READ: &str = "thread:read";
 /// Overlay Thread post (`POST /cli/thread/post`).
 pub const CAP_THREAD_POST: &str = "thread:post";
+/// Workspace files read (GET `/cli/fs/read-dir`, `/cli/fs/read-file`, WS `/cli/fs/events`).
+pub const CAP_FILES_READ: &str = "files:read";
+/// Workspace files write (`POST /cli/fs/write-file`). Does not imply read.
+pub const CAP_FILES_WRITE: &str = "files:write";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
+/// Empty/missing `--caps` stay Thread-only. Never silent-add files.
 const DEFAULT_CAPS: &[&str] = &[CAP_THREAD_READ, CAP_THREAD_POST];
+const ACCEPTED_CAPS: &[&str] = &[
+    CAP_THREAD_READ,
+    CAP_THREAD_POST,
+    CAP_FILES_READ,
+    CAP_FILES_WRITE,
+];
+
+fn accepted_caps_csv() -> String {
+    ACCEPTED_CAPS.join(", ")
+}
 
 /// Copy of Connect: 3 consecutive failures → 15-minute per-username lockout.
 /// Dummy argon2 + the 500 ms 401 delay is **not** lockout.
@@ -120,8 +136,9 @@ pub fn normalize_username(raw: &str) -> Result<String, String> {
     Ok(lowered)
 }
 
-/// Parse + validate cap names. Empty/missing → default Thread read+post.
-/// Unknown names fail loud.
+/// Parse + validate cap names. Empty/missing → default Thread read+post
+/// (never silent-add `files:*`). Unknown names fail loud. Write-only is
+/// accepted at mint; list/read still require `files:read` listed.
 pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     match raw {
@@ -136,22 +153,21 @@ pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
                 if t.is_empty() {
                     continue;
                 }
-                match t {
-                    CAP_THREAD_READ | CAP_THREAD_POST => {
-                        if !out.iter().any(|c| c == t) {
-                            out.push(t.to_string());
-                        }
+                if ACCEPTED_CAPS.contains(&t) {
+                    if !out.iter().any(|c| c == t) {
+                        out.push(t.to_string());
                     }
-                    other => {
-                        return Err(format!(
-                            "unknown capability {other:?}; accepted: {CAP_THREAD_READ}, {CAP_THREAD_POST}"
-                        ));
-                    }
+                } else {
+                    return Err(format!(
+                        "unknown capability {t:?}; accepted: {}",
+                        accepted_caps_csv()
+                    ));
                 }
             }
             if out.is_empty() {
                 return Err(format!(
-                    "caps must include at least one of {CAP_THREAD_READ}, {CAP_THREAD_POST}"
+                    "caps must include at least one of {}",
+                    accepted_caps_csv()
                 ));
             }
         }
@@ -1456,6 +1472,44 @@ mod tests {
     }
 
     #[test]
+    fn parse_caps_accepts_files_verbs_never_silent_add() {
+        let empty = parse_caps(None).expect("empty default");
+        assert_eq!(empty, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+        assert!(
+            !empty
+                .iter()
+                .any(|c| c == CAP_FILES_READ || c == CAP_FILES_WRITE),
+            "empty caps must stay Thread-only, never silent-add files: {empty:?}"
+        );
+        let missing = parse_caps(Some(&[])).expect("missing default");
+        assert_eq!(missing, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+        assert!(
+            !missing
+                .iter()
+                .any(|c| c == CAP_FILES_READ || c == CAP_FILES_WRITE),
+            "missing caps must stay Thread-only: {missing:?}"
+        );
+
+        let read = parse_caps(Some(&["files:read".into()])).expect("files:read");
+        assert_eq!(read, vec![CAP_FILES_READ]);
+        let write = parse_caps(Some(&["files:write".into()])).expect("files:write");
+        assert_eq!(write, vec![CAP_FILES_WRITE]);
+        let both = parse_caps(Some(&[
+            "files:read".into(),
+            "files:write".into(),
+            "thread:read".into(),
+        ]))
+        .expect("mixed");
+        assert_eq!(both, vec![CAP_FILES_READ, CAP_FILES_WRITE, CAP_THREAD_READ]);
+
+        let err = parse_caps(Some(&["files:sales".into()])).unwrap_err();
+        assert!(err.contains("unknown capability"), "{err}");
+        assert!(err.contains("files:sales"), "{err}");
+        let err = parse_caps(Some(&["pty:write".into()])).unwrap_err();
+        assert!(err.contains("pty:write"), "{err}");
+    }
+
+    #[test]
     fn mint_requires_principal_and_rejects_unknown_caps() {
         with_temp_home(|| {
             let room = uuid::Uuid::new_v4().to_string();
@@ -1480,7 +1534,21 @@ mod tests {
             let pass = resolve_skin_token(&raw).expect("resolve");
             assert!(pass.has_cap(CAP_THREAD_READ));
             assert!(pass.has_cap(CAP_THREAD_POST));
-            assert_eq!(pass.rooms, vec![room]);
+            assert!(!pass.has_cap(CAP_FILES_READ));
+            assert!(!pass.has_cap(CAP_FILES_WRITE));
+            assert_eq!(pass.rooms, vec![room.clone()]);
+
+            let (meta, raw) = create_token(
+                "bob",
+                Some(&["files:read".into(), "files:write".into()]),
+                std::slice::from_ref(&room),
+            )
+            .expect("files caps");
+            assert_eq!(meta.caps, vec![CAP_FILES_READ, CAP_FILES_WRITE]);
+            let pass = resolve_skin_token(&raw).expect("files pass");
+            assert!(pass.has_cap(CAP_FILES_READ));
+            assert!(pass.has_cap(CAP_FILES_WRITE));
+            assert!(!pass.has_cap(CAP_THREAD_READ));
         });
     }
 
@@ -1536,6 +1604,10 @@ mod tests {
         );
         let empty_caps = parse_caps(None).expect("caps default");
         assert_eq!(empty_caps.len(), 2, "empty caps still default both verbs");
+        assert!(
+            !empty_caps.iter().any(|c| c.starts_with("files:")),
+            "empty caps must not grant files: {empty_caps:?}"
+        );
         assert!(
             parse_rooms_json(None).is_empty(),
             "rooms must not copy parse_caps default-all"

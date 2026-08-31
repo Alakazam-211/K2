@@ -20,6 +20,8 @@ import {
   SkinAccessSection,
   SKIN_ACCESS_MANIFEST,
   DEFAULT_FRONT_DOOR,
+  DEFAULT_SKIN_CAPS,
+  SKIN_CAP_CHOICES,
   parseFrontDoor,
   parseSkinUsers,
   parseSkinTokens,
@@ -393,8 +395,43 @@ describe('SkinAccessSection', () => {
       caps: ['thread:read', 'thread:post'],
       rooms: ['sales'],
     })
+    expect(DEFAULT_SKIN_CAPS).toEqual(['thread:read', 'thread:post'])
+    expect(SKIN_CAP_CHOICES).toEqual([
+      'thread:read',
+      'thread:post',
+      'files:read',
+      'files:write',
+    ])
     expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
+  })
+
+  it('offers files read/write checkboxes next to Thread and mints them when checked', async () => {
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'skin-tokens') {
+        return { id: 'tok-files', prefix: 'k2skn_ffff', username: 'alice', secret: 'k2skn_FILESECRET' }
+      }
+      return { ok: true }
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(screen.getByLabelText('Mint cap files:read')).not.toBeNull()
+    expect(screen.getByLabelText('Mint cap files:write')).not.toBeNull()
+    fireEvent.change(screen.getByLabelText('Mint key username'), { target: { value: 'alice' } })
+    fireEvent.click(screen.getByLabelText('Mint agent sales'))
+    fireEvent.click(screen.getByLabelText('Mint cap files:read'))
+    fireEvent.click(screen.getByLabelText('Mint cap files:write'))
+    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
+    await waitFor(() => {
+      expect(screen.getByText('k2skn_FILESECRET')).not.toBeNull()
+    })
+    const mintCall = h.daemonCliPost.mock.calls.find((c) => c[0] === 'skin-tokens')
+    expect(mintCall).toBeTruthy()
+    const body = mintCall![1] as { caps: string[] }
+    expect(body.caps).toContain('thread:read')
+    expect(body.caps).toContain('thread:post')
+    expect(body.caps).toContain('files:read')
+    expect(body.caps).toContain('files:write')
   })
 
   it('fails loud when mint returns no secret', async () => {

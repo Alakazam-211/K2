@@ -174,6 +174,7 @@ mod workspace_resources_routes;
 mod workspace_routes;
 mod overlay_routes;
 mod overlay_ws;
+mod fs_events_ws;
 mod skin_hydra;
 mod skin_routes;
 

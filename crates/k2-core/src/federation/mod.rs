@@ -41,6 +41,7 @@ pub mod pairing;
 pub mod peers;
 pub mod roster;
 pub mod seen;
+pub mod tray;
 
 pub use dial::{
     advertised_federation_base, assert_may_dial, host_port, peer_address_host, resolve_peer_base_url,
@@ -59,6 +60,10 @@ pub use peers::{
 pub use roster::{
     build_local_roster, sign_roster_request, verify_roster_request, LocalRoster, RosterAgent,
     RosterAuthError, CAP_ROSTER, DEFAULT_ROSTER_SKEW_SECS,
+};
+pub use tray::{
+    decode_spec as decode_tray_spec, encode_spec as encode_tray_spec, parse_payload as parse_tray_payload,
+    DecodedTray, TrayFile, TraySpec, TRAY_MAX_BYTES, TRAY_SIGNAL_KIND,
 };
 
 use std::sync::atomic::{AtomicBool, Ordering};

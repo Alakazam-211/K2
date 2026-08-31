@@ -582,6 +582,12 @@ _uds_eligible() {
 cli_send() {
     local fn="$1" endpoint="$2"; shift 2
     local sock; sock="$(_hook_sock)"
+    # After _apply_remote_host, every hop must use BASE_URL+Connect token.
+    # UDS would hit THIS box's cell socket (Bug A: foreign staged path).
+    if _cli_skip_uds; then
+        "$fn" "$endpoint" "$@"
+        return
+    fi
     if [ -n "$sock" ] && [ -S "$sock" ] && _uds_eligible "$endpoint"; then
         local out rc
         out="$("${fn}_uds" "$endpoint" "$@")"; rc=$?
@@ -592,6 +598,15 @@ cli_send() {
     fi
     "$fn" "$endpoint" "$@"
 }
+
+# BEGIN_CLI_SEND_TCP_LOCK
+# Set when a command has repointed BASE_URL at a remote Connect host so
+# inbox/fs/resolve/deliver cannot UDS-shortcut to the local cell socket.
+_K2_FORCE_TCP=0
+_cli_skip_uds() {
+    [ "${_K2_FORCE_TCP:-0}" = "1" ] || [ "${_K2_TRAY_REMOTE_APPLIED:-0}" = "1" ]
+}
+# END_CLI_SEND_TCP_LOCK
 
 # ── F2 (sandbox cell + HOST session) — k2 respond ────────────────────
 # `k2 respond [--final] <message>` — the in-session agent's RESPONSE
@@ -1347,6 +1362,9 @@ _apply_remote_host() {
         *)                  BASE_URL="https://${host}" ;;
     esac
     TOKEN="$tok"
+    # Inbox/fs/resolve must not UDS-shortcut to this box after a remote
+    # BASE_URL swap (federated tray Bug A).
+    _K2_FORCE_TCP=1
     return 0
 }
 
@@ -11750,8 +11768,10 @@ ARGUMENTS
   <sessionId>    UUID of a live or durable session (machine/API form).
   <agent>::<host>
                  Federated peer (GH #47). Example: ProposalWriter::box.k2.dev
-                 Legacy agent@host still works temporarily (not email).
-                 Wire form fp::ws::agent is for `k2 fed send` only.
+                 Live text AND --inbox-wake/--inbox-silent use the same
+                 federation plane (connected peer is the gate; no Connect
+                 token required). Legacy agent@host still works temporarily
+                 (not email). Wire form fp::ws::agent is for `k2 fed send` only.
   "text"         The message body. Wrap in quotes if it has spaces.
 
 OPTIONS
@@ -11825,11 +11845,11 @@ TRAY DELIVERY (work packages)
   `.k2/inbox/<id>.files/<filename>`. Multi-file: all files are sidecars
   under one `<id>.files/` with a single cover note listing them.
 
-  Remote tray (`agent::host` / `name@host`): repoints at the K2 Connect
-  host that owns the tray (Servers / connect-tokens / ServerSwitcher).
-  Live text over federation does NOT upload files — no Connect host
-  credentials → hard fail with teaching. Not `k2 mail`; recipient opens
-  with `k2 inbox read <id>`.
+  Remote tray (`agent::host` / `name@host`): same federation plane as
+  live `k2 msg agent::host "text"`. Connected peer is the gate — not a
+  Connect token. Cover `.md` + small attachments (v1 size cap; fail
+  loud above it). Files stay out of the PTY. Not `k2 mail`; recipient
+  opens with `k2 inbox read <id>`.
 
 RELATED VERBS
   k2 inbox list | read <id> | move | archive
@@ -12088,8 +12108,8 @@ cmd_schema() {
     {
       "name": "msg",
       "usage": "k2 msg <workspace|agent::host> \"text\" [--from <name>] [--command \"<text>\"] | k2 msg <workspace|agent::host> --inbox-silent|--inbox-wake <path> [path…]",
-      "description": "Send to another workspace agent. For files use --inbox-wake (copy + knock, preferred) or --inbox-silent (copy only). Live text is SHORT, one line. Not k2 mail. Spawns the agent if needed. Federated live: agent::host over federation. Tray agent::host needs a K2 Connect host token (not federation). Wire form fp::ws::agent is k2 fed send only.",
-      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or agent::host (live=federation; tray=Connect host)"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
+      "description": "Send to another workspace agent. For files use --inbox-wake (copy + knock, preferred) or --inbox-silent (copy only). Live text is SHORT, one line. Not k2 mail. Spawns the agent if needed. Federated live AND tray: agent::host over the same federation plane (connected peer is the gate, not a Connect token). Wire form fp::ws::agent is k2 fed send only.",
+      "args": [{"name": "workspace", "required": true, "description": "Local workspace name/path/uuid, or agent::host (live and tray both use federation)"}, {"name": "text_or_path", "required": false, "description": "Live message text, or one+ file paths with --inbox-silent|--inbox-wake (multi-file → one tray package)"}],
       "flags": [
         {"name": "--from", "arg": "name", "description": "Sender identity rendered as a [from <name>] prefix."},
         {"name": "--command", "arg": "text", "description": "Prepend text (e.g. a slash-command) at the very front of the delivered line."},
@@ -13760,8 +13780,9 @@ SESSION ROLE
   See `k2 study auth`.
 
 FEDERATED SHAPE
-  Live peer: `agent::host` (prefer ::). Tray to a remote host needs a
-  Connect host token — federation live text does not upload files.
+  Live AND tray: `agent::host` (prefer ::) over the same federation
+  plane. Connected peer (`k2 connections`) is the gate — not a Connect
+  host token. Cover .md + small attachments; files stay out of the PTY.
   Wire form fp::ws::agent is `k2 fed send` only, not `k2 msg`.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
@@ -19164,6 +19185,7 @@ _tray_restore_env() {
         BASE_URL="${_K2_TRAY_SAVED_BASE_URL}"
         TOKEN="${_K2_TRAY_SAVED_TOKEN}"
         _K2_TRAY_REMOTE_APPLIED=0
+        _K2_FORCE_TCP=0
     fi
 }
 # END_MSG_INBOX_TRAY_RESTORE
@@ -19235,12 +19257,13 @@ _cmd_msg_inbox_form_inner() {
     # Files + sender brief: --body and leftover non-file positionals are
     # posted as `body=` on deliver (cover note). Not XOR with paths (#64).
     #
-    # Remote tray routing (agent::host / name@host): unlike live text msg
-    # (federation), file packages must land on the daemon that owns the
-    # target tray. When Connect credentials exist for <host>, save/restore
-    # BASE_URL+TOKEN, repoint at that host, and deliver with the bare
-    # workspace/agent name. No Connect token → hard fail (federation
-    # cannot upload files). Local peer names stay on the active daemon.
+    # Remote tray routing (agent::host / name@host): SAME plane as live
+    # `k2 msg agent::host "text"` — local daemon federation. Connected peer
+    # (`k2 connections`) is the gate, not a Connect host token. The CLI
+    # keeps BASE_URL on this box and posts /cli/inbox/deliver with
+    # workspace=agent::host; the daemon reads the files and forwards a
+    # tray envelope. `--host` / explicit remote daemon still uses Connect
+    # HTTP (then _K2_TRAY_REMOTE_APPLIED forces TCP so UDS cannot split).
     #
     # #36: recipient is workspace=<token> (same as live msg) — stamp_principal
     # never overwrites workspace=/target=.
@@ -19252,25 +19275,14 @@ _cmd_msg_inbox_form_inner() {
     _split_remote_target "$target"
     if [ "${_IS_WIRE_FORM:-0}" = "1" ]; then
         echo "k2 msg: '${target}' looks like federation wire form (<fp>::<workspace>::<agent>)." >&2
-        echo "  Tray file send needs a Connect host user form:  k2 msg <agent>::<host> --inbox-wake <path>" >&2
+        echo "  Tray file send uses the user form:  k2 msg <agent>::<host> --inbox-wake <path>" >&2
         echo "  Wire form is for:              k2 fed send <fp>::<ws>::<agent> \"text\"" >&2
         return 2
     fi
-    if [ -n "${_REMOTE_HOST}" ]; then
-        local _tray_tok=""
-        _tray_tok="$(_remote_token_for_host "$_REMOTE_HOST" "")"
-        if [ -z "$_tray_tok" ]; then
-            _tray_token_missing_error "$_REMOTE_HOST"
-            return 2
-        fi
-        if ! _apply_remote_host "$_REMOTE_HOST" ""; then
-            # _apply_remote_host already printed a token-path hint; add tray context.
-            echo "Tray file send to ${_REMOTE_HOST} needs that host's Connect token (not federation)." >&2
-            return 2
-        fi
-        _K2_TRAY_REMOTE_APPLIED=1
-        target="$_BARE_TARGET"
-    fi
+    # Keep the original agent::host token. Do NOT require a Connect token
+    # and do NOT _apply_remote_host — that UDS-split deliver onto this
+    # box while staging on the peer (Bug A) and blocked federation-only
+    # peers (Bug B).
 
     local title="" body="" priority="" from="" path=""
     local positional=()
@@ -19397,9 +19409,14 @@ _cmd_msg_inbox_form_inner() {
             fi
             rm -f "$bundle_local"
             response=$(_msg_inbox_post_deliver_bundle "$staged_path")
-            _msg_inbox_delete_staged "$staged_path"
             _msg_inbox_map_response "$response" "$wake_flag"
-            return $?
+            local bundle_rc=$?
+            # Never delete the staged archive on deliver failure — the
+            # peer (or local daemon) may still need it for retry.
+            if [ "$bundle_rc" -eq 0 ]; then
+                _msg_inbox_delete_staged "$staged_path"
+            fi
+            return "$bundle_rc"
         fi
 
         # ── Single-file (P0/P1 path unchanged) ───────────────────────
@@ -19424,10 +19441,14 @@ _cmd_msg_inbox_form_inner() {
             fi
             deliver_path="$staged_path"
             response=$(_msg_inbox_post_deliver_single "$deliver_path")
-            # Best-effort cleanup of staging copy (package already owns bytes).
-            _msg_inbox_delete_staged "$staged_path"
             _msg_inbox_map_response "$response" "$wake_flag"
-            return $?
+            local staged_rc=$?
+            # Best-effort cleanup of staging copy only after the package
+            # landed. A failed deliver must leave the staged file in place.
+            if [ "$staged_rc" -eq 0 ]; then
+                _msg_inbox_delete_staged "$staged_path"
+            fi
+            return "$staged_rc"
         fi
     fi
 

@@ -40,6 +40,105 @@ fn opt_param(params: &HashMap<String, String>, key: &str) -> Option<String> {
     params.get(key).cloned().filter(|s| !s.is_empty())
 }
 
+/// User-form `agent::host` / legacy `agent@host`. Wire `fp::ws::agent` is None.
+fn split_federated_user_target(token: &str) -> Option<(String, String)> {
+    let raw = token.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // 3-part wire form is `k2 fed send` only.
+    if raw.contains("::*::") || raw.matches("::").count() >= 2 {
+        return None;
+    }
+    if let Some((left, right)) = raw.split_once("::") {
+        if !left.is_empty() && !right.is_empty() && looks_like_host(right) {
+            return Some((left.to_string(), right.to_string()));
+        }
+        return None;
+    }
+    if let Some(idx) = raw.rfind('@') {
+        let left = &raw[..idx];
+        let right = &raw[idx + 1..];
+        if !left.is_empty() && !right.is_empty() {
+            return Some((left.to_string(), right.to_string()));
+        }
+    }
+    None
+}
+
+fn looks_like_host(s: &str) -> bool {
+    s.contains('.') || s.contains(':') || s.to_ascii_lowercase().ends_with(".k2.dev")
+}
+
+fn caller_from_workspace(params: &HashMap<String, String>) -> Option<String> {
+    if let Some(principal) = crate::caller_workspace::request_principal() {
+        if let Ok(ws) = crate::caller_workspace::resolve_caller_workspace(Some(&principal), None) {
+            return Some(ws.path);
+        }
+    }
+    opt_param(params, "project").or_else(|| opt_param(params, "project_path"))
+}
+
+fn deliver_federated_files(
+    params: &HashMap<String, String>,
+    agent: &str,
+    host: &str,
+    source_paths: &[PathBuf],
+) -> CliResponse {
+    if source_paths.is_empty() {
+        return CliResponse::bad_request("Missing path or paths for federated tray send");
+    }
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total: u64 = 0;
+    for p in source_paths {
+        if !p.is_file() {
+            return CliResponse::bad_request(format!(
+                "source path is not a readable file: {}",
+                p.display()
+            ));
+        }
+        let bytes = match std::fs::read(p) {
+            Ok(b) => b,
+            Err(e) => {
+                return CliResponse::bad_request(format!("read {}: {e}", p.display()))
+            }
+        };
+        total += bytes.len() as u64;
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment")
+            .to_string();
+        files.push((name, bytes));
+    }
+    if total > k2_core::federation::TRAY_MAX_BYTES {
+        return CliResponse::bad_request(format!(
+            "federated tray package is {total} bytes (v1 cap {}). \
+             Cover .md + small attachments only. For larger files use K2 Connect \
+             upload/chunk, or split the package.",
+            k2_core::federation::TRAY_MAX_BYTES
+        ));
+    }
+    let title = opt_param(params, "title");
+    let note = opt_param(params, "body").or_else(|| opt_param(params, "note"));
+    let wake = deliver_wants_wake(params);
+    let spec = match k2_core::federation::encode_tray_spec(
+        title.as_deref(),
+        note.as_deref(),
+        wake,
+        &files,
+    ) {
+        Ok(s) => s,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    crate::federation_routes::handle_send_user_tray(
+        agent,
+        host,
+        spec,
+        caller_from_workspace(params),
+    )
+}
+
 // ── GET handlers (query-string) ────────────────────────────────────────
 
 /// GET /cli/inbox/list?project=<path>&folder=<name>
@@ -126,6 +225,33 @@ pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
         return CliResponse::bad_request(
             "Missing workspace (or target/project) — the inbox to compose into",
         );
+    }
+    if let Some((agent, host)) = split_federated_user_target(&target_token) {
+        let title = str_param(params, "title");
+        if title.is_empty() {
+            return CliResponse::bad_request("Missing title");
+        }
+        let body = str_param(params, "body");
+        let md = format!("# {title}\n\n{body}\n");
+        let tmp = std::env::temp_dir().join(format!(
+            "k2-fed-compose-{}-{}.md",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        if let Err(e) = std::fs::write(&tmp, md.as_bytes()) {
+            return CliResponse::bad_request(format!("write compose temp: {e}"));
+        }
+        let mut fed_params = params.clone();
+        fed_params.insert("wake".into(), "false".into());
+        if let Some(mode) = opt_param(params, "mode") {
+            fed_params.insert("mode".into(), mode);
+        }
+        let resp = deliver_federated_files(&fed_params, &agent, &host, &[tmp.clone()]);
+        let _ = std::fs::remove_file(&tmp);
+        return resp;
     }
     let Some(resolved_path) = crate::workspace_msg::resolve_workspace_allowing_handle(&target_token)
     else {
@@ -294,6 +420,13 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
             "Missing workspace (or target/project) — the inbox to deliver into",
         );
     }
+    let source_paths = match deliver_source_paths(params) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    if let Some((agent, host)) = split_federated_user_target(&target_token) {
+        return deliver_federated_files(params, &agent, &host, &source_paths);
+    }
     let Some(resolved_path) = crate::workspace_msg::resolve_workspace_allowing_handle(&target_token)
     else {
         return crate::workspace_routes::workspace_not_found_response(&target_token);
@@ -306,11 +439,6 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
             return crate::workspace_routes::workspace_not_found_response(&target_token);
         }
     }
-
-    let source_paths = match deliver_source_paths(params) {
-        Ok(p) => p,
-        Err(r) => return r,
-    };
     let title = opt_param(params, "title");
     let from = opt_param(params, "from");
     let source = opt_param(params, "source");
@@ -352,6 +480,11 @@ pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliRespon
     if target_token.is_empty() {
         return CliResponse::bad_request(
             "Missing workspace (or target/project) — the inbox to deliver into",
+        );
+    }
+    if split_federated_user_target(&target_token).is_some() {
+        return CliResponse::bad_request(
+            "federated tray multi-file uses /cli/inbox/deliver (paths), not deliver-bundle",
         );
     }
     let Some(resolved_path) = crate::workspace_msg::resolve_workspace_allowing_handle(&target_token)
@@ -758,5 +891,106 @@ mod tests {
         let conn = db.lock();
         let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![caller_id]);
         let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![peer_id]);
+    }
+
+    #[test]
+    fn split_federated_user_target_parses_colon_form() {
+        let (agent, host) =
+            split_federated_user_target("ahama::nsi.k2.dev").expect("user form");
+        assert_eq!(agent, "ahama");
+        assert_eq!(host, "nsi.k2.dev");
+        let lan = split_federated_user_target("sales::10.2.40.28:38471").unwrap();
+        assert_eq!(lan.0, "sales");
+        assert_eq!(lan.1, "10.2.40.28:38471");
+        assert!(split_federated_user_target("fp::ws::agent").is_none());
+        assert!(split_federated_user_target("local-handle").is_none());
+        let legacy = split_federated_user_target("ahama@nsi.k2.dev").unwrap();
+        assert_eq!(legacy, ("ahama".into(), "nsi.k2.dev".into()));
+    }
+
+    #[test]
+    fn deliver_federated_without_federation_fails_loud_not_connect_token() {
+        let prev = std::env::var_os("K2_FEDERATION");
+        std::env::remove_var("K2_FEDERATION");
+        k2_core::federation::set_enabled(false);
+
+        let tmp = std::env::temp_dir().join(format!(
+            "k2-fed-deliver-{}-{}.md",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&tmp, b"# hi\n").unwrap();
+        let mut params = HashMap::new();
+        params.insert("workspace".into(), "ahama::nsi.k2.dev".into());
+        params.insert("path".into(), tmp.display().to_string());
+        params.insert("wake".into(), "true".into());
+        let resp = handle_deliver_post(&params);
+        let _ = std::fs::remove_file(&tmp);
+        match prev {
+            Some(p) => std::env::set_var("K2_FEDERATION", p),
+            None => std::env::remove_var("K2_FEDERATION"),
+        }
+        k2_core::federation::set_enabled(false);
+
+        assert!(
+            resp.status.starts_with("400") || resp.status.starts_with("404"),
+            "federation-off tray must fail loud: {} {}",
+            resp.status,
+            resp.body
+        );
+        assert!(
+            resp.body.to_ascii_lowercase().contains("federation"),
+            "must mention federation, not Connect token: {}",
+            resp.body
+        );
+        assert!(
+            !resp.body.contains("Connect session token"),
+            "must not be the Connect-token missing path: {}",
+            resp.body
+        );
+    }
+
+    #[test]
+    fn deliver_local_file_still_lands() {
+        let _ = k2_core::db::init_for_tests();
+        let ws_path = std::env::temp_dir().join(format!(
+            "k2-local-deliver-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&ws_path).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, "local-deliver", ws_path.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+        }
+        let src = ws_path.join("brief.md");
+        std::fs::write(&src, b"# Local\n\nHello tray.\n").unwrap();
+        let mut params = HashMap::new();
+        params.insert("workspace".into(), ws_path.display().to_string());
+        params.insert("path".into(), src.display().to_string());
+        params.insert("wake".into(), "false".into());
+        let resp = handle_deliver_post(&params);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let items = k2_core::inbox::list_root(&ws_path);
+        assert_eq!(items.len(), 1, "local tray must land, got {}", items.len());
+        let cover = std::fs::read_to_string(&items[0].filename)
+            .ok()
+            .or_else(|| std::fs::read_to_string(std::path::Path::new(&items[0].filename)).ok());
+        let content = std::fs::read_to_string(
+            k2_core::inbox::inbox_root(&ws_path).join(&items[0].filename),
+        )
+        .expect("cover readable");
+        assert!(content.contains("Hello tray."), "{content}");
+        let _ = cover;
+        let _ = std::fs::remove_dir_all(&ws_path);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]);
     }
 }

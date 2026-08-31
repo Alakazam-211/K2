@@ -557,6 +557,60 @@ pub fn unpack_tray_bundle(
     result
 }
 
+/// One in-memory attachment for [`deliver_named_bytes`].
+#[derive(Debug, Clone)]
+pub struct NamedBytes {
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Land a tray package from already-read bytes (federated hop). Same
+/// on-disk shape as [`deliver_files`]: one cover `.md`, sidecars under
+/// `<id>.files/`. Names are sanitized (no path traversal).
+pub fn deliver_named_bytes(
+    workspace: &Path,
+    files: &[NamedBytes],
+    title_override: Option<&str>,
+    from: Option<&str>,
+    source: Option<&str>,
+    note: Option<&str>,
+) -> Result<DeliveredPackage, String> {
+    if files.is_empty() {
+        return Err("no files — pass at least one attachment".to_string());
+    }
+    let tmp_root = std::env::temp_dir().join(format!(
+        "k2-inbox-bytes-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&tmp_root).map_err(|e| format!("create bytes staging dir: {e}"))?;
+
+    let mut paths: Vec<PathBuf> = Vec::with_capacity(files.len());
+    let mut used: Vec<String> = Vec::new();
+    let write_result = (|| -> Result<(), String> {
+        for f in files {
+            let safe = unique_sidecar_name(&f.name, &used);
+            used.push(safe.clone());
+            let dest = tmp_root.join(&safe);
+            fs::write(&dest, &f.bytes)
+                .map_err(|e| format!("write staged '{}': {e}", dest.display()))?;
+            paths.push(dest);
+        }
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = fs::remove_dir_all(&tmp_root);
+        return Err(e);
+    }
+
+    let result = deliver_files(workspace, &paths, title_override, from, source, note);
+    let _ = fs::remove_dir_all(&tmp_root);
+    result
+}
+
 /// Accept flat basenames or a single `files/<name>` prefix; reject `..` /
 /// multi-component paths.
 fn safe_tar_entry_basename(entry_path: &Path) -> Result<String, String> {
@@ -1583,6 +1637,37 @@ mod tests {
         let files_dir = inbox_root(ws.path()).join(format!("{}.files", pkg.id));
         assert!(files_dir.join("one.txt").exists());
         assert!(files_dir.join("two.bin").exists());
+    }
+
+    #[test]
+    fn deliver_named_bytes_md_keeps_single_file_shape() {
+        let ws = make_ws();
+        let pkg = deliver_named_bytes(
+            ws.path(),
+            &[NamedBytes {
+                name: "brief.md".into(),
+                bytes: b"# Ship\n\nDo the thing.\n".to_vec(),
+            }],
+            None,
+            Some("ahama::nsi.k2.dev"),
+            Some("msg-inbox"),
+            Some("please review"),
+        )
+        .unwrap();
+        assert_eq!(pkg.title, "Ship");
+        assert_eq!(pkg.from, "ahama::nsi.k2.dev");
+        assert!(pkg.sidecar_paths.is_empty());
+        let content = fs::read_to_string(inbox_root(ws.path()).join(&pkg.filename)).unwrap();
+        assert!(content.contains("Do the thing."));
+        assert!(content.contains("please review"));
+        assert!(content.contains("from: ahama::nsi.k2.dev"));
+    }
+
+    #[test]
+    fn deliver_named_bytes_rejects_empty() {
+        let ws = make_ws();
+        let err = deliver_named_bytes(ws.path(), &[], None, None, None, None).unwrap_err();
+        assert!(err.contains("no files"));
     }
 
     #[test]

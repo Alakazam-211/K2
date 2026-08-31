@@ -299,6 +299,22 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     };
     let from_label = federated_from_label(sender_agent, &host);
 
+    // Tray packages (`k2 msg agent::host --inbox-wake`) ride this same
+    // sealed envelope. Land in `.k2/inbox/`; never dump file bytes into
+    // the live PTY. remote_instruct gates the optional wake knock only.
+    if let SignalKind::Custom { kind, payload } = &signal.kind {
+        if kind == federation::TRAY_SIGNAL_KIND {
+            return deliver_inbound_tray(
+                &project_path,
+                payload,
+                &from_label,
+                &ingested.peer_fingerprint,
+                &ingested.msg_uuid,
+                &signal.id.to_string(),
+            );
+        }
+    }
+
     // The deliverable text (federation sends `Msg`; render any other kind
     // so nothing is silently lost).
     let text = match &signal.kind {
@@ -363,6 +379,109 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     }
 }
 
+/// Land a federated tray package into `project_path`'s `.k2/inbox/`.
+/// Package success is primary. Wake knock is a short pointer (not the file
+/// body) and only runs when the workspace opted into remote instruction.
+fn deliver_inbound_tray(
+    project_path: &str,
+    payload: &serde_json::Value,
+    from_label: &str,
+    peer_fingerprint: &str,
+    msg_uuid: &str,
+    signal_id: &str,
+) -> CliResponse {
+    let decoded = match federation::parse_tray_payload(payload) {
+        Ok(d) => d,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let named: Vec<k2_core::inbox::NamedBytes> = decoded
+        .files
+        .iter()
+        .map(|(name, bytes)| k2_core::inbox::NamedBytes {
+            name: name.clone(),
+            bytes: bytes.clone(),
+        })
+        .collect();
+    let package = match k2_core::inbox::deliver_named_bytes(
+        std::path::Path::new(project_path),
+        &named,
+        decoded.title.as_deref(),
+        Some(from_label),
+        Some("msg-inbox"),
+        decoded.body.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            return json_err(
+                "500 Internal Server Error",
+                format!("tray inbox deliver: {e}"),
+            )
+        }
+    };
+
+    let file_count = if package.sidecar_paths.is_empty() {
+        1
+    } else {
+        package.sidecar_paths.len()
+    };
+    let opt_in = k2_core::workspace::settings::remote_instruct_allowed_for_path(project_path);
+    let wake = if decoded.wake {
+        if opt_in {
+            let pointer = k2_core::inbox::wake_pointer_text_n(
+                &package.id,
+                &package.title,
+                Some(file_count),
+            );
+            let result = workspace_msg::deliver_live(
+                project_path,
+                &pointer,
+                from_label,
+                "",
+                true,
+                workspace_msg::DEFAULT_WAKE_TIMEOUT,
+            );
+            serde_json::json!({
+                "success": result.success,
+                "reason": result.reason,
+                "hint": result.hint,
+                "targetSessionId": result.target_session_id,
+                "woke": result.woke,
+                "wakeMs": result.wake_ms,
+                "attempts": result.attempts,
+            })
+        } else {
+            serde_json::json!({
+                "success": false,
+                "reason": "remote_instruction_disabled",
+                "hint": "package landed; wake knock skipped (remote instruction off)",
+            })
+        }
+    } else {
+        serde_json::Value::Null
+    };
+
+    // Package write is terminal — drain redelivery must not duplicate the tray.
+    k2_core::federation::seen::record(peer_fingerprint, msg_uuid);
+
+    let mut out = serde_json::json!({
+        "delivered": true,
+        "mode": "inbox",
+        "ok": true,
+        "id": package.id,
+        "title": package.title,
+        "filename": package.filename,
+        "coverPath": package.cover_path,
+        "sidecarPaths": package.sidecar_paths,
+        "fileCount": file_count,
+        "signal_id": signal_id,
+        "from": from_label,
+    });
+    if !wake.is_null() {
+        out["wake"] = wake;
+    }
+    CliResponse::ok_json(out.to_string())
+}
+
 /// Canonical federated `[from …]` attribution shown in the recipient chat.
 ///
 /// **Always** `agent::host` (lowercase). Never `@` — that sigil made
@@ -402,7 +521,9 @@ fn resolve_project_path_by_id(workspace_id: &str) -> Option<String> {
 // ─────────────────────────────────────────────────────────────────────
 
 /// `POST /cli/federation/send` — dual-auth (dispatcher enforces owner-or-admin
-/// OR scoped passport). Body: `{"to":"<peer>::<workspace>::<agent>","text":"..."}`.
+/// OR scoped passport). Body: `{"to":"<peer>::<workspace>::<agent>","text":"..."}`
+/// or the same `to` plus `tray` (cover + small attachments for
+/// `k2 msg --inbox-wake|--inbox-silent` on `agent::host`).
 /// Seals an `AgentSignal`, enqueues it durably, then dials the peer and POSTs
 /// to its `/cli/federation/inbound`. On a confirmed delivery the queued copy
 /// is removed; otherwise it stays for the retry loop. Blocking (network I/O)
@@ -416,6 +537,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     #[derive(serde::Deserialize)]
     struct Req {
         to: String,
+        #[serde(default)]
         text: String,
         /// GAP #3: the SOURCE workspace (filesystem path) the calling
         /// agent is in. When present, the cross-daemon send is GATED on
@@ -428,6 +550,11 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         /// comes from the passport only.
         #[serde(default)]
         from_workspace: Option<String>,
+        /// Federated `--inbox-wake|--inbox-silent` package. When set, the
+        /// signal is `SignalKind::Custom { kind: inbox-tray }` instead of
+        /// live `Msg` text. Mutually preferred over `text`.
+        #[serde(default)]
+        tray: Option<federation::TraySpec>,
     }
     let req: Req = match serde_json::from_slice(body) {
         Ok(r) => r,
@@ -564,6 +691,27 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
             name: "owner".to_string(),
         },
     };
+    let kind = match req.tray.as_ref() {
+        Some(spec) => {
+            if let Err(e) = federation::decode_tray_spec(spec) {
+                return CliResponse::bad_request(e);
+            }
+            SignalKind::Custom {
+                kind: federation::TRAY_SIGNAL_KIND.to_string(),
+                payload: serde_json::to_value(spec).unwrap_or(serde_json::json!({})),
+            }
+        }
+        None => {
+            if req.text.trim().is_empty() {
+                return CliResponse::bad_request(
+                    "text required — or pass tray for k2 msg --inbox-wake",
+                );
+            }
+            SignalKind::Msg {
+                text: req.text.clone(),
+            }
+        }
+    };
     let signal = AgentSignal {
         from,
         to: AgentAddress::Agent {
@@ -574,7 +722,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         ..AgentSignal::new(
             AgentAddress::Broadcast,
             AgentAddress::Broadcast,
-            SignalKind::Msg { text: req.text },
+            kind,
         )
     };
 
@@ -653,10 +801,21 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                     .to_string(),
                 )
             } else {
-                CliResponse::ok_json(
-                    serde_json::json!({ "status": "sent", "msg_uuid": msg_uuid, "peer": peer.fingerprint })
-                        .to_string(),
-                )
+                let mut out = serde_json::json!({
+                    "status": "sent",
+                    "msg_uuid": msg_uuid,
+                    "peer": peer.fingerprint,
+                });
+                if parsed.get("mode").and_then(|v| v.as_str()) == Some("inbox") {
+                    out["ok"] = serde_json::json!(true);
+                    out["mode"] = serde_json::json!("inbox");
+                    for key in ["id", "title", "filename", "coverPath", "sidecarPaths", "fileCount", "wake", "from"] {
+                        if let Some(v) = parsed.get(key) {
+                            out[key] = v.clone();
+                        }
+                    }
+                }
+                CliResponse::ok_json(out.to_string())
             }
         }
         Err(e) => CliResponse::ok_json(
@@ -668,6 +827,199 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
             })
             .to_string(),
         ),
+    }
+}
+
+/// `k2 msg <agent>::<host> --inbox-wake` — resolve the user form against
+/// pinned peers + that peer's roster, then [`handle_send`] a tray package
+/// on the same plane as live federated msg. No Connect token.
+pub fn handle_send_user_tray(
+    agent: &str,
+    host: &str,
+    spec: federation::TraySpec,
+    from_workspace: Option<String>,
+) -> CliResponse {
+    if !federation::enabled() {
+        return CliResponse::bad_request(
+            "federation is off — enable it and pair first (k2 fed enable / k2 fed pair-request)",
+        );
+    }
+    if agent.trim().is_empty() || host.trim().is_empty() {
+        return CliResponse::bad_request("agent::host required for federated tray send");
+    }
+    if let Err(e) = federation::decode_tray_spec(&spec) {
+        return CliResponse::bad_request(e);
+    }
+    let store = match PeerStore::load() {
+        Ok(s) => s,
+        Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
+    };
+    let peer = store
+        .list()
+        .iter()
+        .find(|p| peer_matches_user_host(p, host))
+        .cloned();
+    let peer = match peer {
+        Some(p) => p,
+        None => {
+            return json_err(
+                "404 Not Found",
+                format!("no paired peer matching {host} — pair it first (k2 fed peers)"),
+            )
+        }
+    };
+    if peer.trust != k2_core::federation::PeerTrust::Trusted {
+        return json_err(
+            "403 Forbidden",
+            format!(
+                "peer {host} is not trusted yet (state={:?}) — confirm the pairing (k2 fed confirm)",
+                peer.trust
+            ),
+        );
+    }
+    let roster_resp = handle_peer_roster(&peer.fingerprint);
+    if !roster_resp.status.starts_with("200") {
+        return roster_resp;
+    }
+    let wsid = match workspace_id_from_roster_body(&roster_resp.body, agent) {
+        Ok(id) => id,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let to = format!("{}::{}::{}", peer.fingerprint, wsid, agent);
+    let mut body = serde_json::json!({
+        "to": to,
+        "tray": spec,
+    });
+    if let Some(obj) = body.as_object_mut() {
+        if let Some(ws) = from_workspace.filter(|s| !s.trim().is_empty()) {
+            obj.insert("from_workspace".into(), serde_json::json!(ws));
+        }
+    }
+    handle_send(&body.to_string().into_bytes())
+}
+
+fn bare_host(h: &str) -> String {
+    let mut h = h.trim().to_ascii_lowercase();
+    while h.ends_with(".k2.dev.k2.dev") {
+        let new_len = h.len().saturating_sub(".k2.dev".len());
+        h.truncate(new_len);
+    }
+    if h.ends_with(".k2.dev") {
+        let new_len = h.len().saturating_sub(".k2.dev".len());
+        h.truncate(new_len);
+    }
+    h
+}
+
+fn peer_matches_user_host(peer: &k2_core::federation::FederationPeer, host: &str) -> bool {
+    if peer_selector_matches(peer, host) {
+        return true;
+    }
+    let want = bare_host(host);
+    if want.is_empty() {
+        return false;
+    }
+    if bare_host(&peer.subdomain) == want || bare_host(&peer.label) == want {
+        return true;
+    }
+    if !peer.base_url.is_empty() {
+        let hp = federation::host_port(&peer.base_url);
+        if hp.eq_ignore_ascii_case(host) || bare_host(&hp) == want {
+            return true;
+        }
+    }
+    let sub = peer.subdomain.to_ascii_lowercase();
+    host.eq_ignore_ascii_case(&sub)
+        || host.eq_ignore_ascii_case(&format!("{sub}.k2.dev"))
+        || want.eq_ignore_ascii_case(&format!("{}.k2.dev", bare_host(&peer.subdomain)))
+}
+
+fn slugify_agent(s: &str) -> String {
+    let t = s.trim().to_ascii_lowercase().replace('_', "-");
+    let mut out = String::new();
+    let mut dash = false;
+    for c in t.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            dash = false;
+        } else if !dash {
+            out.push('-');
+            dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+fn workspace_id_from_roster_body(body: &str, agent: &str) -> Result<String, String> {
+    let d: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("parse peer roster: {e}"))?;
+    if let Some(err) = d.get("error") {
+        return Err(format!("peer roster error: {err}"));
+    }
+    let agents = d
+        .get("roster")
+        .and_then(|r| r.get("agents"))
+        .or_else(|| d.get("agents"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let want = slugify_agent(agent);
+    let want_raw = agent.trim().to_ascii_lowercase();
+    let mut ids: Vec<String> = Vec::new();
+    for a in &agents {
+        let handle = a
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let wname = a
+            .get("workspace_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let aliases: Vec<String> = a
+            .get("aliases")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let hit = slugify_agent(handle) == want
+            || handle.eq_ignore_ascii_case(&want_raw)
+            || slugify_agent(wname) == want
+            || aliases.iter().any(|x| {
+                slugify_agent(x) == want || x.trim().eq_ignore_ascii_case(&want_raw)
+            });
+        if !hit {
+            continue;
+        }
+        if let Some(id) = a.get("workspace_id").and_then(|v| v.as_str()) {
+            if !id.is_empty() && !ids.iter().any(|e| e == id) {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    match ids.len() {
+        0 => {
+            let names: Vec<&str> = agents
+                .iter()
+                .filter_map(|a| a.get("agent").and_then(|v| v.as_str()))
+                .collect();
+            if names.is_empty() {
+                Err(format!("no agent \"{agent}\" on that host (its roster is empty)"))
+            } else {
+                Err(format!(
+                    "no agent \"{agent}\" on that host. Available: {}.",
+                    names.join(", ")
+                ))
+            }
+        }
+        1 => Ok(ids.remove(0)),
+        _ => Err(format!(
+            "ambiguous agent \"{agent}\" on that host — multiple workspaces expose it"
+        )),
     }
 }
 
@@ -1189,6 +1541,156 @@ mod tests {
             // The LIVE path was taken — nothing was written to the inbox.
             let items = k2_core::inbox::list_root(Path::new(&ws_path));
             assert!(items.is_empty(), "opt-in ON must NOT write an inbox file");
+        });
+    }
+
+    fn seal_tray_to(
+        ws_id: &str,
+        key: &rcgen::KeyPair,
+        subdomain: &str,
+        spec: federation::TraySpec,
+    ) -> Vec<u8> {
+        let signal = AgentSignal::new(
+            AgentAddress::Agent {
+                workspace: WorkspaceId("/src/cortana".into()),
+                name: "cortana".into(),
+            },
+            AgentAddress::Agent {
+                workspace: WorkspaceId(ws_id.into()),
+                name: "bob".into(),
+            },
+            SignalKind::Custom {
+                kind: federation::TRAY_SIGNAL_KIND.to_string(),
+                payload: serde_json::to_value(&spec).unwrap(),
+            },
+        )
+        .with_delivery(Delivery::Inbox);
+        federation::seal(&signal, key, subdomain, 8).unwrap()
+    }
+
+    fn brief_tray() -> federation::TraySpec {
+        federation::encode_tray_spec(
+            Some("Ship it"),
+            Some("please review"),
+            true,
+            &[("brief.md".to_string(), b"# Ship it\n\nDo the thing.\n".to_vec())],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn inbound_tray_lands_inbox_when_opt_in_off() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let ws_path = temp_ws_path();
+            std::fs::create_dir_all(&ws_path).unwrap();
+            let ws_id = register_project(&ws_path); // opt-in defaults OFF
+
+            let key = pin_trusted_peer("peer");
+            let bytes = seal_tray_to(&ws_id, &key, "peer", brief_tray());
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "200 OK", "tray inbound: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["delivered"], true, "{}", resp.body);
+            assert_eq!(v["mode"], "inbox", "{}", resp.body);
+            assert_eq!(v["ok"], true);
+            assert!(v["id"].as_str().unwrap_or("").len() > 0);
+            assert_eq!(v["wake"]["success"], false);
+            assert_eq!(v["wake"]["reason"], "remote_instruction_disabled");
+
+            let items = k2_core::inbox::list_root(Path::new(&ws_path));
+            assert_eq!(items.len(), 1, "tray must land in .k2/inbox/");
+            let content = std::fs::read_to_string(
+                k2_core::inbox::inbox_root(Path::new(&ws_path)).join(&items[0].filename),
+            )
+            .expect("cover md readable");
+            assert!(content.contains("Do the thing."), "{content}");
+            assert!(content.contains("please review"), "{content}");
+            assert!(
+                !content.contains("bytes_b64"),
+                "must not dump wire encoding into the cover"
+            );
+        });
+    }
+
+    #[test]
+    fn inbound_tray_does_not_dump_file_into_live_path() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let ws_path = temp_ws_path();
+            std::fs::create_dir_all(&ws_path).unwrap();
+            let ws_id = register_project(&ws_path);
+            k2_core::workspace::settings::update_project_setting(
+                &ws_path,
+                "allow_remote_instruct",
+                "1",
+            )
+            .expect("opt in");
+
+            let key = pin_trusted_peer("peer");
+            let bytes = seal_tray_to(&ws_id, &key, "peer", brief_tray());
+            let resp = handle_inbound(&bytes);
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["mode"], "inbox");
+            assert_eq!(v["ok"], true);
+            // Wake may fail (no agent) but must be a POINTER attempt, not file dump.
+            if let Some(hint) = v["wake"]["hint"].as_str() {
+                assert!(
+                    !hint.contains("Do the thing."),
+                    "wake hint must not contain file body: {hint}"
+                );
+            }
+            let items = k2_core::inbox::list_root(Path::new(&ws_path));
+            assert_eq!(items.len(), 1, "package must land");
+        });
+    }
+
+    #[test]
+    fn send_tray_over_cap_fails_loud() {
+        with_temp_home(|| {
+            let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let mut store = PeerStore::default();
+            let fp = store.upsert(
+                FederationPeer::pin("teammate", "peer", peer_key.public_key_pem()).unwrap(),
+            );
+            store.set_trust(&fp, PeerTrust::Trusted);
+            store.grant(&fp, "inbound");
+            store.save().unwrap();
+
+            let too_big = vec![0u8; (federation::TRAY_MAX_BYTES as usize) + 8];
+            let spec = federation::TraySpec {
+                title: Some("huge".into()),
+                wake: true,
+                files: vec![federation::TrayFile {
+                    name: "huge.bin".into(),
+                    bytes_b64: {
+                        use base64::Engine;
+                        base64::engine::general_purpose::STANDARD.encode(&too_big)
+                    },
+                }],
+                ..federation::TraySpec::default()
+            };
+            let send_body = body(serde_json::json!({
+                "to": "peer::ws::bob",
+                "tray": spec,
+            }));
+            let resp = handle_send(&send_body);
+            assert!(
+                resp.status.starts_with("400"),
+                "over-cap tray must fail loud: {} {}",
+                resp.status,
+                resp.body
+            );
+            assert!(
+                resp.body.contains("v1 cap") || resp.body.contains("cap"),
+                "must mention the size cap: {}",
+                resp.body
+            );
+            assert!(
+                outbox::list_for_peer(&fp).is_empty(),
+                "over-cap must not enqueue"
+            );
         });
     }
 
@@ -1953,6 +2455,57 @@ mod tests {
             1,
             "the durable outbox must retain the message for retry"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_tray_to_unreachable_peer_queues_inbox_tray_signal() {
+        let _home = crate::test_support::TempHome::new();
+
+        let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut store = PeerStore::default();
+        let fp = store.upsert(
+            FederationPeer::pin("teammate", "peer", peer_key.public_key_pem()).unwrap(),
+        );
+        store.set_trust(&fp, PeerTrust::Trusted);
+        store.grant(&fp, "inbound");
+        store.save().unwrap();
+
+        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+        let spec = brief_tray();
+        let send_body = body(serde_json::json!({
+            "to": "peer::ws::bob",
+            "tray": spec,
+        }));
+        let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
+            .await
+            .unwrap();
+        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["status"], "queued", "{}", resp.body);
+
+        let queued = outbox::list_for_peer(&fp);
+        assert_eq!(queued.len(), 1, "local daemon must accept and forward");
+        let env: federation::FederationEnvelope =
+            serde_json::from_slice(&queued[0].bytes).expect("queued envelope");
+        match env.payload.signal.kind {
+            SignalKind::Custom { kind, payload } => {
+                assert_eq!(kind, federation::TRAY_SIGNAL_KIND);
+                assert!(
+                    payload.get("files").and_then(|f| f.as_array()).map(|a| !a.is_empty())
+                        == Some(true),
+                    "queued tray must carry files: {payload}"
+                );
+                let dump = payload.to_string();
+                assert!(
+                    !dump.contains("Do the thing.") || dump.contains("bytes_b64"),
+                    "file body rides as bytes_b64, not live text"
+                );
+            }
+            SignalKind::Msg { text } => panic!("must not fall back to live text: {text}"),
+            other => panic!("expected inbox-tray Custom, got {other:?}"),
+        }
     }
 
     // ── PR1: dual-auth under passports — principal-bound from_workspace ──

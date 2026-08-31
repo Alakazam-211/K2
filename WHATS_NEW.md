@@ -7,6 +7,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 GET `/cli/skin/agents` includes `displayName` (guest-facing label; `handle` stays the id). Agent Thread posts stamp the room handle, not `k2`. Skin guest `from` is still the username.
 
+**`k2 msg agent::host --inbox-wake`** uses the same federation plane as live `k2 msg`. Connected peer is the gate — not a Connect token. Wake is a tray pointer, not file bytes in the PTY.
+
 ---
 
 ## 0.40.125 — Skin files read/write + live events

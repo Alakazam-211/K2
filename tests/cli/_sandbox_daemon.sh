@@ -24,14 +24,28 @@ sandbox_daemon_start() {
     SANDBOX_HOME="$(mktemp -d -t k2so-2.1b-sandbox-XXXXXX)"
     export SANDBOX_HOME
 
-    # Prefer release; fall back to debug if release isn't built yet.
-    local daemon_bin="$project_root/target/release/k2so-daemon"
-    if [ ! -x "$daemon_bin" ]; then
-        daemon_bin="$project_root/target/debug/k2so-daemon"
+    # Prefer CARGO_TARGET_DIR (worktree-local), then repo target/.
+    # Binary name is k2-daemon; keep k2so-daemon as a legacy alias.
+    local daemon_bin="" roots=()
+    if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+        roots+=("${CARGO_TARGET_DIR}")
     fi
-    if [ ! -x "$daemon_bin" ]; then
-        echo "FAIL: k2so-daemon binary not found in target/{release,debug}/" >&2
-        echo "       Build first: cargo build -p k2so-daemon" >&2
+    roots+=("$project_root/target")
+    local root cand
+    for root in "${roots[@]}"; do
+        for cand in \
+            "$root/release/k2-daemon" "$root/debug/k2-daemon" \
+            "$root/release/k2so-daemon" "$root/debug/k2so-daemon"
+        do
+            if [ -x "$cand" ]; then
+                daemon_bin="$cand"
+                break 2
+            fi
+        done
+    done
+    if [ -z "$daemon_bin" ] || [ ! -x "$daemon_bin" ]; then
+        echo "FAIL: k2-daemon binary not found in target/{release,debug}/" >&2
+        echo "       Build first: cargo build -p k2-daemon" >&2
         return 1
     fi
     SANDBOX_DAEMON_BIN="$daemon_bin"

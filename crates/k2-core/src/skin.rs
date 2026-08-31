@@ -373,12 +373,14 @@ pub struct SkinTokenMeta {
     pub revoked_at: Option<i64>,
 }
 
-/// One workspace a skin pass may Thread. Wire `{handle, projectId}`.
+/// One workspace a skin pass may Thread. Wire `{handle, projectId, displayName}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SkinAgent {
     pub handle: String,
     pub project_id: String,
+    /// Guest-facing label. Handle stays the id.
+    pub display_name: String,
 }
 
 /// Resolved live pass. Safe to log `id` / `username` / `caps` — never a secret.
@@ -1200,7 +1202,7 @@ pub fn handles_for_project_ids(ids: &[String]) -> Vec<String> {
 pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
     let db = crate::db::shared();
     let conn = db.lock();
-    let mut out = Vec::new();
+    let mut pending: Vec<(String, String, Option<String>)> = Vec::new();
     for id in ids {
         let id = id.trim();
         if id.is_empty() {
@@ -1209,14 +1211,35 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
         if let Ok(h) = crate::workspace::handle::project_handle(&conn, id) {
             let h = h.trim().to_string();
             if !h.is_empty() {
-                out.push(SkinAgent {
-                    handle: h,
-                    project_id: id.to_string(),
-                });
+                let path: Option<String> = conn
+                    .query_row(
+                        "SELECT path FROM projects WHERE id = ?1",
+                        params![id],
+                        |r| r.get(0),
+                    )
+                    .ok()
+                    .map(|s: String| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                pending.push((id.to_string(), h, path));
             }
         }
     }
-    out
+    drop(conn);
+    pending
+        .into_iter()
+        .map(|(project_id, handle, path)| {
+            let display_name = path
+                .map(|p| crate::workspace::display::agent_display_name(&p))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| handle.clone());
+            SkinAgent {
+                handle,
+                project_id,
+                display_name,
+            }
+        })
+        .collect()
 }
 
 /// Resolve a presented raw key. Revoked / expired / unknown / wrong prefix → `None`.
@@ -1670,6 +1693,25 @@ mod tests {
         assert!(err.contains("unknown workspace handle"), "{err}");
         let err = resolve_room_tokens(&["not-a-handle".into()]).unwrap_err();
         assert!(err.contains("unknown workspace handle"), "{err}");
+
+        let agents = live_agents(&[id.clone()]);
+        assert_eq!(agents.len(), 1, "{agents:?}");
+        assert_eq!(agents[0].handle, handle);
+        assert_eq!(agents[0].project_id, id);
+        assert!(
+            !agents[0].display_name.trim().is_empty(),
+            "display_name must be a non-empty string: {agents:?}"
+        );
+        let wire = serde_json::to_value(&agents[0]).expect("wire");
+        assert_eq!(wire["handle"], handle);
+        assert_eq!(wire["projectId"], id);
+        assert!(
+            wire["displayName"]
+                .as_str()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false),
+            "wire displayName: {wire}"
+        );
     }
 
     #[test]

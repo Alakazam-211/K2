@@ -1168,6 +1168,12 @@ async fn skin_rooms_acl_http_ws_list_and_compose() {
         assert_eq!(list.len(), 1, "{}", agents.body);
         assert_eq!(list[0]["handle"], sales, "{}", agents.body);
         assert_eq!(list[0]["projectId"], sales_id, "{}", agents.body);
+        let display_name = list[0]["displayName"].as_str().unwrap_or("");
+        assert!(
+            !display_name.is_empty(),
+            "displayName must be a non-empty string: {}",
+            agents.body
+        );
         assert!(
             !agents.body.contains(&other),
             "list must not contain other handle: {}",
@@ -1198,9 +1204,20 @@ async fn skin_rooms_acl_http_ws_list_and_compose() {
             owner_other.body
         );
 
+        // Skin Thread post may wake a PTY and restamp the pin. WS the live Chat.
+        let live_pin = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            WorkspaceSession::get(&conn, &sales_id)
+                .ok()
+                .flatten()
+                .and_then(|s| s.session_id)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| sales_pin.clone())
+        };
         futures_block(async {
             let url = format!(
-                "ws://127.0.0.1:{port}/cli/overlay/events?conversation={sales_pin}&token={tok}"
+                "ws://127.0.0.1:{port}/cli/overlay/events?conversation={live_pin}&token={tok}"
             );
             let (_ws, resp) = tokio_tungstenite::connect_async(&url)
                 .await

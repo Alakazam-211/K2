@@ -431,17 +431,18 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     };
     let principal = crate::caller_workspace::principal_from_params(params);
     // Skin: authenticated pass username only (never body `from`). Overlay
-    // store and PTY stamp must match.
+    // store and PTY stamp must match. via=compose: session actor. Else
+    // empty/`k2` stamps the room handle (CLI still defaults from=k2).
     let from = if let Some(pass) = request_skin() {
         skin_from_stamp(&pass)
     } else if via == "compose" {
         compose_from_for_session(session_author)
     } else {
         let explicit = opt_param(params, "from").unwrap_or_default();
-        if !explicit.is_empty() {
-            explicit
+        if explicit.is_empty() || explicit.eq_ignore_ascii_case("k2") {
+            thread_from_room_handle(&resolved)
         } else {
-            "k2".to_string()
+            explicit
         }
     };
     let command = if via == "compose" {
@@ -882,6 +883,18 @@ pub fn on_human_pty_text(session_id: &str, text: &str) {
     apply_human_prose(session_id, &project_id, &addr, text);
 }
 
+/// Agent Thread `from`: room handle, never `k2`. UUID pin → handle via
+/// `display_addr_for`; otherwise the canonical addr is already the handle.
+fn thread_from_room_handle(resolved: &ResolvedOverlay) -> String {
+    if k2_core::workspace_session_handles::is_uuid_shape(&resolved.addr) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        display_addr_for(&conn, &resolved.project_id, &resolved.conversation_id)
+    } else {
+        resolved.addr.clone()
+    }
+}
+
 fn display_addr_for(
     conn: &rusqlite::Connection,
     project_id: &str,
@@ -1111,7 +1124,10 @@ mod tests {
         assert_eq!(post.status, "200 OK", "post failed: {}", post.body);
         let posted = json_body(&post);
         assert_eq!(posted["ok"], true, "{posted}");
-        assert_eq!(posted["from"], "k2", "json must have from: {posted}");
+        assert_eq!(
+            posted["from"], handle,
+            "empty/k2 from stamps the room handle: {posted}"
+        );
         assert!(
             posted["seq"].as_i64().is_some(),
             "json must have seq: {posted}"
@@ -1125,7 +1141,7 @@ mod tests {
         let items = snap["items"].as_array().expect("items array");
         assert_eq!(items.len(), 1, "{snap}");
         assert_eq!(items[0]["doc"]["body"], "hi");
-        assert_eq!(items[0]["doc"]["from"], "k2");
+        assert_eq!(items[0]["doc"]["from"], handle);
         assert_eq!(items[0]["seq"], posted["seq"]);
     }
 
@@ -2005,5 +2021,75 @@ mod tests {
             after.iter().all(|l| !l.contains(&compose_text)),
             "via=compose 403 must not inject the compose body; got {after:?}"
         );
+    }
+
+    #[test]
+    fn thread_post_empty_or_k2_from_stamps_room_handle_not_k2() {
+        let handle = format!("dannon-cherokee{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let pin_id = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &pin_id);
+
+        let no_from = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": "no-from",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(no_from.status, "200 OK", "{}", no_from.body);
+        let posted = json_body(&no_from);
+        assert_eq!(
+            posted["from"].as_str().expect("from"),
+            handle.as_str(),
+            "missing from must stamp the room handle, not k2: {posted}"
+        );
+        assert_ne!(posted["from"], "k2");
+
+        let as_k2 = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "text": "from-k2",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(as_k2.status, "200 OK", "{}", as_k2.body);
+        let posted_k2 = json_body(&as_k2);
+        assert_eq!(
+            posted_k2["from"].as_str().expect("from"),
+            handle.as_str(),
+            "from=k2 must rewrite to the room handle: {posted_k2}"
+        );
+        assert_ne!(posted_k2["from"], "k2");
+
+        let pass = skin_pass(&[project_id]);
+        let skin_post = with_request_skin(Some(pass), || {
+            dispatch_post(
+                "/cli/thread/post",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": handle,
+                    "text": "skin-guest",
+                    "from": "k2",
+                })
+                .to_string()
+                .as_bytes(),
+            )
+        });
+        assert_eq!(skin_post.status, "200 OK", "{}", skin_post.body);
+        let skin_posted = json_body(&skin_post);
+        assert_eq!(
+            skin_posted["from"].as_str().expect("from"),
+            "guest",
+            "skin post must stamp the pass username, not the room handle: {skin_posted}"
+        );
+        assert_ne!(skin_posted["from"], handle);
     }
 }

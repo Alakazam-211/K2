@@ -3,6 +3,16 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.124 — Skin agent rooms, study, store 403 names the DB
+
+**Skin Access keys name which agents may use Thread.** Empty list is no Thread, not every agent on the box. New mint requires `--agent`. Existing keys go dark on Thread until you assign rooms (same secret). Overlay WS 403s before upgrade if that conversation is not the allowed agent’s pinned Chat. Sidecar chats (`sales/reviewer`) stay 403. Grid still never. Guest **login** (username/password → cookie) is not this cut.
+
+**CLI.** `k2 study` is daemon-optional pages (Fair Source, people lists, errors) — not a second `--help`. `k2 agent list` reports `local_transport_denied` when the OS blocked the socket (daemon health unobserved). `k2 skin hydra on|off`. Linux: Hydra starts on daemon boot if enabled.
+
+**Database.** Unscoped `k2 store` / migrate 403s name the resolved DB (`dbId`, `dbName`, `resolvedVia`). A write grant on a newer DB does not unlock put on an older read grant.
+
+---
+
 ## 0.40.123 — Skin SPA door, migrate that sticks, Hydra toggle
 
 **Skin Direct** can serve an on-box UI: if you set a UI port, Caddy proxies `/`, `/assets`, `/_next`, and `/app` to that loopback app (not the whole daemon). Grid, login, and `/v1` stay 403. Mail Enable re-applies Caddy so the mail hostname shows up without a second front-door click. Direct custom domains still need **:80** (or dns-01) for certificates.

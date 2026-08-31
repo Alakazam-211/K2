@@ -308,7 +308,7 @@ pub fn handle_dsn(params: &HashMap<String, String>) -> CliResponse {
         return resp;
     }
     let secrets = FileSecretStore::default();
-    match ops::dsn_for_project(&secrets, &project_id, cap_for(&path)) {
+    match ops::dsn_for_project(ops(), &secrets, &project_id, cap_for(&path)) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -656,8 +656,10 @@ pub fn handle_grant(body: &[u8]) -> CliResponse {
         Err(resp) => return resp,
     };
     let can_manage = b.manage.or(b.can_manage).unwrap_or(false);
+    let secrets = FileSecretStore::default();
     match ops::grant_access(
         ops(),
+        &secrets,
         caller_project_id().as_deref(),
         &b.db,
         &grantee,
@@ -756,7 +758,7 @@ pub fn handle_bind(body: &[u8]) -> CliResponse {
             Err(resp) => return resp,
         }
     };
-    match ops::bind_role(b.db.as_deref(), project_id.as_deref(), &b.role) {
+    match ops::bind_role(ops(), b.db.as_deref(), project_id.as_deref(), &b.role) {
         Ok(v) => {
             let s = v.to_string().to_ascii_lowercase();
             if s.contains("password") || s.contains("\"dsn\"") || s.contains("dbsec_") {

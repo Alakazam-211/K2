@@ -42,7 +42,7 @@ mod tests {
     use super::*;
     use crate::caller_workspace::with_request_principal;
     use crate::session_token::HookPrincipal;
-    use crate::sql::secrets::MemSecretStore;
+    use crate::sql::secrets::{MemSecretStore, SecretStore};
     use crate::sql::sysops::FakeSystemOps;
     use crate::sql_routes;
 
@@ -120,7 +120,11 @@ mod tests {
         assert!(!s.contains("superuser"), "{s}");
         assert!(!s.contains("postgres://postgres"), "{s}");
         assert_eq!(v["role"], "agent");
-        assert!(v["dsn"].as_str().unwrap_or("").contains("_agent"));
+        assert!(
+            v["dsn"].as_str().expect("dsn").contains("_agent"),
+            "{}",
+            v["dsn"]
+        );
         let helper = ops
             .pg
             .lock()
@@ -602,22 +606,19 @@ mod tests {
         let secrets = MemSecretStore::default();
         let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
         let db_name = created["name"].as_str().unwrap().to_string();
-        let n_helper_before = ops.pg.lock().unwrap().helper_sql.len();
         ops::store_create(&ops, &secrets, &pid, "items").expect("coll");
-        let helper = ops.pg.lock().unwrap().helper_sql[n_helper_before..].join("\n");
-        assert!(
-            helper.contains("GRANT USAGE ON SCHEMA public TO")
-                && helper.contains(
-                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO"
-                ),
-            "store ensure GRANT via helper missing: {helper}"
-        );
-        assert!(
-            helper.contains(&format!("{db_name}_agent")),
-            "GRANT must target DSN user {{db}}_agent; helper={helper}"
-        );
+        let n_rec = ops.recorded().len();
         let doc = serde_json::json!({"n": 1});
         ops::store_put(&ops, &secrets, &pid, "items", "a", &doc).expect("put");
+        let rec = ops.recorded()[n_rec..].join("\n");
+        assert!(
+            rec.contains(&format!("-U {db_name}_agent")),
+            "store_put must connect as owner agent, got {rec}"
+        );
+        assert!(
+            !rec.contains("_migrator"),
+            "store_put DML must not use migrator, got {rec}"
+        );
         let got = ops::store_get(&ops, &secrets, &pid, "items", "a").expect("get");
         assert_eq!(got["doc"]["n"], 1);
         let q = ops::store_query(&ops, &secrets, &pid, "items", 10).expect("query");
@@ -703,12 +704,30 @@ mod tests {
         let secrets = MemSecretStore::default();
         let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
         let db_name = created["name"].as_str().unwrap().to_string();
-        let granted = ops::grant_access(&ops, None, &db_name, &id_b, "read", false).expect("grant");
+        let granted =
+            ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "read", false).expect("grant");
         assert_eq!(granted["level"], "read");
         assert_eq!(granted["canManage"], false);
         let role = granted["role"].as_str().unwrap();
         assert!(role.contains("_agent"), "{role}");
         assert!(!role.contains("postgres"), "{role}");
+        let granted_s = granted.to_string().to_ascii_lowercase();
+        assert!(!granted_s.contains("password"), "{granted}");
+        assert!(!granted_s.contains("dbsec_"), "{granted}");
+        let sref: Option<String> = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT agent_secret_ref FROM sql_grants WHERE project_id = ?1",
+                rusqlite::params![id_b],
+                |r| r.get(0),
+            )
+            .expect("grant secret_ref")
+        };
+        assert!(
+            sref.as_deref().is_some_and(|s| s.starts_with("dbsec_")),
+            "grant must vault agent_secret_ref, got {sref:?}"
+        );
         let helper = ops
             .pg
             .lock()
@@ -757,7 +776,7 @@ mod tests {
         let secrets = MemSecretStore::default();
         let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
         let db_name = created["name"].as_str().unwrap().to_string();
-        let err = ops::grant_access(&ops, Some(&id_b), &db_name, &id_c, "read", false)
+        let err = ops::grant_access(&ops, &secrets, Some(&id_b), &db_name, &id_c, "read", false)
             .expect_err("foreign agent must not grant");
         assert_eq!(err.code(), "forbidden");
         let principal = HookPrincipal {
@@ -792,11 +811,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
         let pid = insert_project("sql-bind", &path);
-        let ops = FakeSystemOps::baked();
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
         let secrets = MemSecretStore::default();
-        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let created = ops::create_database(fake, &secrets, &pid, 1, None, None).expect("create");
         let db_name = created["name"].as_str().unwrap().to_string();
-        let v = ops::bind_role(Some(&db_name), Some(&pid), "app_reader").expect("bind");
+        let v = ops::bind_role(fake, Some(&db_name), Some(&pid), "app_reader").expect("bind");
         let s = v.to_string().to_ascii_lowercase();
         assert!(!s.contains("password"), "{s}");
         assert!(!s.contains("dsn"), "{s}");
@@ -812,12 +831,14 @@ mod tests {
             .expect("listed");
         assert_eq!(row["bindRole"], "app_reader");
         let body = serde_json::json!({ "project": pid, "db": db_name, "role": "app_reader" });
-        let r = routes::handle_bind(body.to_string().as_bytes());
-        assert_eq!(r.status, "200 OK", "{}", r.body);
-        let out: serde_json::Value = serde_json::from_str(&r.body).unwrap();
-        let s = out.to_string().to_ascii_lowercase();
-        assert!(!s.contains("password"), "{s}");
-        assert!(!s.contains("dsn"), "{s}");
+        routes::with_fake_ops(fake, || {
+            let r = routes::handle_bind(body.to_string().as_bytes());
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let out: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+            let s = out.to_string().to_ascii_lowercase();
+            assert!(!s.contains("password"), "{s}");
+            assert!(!s.contains("dsn"), "{s}");
+        });
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -843,7 +864,7 @@ mod tests {
         let created_a =
             ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create A");
         let db_a = created_a["name"].as_str().unwrap().to_string();
-        ops::grant_access(&ops, None, &db_a, &id_b, "write", false).expect("grant B");
+        ops::grant_access(&ops, &secrets, None, &db_a, &id_b, "write", false).expect("grant B");
         let n_helper_before = ops.pg.lock().unwrap().helper_sql.len();
         let created_b = ops::create_database(&ops, &secrets, &id_b, 1, None, None)
             .expect("create B after grant must not fail on duplicate ROLE");
@@ -883,8 +904,8 @@ mod tests {
             .as_str()
             .expect("create_database must return name")
             .to_string();
-        let granted =
-            ops::grant_access(&ops, None, &db_name, &id_b, "write", false).expect("grant write");
+        let granted = ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false)
+            .expect("grant write");
         assert_eq!(granted["level"], "write", "{granted}");
         let helper = ops
             .pg
@@ -904,6 +925,11 @@ mod tests {
         assert!(
             helper.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES"),
             "write grant must still DML tables, got {helper}"
+        );
+        assert!(
+            helper.contains("ALTER DEFAULT PRIVILEGES FOR ROLE")
+                && helper.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO"),
+            "write grant must ALTER DEFAULT PRIVILEGES to the grantee, got {helper}"
         );
         for stmt in helper.split(';') {
             let grant_on_sequences = stmt.contains("GRANT") && stmt.contains("ON ALL SEQUENCES");
@@ -1050,7 +1076,8 @@ mod tests {
             &serde_json::json!({"n": 1}),
         )
         .expect("seed put");
-        let granted = ops::grant_access(fake, None, &db_name, &id_b, "read", false).expect("grant");
+        let granted =
+            ops::grant_access(fake, &secrets, None, &db_name, &id_b, "read", false).expect("grant");
         let db_id = granted["databaseId"]
             .as_str()
             .expect("databaseId")
@@ -1124,10 +1151,10 @@ mod tests {
             ops::create_database(fake, &secrets, &id_c, 1, None, None).expect("create C");
         let name_a = created_a["name"].as_str().expect("name A").to_string();
         let name_c = created_c["name"].as_str().expect("name C").to_string();
-        let grant_read =
-            ops::grant_access(fake, None, &name_a, &id_b, "read", false).expect("read grant");
-        let grant_write =
-            ops::grant_access(fake, None, &name_c, &id_b, "write", false).expect("write grant");
+        let grant_read = ops::grant_access(fake, &secrets, None, &name_a, &id_b, "read", false)
+            .expect("read grant");
+        let grant_write = ops::grant_access(fake, &secrets, None, &name_c, &id_b, "write", false)
+            .expect("write grant");
         let id_read = grant_read["databaseId"]
             .as_str()
             .expect("read databaseId")
@@ -1290,5 +1317,547 @@ mod tests {
             );
         });
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn dsn_url_user(v: &serde_json::Value) -> &str {
+        let dsn = v["dsn"].as_str().expect("dsn");
+        let rest = dsn.strip_prefix("postgres://").expect("postgres scheme");
+        rest.split(':').next().expect("dsn user")
+    }
+
+    fn grant_secret_ref(grantee: &str) -> Option<String> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT agent_secret_ref FROM sql_grants WHERE project_id = ?1",
+            rusqlite::params![grantee],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten()
+    }
+
+    #[test]
+    fn grant_vaults_secret_and_default_privileges_to_grantee() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-ga-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-gb-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let id_a = insert_project("sql-128-ga", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-128-gb", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        let granted = ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false)
+            .expect("grant");
+        let role_b = ops::default_agent_role(&id_b);
+        assert_eq!(granted["role"].as_str().expect("role"), role_b);
+        let body = granted.to_string().to_ascii_lowercase();
+        assert!(!body.contains("password"), "{granted}");
+        assert!(!body.contains("dbsec_"), "{granted}");
+        let sref = grant_secret_ref(&id_b);
+        assert!(
+            sref.as_deref().is_some_and(|s| s.starts_with("dbsec_")),
+            "agent_secret_ref must be set, got {sref:?}"
+        );
+        let helper = ops.pg.lock().expect("pg").helper_sql.join("\n");
+        assert!(
+            helper.contains(&format!("CREATE ROLE \"{role_b}\"")),
+            "grant must CREATE ROLE {role_b}: {helper}"
+        );
+        assert!(
+            helper.contains(&format!(
+                "GRANT CONNECT ON DATABASE \"{db_name}\" TO \"{role_b}\""
+            )),
+            "grant must GRANT CONNECT to B: {helper}"
+        );
+        assert!(
+            helper.contains("ALTER DEFAULT PRIVILEGES")
+                && helper.contains(&format!("TO \"{role_b}\"")),
+            "grant must DEFAULT PRIVILEGES to B, not only owner agent: {helper}"
+        );
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn dsn_as_grantee_uses_workspace_agent_not_dbname_agent() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-da-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-db-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let id_a = insert_project("sql-128-da", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-128-db", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false).expect("grant");
+        let dsn_b = ops::dsn_for_project(&ops, &secrets, &id_b, 1).expect("dsn B");
+        assert_eq!(dsn_b["role"], "agent", "{dsn_b}");
+        let user_b = dsn_url_user(&dsn_b);
+        assert_eq!(user_b, ops::default_agent_role(&id_b), "{dsn_b}");
+        assert_ne!(user_b, format!("{db_name}_agent"), "{dsn_b}");
+        assert!(
+            dsn_b["dsn"]
+                .as_str()
+                .expect("dsn")
+                .contains(&format!("/{db_name}")),
+            "grantee dsn must target A's db: {dsn_b}"
+        );
+        let dsn_a = ops::dsn_for_project(&ops, &secrets, &id_a, 1).expect("dsn A");
+        assert_eq!(dsn_a["role"], "agent", "{dsn_a}");
+        assert_eq!(dsn_url_user(&dsn_a), format!("{db_name}_agent"), "{dsn_a}");
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn two_grantees_get_different_dsn_users() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-2a-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-2b-{}", uuid::Uuid::new_v4()));
+        let dir_c = std::env::temp_dir().join(format!("k2-sql-128-2c-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        std::fs::create_dir_all(&dir_c).unwrap();
+        let id_a = insert_project("sql-128-2a", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-128-2b", &dir_b.to_string_lossy());
+        let id_c = insert_project("sql-128-2c", &dir_c.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false).expect("grant B");
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_c, "read", false).expect("grant C");
+        let dsn_b = ops::dsn_for_project(&ops, &secrets, &id_b, 1).expect("dsn B");
+        let dsn_c = ops::dsn_for_project(&ops, &secrets, &id_c, 1).expect("dsn C");
+        let user_b = dsn_url_user(&dsn_b);
+        let user_c = dsn_url_user(&dsn_c);
+        assert_eq!(user_b, ops::default_agent_role(&id_b), "{dsn_b}");
+        assert_eq!(user_c, ops::default_agent_role(&id_c), "{dsn_c}");
+        assert_ne!(user_b, user_c, "two grantees must not share a LOGIN");
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+        let _ = std::fs::remove_dir_all(dir_c);
+    }
+
+    #[test]
+    fn store_put_as_grantee_uses_workspace_agent_not_migrator() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-sa-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-sb-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let path_a = dir_a.to_string_lossy().into_owned();
+        let id_a = insert_project("sql-128-sa", &path_a);
+        let id_b = insert_project("sql-128-sb", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false).expect("grant");
+        let n = ops.recorded().len();
+        ops::store_put(
+            &ops,
+            &secrets,
+            &id_b,
+            "items",
+            "b1",
+            &serde_json::json!({"n": 1}),
+        )
+        .expect("put as B");
+        let rec = ops.recorded()[n..].join("\n");
+        let role_b = ops::default_agent_role(&id_b);
+        assert!(
+            rec.contains(&format!("-U {role_b}")),
+            "store_put as B must use -U {role_b}, got {rec}"
+        );
+        assert!(
+            !rec.contains("_migrator"),
+            "store_put as B must not use migrator, got {rec}"
+        );
+        assert!(
+            !rec.contains(&format!("-U {db_name}_agent")),
+            "store_put as B must not use owner agent, got {rec}"
+        );
+        let n = ops.recorded().len();
+        let mig_dir = dir_a.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig_dir).unwrap();
+        std::fs::write(mig_dir.join("0001_init.sql"), b"CREATE TABLE t (id int);\n").unwrap();
+        ops::migrate(&ops, &secrets, &id_a, &path_a, None).expect("migrate");
+        let rec = ops.recorded()[n..].join("\n");
+        assert!(
+            rec.contains(&format!("-U {db_name}_migrator")),
+            "migrate must use migrator, got {rec}"
+        );
+        let n = ops.recorded().len();
+        ops::dump(&ops, &secrets, &id_a, &path_a, Some(".k2/db/dumps/x.dump")).expect("dump");
+        let rec = ops.recorded()[n..].join("\n");
+        assert!(
+            rec.contains(&format!("-U {db_name}_migrator")),
+            "dump must use migrator, got {rec}"
+        );
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn store_put_grantee_missing_table_is_409() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-409a-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-409b-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let id_a = insert_project("sql-128-409a", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-128-409b", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false).expect("grant");
+        {
+            let mut pg = ops.pg.lock().expect("pg");
+            pg.tables.remove(&(db_name.clone(), "_k2_store".into()));
+        }
+        let n = ops.recorded().len();
+        let err = ops::store_put(
+            &ops,
+            &secrets,
+            &id_b,
+            "items",
+            "x",
+            &serde_json::json!({"n": 1}),
+        )
+        .expect_err("grantee missing table");
+        assert_eq!(err.code(), "not_ready", "{}", err.hint());
+        assert_eq!(err.status(), "409 Conflict");
+        assert!(
+            err.hint().contains("_k2_store") || err.hint().contains("migrate"),
+            "{}",
+            err.hint()
+        );
+        let rec = ops.recorded()[n..].join("\n");
+        assert!(
+            !rec.contains("_migrator"),
+            "grantee must not CREATE as migrator, got {rec}"
+        );
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn owner_first_put_missing_table_migrator_ensure_then_agent_insert() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-128-own-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid = insert_project("sql-128-own", &dir.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        {
+            let mut pg = ops.pg.lock().expect("pg");
+            pg.tables.remove(&(db_name.clone(), "_k2_store".into()));
+        }
+        let n = ops.recorded().len();
+        ops::store_put(
+            &ops,
+            &secrets,
+            &pid,
+            "items",
+            "a",
+            &serde_json::json!({"n": 1}),
+        )
+        .expect("owner put");
+        let rec = ops.recorded()[n..].join("\n");
+        assert!(
+            rec.contains(&format!("-U {db_name}_migrator")),
+            "missing table must CREATE as migrator, got {rec}"
+        );
+        assert!(
+            rec.contains(&format!("-U {db_name}_agent")),
+            "INSERT must be owner agent, got {rec}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn foreign_project_on_scoped_token_dsn_uses_stamped_caller() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-fa-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-fb-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let path_a = dir_a.to_string_lossy().into_owned();
+        let path_b = dir_b.to_string_lossy().into_owned();
+        let id_a = insert_project("sql-128-fa", &path_a);
+        let id_b = insert_project("sql-128-fb", &path_b);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        let principal = HookPrincipal {
+            workspace_uuid: id_a.clone(),
+            agent_address: "a".into(),
+        };
+        with_request_principal(Some(principal), || {
+            let (_path, pid) = identity::resolve_caller(&path_b)
+                .unwrap_or_else(|r| panic!("resolve failed: {} {}", r.status, r.body));
+            assert_eq!(pid, id_a, "HookPrincipal A must win over project=B");
+            let v = ops::dsn_for_project(&ops, &secrets, &pid, 1).expect("dsn");
+            assert_eq!(dsn_url_user(&v), format!("{db_name}_agent"), "{v}");
+            assert_ne!(
+                dsn_url_user(&v),
+                ops::default_agent_role(&id_b),
+                "must not dsn as B"
+            );
+        });
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn unscoped_dsn_flips_to_owned_after_grantee_creates() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-fla-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-flb-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let id_a = insert_project("sql-128-fla", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-128-flb", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created_a =
+            ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create A");
+        let db_a = created_a["name"].as_str().expect("name").to_string();
+        ops::grant_access(&ops, &secrets, None, &db_a, &id_b, "write", false).expect("grant");
+        let dsn_grant = ops::dsn_for_project(&ops, &secrets, &id_b, 1).expect("dsn grant");
+        assert_eq!(
+            dsn_url_user(&dsn_grant),
+            ops::default_agent_role(&id_b),
+            "{dsn_grant}"
+        );
+        assert_eq!(dsn_grant["name"].as_str().expect("name"), db_a);
+        let created_b =
+            ops::create_database(&ops, &secrets, &id_b, 1, None, None).expect("create B");
+        let db_b = created_b["name"].as_str().expect("name B").to_string();
+        let dsn_owned = ops::dsn_for_project(&ops, &secrets, &id_b, 1).expect("dsn owned");
+        assert_eq!(
+            dsn_url_user(&dsn_owned),
+            format!("{db_b}_agent"),
+            "unscoped dsn must flip to B's owned DB: {dsn_owned}"
+        );
+        assert_eq!(dsn_owned["name"].as_str().expect("name"), db_b);
+        assert_ne!(
+            dsn_owned["name"].as_str().expect("name"),
+            dsn_grant["name"].as_str().expect("name"),
+            "unscoped dsn must leave A's DB after B creates: grant={dsn_grant} owned={dsn_owned}"
+        );
+        assert!(
+            dsn_owned["dsn"]
+                .as_str()
+                .expect("dsn")
+                .contains(&format!("/{db_b}")),
+            "owned dsn URL must target B's database: {dsn_owned}"
+        );
+        assert!(
+            !dsn_owned["dsn"]
+                .as_str()
+                .expect("dsn")
+                .contains(&format!("/{db_a}")),
+            "owned dsn must not still point at A's database: {dsn_owned}"
+        );
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn grant_then_create_does_not_rotate_the_other_vaulted_secret() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-rot-a-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-rot-b-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let id_a = insert_project("sql-128-rot-a", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-128-rot-b", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created_a =
+            ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create A");
+        let db_a = created_a["name"].as_str().expect("name").to_string();
+        ops::grant_access(&ops, &secrets, None, &db_a, &id_b, "write", false).expect("grant");
+        let grant_ref = grant_secret_ref(&id_b).expect("grant secret_ref");
+        let pw_before = secrets
+            .resolve(&grant_ref)
+            .expect("resolve")
+            .expect("vaulted");
+        let dsn_before = ops::dsn_for_project(&ops, &secrets, &id_b, 1).expect("dsn before");
+        let created_b = ops::create_database(&ops, &secrets, &id_b, 1, None, None)
+            .expect("create B after grant");
+        let grant_ref_after = grant_secret_ref(&id_b).expect("grant secret_ref after");
+        let pw_after = secrets
+            .resolve(&grant_ref_after)
+            .expect("resolve after")
+            .expect("vaulted after");
+        assert_eq!(
+            pw_before, pw_after,
+            "create must not rotate the grant vaulted password"
+        );
+        let db_ref: String = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT agent_secret_ref FROM sql_databases WHERE project_id = ?1 AND status = 'active'",
+                rusqlite::params![id_b],
+                |r| r.get(0),
+            )
+            .expect("owned secret_ref")
+        };
+        assert_eq!(
+            db_ref, grant_ref_after,
+            "owned row must share the grant vault key"
+        );
+        let dsn_owned = ops::dsn_for_project(&ops, &secrets, &id_b, 1).expect("dsn owned");
+        assert_eq!(
+            dsn_url_user(&dsn_owned),
+            format!("{}_agent", created_b["name"].as_str().expect("name"))
+        );
+        let dsn_grant = ops::dsn_for_project(&ops, &secrets, &id_a, 1).expect("dsn A still owner");
+        assert_eq!(dsn_url_user(&dsn_grant), format!("{db_a}_agent"));
+        assert_eq!(dsn_url_user(&dsn_before), ops::default_agent_role(&id_b));
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn bind_set_grants_membership_and_set_role_postgres_still_400() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-128-bind-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid = insert_project("sql-128-bind", &dir.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        let err = ops::bind_role(&ops, Some(&db_name), Some(&pid), "postgres")
+            .expect_err("postgres bind");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        assert_eq!(err.status(), "400 Bad Request");
+        let err = ops::bind_role(&ops, Some(&db_name), Some(&pid), "k2_admin")
+            .expect_err("k2_admin bind");
+        assert_eq!(err.code(), "usage");
+        let err = ops::bind_role(&ops, Some(&db_name), Some(&pid), "my_superuser")
+            .expect_err("superuser substring");
+        assert_eq!(err.code(), "usage");
+        ops::bind_role(&ops, Some(&db_name), Some(&pid), "app_reader").expect("bind");
+        let helper = ops.pg.lock().expect("pg").helper_sql.join("\n");
+        assert!(
+            helper.contains("GRANT \"app_reader\" TO")
+                && helper.contains(&format!("\"{db_name}_agent\"")),
+            "bind must GRANT membership to owner agent: {helper}"
+        );
+        assert!(
+            helper.to_ascii_uppercase().contains("CREATE ROLE")
+                && helper.contains("\"app_reader\""),
+            "bind must CREATE ROLE bind if missing: {helper}"
+        );
+        let n = ops.recorded().len();
+        ops::store_put(
+            &ops,
+            &secrets,
+            &pid,
+            "items",
+            "a",
+            &serde_json::json!({"n": 1}),
+        )
+        .expect("put with bind");
+        let rec = ops.recorded()[n..].join("\n");
+        assert!(
+            rec.contains("SET ROLE"),
+            "owned store with bind must SET ROLE, got {rec}"
+        );
+        assert!(
+            rec.contains(&format!("-U {db_name}_agent")),
+            "SET ROLE session still logs in as owner agent, got {rec}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn upgrade_old_grant_alters_and_vaults_once() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-up-a-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-up-b-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let id_a = insert_project("sql-128-up-a", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-128-up-b", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false).expect("grant");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE sql_grants SET agent_secret_ref = NULL WHERE project_id = ?1",
+                rusqlite::params![id_b],
+            )
+            .expect("simulate pre-128 grant");
+        }
+        let n_helper = ops.pg.lock().expect("pg").helper_sql.len();
+        let dsn_b = ops::dsn_for_project(&ops, &secrets, &id_b, 1).expect("upgrade dsn");
+        assert_eq!(
+            dsn_url_user(&dsn_b),
+            ops::default_agent_role(&id_b),
+            "{dsn_b}"
+        );
+        let helper = ops.pg.lock().expect("pg").helper_sql[n_helper..].join("\n");
+        assert!(
+            helper.to_ascii_uppercase().contains("ALTER ROLE"),
+            "upgrade must ALTER ROLE + vault, got {helper}"
+        );
+        let sref = grant_secret_ref(&id_b);
+        assert!(
+            sref.as_deref().is_some_and(|s| s.starts_with("dbsec_")),
+            "upgrade must vault, got {sref:?}"
+        );
+        let n_helper2 = ops.pg.lock().expect("pg").helper_sql.len();
+        let dsn_b2 = ops::dsn_for_project(&ops, &secrets, &id_b, 1).expect("second dsn");
+        assert_eq!(dsn_url_user(&dsn_b2), dsn_url_user(&dsn_b));
+        let helper2 = ops.pg.lock().expect("pg").helper_sql[n_helper2..].join("\n");
+        assert!(
+            !helper2.to_ascii_uppercase().contains("ALTER ROLE"),
+            "second dsn must not rotate, got {helper2}"
+        );
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
     }
 }

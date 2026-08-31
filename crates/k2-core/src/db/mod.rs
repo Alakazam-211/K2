@@ -943,6 +943,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0112_skin_hydra",
             include_str!("../../drizzle_sql/0112_skin_hydra.sql"),
         ),
+        // 0113 — sql_grants.agent_secret_ref (workspace PG LOGIN vault).
+        // Do not touch skin_hydra.
+        (
+            "0113_sql_grants_agent_secret",
+            include_str!("../../drizzle_sql/0113_sql_grants_agent_secret.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1544,7 +1550,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0112_skin_hydra",
+            last_name, "0113_sql_grants_agent_secret",
             "unexpected last migration name: {last_name}"
         );
     }

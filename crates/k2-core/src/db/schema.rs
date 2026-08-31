@@ -3300,6 +3300,10 @@ pub struct SqlGrant {
     pub project_id: String,
     pub level: String,
     pub can_manage: bool,
+    /// 0113: vault ref (`dbsec_*`) for this workspace's cluster LOGIN.
+    /// Shared with `sql_databases.agent_secret_ref` when `{name}_agent`
+    /// equals `ws_<project_id>_agent`. Never plaintext.
+    pub agent_secret_ref: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -3709,6 +3713,46 @@ mod unit_tests {
             .query_row("SELECT COUNT(*) FROM sql_grants WHERE database_id = 'd1'", [], |r| r.get(0))
             .expect("count");
         assert_eq!(n, 0);
+    }
+
+    /// 0113: sql_grants.agent_secret_ref is nullable (upgrade path).
+    #[test]
+    fn sql_grants_agent_secret_ref_0113_nullable() {
+        let conn = fresh();
+        conn.execute(
+            "INSERT INTO sql_databases (id, project_id, name, created_at) \
+             VALUES ('d1', 'p1', 'ws_p1', 100)",
+            [],
+        )
+        .expect("sql_databases insert");
+        conn.execute(
+            "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at) \
+             VALUES ('d1', 'p2', 'write', 0, 100, 100)",
+            [],
+        )
+        .expect("grant without secret_ref");
+        let sref: Option<String> = conn
+            .query_row(
+                "SELECT agent_secret_ref FROM sql_grants WHERE database_id = 'd1' AND project_id = 'p2'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("secret_ref read");
+        assert!(sref.is_none(), "0113 column must be nullable");
+        conn.execute(
+            "UPDATE sql_grants SET agent_secret_ref = 'dbsec_agent_test' \
+             WHERE database_id = 'd1' AND project_id = 'p2'",
+            [],
+        )
+        .expect("set secret_ref");
+        let sref2: Option<String> = conn
+            .query_row(
+                "SELECT agent_secret_ref FROM sql_grants WHERE database_id = 'd1' AND project_id = 'p2'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("secret_ref reread");
+        assert_eq!(sref2.as_deref(), Some("dbsec_agent_test"));
     }
 
     /// 0072 (K2 Mail): the CHECK-constrained enums reject invalid

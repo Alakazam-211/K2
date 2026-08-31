@@ -149,6 +149,48 @@ pub fn alter_role_password_sql(role: &str, password: &str) -> String {
     )
 }
 
+/// CREATE ROLE NOLOGIN for an owned `bind_role`. Membership GRANT is separate.
+pub fn create_nologin_role_sql(role: &str) -> String {
+    format!(
+        "CREATE ROLE {role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;",
+        role = pg_quote_ident(role),
+    )
+}
+
+fn refuse_dangerous_role_sql(sql: &str) -> Result<(), OpsError> {
+    let up = sql.to_ascii_uppercase();
+    if up.contains("SUPERUSER") && !up.contains("NOSUPERUSER") {
+        return Err(OpsError::Engine(
+            "internal: superuser leaked into role SQL".into(),
+        ));
+    }
+    if up.contains("CREATEDB") && !up.contains("NOCREATEDB") {
+        return Err(OpsError::Engine(
+            "internal: createdb leaked into role SQL".into(),
+        ));
+    }
+    if up.contains("BYPASSRLS") && !up.contains("NOBYPASSRLS") {
+        return Err(OpsError::Engine(
+            "internal: bypassrls leaked into role SQL".into(),
+        ));
+    }
+    if up.contains("FORCE ROW LEVEL") {
+        return Err(OpsError::Engine("internal: FORCE RLS is not v1".into()));
+    }
+    Ok(())
+}
+
+fn agent_login_for(row: &DbRow) -> String {
+    format!("{}_agent", row.name)
+}
+
+fn connect_user(row: &DbRow, via: ResolvedVia, caller_project_id: &str) -> String {
+    match via {
+        ResolvedVia::Owned => agent_login_for(row),
+        ResolvedVia::Grant => default_agent_role(caller_project_id),
+    }
+}
+
 fn count_active(conn: &rusqlite::Connection, project_id: &str) -> u32 {
     conn.query_row(
         "SELECT COUNT(*) FROM sql_databases WHERE project_id = ?1 AND status = 'active'",
@@ -387,13 +429,31 @@ pub fn create_database(
             if let Some(row) = load_active_by_client(&conn, project_id, cid) {
                 if row.status == "active" {
                     let used = count_active(&conn, project_id);
-                    return dsn_json(secrets, &row, true, used, cap);
+                    return dsn_json(
+                        ops,
+                        secrets,
+                        &row,
+                        ResolvedVia::Owned,
+                        project_id,
+                        true,
+                        used,
+                        cap,
+                    );
                 }
             }
         }
         if let Some(row) = load_active_by_name(&conn, project_id, &name) {
             let used = count_active(&conn, project_id);
-            return dsn_json(secrets, &row, true, used, cap);
+            return dsn_json(
+                ops,
+                secrets,
+                &row,
+                ResolvedVia::Owned,
+                project_id,
+                true,
+                used,
+                cap,
+            );
         }
         let used = count_active(&conn, project_id);
         if cap != 0 && used >= cap {
@@ -409,34 +469,32 @@ pub fn create_database(
     let migrator = format!("{name}_migrator");
     let agent = format!("{name}_agent");
     let migrator_pw = generate_secret().map_err(OpsError::Engine)?;
-    let agent_pw = generate_secret().map_err(OpsError::Engine)?;
+    // R2: one cluster password per LOGIN. A prior grant may have vaulted
+    // `{name}_agent` (default db name = ws_<id>). Reuse; do not ALTER.
+    let reused_agent = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        vaulted_secret_for_role(&conn, secrets, &agent)?
+    };
+    let (agent_pw, existing_agent_ref, alter_agent) = match reused_agent {
+        Some((sref, pw)) => (pw, Some(sref), false),
+        None => {
+            let pw = generate_secret().map_err(OpsError::Engine)?;
+            (pw, None, true)
+        }
+    };
 
-    let role_sql = format!(
-        "{}\n{}\n{}\n{}",
+    let mut role_sql = format!(
+        "{}\n{}\n{}",
         ensure_role_sql(&migrator, &migrator_pw),
         alter_role_password_sql(&migrator, &migrator_pw),
         ensure_role_sql(&agent, &agent_pw),
-        alter_role_password_sql(&agent, &agent_pw),
     );
-    let up = role_sql.to_ascii_uppercase();
-    if up.contains("SUPERUSER") && !up.contains("NOSUPERUSER") {
-        return Err(OpsError::Engine(
-            "internal: superuser leaked into role SQL".into(),
-        ));
+    if alter_agent {
+        role_sql.push('\n');
+        role_sql.push_str(&alter_role_password_sql(&agent, &agent_pw));
     }
-    if up.contains("CREATEDB") && !up.contains("NOCREATEDB") {
-        return Err(OpsError::Engine(
-            "internal: createdb leaked into role SQL".into(),
-        ));
-    }
-    if up.contains("BYPASSRLS") && !up.contains("NOBYPASSRLS") {
-        return Err(OpsError::Engine(
-            "internal: bypassrls leaked into role SQL".into(),
-        ));
-    }
-    if up.contains("FORCE ROW LEVEL") {
-        return Err(OpsError::Engine("internal: FORCE RLS is not v1".into()));
-    }
+    refuse_dangerous_role_sql(&role_sql)?;
 
     ops.run_helper(
         &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
@@ -486,9 +544,15 @@ pub fn create_database(
     )
     .map_err(OpsError::Engine)?;
 
-    let agent_ref = secrets
-        .store("agent", &agent_pw)
-        .map_err(OpsError::Engine)?;
+    let agent_ref = if let Some(sref) = existing_agent_ref {
+        sref
+    } else {
+        let sref = secrets
+            .store("agent", &agent_pw)
+            .map_err(OpsError::Engine)?;
+        sync_grant_secret_refs_for_role(&agent, &sref)?;
+        sref
+    };
     let migrator_ref = secrets
         .store("migrator", &migrator_pw)
         .map_err(OpsError::Engine)?;
@@ -520,22 +584,24 @@ pub fn create_database(
 }
 
 fn dsn_json(
+    ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     row: &DbRow,
+    via: ResolvedVia,
+    caller_project_id: &str,
     existing: bool,
     used: u32,
     cap: u32,
 ) -> Result<serde_json::Value, OpsError> {
-    let sref = row
-        .agent_secret_ref
-        .as_deref()
-        .ok_or_else(|| OpsError::Engine("agent secret ref missing".into()))?;
-    let pw = secrets
-        .resolve(sref)
-        .map_err(OpsError::Engine)?
-        .ok_or_else(|| OpsError::Engine("agent secret missing from vault".into()))?;
-    let agent = format!("{}_agent", row.name);
-    let dsn = dsn_for(&row.name, &agent, &pw);
+    let user = connect_user(row, via, caller_project_id);
+    let pw = match via {
+        ResolvedVia::Owned => owner_agent_password(secrets, row)?,
+        ResolvedVia::Grant => mint_workspace_agent_secret(ops, secrets, &user, false)?.1,
+    };
+    if via == ResolvedVia::Owned {
+        ensure_owned_bind(ops, row)?;
+    }
+    let dsn = dsn_for(&row.name, &user, &pw);
     let v = json_create(&row.name, &dsn, existing, used, cap);
     assert_no_superuser_json(&v);
     Ok(v)
@@ -546,28 +612,44 @@ pub fn list_databases(project_id: &str) -> serde_json::Value {
 }
 
 pub fn dsn_for_project(
+    ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     project_id: &str,
     cap: u32,
 ) -> Result<serde_json::Value, OpsError> {
     require_running()?;
-    let row = active_row(project_id)?;
+    let (row, via) = active_resolved(project_id)?;
     let used = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         count_active(&conn, project_id)
     };
-    dsn_json(secrets, &row, true, used, cap)
+    dsn_json(ops, secrets, &row, via, project_id, true, used, cap)
 }
 
 fn active_row(project_id: &str) -> Result<DbRow, OpsError> {
+    active_resolved(project_id).map(|(row, _)| row)
+}
+
+fn active_resolved(project_id: &str) -> Result<(DbRow, ResolvedVia), OpsError> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     resolve_unscoped(&conn, project_id)
-        .map(|(row, _, _)| row)
+        .map(|(row, via, _)| (row, via))
         .ok_or_else(|| {
             OpsError::NotFound("no database for this workspace — run 'k2 db create' first".into())
         })
+}
+
+fn owner_agent_password(secrets: &dyn SecretStore, row: &DbRow) -> Result<String, OpsError> {
+    let sref = row
+        .agent_secret_ref
+        .as_deref()
+        .ok_or_else(|| OpsError::Engine("agent secret ref missing".into()))?;
+    secrets
+        .resolve(sref)
+        .map_err(OpsError::Engine)?
+        .ok_or_else(|| OpsError::Engine("agent secret missing from vault".into()))
 }
 
 fn migrator_creds(secrets: &dyn SecretStore, row: &DbRow) -> Result<(String, String), OpsError> {
@@ -589,25 +671,45 @@ fn exec_as(
     password: &str,
     sql: &str,
 ) -> Result<String, OpsError> {
+    exec_as_role(ops, db, user, password, sql, None)
+}
+
+fn exec_as_role(
+    ops: &dyn SystemOps,
+    db: &str,
+    user: &str,
+    password: &str,
+    sql: &str,
+    set_role: Option<&str>,
+) -> Result<String, OpsError> {
     // `-tA` without `-F` uses `|` as the unaligned field separator.
     // Force tab so SELECT version, checksum is unambiguous; the parser
     // still accepts `|` for older fakes / forgotten `-F`.
+    // Bind SET ROLE is `-c` so Fake `recorded()` shows it (stdin is dropped).
+    let set_sql = set_role
+        .filter(|role| *role != user)
+        .map(|role| format!("SET ROLE {}", pg_quote_ident(role)));
+    let mut args: Vec<&str> = vec![
+        "-h",
+        "127.0.0.1",
+        "-U",
+        user,
+        "-d",
+        db,
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-tA",
+        "-F",
+        "\t",
+    ];
+    if let Some(ref set_sql) = set_sql {
+        args.push("-c");
+        args.push(set_sql.as_str());
+    }
     let out = ops
         .run_cmd(
             PSQL_PATH,
-            &[
-                "-h",
-                "127.0.0.1",
-                "-U",
-                user,
-                "-d",
-                db,
-                "-v",
-                "ON_ERROR_STOP=1",
-                "-tA",
-                "-F",
-                "\t",
-            ],
+            &args,
             &[("PGPASSWORD", password)],
             Some(sql.as_bytes()),
         )
@@ -996,10 +1098,183 @@ pub fn drop_database(ops: &dyn SystemOps, project_id: &str) -> Result<serde_json
 }
 
 /// Default PG role for a workspace (`ws_<id>_agent`). D22 bind overrides
-/// the *catalog* name shown to owners; DSN still uses this role's vault
-/// secret (bind does not mint or print a password).
+/// the *catalog* name shown to owners; DSN URL user on a grant is this
+/// LOGIN. Bind SET ROLE is owned-only and does not mint a password.
 pub fn default_agent_role(project_id: &str) -> String {
     format!("{}_agent", pg_ident_for_project(project_id))
+}
+
+/// R2: any vaulted secret for this cluster LOGIN, or None.
+fn vaulted_secret_for_role(
+    conn: &rusqlite::Connection,
+    secrets: &dyn SecretStore,
+    role: &str,
+) -> Result<Option<(String, String)>, OpsError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, agent_secret_ref FROM sql_databases \
+             WHERE status = 'active' AND agent_secret_ref IS NOT NULL",
+        )
+        .map_err(|e| OpsError::Engine(format!("prepare owned secrets: {e}")))?;
+    let owned: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| OpsError::Engine(format!("query owned secrets: {e}")))?
+        .filter_map(Result::ok)
+        .collect();
+    drop(stmt);
+    for (name, sref) in owned {
+        if format!("{name}_agent") == role {
+            if let Some(pw) = secrets.resolve(&sref).map_err(OpsError::Engine)? {
+                return Ok(Some((sref, pw)));
+            }
+        }
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT project_id, agent_secret_ref FROM sql_grants \
+             WHERE agent_secret_ref IS NOT NULL",
+        )
+        .map_err(|e| OpsError::Engine(format!("prepare grant secrets: {e}")))?;
+    let grants: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| OpsError::Engine(format!("query grant secrets: {e}")))?
+        .filter_map(Result::ok)
+        .collect();
+    drop(stmt);
+    for (pid, sref) in grants {
+        if default_agent_role(&pid) == role {
+            if let Some(pw) = secrets.resolve(&sref).map_err(OpsError::Engine)? {
+                return Ok(Some((sref, pw)));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn sync_grant_secret_refs_for_role(role: &str, sref: &str) -> Result<(), OpsError> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let pairs: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT database_id, project_id FROM sql_grants")
+            .map_err(|e| OpsError::Engine(format!("prepare sync grants: {e}")))?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| OpsError::Engine(format!("query sync grants: {e}")))?
+            .filter_map(Result::ok)
+            .collect();
+        rows.into_iter()
+            .filter(|(_, pid)| default_agent_role(pid) == role)
+            .collect()
+    };
+    for (database_id, pid) in pairs {
+        conn.execute(
+            "UPDATE sql_grants SET agent_secret_ref = ?1 \
+             WHERE database_id = ?2 AND project_id = ?3",
+            rusqlite::params![sref, database_id, pid],
+        )
+        .map_err(|e| OpsError::Engine(format!("sync grant secret: {e}")))?;
+    }
+    Ok(())
+}
+
+fn pg_role_exists(ops: &dyn SystemOps, role: &str) -> Result<bool, OpsError> {
+    let sql = format!(
+        "SELECT rolname FROM pg_roles WHERE rolname = {lit};",
+        lit = pg_quote_literal(role),
+    );
+    let out = ops
+        .run_helper(
+            &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tA"],
+            Some(sql.as_bytes()),
+        )
+        .map_err(OpsError::Engine)?;
+    Ok(!out.trim().is_empty())
+}
+
+/// Mint or reuse the workspace-role LOGIN secret. Never ALTER a role
+/// that already authenticates with a vaulted secret elsewhere.
+/// `create_if_missing` is the grant path; dsn/store upgrade fails loud
+/// if `pg_roles` has no LOGIN.
+fn mint_workspace_agent_secret(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    role: &str,
+    create_if_missing: bool,
+) -> Result<(String, String), OpsError> {
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Some(found) = vaulted_secret_for_role(&conn, secrets, role)? {
+            return Ok(found);
+        }
+    }
+    let exists = pg_role_exists(ops, role)?;
+    let pw = generate_secret().map_err(OpsError::Engine)?;
+    let sql = if exists {
+        alter_role_password_sql(role, &pw)
+    } else if create_if_missing {
+        format!(
+            "{}\n{}",
+            ensure_role_sql(role, &pw),
+            alter_role_password_sql(role, &pw)
+        )
+    } else {
+        return Err(OpsError::Engine(format!(
+            "Postgres role {role} is missing — re-grant this workspace so the LOGIN exists"
+        )));
+    };
+    refuse_dangerous_role_sql(&sql)?;
+    ops.run_helper(
+        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        Some(sql.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
+    let sref = secrets.store("agent", &pw).map_err(OpsError::Engine)?;
+    sync_grant_secret_refs_for_role(role, &sref)?;
+    Ok((sref, pw))
+}
+
+fn ensure_bind_membership(
+    ops: &dyn SystemOps,
+    _db_name: &str,
+    bind: &str,
+    agent: &str,
+) -> Result<(), OpsError> {
+    let create = create_nologin_role_sql(bind);
+    let sql = format!(
+        "DO $$\nBEGIN\n  {create}\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;\n\
+         GRANT {bind} TO {agent};",
+        bind = pg_quote_ident(bind),
+        agent = pg_quote_ident(agent),
+    );
+    refuse_dangerous_role_sql(&sql)?;
+    ops.run_helper(
+        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        Some(sql.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
+    Ok(())
+}
+
+fn ensure_owned_bind(ops: &dyn SystemOps, row: &DbRow) -> Result<(), OpsError> {
+    let Some(bind) = row
+        .bind_role
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(());
+    };
+    let bind = validate_bind_role(bind)?.unwrap_or_default();
+    if bind.is_empty() {
+        return Ok(());
+    }
+    let agent = agent_login_for(row);
+    if bind == agent {
+        return Ok(());
+    }
+    ensure_bind_membership(ops, &row.name, &bind, &agent)
 }
 
 fn project_name(conn: &rusqlite::Connection, project_id: &str) -> Option<String> {
@@ -1106,41 +1381,44 @@ fn validate_level(level: &str) -> Result<&str, OpsError> {
 
 fn apply_pg_grant(
     ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
     db_name: &str,
     role: &str,
     level: &str,
-) -> Result<(), OpsError> {
-    let pw = generate_secret().map_err(OpsError::Engine)?;
-    let ensure = ensure_role_sql(role, &pw);
+) -> Result<String, OpsError> {
+    let (sref, _pw) = mint_workspace_agent_secret(ops, secrets, role, true)?;
     let connect = format!(
-        "{ensure}\nGRANT CONNECT ON DATABASE {db} TO {role};",
+        "GRANT CONNECT ON DATABASE {db} TO {role};",
         db = pg_quote_ident(db_name),
         role = pg_quote_ident(role),
     );
-    let up = connect.to_ascii_uppercase();
-    if up.contains("SUPERUSER") && !up.contains("NOSUPERUSER") {
-        return Err(OpsError::Engine(
-            "internal: superuser leaked into grant SQL".into(),
-        ));
-    }
+    refuse_dangerous_role_sql(&connect)?;
     ops.run_helper(
         &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
         Some(connect.as_bytes()),
     )
     .map_err(OpsError::Engine)?;
+    let migrator = pg_quote_ident(&format!("{db_name}_migrator"));
+    let role_q = pg_quote_ident(role);
     let dml = if level == "write" {
         format!(
-            "GRANT USAGE ON SCHEMA public TO {role};\n\
-             GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role};\n\
-             GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {role};",
-            role = pg_quote_ident(role),
+            "GRANT USAGE ON SCHEMA public TO {role_q};\n\
+             GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role_q};\n\
+             GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {role_q};\n\
+             ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
+               GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {role_q};\n\
+             ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
+               GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO {role_q};"
         )
     } else {
         format!(
-            "GRANT USAGE ON SCHEMA public TO {role};\n\
-             GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role};\n\
-             GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO {role};",
-            role = pg_quote_ident(role),
+            "GRANT USAGE ON SCHEMA public TO {role_q};\n\
+             GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role_q};\n\
+             GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO {role_q};\n\
+             ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
+               GRANT SELECT ON TABLES TO {role_q};\n\
+             ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
+               GRANT SELECT ON SEQUENCES TO {role_q};"
         )
     };
     ops.run_helper(
@@ -1148,7 +1426,7 @@ fn apply_pg_grant(
         Some(dml.as_bytes()),
     )
     .map_err(OpsError::Engine)?;
-    Ok(())
+    Ok(sref)
 }
 
 fn apply_pg_revoke(ops: &dyn SystemOps, db_name: &str, role: &str) -> Result<(), OpsError> {
@@ -1179,6 +1457,7 @@ fn apply_pg_revoke(ops: &dyn SystemOps, db_name: &str, role: &str) -> Result<(),
 /// with teaching — they already have manage/write.
 pub fn grant_access(
     ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
     caller_project: Option<&str>,
     db_spec: &str,
     grantee_project_id: &str,
@@ -1209,17 +1488,18 @@ pub fn grant_access(
         }
     }
     let role = default_agent_role(grantee_project_id);
-    apply_pg_grant(ops, &row.name, &role, level)?;
+    let sref = apply_pg_grant(ops, secrets, &row.name, &role, level)?;
     let now = now_secs();
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         conn.execute(
-            "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at, agent_secret_ref) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
              ON CONFLICT (database_id, project_id) DO UPDATE SET \
-               level = excluded.level, can_manage = excluded.can_manage, updated_at = excluded.updated_at",
-            rusqlite::params![row.id, grantee_project_id, level, if can_manage { 1 } else { 0 }, now],
+               level = excluded.level, can_manage = excluded.can_manage, updated_at = excluded.updated_at, \
+               agent_secret_ref = COALESCE(sql_grants.agent_secret_ref, excluded.agent_secret_ref)",
+            rusqlite::params![row.id, grantee_project_id, level, if can_manage { 1 } else { 0 }, now, sref],
         )
         .map_err(|e| OpsError::Engine(format!("catalog grant: {e}")))?;
     }
@@ -1303,8 +1583,10 @@ fn validate_bind_role(role: &str) -> Result<Option<String>, OpsError> {
 }
 
 /// D22: persist the PG role the workspace assistant uses. Owner/admin.
+/// CREATE ROLE bind NOLOGIN if missing + GRANT bind TO {dbname}_agent.
 /// Does **not** mint RLS, does **not** print a DSN or password.
 pub fn bind_role(
+    ops: &dyn SystemOps,
     db_spec: Option<&str>,
     project_id: Option<&str>,
     role: &str,
@@ -1332,6 +1614,12 @@ pub fn bind_role(
             rusqlite::params![bind.as_deref(), row.id],
         )
         .map_err(|e| OpsError::Engine(format!("catalog bind: {e}")))?;
+    }
+    if let Some(bind) = bind.as_deref() {
+        let agent = agent_login_for(&row);
+        if bind != agent {
+            ensure_bind_membership(ops, &row.name, bind, &agent)?;
+        }
     }
     let shown = bind
         .clone()
@@ -1462,18 +1750,78 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
     serde_json::json!({ "ok": true, "databases": out })
 }
 
-fn require_store_db(
+struct StoreDml {
+    row: DbRow,
+    via: ResolvedVia,
+    user: String,
+    password: String,
+    bind: Option<String>,
+}
+
+fn store_dml_creds(
+    ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     project_id: &str,
-) -> Result<(DbRow, String, String), OpsError> {
+) -> Result<StoreDml, OpsError> {
     require_running()?;
-    let row = active_row(project_id)?;
-    let (user, pw) = migrator_creds(secrets, &row)?;
-    Ok((row, user, pw))
+    let (row, via) = active_resolved(project_id)?;
+    let user = connect_user(&row, via, project_id);
+    let password = match via {
+        ResolvedVia::Owned => owner_agent_password(secrets, &row)?,
+        ResolvedVia::Grant => mint_workspace_agent_secret(ops, secrets, &user, false)?.1,
+    };
+    let bind = if via == ResolvedVia::Owned {
+        ensure_owned_bind(ops, &row)?;
+        row.bind_role
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != user)
+            .map(|s| s.to_string())
+    } else {
+        None
+    };
+    Ok(StoreDml {
+        row,
+        via,
+        user,
+        password,
+        bind,
+    })
+}
+
+fn store_ddl_creds(
+    secrets: &dyn SecretStore,
+    dml: &StoreDml,
+) -> Result<(String, String), OpsError> {
+    if dml.via != ResolvedVia::Owned {
+        return Err(OpsError::NotReady(
+            "_k2_store is missing — ask the owner to run 'k2 db migrate' or 'k2 store put' first \
+             (granted workspaces cannot CREATE TABLE)"
+                .into(),
+        ));
+    }
+    migrator_creds(secrets, &dml.row)
 }
 
 fn agent_role_for_db(db_name: &str) -> String {
     format!("{db_name}_agent")
+}
+
+fn store_table_exists(
+    ops: &dyn SystemOps,
+    db: &str,
+    user: &str,
+    password: &str,
+) -> Result<bool, OpsError> {
+    let raw = exec_as(
+        ops,
+        db,
+        user,
+        password,
+        "SELECT to_regclass('public._k2_store');",
+    )?;
+    let t = raw.trim();
+    Ok(!t.is_empty() && !t.eq_ignore_ascii_case("null"))
 }
 
 fn ensure_store_table(
@@ -1499,6 +1847,18 @@ fn ensure_store_table(
     Ok(())
 }
 
+fn ensure_store_table_for(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    dml: &StoreDml,
+) -> Result<(), OpsError> {
+    if store_table_exists(ops, &dml.row.name, &dml.user, &dml.password)? {
+        return Ok(());
+    }
+    let (ddl_user, ddl_pw) = store_ddl_creds(secrets, dml)?;
+    ensure_store_table(ops, &dml.row.name, &ddl_user, &ddl_pw)
+}
+
 pub fn store_create(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -1506,8 +1866,8 @@ pub fn store_create(
     collection: &str,
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
-    let (row, user, pw) = require_store_db(secrets, project_id)?;
-    ensure_store_table(ops, &row.name, &user, &pw)?;
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    ensure_store_table_for(ops, secrets, &dml)?;
     Ok(serde_json::json!({ "ok": true, "collection": name }))
 }
 
@@ -1516,13 +1876,14 @@ pub fn store_list(
     secrets: &dyn SecretStore,
     project_id: &str,
 ) -> Result<serde_json::Value, OpsError> {
-    let (row, user, pw) = require_store_db(secrets, project_id)?;
-    let raw = exec_as(
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    let raw = exec_as_role(
         ops,
-        &row.name,
-        &user,
-        &pw,
+        &dml.row.name,
+        &dml.user,
+        &dml.password,
         "SELECT collection FROM _k2_store GROUP BY collection ORDER BY collection;",
+        dml.bind.as_deref(),
     )
     .unwrap_or_default();
     let names: Vec<&str> = raw
@@ -1546,8 +1907,8 @@ pub fn store_put(
     if id.is_empty() {
         return Err(OpsError::Usage("missing document id".into()));
     }
-    let (row, user, pw) = require_store_db(secrets, project_id)?;
-    ensure_store_table(ops, &row.name, &user, &pw)?;
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    ensure_store_table_for(ops, secrets, &dml)?;
     let sql = format!(
         "INSERT INTO _k2_store (collection, id, doc) VALUES ({coll}, {id}, {doc}::jsonb) \
          ON CONFLICT (collection, id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = now();",
@@ -1555,7 +1916,14 @@ pub fn store_put(
         id = pg_quote_literal(id),
         doc = pg_quote_literal(&doc.to_string()),
     );
-    exec_as(ops, &row.name, &user, &pw, &sql)?;
+    exec_as_role(
+        ops,
+        &dml.row.name,
+        &dml.user,
+        &dml.password,
+        &sql,
+        dml.bind.as_deref(),
+    )?;
     Ok(serde_json::json!({ "ok": true, "id": id, "collection": name }))
 }
 
@@ -1567,13 +1935,20 @@ pub fn store_get(
     id: &str,
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
-    let (row, user, pw) = require_store_db(secrets, project_id)?;
+    let dml = store_dml_creds(ops, secrets, project_id)?;
     let sql = format!(
         "SELECT doc FROM _k2_store WHERE collection = {coll} AND id = {id};",
         coll = pg_quote_literal(&name),
         id = pg_quote_literal(id.trim()),
     );
-    let raw = exec_as(ops, &row.name, &user, &pw, &sql)?;
+    let raw = exec_as_role(
+        ops,
+        &dml.row.name,
+        &dml.user,
+        &dml.password,
+        &sql,
+        dml.bind.as_deref(),
+    )?;
     if raw.is_empty() {
         return Err(OpsError::NotFound(format!(
             "document '{id}' not in collection '{name}'"
@@ -1592,13 +1967,21 @@ pub fn store_query(
     limit: u32,
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
-    let (row, user, pw) = require_store_db(secrets, project_id)?;
+    let dml = store_dml_creds(ops, secrets, project_id)?;
     let lim = limit.max(1).min(500);
     let sql = format!(
         "SELECT id::text || E'\\t' || doc::text FROM _k2_store WHERE collection = {coll} LIMIT {lim};",
         coll = pg_quote_literal(&name),
     );
-    let raw = exec_as(ops, &row.name, &user, &pw, &sql).unwrap_or_default();
+    let raw = exec_as_role(
+        ops,
+        &dml.row.name,
+        &dml.user,
+        &dml.password,
+        &sql,
+        dml.bind.as_deref(),
+    )
+    .unwrap_or_default();
     let mut docs = Vec::new();
     for line in raw.lines() {
         if let Some((id, doc)) = line.split_once('\t') {
@@ -1618,13 +2001,20 @@ pub fn store_rm(
     id: &str,
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
-    let (row, user, pw) = require_store_db(secrets, project_id)?;
+    let dml = store_dml_creds(ops, secrets, project_id)?;
     let sql = format!(
         "DELETE FROM _k2_store WHERE collection = {coll} AND id = {id};",
         coll = pg_quote_literal(&name),
         id = pg_quote_literal(id.trim()),
     );
-    exec_as(ops, &row.name, &user, &pw, &sql)?;
+    exec_as_role(
+        ops,
+        &dml.row.name,
+        &dml.user,
+        &dml.password,
+        &sql,
+        dml.bind.as_deref(),
+    )?;
     Ok(serde_json::json!({ "ok": true, "removed": id }))
 }
 
@@ -1635,12 +2025,19 @@ pub fn store_drop(
     collection: &str,
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
-    let (row, user, pw) = require_store_db(secrets, project_id)?;
+    let dml = store_dml_creds(ops, secrets, project_id)?;
     let sql = format!(
         "DELETE FROM _k2_store WHERE collection = {coll};",
         coll = pg_quote_literal(&name),
     );
-    exec_as(ops, &row.name, &user, &pw, &sql)?;
+    exec_as_role(
+        ops,
+        &dml.row.name,
+        &dml.user,
+        &dml.password,
+        &sql,
+        dml.bind.as_deref(),
+    )?;
     Ok(serde_json::json!({ "ok": true, "dropped": name }))
 }
 

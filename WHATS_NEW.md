@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.128 — Granted workspaces run SQL as that workspace’s Postgres role
+
+A workspace granted onto a shared database — and `k2 store` from that workspace — connect as **that workspace’s** Postgres role, not the owner’s agent and not the migrator. Dump RLS keyed to the role now applies to both the agent (`k2 db dsn` / `k2 store`) and a human who shares that DSN. The owner still connects as `{dbname}_agent`. Migrate, dump, and restore stay the migrator.
+
+---
+
 ## 0.40.127 — Agents can publish from a cell
 
 `k2 publish run` works from an agent session (scoped cell token), not only from an owner shell. Status, `ps`, and Connect are unchanged.

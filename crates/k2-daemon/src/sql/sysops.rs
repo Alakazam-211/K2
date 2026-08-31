@@ -8,7 +8,7 @@
 use std::path::Path;
 
 #[cfg(test)]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -292,6 +292,8 @@ pub struct FakePg {
     /// when `-F` is omitted; tests must not hide the tab-split bug.
     pub select_field_sep: &'static str,
     pub store: HashMap<(String, String), HashMap<String, serde_json::Value>>,
+    /// Databases that have `CREATE TABLE _k2_store` (any helper/psql blob).
+    pub tables: HashSet<(String, String)>,
     pub dump_marker: Vec<u8>,
     /// Live GUC map (`current_setting`). Defaults look like stock Postgres
     /// so doctor fails loudly until `install-ram-fence` / ALTER SYSTEM pins.
@@ -317,6 +319,7 @@ impl Default for FakePg {
             migrations: HashMap::new(),
             select_field_sep: "|",
             store: HashMap::new(),
+            tables: HashSet::new(),
             dump_marker: Vec::new(),
             gucs,
         }
@@ -349,6 +352,11 @@ impl FakePg {
             {
                 return Err("refusing SUPERUSER in CREATE ROLE".into());
             }
+            for name in extract_all_create_roles(trimmed) {
+                if !self.roles.iter().any(|r| r == &name) {
+                    self.roles.push(name);
+                }
+            }
             if !self.roles.iter().any(|r| r == &name) {
                 self.roles.push(name);
             }
@@ -356,6 +364,19 @@ impl FakePg {
             return Ok(String::new());
         }
         let up = trimmed.to_ascii_uppercase();
+        let db_name_early = db.unwrap_or("postgres");
+        if trimmed.contains("_k2_store") && up.contains("CREATE TABLE") {
+            self.tables
+                .insert((db_name_early.to_string(), "_k2_store".into()));
+        }
+        if up.contains("PG_ROLES") {
+            if let Some(name) = nth_sql_string(trimmed, 0) {
+                if self.roles.iter().any(|r| r == &name) {
+                    return Ok(name);
+                }
+            }
+            return Ok(String::new());
+        }
         if up.contains("ALTER SYSTEM SET") {
             for stmt in trimmed.split(';') {
                 let s = stmt.trim();
@@ -438,7 +459,14 @@ impl FakePg {
 
     fn exec_store(&mut self, db: &str, sql: &str) -> Result<String, String> {
         let up = sql.to_ascii_uppercase();
+        if up.contains("TO_REGCLASS") || up.contains("REGCLASS") {
+            if self.tables.contains(&(db.to_string(), "_k2_store".into())) {
+                return Ok("_k2_store".into());
+            }
+            return Ok(String::new());
+        }
         if up.contains("CREATE TABLE") {
+            self.tables.insert((db.to_string(), "_k2_store".into()));
             return Ok(String::new());
         }
         if up.starts_with("INSERT")
@@ -493,6 +521,23 @@ impl FakePg {
         }
         Ok(String::new())
     }
+}
+
+#[cfg(test)]
+fn extract_all_create_roles(sql: &str) -> Vec<String> {
+    let up = sql.to_ascii_uppercase();
+    let mut roles = Vec::new();
+    let mut from = 0;
+    while let Some(idx) = up[from..].find("CREATE ROLE") {
+        let abs = from + idx;
+        if let Some(name) = extract_quoted_after(&sql[abs..], "CREATE ROLE") {
+            if !roles.iter().any(|r| r == &name) {
+                roles.push(name);
+            }
+        }
+        from = abs + 11;
+    }
+    roles
 }
 
 #[cfg(test)]

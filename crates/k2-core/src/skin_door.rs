@@ -222,8 +222,6 @@ pub fn render_caddyfile(spec: &CaddyfileSpec) -> String {
 fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     out.push_str(" {\n");
     push_handle(out, "/boot-status*", daemon);
-    // L9: `/login` before `@skinUi` so a future SPA matcher cannot steal it.
-    push_handle(out, "/login", daemon);
     push_handle(out, "/cli/skin/login", daemon);
     push_handle(out, "/cli/skin/logout", daemon);
     push_handle(out, "/cli/thread", daemon);
@@ -233,7 +231,8 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     if let Some(ui) = ui_port {
         // Exact `/` plus SPA prefixes. Never `/*` — catch-all stays 403.
         // Grid / login / `/v1` are not in this matcher.
-        out.push_str("\t@skinUi path / /assets* /_next* /app*\n");
+        // `/login*` is the skin SPA (not a daemon HTML page).
+        out.push_str("\t@skinUi path / /login* /assets* /_next* /app*\n");
         out.push_str("\thandle @skinUi {\n");
         out.push_str("\t\treverse_proxy 127.0.0.1:");
         out.push_str(&ui.to_string());
@@ -935,7 +934,7 @@ mod tests {
         assert!(file.contains("/cli/overlay/events"), "{file}");
         assert!(file.contains("/cli/skin/agents"), "{file}");
         assert!(file.contains("/boot-status"), "{file}");
-        assert!(file.contains("handle /login"), "{file}");
+        assert!(!file.contains("handle /login\n") && !file.contains("handle /login {"), "{file}");
         assert!(file.contains("handle /cli/skin/login"), "{file}");
         assert!(file.contains("handle /cli/skin/logout"), "{file}");
         assert!(
@@ -981,13 +980,9 @@ mod tests {
         let file = render_caddyfile(&spec(Some(5173), None));
         assert!(file.contains("127.0.0.1:5173"), "{file}");
         assert!(file.contains("@skinUi"), "{file}");
-        assert!(file.contains("path / /assets* /_next* /app*"), "{file}");
-        let login_at = file.find("handle /login").expect("handle /login");
-        let ui_at = file.find("@skinUi").expect("@skinUi");
-        assert!(
-            login_at < ui_at,
-            "/login handle must come before @skinUi:\n{file}"
-        );
+        assert!(file.contains("path / /login* /assets* /_next* /app*"), "{file}");
+        assert!(file.contains("handle /cli/skin/login"), "{file}");
+        assert!(!file.contains("handle /login\n"), "{file}");
         assert!(file.contains("/assets*"), "{file}");
         assert!(file.contains("/_next*"), "{file}");
         assert!(file.contains("/app*"), "{file}");

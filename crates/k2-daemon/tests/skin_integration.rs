@@ -1536,13 +1536,6 @@ async fn skin_login_session_cookie_logout_and_host_fold() {
             grid.body
         );
 
-        let page = http_host(port, "GET", "/login", None, "skin.rosson.k2.dev");
-        assert_eq!(page.status, 200, "{}", page.body);
-        assert!(page.body.contains("Skin Access"), "{}", page.body);
-        assert!(!page.body.contains("k2skn_"), "{}", page.body);
-        let op_page = http_host(port, "GET", "/login", None, "127.0.0.1");
-        assert_eq!(op_page.status, 404, "operator /login; {}", op_page.body);
-
         let logout = http_host_ex(
             port,
             "POST",
@@ -1693,8 +1686,8 @@ async fn skin_login_empty_rooms_thread_403_connect_cookie_not_a_pass() {
             mail_host: None,
             bind_http80: false,
         });
-        assert!(caddy.contains("handle /login"), "{caddy}");
         assert!(caddy.contains("handle /cli/skin/login"), "{caddy}");
+        assert!(caddy.contains("/login*"), "{caddy}");
         assert!(caddy.contains("handle /cli/skin/logout"), "{caddy}");
     });
 }

@@ -714,83 +714,12 @@ pub fn handle_logout(presented: Option<&str>) -> CliResponse {
     }
 }
 
-pub fn login_page_html(next: Option<&str>) -> String {
-    let next = html_escape(&safe_next(next));
-    format!(
-        r##"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>K2 Skin login</title>
-<style>
-  :root {{ color-scheme: dark; }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    margin: 0; min-height: 100vh; display: grid; place-items: center;
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #0d1117; color: #e6edf3;
-  }}
-  .card {{
-    width: min(380px, calc(100vw - 32px));
-    background: #161b22; border: 1px solid #30363d; border-radius: 12px;
-    padding: 28px 26px;
-  }}
-  h1 {{ font-size: 17px; font-weight: 600; margin: 0 0 6px; }}
-  .sub {{ color: #8b949e; font-size: 13px; margin: 0 0 20px; }}
-  label {{ display: block; font-size: 12px; color: #8b949e; margin: 14px 0 5px; }}
-  input {{
-    width: 100%; padding: 9px 11px; border-radius: 7px;
-    border: 1px solid #30363d; background: #0d1117; color: #e6edf3; font-size: 14px;
-  }}
-  button {{
-    width: 100%; margin-top: 20px; padding: 10px; border: 0; border-radius: 7px;
-    background: #238636; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
-  }}
-  .logout {{ background: #21262d; margin-top: 10px; }}
-</style>
-</head>
-<body>
-  <div class="card">
-    <h1>Skin Access</h1>
-    <p class="sub">Username and password for this skin. Not Connect login.</p>
-    <form method="post" action="/cli/skin/login">
-      <input type="hidden" name="next" value="{next}">
-      <label for="u">Username</label>
-      <input id="u" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" required>
-      <label for="p">Password</label>
-      <input id="p" name="password" type="password" autocomplete="current-password" required>
-      <button type="submit">Log in</button>
-    </form>
-    <form method="post" action="/cli/skin/logout">
-      <button type="submit" class="logout">Log out</button>
-    </form>
-  </div>
-</body>
-</html>
-"##
-    )
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn login_page_html_does_not_paint_k2skn() {
-        let html = login_page_html(Some("/app"));
-        assert!(html.contains("action=\"/cli/skin/login\""), "{html}");
-        assert!(html.contains("action=\"/cli/skin/logout\""), "{html}");
-        assert!(html.contains("name=\"next\""));
-        assert!(!html.contains("k2skn_"), "must not paint the pass: {html}");
-        assert!(!html.contains("k2_session"), "{html}");
+    fn safe_next_rejects_open_redirects() {
         assert_eq!(safe_next(Some("https://evil.example")), "/");
         assert_eq!(safe_next(Some("//evil")), "/");
         assert_eq!(safe_next(Some("/app")), "/app");

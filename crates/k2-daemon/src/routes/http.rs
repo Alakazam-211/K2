@@ -452,10 +452,8 @@ pub(crate) fn cookie_csrf_gate(
     if !path.starts_with("/cli/") {
         return None;
     }
-    // Public login is password-authed, not session-authed — don't require
-    // CSRF for a leftover stale cookie on a fresh login form POST.
-    // Skin login + logout are exempt so GET `/login` can POST without
-    // `X-K2-Client: web`.
+    // Public login is password-authed, not session-authed. Skin SPA POSTs
+    // `/cli/skin/login` and `/cli/skin/logout` without `X-K2-Client: web`.
     if path == "/cli/auth/login"
         || path == "/cli/skin/login"
         || path == "/cli/skin/logout"

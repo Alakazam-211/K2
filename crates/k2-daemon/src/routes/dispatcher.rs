@@ -1154,30 +1154,6 @@ async fn handle_one_request(
             )
             .await;
         }
-        // GET /login — Skin Host only (nested `skin.*` or Direct front-door
-        // host). Operator `/` already owns Connect account HTML.
-        "/login" if !is_post => {
-            let _ = stream.read(&mut buf).await;
-            if !super::http::host_is_skin_cookie_class(&headers_blob) {
-                super::http::send_response(
-                    &mut *stream,
-                    "404 Not Found",
-                    "application/json",
-                    r#"{"error":"route not found"}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
-            let next = query.split('&').find_map(|p| p.strip_prefix("next="));
-            let html = crate::skin_routes::login_page_html(next);
-            super::http::send_response(
-                &mut *stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                &html,
-            )
-            .await;
-        }
         "/status" => {
             let _ = stream.read(&mut buf).await;
             // Token-gated. Returns a small JSON blob describing the

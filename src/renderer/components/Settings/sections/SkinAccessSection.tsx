@@ -833,7 +833,8 @@ export function SkinAccessSection(): React.JSX.Element {
           <div data-settings-id="skin-access.users" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
               Guest list for skins. Not the Server Access / Connect operator roster. Set a
-              password so they can open /login on the skin Host. No public register.
+              password so the skin can POST /cli/skin/login (the skin owns the login UI).
+              No public register.
             </p>
             <form
               className="flex flex-wrap gap-1.5 items-center"

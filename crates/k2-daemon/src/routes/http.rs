@@ -105,6 +105,10 @@ pub(crate) fn extract_bearer(headers_blob: &str) -> Option<&str> {
 /// token from `connect_users::create_session` — never the owner daemon token.
 pub(crate) const SESSION_COOKIE_NAME: &str = "k2_session";
 
+/// Skin guest session cookie. Distinct from [`SESSION_COOKIE_NAME`] (L1).
+/// Value is a raw `k2skn_` session pass, never a Connect token.
+pub(crate) const SKIN_SESSION_COOKIE_NAME: &str = "k2_skin_session";
+
 /// Custom header the web SPA sends on every request (and the CSRF signal
 /// on cookie-only mutating POSTs). Value must be the literal `web`.
 pub(crate) const CLIENT_WEB_HEADER: &str = "x-k2-client";
@@ -183,6 +187,19 @@ pub(crate) fn host_is_skin_front_door(headers_blob: &str) -> bool {
         .starts_with("skin.")
 }
 
+/// Cookie class: nested `skin.*` **or** Direct `front_door.url` host.
+/// Operator `*.k2.dev` (no `skin.` prefix) is false.
+pub(crate) fn host_is_skin_cookie_class(headers_blob: &str) -> bool {
+    if host_is_skin_front_door(headers_blob) {
+        return true;
+    }
+    let Some(host) = extract_host(headers_blob) else {
+        return false;
+    };
+    let req = host_no_port(host).to_ascii_lowercase();
+    k2_core::skin::direct_front_door_host().is_some_and(|h| h == req)
+}
+
 /// True when this request should be treated as the hosted web client for
 /// the Layer-0 wall. Rule: web client header, OR session cookie, OR
 /// Host contains `.app.k2.dev`.
@@ -238,6 +255,12 @@ pub(crate) fn extract_cookie<'a>(headers_blob: &'a str, name: &str) -> Option<&'
 /// `Cookie: k2_session=<session_token>` — the web SPA auth transport.
 pub(crate) fn extract_session_cookie(headers_blob: &str) -> Option<&str> {
     extract_cookie(headers_blob, SESSION_COOKIE_NAME)
+}
+
+/// `Cookie: k2_skin_session=<k2skn_…>` — Skin Host only (folded in
+/// [`effective_auth_query`], never via [`extract_token`]).
+pub(crate) fn extract_skin_session_cookie(headers_blob: &str) -> Option<&str> {
+    extract_cookie(headers_blob, SKIN_SESSION_COOKIE_NAME)
 }
 
 /// True when `X-K2-Client: web` or `X-K2-CSRF: web` is present (case-
@@ -326,6 +349,27 @@ pub(crate) fn session_cookie_clear_value(secure: bool) -> String {
     v
 }
 
+/// Skin session cookie. **SameSite=Lax** (not Connect Strict) so email/CNAME
+/// still sends it. `Secure` on HTTPS / `X-Forwarded-Proto: https`.
+pub(crate) fn skin_session_cookie_set_value(token: &str, secure: bool, max_age_secs: i64) -> String {
+    let mut v = format!(
+        "{SKIN_SESSION_COOKIE_NAME}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age_secs}"
+    );
+    if secure {
+        v.push_str("; Secure");
+    }
+    v
+}
+
+pub(crate) fn skin_session_cookie_clear_value(secure: bool) -> String {
+    let mut v =
+        format!("{SKIN_SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    if secure {
+        v.push_str("; Secure");
+    }
+    v
+}
+
 /// Resolve the effective request credential and whether it is cookie-only.
 ///
 /// Preference: Bearer → `?token=` → `k2_session` cookie. Returns
@@ -338,7 +382,13 @@ pub(crate) fn session_cookie_clear_value(secure: bool) -> String {
 pub(crate) fn effective_auth_query(query: &str, headers_blob: &str) -> (String, bool) {
     let bearer = extract_bearer(headers_blob).filter(|s| !s.is_empty());
     let qtok = extract_token(query).filter(|s| !s.is_empty());
-    let cookie = extract_session_cookie(headers_blob).filter(|s| !s.is_empty());
+    // L7: Skin Host folds `k2_skin_session` and ignores `k2_session`.
+    // Operator Host folds Connect `k2_session` and ignores the skin cookie.
+    let cookie = if host_is_skin_cookie_class(headers_blob) {
+        extract_skin_session_cookie(headers_blob).filter(|s| !s.is_empty())
+    } else {
+        extract_session_cookie(headers_blob).filter(|s| !s.is_empty())
+    };
 
     let cookie_only = cookie.is_some() && bearer.is_none() && qtok.is_none();
 
@@ -404,7 +454,12 @@ pub(crate) fn cookie_csrf_gate(
     }
     // Public login is password-authed, not session-authed — don't require
     // CSRF for a leftover stale cookie on a fresh login form POST.
-    if path == "/cli/auth/login" {
+    // Skin login + logout are exempt so GET `/login` can POST without
+    // `X-K2-Client: web`.
+    if path == "/cli/auth/login"
+        || path == "/cli/skin/login"
+        || path == "/cli/skin/logout"
+    {
         return None;
     }
     if has_web_client_header(headers_blob) {
@@ -753,6 +808,19 @@ pub(crate) async fn send_response_with_cookie(
     body: &str,
     set_cookie: Option<&str>,
 ) {
+    send_response_with_cookie_and_location(stream, status, ct, body, set_cookie, None).await;
+}
+
+/// Like [`send_response_with_cookie`] plus an optional `Location:` (HTML
+/// form skin login 302). `location` is the header value only.
+pub(crate) async fn send_response_with_cookie_and_location(
+    stream: &mut TcpStream,
+    status: &str,
+    ct: &str,
+    body: &str,
+    set_cookie: Option<&str>,
+    location: Option<&str>,
+) {
     // CORS headers on every response so the Tauri WebView (cross-
     // origin from tauri://localhost or http://localhost:5173 to
     // http://127.0.0.1:<port>) can read the body. Token auth
@@ -763,13 +831,17 @@ pub(crate) async fn send_response_with_cookie(
         Some(v) if !v.is_empty() => format!("Set-Cookie: {v}\r\n"),
         _ => String::new(),
     };
+    let location_line = match location {
+        Some(v) if !v.is_empty() => format!("Location: {v}\r\n"),
+        _ => String::new(),
+    };
     let resp = format!(
         "HTTP/1.1 {status}\r\n\
          Content-Type: {ct}\r\n\
          Content-Length: {}\r\n\
          Access-Control-Allow-Origin: *\r\n\
          Access-Control-Expose-Headers: *\r\n\
-         {cookie_line}\r\n{}",
+         {cookie_line}{location_line}\r\n{}",
         body.len(),
         body,
     );
@@ -1510,6 +1582,63 @@ mod tests {
             "POST /cli/auth/login HTTP/1.1\r\n",
         )
         .is_none());
+
+        assert!(cookie_csrf_gate(
+            "POST",
+            "/cli/skin/login",
+            true,
+            "POST /cli/skin/login HTTP/1.1\r\n",
+        )
+        .is_none());
+        assert!(cookie_csrf_gate(
+            "POST",
+            "/cli/skin/logout",
+            true,
+            "POST /cli/skin/logout HTTP/1.1\r\n",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn effective_auth_query_skin_host_folds_skin_cookie_not_connect() {
+        let skin = "GET /cli/thread HTTP/1.1\r\nHost: skin.rosson.k2.dev\r\nCookie: k2_skin_session=k2skn_abc; k2_session=connecttok\r\n";
+        let (q, cookie_only) = effective_auth_query("", skin);
+        assert_eq!(q, "token=k2skn_abc");
+        assert!(cookie_only);
+
+        // Connect cookie alone on Skin Host is ignored (not a skin pass).
+        let connect_only = "GET /cli/thread HTTP/1.1\r\nHost: skin.rosson.k2.dev\r\nCookie: k2_session=connecttok\r\n";
+        let (q, cookie_only) = effective_auth_query("", connect_only);
+        assert_eq!(q, "");
+        assert!(!cookie_only);
+
+        // Operator Host folds Connect, ignores skin cookie.
+        let op = "GET /cli/thread HTTP/1.1\r\nHost: rosson.k2.dev\r\nCookie: k2_skin_session=k2skn_abc; k2_session=connecttok\r\n";
+        let (q, cookie_only) = effective_auth_query("", op);
+        assert_eq!(q, "token=connecttok");
+        assert!(cookie_only);
+
+        let op_skin_only = "GET /cli/thread HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: k2_skin_session=k2skn_abc\r\n";
+        let (q, cookie_only) = effective_auth_query("", op_skin_only);
+        assert_eq!(q, "");
+        assert!(!cookie_only);
+    }
+
+    #[test]
+    fn skin_session_cookie_is_lax_not_strict() {
+        let v = skin_session_cookie_set_value("k2skn_tok", false, 3600);
+        assert!(v.contains("k2_skin_session=k2skn_tok"));
+        assert!(v.contains("HttpOnly"));
+        assert!(v.contains("SameSite=Lax"));
+        assert!(!v.contains("SameSite=Strict"));
+        assert!(v.contains("Path=/"));
+        assert!(v.contains("Max-Age=3600"));
+        assert!(!v.contains("Secure"), "{v}");
+        let https = skin_session_cookie_set_value("k2skn_tok", true, 3600);
+        assert!(https.contains("Secure"), "{https}");
+        let clear = skin_session_cookie_clear_value(false);
+        assert!(clear.contains("Max-Age=0"));
+        assert!(clear.contains("k2_skin_session="));
     }
 
     #[test]

@@ -33,7 +33,17 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
     section: 'skin-access',
     label: 'Skin users',
     description: 'Guest list for skins — separate from Server Access / Connect operators',
-    keywords: ['skin users', 'roster', 'guest', 'principal', 'add', 'remove', 'search'],
+    keywords: [
+      'skin users',
+      'roster',
+      'guest',
+      'principal',
+      'add',
+      'remove',
+      'search',
+      'password',
+      'login',
+    ],
     group: 'Skin users',
   },
   {
@@ -92,6 +102,7 @@ export type SkinUser = {
   createdAt?: string | null
   defaultRooms: string[]
   defaultRoomHandles: string[]
+  hasPassword: boolean
 }
 
 export type SkinTokenRow = {
@@ -277,6 +288,7 @@ export function parseSkinUsers(raw: unknown): SkinUser[] {
       createdAt: asString(rec.createdAt) ?? asString(rec.created_at),
       defaultRooms: parseStringList(rec.defaultRooms ?? rec.default_rooms),
       defaultRoomHandles: parseStringList(rec.defaultRoomHandles ?? rec.default_room_handles),
+      hasPassword: asBool(rec.hasPassword) ?? asBool(rec.has_password) ?? false,
     }]
   })
 }
@@ -416,6 +428,7 @@ export function SkinAccessSection(): React.JSX.Element {
   const [addBusy, setAddBusy] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null)
+  const [passwordDraft, setPasswordDraft] = useState<Record<string, string>>({})
   const [mintUsername, setMintUsername] = useState('')
   const [mintCaps, setMintCaps] = useState<Set<string>>(() => new Set(DEFAULT_SKIN_CAPS))
   const [mintRooms, setMintRooms] = useState<Set<string>>(() => new Set())
@@ -614,6 +627,20 @@ export function SkinAccessSection(): React.JSX.Element {
     }
   }, [mintUsername, mintCaps, mintRooms, refresh])
 
+  const setUserPassword = useCallback(
+    async (username: string, password: string | null) => {
+      setAddError(null)
+      try {
+        await daemonCliPost('skin/users/password', { username, password: password ?? '' })
+        setPasswordDraft((prev) => ({ ...prev, [username]: '' }))
+        await refresh()
+      } catch (e) {
+        setAddError(errText(e))
+      }
+    },
+    [refresh],
+  )
+
   const saveUserRooms = useCallback(
     async (username: string, handles: string[], applyTokens: boolean) => {
       setAddError(null)
@@ -805,8 +832,8 @@ export function SkinAccessSection(): React.JSX.Element {
         <SettingsGroup title="Skin users">
           <div data-settings-id="skin-access.users" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              Guest list for skins. Not the Server Access / Connect operator roster. Login lives
-              in the skin; K2 stores the principal id.
+              Guest list for skins. Not the Server Access / Connect operator roster. Set a
+              password so they can open /login on the skin Host. No public register.
             </p>
             <form
               className="flex flex-wrap gap-1.5 items-center"
@@ -935,6 +962,47 @@ export function SkinAccessSection(): React.JSX.Element {
                         ))}
                       </div>
                     ) : null}
+                    <form
+                      className="flex flex-wrap gap-1.5 items-center"
+                      onSubmit={(e) => {
+                        e.preventDefault()
+                        const pw = (passwordDraft[u.username] ?? '').trim()
+                        if (!pw) return
+                        void setUserPassword(u.username, pw)
+                      }}
+                    >
+                      <input
+                        type="password"
+                        className={`${INPUT_CLS} flex-1 min-w-[8rem]`}
+                        placeholder={u.hasPassword ? 'new password' : 'set password'}
+                        autoComplete="new-password"
+                        aria-label={`${u.username} password`}
+                        value={passwordDraft[u.username] ?? ''}
+                        onChange={(e) =>
+                          setPasswordDraft((prev) => ({ ...prev, [u.username]: e.target.value }))
+                        }
+                      />
+                      <button
+                        type="submit"
+                        disabled={!(passwordDraft[u.username] ?? '').trim()}
+                        className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40"
+                      >
+                        Set password
+                      </button>
+                      {u.hasPassword ? (
+                        <button
+                          type="button"
+                          onClick={() => void setUserPassword(u.username, null)}
+                          className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
+                        >
+                          Clear password
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-[var(--color-text-muted)]">
+                          no K2 login
+                        </span>
+                      )}
+                    </form>
                     <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
                       <input
                         type="checkbox"

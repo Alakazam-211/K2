@@ -5,7 +5,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.40.124 — Skin agent rooms, study, store 403 names the DB
 
-**Skin Access keys name which agents may use Thread.** Empty list is no Thread, not every agent on the box. New mint requires `--agent`. Existing keys go dark on Thread until you assign rooms (same secret). Overlay WS 403s before upgrade if that conversation is not the allowed agent’s pinned Chat. Sidecar chats (`sales/reviewer`) stay 403. Grid still never. Guest **login** (username/password → cookie) is not this cut.
+**Skin Access keys name which agents may use Thread.** Empty list is no Thread, not every agent on the box. New mint requires `--agent`. Existing keys go dark on Thread until you assign rooms (same secret). Overlay WS 403s before upgrade if that conversation is not the allowed agent’s pinned Chat. Sidecar chats (`sales/reviewer`) stay 403. Grid still never.
+
+**Skin Access username/password** logs in at `/login` on the skin Host (`skin.<sub>.k2.dev` or Direct custom domain) and sets an HttpOnly `k2_skin_session` cookie. Static `k2skn_` keys stay for servers. This is not Connect login (`k2_session` / Server Access).
 
 **CLI.** `k2 study` is daemon-optional pages (Fair Source, people lists, errors) — not a second `--help`. `k2 agent list` reports `local_transport_denied` when the OS blocked the socket (daemon health unobserved). `k2 skin hydra on|off`. Linux: Hydra starts on daemon boot if enabled.
 

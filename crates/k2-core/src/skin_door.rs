@@ -222,6 +222,10 @@ pub fn render_caddyfile(spec: &CaddyfileSpec) -> String {
 fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     out.push_str(" {\n");
     push_handle(out, "/boot-status*", daemon);
+    // L9: `/login` before `@skinUi` so a future SPA matcher cannot steal it.
+    push_handle(out, "/login", daemon);
+    push_handle(out, "/cli/skin/login", daemon);
+    push_handle(out, "/cli/skin/logout", daemon);
     push_handle(out, "/cli/thread", daemon);
     push_handle(out, "/cli/thread/*", daemon);
     push_handle(out, "/cli/overlay/events*", daemon);
@@ -864,12 +868,9 @@ pub fn maybe_apply_on_boot(daemon_port: u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
-
-    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::themes::HOME_LOCK.lock();
         let prev = std::env::var_os("HOME");
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -934,6 +935,9 @@ mod tests {
         assert!(file.contains("/cli/overlay/events"), "{file}");
         assert!(file.contains("/cli/skin/agents"), "{file}");
         assert!(file.contains("/boot-status"), "{file}");
+        assert!(file.contains("handle /login"), "{file}");
+        assert!(file.contains("handle /cli/skin/login"), "{file}");
+        assert!(file.contains("handle /cli/skin/logout"), "{file}");
         assert!(
             file.contains(PATH_FILTER_ERROR),
             "catch-all 403 JSON missing: {file}"
@@ -978,6 +982,12 @@ mod tests {
         assert!(file.contains("127.0.0.1:5173"), "{file}");
         assert!(file.contains("@skinUi"), "{file}");
         assert!(file.contains("path / /assets* /_next* /app*"), "{file}");
+        let login_at = file.find("handle /login").expect("handle /login");
+        let ui_at = file.find("@skinUi").expect("@skinUi");
+        assert!(
+            login_at < ui_at,
+            "/login handle must come before @skinUi:\n{file}"
+        );
         assert!(file.contains("/assets*"), "{file}");
         assert!(file.contains("/_next*"), "{file}");
         assert!(file.contains("/app*"), "{file}");

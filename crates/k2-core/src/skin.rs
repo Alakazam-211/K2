@@ -2,7 +2,8 @@
 //!
 //! Standalone guest list + hashed `k2skn_…` tokens. **Not** Connect users,
 //! **not** `/v1` `k2sk_` API keys, **not** the owner token. Overlay Thread
-//! rooms only — grid/PTY is never a skin room.
+//! rooms only — grid/PTY is never a skin room. Optional `password_hash` on
+//! principals is K2-login only (`POST /cli/skin/login`); NULL = mint-only.
 //!
 //! ## Store (`~/.k2/skin.db`, WAL, own Mutex)
 //! Two tables: `principals` (roster) and `tokens` (hashed passes). The raw
@@ -15,6 +16,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -32,6 +36,11 @@ const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 const DEFAULT_CAPS: &[&str] = &[CAP_THREAD_READ, CAP_THREAD_POST];
+
+/// Copy of Connect: 3 consecutive failures → 15-minute per-username lockout.
+/// Dummy argon2 + the 500 ms 401 delay is **not** lockout.
+const LOCKOUT_THRESHOLD: u32 = 3;
+const LOCKOUT_DURATION_SECS: i64 = 15 * 60;
 
 /// True iff `raw` is a skin-class credential (prefix only — may be revoked).
 pub fn is_skin_token(raw: &str) -> bool {
@@ -191,6 +200,83 @@ fn rooms_from_json(raw: &str) -> Vec<String> {
     parse_rooms_json(Some(raw))
 }
 
+fn password_is_set(hash: Option<&str>) -> bool {
+    hash.map(str::trim).is_some_and(|s| !s.is_empty())
+}
+
+fn hash_password(password: &str) -> Result<String, String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| format!("password hashing failed: {e}"))
+}
+
+fn verify_hash(password: &str, hash: &str) -> bool {
+    let parsed = match PasswordHash::new(hash) {
+        Ok(h) => h,
+        Err(_) => return false,
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok()
+}
+
+fn build_dummy_hash() -> String {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(b"k2-skin-dummy-verify-target", &salt)
+        .map(|h| h.to_string())
+        .unwrap_or_else(|_| {
+            String::from(
+                "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+        })
+}
+
+/// Host of Direct-mode `front_door.url` (no port). None when mode is not
+/// `direct` or the URL is empty. Used for cookie-class matching — not the
+/// Caddy bind filter (`host_from_front_door_url` rejects `*.k2.dev`).
+pub fn direct_front_door_host() -> Option<String> {
+    let door = get_front_door().ok()?;
+    if !door.mode.eq_ignore_ascii_case("direct") {
+        return None;
+    }
+    host_from_url(door.url.as_deref()?)
+}
+
+fn host_from_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let rest = raw
+        .strip_prefix("https://")
+        .or_else(|| raw.strip_prefix("http://"))
+        .unwrap_or(raw);
+    let hostport = rest.split('/').next().unwrap_or(rest).trim();
+    if hostport.is_empty() {
+        return None;
+    }
+    let host = if let Some(stripped) = hostport.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or(hostport).to_string()
+    } else if let Some((h, p)) = hostport.rsplit_once(':') {
+        if p.chars().all(|c| c.is_ascii_digit()) {
+            h.to_string()
+        } else {
+            hostport.to_string()
+        }
+    } else {
+        hostport.to_string()
+    };
+    let host = host.trim().to_ascii_lowercase();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
 fn normalize_room_ids(rooms: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for raw in rooms {
@@ -248,6 +334,9 @@ pub struct SkinPrincipal {
     pub default_rooms: Vec<String>,
     #[serde(default)]
     pub default_room_handles: Vec<String>,
+    /// True when a K2-login password is set. Never the hash.
+    #[serde(default)]
+    pub has_password: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -284,6 +373,8 @@ pub struct SkinPass {
     pub username: String,
     pub caps: Vec<String>,
     pub rooms: Vec<String>,
+    /// Login-minted session pass (`session=1`). Static partner mint is `false`.
+    pub session: bool,
 }
 
 impl SkinPass {
@@ -403,6 +494,20 @@ fn open_db(path: &Path) -> Result<Connection, String> {
         "ALTER TABLE principals ADD COLUMN default_rooms TEXT NOT NULL DEFAULT '[]'",
         [],
     );
+    // Skin login (prd-skin-login-v1): ignore duplicate ALTER like `ui_port`.
+    let _ = conn.execute("ALTER TABLE principals ADD COLUMN password_hash TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE tokens ADD COLUMN session INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE tokens ADD COLUMN expires_at INTEGER", []);
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS login_lockouts (
+            username TEXT PRIMARY KEY,
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            locked_until INTEGER
+         );",
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -465,6 +570,7 @@ pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
             created_at,
             default_rooms: Vec::new(),
             default_room_handles: Vec::new(),
+            has_password: false,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -475,19 +581,22 @@ pub fn list_principals() -> Result<Vec<SkinPrincipal>, String> {
     with_conn(|conn| {
         let mut stmt = conn
             .prepare(
-                "SELECT id, username, created_at, default_rooms FROM principals ORDER BY username COLLATE NOCASE",
+                "SELECT id, username, created_at, default_rooms, password_hash
+                 FROM principals ORDER BY username COLLATE NOCASE",
             )
             .map_err(|e| format!("skin principal list: {e}"))?;
         let rows = stmt
             .query_map([], |r| {
                 let rooms_raw: String = r.get(3)?;
                 let default_rooms = rooms_from_json(&rooms_raw);
+                let hash: Option<String> = r.get(4)?;
                 Ok(SkinPrincipal {
                     id: r.get(0)?,
                     username: r.get(1)?,
                     created_at: r.get(2)?,
                     default_room_handles: Vec::new(),
                     default_rooms,
+                    has_password: password_is_set(hash.as_deref()),
                 })
             })
             .map_err(|e| format!("skin principal list: {e}"))?;
@@ -537,16 +646,18 @@ fn principal_by_username(
     username: &str,
 ) -> Result<Option<SkinPrincipal>, String> {
     conn.query_row(
-        "SELECT id, username, created_at, default_rooms FROM principals WHERE username = ?1",
+        "SELECT id, username, created_at, default_rooms, password_hash FROM principals WHERE username = ?1",
         params![username],
         |r| {
             let rooms_raw: String = r.get(3)?;
+            let hash: Option<String> = r.get(4)?;
             Ok(SkinPrincipal {
                 id: r.get(0)?,
                 username: r.get(1)?,
                 created_at: r.get(2)?,
                 default_rooms: rooms_from_json(&rooms_raw),
                 default_room_handles: Vec::new(),
+                has_password: password_is_set(hash.as_deref()),
             })
         },
     )
@@ -616,6 +727,216 @@ pub fn create_token(
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
     Ok((attach_token_handles(r.0), r.1))
+}
+
+/// Login session mint. Copies `default_rooms` **including []** (Thread
+/// `skin_room` 403). Do **not** call [`create_token`] (R5: empty rooms 400).
+/// `session=1`, `expires_at` = now + [`crate::connect_users::session_ttl_days`].
+pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), String> {
+    let username = normalize_username(username)?;
+    let caps = parse_caps(None)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let raw = generate_raw_key();
+    debug_assert!(
+        raw.starts_with(SKIN_KEY_PREFIX) && !raw.starts_with("k2sk_"),
+        "skin prefix must be k2skn_, never k2sk_"
+    );
+    let key_hash = sha256_hex(&raw);
+    let prefix = display_prefix(&raw);
+    let created_at = now_secs();
+    let ttl_secs = crate::connect_users::session_ttl_days().saturating_mul(86_400);
+    let expires_at = created_at.saturating_add(ttl_secs);
+    let caps_stored = caps_json(&caps);
+    let r = with_conn(|conn| {
+        let Some(principal) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        let rooms = principal.default_rooms.clone();
+        let rooms_stored = rooms_json(&rooms);
+        conn.execute(
+            "INSERT INTO tokens (id, principal_id, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 1, ?8)",
+            params![
+                id,
+                principal.id,
+                key_hash,
+                prefix,
+                caps_stored,
+                rooms_stored,
+                created_at,
+                expires_at
+            ],
+        )
+        .map_err(|e| format!("skin session insert: {e}"))?;
+        Ok((
+            SkinTokenMeta {
+                id,
+                username: principal.username,
+                prefix,
+                caps,
+                rooms,
+                room_handles: Vec::new(),
+                created_at,
+                revoked_at: None,
+            },
+            raw,
+        ))
+    })?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok((attach_token_handles(r.0), r.1))
+}
+
+/// Set or clear the K2-login password. Empty/`None` → NULL hash (cannot
+/// K2-login; static mint still works). Revokes **session** passes only.
+/// Hashes **before** taking `skin.db` so argon2 never holds the Mutex.
+pub fn set_principal_password(
+    username: &str,
+    password: Option<&str>,
+) -> Result<SkinPrincipal, String> {
+    let username = normalize_username(username)?;
+    let hash = match password.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(pw) => Some(hash_password(pw)?),
+        None => None,
+    };
+    let has_password = hash.is_some();
+    with_conn(|conn| {
+        let Some(p) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        conn.execute(
+            "UPDATE principals SET password_hash = ?1 WHERE id = ?2",
+            params![hash, p.id],
+        )
+        .map_err(|e| format!("skin password update: {e}"))?;
+        revoke_sessions_for_principal(conn, &p.id)?;
+        Ok(SkinPrincipal {
+            id: p.id,
+            username: p.username,
+            created_at: p.created_at,
+            default_rooms: p.default_rooms,
+            default_room_handles: Vec::new(),
+            has_password,
+        })
+    })
+    .map(attach_principal_handles)
+}
+
+fn revoke_sessions_for_principal(conn: &Connection, principal_id: &str) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE tokens SET revoked_at = ?1
+         WHERE principal_id = ?2 AND session = 1 AND revoked_at IS NULL",
+        params![now_secs(), principal_id],
+    )
+    .map_err(|e| format!("skin session revoke: {e}"))
+}
+
+/// Login gate: lockout then dummy-argon2 verify. Never holds `skin.db`
+/// across hashing.
+#[derive(Debug)]
+pub enum SkinLoginOutcome {
+    Ok(SkinPrincipal),
+    BadCreds,
+    LockedOut,
+}
+
+pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcome {
+    let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
+
+    let locked = with_conn(|conn| {
+        let row: Option<(i64, Option<i64>)> = conn
+            .query_row(
+                "SELECT failed_count, locked_until FROM login_lockouts WHERE username = ?1",
+                params![key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("skin lockout lookup: {e}"))?;
+        if let Some((_count, Some(until))) = row {
+            if now_secs() < until {
+                return Ok(true);
+            }
+            conn.execute(
+                "UPDATE login_lockouts SET locked_until = NULL, failed_count = 0 WHERE username = ?1",
+                params![key],
+            )
+            .map_err(|e| format!("skin lockout expire: {e}"))?;
+        }
+        Ok(false)
+    })
+    .unwrap_or(false);
+    if locked {
+        return SkinLoginOutcome::LockedOut;
+    }
+
+    let stored = with_conn(|conn| {
+        let hash: Option<Option<String>> = conn
+            .query_row(
+                "SELECT password_hash FROM principals WHERE username = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("skin password lookup: {e}"))?;
+        Ok(hash.flatten().filter(|s| !s.trim().is_empty()))
+    })
+    .unwrap_or(None);
+
+    static DUMMY_HASH: OnceLock<String> = OnceLock::new();
+    let dummy = DUMMY_HASH.get_or_init(build_dummy_hash);
+    let ok = match stored.as_deref() {
+        Some(h) => verify_hash(password, h),
+        None => {
+            let _ = verify_hash(password, dummy);
+            false
+        }
+    };
+
+    let _ = with_conn(|conn| {
+        if ok {
+            conn.execute(
+                "DELETE FROM login_lockouts WHERE username = ?1",
+                params![key],
+            )
+            .map_err(|e| format!("skin lockout clear: {e}"))?;
+        } else {
+            let failed: i64 = conn
+                .query_row(
+                    "SELECT failed_count FROM login_lockouts WHERE username = ?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| format!("skin lockout count: {e}"))?
+                .unwrap_or(0)
+                + 1;
+            if failed >= i64::from(LOCKOUT_THRESHOLD) {
+                conn.execute(
+                    "INSERT INTO login_lockouts (username, failed_count, locked_until)
+                     VALUES (?1, 0, ?2)
+                     ON CONFLICT(username) DO UPDATE SET failed_count = 0, locked_until = excluded.locked_until",
+                    params![key, now_secs().saturating_add(LOCKOUT_DURATION_SECS)],
+                )
+                .map_err(|e| format!("skin lockout set: {e}"))?;
+            } else {
+                conn.execute(
+                    "INSERT INTO login_lockouts (username, failed_count, locked_until)
+                     VALUES (?1, ?2, NULL)
+                     ON CONFLICT(username) DO UPDATE SET failed_count = excluded.failed_count, locked_until = NULL",
+                    params![key, failed],
+                )
+                .map_err(|e| format!("skin lockout bump: {e}"))?;
+            }
+        }
+        Ok(())
+    });
+
+    if !ok {
+        return SkinLoginOutcome::BadCreds;
+    }
+    match with_conn(|conn| principal_by_username(conn, &key)) {
+        Ok(Some(p)) => SkinLoginOutcome::Ok(attach_principal_handles(p)),
+        _ => SkinLoginOutcome::BadCreds,
+    }
 }
 
 pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
@@ -763,6 +1084,7 @@ pub fn set_principal_default_rooms(
             created_at: p.created_at,
             default_rooms: rooms,
             default_room_handles: Vec::new(),
+            has_password: p.has_password,
         })
     })
     .map(attach_principal_handles)
@@ -881,29 +1203,33 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
     out
 }
 
-/// Resolve a presented raw key. Revoked / unknown / wrong prefix → `None`.
+/// Resolve a presented raw key. Revoked / expired / unknown / wrong prefix → `None`.
 pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
     if !is_skin_token(presented_raw) || is_api_key_prefix(presented_raw) {
         return None;
     }
     let key_hash = sha256_hex(presented_raw);
+    let now = now_secs();
     with_conn(|conn| {
         let row = conn
             .query_row(
-                "SELECT t.id, t.principal_id, p.username, t.caps, t.rooms
+                "SELECT t.id, t.principal_id, p.username, t.caps, t.rooms, t.session
                  FROM tokens t
                  JOIN principals p ON p.id = t.principal_id
-                 WHERE t.key_hash = ?1 AND t.revoked_at IS NULL",
-                params![key_hash],
+                 WHERE t.key_hash = ?1 AND t.revoked_at IS NULL
+                   AND (t.expires_at IS NULL OR t.expires_at > ?2)",
+                params![key_hash, now],
                 |r| {
                     let caps_raw: String = r.get(3)?;
                     let rooms_raw: String = r.get(4)?;
+                    let session: i64 = r.get(5)?;
                     Ok(SkinPass {
                         id: r.get(0)?,
                         principal_id: r.get(1)?,
                         username: r.get(2)?,
                         caps: caps_from_json(&caps_raw),
                         rooms: rooms_from_json(&rooms_raw),
+                        session: session != 0,
                     })
                 },
             )
@@ -1010,12 +1336,9 @@ pub fn effective_front_door() -> Result<SkinFrontDoor, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
-
-    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::themes::HOME_LOCK.lock();
         let prev = std::env::var_os("HOME");
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1290,5 +1613,149 @@ mod tests {
                 "WAL mode should leave wal/shm companions or at least the db"
             );
         });
+    }
+
+    #[test]
+    fn session_mint_allows_empty_rooms_create_token_does_not() {
+        with_temp_home(|| {
+            add_principal("ada").unwrap();
+            let err = create_token("ada", None, &[]).unwrap_err();
+            assert!(
+                err.contains("rooms must include at least one workspace"),
+                "{err}"
+            );
+            let (meta, raw) = create_session_token("ada").expect("session mint");
+            assert!(raw.starts_with(SKIN_KEY_PREFIX), "{raw}");
+            assert!(meta.rooms.is_empty(), "default_rooms [] must copy");
+            let pass = resolve_skin_token(&raw).expect("live session");
+            assert!(pass.session);
+            assert!(pass.rooms_empty());
+            assert!(pass.has_cap(CAP_THREAD_READ));
+            assert!(pass.has_cap(CAP_THREAD_POST));
+        });
+    }
+
+    #[test]
+    fn resolve_rejects_expired_session_static_survives() {
+        with_temp_home(|| {
+            add_principal("bob").unwrap();
+            let room = uuid::Uuid::new_v4().to_string();
+            let (static_meta, static_raw) =
+                create_token("bob", None, std::slice::from_ref(&room)).unwrap();
+            assert!(resolve_skin_token(&static_raw).is_some());
+            let (_sess, sess_raw) = create_session_token("bob").unwrap();
+            assert!(resolve_skin_token(&sess_raw).is_some());
+            let _ = static_meta;
+            with_conn(|conn| {
+                conn.execute("UPDATE tokens SET expires_at = 1 WHERE session = 1", [])
+                    .unwrap();
+                Ok(())
+            })
+            .unwrap();
+            assert!(
+                resolve_skin_token(&sess_raw).is_none(),
+                "expired session must not resolve"
+            );
+            assert!(
+                resolve_skin_token(&static_raw).is_some(),
+                "static mint expires_at NULL stays live"
+            );
+        });
+    }
+
+    #[test]
+    fn password_reset_revokes_sessions_not_static() {
+        with_temp_home(|| {
+            add_principal("cara").unwrap();
+            set_principal_password("cara", Some("s3cret-horse")).unwrap();
+            let room = uuid::Uuid::new_v4().to_string();
+            let (_sm, static_raw) =
+                create_token("cara", None, std::slice::from_ref(&room)).unwrap();
+            let (_sess, sess_raw) = create_session_token("cara").unwrap();
+            assert!(resolve_skin_token(&sess_raw).is_some());
+            set_principal_password("cara", Some("new-pass-word")).unwrap();
+            assert!(
+                resolve_skin_token(&sess_raw).is_none(),
+                "password reset revokes session=1"
+            );
+            assert!(
+                resolve_skin_token(&static_raw).is_some(),
+                "static partner key survives password reset"
+            );
+            match check_and_record_login("cara", "new-pass-word") {
+                SkinLoginOutcome::Ok(p) => assert_eq!(p.username, "cara"),
+                other => panic!("expected Ok, got {other:?}"),
+            }
+            match check_and_record_login("cara", "s3cret-horse") {
+                SkinLoginOutcome::BadCreds => {}
+                _ => panic!("old password must fail"),
+            }
+            match check_and_record_login("ghost-user", "nope") {
+                SkinLoginOutcome::BadCreds => {}
+                _ => panic!("unknown user must be generic BadCreds"),
+            }
+            set_principal_password("cara", None).unwrap();
+            match check_and_record_login("cara", "new-pass-word") {
+                SkinLoginOutcome::BadCreds => {}
+                _ => panic!("cleared password cannot K2-login"),
+            }
+            assert!(
+                resolve_skin_token(&static_raw).is_some(),
+                "clearing password still leaves static mint"
+            );
+        });
+    }
+
+    #[test]
+    fn lockout_is_generic_and_is_not_dummy_argon_alone() {
+        with_temp_home(|| {
+            add_principal("eve").unwrap();
+            set_principal_password("eve", Some("right-password")).unwrap();
+            for _ in 0..3 {
+                match check_and_record_login("eve", "wrong") {
+                    SkinLoginOutcome::BadCreds => {}
+                    _ => panic!("pre-lockout must be BadCreds"),
+                }
+            }
+            match check_and_record_login("eve", "right-password") {
+                SkinLoginOutcome::LockedOut => {}
+                _ => panic!("4th attempt after 3 fails is lockout, not a verify"),
+            }
+            match check_and_record_login("eve", "wrong") {
+                SkinLoginOutcome::LockedOut => {}
+                _ => panic!("locked username stays generic LockedOut"),
+            }
+        });
+    }
+
+    #[test]
+    fn null_password_cannot_k2_login_static_mint_still_works() {
+        with_temp_home(|| {
+            let p = add_principal("mintonly").unwrap();
+            assert!(!p.has_password);
+            match check_and_record_login("mintonly", "anything") {
+                SkinLoginOutcome::BadCreds => {}
+                _ => panic!("NULL password_hash cannot K2-login"),
+            }
+            let room = uuid::Uuid::new_v4().to_string();
+            let (_m, raw) = create_token("mintonly", None, std::slice::from_ref(&room)).unwrap();
+            assert!(resolve_skin_token(&raw).is_some());
+        });
+    }
+
+    #[test]
+    fn direct_front_door_host_from_url() {
+        with_temp_home(|| {
+            assert_eq!(direct_front_door_host(), None);
+            set_front_door("direct", Some("https://skin.app.com"), None, None).unwrap();
+            assert_eq!(direct_front_door_host().as_deref(), Some("skin.app.com"));
+            set_front_door("connect", None, None, None).unwrap();
+            assert_eq!(direct_front_door_host(), None);
+        });
+        assert_eq!(
+            host_from_url("https://Skin.App.com:8443/path"),
+            Some("skin.app.com".into())
+        );
+        assert_eq!(host_from_url("skin.app.com"), Some("skin.app.com".into()));
     }
 }

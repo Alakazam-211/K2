@@ -822,6 +822,9 @@ async fn handle_one_request(
             | "/cli/skin/users"
             | "/cli/skin/users/remove"
             | "/cli/skin/users/rooms"
+            | "/cli/skin/users/password"
+            | "/cli/skin/login"
+            | "/cli/skin/logout"
             | "/cli/skin-tokens"
             | "/cli/skin-tokens/revoke"
             | "/cli/skin-tokens/rooms"
@@ -967,6 +970,8 @@ async fn handle_one_request(
     // the loader does not look dead. Distinct from REMOTE_SESSIONS_DISABLED.
     if !k2_core::app_settings::load().web_client_enabled
         && (path.starts_with("/cli/") || path == "/events")
+        && path != "/cli/skin/login"
+        && path != "/cli/skin/logout"
         && super::http::is_web_client_request(&headers_blob)
     {
         let _ = stream.read(&mut buf).await;
@@ -1141,6 +1146,30 @@ async fn handle_one_request(
         "/" | "/account" if !is_post => {
             let _ = stream.read(&mut buf).await;
             let html = crate::connect_users_routes::account_page_html();
+            super::http::send_response(
+                &mut *stream,
+                "200 OK",
+                "text/html; charset=utf-8",
+                &html,
+            )
+            .await;
+        }
+        // GET /login — Skin Host only (nested `skin.*` or Direct front-door
+        // host). Operator `/` already owns Connect account HTML.
+        "/login" if !is_post => {
+            let _ = stream.read(&mut buf).await;
+            if !super::http::host_is_skin_cookie_class(&headers_blob) {
+                super::http::send_response(
+                    &mut *stream,
+                    "404 Not Found",
+                    "application/json",
+                    r#"{"error":"route not found"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let next = query.split('&').find_map(|p| p.strip_prefix("next="));
+            let html = crate::skin_routes::login_page_html(next);
             super::http::send_response(
                 &mut *stream,
                 "200 OK",
@@ -2586,6 +2615,76 @@ async fn handle_one_request(
                 r.content_type,
                 &r.body,
                 set_cookie.as_deref(),
+            )
+            .await;
+        }
+        // POST /cli/skin/login — PUBLIC (NO token gate). Exact arm before
+        // the `/cli/skin*` prefix so the roster stays owner-gated.
+        "/cli/skin/login" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let content_type = headers_blob
+                .lines()
+                .find_map(|line| {
+                    let colon = line.find(':')?;
+                    let (name, rest) = line.split_at(colon);
+                    if name.eq_ignore_ascii_case("content-type") {
+                        Some(rest[1..].trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || {
+                crate::skin_routes::handle_login(&body_bytes, &content_type)
+            })
+            .await
+            .unwrap_or_else(|e| crate::skin_routes::SkinLoginReply {
+                response: crate::cli_response::CliResponse::internal_error(format!(
+                    "worker join: {e}"
+                )),
+                token: None,
+                location: None,
+            });
+            if r.response.status.starts_with("401") {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            let max_age = k2_core::connect_users::session_ttl_days().saturating_mul(86_400);
+            let set_cookie = r.token.as_deref().filter(|t| !t.is_empty()).map(|t| {
+                super::http::skin_session_cookie_set_value(t, request_secure, max_age)
+            });
+            super::http::send_response_with_cookie_and_location(
+                &mut *stream,
+                r.response.status,
+                r.response.content_type,
+                &r.response.body,
+                set_cookie.as_deref(),
+                r.location.as_deref(),
+            )
+            .await;
+        }
+        // POST /cli/skin/logout — session k2skn_ only (session=1). Static
+        // partner keys 403 and stay live. Always clear the skin cookie.
+        "/cli/skin/logout" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let presented = super::http::extract_token(&query).map(str::to_string);
+            let r = tokio::task::spawn_blocking(move || {
+                crate::skin_routes::handle_logout(presented.as_deref())
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            let clear = super::http::skin_session_cookie_clear_value(request_secure);
+            super::http::send_response_with_cookie(
+                &mut *stream,
+                r.status,
+                r.content_type,
+                &r.body,
+                Some(&clear),
             )
             .await;
         }
@@ -5132,6 +5231,31 @@ async fn handle_one_request(
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::handle_users_rooms(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/users/password" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_users_password(&body, &actor)
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))

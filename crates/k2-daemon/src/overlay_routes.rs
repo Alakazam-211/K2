@@ -1852,6 +1852,7 @@ mod tests {
             username: "guest".into(),
             caps: vec!["thread:read".into(), "thread:post".into()],
             rooms: rooms.to_vec(),
+            session: false,
         }
     }
 

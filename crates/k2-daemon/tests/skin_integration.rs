@@ -45,6 +45,7 @@ const TERMINAL_403: &str = r#"{"error":"skin tokens cannot use the terminal"}"#;
 struct Resp {
     status: u16,
     body: String,
+    headers: String,
 }
 
 fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Resp {
@@ -58,21 +59,35 @@ fn http_host(
     body: Option<&str>,
     host: &str,
 ) -> Resp {
+    http_host_ex(port, method, path_and_query, body, host, "")
+}
+
+fn http_host_ex(
+    port: u16,
+    method: &str,
+    path_and_query: &str,
+    body: Option<&str>,
+    host: &str,
+    extra_headers: &str,
+) -> Resp {
     let mut stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
     stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(Duration::from_secs(15)))
         .expect("set read timeout");
+    let extra = if extra_headers.is_empty() {
+        String::new()
+    } else if extra_headers.ends_with("\r\n") {
+        extra_headers.to_string()
+    } else {
+        format!("{extra_headers}\r\n")
+    };
     let req = match body {
         Some(b) => format!(
-            "{method} {path_and_query} HTTP/1.1\r\n\
-             Host: {host}\r\n\
-             Content-Type: application/json\r\n\
-             Content-Length: {}\r\n\r\n{b}",
+            "{method} {path_and_query} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}\r\n{b}",
             b.len()
         ),
         None => format!(
-            "{method} {path_and_query} HTTP/1.1\r\n\
-             Host: {host}\r\n\r\n"
+            "{method} {path_and_query} HTTP/1.1\r\nHost: {host}\r\n{extra}\r\n"
         ),
     };
     stream.write_all(req.as_bytes()).expect("write request");
@@ -83,7 +98,11 @@ fn http_host(
     loop {
         if let Some((status, body, complete)) = try_parse(&raw) {
             if complete {
-                return Resp { status, body };
+                return Resp {
+                    status,
+                    body,
+                    headers: headers_of(&raw),
+                };
             }
         }
         match stream.read(&mut chunk) {
@@ -104,7 +123,11 @@ fn http_host(
                 ) =>
             {
                 if let Some((status, body, _)) = try_parse(&raw) {
-                    return Resp { status, body };
+                    return Resp {
+                        status,
+                        body,
+                        headers: headers_of(&raw),
+                    };
                 }
                 panic!("read timeout: {e:?} raw={}", String::from_utf8_lossy(&raw));
             }
@@ -122,7 +145,28 @@ fn http_host(
         Some((_h, b)) => b.to_string(),
         None => String::new(),
     };
-    Resp { status, body }
+    Resp {
+        status,
+        body,
+        headers: headers_of(&raw),
+    }
+}
+
+fn headers_of(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+    text.split("\r\n\r\n").next().unwrap_or("").to_string()
+}
+
+fn header_value(headers: &str, name: &str) -> Option<String> {
+    for line in headers.lines() {
+        let Some(colon) = line.find(':') else {
+            continue;
+        };
+        if line[..colon].eq_ignore_ascii_case(name) {
+            return Some(line[colon + 1..].trim().to_string());
+        }
+    }
+    None
 }
 
 fn try_parse(raw: &[u8]) -> Option<(u16, String, bool)> {
@@ -1346,6 +1390,312 @@ async fn skin_empty_rooms_dark_rename_delete_apply_hook() {
             "deleted workspace omitted: {}",
             agents.body
         );
+    });
+}
+
+fn set_password(port: u16, username: &str, password: &str) {
+    let r = http(
+        port,
+        "POST",
+        &format!("/cli/skin/users/password?token={OWNER_TOKEN}"),
+        Some(&format!(
+            r#"{{"username":"{username}","password":"{password}"}}"#
+        )),
+    );
+    assert_eq!(r.status, 200, "set password; {}", r.body);
+    assert!(
+        !r.body.contains("password_hash") && !r.body.contains("passwordHash"),
+        "hash must not be on the wire: {}",
+        r.body
+    );
+}
+
+fn cookie_get(port: u16, path: &str, host: &str, cookie: &str) -> Resp {
+    http_host_ex(port, "GET", path, None, host, &format!("Cookie: {cookie}"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_login_session_cookie_logout_and_host_fold() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("skinlogin{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+        add_user(port, "guest");
+        let rooms = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/rooms?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"username":"guest","rooms":["{handle}"]}}"#)),
+        );
+        assert_eq!(rooms.status, 200, "default rooms; {}", rooms.body);
+        set_password(port, "guest", "s3cret-horse");
+
+        let get_login = http(port, "GET", "/cli/skin/login", None);
+        assert_eq!(get_login.status, 405, "GET login; {}", get_login.body);
+        assert!(
+            get_login.body.contains("POST required"),
+            "{}",
+            get_login.body
+        );
+
+        let unknown = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"nope","password":"s3cret-horse"}"#),
+        );
+        let wrong = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"guest","password":"nope"}"#),
+        );
+        assert_eq!(unknown.status, 401, "{}", unknown.body);
+        assert_eq!(wrong.status, 401, "{}", wrong.body);
+        assert_eq!(
+            unknown.body, wrong.body,
+            "unknown and wrong password must be the same 401 body"
+        );
+        assert_eq!(
+            unknown.body.trim(),
+            r#"{"error":"invalid username or password"}"#
+        );
+        assert!(!unknown.body.contains("guest"));
+        assert!(!unknown.body.contains("nope"));
+
+        let ok = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"guest","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(ok.status, 200, "{}", ok.body);
+        let v = json(&ok.body);
+        assert_eq!(v["ok"], true, "{}", ok.body);
+        let token = v["token"].as_str().expect("token").to_string();
+        assert!(token.starts_with("k2skn_"), "{token}");
+        assert!(!ok.body.contains("password_hash"));
+        assert!(!ok.body.contains("passwordHash"));
+        let set_cookie = header_value(&ok.headers, "set-cookie").expect("Set-Cookie");
+        assert!(set_cookie.contains("k2_skin_session="), "{set_cookie}");
+        assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+        assert!(set_cookie.contains("SameSite=Lax"), "{set_cookie}");
+        assert!(!set_cookie.contains("SameSite=Strict"), "{set_cookie}");
+        assert!(set_cookie.contains("Path=/"), "{set_cookie}");
+        assert!(set_cookie.contains(&token), "{set_cookie}");
+
+        let thread = cookie_get(
+            port,
+            &format!("/cli/thread?addr={handle}"),
+            "skin.rosson.k2.dev",
+            &format!("k2_skin_session={token}"),
+        );
+        assert_eq!(thread.status, 200, "skin.* cookie fold; {}", thread.body);
+
+        k2_core::skin::set_front_door("direct", Some("https://skin.app.com"), None, None)
+            .expect("direct door");
+        let direct = cookie_get(
+            port,
+            &format!("/cli/thread?addr={handle}"),
+            "skin.app.com",
+            &format!("k2_skin_session={token}"),
+        );
+        assert_eq!(
+            direct.status, 200,
+            "Direct Host cookie fold; {}",
+            direct.body
+        );
+
+        let operator = cookie_get(
+            port,
+            &format!("/cli/thread?addr={handle}"),
+            "127.0.0.1",
+            &format!("k2_skin_session={token}"),
+        );
+        assert_ne!(
+            operator.status, 200,
+            "operator Host must not fold skin cookie; {}",
+            operator.body
+        );
+
+        let grid = cookie_get(
+            port,
+            "/cli/sessions/grid?session=nope",
+            "skin.rosson.k2.dev",
+            &format!("k2_skin_session={token}"),
+        );
+        assert_eq!(grid.status, 403, "grid; {}", grid.body);
+        // Host belt 403s grid on `skin.*` before the token terminal check.
+        assert!(
+            grid.body
+                .contains("skin front door does not proxy this path")
+                || grid.body.trim() == TERMINAL_403,
+            "grid 403; {}",
+            grid.body
+        );
+
+        let page = http_host(port, "GET", "/login", None, "skin.rosson.k2.dev");
+        assert_eq!(page.status, 200, "{}", page.body);
+        assert!(page.body.contains("Skin Access"), "{}", page.body);
+        assert!(!page.body.contains("k2skn_"), "{}", page.body);
+        let op_page = http_host(port, "GET", "/login", None, "127.0.0.1");
+        assert_eq!(op_page.status, 404, "operator /login; {}", op_page.body);
+
+        let logout = http_host_ex(
+            port,
+            "POST",
+            "/cli/skin/logout",
+            Some("{}"),
+            "skin.rosson.k2.dev",
+            &format!("Cookie: k2_skin_session={token}"),
+        );
+        assert_eq!(logout.status, 200, "{}", logout.body);
+        let clear = header_value(&logout.headers, "set-cookie").expect("clear cookie");
+        assert!(clear.contains("Max-Age=0"), "{clear}");
+        let dead = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={token}&addr={handle}"),
+            None,
+        );
+        assert_eq!(dead.status, 401, "revoked session; {}", dead.body);
+
+        let (_id, static_tok) = mint(port, "guest", &["thread:read"], &[&handle]);
+        let static_logout = http(
+            port,
+            "POST",
+            &format!("/cli/skin/logout?token={static_tok}"),
+            Some("{}"),
+        );
+        assert!(
+            static_logout.status == 400 || static_logout.status == 403,
+            "static logout; {}",
+            static_logout.body
+        );
+        let still = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={static_tok}&addr={handle}"),
+            None,
+        );
+        assert_eq!(
+            still.status, 200,
+            "static key survives logout; {}",
+            still.body
+        );
+
+        let session2 = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"guest","password":"s3cret-horse"}"#),
+        );
+        let session_tok = json(&session2.body)["token"]
+            .as_str()
+            .expect("session2")
+            .to_string();
+        set_password(port, "guest", "new-pass-word");
+        let after_reset = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={session_tok}&addr={handle}"),
+            None,
+        );
+        assert_eq!(
+            after_reset.status, 401,
+            "password reset revokes sessions; {}",
+            after_reset.body
+        );
+        let static_after = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={static_tok}&addr={handle}"),
+            None,
+        );
+        assert_eq!(
+            static_after.status, 200,
+            "static survives password reset; {}",
+            static_after.body
+        );
+
+        let hook = mint_scoped_hook();
+        let hook_pw = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/password?token={hook}"),
+            Some(r#"{"username":"guest","password":"x"}"#),
+        );
+        assert_eq!(hook_pw.status, 403, "agent passport; {}", hook_pw.body);
+        assert!(hook_pw.body.contains("owner_only"), "{}", hook_pw.body);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_login_empty_rooms_thread_403_connect_cookie_not_a_pass() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("skindark{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+        add_user(port, "emptyrooms");
+        set_password(port, "emptyrooms", "s3cret-horse");
+        // default_rooms stay []
+        let ok = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"emptyrooms","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(ok.status, 200, "{}", ok.body);
+        let token = json(&ok.body)["token"].as_str().expect("token").to_string();
+        let dark = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={token}&addr={handle}"),
+            None,
+        );
+        assert_skin_room(&dark);
+
+        let connect_tok = provision_role(port, "opuser", "op-pass-word", "member");
+        let connect_on_skin = cookie_get(
+            port,
+            &format!("/cli/thread?addr={handle}"),
+            "skin.rosson.k2.dev",
+            &format!("k2_session={connect_tok}"),
+        );
+        assert_ne!(
+            connect_on_skin.status, 200,
+            "Connect cookie is not a skin pass; {}",
+            connect_on_skin.body
+        );
+
+        let skin_on_op = cookie_get(
+            port,
+            "/cli/auth/whoami",
+            "127.0.0.1",
+            &format!("k2_skin_session={token}"),
+        );
+        assert_ne!(
+            skin_on_op.status, 200,
+            "skin cookie is not Connect on operator Host; {}",
+            skin_on_op.body
+        );
+
+        let caddy = k2_core::skin_door::render_caddyfile(&k2_core::skin_door::CaddyfileSpec {
+            daemon_port: 18789,
+            loopback_port: 38472,
+            extra_listen: None,
+            ui_port: Some(5173),
+            skin_host: None,
+            mail_host: None,
+            bind_http80: false,
+        });
+        assert!(caddy.contains("handle /login"), "{caddy}");
+        assert!(caddy.contains("handle /cli/skin/login"), "{caddy}");
+        assert!(caddy.contains("handle /cli/skin/logout"), "{caddy}");
     });
 }
 

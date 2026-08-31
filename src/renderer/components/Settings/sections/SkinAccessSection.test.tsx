@@ -181,11 +181,21 @@ describe('parsers', () => {
         createdAt: '2026-08-01T00:00:00Z',
         defaultRooms: [],
         defaultRoomHandles: [],
+        hasPassword: false,
       },
     ])
     expect(parseSkinUsers([USER_BOB])).toEqual([
-      { username: 'bob', createdAt: null, defaultRooms: [], defaultRoomHandles: [] },
+      {
+        username: 'bob',
+        createdAt: null,
+        defaultRooms: [],
+        defaultRoomHandles: [],
+        hasPassword: false,
+      },
     ])
+    expect(
+      parseSkinUsers({ users: [{ username: 'cara', hasPassword: true }] })[0].hasPassword,
+    ).toBe(true)
   })
 
   it('parseHydra reads supported/enabled/running and URLs', () => {
@@ -481,6 +491,32 @@ describe('SkinAccessSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByText(/Assign agents or these guests go dark/i)).toBeNull()
     expect(h.daemonCliPost.mock.calls.map((c) => String(c[0])).join(' ')).not.toMatch(/rooms/)
+  })
+
+  it('sets a skin password via skin/users/password, not Connect users', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/front-door') {
+        return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
+      }
+      if (route === 'skin/users') {
+        return { users: [{ ...USER_ALICE, hasPassword: false }, USER_BOB] }
+      }
+      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    fireEvent.change(screen.getByLabelText('alice password'), { target: { value: 's3cret-horse' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Set password' })[0])
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/password', {
+        username: 'alice',
+        password: 's3cret-horse',
+      })
+    })
+    expect(h.daemonCliPost.mock.calls.map((c) => String(c[0]))).not.toContain('users/set-password')
   })
 
   it('mints disabled until an agent is checked', async () => {

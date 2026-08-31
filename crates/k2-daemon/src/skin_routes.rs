@@ -135,6 +135,43 @@ pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {
     match skin::add_principal(username) {
         Ok(p) => {
             k2_core::log_debug!("[skin] actor={actor} added principal {}", p.username);
+            let password = str_field(&v, &["password"]);
+            if password.is_some() {
+                match skin::set_principal_password(&p.username, password) {
+                    Ok(p) => {
+                        return CliResponse::ok_json(
+                            serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()),
+                        )
+                    }
+                    Err(e) => return CliResponse::bad_request(e),
+                }
+            }
+            CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_users_password(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = str_field(&v, &["username", "name"]) else {
+        return CliResponse::bad_request("missing username");
+    };
+    let password = v
+        .get("password")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match skin::set_principal_password(username, password) {
+        Ok(p) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} set password for {} has_password={}",
+                p.username,
+                p.has_password
+            );
             CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
         }
         Err(e) => CliResponse::bad_request(e),
@@ -459,9 +496,315 @@ pub fn owner_only_response() -> CliResponse {
     }
 }
 
+const LOGIN_FAILED_JSON: &str = r#"{"error":"invalid username or password"}"#;
+
+fn login_failed_json() -> CliResponse {
+    CliResponse {
+        status: "401 Unauthorized",
+        content_type: "application/json",
+        body: LOGIN_FAILED_JSON.to_string(),
+    }
+}
+
+fn login_failed_html() -> CliResponse {
+    CliResponse {
+        status: "401 Unauthorized",
+        content_type: "text/html; charset=utf-8",
+        body: "<!DOCTYPE html><html><body><p>invalid username or password</p></body></html>"
+            .to_string(),
+    }
+}
+
+pub struct SkinLoginReply {
+    pub response: CliResponse,
+    /// Raw `k2skn_` for Set-Cookie (and JSON `token`). Never the hash.
+    pub token: Option<String>,
+    /// HTML form success → 302 Location. JSON leaves this `None`.
+    pub location: Option<String>,
+}
+
+fn is_form_body(content_type: &str) -> bool {
+    let ct = content_type.to_ascii_lowercase();
+    ct.contains("application/x-www-form-urlencoded") || ct.contains("multipart/form-data")
+}
+
+fn percent_decode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let bytes = raw.replace('+', " ").into_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = &bytes[i + 1..i + 3];
+            if let Ok(s) = std::str::from_utf8(hex) {
+                if let Ok(v) = u8::from_str_radix(s, 16) {
+                    out.push(v as char);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn parse_form_pairs(body: &[u8]) -> Vec<(String, String)> {
+    let s = String::from_utf8_lossy(body);
+    s.split('&')
+        .filter_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            Some((percent_decode(k.trim()), percent_decode(v.trim())))
+        })
+        .collect()
+}
+
+fn form_field<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+/// Relative path only — block `//host` and scheme URLs.
+pub fn safe_next(raw: Option<&str>) -> String {
+    let t = raw.unwrap_or("/").trim();
+    if t.starts_with('/')
+        && !t.starts_with("//")
+        && !t.contains("://")
+        && !t.contains('\r')
+        && !t.contains('\n')
+    {
+        t.to_string()
+    } else {
+        "/".to_string()
+    }
+}
+
+/// Public `POST /cli/skin/login`. Generic 401. Dummy argon2 + lockout live
+/// in core (`check_and_record_login`); caller adds the 500 ms 401 delay.
+pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
+    let form = is_form_body(content_type);
+    let parsed = if form {
+        let pairs = parse_form_pairs(body);
+        let username = form_field(&pairs, "username").unwrap_or("").to_string();
+        let password = form_field(&pairs, "password").unwrap_or("").to_string();
+        let next = form_field(&pairs, "next").map(str::to_string);
+        Some((username, password, next))
+    } else {
+        match serde_json::from_slice::<serde_json::Value>(body) {
+            Ok(v) => {
+                let username = str_field(&v, &["username", "name"])
+                    .unwrap_or("")
+                    .to_string();
+                let password = v
+                    .get("password")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let next = str_field(&v, &["next"]).map(str::to_string);
+                Some((username, password, next))
+            }
+            Err(_) => None,
+        }
+    };
+    let Some((username, password, next)) = parsed else {
+        return SkinLoginReply {
+            response: if form {
+                login_failed_html()
+            } else {
+                login_failed_json()
+            },
+            token: None,
+            location: None,
+        };
+    };
+    if username.trim().is_empty() || password.is_empty() {
+        return SkinLoginReply {
+            response: if form {
+                login_failed_html()
+            } else {
+                login_failed_json()
+            },
+            token: None,
+            location: None,
+        };
+    }
+    let principal = match skin::check_and_record_login(&username, &password) {
+        skin::SkinLoginOutcome::Ok(p) => p,
+        skin::SkinLoginOutcome::BadCreds | skin::SkinLoginOutcome::LockedOut => {
+            return SkinLoginReply {
+                response: if form {
+                    login_failed_html()
+                } else {
+                    login_failed_json()
+                },
+                token: None,
+                location: None,
+            };
+        }
+    };
+    let (meta, raw) = match skin::create_session_token(&principal.username) {
+        Ok(v) => v,
+        Err(e) => {
+            return SkinLoginReply {
+                response: CliResponse::internal_error(e),
+                token: None,
+                location: None,
+            };
+        }
+    };
+    if form {
+        let location = safe_next(next.as_deref());
+        return SkinLoginReply {
+            response: CliResponse {
+                status: "302 Found",
+                content_type: "text/html; charset=utf-8",
+                body: "<!DOCTYPE html><html><body>ok</body></html>".to_string(),
+            },
+            token: Some(raw),
+            location: Some(location),
+        };
+    }
+    let body = serde_json::json!({
+        "ok": true,
+        "token": raw.clone(),
+        "username": meta.username,
+        "rooms": meta.rooms,
+        "roomHandles": meta.room_handles,
+    })
+    .to_string();
+    debug_assert!(
+        !body.contains("password_hash") && !body.contains("passwordHash"),
+        "password_hash must never be on the wire"
+    );
+    SkinLoginReply {
+        response: CliResponse::ok_json(body),
+        token: Some(raw),
+        location: None,
+    }
+}
+
+/// Session `k2skn_` only. Static partner key → 403, not revoked.
+pub fn handle_logout(presented: Option<&str>) -> CliResponse {
+    let Some(raw) = presented.map(str::trim).filter(|s| !s.is_empty()) else {
+        return CliResponse {
+            status: "401 Unauthorized",
+            content_type: "application/json",
+            body: r#"{"error":"invalid or revoked skin token"}"#.to_string(),
+        };
+    };
+    let Some(pass) = skin::resolve_skin_token(raw) else {
+        return CliResponse {
+            status: "401 Unauthorized",
+            content_type: "application/json",
+            body: r#"{"error":"invalid or revoked skin token"}"#.to_string(),
+        };
+    };
+    if !pass.session {
+        return CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: r#"{"error":"static skin tokens cannot be logged out"}"#.to_string(),
+        };
+    }
+    match skin::revoke_token(&pass.id) {
+        Ok(_) => CliResponse::ok_json(r#"{"ok":true}"#.to_string()),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+pub fn login_page_html(next: Option<&str>) -> String {
+    let next = html_escape(&safe_next(next));
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K2 Skin login</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0d1117; color: #e6edf3;
+  }}
+  .card {{
+    width: min(380px, calc(100vw - 32px));
+    background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+    padding: 28px 26px;
+  }}
+  h1 {{ font-size: 17px; font-weight: 600; margin: 0 0 6px; }}
+  .sub {{ color: #8b949e; font-size: 13px; margin: 0 0 20px; }}
+  label {{ display: block; font-size: 12px; color: #8b949e; margin: 14px 0 5px; }}
+  input {{
+    width: 100%; padding: 9px 11px; border-radius: 7px;
+    border: 1px solid #30363d; background: #0d1117; color: #e6edf3; font-size: 14px;
+  }}
+  button {{
+    width: 100%; margin-top: 20px; padding: 10px; border: 0; border-radius: 7px;
+    background: #238636; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  }}
+  .logout {{ background: #21262d; margin-top: 10px; }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Skin Access</h1>
+    <p class="sub">Username and password for this skin. Not Connect login.</p>
+    <form method="post" action="/cli/skin/login">
+      <input type="hidden" name="next" value="{next}">
+      <label for="u">Username</label>
+      <input id="u" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" required>
+      <label for="p">Password</label>
+      <input id="p" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Log in</button>
+    </form>
+    <form method="post" action="/cli/skin/logout">
+      <button type="submit" class="logout">Log out</button>
+    </form>
+  </div>
+</body>
+</html>
+"##
+    )
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_page_html_does_not_paint_k2skn() {
+        let html = login_page_html(Some("/app"));
+        assert!(html.contains("action=\"/cli/skin/login\""), "{html}");
+        assert!(html.contains("action=\"/cli/skin/logout\""), "{html}");
+        assert!(html.contains("name=\"next\""));
+        assert!(!html.contains("k2skn_"), "must not paint the pass: {html}");
+        assert!(!html.contains("k2_session"), "{html}");
+        assert_eq!(safe_next(Some("https://evil.example")), "/");
+        assert_eq!(safe_next(Some("//evil")), "/");
+        assert_eq!(safe_next(Some("/app")), "/app");
+    }
+
+    #[test]
+    fn login_failed_bodies_are_generic() {
+        let a = login_failed_json();
+        let b = login_failed_json();
+        assert_eq!(a.body, b.body);
+        assert_eq!(a.status, "401 Unauthorized");
+        assert!(!a.body.contains("guest"));
+        assert_eq!(a.body, LOGIN_FAILED_JSON);
+    }
 
     #[test]
     fn owner_only_response_has_stable_code_and_403() {

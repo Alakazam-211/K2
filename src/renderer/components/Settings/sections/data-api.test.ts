@@ -1,13 +1,23 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/daemon-cli', () => ({
+  daemonCliPost: vi.fn(),
+  daemonCliGet: vi.fn(),
+}))
+
+import { daemonCliPost } from '@/lib/daemon-cli'
 import {
   SAMPLE_DATABASES,
   SAMPLE_STATUS,
   dbTypeLabel,
   formatSqlListen,
+  setSqlDbAgentAccess,
   sqlErrorInfo,
   sqlErrorMessage,
   type SqlDatabase,
 } from './data-api'
+
+const post = vi.mocked(daemonCliPost)
 
 describe('data-api helpers', () => {
   it('dbTypeLabel is sql / documents-in-same-DB', () => {
@@ -56,5 +66,29 @@ describe('data-api helpers', () => {
     const err = new Error(JSON.stringify({ ok: false, error: { code: 'forbidden', hint: 'ask your human' } }))
     expect(sqlErrorInfo(err)).toEqual({ code: 'forbidden', hint: 'ask your human' })
     expect(sqlErrorMessage(err)).toBe('ask your human')
+  })
+})
+
+describe('setSqlDbAgentAccess', () => {
+  beforeEach(() => {
+    post.mockReset()
+    post.mockResolvedValue({ ok: true })
+  })
+
+  it('posts workspace/set with write when the Agent-tab toggle is on', async () => {
+    await setSqlDbAgentAccess('/ws/sales', true)
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(post).toHaveBeenCalledWith('workspace/set', {
+      project: '/ws/sales',
+      fields: { db_agent_access: 'write' },
+    })
+  })
+
+  it('posts workspace/set with off when the Agent-tab toggle is off', async () => {
+    await setSqlDbAgentAccess('/ws/sales', false)
+    expect(post).toHaveBeenCalledWith('workspace/set', {
+      project: '/ws/sales',
+      fields: { db_agent_access: 'off' },
+    })
   })
 })

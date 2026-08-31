@@ -9,6 +9,8 @@ GET `/cli/skin/agents` includes `displayName` (guest-facing label; `handle` stay
 
 **`k2 msg agent::host --inbox-wake`** uses the same federation plane as live `k2 msg`. Connected peer is the gate — not a Connect token. Wake is a tray pointer, not file bytes in the PTY.
 
+The create-DB grant lives on each workspace’s Agent tab (Settings → Workspaces), not inside Settings → Data.
+
 ---
 
 ## 0.40.125 — Skin files read/write + live events

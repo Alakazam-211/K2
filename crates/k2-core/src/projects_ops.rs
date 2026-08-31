@@ -1222,6 +1222,10 @@ mod tests {
             serde_json::json!([]),
             "empty workspaces must serialize as [] not omit the key"
         );
+        assert_eq!(
+            empty_row["dbAgentAccess"], "off",
+            "projects/list must include create-only dbAgentAccess (default off)"
+        );
 
         delete_workspace("embed-w1");
         delete_project("embed-ws-proj");

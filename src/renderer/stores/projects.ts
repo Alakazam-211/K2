@@ -255,6 +255,10 @@ interface Project {
   completionSoundEnabled?: number
   // 0103 — workspace address token. Empty until backfilled / minted.
   handle?: string
+  // Create-only passport for `k2 db create` (`off` | `read` | `write`).
+  // Missing / empty → treat as `'off'`. No global master. Written via
+  // POST workspace/set `db_agent_access`.
+  dbAgentAccess?: 'off' | 'read' | 'write'
 }
 
 export interface ProjectWithWorkspaces extends Project {

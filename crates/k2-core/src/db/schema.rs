@@ -143,6 +143,11 @@ pub struct Project {
     /// Default 0 (harness keeps the transcript's model).
     #[serde(default)]
     pub force_model_on_resume: i64,
+    /// Create-only passport for `k2 db create` (migration 0108).
+    /// `off` | `read` | `write`. Empty/NULL → `"off"` (fail-closed).
+    /// No global master (unlike DNS/connections). Default off.
+    #[serde(default)]
+    pub db_agent_access: String,
 }
 
 impl Project {
@@ -158,7 +163,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -196,6 +201,11 @@ impl Project {
                     if t.is_empty() { None } else { Some(t.to_string()) }
                 }),
                 force_model_on_resume: row.get::<_, i64>(28).unwrap_or(0),
+                db_agent_access: {
+                    let raw = row.get::<_, Option<String>>(29).ok().flatten().unwrap_or_default();
+                    let t = raw.trim();
+                    if t.is_empty() { "off".to_string() } else { t.to_string() }
+                },
             })
         })?;
         rows.collect()
@@ -206,7 +216,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -244,6 +254,11 @@ impl Project {
                         if t.is_empty() { None } else { Some(t.to_string()) }
                     }),
                     force_model_on_resume: row.get::<_, i64>(28).unwrap_or(0),
+                    db_agent_access: {
+                        let raw = row.get::<_, Option<String>>(29).ok().flatten().unwrap_or_default();
+                        let t = raw.trim();
+                        if t.is_empty() { "off".to_string() } else { t.to_string() }
+                    },
                 })
             },
         )
@@ -4125,6 +4140,31 @@ mod unit_tests {
         let p = Project::get(&conn, &id).unwrap();
         assert_eq!(p.default_model, None);
         assert_eq!(p.force_model_on_resume, 0);
+    }
+
+    #[test]
+    fn project_db_agent_access_defaults_off_and_serializes_camel_case() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-db-agent");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.db_agent_access, "off");
+        let listed = Project::list(&conn).unwrap();
+        let listed_p = listed.iter().find(|x| x.id == id).expect("listed");
+        assert_eq!(listed_p.db_agent_access, "off");
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["dbAgentAccess"], "off");
+
+        conn.execute(
+            "UPDATE projects SET db_agent_access = 'write' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        let written = Project::get(&conn, &id).unwrap();
+        assert_eq!(written.db_agent_access, "write");
+        assert_eq!(
+            serde_json::to_value(&written).unwrap()["dbAgentAccess"],
+            "write"
+        );
     }
 
     #[test]

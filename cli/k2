@@ -377,6 +377,61 @@ unset _skip_conn_gate
 BASE_URL="http://${HOST}:${PORT}"
 
 # HTTP helper
+# 75 = local_transport_denied (unused by curl 8.x). Survives $(cli_request)
+# subshells; curl 7 / connection refused stay daemon_unreachable.
+_CLI_LOCAL_TRANSPORT_DENIED=75
+
+# True when curl/OS failure is a local restriction (daemon health unobserved).
+_cli_transport_is_denied() {
+    local rc="$1" err="$2"
+    if [[ "$err" == *[Cc]onnection\ refused* ]]; then
+        return 1
+    fi
+    if [[ "$err" == *[Oo]peration\ not\ permitted* || "$err" == *EPERM* \
+       || "$err" == *[Pp]ermission\ denied* || "$err" == *EACCES* ]]; then
+        return 0
+    fi
+    if [[ "$err" == *Address\ family\ not\ supported* \
+       || "$err" == *Protocol\ family\ not\ supported* ]]; then
+        return 0
+    fi
+    if [[ "$err" == *"::1"* && ( "$err" == *Network\ is\ unreachable* \
+       || "$err" == *No\ route\ to\ host* ) ]]; then
+        return 0
+    fi
+    if [[ "$err" == *temporary\ file* || "$err" == *temp\ file* || "$err" == *TMPDIR* ]]; then
+        return 0
+    fi
+    if [ "$rc" -ne 0 ]; then
+        local td="${TMPDIR:-/tmp}"
+        if [ ! -d "$td" ] || [ ! -w "$td" ]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Body on stdout. -v so modern curl's OS errno (EPERM vs refused) is visible.
+# `{ } 4>&1` + `1>&4` keeps the body on this function's stdout (so
+# `resp=$(cli_request …)` works); stderr is classified, never printed.
+_cli_curl() {
+    local err rc=1
+    local _had_e=0
+    case $- in *e*) _had_e=1; set +e ;; esac
+    {
+        err=$(curl "$@" 2>&1 1>&4)
+        rc=$?
+    } 4>&1
+    [ "$_had_e" -eq 1 ] && set -e
+    if [ "$rc" -eq 0 ]; then
+        return 0
+    fi
+    if _cli_transport_is_denied "$rc" "$err"; then
+        return "$_CLI_LOCAL_TRANSPORT_DENIED"
+    fi
+    return "$rc"
+}
+
 cli_request() {
     local endpoint="$1"
     shift
@@ -384,9 +439,9 @@ cli_request() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    curl -sG "${BASE_URL}${endpoint}" \
+    _cli_curl -sS -v -G "${BASE_URL}${endpoint}" \
         --connect-timeout 5 --max-time 30 \
-        -d "$params" 2>/dev/null
+        -d "$params"
 }
 
 # POST a JSON body. Used by /cli/awareness/publish (Phase 3).
@@ -456,10 +511,10 @@ cli_request_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    curl -sG --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+    _cli_curl -sS -v -G --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
         --connect-timeout 5 --max-time 30 \
         -H "Authorization: Bearer ${SCOPED_TOKEN}" \
-        ${params:+-d "$params"} 2>/dev/null
+        ${params:+-d "$params"}
 }
 
 cli_post_form_uds() {
@@ -15819,10 +15874,17 @@ cmd_agent_list() {
                 exit 2 ;;
         esac
     done
-    local resp
-    resp=$(cli_request "/cli/agent/list") || resp=""
+    local resp rc
+    set +e
+    resp=$(cli_request "/cli/agent/list")
+    rc=$?
+    set -e
     if [ -z "$resp" ]; then
-        _agent_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
+        if [ "$rc" -eq "$_CLI_LOCAL_TRANSPORT_DENIED" ]; then
+            _agent_err "local_transport_denied" "local restriction, daemon health unobserved"
+        else
+            _agent_err "daemon_unreachable" "no response from the K2 daemon (is it running?)"
+        fi
         exit 1
     fi
     RESP="$resp" AS_JSON="$as_json" python3 - <<'PYEOF'

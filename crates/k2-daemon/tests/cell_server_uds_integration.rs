@@ -189,6 +189,17 @@ fn post_form(path: &str, bearer: &str, body: &str) -> String {
     )
 }
 
+fn post_json(path: &str, bearer: &str, body: &str) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\n\
+         Authorization: Bearer {bearer}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
 // Give the spawned accept loop a beat to come up before connecting.
 async fn settle() {
     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
@@ -505,6 +516,97 @@ async fn connections_list_users_is_200_and_cli_users_is_not_an_agent_verb() {
         ustatus == 403 || ustatus == 404,
         "GET /cli/users on cell UDS is not an agent verb (403 via require_hook or 404 sentinel); got {ustatus} body={ubody}"
     );
+}
+
+/// 0.40.127: POST /cli/publish/run over the cell UDS with a scoped Bearer
+/// must not 404 the TCP-fallback sentinel (and must not 403). JSON flatten
+/// is load-bearing; stamp forces the principal workspace (foreign project=
+/// is ignored). GET list stays 200-class. `--no-tunnel` so we never dial
+/// connect.k2.dev.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_post_json_is_served_on_cell_socket() {
+    let _g = lock();
+    let home = set_short_home();
+    std::env::set_var("K2_PUBLISH_PROBE_MS", "80");
+
+    let (ws_uuid, ws) = mk_workspace(&home, "pubw");
+    let (evil_uuid, evil) = mk_workspace(&home, "evil");
+    let (_sid, token, sock) = mint_bind_serve_in_ws("pane-1", &ws_uuid);
+    settle().await;
+
+    let cwd = ws.to_str().expect("utf8 workspace path");
+    let body = serde_json::json!({
+        "name": "cell-pub-run",
+        "cmd": "true",
+        "port": 38471,
+        "noTunnel": true,
+        "cwd": cwd,
+        "project": "/evil",
+    })
+    .to_string();
+    let (status, resp) = uds(&sock, &post_json("/cli/publish/run", &token, &body)).await;
+    assert_ne!(
+        status, 404,
+        "POST /cli/publish/run must not 404 on the cell socket; body={resp}"
+    );
+    assert!(
+        !resp.contains("not served on cell socket"),
+        "must not be the cell-sentinel; body={resp}"
+    );
+    assert_ne!(
+        status, 403,
+        "scoped Bearer must authorize POST /cli/publish/run; body={resp}"
+    );
+    assert!(
+        !resp.contains("Missing name"),
+        "JSON flatten must surface name; body={resp}"
+    );
+    assert!(
+        !resp.to_lowercase().contains("/evil")
+            && !resp.contains(&evil.to_string_lossy().to_string()),
+        "foreign JSON project must not be the operand; body={resp}"
+    );
+
+    let (lstatus, lbody) = uds(&sock, &get("/cli/publish/list", Some(&token))).await;
+    assert!(
+        (200..300).contains(&lstatus),
+        "GET /cli/publish/list must be 200-class; status={lstatus} body={lbody}"
+    );
+    let listed: serde_json::Value = serde_json::from_str(&lbody)
+        .unwrap_or_else(|e| panic!("publish list body must be JSON: {e}; body={lbody}"));
+    let services = listed
+        .get("services")
+        .and_then(|s| s.as_array())
+        .unwrap_or_else(|| panic!("services[] missing; body={lbody}"));
+    for svc in services {
+        let name = svc
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or_else(|| panic!("service name missing; body={lbody}"));
+        assert_ne!(name, "evil", "must not list a foreign-named service; body={lbody}");
+    }
+
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let evil_rows = k2_core::published_services::list_for_project(&conn, &evil_uuid)
+            .expect("list evil project services");
+        assert!(
+            evil_rows.is_empty(),
+            "stamp must not publish into the foreign workspace; got {evil_rows:?}"
+        );
+    }
+
+    // Best-effort cleanup if run inserted a row / spawned.
+    let _ = uds(
+        &sock,
+        &post_json(
+            "/cli/publish/rm",
+            &token,
+            &serde_json::json!({ "name": "cell-pub-run", "keepHostname": true }).to_string(),
+        ),
+    )
+    .await;
 }
 
 /// Minimal query-string percent-encoding for a filesystem path.

@@ -739,6 +739,36 @@ pub(crate) fn parse_form_body(body: &[u8]) -> std::collections::HashMap<String, 
     k2_core::agent_hooks::parse_query_params(&format!("/x?{}", s))
 }
 
+/// Flatten a JSON object body into a params map (string/bool/number).
+/// Empty strings are skipped. Nested objects/arrays/null are ignored.
+/// Used by `/cli/publish/*` POST (`cli_post_json`) so the cell UDS and
+/// TCP dispatcher share the same merge.
+pub(crate) fn merge_json_object_params(
+    params: &mut std::collections::HashMap<String, String>,
+    body: &[u8],
+) {
+    if body.is_empty() {
+        return;
+    }
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return;
+    };
+    let Some(obj) = v.as_object() else {
+        return;
+    };
+    for (k, val) in obj {
+        let s = match val {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => continue,
+        };
+        if !s.is_empty() {
+            params.insert(k.clone(), s);
+        }
+    }
+}
+
 /// Reassemble a full `path?query` URL and hand off to k2_core's
 /// URL-decoding query parser. The core helper knows how to unescape
 /// `%20`/`+` and multi-byte UTF-8 — we just combine the pieces.

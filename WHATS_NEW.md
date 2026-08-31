@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.127
+
+- Agents can `k2 publish run` from a cell (scoped token).
+
+---
+
 ## 0.40.126 — Skin agent display names
 
 GET `/cli/skin/agents` includes `displayName` (guest-facing label; `handle` stays the id). Agent Thread posts stamp the room handle, not `k2`. Skin guest `from` is still the username.

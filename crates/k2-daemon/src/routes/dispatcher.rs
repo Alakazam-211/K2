@@ -4632,15 +4632,18 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body).await;
         }
-        // Workspace knowledge base — seed + localhost serve on/off.
-        // token_ok (owner OR connect-user), same tier as fs/inbox reads.
-        // spawn_blocking so serve start can Handle::block_on bind without
-        // pinning an async worker; the accept loop is then tokio::spawn'd.
+        // Published services — daemon-owned process + optional nested
+        // hostname. Dual-auth: owner/connect-user (token_ok) OR scoped
+        // hook. Stamp self-workspace for scoped callers; do not preserve
+        // a foreign project=. spawn_blocking so run/start can wait the
+        // probe without pinning an async worker.
         p if is_post && post_allowed && p.starts_with("/cli/publish/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -4656,24 +4659,15 @@ async fn handle_one_request(
             for (k, v) in super::http::parse_form_body(&body_bytes) {
                 params.insert(k, v);
             }
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-                if let Some(obj) = v.as_object() {
-                    for (k, val) in obj {
-                        let s = match val {
-                            serde_json::Value::String(s) => s.clone(),
-                            serde_json::Value::Bool(b) => b.to_string(),
-                            serde_json::Value::Number(n) => n.to_string(),
-                            _ => continue,
-                        };
-                        if !s.is_empty() {
-                            params.insert(k.clone(), s);
-                        }
-                    }
-                }
+            super::http::merge_json_object_params(&mut params, &body_bytes);
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
             }
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::publish_routes::dispatch_post(&p_owned, &params)
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::publish_routes::dispatch_post(&p_owned, &params)
+                })
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

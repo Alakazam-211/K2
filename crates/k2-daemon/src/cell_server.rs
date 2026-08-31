@@ -647,6 +647,17 @@ mod unix_impl {
             p if p.starts_with("/cli/dns/") && is_post => {
                 from_cli(crate::dns_routes::dispatch_post(p, body))
             }
+            // Published services: POST run/start/stop/rm. CLI `cli_post_json`
+            // sends a JSON body; cell handle_conn only merges form, so flatten
+            // here then re-stamp so identity wins over body's `project`.
+            // GET list/logs stay on is_agent_verb && !is_post. Self-host:
+            // do not preserve a foreign project= the way inbox compose does.
+            p if p.starts_with("/cli/publish/") && is_post => {
+                let mut params = params.clone();
+                crate::routes::http::merge_json_object_params(&mut params, body);
+                stamp_principal(&mut params, principal);
+                from_cli(crate::publish_routes::dispatch_post(p, &params))
+            }
             // PR1 federation dual-auth: peers / peer-roster / send over the
             // cell UDS. Dark when federation is off (same 404 as TCP). Principal
             // already installed by the outer with_request_principal so send
@@ -910,6 +921,82 @@ mod unix_impl {
                 "sid-1",
             );
             assert_eq!(status, "405 Method Not Allowed");
+        }
+
+        // ── 0.40.127 published-services POST over the cell socket ─────
+
+        #[test]
+        fn cell_dispatch_serves_publish_run_post_not_cell_sentinel() {
+            let _ = k2_core::db::init_for_tests();
+            let ws_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+            let ws_path = "/tmp/k2-cell-publish-run-W";
+            std::fs::create_dir_all(ws_path).expect("create workspace dir");
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![ws_uuid, ws_path, "W"],
+                )
+                .expect("insert project W");
+            }
+            let p = HookPrincipal {
+                workspace_uuid: ws_uuid.to_string(),
+                agent_address: "julie".to_string(),
+            };
+            let params: HashMap<String, String> = HashMap::new();
+            // JSON body only — cell handle_conn does not merge JSON; the
+            // POST arm must flatten or handle_run 400s Missing name.
+            let body = serde_json::json!({
+                "name": "julie-probe",
+                "cmd": "true",
+                "port": 38471,
+                "noTunnel": true,
+                "cwd": "/no/such/k2-publish-cwd",
+                "project": "/evil",
+            })
+            .to_string();
+            let (status, _, out) = dispatch_cell_verb(
+                "POST",
+                "/cli/publish/run",
+                &params,
+                body.as_bytes(),
+                &p,
+                "sid-1",
+            );
+            assert_ne!(
+                status, "404 Not Found",
+                "POST /cli/publish/run must not be the cell-sentinel; body={out}"
+            );
+            assert!(
+                !out.contains("not served on cell socket"),
+                "POST /cli/publish/run must not fall through to the TCP-fallback sentinel; body={out}"
+            );
+            assert!(
+                !out.contains("Missing name"),
+                "JSON name/cmd/port/noTunnel must be flattened into params; body={out}"
+            );
+            assert!(
+                !out.contains("/evil"),
+                "foreign JSON project must not win over stamp; body={out}"
+            );
+            // cwd flatten is visible: we passed a missing dir so the handler
+            // 400s on cwd after name/cmd/port/project, not on Missing name.
+            assert_eq!(status, "400 Bad Request", "body={out}");
+            assert!(
+                out.contains("cwd is not a directory"),
+                "expected cwd validation after JSON flatten; body={out}"
+            );
+
+            let (gstatus, _, _) = dispatch_cell_verb(
+                "GET",
+                "/cli/publish/run",
+                &params,
+                b"",
+                &p,
+                "sid-1",
+            );
+            assert_eq!(gstatus, "405 Method Not Allowed");
         }
 
         // ── awareness body re-stamp (identity from principal, not body) ──

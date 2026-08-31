@@ -1259,9 +1259,11 @@ async fn async_main() {
 
     // Skin front door — re-apply Caddy if the operator already persisted a
     // mode. Fault-isolated (missing caddy is a log, never a boot crash).
+    // Hydra sidecar is independent (H2: Caddy apply is not Hydra start).
     let _ = tokio::task::spawn_blocking(move || {
         k2_core::skin_door::maybe_apply_on_boot(port);
     });
+    let _ = tokio::task::spawn_blocking(skin_hydra::maybe_apply_on_boot);
 
     // Keep the process alive until shutdown; the accept loop runs as its
     // own task (spawned above). A Ctrl+C during the migration sweep was

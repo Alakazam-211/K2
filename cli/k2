@@ -5337,13 +5337,14 @@ sys.exit(1)
 
 _skin_usage() {
     cat >&2 <<'EOF'
-Usage: k2 skin <user|front-door> ...
+Usage: k2 skin <user|front-door|hydra> ...
        k2 skin-token <create|list|revoke> ...
 
   k2 skin user add <username>           Add a skin principal (not a Connect user)
   k2 skin user list                     Roster (no secrets)
   k2 skin user remove <username>        Drop principal + their passes
   k2 skin front-door [connect|direct]   Show or persist+apply the Skin front door
+  k2 skin hydra [on|off] [--json]       OIDC issuer sidecar (Linux; owner/admin)
   k2 skin-token create <username> [--caps thread:read,thread:post]
                                         Mint k2skn_ pass (secret once)
   k2 skin-token list                    Live/revoked passes (prefix + caps)
@@ -5517,6 +5518,54 @@ if isinstance(err,str) and err.strip():
     print(err, file=sys.stderr)
     if not d.get("applied"):
         sys.exit(1)
+'
+            ;;
+        hydra)
+            local json_out=0 action=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --json) json_out=1; shift ;;
+                    --help|-h)
+                        echo "Usage: k2 skin hydra [on|off] [--json]" >&2
+                        exit 0 ;;
+                    on|off)
+                        if [ -n "$action" ]; then
+                            echo "Usage: k2 skin hydra [on|off] [--json]" >&2
+                            exit 2
+                        fi
+                        action="$1"; shift ;;
+                    *)
+                        echo "Usage: k2 skin hydra [on|off] [--json]" >&2
+                        exit 2 ;;
+                esac
+            done
+            local raw
+            if [ -z "$action" ]; then
+                raw=$(cli_request "/cli/skin/hydra")
+            else
+                local body
+                if [ "$action" = "on" ]; then
+                    body='{"enabled":true,"apply":true}'
+                else
+                    body='{"enabled":false,"apply":true}'
+                fi
+                raw=$(cli_post_json "/cli/skin/hydra" "$body")
+            fi
+            printf '%s' "$raw" | _skin_die_if_err
+            if [ "$json_out" = 1 ]; then
+                printf '%s\n' "$raw"
+                return 0
+            fi
+            printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print("supported: %s" % d.get("supported"))
+print("enabled:   %s" % d.get("enabled"))
+print("running:   %s" % d.get("running"))
+print("public:    %s" % (d.get("publicUrl") or ""))
+print("admin:     %s" % (d.get("adminUrl") or ""))
+if d.get("hint"):
+    print("hint:      %s" % d["hint"])
 '
             ;;
         --help|-h|"")

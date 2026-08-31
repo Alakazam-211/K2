@@ -1,7 +1,9 @@
-//! Skin OIDC issuer sidecar (prd-skin-oidc-hydra-v1 leftover 123).
+//! Skin OIDC issuer sidecar (prd-skin-oidc-hydra-v1 leftover 123 + 0.40.124 boot).
 //!
 //! Linux bake/supervise like mail: PATH `hydra` child, loopback only.
-//! Mac: `supported=false`, toggle no-ops loud. Enable skins ≠ start Hydra.
+//! Mac: `supported=false`, toggle no-ops loud. Enable skins ≠ start Hydra
+//! (H2). Catalog `enabled=true` on Linux with `hydra` on PATH starts the
+//! sidecar on daemon boot via the same `apply`/`start` as POST.
 //!
 //! Ports (loopback): **4444 public** / **4445 admin**. Caddy Host table for
 //! public OIDC on :443 is a follow-up. Hydra stores **no users/passwords**;
@@ -505,6 +507,33 @@ pub fn apply(enabled: bool, do_apply: bool) -> Result<serde_json::Value, String>
     Ok(status_json())
 }
 
+/// Re-apply catalog on daemon boot. Same `apply`/`start` as POST `/cli/skin/hydra`.
+///
+/// H2: enabling skins / Caddy apply is **not** Hydra start — this path is
+/// independent of `skin_door::maybe_apply_on_boot`. `enabled=false` calls
+/// [`stop`] (pid file; leftover 4444 from a previous process is real).
+/// Missing binary: persist enabled, log `hydra_missing`. Never panics.
+pub fn maybe_apply_on_boot() {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(boot_apply)).is_err() {
+        k2_core::log_debug!("[skin-hydra] boot apply panicked (ignored)");
+    }
+}
+
+fn boot_apply() {
+    if !is_enabled() {
+        stop();
+        return;
+    }
+    match apply(true, true) {
+        Ok(_) => {
+            if hydra_supported() && resolve_hydra().is_none() {
+                k2_core::log_debug!("[skin-hydra] {HYDRA_MISSING}");
+            }
+        }
+        Err(e) => k2_core::log_debug!("[skin-hydra] boot apply skipped: {e}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,5 +639,59 @@ mod tests {
         assert!(yml.contains("\n    host: 127.0.0.1\n"), "{yml}");
         assert!(!yml.contains("password:"), "{yml}");
         assert!(yml.contains("no users or passwords"), "{yml}");
+    }
+
+    #[test]
+    fn boot_enabled_true_fake_linux_starts() {
+        let _g = hydra_test_lock();
+        reset_row();
+        with_fake_linux(true, || {
+            apply(true, false).expect("persist without apply");
+            assert!(!is_running(), "H2: persist must not start Hydra");
+            maybe_apply_on_boot();
+            assert!(is_enabled());
+            assert!(
+                is_running(),
+                "boot must call start when enabled + hydra on PATH"
+            );
+            let v = status_json();
+            assert_eq!(v["supported"], true, "{v}");
+            assert_eq!(v["enabled"], true, "{v}");
+            assert_eq!(v["running"], true, "{v}");
+        });
+    }
+
+    #[test]
+    fn boot_missing_binary_does_not_panic_persists_enabled() {
+        let _g = hydra_test_lock();
+        reset_row();
+        with_fake_linux(false, || {
+            set_enabled(true).expect("persist enabled");
+            let panicked = std::panic::catch_unwind(|| maybe_apply_on_boot()).is_err();
+            assert!(!panicked, "missing hydra must not crash boot");
+            assert!(is_enabled(), "catalog stays enabled");
+            assert!(!is_running());
+            let v = status_json();
+            let hint = v["hint"].as_str().unwrap_or("");
+            assert!(hint.contains("hydra_missing"), "{hint}");
+        });
+    }
+
+    #[test]
+    fn boot_enabled_false_calls_stop() {
+        let _g = hydra_test_lock();
+        reset_row();
+        with_fake_linux(true, || {
+            apply(true, true).expect("start");
+            assert!(is_running());
+            set_enabled(false).expect("catalog off");
+            assert!(is_running(), "catalog off must not itself stop Hydra");
+            maybe_apply_on_boot();
+            assert!(!is_enabled());
+            assert!(
+                !is_running(),
+                "boot must stop leftover Hydra when enabled=false"
+            );
+        });
     }
 }

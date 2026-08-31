@@ -108,7 +108,8 @@ with `k2 thread <addr> \"...\"`, do not answer in this terminal), `feedback` to 
 ask your human a durable question, `project` for your project group's shared \
 chat — reply to a `[project:<name>]`-prefixed message with \
 `k2 project msg <name> \"...\"`, never `k2 msg` — and `mail` for your agent email: \
-mint/read/wait, send under your human's governance).\n";
+mint/read/wait, send under your human's governance). \
+`k2 study` prints bounded pages (Fair Source, people lists, errors) — not `--help`.\n";
 
 pub fn compose_agents_md_public(project_path: &str) -> String {
     compose_agents_md(project_path)
@@ -541,6 +542,19 @@ k2 agent context add skin:roster                            # Skin Access guests
 ```
 Optional path layers compose into `.k2/AGENTS.md` with Agent / Project /
 Tooling. Prefer short standing orders; load skills for depth.
+
+## Study
+`k2 study` (and `k2 study list`) is a catalog of bounded pages — not `--help`,
+not a crawl of wiki or PRDs. `k2 study <topic>` prints one page. Daemon-optional.
+
+Topics: what, source, map, identity, send, human, people, auth, errors, context,
+db, mail, connect-boundary, skins, feedback-loop.
+
+K2 is source-available Fair Source (FSL-1.1-Apache-2.0), not MIT. Connect is a
+separate product. Four people lists: connections (agents), Connect users, skin guests,
+`k2 connections list --users` humans. Never `k2 msg` usernames.
+
+To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
 "#
     .to_string()
 }
@@ -1961,6 +1975,38 @@ mod tests {
         assert!(
             body.contains("Sending=`on`") || body.contains("Sending=on"),
             "k2-cli skill must teach linked send needs Sending=on"
+        );
+        assert!(
+            body.contains("k2 study"),
+            "k2-cli skill must mention `k2 study`"
+        );
+        assert!(
+            body.contains("Fair Source") && body.contains("not MIT"),
+            "k2-cli skill must say Fair Source, not MIT"
+        );
+        assert!(
+            body.contains("connections (agents)"),
+            "k2-cli skill must mention connections (agents)"
+        );
+        assert!(
+            body.contains("Connect users"),
+            "k2-cli skill must mention Connect users"
+        );
+        assert!(
+            body.contains("skin guests"),
+            "k2-cli skill must mention skin guests"
+        );
+        assert!(
+            body.contains("--users"),
+            "k2-cli skill must mention --users"
+        );
+        assert!(
+            body.contains("Never `k2 msg` usernames"),
+            "k2-cli skill must say never k2 msg usernames"
+        );
+        assert!(
+            AGENTS_MD_TOOLING_SECTION.contains("k2 study"),
+            "always-on AGENTS.md Tooling must mention k2 study"
         );
     }
 

@@ -238,39 +238,80 @@ fn load_granted_active(conn: &rusqlite::Connection, project_id: &str) -> Option<
     .ok()
 }
 
-/// Effective SQL interaction level for a workspace: `write` if it owns an
-/// active DB, else the highest `sql_grants.level` on an active DB, else None.
-/// Does **not** consult `projects.db_agent_access` (that flag is create-only).
-pub fn project_sql_level(project_id: &str) -> Option<&'static str> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    if count_active(&conn, project_id) > 0 {
-        return Some("write");
+fn intern_sql_level(level: &str) -> Option<&'static str> {
+    match level {
+        "read" => Some("read"),
+        "write" => Some("write"),
+        _ => None,
     }
-    let mut stmt = conn
-        .prepare(
-            "SELECT g.level FROM sql_grants g \
-             JOIN sql_databases d ON d.id = g.database_id \
-             WHERE g.project_id = ?1 AND d.status = 'active'",
+}
+
+fn grant_level_on(
+    conn: &rusqlite::Connection,
+    database_id: &str,
+    project_id: &str,
+) -> Option<&'static str> {
+    let raw: String = conn
+        .query_row(
+            "SELECT level FROM sql_grants WHERE database_id = ?1 AND project_id = ?2",
+            rusqlite::params![database_id, project_id],
+            |r| r.get(0),
         )
         .ok()?;
-    let rows = stmt
-        .query_map(rusqlite::params![project_id], |r| r.get::<_, String>(0))
-        .ok()?;
-    let mut saw_read = false;
-    for level in rows.filter_map(Result::ok) {
-        if level == "write" {
-            return Some("write");
-        }
-        if level == "read" {
-            saw_read = true;
+    intern_sql_level(&raw)
+}
+
+/// How unscoped dsn/store/migrate picked the catalog row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResolvedVia {
+    Owned,
+    Grant,
+}
+
+impl ResolvedVia {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Owned => "owned",
+            Self::Grant => "grant",
         }
     }
-    if saw_read {
-        Some("read")
-    } else {
-        None
+}
+
+/// Unscoped `active_row` plus the caller's level on **that** row.
+/// Owning the row ⇒ write; else that grant's level. Not workspace-max.
+#[derive(Debug)]
+pub(crate) struct UnscopedAccess {
+    pub id: String,
+    pub name: String,
+    pub resolved_via: ResolvedVia,
+    pub level: &'static str,
+}
+
+/// Same order as unscoped ops: first owned active by `created_at`, else
+/// first granted active by `sql_grants.created_at`.
+fn resolve_unscoped(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> Option<(DbRow, ResolvedVia, &'static str)> {
+    if let Some(row) = load_active_default(conn, project_id) {
+        return Some((row, ResolvedVia::Owned, "write"));
     }
+    let row = load_granted_active(conn, project_id)?;
+    let level = grant_level_on(conn, &row.id, project_id)?;
+    Some((row, ResolvedVia::Grant, level))
+}
+
+/// Unscoped target + caller's level on that row. None = no catalog row.
+pub(crate) fn unscoped_access(project_id: &str) -> Option<UnscopedAccess> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (row, via, level) = resolve_unscoped(&conn, project_id)?;
+    Some(UnscopedAccess {
+        id: row.id,
+        name: row.name,
+        resolved_via: via,
+        level,
+    })
 }
 
 fn project_db_agent_access(conn: &rusqlite::Connection, project_id: &str) -> String {
@@ -522,15 +563,11 @@ pub fn dsn_for_project(
 fn active_row(project_id: &str) -> Result<DbRow, OpsError> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    if let Some(row) = load_active_default(&conn, project_id) {
-        return Ok(row);
-    }
-    if let Some(row) = load_granted_active(&conn, project_id) {
-        return Ok(row);
-    }
-    Err(OpsError::NotFound(
-        "no database for this workspace — run 'k2 db create' first".into(),
-    ))
+    resolve_unscoped(&conn, project_id)
+        .map(|(row, _, _)| row)
+        .ok_or_else(|| {
+            OpsError::NotFound("no database for this workspace — run 'k2 db create' first".into())
+        })
 }
 
 fn migrator_creds(secrets: &dyn SecretStore, row: &DbRow) -> Result<(String, String), OpsError> {

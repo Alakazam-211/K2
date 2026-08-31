@@ -920,6 +920,31 @@ mod tests {
         serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json {}: {}", e, r.body))
     }
 
+    fn assert_grant_403(
+        resp: &crate::cli_response::CliResponse,
+        db_id: &str,
+        db_name: &str,
+        need: &str,
+    ) {
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        let err = json_body(resp);
+        assert_eq!(err["error"]["code"], "forbidden", "{err}");
+        assert_eq!(err["error"]["dbId"], db_id, "{err}");
+        assert_eq!(err["error"]["dbName"], db_name, "{err}");
+        assert_eq!(err["error"]["resolvedVia"], "grant", "{err}");
+        let hint = err["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("sql_grants"), "{hint}");
+        assert!(hint.contains(db_name), "{hint}");
+        assert!(hint.contains(db_id), "{hint}");
+        assert!(hint.contains("resolvedVia=grant"), "{hint}");
+        assert!(
+            hint.contains(&format!("need {need}")),
+            "hint must name need={need}: {hint}"
+        );
+        assert!(!hint.contains("db_agent_access"), "{hint}");
+        assert!(!resp.body.contains("db_agent_access"), "{}", resp.body);
+    }
+
     #[test]
     fn agent_off_who_owns_db_lists_and_stores_create_still_403() {
         let _g = sql_server_test_lock();
@@ -1025,7 +1050,11 @@ mod tests {
             &serde_json::json!({"n": 1}),
         )
         .expect("seed put");
-        ops::grant_access(fake, None, &db_name, &id_b, "read", false).expect("grant");
+        let granted = ops::grant_access(fake, None, &db_name, &id_b, "read", false).expect("grant");
+        let db_id = granted["databaseId"]
+            .as_str()
+            .expect("databaseId")
+            .to_string();
         let principal = HookPrincipal {
             workspace_uuid: id_b.clone(),
             agent_address: "grantee".into(),
@@ -1056,26 +1085,164 @@ mod tests {
                     "json": {"n": 2},
                 });
                 let put = routes::handle_store_put(put_body.to_string().as_bytes());
-                assert_eq!(put.status, "403 Forbidden", "{}", put.body);
-                let put_err = json_body(&put);
-                let put_hint = put_err["error"]["hint"].as_str().expect("put hint");
-                assert!(put_hint.contains("sql_grants"), "{put_hint}");
-                assert!(!put_hint.contains("db_agent_access"), "{put_hint}");
+                assert_grant_403(&put, &db_id, &db_name, "write");
 
                 let mig = routes::handle_migrate(
                     serde_json::json!({ "project": path_b })
                         .to_string()
                         .as_bytes(),
                 );
-                assert_eq!(mig.status, "403 Forbidden", "{}", mig.body);
-                let mig_err = json_body(&mig);
-                let mig_hint = mig_err["error"]["hint"].as_str().expect("mig hint");
-                assert!(mig_hint.contains("sql_grants"), "{mig_hint}");
-                assert!(!mig_hint.contains("db_agent_access"), "{mig_hint}");
+                assert_grant_403(&mig, &db_id, &db_name, "write");
             });
         });
         let _ = std::fs::remove_dir_all(dir_a);
         let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn older_read_then_newer_write_grant_unscoped_put_is_403() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-old-a-{}", std::process::id()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-old-b-{}", std::process::id()));
+        let dir_c = std::env::temp_dir().join(format!("k2-sql-old-c-{}", std::process::id()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        std::fs::create_dir_all(&dir_c).unwrap();
+        let path_a = dir_a.to_string_lossy().into_owned();
+        let path_b = dir_b.to_string_lossy().into_owned();
+        let path_c = dir_c.to_string_lossy().into_owned();
+        let id_a = insert_project("sql-old-a", &path_a);
+        let id_b = insert_project("sql-old-b", &path_b);
+        let id_c = insert_project("sql-old-c", &path_c);
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        let created_a =
+            ops::create_database(fake, &secrets, &id_a, 1, None, None).expect("create A");
+        let created_c =
+            ops::create_database(fake, &secrets, &id_c, 1, None, None).expect("create C");
+        let name_a = created_a["name"].as_str().expect("name A").to_string();
+        let name_c = created_c["name"].as_str().expect("name C").to_string();
+        let grant_read =
+            ops::grant_access(fake, None, &name_a, &id_b, "read", false).expect("read grant");
+        let grant_write =
+            ops::grant_access(fake, None, &name_c, &id_b, "write", false).expect("write grant");
+        let id_read = grant_read["databaseId"]
+            .as_str()
+            .expect("read databaseId")
+            .to_string();
+        let id_write = grant_write["databaseId"]
+            .as_str()
+            .expect("write databaseId")
+            .to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE sql_grants SET created_at = 1 WHERE database_id = ?1 AND project_id = ?2",
+                rusqlite::params![id_read, id_b],
+            )
+            .expect("stamp older read grant");
+            conn.execute(
+                "UPDATE sql_grants SET created_at = 2 WHERE database_id = ?1 AND project_id = ?2",
+                rusqlite::params![id_write, id_b],
+            )
+            .expect("stamp newer write grant");
+        }
+        let principal = HookPrincipal {
+            workspace_uuid: id_b.clone(),
+            agent_address: "grantee".into(),
+        };
+        with_request_principal(Some(principal), || {
+            routes::with_fake_ops(fake, || {
+                let put = routes::handle_store_put(
+                    serde_json::json!({
+                        "project": path_b,
+                        "name": "items",
+                        "id": "b",
+                        "json": {"n": 2},
+                    })
+                    .to_string()
+                    .as_bytes(),
+                );
+                assert_grant_403(&put, &id_read, &name_a, "write");
+                let put_err = json_body(&put);
+                assert_ne!(
+                    put_err["error"]["dbId"].as_str().unwrap_or(""),
+                    id_write,
+                    "unscoped put must not ride the newer write grant: {put_err}"
+                );
+                assert_ne!(
+                    put_err["error"]["dbName"].as_str().unwrap_or(""),
+                    name_c,
+                    "unscoped put must not name the write-granted DB: {put_err}"
+                );
+
+                let mig = routes::handle_migrate(
+                    serde_json::json!({ "project": path_b })
+                        .to_string()
+                        .as_bytes(),
+                );
+                assert_grant_403(&mig, &id_read, &name_a, "write");
+            });
+        });
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+        let _ = std::fs::remove_dir_all(dir_c);
+    }
+
+    #[test]
+    fn owner_interact_put_write_without_grant_row() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-own-put-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-own-put", &path);
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        ops::create_database(fake, &secrets, &pid, 1, None, None).expect("create");
+        ops::store_create(fake, &secrets, &pid, "items").expect("coll");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let n: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sql_grants", [], |r| r.get(0))
+                .expect("grant count");
+            assert_eq!(n, 0, "owner write must not require a grant row");
+        }
+        let principal = HookPrincipal {
+            workspace_uuid: pid.clone(),
+            agent_address: "owner".into(),
+        };
+        with_request_principal(Some(principal), || {
+            routes::with_fake_ops(fake, || {
+                let put = routes::handle_store_put(
+                    serde_json::json!({
+                        "project": path,
+                        "name": "items",
+                        "id": "a",
+                        "json": {"n": 1},
+                    })
+                    .to_string()
+                    .as_bytes(),
+                );
+                assert_eq!(put.status, "200 OK", "{}", put.body);
+                assert!(!put.body.contains("db_agent_access"), "{}", put.body);
+
+                let mut params = std::collections::HashMap::new();
+                params.insert("project".into(), path.clone());
+                params.insert("name".into(), "items".into());
+                params.insert("id".into(), "a".into());
+                let got = routes::handle_store_get(&params);
+                assert_eq!(got.status, "200 OK", "{}", got.body);
+                let doc = json_body(&got);
+                assert_eq!(doc["doc"]["n"], 1, "{doc}");
+            });
+        });
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1109,6 +1276,18 @@ mod tests {
             let hint = err["error"]["hint"].as_str().expect("hint");
             assert!(hint.contains("ask your human to create one"), "{hint}");
             assert!(!hint.contains("db_agent_access"), "{hint}");
+            assert!(
+                err["error"].get("dbId").is_none(),
+                "true empty 404 must omit dbId: {err}"
+            );
+            assert!(
+                err["error"].get("dbName").is_none(),
+                "true empty 404 must omit dbName: {err}"
+            );
+            assert!(
+                err["error"].get("resolvedVia").is_none(),
+                "true empty 404 must omit resolvedVia: {err}"
+            );
         });
         let _ = std::fs::remove_dir_all(dir);
     }

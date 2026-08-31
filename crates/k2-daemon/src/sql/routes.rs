@@ -69,29 +69,50 @@ fn access_for(path: &str, need: &str) -> Result<(), CliResponse> {
     }
 }
 
-/// Interaction gate (list is ungated). Owner token always; else the
-/// workspace must own an active DB (implicit write) or hold an
-/// `sql_grants` row covering `need`. No owned DB and no grant → 404,
-/// never a passport 403.
+fn err_forbidden_on_db(need: &str, access: &ops::UnscopedAccess) -> CliResponse {
+    let via = access.resolved_via.as_str();
+    let hint = format!(
+        "sql_grants level is '{level}' (need {need}) on {name} (id={id}) resolvedVia={via} — ask your human",
+        level = access.level,
+        name = access.name,
+        id = access.id,
+    );
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "forbidden",
+                "hint": hint,
+                "dbId": access.id,
+                "dbName": access.name,
+                "resolvedVia": via,
+            },
+        })
+        .to_string(),
+    }
+}
+
+/// Interaction gate (list is ungated). Owner token always; else resolve
+/// `active_row` once (first owned active, else first grant) and gate
+/// **that** row's level — owning it ⇒ write, else that grant. No row →
+/// 404, never a passport 403.
 fn interact_for(project_id: &str, need: &str) -> Result<(), CliResponse> {
     if request_principal().is_none() {
         return Ok(());
     }
-    match ops::project_sql_level(project_id) {
-        Some(level) => {
+    match ops::unscoped_access(project_id) {
+        Some(access) => {
             let ok = match need {
-                "read" => level == "read" || level == "write",
-                "write" => level == "write",
+                "read" => access.level == "read" || access.level == "write",
+                "write" => access.level == "write",
                 _ => false,
             };
             if ok {
                 Ok(())
             } else {
-                Err(err_json(
-                    "403 Forbidden",
-                    "forbidden",
-                    format!("sql_grants level is '{level}' (need {need}) — ask your human"),
-                ))
+                Err(err_forbidden_on_db(need, &access))
             }
         }
         None => Err(err_json(

@@ -3,9 +3,9 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.40.127
+## 0.40.127 — Agents can publish from a cell
 
-- Agents can `k2 publish run` from a cell (scoped token).
+`k2 publish run` works from an agent session (scoped cell token), not only from an owner shell. Status, `ps`, and Connect are unchanged.
 
 ---
 

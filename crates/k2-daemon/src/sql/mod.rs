@@ -536,6 +536,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("k2-sql-restore-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".k2/db/dumps")).unwrap();
         std::fs::write(dir.join(".k2/db/dumps/ok.dump"), b"FAKE-PG-DUMP").unwrap();
+        std::fs::write(
+            dir.join(".k2/db/dumps/ok.dump.grants.json"),
+            br#"{"databaseId":"","databaseName":"","grants":[]}"#,
+        )
+        .unwrap();
         let path = dir.to_string_lossy().into_owned();
         let pid = insert_project("sql-restore", &path);
         let ops = FakeSystemOps::baked();
@@ -1857,6 +1862,186 @@ mod tests {
             !helper2.to_ascii_uppercase().contains("ALTER ROLE"),
             "second dsn must not rotate, got {helper2}"
         );
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn dump_writes_grants_sidecar_without_passwords() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-dsa-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-dsb-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let path_a = dir_a.to_string_lossy().into_owned();
+        let id_a = insert_project("sql-128-dsa", &path_a);
+        let id_b = insert_project("sql-128-dsb", &dir_b.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        let db_id: String = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT id FROM sql_databases WHERE name = ?1 AND status = 'active'",
+                rusqlite::params![db_name],
+                |r| r.get(0),
+            )
+            .expect("db id")
+        };
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false).expect("grant");
+        let dumped = ops::dump(&ops, &secrets, &id_a, &path_a, Some(".k2/db/dumps/x.dump"))
+            .expect("dump")
+            .0;
+        assert_eq!(dumped["ok"], true, "{dumped}");
+        assert_eq!(dumped["path"], ".k2/db/dumps/x.dump", "{dumped}");
+        assert_eq!(
+            dumped["grantsPath"], ".k2/db/dumps/x.dump.grants.json",
+            "{dumped}"
+        );
+        let sidecar_path = dir_a.join(".k2/db/dumps/x.dump.grants.json");
+        let raw = std::fs::read_to_string(&sidecar_path).expect("sidecar on disk");
+        let lower = raw.to_ascii_lowercase();
+        assert!(!lower.contains("password"), "{raw}");
+        assert!(!lower.contains("dbsec_"), "{raw}");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("sidecar json");
+        assert_eq!(v["databaseId"], db_id, "{v}");
+        assert_eq!(v["databaseName"], db_name, "{v}");
+        let grants = v["grants"].as_array().expect("grants array");
+        assert_eq!(grants.len(), 1, "{v}");
+        assert_eq!(grants[0]["projectId"], id_b, "{v}");
+        assert_eq!(grants[0]["level"], "write", "{v}");
+        assert_eq!(grants[0]["canManage"], false, "{v}");
+        assert_eq!(
+            grants[0]["role"].as_str().expect("role"),
+            ops::default_agent_role(&id_b),
+            "{v}"
+        );
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn restore_replays_grant_logins_failing_then_passing() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-128-rsa-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-128-rsb-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir_a.join(".k2/db/dumps")).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let path_a = dir_a.to_string_lossy().into_owned();
+        let id_a = insert_project("sql-128-rsa", &path_a);
+        let id_b = insert_project("sql-128-rsb", &dir_b.to_string_lossy());
+        let unhired = "00000000-0000-4000-8000-000000000099";
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false).expect("grant");
+        let role_b = ops::default_agent_role(&id_b);
+        let role_unhired = ops::default_agent_role(unhired);
+        let policy_sql = format!("CREATE POLICY interview ON t TO \"{role_b}\";");
+        let dump_rel = ".k2/db/dumps/x.dump";
+        std::fs::write(dir_a.join(dump_rel), policy_sql.as_bytes()).expect("dump file");
+
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("DELETE FROM sql_grants", [])
+                .expect("clear grants");
+        }
+        {
+            let mut pg = ops.pg.lock().expect("pg");
+            pg.roles.retain(|r| r != &role_b && r != &role_unhired);
+            let err = pg
+                .exec_sql(Some(&db_name), &policy_sql)
+                .expect_err("CREATE POLICY without role");
+            assert!(
+                err.contains(&role_b) || err.contains("does not exist"),
+                "missing role must fail CREATE POLICY, got {err}"
+            );
+        }
+
+        let err = ops::restore(&ops, &secrets, &id_a, &path_a, dump_rel)
+            .expect_err("restore without sidecar/replay");
+        assert_eq!(err.code(), "not_ready", "{}", err.hint());
+        assert_eq!(err.status(), "409 Conflict");
+        assert!(
+            err.hint().contains("grants.json"),
+            "must name the sidecar: {}",
+            err.hint()
+        );
+
+        let sidecar = serde_json::json!({
+            "databaseId": db_name,
+            "databaseName": db_name,
+            "grants": [
+                {
+                    "projectId": id_b,
+                    "level": "write",
+                    "canManage": false,
+                    "role": role_b,
+                },
+                {
+                    "projectId": unhired,
+                    "level": "read",
+                    "canManage": false,
+                    "role": role_unhired,
+                }
+            ],
+        });
+        std::fs::write(
+            dir_a.join(".k2/db/dumps/x.dump.grants.json"),
+            serde_json::to_vec_pretty(&sidecar).expect("sidecar bytes"),
+        )
+        .expect("write sidecar");
+
+        let n_helper = ops.pg.lock().expect("pg").helper_sql.len();
+        let ok =
+            ops::restore(&ops, &secrets, &id_a, &path_a, dump_rel).expect("restore with sidecar");
+        assert_eq!(ok["ok"], true, "{ok}");
+        let helper = ops.pg.lock().expect("pg").helper_sql[n_helper..].join("\n");
+        assert!(
+            helper.to_ascii_uppercase().contains("CREATE ROLE") && helper.contains(&role_b),
+            "replay must CREATE ROLE {role_b}: {helper}"
+        );
+        assert!(
+            helper.contains(&role_unhired),
+            "un-hired workspace still gets CREATE ROLE: {helper}"
+        );
+        {
+            let pg = ops.pg.lock().expect("pg");
+            assert!(
+                pg.roles.iter().any(|r| r == &role_b),
+                "role B must exist after replay: {:?}",
+                pg.roles
+            );
+            assert!(
+                pg.roles.iter().any(|r| r == &role_unhired),
+                "un-hired role must exist after replay: {:?}",
+                pg.roles
+            );
+        }
+        let n_grants: i64 = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row("SELECT COUNT(*) FROM sql_grants", [], |r| r.get(0))
+                .expect("grant count")
+        };
+        assert_eq!(
+            n_grants, 1,
+            "sql_grants only when projects.id exists (B hired, unhired skipped)"
+        );
+
+        std::fs::remove_file(dir_a.join(".k2/db/dumps/x.dump.grants.json")).expect("drop sidecar");
+        let ok2 = ops::restore(&ops, &secrets, &id_a, &path_a, dump_rel)
+            .expect("same-box restore from catalog grants");
+        assert_eq!(ok2["ok"], true, "{ok2}");
+
         let _ = std::fs::remove_dir_all(dir_a);
         let _ = std::fs::remove_dir_all(dir_b);
     }

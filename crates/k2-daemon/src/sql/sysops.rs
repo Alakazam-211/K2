@@ -364,6 +364,21 @@ impl FakePg {
             return Ok(String::new());
         }
         let up = trimmed.to_ascii_uppercase();
+        if up.contains("CREATE POLICY") {
+            for role in extract_policy_to_roles(trimmed) {
+                let skip = role.eq_ignore_ascii_case("public")
+                    || role.eq_ignore_ascii_case("current_user")
+                    || role.eq_ignore_ascii_case("session_user")
+                    || role.eq_ignore_ascii_case("current_role");
+                if skip {
+                    continue;
+                }
+                if !self.roles.iter().any(|r| r == &role) {
+                    return Err(format!("role \"{role}\" does not exist"));
+                }
+            }
+            return Ok(String::new());
+        }
         let db_name_early = db.unwrap_or("postgres");
         if trimmed.contains("_k2_store") && up.contains("CREATE TABLE") {
             self.tables
@@ -536,6 +551,58 @@ fn extract_all_create_roles(sql: &str) -> Vec<String> {
             }
         }
         from = abs + 11;
+    }
+    roles
+}
+
+#[cfg(test)]
+fn extract_policy_to_roles(sql: &str) -> Vec<String> {
+    let up = sql.to_ascii_uppercase();
+    let mut roles = Vec::new();
+    let mut from = 0;
+    while let Some(idx) = up[from..].find("CREATE POLICY") {
+        let abs = from + idx;
+        let after = abs + "CREATE POLICY".len();
+        if let Some(to_rel) = up[after..].find(" TO ") {
+            let mut rest = sql[after + to_rel + 4..].trim_start();
+            loop {
+                rest = rest.trim_start();
+                if rest.is_empty() {
+                    break;
+                }
+                let ru = rest.to_ascii_uppercase();
+                if ru.starts_with("USING") || ru.starts_with("WITH") || rest.starts_with(';') {
+                    break;
+                }
+                if rest.starts_with(',') {
+                    rest = &rest[1..];
+                    continue;
+                }
+                if let Some(stripped) = rest.strip_prefix('"') {
+                    if let Some(end) = stripped.find('"') {
+                        let name = stripped[..end].to_string();
+                        if !roles.iter().any(|r| r == &name) {
+                            roles.push(name);
+                        }
+                        rest = &stripped[end + 1..];
+                        continue;
+                    }
+                    break;
+                }
+                let ident: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if ident.is_empty() {
+                    break;
+                }
+                if !roles.iter().any(|r| r == &ident) {
+                    roles.push(ident.clone());
+                }
+                rest = &rest[ident.len()..];
+            }
+        }
+        from = after;
     }
     roles
 }
@@ -813,7 +880,25 @@ impl SystemOps for FakeSystemOps {
             return Ok(marker);
         }
         if cmd.ends_with("pg_restore") {
-            return Ok(Vec::new());
+            let dump_path = args.last().copied().unwrap_or("");
+            let bytes = self
+                .files
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(dump_path)
+                .cloned()
+                .or_else(|| std::fs::read(dump_path).ok())
+                .unwrap_or_default();
+            let sql = String::from_utf8_lossy(&bytes).into_owned();
+            if sql.trim().is_empty() {
+                return Ok(Vec::new());
+            }
+            let db = args
+                .windows(2)
+                .find(|w| w[0] == "-d")
+                .map(|w| w[1].to_string());
+            let mut pg = self.pg.lock().unwrap_or_else(|p| p.into_inner());
+            return pg.exec_sql(db.as_deref(), &sql).map(|s| s.into_bytes());
         }
         let sql = stdin
             .map(|b| String::from_utf8_lossy(b).to_string())

@@ -12613,13 +12613,37 @@ cmd_schema() {
       ]
     },
     {
+      "name": "db dsn",
+      "usage": "k2 db dsn [--json] [--workspace <ws>]",
+      "description": "DSN for this workspace's Postgres LOGIN on the unscoped DB (owned first, else first grant). --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."},
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
+        {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}
+      ]
+    },
+    {
       "name": "store put",
-      "usage": "k2 store put <name> --id <id> --json '{…}'",
-      "description": "Put a JSON document into a named JSONB collection in this workspace DB. Works when you own a DB or have a write grant — does not need db_agent_access.",
+      "usage": "k2 store put <name> --id <id> --json '{…}' [--workspace <ws>]",
+      "description": "Put a JSON document into a named JSONB collection in this workspace DB. Works when you own a DB or have a write grant — does not need db_agent_access. --workspace/--project selects that workspace's LOGIN (owner token; cell stamp pins).",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--id", "arg": "id", "description": "Document id."},
-        {"name": "--json", "arg": "object", "description": "Document JSON."}
+        {"name": "--json", "arg": "object", "description": "Document JSON."},
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
+        {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}
+      ]
+    },
+    {
+      "name": "store list",
+      "usage": "k2 store list [--json] [--workspace <ws>]",
+      "description": "List JSONB collections in this workspace DB. --workspace/--project selects that workspace's LOGIN (owner token; cell stamp pins).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."},
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
+        {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}
       ]
     },
     {
@@ -26140,6 +26164,10 @@ cmd_help_db() {
     cat <<'EOF'
 k2 db — workspace Postgres sidecar (SQL + JSON documents in the same DB)
 
+Global: --workspace|--project <ws>  path, handle, or uuid (same as wiki/context).
+Sets this command's workspace so GET /cli/db/dsn?project=… is that LOGIN.
+Owner token only for a foreign workspace; a cell stamp still pins identity.
+
 OWNER (engine — server-side owner/admin gate; agents exit 3)
   status [--health] [--json]     supported, state, pg major, listen, port
   enable [--json]                catalog + start unit if baked (--bake --with-db)
@@ -26152,7 +26180,8 @@ AGENT (workspace — identity from token, never body project=)
   create [--id <client-id>] [--db-access off|read|write] [--json]
                                  needs db_agent_access=write (create-only passport)
   list [--json]                  owned + granted; empty list is success (not 403)
-  dsn | creds [--json]           owned or granted; always re-fetchable; never logged
+  dsn | creds [--json] [--workspace <ws>]
+                                 owned or granted; always re-fetchable; never logged
   migrate [--dir .k2/db/migrations]
   dump  [--out .k2/db/dumps/<ts>.dump]
   restore <file>                 workspace-relative (no .. / abs)
@@ -26184,6 +26213,9 @@ k2 store — JSONB documents in this workspace's SQL database
 Works when this workspace owns a DB or has a grant. db_agent_access only
 gates k2 db create — not list/get/put.
 
+Global: --workspace|--project <ws>  path, handle, or uuid (same as k2 db dsn).
+k2 store list --workspace I uses I's PG LOGIN (owner token; cell stamp pins).
+
   create <name>
   list
   put  <name> --id <id> --json '{…}'
@@ -26197,8 +26229,40 @@ work when you own a DB or have a grant covering the verb.
 EOF
 }
 
+# R10: strip --workspace|--project into global PROJECT for _db_py (D_WS_PATH).
+# Remaining argv in _db_ws_args. bash 3.2 + set -u rejects empty arrays.
+_db_ws_args=()
+_db_take_workspace_flags() {
+    _db_ws_args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace|--project)
+                if [ $# -lt 2 ] || [ -z "${2:-}" ] || [ "${2:0:1}" = "-" ]; then
+                    _db_err "usage" "$1 requires a workspace path, handle, or uuid"
+                    exit 2
+                fi
+                _wiki_apply_project "$2"
+                export K2_PROJECT_PATH="$PROJECT"
+                shift 2 ;;
+            --workspace=*|--project=*)
+                local sel="${1#*=}"
+                if [ -z "$sel" ]; then
+                    _db_err "usage" "${1%%=*} requires a workspace path, handle, or uuid"
+                    exit 2
+                fi
+                _wiki_apply_project "$sel"
+                export K2_PROJECT_PATH="$PROJECT"
+                shift ;;
+            *) _db_ws_args+=("$1"); shift ;;
+        esac
+    done
+}
+
 cmd_db() {
     if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_db; exit 0; fi
+    _db_take_workspace_flags "$@"
+    if [ ${#_db_ws_args[@]} -eq 0 ]; then cmd_help_db; exit 0; fi
+    set -- "${_db_ws_args[@]}"
     local sub="$1"; shift
     local as_json=false health=false yes=false
     local client_id="" name="" out="" file="" dir=""
@@ -26330,6 +26394,9 @@ cmd_db() {
 
 cmd_store() {
     if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_store; exit 0; fi
+    _db_take_workspace_flags "$@"
+    if [ ${#_db_ws_args[@]} -eq 0 ]; then cmd_help_store; exit 0; fi
+    set -- "${_db_ws_args[@]}"
     local sub="$1"; shift
     local as_json=false name="" doc_id="" doc_json="" limit=""
     case "$sub" in

@@ -5,7 +5,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.40.128 — Granted workspaces run SQL as that workspace’s Postgres role
 
-A workspace granted onto a shared database — and `k2 store` from that workspace — connect as **that workspace’s** Postgres role, not the owner’s agent and not the migrator. Dump RLS keyed to the role now applies to both the agent (`k2 db dsn` / `k2 store`) and a human who shares that DSN. The owner still connects as `{dbname}_agent`. Migrate, dump, and restore stay the migrator.
+A workspace granted onto a shared database — and `k2 store` from that workspace — connect as **that workspace’s** Postgres role, not the owner’s agent and not the migrator. Dump RLS keyed to the role now applies to both the agent (`k2 db dsn` / `k2 store`) and a human who shares that DSN. The owner still connects as `{dbname}_agent`. Migrate, dump, and restore stay the migrator. `k2 db dsn --workspace` fetches that workspace’s LOGIN (owner backend), and restore recreates grant roles so dump policies bind on a fresh box.
 
 ---
 

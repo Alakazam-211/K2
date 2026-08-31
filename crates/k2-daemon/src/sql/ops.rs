@@ -971,6 +971,197 @@ pub fn database_status(
     }))
 }
 
+fn grants_sidecar_rel(dump_rel: &str) -> String {
+    format!("{dump_rel}.grants.json")
+}
+
+fn grants_sidecar_sibling(dump_src: &Path) -> PathBuf {
+    let mut os = dump_src.as_os_str().to_os_string();
+    os.push(".grants.json");
+    PathBuf::from(os)
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarGrant {
+    project_id: String,
+    level: String,
+    #[serde(default)]
+    can_manage: bool,
+    #[serde(default)]
+    role: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrantsSidecar {
+    #[serde(default)]
+    database_id: Option<String>,
+    #[serde(default)]
+    database_name: Option<String>,
+    #[serde(default)]
+    grants: Vec<SidecarGrant>,
+}
+
+fn sidecar_refuses_secrets(v: &serde_json::Value) -> Result<(), OpsError> {
+    let s = v.to_string().to_ascii_lowercase();
+    if s.contains("password") || s.contains("dbsec_") {
+        return Err(OpsError::Engine(
+            "grants sidecar must not contain secrets".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_grants_sidecar(bytes: &[u8]) -> Result<GrantsSidecar, OpsError> {
+    let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| {
+        OpsError::Usage(format!(
+            "grants sidecar is not JSON: {e} — expected {{ databaseId, databaseName, grants }}"
+        ))
+    })?;
+    sidecar_refuses_secrets(&v)?;
+    serde_json::from_value(v).map_err(|e| {
+        OpsError::Usage(format!(
+            "grants sidecar shape is invalid: {e} — expected grants[].projectId/level/canManage/role"
+        ))
+    })
+}
+
+fn load_grants_sidecar(
+    ops: &dyn SystemOps,
+    ws_path: &str,
+    dump_rel: &str,
+    dump_src: &Path,
+) -> Result<Option<GrantsSidecar>, OpsError> {
+    let rel = grants_sidecar_rel(dump_rel);
+    let sibling = grants_sidecar_sibling(dump_src);
+    let sibling_s = sibling.to_string_lossy().into_owned();
+    let bytes = ops
+        .read_file(&sibling_s)
+        .ok()
+        .or_else(|| std::fs::read(&sibling).ok());
+    let bytes = match bytes {
+        Some(b) => Some(b),
+        None => match resolve_in_path(ws_path, &rel) {
+            Ok(p) => ops
+                .read_file(&p.to_string_lossy())
+                .ok()
+                .or_else(|| std::fs::read(&p).ok()),
+            Err(InPathError::NotFound(_)) => None,
+            Err(InPathError::Usage(h)) => return Err(OpsError::Usage(h)),
+        },
+    };
+    match bytes {
+        None => Ok(None),
+        Some(b) => parse_grants_sidecar(&b).map(Some),
+    }
+}
+
+fn catalog_upsert_grant(
+    database_id: &str,
+    project_id: &str,
+    level: &str,
+    can_manage: bool,
+    sref: &str,
+) -> Result<(), OpsError> {
+    let now = now_secs();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at, agent_secret_ref) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+         ON CONFLICT (database_id, project_id) DO UPDATE SET \
+           level = excluded.level, can_manage = excluded.can_manage, updated_at = excluded.updated_at, \
+           agent_secret_ref = COALESCE(sql_grants.agent_secret_ref, excluded.agent_secret_ref)",
+        rusqlite::params![
+            database_id,
+            project_id,
+            level,
+            if can_manage { 1 } else { 0 },
+            now,
+            sref
+        ],
+    )
+    .map_err(|e| OpsError::Engine(format!("catalog grant: {e}")))?;
+    Ok(())
+}
+
+fn refuse_sidecar_role(role: &str) -> Result<(), OpsError> {
+    let lower = role.to_ascii_lowercase();
+    if lower == "postgres" || lower == "k2_admin" || lower.contains("superuser") {
+        return Err(OpsError::Usage(
+            "grants sidecar role cannot be postgres, k2_admin, or a superuser name".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn replay_one_grant(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    row: &DbRow,
+    grant: &SidecarGrant,
+) -> Result<(), OpsError> {
+    let level = validate_level(&grant.level)?;
+    let role = grant
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| default_agent_role(&grant.project_id));
+    refuse_sidecar_role(&role)?;
+    let sref = apply_pg_grant(ops, secrets, &row.name, &role, level)?;
+    let hired = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        project_name(&conn, &grant.project_id).is_some()
+    };
+    if hired {
+        catalog_upsert_grant(&row.id, &grant.project_id, level, grant.can_manage, &sref)?;
+    }
+    Ok(())
+}
+
+fn replay_grants_for_restore(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    row: &DbRow,
+    ws_path: &str,
+    dump_rel: &str,
+    dump_src: &Path,
+) -> Result<(), OpsError> {
+    let sidecar = load_grants_sidecar(ops, ws_path, dump_rel, dump_src)?;
+    let grants: Vec<SidecarGrant> = if let Some(sc) = sidecar {
+        sc.grants
+    } else {
+        let catalog = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            grants_for(&conn, &row.id)
+        };
+        if catalog.is_empty() {
+            return Err(OpsError::NotReady(format!(
+                "restore needs {}.grants.json so grant LOGINs exist before pg_restore (dump policies BIND). Re-dump with this daemon, or grant the workspaces first.",
+                dump_rel
+            )));
+        }
+        catalog
+            .into_iter()
+            .map(|g| SidecarGrant {
+                role: Some(default_agent_role(&g.project_id)),
+                project_id: g.project_id,
+                level: g.level,
+                can_manage: g.can_manage,
+            })
+            .collect()
+    };
+    for g in grants {
+        replay_one_grant(ops, secrets, row, &g)?;
+    }
+    Ok(())
+}
+
 pub fn dump(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -1007,11 +1198,35 @@ pub fn dump(
         None,
     )
     .map_err(OpsError::Engine)?;
+    let grants = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        grants_for(&conn, &row.id)
+    };
+    let sidecar = serde_json::json!({
+        "databaseId": row.id,
+        "databaseName": row.name,
+        "grants": grants.iter().map(|g| serde_json::json!({
+            "projectId": g.project_id,
+            "level": g.level,
+            "canManage": g.can_manage,
+            "role": default_agent_role(&g.project_id),
+        })).collect::<Vec<_>>(),
+    });
+    sidecar_refuses_secrets(&sidecar)?;
+    let sidecar_rel = grants_sidecar_rel(&rel);
+    let sidecar_dest = resolve_out_path(ws_path, &sidecar_rel).map_err(OpsError::Usage)?;
+    let sidecar_bytes = serde_json::to_vec_pretty(&sidecar)
+        .map_err(|e| OpsError::Engine(format!("serialize grants sidecar: {e}")))?;
+    std::fs::write(&sidecar_dest, &sidecar_bytes)
+        .map_err(|e| OpsError::Engine(format!("write {sidecar_rel}: {e}")))?;
+    let _ = ops.write_file(&sidecar_dest.to_string_lossy(), &sidecar_bytes, 0o600);
     let bytes = ops.read_file(&dest_s).ok();
     Ok((
         serde_json::json!({
             "ok": true,
             "path": rel,
+            "grantsPath": sidecar_rel,
             "format": "custom",
         }),
         bytes,
@@ -1045,6 +1260,7 @@ pub fn restore(
         }
         Err(e) => return Err(e),
     };
+    replay_grants_for_restore(ops, secrets, &row, ws_path, file, &src)?;
     let (user, pw) = migrator_creds(secrets, &row)?;
     ops.run_cmd(
         PG_RESTORE_PATH,
@@ -1489,20 +1705,7 @@ pub fn grant_access(
     }
     let role = default_agent_role(grantee_project_id);
     let sref = apply_pg_grant(ops, secrets, &row.name, &role, level)?;
-    let now = now_secs();
-    {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        conn.execute(
-            "INSERT INTO sql_grants (database_id, project_id, level, can_manage, created_at, updated_at, agent_secret_ref) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
-             ON CONFLICT (database_id, project_id) DO UPDATE SET \
-               level = excluded.level, can_manage = excluded.can_manage, updated_at = excluded.updated_at, \
-               agent_secret_ref = COALESCE(sql_grants.agent_secret_ref, excluded.agent_secret_ref)",
-            rusqlite::params![row.id, grantee_project_id, level, if can_manage { 1 } else { 0 }, now, sref],
-        )
-        .map_err(|e| OpsError::Engine(format!("catalog grant: {e}")))?;
-    }
+    catalog_upsert_grant(&row.id, grantee_project_id, level, can_manage, &sref)?;
     let v = serde_json::json!({
         "ok": true,
         "databaseId": row.id,

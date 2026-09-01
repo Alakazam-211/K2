@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.131 — Skin platform tokens are not per-guest keys
+
+Skin Access mint is a **named platform token** (`k2 skin-token create --name vercel --agent sales`), not a key hung off a guest. Guests still sign in; that session is their access. Login does not hand them a copyable key. Grid and the terminal stay off. Existing static mints become platform tokens on first boot (name from the old username).
+
+---
+
 ## 0.40.130 — Skin gateway login page and no stale assets
 
 `k2 publish run --skin <dir>` always serves a sign-in page at `/login` (session expiry no longer 404s). Static files send `Cache-Control: no-store` so a published UI updates without a hard refresh. `/` and `/assets/*` stay public — login only guards Thread; do not put private files in that folder.

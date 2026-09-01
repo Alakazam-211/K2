@@ -14379,6 +14379,37 @@ CAPABILITY CHECK (full paths — do not shorten them)
      string. A test against those short paths goes red with
      a perfectly good pass.
 
+THREAD + OVERLAY (verbatim — copy this; silent empty history is
+usually a wrong key, not a 403)
+  GET /cli/thread?addr=<handle>
+    not ?agent=. Handle is the room (sales, anna).
+  200:
+    {"ok":true,"collection":"thread","addr":"…",
+     "conversation_id":"<id>",
+     "items":[{"doc":{"text":"…"}},…],"has_more":false}
+    Read item.doc.text (or item.doc.body). Not item.text.
+  Open the socket ONLY after that GET (need conversation_id):
+    WS /cli/overlay/events?conversation=<conversation_id>
+    not the thread path, not ?addr=, not a stream flag.
+  Frames: {"doc":{"text":"…"}}. Same nesting as history.
+  POST /cli/thread/post  {"addr":"<handle>","text":"…"}
+    not {agent,text}.
+  Reference client: k2 publish run ref --skin --port N --no-tunnel
+  then read /assets/app.js.
+
+FILES
+  Caps files:read / files:write exist on mint. The official
+  gateway (0.40.129) does NOT proxy /cli/fs/* — those paths
+  404 on the published origin (daemon still 403s them). Do
+  not build a BFF for files. That is a later gateway cut.
+
+STATIC DIR (--skin <dir>)
+  GET / and /assets/* are PUBLIC. No cookie. Login only
+  guards Thread. Do not copy wiki, contracts, or any private
+  files into that folder — the URL fetches them with no auth.
+  GET /login is the gateway's sign-in page even with --skin
+  <dir> (do not require login.html in the folder).
+
 NOT THIS
   Do not require Caddy, `k2 skin front-door`, or port 38472.
   Nested label `skin` is reserved — pick any other name.

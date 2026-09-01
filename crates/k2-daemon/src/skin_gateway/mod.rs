@@ -210,6 +210,12 @@ fn path_only(path: &str) -> &str {
 }
 
 async fn serve(args: Args) -> Result<(), String> {
+    if let Some(root) = args.root.as_ref() {
+        eprintln!(
+            "skin-gateway: {} is PUBLIC (no cookie). Login only guards Thread. Do not put wiki, contracts, or other private files in this folder.",
+            root.display()
+        );
+    }
     let listener = TcpListener::bind(args.listen)
         .await
         .map_err(|e| format!("bind {}: {e}", args.listen))?;
@@ -543,6 +549,19 @@ async fn handle_logout(gw: &Gateway, stream: &mut TcpStream, cookie: Option<&str
 }
 
 async fn serve_static(gw: &Gateway, stream: &mut TcpStream, path: &str, head_only: bool) {
+    // GET /login is gateway-owned even with --skin <dir>. Custom trees
+    // rarely ship login.html; the bundled client redirects 401 here.
+    if path == "/login" {
+        write_bytes(
+            stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            LOGIN_HTML.as_bytes(),
+            head_only,
+        )
+        .await;
+        return;
+    }
     if let Some(root) = gw.root.as_ref() {
         match read_static_file(root, path) {
             Ok((ct, bytes)) => {
@@ -865,11 +884,17 @@ async fn write_json(stream: &mut TcpStream, status: &str, body: &str) {
 
 async fn write_json_cookie(stream: &mut TcpStream, status: &str, body: &str, cookie: &str) {
     let resp = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nSet-Cookie: {cookie}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nSet-Cookie: {cookie}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = stream.write_all(resp.as_bytes()).await;
     let _ = stream.flush().await;
+}
+
+fn http_headers(status: &str, ct: &str, len: usize) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {ct}\r\nContent-Length: {len}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+    )
 }
 
 async fn write_bytes(
@@ -879,10 +904,7 @@ async fn write_bytes(
     body: &[u8],
     head_only: bool,
 ) {
-    let resp = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
+    let resp = http_headers(status, ct, body.len());
     let _ = stream.write_all(resp.as_bytes()).await;
     if !head_only {
         let _ = stream.write_all(body).await;
@@ -926,6 +948,27 @@ mod tests {
         assert!(allowlisted_ws("/cli/overlay/events?conversation=abc"));
         assert!(!allowlisted_ws("/cli/sessions/events"));
         assert!(!allowlisted_ws("/cli/fs/events"));
+        assert!(!allowlisted_http("GET", "/cli/fs/read-dir"));
+        assert!(!allowlisted_http("GET", "/cli/fs/read-file"));
+        assert!(!allowlisted_http("POST", "/cli/fs/write-file"));
+    }
+
+    #[test]
+    fn static_and_json_headers_are_no_store() {
+        let h = http_headers("200 OK", "text/javascript; charset=utf-8", 12);
+        assert!(h.contains("Cache-Control: no-store"), "{h}");
+        assert!(h.contains("Content-Type: text/javascript; charset=utf-8"), "{h}");
+    }
+
+    #[test]
+    fn login_path_is_static_and_not_never_proxy() {
+        assert!(is_static_path("/login"));
+        assert!(!never_proxy("/login"));
+        assert_eq!(
+            include_str!("login.html").contains("Sign in"),
+            true,
+            "bundled GET /login must be a form, not a 404"
+        );
     }
 
     #[test]

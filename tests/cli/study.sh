@@ -62,6 +62,17 @@ assert_contains "FSL" "$source_out" "FSL"
 assert_contains "Fair Source" "$source_out" "Fair Source"
 assert_contains "not MIT" "$source_out" "not MIT"
 
+echo "== k2 study skins thread/overlay contract =="
+skins_out="$("$K2" study skins)"
+assert_contains "thread addr param" "$skins_out" "GET /cli/thread?addr="
+assert_contains "not agent query" "$skins_out" "not ?agent="
+assert_contains "conversation_id" "$skins_out" "conversation_id"
+assert_contains "item.doc.text" "$skins_out" "item.doc.text"
+assert_contains "overlay conversation query" "$skins_out" "WS /cli/overlay/events?conversation="
+assert_contains "post addr text" "$skins_out" '{"addr":"<handle>","text":"…"}'
+assert_contains "gateway no files this cut" "$skins_out" "does NOT proxy /cli/fs/*"
+assert_contains "static dir is public" "$skins_out" "GET / and /assets/* are PUBLIC"
+
 echo "== k2 study people =="
 people_out="$("$K2" study people)"
 assert_contains "connections (agents)" "$people_out" "CONNECTIONS (AGENTS)"

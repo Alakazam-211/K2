@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.130 — Skin gateway login page and no stale assets
+
+`k2 publish run --skin <dir>` always serves a sign-in page at `/login` (session expiry no longer 404s). Static files send `Cache-Control: no-store` so a published UI updates without a hard refresh. `/` and `/assets/*` stay public — login only guards Thread; do not put private files in that folder.
+
+---
+
 ## 0.40.129 — Host a skin UI with k2 publish
 
 `k2 publish run <name> --skin --port <n>` puts a login + Thread site on a nested URL (`https://<name>.<your-host>.k2.dev`). Guests use the username and password from Skin Access. The pass stays on the server — not in the browser. Grid and the terminal stay off. Your own static files: `--skin <dir>`. `k2 skin` is still the guest list, tokens, and rooms; it does not serve the site. Caddy / `skin.` as a special hostname is not required.

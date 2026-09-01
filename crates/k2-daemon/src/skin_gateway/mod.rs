@@ -208,6 +208,10 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("POST", "/cli/feedback/comment")
             | ("POST", "/cli/feedback/answer")
             | ("POST", "/cli/feedback/resolve")
+            | ("GET", "/cli/wiki/index")
+            | ("HEAD", "/cli/wiki/index")
+            | ("GET", "/cli/wiki/note")
+            | ("HEAD", "/cli/wiki/note")
     )
 }
 
@@ -1018,6 +1022,24 @@ mod tests {
         assert!(!allowlisted_http("GET", "/cli/tickets"));
         assert!(!allowlisted_ws("/cli/feedback/list"));
         assert!(!allowlisted_ws("/cli/sessions/events"));
+        assert!(allowlisted_http("GET", "/cli/wiki/index"));
+        assert!(allowlisted_http("HEAD", "/cli/wiki/index"));
+        assert!(allowlisted_http("GET", "/cli/wiki/note"));
+        assert!(allowlisted_http("HEAD", "/cli/wiki/note"));
+        assert!(!allowlisted_http("GET", "/cli/wiki/seed"));
+        assert!(!allowlisted_http("POST", "/cli/wiki/seed"));
+        assert!(!allowlisted_http("GET", "/cli/wiki/serve"));
+        assert!(!allowlisted_http("POST", "/cli/wiki/serve"));
+        assert!(!allowlisted_http("GET", "/cli/wiki/chat"));
+        assert!(!allowlisted_http("POST", "/cli/wiki/chat"));
+        assert!(!allowlisted_http("GET", "/cli/wiki/serve/status"));
+        assert!(!allowlisted_http("GET", "/cli/wiki/status"));
+        assert!(!allowlisted_http("GET", "/cli/wiki/foo"));
+        assert!(!allowlisted_http("GET", "/cli/wiki/read"));
+        assert!(!allowlisted_http("GET", "/cli/notes"));
+        assert!(!allowlisted_http("POST", "/cli/wiki/index"));
+        assert!(!allowlisted_ws("/cli/wiki/index"));
+        assert!(!allowlisted_ws("/cli/wiki/note"));
     }
 
     #[test]

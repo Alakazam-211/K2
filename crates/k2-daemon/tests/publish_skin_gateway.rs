@@ -552,6 +552,30 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
         );
         assert_ne!(tickets.status, 404, "unassigned tickets must not 404");
 
+        let wiki = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/index?project={handle}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(
+            wiki.status, 403,
+            "unassigned thread-only wiki:read; {}",
+            wiki.body
+        );
+        assert!(
+            wiki.body.contains("missing capability wiki:read"),
+            "must be missing cap, not 404: {}",
+            wiki.body
+        );
+        assert!(
+            !wiki.body.contains("skin_room"),
+            "thread-only wiki must not be skin_room: {}",
+            wiki.body
+        );
+        assert_ne!(wiki.status, 404, "unassigned wiki must not 404");
+
         let grid = http_ex(
             gport,
             "GET",
@@ -1858,5 +1882,302 @@ async fn publish_run_skin_gateway_tickets_per_room() {
         let _ = std::fs::remove_dir_all(&anna_path);
         let _ = std::fs::remove_dir_all(&docs_path);
         let _ = std::fs::remove_dir_all(&other_path);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_wiki_per_room() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (anna_id, _anna_conv, anna_path) = seed_workspace(&anna);
+        let (docs_id, _docs_conv, docs_path) = seed_workspace(&docs);
+        add_user(dport, "bob");
+        set_password(dport, "bob", "s3cret-horse");
+
+        let created = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"dentist"}"#),
+        );
+        assert_eq!(created.status, 200, "role create; {}", created.body);
+        let anna_room = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{anna}","caps":["thread:read","thread:post"]}}"#
+            )),
+        );
+        assert_eq!(anna_room.status, 200, "anna room; {}", anna_room.body);
+        let docs_room = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{docs}","caps":["thread:read","thread:post","wiki:read"]}}"#
+            )),
+        );
+        assert_eq!(docs_room.status, 200, "docs room; {}", docs_room.body);
+        let assign = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"bob","role":"dentist"}"#),
+        );
+        assert_eq!(assign.status, 200, "assign; {}", assign.body);
+
+        let gport = free_port();
+        publish_skin(dport, &anna_path, gport, None);
+
+        let login = http(
+            gport,
+            "POST",
+            "/login",
+            Some(r#"{"username":"bob","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "gateway login; {}", login.body);
+        assert!(!login.body.contains("k2skn_"), "{}", login.body);
+        assert!(!login.body.contains("?token="), "{}", login.body);
+        let lv = json(&login.body);
+        assert!(lv.get("token").is_none(), "no token key: {}", login.body);
+        let set_cookie = header_value(&login.headers, "set-cookie").expect("Set-Cookie");
+        assert!(set_cookie.contains("k2_skin_ui="), "{set_cookie}");
+        let sid = cookie_k2_skin_ui(&set_cookie).expect("opaque id");
+        assert!(
+            !sid.starts_with("k2skn_"),
+            "cookie is not the raw pass: {sid}"
+        );
+        let cookie = format!("Cookie: k2_skin_ui={sid}");
+
+        let docs_index = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/index?project={docs}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(
+            docs_index.status, 200,
+            "empty docs wiki index; {}",
+            docs_index.body
+        );
+        assert!(!docs_index.body.contains("k2skn_"), "{}", docs_index.body);
+        assert!(
+            docs_index.body.contains("\"noteCount\":0") || docs_index.body.contains("noteCount"),
+            "empty vault must not auto-seed: {}",
+            docs_index.body
+        );
+
+        k2_core::wiki::seed_wiki(std::path::Path::new(&docs_path)).expect("seed docs wiki");
+
+        let docs_note = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/note?project={docs}&id=Home.md"),
+            None,
+            &cookie,
+        );
+        assert_eq!(docs_note.status, 200, "docs note; {}", docs_note.body);
+        assert!(!docs_note.body.contains("k2skn_"), "{}", docs_note.body);
+        assert!(
+            docs_note.body.contains("Knowledge Base") || docs_note.body.contains("Home"),
+            "{}",
+            docs_note.body
+        );
+
+        let anna_index = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/index?project={anna}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(
+            anna_index.status, 403,
+            "anna wiki index; {}",
+            anna_index.body
+        );
+        assert!(
+            anna_index.body.contains("missing capability wiki:read"),
+            "anna index must be missing cap, not skin_room: {}",
+            anna_index.body
+        );
+        assert!(
+            !anna_index.body.contains("skin_room"),
+            "anna index must not be skin_room: {}",
+            anna_index.body
+        );
+
+        let thread_anna = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/thread?addr={anna}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(thread_anna.status, 200, "thread anna; {}", thread_anna.body);
+
+        let abs_index = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/index?project={docs_path}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(abs_index.status, 403, "abs project=; {}", abs_index.body);
+        assert!(
+            abs_index.body.contains("skin_room"),
+            "abs path project= must be skin_room: {}",
+            abs_index.body
+        );
+
+        let base = std::path::Path::new(&docs_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .expect("basename");
+        let base_index = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/index?project={base}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(
+            base_index.status, 403,
+            "basename project=; {}",
+            base_index.body
+        );
+        assert!(
+            base_index.body.contains("skin_room"),
+            "folder-basename project= must be skin_room: {}",
+            base_index.body
+        );
+
+        for scope in ["k2", "host", "fleet"] {
+            let scoped = http_ex(
+                gport,
+                "GET",
+                &format!("/cli/wiki/index?scope={scope}&project={docs}"),
+                None,
+                &cookie,
+            );
+            assert_eq!(
+                scoped.status, 403,
+                "scope={scope} with project; {}",
+                scoped.body
+            );
+            assert!(
+                scoped.body.contains("skin_room"),
+                "scope={scope} must be skin_room: {}",
+                scoped.body
+            );
+            assert!(
+                !scoped.body.contains("\"scope\":\"k2\""),
+                "must not return a fleet map: {}",
+                scoped.body
+            );
+            let scoped_only = http_ex(
+                gport,
+                "GET",
+                &format!("/cli/wiki/index?scope={scope}"),
+                None,
+                &cookie,
+            );
+            assert_eq!(
+                scoped_only.status, 403,
+                "scope={scope} alone; {}",
+                scoped_only.body
+            );
+            assert!(
+                scoped_only.body.contains("skin_room"),
+                "scope={scope} alone must be skin_room: {}",
+                scoped_only.body
+            );
+        }
+
+        let fleet = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/note?project={docs}&id={docs_id}::Home.md"),
+            None,
+            &cookie,
+        );
+        assert_eq!(fleet.status, 403, "fleet id; {}", fleet.body);
+        assert!(
+            fleet.body.contains("skin_room"),
+            "fleet id must be skin_room: {}",
+            fleet.body
+        );
+
+        let hub = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/note?project={docs}&id={docs_id}::__workspace__"),
+            None,
+            &cookie,
+        );
+        assert_eq!(hub.status, 403, "workspace hub; {}", hub.body);
+        assert!(hub.body.contains("skin_room"), "{}", hub.body);
+
+        let fg = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/note?project={docs}&id=__focusgroup__::abc"),
+            None,
+            &cookie,
+        );
+        assert_eq!(fg.status, 403, "focus group hub; {}", fg.body);
+        assert!(fg.body.contains("skin_room"), "{}", fg.body);
+
+        let proj = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/wiki/note?project={docs}&id=__project__::abc"),
+            None,
+            &cookie,
+        );
+        assert_eq!(proj.status, 403, "project hub; {}", proj.body);
+        assert!(proj.body.contains("skin_room"), "{}", proj.body);
+
+        for path in [
+            "/cli/wiki/seed",
+            "/cli/wiki/serve",
+            "/cli/wiki/chat",
+            "/cli/wiki/serve/status",
+            "/cli/wiki/status",
+            "/cli/wiki/foo",
+            "/cli/wiki/read",
+        ] {
+            let r = http_ex(gport, "GET", path, None, &cookie);
+            assert_eq!(r.status, 404, "{path}; {}", r.body);
+            assert!(r.body.contains("not found"), "{path} {}", r.body);
+            let post = http_ex(gport, "POST", path, Some("{}"), &cookie);
+            assert_eq!(post.status, 404, "POST {path}; {}", post.body);
+        }
+
+        let grid = http_ex(
+            gport,
+            "GET",
+            "/cli/sessions/grid?session=nope",
+            None,
+            &cookie,
+        );
+        assert_eq!(grid.status, 403, "grid; {}", grid.body);
+        assert!(
+            grid.body.contains("not allowed"),
+            "grid 403 not allowed; {}",
+            grid.body
+        );
+        assert_ne!(grid.body.trim(), TERMINAL_403, "{}", grid.body);
+
+        stop_skin(dport, &anna_path);
+        let _ = std::fs::remove_dir_all(&anna_path);
+        let _ = std::fs::remove_dir_all(&docs_path);
+        let _ = anna_id;
     });
 }

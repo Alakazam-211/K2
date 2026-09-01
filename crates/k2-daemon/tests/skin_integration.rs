@@ -2129,7 +2129,7 @@ async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
             "POST",
             &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
             Some(&format!(
-                r#"{{"name":"xray","roomAccess":[{{"handle":"{sales}","caps":["wiki:read"]}}]}}"#
+                r#"{{"name":"xray","roomAccess":[{{"handle":"{sales}","caps":["wiki:write"]}}]}}"#
             )),
         );
         assert_eq!(unknown_cap.status, 400, "{}", unknown_cap.body);

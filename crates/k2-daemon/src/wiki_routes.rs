@@ -29,6 +29,7 @@ use tokio::sync::watch;
 
 use crate::cli_response::CliResponse;
 use crate::routes::http::V1Principal;
+use k2_core::skin::SkinPass;
 
 // ── Serve state (process-wide, per workspace) ──────────────────────────
 
@@ -379,6 +380,21 @@ fn bool_param(params: &HashMap<String, String>, key: &str) -> bool {
 
 // ── GET handlers ───────────────────────────────────────────────────────
 
+/// Skin wiki GET index. Owner/Connect use [`handle_index`].
+pub fn handle_index_gated(params: &HashMap<String, String>, skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_index(params, &pass),
+        None => handle_index(params),
+    }
+}
+
+pub fn handle_note_gated(params: &HashMap<String, String>, skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_note(params, &pass),
+        None => handle_note(params),
+    }
+}
+
 /// GET /cli/wiki/index?project=<path>
 /// GET /cli/wiki/index?scope=k2 — fleet map (all workspace brains; host registry).
 pub fn handle_index(params: &HashMap<String, String>) -> CliResponse {
@@ -412,6 +428,125 @@ pub fn handle_note(params: &HashMap<String, String>) -> CliResponse {
     }
     let workspace = need_project_path(params).ok();
     match k2_core::wiki::read_note_fleet_or_local(workspace.as_deref(), &id) {
+        Ok(note) => CliResponse::ok_json(
+            serde_json::to_string(&note).unwrap_or_else(|_| "{}".to_string()),
+        ),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn usage_error(hint: impl std::fmt::Display) -> CliResponse {
+    CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "usage", "hint": hint.to_string() },
+        })
+        .to_string(),
+    }
+}
+
+/// Handle or uuid only. Folder-basename / abs path / unknown → 403 `skin_room`.
+fn skin_resolve_project(pass: &SkinPass, token: &str) -> Result<(String, PathBuf), CliResponse> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(crate::skin_routes::skin_room_response());
+    }
+    let ids = match k2_core::skin::resolve_room_tokens(&[token.to_string()]) {
+        Ok(ids) if ids.len() == 1 => ids,
+        _ => return Err(crate::skin_routes::skin_room_response()),
+    };
+    let project_id = ids[0].clone();
+    if !pass.has_room(&project_id) {
+        return Err(crate::skin_routes::skin_room_response());
+    }
+    let Some(path) = lookup_project_path(&project_id) else {
+        return Err(crate::skin_routes::skin_room_response());
+    };
+    Ok((project_id, path))
+}
+
+fn lookup_project_path(project_id: &str) -> Option<PathBuf> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT path FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+    .map(PathBuf::from)
+}
+
+fn skin_require_cap(pass: &SkinPass, project_id: &str, cap: &str) -> Result<(), CliResponse> {
+    if !pass.has_cap_in_room(project_id, cap) {
+        return Err(crate::skin_routes::missing_cap_response(cap));
+    }
+    Ok(())
+}
+
+fn skin_wiki_id_forbidden(id: &str) -> bool {
+    id.contains(k2_core::wiki::FLEET_ID_SEP)
+        || id.contains("__focusgroup__")
+        || id.contains("__project__")
+        || id.contains("__workspace__")
+}
+
+fn need_skin_project(params: &HashMap<String, String>) -> Result<String, CliResponse> {
+    params
+        .get("project")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| usage_error("missing 'project' (workspace handle or UUID)"))
+}
+
+fn handle_skin_index(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let scope = str_param(params, "scope").to_ascii_lowercase();
+    if scope == "k2" || scope == "host" || scope == "fleet" {
+        return crate::skin_routes::skin_room_response();
+    }
+    let project = match need_skin_project(params) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let (project_id, path) = match skin_resolve_project(pass, &project) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(e) = skin_require_cap(pass, &project_id, crate::skin_routes::WIKI_READ) {
+        return e;
+    }
+    match k2_core::wiki::build_index(&path) {
+        Ok(idx) => CliResponse::ok_json(
+            serde_json::to_string(&idx).unwrap_or_else(|_| "{}".to_string()),
+        ),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn handle_skin_note(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let project = match need_skin_project(params) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let id = str_param(params, "id");
+    if id.is_empty() {
+        return usage_error("missing 'id' (wiki-rel note id)");
+    }
+    if skin_wiki_id_forbidden(&id) {
+        return crate::skin_routes::skin_room_response();
+    }
+    let (project_id, path) = match skin_resolve_project(pass, &project) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(e) = skin_require_cap(pass, &project_id, crate::skin_routes::WIKI_READ) {
+        return e;
+    }
+    match k2_core::wiki::read_note(&path, &id) {
         Ok(note) => CliResponse::ok_json(
             serde_json::to_string(&note).unwrap_or_else(|_| "{}".to_string()),
         ),
@@ -2621,5 +2756,202 @@ mod tests {
         assert_ne!(r2.status, "404 Not Found");
         let r3 = dispatch_post("/cli/wiki/chat/off", &params);
         assert_ne!(r3.status, "404 Not Found");
+    }
+
+    fn insert_project_handle(name: &str, path: &str, handle: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, name, path, handle],
+        )
+        .expect("insert project row");
+        id
+    }
+
+    fn skin_session(username: &str, policy: k2_core::skin::RoomPolicy) -> k2_core::skin::SkinPass {
+        let rooms: Vec<String> = policy.keys().cloned().collect();
+        let mut caps = Vec::new();
+        for c in [
+            k2_core::skin::CAP_THREAD_READ,
+            k2_core::skin::CAP_THREAD_POST,
+            k2_core::skin::CAP_FILES_READ,
+            k2_core::skin::CAP_FILES_WRITE,
+            k2_core::skin::CAP_TICKETS_READ,
+            k2_core::skin::CAP_TICKETS_POST,
+            k2_core::skin::CAP_WIKI_READ,
+        ] {
+            if policy.values().any(|room| room.iter().any(|x| x == c))
+                && !caps.iter().any(|x| x == c)
+            {
+                caps.push(c.to_string());
+            }
+        }
+        k2_core::skin::SkinPass {
+            id: uuid::Uuid::new_v4().to_string(),
+            principal_id: Some(uuid::Uuid::new_v4().to_string()),
+            username: username.to_string(),
+            caps,
+            rooms,
+            session: true,
+            room_policy: policy,
+        }
+    }
+
+    fn wiki_params(project: &str, extra: &[(&str, &str)]) -> HashMap<String, String> {
+        let mut p = HashMap::from([("project".to_string(), project.to_string())]);
+        for (k, v) in extra {
+            p.insert(k.to_string(), v.to_string());
+        }
+        p
+    }
+
+    #[test]
+    fn skin_wiki_index_note_are_has_cap_in_room() {
+        let handle = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let anna_h = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs_ws = temp_ws("skin-docs");
+        let anna_ws = temp_ws("skin-anna");
+        let docs_path = docs_ws.to_string_lossy().into_owned();
+        let anna_path = anna_ws.to_string_lossy().into_owned();
+        let docs_id = insert_project_handle("docs-wiki", &docs_path, &handle);
+        let anna_id = insert_project_handle("anna-wiki", &anna_path, &anna_h);
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(
+            anna_id.clone(),
+            vec![
+                k2_core::skin::CAP_THREAD_READ.into(),
+                k2_core::skin::CAP_THREAD_POST.into(),
+            ],
+        );
+        policy.insert(
+            docs_id.clone(),
+            vec![
+                k2_core::skin::CAP_THREAD_READ.into(),
+                k2_core::skin::CAP_THREAD_POST.into(),
+                k2_core::skin::CAP_WIKI_READ.into(),
+            ],
+        );
+        let pass = skin_session("bob", policy);
+
+        let empty = handle_index_gated(&wiki_params(&handle, &[]), Some(pass.clone()));
+        assert_eq!(empty.status, "200 OK", "{}", empty.body);
+        assert!(
+            empty.body.contains("\"noteCount\":0") || empty.body.contains("noteCount"),
+            "empty vault must not auto-seed: {}",
+            empty.body
+        );
+
+        k2_core::wiki::seed_wiki(&docs_ws).expect("seed docs wiki");
+
+        let list_docs = handle_index_gated(&wiki_params(&handle, &[]), Some(pass.clone()));
+        assert_eq!(list_docs.status, "200 OK", "{}", list_docs.body);
+        assert!(list_docs.body.contains("Home.md"), "{}", list_docs.body);
+
+        let list_anna = handle_index_gated(&wiki_params(&anna_h, &[]), Some(pass.clone()));
+        assert_eq!(list_anna.status, "403 Forbidden", "{}", list_anna.body);
+        assert!(
+            list_anna.body.contains("missing capability wiki:read"),
+            "{}",
+            list_anna.body
+        );
+        assert!(!list_anna.body.contains("skin_room"), "{}", list_anna.body);
+
+        let list_abs = handle_index_gated(&wiki_params(&docs_path, &[]), Some(pass.clone()));
+        assert_eq!(list_abs.status, "403 Forbidden", "{}", list_abs.body);
+        assert!(list_abs.body.contains("skin_room"), "{}", list_abs.body);
+
+        let missing_project = handle_index_gated(&HashMap::new(), Some(pass.clone()));
+        assert_eq!(
+            missing_project.status,
+            "400 Bad Request",
+            "{}",
+            missing_project.body
+        );
+        assert!(
+            missing_project.body.contains("missing") && missing_project.body.contains("project"),
+            "{}",
+            missing_project.body
+        );
+
+        for scope in ["k2", "host", "fleet", "K2"] {
+            let scoped = handle_index_gated(
+                &wiki_params(&handle, &[("scope", scope)]),
+                Some(pass.clone()),
+            );
+            assert_eq!(
+                scoped.status,
+                "403 Forbidden",
+                "scope={scope} {}",
+                scoped.body
+            );
+            assert!(
+                scoped.body.contains("skin_room"),
+                "scope={scope} must be skin_room: {}",
+                scoped.body
+            );
+            assert!(
+                !scoped.body.contains("\"scope\":\"k2\""),
+                "must not return a fleet map: {}",
+                scoped.body
+            );
+        }
+
+        let note_docs = handle_note_gated(
+            &wiki_params(&handle, &[("id", "Home.md")]),
+            Some(pass.clone()),
+        );
+        assert_eq!(note_docs.status, "200 OK", "{}", note_docs.body);
+        assert!(
+            note_docs.body.contains("Knowledge Base") || note_docs.body.contains("body"),
+            "{}",
+            note_docs.body
+        );
+
+        let note_anna = handle_note_gated(
+            &wiki_params(&anna_h, &[("id", "Home.md")]),
+            Some(pass.clone()),
+        );
+        assert_eq!(note_anna.status, "403 Forbidden", "{}", note_anna.body);
+        assert!(
+            note_anna.body.contains("missing capability wiki:read"),
+            "{}",
+            note_anna.body
+        );
+
+        let fleet_id = format!("{docs_id}::Home.md");
+        let fleet = handle_note_gated(
+            &wiki_params(&handle, &[("id", fleet_id.as_str())]),
+            Some(pass.clone()),
+        );
+        assert_eq!(fleet.status, "403 Forbidden", "{}", fleet.body);
+        assert!(fleet.body.contains("skin_room"), "{}", fleet.body);
+
+        for id in [
+            "__focusgroup__::abc",
+            "__project__::abc",
+            &format!("{docs_id}::__workspace__"),
+        ] {
+            let r = handle_note_gated(&wiki_params(&handle, &[("id", id)]), Some(pass.clone()));
+            assert_eq!(r.status, "403 Forbidden", "id={id} {}", r.body);
+            assert!(r.body.contains("skin_room"), "id={id} {}", r.body);
+        }
+
+        let missing_id = handle_note_gated(&wiki_params(&handle, &[]), Some(pass.clone()));
+        assert_eq!(missing_id.status, "400 Bad Request", "{}", missing_id.body);
+        assert!(missing_id.body.contains("missing"), "{}", missing_id.body);
+
+        let owner = handle_index_gated(&wiki_params(&docs_path, &[]), None);
+        assert_eq!(
+            owner.status,
+            "200 OK",
+            "owner path still works: {}",
+            owner.body
+        );
+
+        let _ = fs::remove_dir_all(&docs_ws);
+        let _ = fs::remove_dir_all(&anna_ws);
+        let _ = (docs_id, anna_id);
     }
 }

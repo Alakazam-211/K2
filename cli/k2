@@ -14655,10 +14655,11 @@ k2 study skins — Skin Access
 FIND THE ROOM, THEN THE FUNCTIONS
   Guests think “this user, this room, these functions in that room.”
   Files on Documents does not grant files on Anna. Tickets on Documents
-  does not grant tickets on Anna. One login.
-  Unassigned guests stay Thread-only. Want files or tickets on one room
-  → `k2 skin role room`. Platform tokens (`k2 skin-token create --name`)
-  stay flat.
+  does not grant tickets on Anna. Wiki on Documents does not grant wiki
+  on Anna. One login.
+  Unassigned guests stay Thread-only. Want files, tickets, or wiki on
+  one room → `k2 skin role room`. Platform tokens (`k2 skin-token
+  create --name`) stay flat.
 
 LANES (read this first)
   Hosting the UI  = k2 publish. Always. Not k2 skin.
@@ -14715,12 +14716,12 @@ TWO CREDENTIALS (same prefix k2skn_)
 ROLES (named bundles for guests — not Connect, not a platform token)
   k2 skin role create dentist
   k2 skin role room dentist anna --caps thread:read,thread:post
-  k2 skin role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post
+  k2 skin role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post,wiki:read
   k2 skin user role bob dentist
   Session inherits the role at login (and live sessions rewrite on
   change). Platform token keeps its own caps+rooms — it is not a role.
   Empty rooms on a role = Thread dark, not omnipotent.
-  files:* and tickets:* on a role are has_cap_in_room (per room, not union).
+  files:*, tickets:*, and wiki:read on a role are has_cap_in_room (per room, not union).
   Never grid.
 
 Find the room, then the functions. Empty rooms = Thread dark. Never grid.
@@ -14778,6 +14779,15 @@ TICKETS
   Doors are has_cap_in_room: tickets on Documents does not grant tickets on Anna.
   waiting-count, assign, and unknown /cli/feedback/foo stay 404.
   Never /cli/tickets. Never /cli/sessions/events. Never grid.
+
+WIKI
+  Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
+    GET|HEAD /cli/wiki/index?project=<handle>
+    GET|HEAD /cli/wiki/note?project=<handle>&id=Home.md
+  project= is handle or uuid only — never a folder basename or absolute path.
+  Doors are has_cap_in_room: wiki on Documents does not grant wiki on Anna.
+  Never scope=k2/host/fleet. Never fleet ids ({ws}::{note}). Never seed/serve/chat.
+  Never /cli/wiki/read. Never /cli/notes. Never glob. Never wiki WS.
 
 STATIC DIR (--skin <dir>)
   GET / and /assets/* are PUBLIC. No cookie. Login guards

@@ -4280,6 +4280,99 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // Skin tickets POST — dedicated exact arms before the host-wide
+        // `/cli/feedback/` glob. waiting-count/assign stay off this door.
+        p if is_post
+            && post_allowed
+            && matches!(
+                p,
+                "/cli/feedback/create"
+                    | "/cli/feedback/comment"
+                    | "/cli/feedback/answer"
+                    | "/cli/feedback/resolve"
+            ) =>
+        {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    None => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::TICKETS_POST) =>
+                    {
+                        Some(pass)
+                    }
+                    Some(_) => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::TICKETS_POST,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let session_author = if let Some(ref pass) = skin_pass {
+                pass.username.clone()
+            } else if super::http::token_is_owner(&query, state.token.as_str()) {
+                "owner".to_string()
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .unwrap_or_else(|| "owner".to_string())
+            };
+            let result = tokio::task::spawn_blocking(move || {
+                crate::feedback_routes::dispatch_post_as_gated(
+                    &p_owned,
+                    &body_bytes,
+                    &session_author,
+                    skin_pass,
+                )
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         p if is_post && post_allowed && p.starts_with("/cli/feedback/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -7233,6 +7326,69 @@ async fn handle_one_request(
                     crate::fs_routes::handle_read_dir_gated(&params, skin_pass)
                 } else {
                     crate::fs_routes::handle_read_file_gated(&params, skin_pass)
+                }
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // Skin tickets GET — dedicated arms before the catchall. Do not
+        // fall through to owner 404 `not_found`. waiting-count stays off
+        // this door (catchall / owner glob).
+        p if p == "/cli/feedback/list" || p == "/cli/feedback/show" => {
+            let _ = stream.read(&mut buf).await;
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::TICKETS_READ) =>
+                    {
+                        Some(pass)
+                    }
+                    Some(_) => {
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::TICKETS_READ,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            };
+            let params = super::http::parse_params(&path, &query);
+            let is_list = p == "/cli/feedback/list";
+            let resp = tokio::task::spawn_blocking(move || {
+                if is_list {
+                    crate::feedback_routes::handle_list_gated(&params, skin_pass)
+                } else {
+                    crate::feedback_routes::handle_show_gated(&params, skin_pass)
                 }
             })
             .await

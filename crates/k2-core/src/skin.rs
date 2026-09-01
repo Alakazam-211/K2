@@ -14,8 +14,9 @@
 //! presented key (same construction as API keys / connect-user session
 //! tokens — high-entropy CSPRNG, not argon2).
 //!
-//! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`.
-//! Empty/missing caps stay Thread-only — never silent-add files. Never `pty:*`.
+//! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`,
+//! `tickets:read`, `tickets:post`. Empty/missing caps stay Thread-only —
+//! never silent-add files or tickets. Never `pty:*`.
 //! Assigned guests snapshot the role onto `session=1`; platform tokens
 //! keep their own caps+rooms (not a role). Session policy is **per-room**
 //! (`room_policy` map). Platform `--name` tokens stay flat.
@@ -43,17 +44,23 @@ pub const CAP_THREAD_POST: &str = "thread:post";
 pub const CAP_FILES_READ: &str = "files:read";
 /// Workspace files write (`POST /cli/fs/write-file`). Does not imply read.
 pub const CAP_FILES_WRITE: &str = "files:write";
+/// Tickets read (`GET /cli/feedback/list`, `GET /cli/feedback/show`).
+pub const CAP_TICKETS_READ: &str = "tickets:read";
+/// Tickets write (`POST /cli/feedback/create|comment|answer|resolve`).
+pub const CAP_TICKETS_POST: &str = "tickets:post";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// Empty/missing `--caps` stay Thread-only. Never silent-add files.
+/// Empty/missing `--caps` stay Thread-only. Never silent-add files or tickets.
 const DEFAULT_CAPS: &[&str] = &[CAP_THREAD_READ, CAP_THREAD_POST];
 const ACCEPTED_CAPS: &[&str] = &[
     CAP_THREAD_READ,
     CAP_THREAD_POST,
     CAP_FILES_READ,
     CAP_FILES_WRITE,
+    CAP_TICKETS_READ,
+    CAP_TICKETS_POST,
 ];
 
 /// Connect / Server Access names — never a skin role.
@@ -162,8 +169,9 @@ pub fn normalize_username(raw: &str) -> Result<String, String> {
 }
 
 /// Parse + validate cap names. Empty/missing → default Thread read+post
-/// (never silent-add `files:*`). Unknown names fail loud. Write-only is
-/// accepted at mint; list/read still require `files:read` listed.
+/// (never silent-add `files:*` or `tickets:*`). Unknown names fail loud.
+/// Write-only is accepted at mint; list/read still require `files:read`
+/// / `tickets:read` listed.
 pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     match raw {
@@ -267,7 +275,8 @@ fn thread_only_policy(rooms: &[String]) -> RoomPolicy {
 fn union_caps(policy: &RoomPolicy) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for cap in ACCEPTED_CAPS {
-        if policy.values().any(|caps| caps.iter().any(|c| c == cap)) && !out.iter().any(|c| c == cap)
+        if policy.values().any(|caps| caps.iter().any(|c| c == cap))
+            && !out.iter().any(|c| c == cap)
         {
             out.push((*cap).to_string());
         }
@@ -1727,7 +1736,8 @@ pub fn set_principal_default_rooms(
 
 // ── Roles ────────────────────────────────────────────────────────────
 
-const ROLE_SELECT: &str = "SELECT id, name, caps, rooms, created_at, COALESCE(room_policy, '{}') FROM roles";
+const ROLE_SELECT: &str =
+    "SELECT id, name, caps, rooms, created_at, COALESCE(room_policy, '{}') FROM roles";
 
 fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
     let caps_raw: String = r.get(2)?;
@@ -1735,9 +1745,8 @@ fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
     let policy_raw: String = r.get(5)?;
     let caps = caps_from_json(&caps_raw);
     let rooms = rooms_from_json(&rooms_raw);
-    let room_policy = policy_or_cartesian(&caps, &rooms, Some(&policy_raw)).unwrap_or_else(|_| {
-        cartesian_policy(&caps, &rooms)
-    });
+    let room_policy = policy_or_cartesian(&caps, &rooms, Some(&policy_raw))
+        .unwrap_or_else(|_| cartesian_policy(&caps, &rooms));
     Ok(SkinRole {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -1758,7 +1767,11 @@ fn attach_role_handles(mut role: SkinRole) -> SkinRole {
     role
 }
 
-fn persist_role_policy(conn: &Connection, role_id: &str, policy: &RoomPolicy) -> Result<(), String> {
+fn persist_role_policy(
+    conn: &Connection,
+    role_id: &str,
+    policy: &RoomPolicy,
+) -> Result<(), String> {
     conn.execute(
         "UPDATE roles SET caps = ?1, rooms = ?2, room_policy = ?3 WHERE id = ?4",
         params![
@@ -1925,10 +1938,7 @@ pub fn list_roles() -> Result<Vec<SkinRole>, String> {
 
 /// Present policy replaces the whole map. `None` is a no-op persist of the
 /// current snapshot (still R8-rewrites live sessions).
-pub fn update_role(
-    id_or_name: &str,
-    policy: Option<&RoomPolicy>,
-) -> Result<SkinRole, String> {
+pub fn update_role(id_or_name: &str, policy: Option<&RoomPolicy>) -> Result<SkinRole, String> {
     let id_or_name = id_or_name.trim();
     if id_or_name.is_empty() {
         return Err("missing role id or name".to_string());
@@ -2573,6 +2583,41 @@ mod tests {
     }
 
     #[test]
+    fn parse_caps_accepts_tickets_verbs_never_silent_add() {
+        let empty = parse_caps(None).expect("empty default");
+        assert_eq!(empty, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+        assert!(
+            !empty
+                .iter()
+                .any(|c| c == CAP_TICKETS_READ || c == CAP_TICKETS_POST),
+            "empty caps must stay Thread-only, never silent-add tickets: {empty:?}"
+        );
+        let missing = parse_caps(Some(&[])).expect("missing default");
+        assert_eq!(missing, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+        assert!(
+            !missing
+                .iter()
+                .any(|c| c == CAP_TICKETS_READ || c == CAP_TICKETS_POST),
+            "missing caps must stay Thread-only: {missing:?}"
+        );
+
+        let read = parse_caps(Some(&["tickets:read".into()])).expect("tickets:read");
+        assert_eq!(read, vec![CAP_TICKETS_READ]);
+        let post = parse_caps(Some(&["tickets:post".into()])).expect("tickets:post");
+        assert_eq!(post, vec![CAP_TICKETS_POST]);
+        let mixed = parse_caps(Some(&[
+            "tickets:read".into(),
+            "tickets:post".into(),
+            "thread:read".into(),
+        ]))
+        .expect("mixed");
+        assert_eq!(
+            mixed,
+            vec![CAP_TICKETS_READ, CAP_TICKETS_POST, CAP_THREAD_READ]
+        );
+    }
+
+    #[test]
     fn mint_requires_principal_and_rejects_unknown_caps() {
         with_temp_home(|| {
             let room = uuid::Uuid::new_v4().to_string();
@@ -3081,7 +3126,8 @@ mod tests {
             let err = create_role("Dentist", &RoomPolicy::new()).unwrap_err();
             assert!(err.contains("already exists"), "{err}");
             add_principal("bob").unwrap();
-            let guest_role = create_role("bob", &RoomPolicy::new()).expect("guest and role coexist");
+            let guest_role =
+                create_role("bob", &RoomPolicy::new()).expect("guest and role coexist");
             assert_eq!(guest_role.name, "bob");
         });
     }
@@ -3089,13 +3135,10 @@ mod tests {
     #[test]
     fn role_parse_caps_rejects_unknown_verbs() {
         with_temp_home(|| {
-            for cap in [
-                "tickets:read",
-                "store:write",
-                "pty:write",
-                "wiki:read",
-                "grid",
-            ] {
+            let mut ok = RoomPolicy::new();
+            ok.insert("anna".into(), vec![CAP_TICKETS_READ.into()]);
+            create_role("hygienist", &ok).expect("tickets:read is accepted");
+            for cap in ["store:write", "pty:write", "wiki:read", "grid"] {
                 let mut p = RoomPolicy::new();
                 p.insert("anna".into(), vec![cap.into()]);
                 let err = create_role("xray", &p).unwrap_err();
@@ -3167,7 +3210,11 @@ mod tests {
         with_temp_home(|| {
             add_principal("bob").unwrap();
             let sales = uuid::Uuid::new_v4().to_string();
-            create_role("dentist", &thread_only_room_policy(std::slice::from_ref(&sales))).unwrap();
+            create_role(
+                "dentist",
+                &thread_only_room_policy(std::slice::from_ref(&sales)),
+            )
+            .unwrap();
             assign_role("bob", "dentist").unwrap();
             let (_sess, sess_raw) = create_session_token("bob").unwrap();
             let (plat, plat_raw) = create_token("bob", None, std::slice::from_ref(&sales)).unwrap();
@@ -3341,6 +3388,43 @@ mod tests {
     }
 
     #[test]
+    fn session_tickets_has_cap_in_room_is_not_cartesian() {
+        with_temp_home(|| {
+            add_principal("bob").unwrap();
+            let anna = uuid::Uuid::new_v4().to_string();
+            let docs = uuid::Uuid::new_v4().to_string();
+            let mut policy = RoomPolicy::new();
+            policy.insert(
+                anna.clone(),
+                vec![CAP_THREAD_READ.into(), CAP_THREAD_POST.into()],
+            );
+            policy.insert(
+                docs.clone(),
+                vec![
+                    CAP_THREAD_READ.into(),
+                    CAP_THREAD_POST.into(),
+                    CAP_TICKETS_READ.into(),
+                    CAP_TICKETS_POST.into(),
+                ],
+            );
+            create_role("dentist", &policy).unwrap();
+            assign_role("bob", "dentist").unwrap();
+            let (_m, raw) = create_session_token("bob").unwrap();
+            let pass = resolve_skin_token(&raw).expect("session");
+            assert!(pass.has_cap(CAP_TICKETS_READ), "union still lists tickets");
+            assert!(pass.has_cap(CAP_TICKETS_POST));
+            assert!(
+                !pass.has_cap_in_room(&anna, CAP_TICKETS_READ),
+                "tickets on docs must not grant tickets on anna: {pass:?}"
+            );
+            assert!(!pass.has_cap_in_room(&anna, CAP_TICKETS_POST));
+            assert!(pass.has_cap_in_room(&docs, CAP_TICKETS_READ));
+            assert!(pass.has_cap_in_room(&docs, CAP_TICKETS_POST));
+            assert!(pass.has_cap_in_room(&anna, CAP_THREAD_READ));
+        });
+    }
+
+    #[test]
     fn platform_stays_flat_room_policy_null() {
         with_temp_home(|| {
             let room = uuid::Uuid::new_v4().to_string();
@@ -3365,7 +3449,10 @@ mod tests {
                         |r| r.get(0),
                     )
                     .map_err(|e| e.to_string())?;
-                assert!(policy.is_none(), "platform room_policy must stay NULL: {policy:?}");
+                assert!(
+                    policy.is_none(),
+                    "platform room_policy must stay NULL: {policy:?}"
+                );
                 Ok(())
             })
             .unwrap();
@@ -3394,7 +3481,11 @@ mod tests {
                 let policy = parse_room_policy_json(Some(&policy_raw))
                     .expect("json")
                     .expect("object");
-                assert_eq!(policy.get(&room), Some(&default_thread_caps()), "{policy:?}");
+                assert_eq!(
+                    policy.get(&room),
+                    Some(&default_thread_caps()),
+                    "{policy:?}"
+                );
                 Ok(())
             })
             .unwrap();
@@ -3484,14 +3575,12 @@ mod tests {
                 listed[0].room_policy.get(&anna),
                 listed[0].room_policy.get(&docs)
             );
-            assert!(
-                listed[0]
-                    .room_policy
-                    .get(&anna)
-                    .unwrap()
-                    .iter()
-                    .any(|c| c == CAP_FILES_READ)
-            );
+            assert!(listed[0]
+                .room_policy
+                .get(&anna)
+                .unwrap()
+                .iter()
+                .any(|c| c == CAP_FILES_READ));
 
             let pass = resolve_skin_token(&raw).expect("migrated session");
             assert!(pass.session);
@@ -3544,13 +3633,13 @@ mod tests {
     fn omitted_caps_on_present_room_is_thread_only() {
         with_temp_home(|| {
             let sales = uuid::Uuid::new_v4().to_string();
-            let role = create_role("hygienist", &thread_only_room_policy(std::slice::from_ref(&sales)))
-                .unwrap();
+            let role = create_role(
+                "hygienist",
+                &thread_only_room_policy(std::slice::from_ref(&sales)),
+            )
+            .unwrap();
             assert_eq!(role.rooms, vec![sales.clone()]);
-            assert_eq!(
-                role.room_policy.get(&sales),
-                Some(&default_thread_caps())
-            );
+            assert_eq!(role.room_policy.get(&sales), Some(&default_thread_caps()));
             assert!(!role.caps.iter().any(|c| c == CAP_FILES_READ));
             let added = set_role_room("hygienist", &sales, Some(&[CAP_FILES_READ.into()])).unwrap();
             assert_eq!(

@@ -415,6 +415,8 @@ describe('SkinAccessSection', () => {
       'thread:post',
       'files:read',
       'files:write',
+      'tickets:read',
+      'tickets:post',
     ])
     expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()

@@ -94,7 +94,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
 
 export const DEFAULT_SKIN_CAPS = ['thread:read', 'thread:post'] as const
 export const SKIN_FILE_CAPS = ['files:read', 'files:write'] as const
-export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS] as const
+export const SKIN_TICKET_CAPS = ['tickets:read', 'tickets:post'] as const
+export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS] as const
 
 export type FrontDoorMode = 'connect' | 'direct'
 

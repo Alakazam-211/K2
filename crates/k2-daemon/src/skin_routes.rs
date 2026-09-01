@@ -10,7 +10,10 @@
 use std::collections::HashSet;
 
 use crate::cli_response::CliResponse;
-use k2_core::skin::{self, RoomPolicy, CAP_FILES_READ, CAP_FILES_WRITE, CAP_THREAD_POST, CAP_THREAD_READ};
+use k2_core::skin::{
+    self, RoomPolicy, CAP_FILES_READ, CAP_FILES_WRITE, CAP_THREAD_POST, CAP_THREAD_READ,
+    CAP_TICKETS_POST, CAP_TICKETS_READ,
+};
 use k2_core::skin_door;
 
 fn json_body(body: &[u8]) -> Result<serde_json::Value, CliResponse> {
@@ -455,9 +458,7 @@ pub fn handle_roles_room(body: &[u8], actor: &str) -> CliResponse {
     };
     let ids = match skin::resolve_room_tokens(&[handle.to_string()]) {
         Ok(ids) if ids.len() == 1 => ids,
-        Ok(_) => {
-            return CliResponse::bad_request(format!("unknown workspace handle {handle:?}"))
-        }
+        Ok(_) => return CliResponse::bad_request(format!("unknown workspace handle {handle:?}")),
         Err(e) => return CliResponse::bad_request(e),
     };
     let project_id = &ids[0];
@@ -736,6 +737,8 @@ pub const THREAD_READ: &str = CAP_THREAD_READ;
 pub const THREAD_POST: &str = CAP_THREAD_POST;
 pub const FILES_READ: &str = CAP_FILES_READ;
 pub const FILES_WRITE: &str = CAP_FILES_WRITE;
+pub const TICKETS_READ: &str = CAP_TICKETS_READ;
+pub const TICKETS_POST: &str = CAP_TICKETS_POST;
 
 const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 skin user add/remove/password, k2 skin role create/update/remove, k2 skin user role/unassign, skin-token create/revoke/rooms; use k2 skin user list / k2 skin role list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin.";
 

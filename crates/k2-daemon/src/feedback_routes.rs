@@ -47,6 +47,7 @@ use std::collections::HashMap;
 use crate::cli::{need_project, opt_param, str_param};
 use crate::cli_response::CliResponse;
 use k2_core::feedback::{self, ListFilter, PrefixError};
+use k2_core::skin::SkinPass;
 
 /// Feedback-domain GET dispatch. Returns `Some(resp)` for a handled
 /// path, `None` if the path isn't a feedback-domain route.
@@ -55,56 +56,28 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // ── Reads ───────────────────────────────────────────────────
         // GET /cli/feedback/waiting-count — host-wide Tickets badge.
         "/cli/feedback/waiting-count" => match feedback::count_waiting() {
-            Ok(count) => CliResponse::ok_json(
-                serde_json::json!({ "ok": true, "count": count }).to_string(),
-            ),
+            Ok(count) => {
+                CliResponse::ok_json(serde_json::json!({ "ok": true, "count": count }).to_string())
+            }
             Err(e) => usage_error(e),
         },
 
         // GET /cli/feedback/list?project=<path>[&all=1][&status=<s>]
         // Default shows open items (waiting + answered + needs_discussion), newest first.
-        "/cli/feedback/list" => match need_project(params) {
-            Ok(p) => {
-                let Some(project_id) = resolve_project_id(&p) else {
-                    return Some(project_not_registered(&p));
-                };
-                let filter = match opt_param(params, "status") {
-                    Some(s) => ListFilter::Status(s),
-                    None if crate::cli::bool_param(params, "all") => ListFilter::All,
-                    None => ListFilter::Open,
-                };
-                match feedback::list_for_project(&project_id, &filter) {
-                    Ok(items) => CliResponse::ok_json(
-                        serde_json::json!({ "ok": true, "items": items }).to_string(),
-                    ),
-                    Err(e) => usage_error(e),
-                }
-            }
-            Err(r) => r,
-        },
+        "/cli/feedback/list" => handle_list(params),
 
         // GET /cli/feedback/show?id=<id-or-prefix>
         // One item + its full thread. `id` accepts a short unique
         // prefix (ambiguity → `ambiguous_id`, candidates in the hint).
-        "/cli/feedback/show" => {
-            let id = str_param(params, "id");
-            if id.is_empty() {
-                return Some(usage_error("missing id (a feedback id or unique prefix)"));
-            }
-            let full_id = match feedback::resolve_id_prefix(&id) {
-                Ok(f) => f,
-                Err(e) => return Some(prefix_error_response(&id, e)),
-            };
-            match feedback::get_with_comments(&full_id) {
-                Some((item, comments)) => CliResponse::ok_json(show_json(&item, &comments)),
-                None => prefix_error_response(&id, PrefixError::NotFound),
-            }
-        }
+        "/cli/feedback/show" => handle_show(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
-        "/cli/feedback/create" | "/cli/feedback/comment" | "/cli/feedback/answer"
-        | "/cli/feedback/resolve" | "/cli/feedback/assign" => CliResponse::method_not_allowed(),
+        "/cli/feedback/create"
+        | "/cli/feedback/comment"
+        | "/cli/feedback/answer"
+        | "/cli/feedback/resolve"
+        | "/cli/feedback/assign" => CliResponse::method_not_allowed(),
 
         _ => return None,
     };
@@ -124,13 +97,37 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
 }
 
 pub fn dispatch_post_as(path: &str, body: &[u8], session_author: &str) -> CliResponse {
+    dispatch_post_as_gated(path, body, session_author, None)
+}
+
+pub fn dispatch_post_as_gated(
+    path: &str,
+    body: &[u8],
+    session_author: &str,
+    skin: Option<SkinPass>,
+) -> CliResponse {
     match path {
-        "/cli/feedback/create" => handle_create(body),
-        "/cli/feedback/comment" => handle_comment_as(body, session_author),
-        "/cli/feedback/answer" => handle_answer(body),
-        "/cli/feedback/resolve" => handle_resolve(body),
-        "/cli/feedback/assign" => handle_assign(body),
+        "/cli/feedback/create" => handle_create_gated(body, skin.as_ref()),
+        "/cli/feedback/comment" => handle_comment_gated(body, session_author, skin.as_ref()),
+        "/cli/feedback/answer" => handle_answer_gated(body, session_author, skin.as_ref()),
+        "/cli/feedback/resolve" => handle_resolve_gated(body, skin.as_ref()),
+        "/cli/feedback/assign" if skin.is_none() => handle_assign(body),
         _ => CliResponse::not_found(),
+    }
+}
+
+/// Skin tickets GET list. Owner/Connect use [`dispatch`].
+pub fn handle_list_gated(params: &HashMap<String, String>, skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_list(params, &pass),
+        None => handle_list(params),
+    }
+}
+
+pub fn handle_show_gated(params: &HashMap<String, String>, skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_show(params, &pass),
+        None => handle_show(params),
     }
 }
 
@@ -153,10 +150,7 @@ fn usage_error(hint: impl std::fmt::Display) -> CliResponse {
 /// exit 4; the ambiguous hint lists the matching candidates).
 fn prefix_error_response(given: &str, err: PrefixError) -> CliResponse {
     let (code, hint) = match err {
-        PrefixError::NotFound => (
-            "not_found",
-            format!("no feedback item matches '{given}'"),
-        ),
+        PrefixError::NotFound => ("not_found", format!("no feedback item matches '{given}'")),
         PrefixError::Ambiguous(candidates) => (
             "ambiguous_id",
             format!(
@@ -198,6 +192,124 @@ fn resolve_project_id(path: &str) -> Option<String> {
     k2_core::workspace::agent_identity::resolve_project_id(&conn, path)
 }
 
+fn handle_list(params: &HashMap<String, String>) -> CliResponse {
+    match need_project(params) {
+        Ok(p) => {
+            let Some(project_id) = resolve_project_id(&p) else {
+                return project_not_registered(&p);
+            };
+            list_items(&project_id, params)
+        }
+        Err(r) => r,
+    }
+}
+
+fn handle_show(params: &HashMap<String, String>) -> CliResponse {
+    let id = str_param(params, "id");
+    if id.is_empty() {
+        return usage_error("missing id (a feedback id or unique prefix)");
+    }
+    let full_id = match feedback::resolve_id_prefix(&id) {
+        Ok(f) => f,
+        Err(e) => return prefix_error_response(&id, e),
+    };
+    match feedback::get_with_comments(&full_id) {
+        Some((item, comments)) => CliResponse::ok_json(show_json(&item, &comments)),
+        None => prefix_error_response(&id, PrefixError::NotFound),
+    }
+}
+
+fn list_items(project_id: &str, params: &HashMap<String, String>) -> CliResponse {
+    let filter = match opt_param(params, "status") {
+        Some(s) => ListFilter::Status(s),
+        None if crate::cli::bool_param(params, "all") => ListFilter::All,
+        None => ListFilter::Open,
+    };
+    match feedback::list_for_project(project_id, &filter) {
+        Ok(items) => {
+            CliResponse::ok_json(serde_json::json!({ "ok": true, "items": items }).to_string())
+        }
+        Err(e) => usage_error(e),
+    }
+}
+
+/// Handle or uuid only. Folder-basename / abs path / unknown → 403 `skin_room`.
+fn skin_resolve_project_id(pass: &SkinPass, token: &str) -> Result<String, CliResponse> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(crate::skin_routes::skin_room_response());
+    }
+    let ids = match k2_core::skin::resolve_room_tokens(&[token.to_string()]) {
+        Ok(ids) if ids.len() == 1 => ids,
+        _ => return Err(crate::skin_routes::skin_room_response()),
+    };
+    let project_id = ids[0].clone();
+    if !pass.has_room(&project_id) {
+        return Err(crate::skin_routes::skin_room_response());
+    }
+    Ok(project_id)
+}
+
+fn skin_require_cap(pass: &SkinPass, project_id: &str, cap: &str) -> Result<(), CliResponse> {
+    if !pass.has_cap_in_room(project_id, cap) {
+        return Err(crate::skin_routes::missing_cap_response(cap));
+    }
+    Ok(())
+}
+
+/// Load by id. Missing / other room → 403 `skin_room` (no 404 oracle).
+fn skin_load_item(
+    pass: &SkinPass,
+    id: &str,
+    cap: &str,
+) -> Result<feedback::FeedbackItem, CliResponse> {
+    let full_id = match feedback::resolve_id_prefix(id) {
+        Ok(f) => f,
+        Err(_) => return Err(crate::skin_routes::skin_room_response()),
+    };
+    let Some(item) = feedback::get_item(&full_id) else {
+        return Err(crate::skin_routes::skin_room_response());
+    };
+    if !pass.has_room(&item.project_id) {
+        return Err(crate::skin_routes::skin_room_response());
+    }
+    skin_require_cap(pass, &item.project_id, cap)?;
+    Ok(item)
+}
+
+fn handle_skin_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let project = params
+        .get("project")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let Some(project) = project else {
+        return usage_error("missing 'project' (workspace handle or UUID)");
+    };
+    let project_id = match skin_resolve_project_id(pass, &project) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    if let Err(e) = skin_require_cap(pass, &project_id, crate::skin_routes::TICKETS_READ) {
+        return e;
+    }
+    list_items(&project_id, params)
+}
+
+fn handle_skin_show(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let id = str_param(params, "id");
+    if id.is_empty() {
+        return usage_error("missing id (a feedback id or unique prefix)");
+    }
+    let item = match skin_load_item(pass, &id, crate::skin_routes::TICKETS_READ) {
+        Ok(item) => item,
+        Err(e) => return e,
+    };
+    match feedback::get_with_comments(&item.id) {
+        Some((item, comments)) => CliResponse::ok_json(show_json(&item, &comments)),
+        None => crate::skin_routes::skin_room_response(),
+    }
+}
+
 /// `projects.name` + `projects.path` for a project id (for the
 /// `workspace` field in responses + the `projectPath` event field).
 fn project_name_path(project_id: &str) -> (Option<String>, Option<String>) {
@@ -206,7 +318,12 @@ fn project_name_path(project_id: &str) -> (Option<String>, Option<String>) {
     conn.query_row(
         "SELECT name, path FROM projects WHERE id = ?1",
         rusqlite::params![project_id],
-        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+        |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+            ))
+        },
     )
     .unwrap_or((None, None))
 }
@@ -365,7 +482,12 @@ struct CreateBody {
 /// fires `FeedbackCreated` on the `/events` broadcast. Response is the
 /// mockup's ask `--json` shape (`ok/id/title/kind/priority/status/
 /// options/workspace/sessionId`) plus the full item fields.
+#[cfg(test)]
 pub fn handle_create(body: &[u8]) -> CliResponse {
+    handle_create_gated(body, None)
+}
+
+fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
     let b: CreateBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -388,11 +510,9 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
             ));
         }
     }
-    let Some(path) = crate::workspace_msg::resolve_workspace(&b.project) else {
-        return crate::workspace_routes::workspace_not_found_response(&b.project);
-    };
-    let Some(project_id) = resolve_project_id(&path) else {
-        return project_not_registered(&path);
+    let (project_id, path) = match resolve_create_project(&b.project, skin) {
+        Ok(pair) => pair,
+        Err(e) => return e,
     };
     // Asker attribution: explicit agentName wins; otherwise the
     // workspace's agent display name (always returns a string).
@@ -457,11 +577,7 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
     // content-free (agent name + id, NEVER the ask's title/body —
     // §4.5) and dormant/fire-and-forget inside push_routes. Assignees
     // narrow the fan-out when present.
-    crate::push_routes::notify_feedback_created(
-        &item.agent_name,
-        &item.id,
-        &item.assignees,
-    );
+    crate::push_routes::notify_feedback_created(&item.agent_name, &item.id, &item.assignees);
 
     let (name, _) = project_name_path(&item.project_id);
     let mut v = serde_json::to_value(&item).unwrap_or_else(|_| serde_json::json!({}));
@@ -470,6 +586,33 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
         map.insert("workspace".to_string(), serde_json::json!(name));
     }
     CliResponse::ok_json(v.to_string())
+}
+
+fn resolve_create_project(
+    project: &str,
+    skin: Option<&SkinPass>,
+) -> Result<(String, String), CliResponse> {
+    if let Some(pass) = skin {
+        let project_id = skin_resolve_project_id(pass, project)?;
+        skin_require_cap(pass, &project_id, crate::skin_routes::TICKETS_POST)?;
+        let Some(path) = project_name_path(&project_id)
+            .1
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+        else {
+            return Err(crate::skin_routes::skin_room_response());
+        };
+        return Ok((project_id, path));
+    }
+    let Some(path) = crate::workspace_msg::resolve_workspace(project) else {
+        return Err(crate::workspace_routes::workspace_not_found_response(
+            project,
+        ));
+    };
+    let Some(project_id) = resolve_project_id(&path) else {
+        return Err(project_not_registered(&path));
+    };
+    Ok((project_id, path))
 }
 
 /// `POST /cli/feedback/comment` body. `author` defaults to `owner`
@@ -508,7 +651,12 @@ pub fn handle_comment(body: &[u8]) -> CliResponse {
     handle_comment_as(body, "owner")
 }
 
+#[cfg(test)]
 pub fn handle_comment_as(body: &[u8], session_author: &str) -> CliResponse {
+    handle_comment_gated(body, session_author, None)
+}
+
+fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass>) -> CliResponse {
     let b: CommentBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -519,17 +667,28 @@ pub fn handle_comment_as(body: &[u8], session_author: &str) -> CliResponse {
     if b.body.trim().is_empty() {
         return usage_error("comment requires non-empty <text>");
     }
-    let full_id = match feedback::resolve_id_prefix(&b.id) {
-        Ok(f) => f,
-        Err(e) => return prefix_error_response(&b.id, e),
+    let (full_id, author, is_human) = if let Some(pass) = skin {
+        let item = match skin_load_item(pass, &b.id, crate::skin_routes::TICKETS_POST) {
+            Ok(item) => item,
+            Err(e) => return e,
+        };
+        // Skin: session_author = pass.username. Never body `author`, never "owner".
+        (item.id, pass.username.clone(), true)
+    } else {
+        let full_id = match feedback::resolve_id_prefix(&b.id) {
+            Ok(f) => f,
+            Err(e) => return prefix_error_response(&b.id, e),
+        };
+        // Body `author` is the agent-CLI path. UI human posts omit it —
+        // use the token identity so a Connect user is stored/injected as
+        // themselves, not `resolve_owner_from()`.
+        let author_given = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let session = session_author.trim();
+        let author = author_given.unwrap_or(if session.is_empty() { "owner" } else { session });
+        let is_human = author_given.is_none() || author == "owner";
+        (full_id, author.to_string(), is_human)
     };
-    // Body `author` is the agent-CLI path. UI human posts omit it —
-    // use the token identity so a Connect user is stored/injected as
-    // themselves, not `resolve_owner_from()`.
-    let author_given = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let session = session_author.trim();
-    let author = author_given.unwrap_or(if session.is_empty() { "owner" } else { session });
-    let is_human = author_given.is_none() || author == "owner";
+    let author = author.as_str();
 
     // Agent comment — store only, current shape (no delivery fields).
     if !is_human {
@@ -561,8 +720,8 @@ pub fn handle_comment_as(body: &[u8], session_author: &str) -> CliResponse {
     let Some(before) = feedback::get_item(&full_id) else {
         return prefix_error_response(&b.id, PrefixError::NotFound);
     };
-    let answers = before.status == "waiting"
-        && matches!(before.kind.as_str(), "question" | "approval");
+    let answers =
+        before.status == "waiting" && matches!(before.kind.as_str(), "question" | "approval");
 
     let (item, comment) = if answers {
         match feedback::set_answer(&full_id, author, &b.body) {
@@ -638,7 +797,12 @@ struct AnswerBody {
 }
 
 /// Handler for `POST /cli/feedback/answer`.
+#[cfg(test)]
 pub fn handle_answer(body: &[u8]) -> CliResponse {
+    handle_answer_gated(body, "owner", None)
+}
+
+fn handle_answer_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass>) -> CliResponse {
     let b: AnswerBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -649,13 +813,29 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
     if b.answer.trim().is_empty() {
         return usage_error("answer requires non-empty text");
     }
-    let full_id = match feedback::resolve_id_prefix(&b.id) {
-        Ok(f) => f,
-        Err(e) => return prefix_error_response(&b.id, e),
+    let (full_id, author_owned, from_owned) = if let Some(pass) = skin {
+        let item = match skin_load_item(pass, &b.id, crate::skin_routes::TICKETS_POST) {
+            Ok(item) => item,
+            Err(e) => return e,
+        };
+        let name = pass.username.clone();
+        (item.id, name.clone(), name)
+    } else {
+        let full_id = match feedback::resolve_id_prefix(&b.id) {
+            Ok(f) => f,
+            Err(e) => return prefix_error_response(&b.id, e),
+        };
+        let author = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let session = session_author.trim();
+        let stored = author
+            .unwrap_or(if session.is_empty() { "owner" } else { session })
+            .to_string();
+        let from = author
+            .map(String::from)
+            .unwrap_or_else(crate::workspace_msg::resolve_owner_from);
+        (full_id, stored, from)
     };
-    let author = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let (item, comment) = match feedback::set_answer(&full_id, author.unwrap_or("owner"), &b.answer)
-    {
+    let (item, comment) = match feedback::set_answer(&full_id, &author_owned, &b.answer) {
         Ok(pair) => pair,
         Err(e) => return usage_error(e),
     };
@@ -681,11 +861,11 @@ pub fn handle_answer(body: &[u8]) -> CliResponse {
     // failure never fails the answer. An unnamed answerer is framed
     // with the owner's display name (same server-side resolution as
     // the composer, D3), so the line reads natively in-session.
-    let from = author
-        .map(String::from)
-        .unwrap_or_else(crate::workspace_msg::resolve_owner_from);
-    let (delivered, delivery_reason, delivered_session) =
-        deliver_to_asker(&item, &from, item.answer.as_deref().unwrap_or_default());
+    let (delivered, delivery_reason, delivered_session) = deliver_to_asker(
+        &item,
+        &from_owned,
+        item.answer.as_deref().unwrap_or_default(),
+    );
 
     CliResponse::ok_json(
         serde_json::json!({
@@ -718,7 +898,12 @@ struct ResolveBody {
 }
 
 /// Handler for `POST /cli/feedback/resolve`.
+#[cfg(test)]
 pub fn handle_resolve(body: &[u8]) -> CliResponse {
+    handle_resolve_gated(body, None)
+}
+
+fn handle_resolve_gated(body: &[u8], skin: Option<&SkinPass>) -> CliResponse {
     let b: ResolveBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -735,9 +920,16 @@ pub fn handle_resolve(body: &[u8]) -> CliResponse {
             "invalid status '{status}' — resolve accepts: resolved, dismissed, planned, needs_discussion, waiting (reopen)"
         ));
     }
-    let full_id = match feedback::resolve_id_prefix(&b.id) {
-        Ok(f) => f,
-        Err(e) => return prefix_error_response(&b.id, e),
+    let full_id = if let Some(pass) = skin {
+        match skin_load_item(pass, &b.id, crate::skin_routes::TICKETS_POST) {
+            Ok(item) => item.id,
+            Err(e) => return e,
+        }
+    } else {
+        match feedback::resolve_id_prefix(&b.id) {
+            Ok(f) => f,
+            Err(e) => return prefix_error_response(&b.id, e),
+        }
     };
     match feedback::set_status(&full_id, &status) {
         Ok(item) => {
@@ -889,8 +1081,8 @@ mod tests {
     }
 
     fn list_ids(path: &str, extra: &[(&str, &str)]) -> Vec<String> {
-        let resp = dispatch("/cli/feedback/list", &list_params(path, extra))
-            .expect("list route claimed");
+        let resp =
+            dispatch("/cli/feedback/list", &list_params(path, extra)).expect("list route claimed");
         assert_eq!(resp.status, "200 OK", "list failed: {}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid list JSON");
         v["items"]
@@ -964,12 +1156,17 @@ mod tests {
         let c: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(c["author"], "scout");
         let item = k2_core::feedback::get_item(&id).expect("item");
-        assert_eq!(item.status, "waiting", "agent comment must not change status");
+        assert_eq!(
+            item.status, "waiting",
+            "agent comment must not change status"
+        );
         assert_eq!(item.comment_count, 2);
 
         // answer: stores comment + answer + answered_at + status.
         let resp = handle_answer(
-            serde_json::json!({ "id": id, "answer": "Yes" }).to_string().as_bytes(),
+            serde_json::json!({ "id": id, "answer": "Yes" })
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(resp.status, "200 OK", "answer failed: {}", resp.body);
         let a: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
@@ -982,24 +1179,34 @@ mod tests {
         // resolve: default list hides it; --all / --status show it.
         let resp = handle_resolve(serde_json::json!({ "id": id }).to_string().as_bytes());
         assert_eq!(resp.status, "200 OK", "resolve failed: {}", resp.body);
-        assert!(!list_ids(&path, &[]).contains(&id), "default hides resolved");
+        assert!(
+            !list_ids(&path, &[]).contains(&id),
+            "default hides resolved"
+        );
         assert!(list_ids(&path, &[("all", "1")]).contains(&id));
         assert!(list_ids(&path, &[("status", "resolved")]).contains(&id));
 
         // reopen (per-card status dropdown): waiting rides the resolve
         // route; the answer survives so --wait semantics stay coherent.
         let resp = handle_resolve(
-            serde_json::json!({ "id": id, "status": "waiting" }).to_string().as_bytes(),
+            serde_json::json!({ "id": id, "status": "waiting" })
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(resp.status, "200 OK", "reopen failed: {}", resp.body);
         let r: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(r["status"], "waiting");
-        assert!(list_ids(&path, &[]).contains(&id), "reopened item lists by default");
+        assert!(
+            list_ids(&path, &[]).contains(&id),
+            "reopened item lists by default"
+        );
 
         // A manual `answered` is rejected loudly — only an actual reply
         // may answer (a null-answer answered would break --wait).
         let resp = handle_resolve(
-            serde_json::json!({ "id": id, "status": "answered" }).to_string().as_bytes(),
+            serde_json::json!({ "id": id, "status": "answered" })
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
@@ -1046,7 +1253,9 @@ mod tests {
 
         // Unique prefix resolves (via a mutation route too).
         let resp = handle_resolve(
-            serde_json::json!({ "id": "fbamb-o", "status": "dismissed" }).to_string().as_bytes(),
+            serde_json::json!({ "id": "fbamb-o", "status": "dismissed" })
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(resp.status, "200 OK", "body={}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
@@ -1060,8 +1269,16 @@ mod tests {
                 &HashMap::from([("id".to_string(), "zzzz".to_string())]),
             )
             .expect("claimed"),
-            handle_comment(serde_json::json!({ "id": "zzzz", "body": "x" }).to_string().as_bytes()),
-            handle_answer(serde_json::json!({ "id": "zzzz", "answer": "x" }).to_string().as_bytes()),
+            handle_comment(
+                serde_json::json!({ "id": "zzzz", "body": "x" })
+                    .to_string()
+                    .as_bytes(),
+            ),
+            handle_answer(
+                serde_json::json!({ "id": "zzzz", "answer": "x" })
+                    .to_string()
+                    .as_bytes(),
+            ),
             handle_resolve(serde_json::json!({ "id": "zzzz" }).to_string().as_bytes()),
         ] {
             assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
@@ -1089,10 +1306,17 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         let assignees = v["assignees"].as_array().expect("assignees array");
         let names: Vec<&str> = assignees.iter().filter_map(|x| x.as_str()).collect();
-        assert_eq!(names, vec!["julie", "owner"], "deduped + sorted snapshots: {names:?}");
+        assert_eq!(
+            names,
+            vec!["julie", "owner"],
+            "deduped + sorted snapshots: {names:?}"
+        );
         let id = v["id"].as_str().expect("id");
         let item = k2_core::feedback::get_item(id).expect("item");
-        assert_eq!(item.assignees, vec!["julie".to_string(), "owner".to_string()]);
+        assert_eq!(
+            item.assignees,
+            vec!["julie".to_string(), "owner".to_string()]
+        );
     }
 
     /// Validation misses answer 400 with the stable `usage` code and
@@ -1103,7 +1327,11 @@ mod tests {
         insert_project(&name, &path);
 
         // No title.
-        let resp = handle_create(serde_json::json!({ "project": path }).to_string().as_bytes());
+        let resp = handle_create(
+            serde_json::json!({ "project": path })
+                .to_string()
+                .as_bytes(),
+        );
         assert_eq!(resp.status, "400 Bad Request");
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(v["error"]["code"], "usage");
@@ -1158,7 +1386,10 @@ mod tests {
                     "sessionKind": kind,
                 }),
             );
-            assert_eq!(created["sessionKind"], kind, "known kind {kind} must persist: {created}");
+            assert_eq!(
+                created["sessionKind"], kind,
+                "known kind {kind} must persist: {created}"
+            );
             assert_eq!(created["sessionId"], format!("sess-{kind}"));
             extra_ids.push(created["id"].as_str().expect("id").to_string());
         }
@@ -1227,9 +1458,18 @@ mod tests {
             injection_target(Some("api-1"), Some("api")),
             InjectionTarget::WorkspaceAgent
         );
-        assert_eq!(injection_target(None, None), InjectionTarget::WorkspaceAgent);
-        assert_eq!(injection_target(Some("conv-1"), None), InjectionTarget::WorkspaceAgent);
-        assert_eq!(injection_target(None, Some("sandbox")), InjectionTarget::WorkspaceAgent);
+        assert_eq!(
+            injection_target(None, None),
+            InjectionTarget::WorkspaceAgent
+        );
+        assert_eq!(
+            injection_target(Some("conv-1"), None),
+            InjectionTarget::WorkspaceAgent
+        );
+        assert_eq!(
+            injection_target(None, Some("sandbox")),
+            InjectionTarget::WorkspaceAgent
+        );
 
         // Injected body: PRD §4.3 `[feedback:<short-id>] <body>` —
         // shared by answers AND human comments; the short id is a
@@ -1253,7 +1493,9 @@ mod tests {
 
         let answer = |id: &str, text: &str| -> serde_json::Value {
             let resp = handle_answer(
-                serde_json::json!({ "id": id, "answer": text }).to_string().as_bytes(),
+                serde_json::json!({ "id": id, "answer": text })
+                    .to_string()
+                    .as_bytes(),
             );
             assert_eq!(resp.status, "200 OK", "answer failed: {}", resp.body);
             serde_json::from_str(&resp.body).expect("valid answer JSON")
@@ -1273,7 +1515,10 @@ mod tests {
         assert_eq!(a["deliveryReason"], "no_agent_mode");
         assert!(a["deliveredSessionId"].is_null());
         let item = k2_core::feedback::get_item(&id).expect("item");
-        assert_eq!(item.status, "answered", "failed delivery must not lose the answer");
+        assert_eq!(
+            item.status, "answered",
+            "failed delivery must not lose the answer"
+        );
         assert_eq!(item.answer.as_deref(), Some("navy"));
 
         // (b) Random-UUID sandbox stamp on a project with no agent →
@@ -1445,7 +1690,10 @@ mod tests {
         assert_eq!(c["author"], "owner", "author defaults to owner (human)");
         assert_eq!(c["answered"], true);
         assert_eq!(c["status"], "answered");
-        assert_eq!(c["delivered"], false, "dead project → attempted, not delivered");
+        assert_eq!(
+            c["delivered"], false,
+            "dead project → attempted, not delivered"
+        );
         assert_eq!(c["deliveryReason"], "no_agent_mode");
         assert!(c["commentId"].is_string());
         let item = k2_core::feedback::get_item(&id).expect("item");
@@ -1464,11 +1712,8 @@ mod tests {
         assert_eq!(item.comment_count, 3);
 
         // Human comment on a WAITING approval → answers too.
-        let created = create_via_route(
-            &path,
-            "Ship it?",
-            serde_json::json!({ "kind": "approval" }),
-        );
+        let created =
+            create_via_route(&path, "Ship it?", serde_json::json!({ "kind": "approval" }));
         let id = created["id"].as_str().expect("id").to_string();
         let c = comment(serde_json::json!({ "id": id, "body": "Ship it" }));
         assert_eq!(c["answered"], true);
@@ -1486,7 +1731,10 @@ mod tests {
         let c = comment(serde_json::json!({ "id": id, "body": "noted, thanks" }));
         assert_eq!(c["answered"], false);
         assert_eq!(c["status"], "waiting");
-        assert_eq!(c["deliveryReason"], "no_agent_mode", "fyi comment still injects");
+        assert_eq!(
+            c["deliveryReason"], "no_agent_mode",
+            "fyi comment still injects"
+        );
         let item = k2_core::feedback::get_item(&id).expect("item");
         assert_eq!(item.status, "waiting", "fyi never auto-answers");
         assert!(item.answer.is_none());
@@ -1496,7 +1744,8 @@ mod tests {
         // fields in the response.
         let created = create_via_route(&path, "agent self-note", sandbox_session());
         let id = created["id"].as_str().expect("id").to_string();
-        let c = comment(serde_json::json!({ "id": id, "body": "still thinking", "author": "scout" }));
+        let c =
+            comment(serde_json::json!({ "id": id, "body": "still thinking", "author": "scout" }));
         assert_eq!(c["author"], "scout");
         assert!(
             c.get("delivered").is_none()
@@ -1530,7 +1779,9 @@ mod tests {
         // dismiss → reopen → resolve, none reporting delivery.
         for status in ["dismissed", "waiting", "resolved"] {
             let resp = handle_resolve(
-                serde_json::json!({ "id": id, "status": status }).to_string().as_bytes(),
+                serde_json::json!({ "id": id, "status": status })
+                    .to_string()
+                    .as_bytes(),
             );
             assert_eq!(resp.status, "200 OK", "{status} failed: {}", resp.body);
             let r: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
@@ -1542,14 +1793,23 @@ mod tests {
         }
         let item = k2_core::feedback::get_item(&id).expect("item");
         assert_eq!(item.status, "resolved");
-        assert!(item.answer.is_none(), "reopen path never fabricates an answer");
+        assert!(
+            item.answer.is_none(),
+            "reopen path never fabricates an answer"
+        );
 
         // Manual answered / garbage statuses are loud usage errors.
         for bad in ["answered", "closed", ""] {
             let resp = handle_resolve(
-                serde_json::json!({ "id": id, "status": bad }).to_string().as_bytes(),
+                serde_json::json!({ "id": id, "status": bad })
+                    .to_string()
+                    .as_bytes(),
             );
-            assert_eq!(resp.status, "400 Bad Request", "status '{bad}' body={}", resp.body);
+            assert_eq!(
+                resp.status, "400 Bad Request",
+                "status '{bad}' body={}",
+                resp.body
+            );
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
             assert_eq!(v["error"]["code"], "usage", "status '{bad}'");
         }
@@ -1619,7 +1879,9 @@ mod tests {
         // feedback:created (comments must not notify).
         let mark = event_mark();
         let resp = handle_comment(
-            serde_json::json!({ "id": id, "body": "8080" }).to_string().as_bytes(),
+            serde_json::json!({ "id": id, "body": "8080" })
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
         let events = events_since(mark, &id);
@@ -1661,7 +1923,9 @@ mod tests {
 
         let mark = event_mark();
         let resp = handle_answer(
-            serde_json::json!({ "id": id, "answer": "Ship it" }).to_string().as_bytes(),
+            serde_json::json!({ "id": id, "answer": "Ship it" })
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(resp.status, "200 OK", "answer failed: {}", resp.body);
         let events = events_since(mark, &id);
@@ -1692,22 +1956,25 @@ mod tests {
         assert!(list_ids(&path, &[("status", "waiting")]).contains(&id));
 
         // Invalid status filter fails loudly.
-        let resp = dispatch("/cli/feedback/list", &list_params(&path, &[("status", "bogus")]))
-            .expect("claimed");
+        let resp = dispatch(
+            "/cli/feedback/list",
+            &list_params(&path, &[("status", "bogus")]),
+        )
+        .expect("claimed");
         assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
 
         let before = dispatch("/cli/feedback/waiting-count", &HashMap::new())
             .expect("waiting-count claimed");
         assert_eq!(before.status, "200 OK", "body={}", before.body);
-        let before_n = serde_json::from_str::<serde_json::Value>(&before.body)
-            .expect("json")["count"]
+        let before_n = serde_json::from_str::<serde_json::Value>(&before.body).expect("json")
+            ["count"]
             .as_i64()
             .expect("count");
         create_via_route(&path, "another waiting", serde_json::json!({}));
         let after = dispatch("/cli/feedback/waiting-count", &HashMap::new())
             .expect("waiting-count claimed");
-        let after_n = serde_json::from_str::<serde_json::Value>(&after.body)
-            .expect("json")["count"]
+        let after_n = serde_json::from_str::<serde_json::Value>(&after.body).expect("json")
+            ["count"]
             .as_i64()
             .expect("count");
         assert!(
@@ -1771,12 +2038,12 @@ mod tests {
         );
         assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
         let resp = handle_comment(
-            serde_json::json!({ "id": id, "body": "8080" }).to_string().as_bytes(),
+            serde_json::json!({ "id": id, "body": "8080" })
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(resp.status, "200 OK", "comment failed: {}", resp.body);
-        let resp = handle_resolve(
-            serde_json::json!({ "id": id }).to_string().as_bytes(),
-        );
+        let resp = handle_resolve(serde_json::json!({ "id": id }).to_string().as_bytes());
         assert_eq!(resp.status, "200 OK", "resolve failed: {}", resp.body);
         let since = crate::push_routes::test_push_capture::since(mark);
         let creates: Vec<_> = since
@@ -1799,6 +2066,176 @@ mod tests {
             comments.len(),
             2,
             "each comment should push once: {comments:?}"
+        );
+    }
+
+    fn insert_project_handle(name: &str, path: &str, handle: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, name, path, handle],
+        )
+        .expect("insert project row");
+        id
+    }
+
+    fn skin_session(username: &str, policy: k2_core::skin::RoomPolicy) -> k2_core::skin::SkinPass {
+        let rooms: Vec<String> = policy.keys().cloned().collect();
+        let mut caps = Vec::new();
+        for c in [
+            k2_core::skin::CAP_THREAD_READ,
+            k2_core::skin::CAP_THREAD_POST,
+            k2_core::skin::CAP_FILES_READ,
+            k2_core::skin::CAP_FILES_WRITE,
+            k2_core::skin::CAP_TICKETS_READ,
+            k2_core::skin::CAP_TICKETS_POST,
+        ] {
+            if policy.values().any(|room| room.iter().any(|x| x == c))
+                && !caps.iter().any(|x| x == c)
+            {
+                caps.push(c.to_string());
+            }
+        }
+        k2_core::skin::SkinPass {
+            id: uuid::Uuid::new_v4().to_string(),
+            principal_id: Some(uuid::Uuid::new_v4().to_string()),
+            username: username.to_string(),
+            caps,
+            rooms,
+            session: true,
+            room_policy: policy,
+        }
+    }
+
+    #[test]
+    fn skin_tickets_list_create_show_are_has_cap_in_room() {
+        let handle = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let anna_h = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (docs_name, docs_path) = unique("skin-docs");
+        let (anna_name, anna_path) = unique("skin-anna");
+        let docs_id = insert_project_handle(&docs_name, &docs_path, &handle);
+        let anna_id = insert_project_handle(&anna_name, &anna_path, &anna_h);
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(
+            anna_id.clone(),
+            vec![
+                k2_core::skin::CAP_THREAD_READ.into(),
+                k2_core::skin::CAP_THREAD_POST.into(),
+            ],
+        );
+        policy.insert(
+            docs_id.clone(),
+            vec![
+                k2_core::skin::CAP_THREAD_READ.into(),
+                k2_core::skin::CAP_THREAD_POST.into(),
+                k2_core::skin::CAP_TICKETS_READ.into(),
+                k2_core::skin::CAP_TICKETS_POST.into(),
+            ],
+        );
+        let pass = skin_session("bob", policy);
+
+        let list_docs = handle_list_gated(&list_params(&handle, &[]), Some(pass.clone()));
+        assert_eq!(list_docs.status, "200 OK", "{}", list_docs.body);
+
+        let list_anna = handle_list_gated(&list_params(&anna_h, &[]), Some(pass.clone()));
+        assert_eq!(list_anna.status, "403 Forbidden", "{}", list_anna.body);
+        assert!(
+            list_anna.body.contains("missing capability tickets:read"),
+            "{}",
+            list_anna.body
+        );
+        assert!(!list_anna.body.contains("skin_room"), "{}", list_anna.body);
+
+        let list_abs = handle_list_gated(&list_params(&docs_path, &[]), Some(pass.clone()));
+        assert_eq!(list_abs.status, "403 Forbidden", "{}", list_abs.body);
+        assert!(list_abs.body.contains("skin_room"), "{}", list_abs.body);
+
+        let created = super::handle_create_gated(
+            serde_json::json!({ "project": handle, "title": "Docs ask" })
+                .to_string()
+                .as_bytes(),
+            Some(&pass),
+        );
+        assert_eq!(created.status, "200 OK", "{}", created.body);
+        let docs_ticket = serde_json::from_str::<serde_json::Value>(&created.body).expect("json")
+            ["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+
+        let anna_item = feedback::create(feedback::NewFeedback {
+            project_id: anna_id.clone(),
+            session_id: None,
+            session_kind: None,
+            agent_name: "anna".into(),
+            kind: "question".into(),
+            title: "Anna ask".into(),
+            body: None,
+            options: None,
+            priority: 3,
+        })
+        .expect("anna item");
+
+        let show_anna = handle_show_gated(
+            &HashMap::from([("id".into(), anna_item.id.clone())]),
+            Some(pass.clone()),
+        );
+        assert_eq!(show_anna.status, "403 Forbidden", "{}", show_anna.body);
+        assert!(
+            show_anna.body.contains("missing capability tickets:read"),
+            "{}",
+            show_anna.body
+        );
+
+        let show_docs = handle_show_gated(
+            &HashMap::from([("id".into(), docs_ticket.clone())]),
+            Some(pass.clone()),
+        );
+        assert_eq!(show_docs.status, "200 OK", "{}", show_docs.body);
+
+        let show_missing = handle_show_gated(
+            &HashMap::from([("id".into(), "00000000-0000-0000-0000-000000000000".into())]),
+            Some(pass.clone()),
+        );
+        assert_eq!(
+            show_missing.status, "403 Forbidden",
+            "{}",
+            show_missing.body
+        );
+        assert!(
+            show_missing.body.contains("skin_room"),
+            "unknown id must not 404: {}",
+            show_missing.body
+        );
+
+        let comment = super::handle_comment_gated(
+            serde_json::json!({
+                "id": docs_ticket,
+                "body": "ship it",
+                "author": "owner"
+            })
+            .to_string()
+            .as_bytes(),
+            "bob",
+            Some(&pass),
+        );
+        assert_eq!(comment.status, "200 OK", "{}", comment.body);
+        let cv: serde_json::Value = serde_json::from_str(&comment.body).expect("json");
+        assert_eq!(cv["author"], "bob", "{}", comment.body);
+
+        let create_anna = super::handle_create_gated(
+            serde_json::json!({ "project": anna_h, "title": "nope" })
+                .to_string()
+                .as_bytes(),
+            Some(&pass),
+        );
+        assert_eq!(create_anna.status, "403 Forbidden", "{}", create_anna.body);
+        assert!(
+            create_anna.body.contains("missing capability tickets:post"),
+            "{}",
+            create_anna.body
         );
     }
 }

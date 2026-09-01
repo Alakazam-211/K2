@@ -200,6 +200,14 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("GET", "/cli/fs/read-file")
             | ("HEAD", "/cli/fs/read-file")
             | ("POST", "/cli/fs/write-file")
+            | ("GET", "/cli/feedback/list")
+            | ("HEAD", "/cli/feedback/list")
+            | ("GET", "/cli/feedback/show")
+            | ("HEAD", "/cli/feedback/show")
+            | ("POST", "/cli/feedback/create")
+            | ("POST", "/cli/feedback/comment")
+            | ("POST", "/cli/feedback/answer")
+            | ("POST", "/cli/feedback/resolve")
     )
 }
 
@@ -995,6 +1003,21 @@ mod tests {
         assert!(!allowlisted_http("POST", "/cli/fs/read-dir"));
         assert!(!never_proxy("/cli/fs/events"));
         assert!(!never_proxy("/cli/fs/read-dir"));
+        assert!(allowlisted_http("GET", "/cli/feedback/list"));
+        assert!(allowlisted_http("HEAD", "/cli/feedback/list"));
+        assert!(allowlisted_http("GET", "/cli/feedback/show"));
+        assert!(allowlisted_http("HEAD", "/cli/feedback/show"));
+        assert!(allowlisted_http("POST", "/cli/feedback/create"));
+        assert!(allowlisted_http("POST", "/cli/feedback/comment"));
+        assert!(allowlisted_http("POST", "/cli/feedback/answer"));
+        assert!(allowlisted_http("POST", "/cli/feedback/resolve"));
+        assert!(!allowlisted_http("GET", "/cli/feedback/waiting-count"));
+        assert!(!allowlisted_http("POST", "/cli/feedback/assign"));
+        assert!(!allowlisted_http("GET", "/cli/feedback/foo"));
+        assert!(!allowlisted_http("POST", "/cli/feedback/foo"));
+        assert!(!allowlisted_http("GET", "/cli/tickets"));
+        assert!(!allowlisted_ws("/cli/feedback/list"));
+        assert!(!allowlisted_ws("/cli/sessions/events"));
     }
 
     #[test]

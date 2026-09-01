@@ -487,14 +487,23 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
         let fs = http_ex(
             gport,
             "GET",
-            "/cli/fs/read-dir?workspace=sales&path=.",
+            &format!("/cli/fs/read-dir?workspace={handle}&path=."),
             None,
             &cookie,
         );
-        assert_eq!(fs.status, 404, "gateway files still 404; {}", fs.body);
+        assert_eq!(
+            fs.status, 403,
+            "unassigned thread-only files:read; {}",
+            fs.body
+        );
         assert!(
-            fs.body.contains("not found"),
-            "gateway files 404 body; {}",
+            fs.body.contains("missing capability files:read"),
+            "must be missing cap, not 404: {}",
+            fs.body
+        );
+        assert!(
+            !fs.body.contains("skin_room"),
+            "thread-only files must not be skin_room: {}",
             fs.body
         );
 
@@ -688,6 +697,38 @@ fn stop_skin(dport: u16, path: &str) {
     );
 }
 
+fn seed_files_workspace(handle: &str) -> (String, String, String) {
+    let (id, conv, path) = seed_workspace(handle);
+    std::fs::write(format!("{path}/README.md"), b"hello files\n").expect("readme");
+    (id, conv, path)
+}
+
+fn ws_upgrade(port: u16, path_and_query: &str, extra_headers: &str) -> Resp {
+    let mut stream = StdTcpStream::connect(("127.0.0.1", port)).expect("ws connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(8)))
+        .expect("read timeout");
+    let extra = if extra_headers.is_empty() {
+        String::new()
+    } else if extra_headers.ends_with("\r\n") {
+        extra_headers.to_string()
+    } else {
+        format!("{extra_headers}\r\n")
+    };
+    let req = format!(
+        "GET {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{extra}\r\n"
+    );
+    stream.write_all(req.as_bytes()).expect("ws write");
+    stream.flush().expect("ws flush");
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 4096];
+    match stream.read(&mut buf) {
+        Ok(n) => raw.extend_from_slice(&buf[..n]),
+        Err(_) => {}
+    }
+    parse_resp(&raw)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publish_run_skin_custom_login_html_or_bundled() {
     let _g = lock();
@@ -838,13 +879,31 @@ async fn publish_run_skin_gateway_thread_answer_not_ask_or_fs() {
             ask_gw.body
         );
 
-        let fs = http_ex(gport, "GET", "/cli/fs/read-dir", None, &cookie);
-        assert_eq!(fs.status, 404, "fs must 404 on gateway; {}", fs.body);
-        assert!(
-            fs.body.contains("not found"),
-            "fs 404 body: {}",
+        let fs = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/fs/read-dir?workspace={handle}&path=."),
+            None,
+            &cookie,
+        );
+        assert_eq!(
+            fs.status, 403,
+            "unassigned thread-only files:read; {}",
             fs.body
         );
+        assert!(
+            fs.body.contains("missing capability files:read"),
+            "must be missing cap, not 404: {}",
+            fs.body
+        );
+        assert!(
+            !fs.body.contains("skin_room"),
+            "thread-only files must not be skin_room: {}",
+            fs.body
+        );
+        let info = http_ex(gport, "GET", "/cli/fs/info", None, &cookie);
+        assert_eq!(info.status, 404, "info stays 404; {}", info.body);
+        assert!(info.body.contains("not found"), "info 404 body: {}", info.body);
 
         stop_skin(dport, &path);
         let _ = std::fs::remove_dir_all(&path);
@@ -1000,5 +1059,400 @@ async fn skin_daemon_thread_answer_void_caps_and_rooms() {
 
         let _ = std::fs::remove_dir_all(&path);
         let _ = std::fs::remove_dir_all(&opath);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_files_rooms_jail_and_ws() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_anna_id, _anna_conv, anna_path) = seed_files_workspace(&anna);
+        let (_docs_id, _docs_conv, docs_path) = seed_files_workspace(&docs);
+        add_user(dport, "bob");
+        set_password(dport, "bob", "s3cret-horse");
+
+        let created = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"dentist"}"#),
+        );
+        assert_eq!(created.status, 200, "role create; {}", created.body);
+        let anna_room = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{anna}","caps":["thread:read","thread:post"]}}"#
+            )),
+        );
+        assert_eq!(anna_room.status, 200, "anna room; {}", anna_room.body);
+        let docs_room = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{docs}","caps":["thread:read","thread:post","files:read","files:write"]}}"#
+            )),
+        );
+        assert_eq!(docs_room.status, 200, "docs room; {}", docs_room.body);
+        let assign = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"bob","role":"dentist"}"#),
+        );
+        assert_eq!(assign.status, 200, "assign; {}", assign.body);
+
+        let gport = free_port();
+        publish_skin(dport, &anna_path, gport, None);
+
+        let public = http(gport, "GET", "/", None);
+        assert_eq!(public.status, 200, "static / no cookie; {}", public.body);
+        assert!(!public.body.contains("k2skn_"), "{}", public.body);
+        assert!(!public.body.contains("?token="), "{}", public.body);
+
+        let no_cookie = http(
+            gport,
+            "GET",
+            &format!("/cli/fs/read-dir?workspace={docs}&path=."),
+            None,
+        );
+        assert_eq!(no_cookie.status, 401, "no cookie; {}", no_cookie.body);
+        assert!(
+            no_cookie.body.contains("not logged in"),
+            "live 401 string; {}",
+            no_cookie.body
+        );
+
+        let login = http(
+            gport,
+            "POST",
+            "/login",
+            Some(r#"{"username":"bob","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "gateway login; {}", login.body);
+        assert!(
+            !login.body.contains("k2skn_"),
+            "official origin must not put k2skn_ on the wire: {}",
+            login.body
+        );
+        assert!(
+            !login.body.contains("?token="),
+            "official origin must not put ?token= on the wire: {}",
+            login.body
+        );
+        let lv = json(&login.body);
+        assert!(lv.get("token").is_none(), "no token key: {}", login.body);
+        assert!(
+            lv.get("roomAccess").is_some(),
+            "login JSON must include roomAccess: {}",
+            login.body
+        );
+        let set_cookie = header_value(&login.headers, "set-cookie").expect("Set-Cookie");
+        assert!(set_cookie.contains("k2_skin_ui="), "{set_cookie}");
+        let sid = cookie_k2_skin_ui(&set_cookie).expect("opaque id");
+        assert!(!sid.starts_with("k2skn_"), "cookie is not the raw pass: {sid}");
+        let cookie = format!("Cookie: k2_skin_ui={sid}");
+
+        let docs_dir = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/fs/read-dir?workspace={docs}&path=."),
+            None,
+            &cookie,
+        );
+        assert_eq!(docs_dir.status, 200, "docs files; {}", docs_dir.body);
+        assert!(
+            !docs_dir.body.contains("k2skn_"),
+            "no pass in files body: {}",
+            docs_dir.body
+        );
+
+        let anna_dir = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/fs/read-dir?workspace={anna}&path=."),
+            None,
+            &cookie,
+        );
+        assert_eq!(anna_dir.status, 403, "anna files; {}", anna_dir.body);
+        assert!(
+            anna_dir.body.contains("missing capability files:read"),
+            "anna must be missing cap, not skin_room: {}",
+            anna_dir.body
+        );
+        assert!(
+            !anna_dir.body.contains("skin_room"),
+            "anna files must not be skin_room: {}",
+            anna_dir.body
+        );
+
+        let thread_anna = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/thread?addr={anna}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(thread_anna.status, 200, "thread anna; {}", thread_anna.body);
+
+        let write_docs = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/write-file",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","path":"hello.md","content":"from-gateway"}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(write_docs.status, 200, "write docs; {}", write_docs.body);
+        assert_eq!(
+            std::fs::read_to_string(format!("{docs_path}/hello.md")).expect("hello.md"),
+            "from-gateway"
+        );
+
+        let write_anna = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/write-file",
+            Some(&format!(
+                r#"{{"workspace":"{anna}","path":"hello.md","content":"nope"}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(write_anna.status, 403, "write anna; {}", write_anna.body);
+        assert!(
+            write_anna.body.contains("missing capability files:write"),
+            "anna write must be missing files:write: {}",
+            write_anna.body
+        );
+        assert!(
+            !std::path::Path::new(&format!("{anna_path}/hello.md")).exists(),
+            "must not write anna"
+        );
+
+        let wrong = http_ex(
+            gport,
+            "GET",
+            "/cli/fs/read-dir?workspace=not-a-handle&path=.",
+            None,
+            &cookie,
+        );
+        assert_eq!(wrong.status, 403, "wrong handle; {}", wrong.body);
+        assert!(
+            wrong.body.contains("skin_room"),
+            "wrong handle must be skin_room: {}",
+            wrong.body
+        );
+
+        let jail_dot = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/fs/read-dir?workspace={docs}&path=../"),
+            None,
+            &cookie,
+        );
+        assert!(
+            jail_dot.status == 400 || jail_dot.status == 403,
+            "jail ../ status; {}",
+            jail_dot.body
+        );
+        assert_ne!(jail_dot.status, 200);
+
+        let jail_abs = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/fs/read-file?workspace={docs}&path=/etc/passwd"),
+            None,
+            &cookie,
+        );
+        assert!(
+            jail_abs.status == 400 || jail_abs.status == 403,
+            "jail abs; {}",
+            jail_abs.body
+        );
+        assert!(
+            !jail_abs.body.contains("root:"),
+            "must never leak /etc/passwd: {}",
+            jail_abs.body
+        );
+
+        let outside = std::env::temp_dir().join(format!(
+            "k2-psg-outside-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&outside, b"untouched\n").expect("outside");
+        std::os::unix::fs::symlink(&outside, format!("{docs_path}/notes.md")).expect("symlink");
+        let write_link = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/write-file",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","path":"notes.md","content":"pwned"}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(
+            write_link.status, 400,
+            "F23 symlink write; {}",
+            write_link.body
+        );
+        assert_eq!(
+            std::fs::read_to_string(&outside).expect("outside intact"),
+            "untouched\n"
+        );
+
+        let write_fresh = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/write-file",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","path":"fresh.md","content":"new-leaf"}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(
+            write_fresh.status, 200,
+            "create-new-leaf; {}",
+            write_fresh.body
+        );
+        assert_eq!(
+            std::fs::read_to_string(format!("{docs_path}/fresh.md")).expect("fresh.md"),
+            "new-leaf"
+        );
+
+        let info = http_ex(gport, "GET", "/cli/fs/info", None, &cookie);
+        assert_eq!(info.status, 404, "info; {}", info.body);
+        assert!(info.body.contains("not found"), "{}", info.body);
+        let ask = http_ex(
+            gport,
+            "POST",
+            "/cli/thread/ask",
+            Some(&format!(
+                r#"{{"addr":"{anna}","prompt":"nope","options":"A,B"}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(ask.status, 404, "ask; {}", ask.body);
+
+        let grid = http_ex(
+            gport,
+            "GET",
+            "/cli/sessions/grid?session=nope",
+            None,
+            &cookie,
+        );
+        assert_eq!(grid.status, 403, "grid; {}", grid.body);
+        assert_ne!(
+            grid.body.trim(),
+            TERMINAL_403,
+            "gateway grid body must not be the teaching string: {}",
+            grid.body
+        );
+        assert!(
+            grid.body.contains("not allowed"),
+            "grid 403 not allowed; {}",
+            grid.body
+        );
+        let bytes = http_ex(
+            gport,
+            "GET",
+            "/cli/sessions/bytes?session=nope",
+            None,
+            &cookie,
+        );
+        assert_eq!(bytes.status, 403, "bytes; {}", bytes.body);
+        assert_ne!(bytes.body.trim(), TERMINAL_403, "{}", bytes.body);
+
+        let files_ws = ws_upgrade(
+            gport,
+            &format!("/cli/fs/events?workspace={docs}"),
+            &cookie,
+        );
+        assert_eq!(files_ws.status, 101, "files WS cookie; {}", files_ws.body);
+
+        let missing_ws = ws_upgrade(gport, "/cli/fs/events", &cookie);
+        assert_eq!(
+            missing_ws.status, 400,
+            "missing workspace; {}",
+            missing_ws.body
+        );
+        assert!(
+            missing_ws.body.contains("missing workspace query parameter"),
+            "files missing workspace string; {}",
+            missing_ws.body
+        );
+        assert!(
+            !missing_ws.body.contains("conversation"),
+            "must not use overlay conversation error: {}",
+            missing_ws.body
+        );
+
+        let conv_only = ws_upgrade(
+            gport,
+            "/cli/fs/events?conversation=abc",
+            &cookie,
+        );
+        assert_eq!(
+            conv_only.status, 400,
+            "conversation without workspace; {}",
+            conv_only.body
+        );
+        assert!(
+            conv_only.body.contains("missing workspace query parameter"),
+            "{}",
+            conv_only.body
+        );
+
+        let overlay_missing = ws_upgrade(gport, "/cli/overlay/events", &cookie);
+        assert_eq!(
+            overlay_missing.status, 400,
+            "overlay missing conversation; {}",
+            overlay_missing.body
+        );
+        assert!(
+            overlay_missing
+                .body
+                .contains("missing conversation query parameter"),
+            "{}",
+            overlay_missing.body
+        );
+
+        let ws_wrong = ws_upgrade(
+            gport,
+            "/cli/fs/events?workspace=not-a-handle",
+            &cookie,
+        );
+        assert_eq!(ws_wrong.status, 403, "wrong room WS; {}", ws_wrong.body);
+        assert_ne!(ws_wrong.status, 101);
+        assert!(
+            ws_wrong.body.contains("skin_room"),
+            "wrong room WS must be skin_room: {}",
+            ws_wrong.body
+        );
+
+        let sessions_ev = ws_upgrade(gport, "/cli/sessions/events", &cookie);
+        assert_eq!(
+            sessions_ev.status, 403,
+            "sessions/events; {}",
+            sessions_ev.body
+        );
+        assert!(
+            sessions_ev.body.contains("not allowed"),
+            "sessions/events must stay G8: {}",
+            sessions_ev.body
+        );
+        assert_ne!(sessions_ev.status, 101);
+
+        stop_skin(dport, &anna_path);
+        let _ = std::fs::remove_file(&outside);
+        let _ = std::fs::remove_dir_all(&anna_path);
+        let _ = std::fs::remove_dir_all(&docs_path);
     });
 }

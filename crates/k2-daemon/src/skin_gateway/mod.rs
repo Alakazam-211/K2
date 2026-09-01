@@ -195,11 +195,19 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("POST", "/cli/thread/post")
             | ("POST", "/cli/thread/answer")
             | ("POST", "/cli/thread/void")
+            | ("GET", "/cli/fs/read-dir")
+            | ("HEAD", "/cli/fs/read-dir")
+            | ("GET", "/cli/fs/read-file")
+            | ("HEAD", "/cli/fs/read-file")
+            | ("POST", "/cli/fs/write-file")
     )
 }
 
 pub fn allowlisted_ws(path: &str) -> bool {
-    path_only(path) == "/cli/overlay/events"
+    matches!(
+        path_only(path),
+        "/cli/overlay/events" | "/cli/fs/events"
+    )
 }
 
 pub fn is_static_path(path: &str) -> bool {
@@ -214,7 +222,7 @@ fn path_only(path: &str) -> &str {
 async fn serve(args: Args) -> Result<(), String> {
     if let Some(root) = args.root.as_ref() {
         eprintln!(
-            "skin-gateway: {} is PUBLIC (no cookie). Login only guards Thread. Do not put wiki, contracts, or other private files in this folder.",
+            "skin-gateway: {} is PUBLIC (no cookie). Login guards Thread and files. Do not put wiki, contracts, or other private files in this folder.",
             root.display()
         );
     }
@@ -833,7 +841,17 @@ async fn proxy_upgrade(
         None => (target, ""),
     };
     let query = strip_token_query(query);
-    if !query.contains("conversation=") {
+    if path == "/cli/fs/events" {
+        if !query.contains("workspace=") {
+            write_json(
+                client,
+                "400 Bad Request",
+                r#"{"error":"missing workspace query parameter"}"#,
+            )
+            .await;
+            return;
+        }
+    } else if !query.contains("conversation=") {
         write_json(
             client,
             "400 Bad Request",
@@ -963,11 +981,20 @@ mod tests {
         assert!(!allowlisted_http("POST", "/cli/thread/ask"));
         assert!(!allowlisted_http("POST", "/cli/thread/secret"));
         assert!(allowlisted_ws("/cli/overlay/events?conversation=abc"));
+        assert!(allowlisted_ws("/cli/fs/events?workspace=docs"));
+        assert!(allowlisted_http("GET", "/cli/fs/read-dir"));
+        assert!(allowlisted_http("HEAD", "/cli/fs/read-dir"));
+        assert!(allowlisted_http("GET", "/cli/fs/read-file"));
+        assert!(allowlisted_http("HEAD", "/cli/fs/read-file"));
+        assert!(allowlisted_http("POST", "/cli/fs/write-file"));
         assert!(!allowlisted_ws("/cli/sessions/events"));
-        assert!(!allowlisted_ws("/cli/fs/events"));
-        assert!(!allowlisted_http("GET", "/cli/fs/read-dir"));
-        assert!(!allowlisted_http("GET", "/cli/fs/read-file"));
-        assert!(!allowlisted_http("POST", "/cli/fs/write-file"));
+        assert!(!allowlisted_http("GET", "/cli/fs/info"));
+        assert!(!allowlisted_http("GET", "/cli/fs/read-binary"));
+        assert!(!allowlisted_http("POST", "/cli/fs/delete"));
+        assert!(!allowlisted_http("GET", "/cli/fs/events"));
+        assert!(!allowlisted_http("POST", "/cli/fs/read-dir"));
+        assert!(!never_proxy("/cli/fs/events"));
+        assert!(!never_proxy("/cli/fs/read-dir"));
     }
 
     #[test]

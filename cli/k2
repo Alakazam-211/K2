@@ -14718,8 +14718,7 @@ ROLES (named bundles for guests — not Connect, not a platform token)
   Session inherits the role at login (and live sessions rewrite on
   change). Platform token keeps its own caps+rooms — it is not a role.
   Empty rooms on a role = Thread dark, not omnipotent.
-  files:* on a role is true on the daemon this cut; k2 publish --skin
-  files is a later gateway cut. Never grid.
+  files:* on a role is has_cap_in_room (per room, not union). Never grid.
 
 Find the room, then the functions. Empty rooms = Thread dark. Never grid.
 
@@ -14752,15 +14751,21 @@ usually a wrong key, not a 403)
   then read /assets/app.js.
 
 FILES
-  Caps files:read / files:write exist on mint and on a role
-  (daemon-true for the session). The official gateway
-  does NOT proxy /cli/fs/* — those paths 404 on the
-  published origin. Do not build a BFF for files. That
-  is a later gateway cut.
+  Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
+    GET|HEAD /cli/fs/read-dir?workspace=<handle>&path=.
+    GET|HEAD /cli/fs/read-file?workspace=<handle>&path=README.md
+    POST     /cli/fs/write-file  {"workspace":"<handle>","path":"notes.md","content":"…"}
+    WS GET   /cli/fs/events?workspace=<handle>
+  One socket per workspace. Do not omit workspace= and fan in every agent.
+  Doors are has_cap_in_room: files on Documents does not grant files on Anna.
+  Jail is that room's workspace root. Relative path= only — never host-wide
+  path=/etc/passwd or path=../. info / read-binary / delete and the rest of
+  the fs family stay 404 not found. Never /cli/sessions/events for files.
+  Do not build a hybrid BFF. Token never in the browser.
 
 STATIC DIR (--skin <dir>)
-  GET / and /assets/* are PUBLIC. No cookie. Login only
-  guards Thread. Do not copy wiki, contracts, or any private
+  GET / and /assets/* are PUBLIC. No cookie. Login guards
+  Thread and files. Do not copy wiki, contracts, or any private
   files into that folder — the URL fetches them with no auth.
   Custom dir may ship login.html. GET /login serves that
   file when present (Cache-Control: no-store). Missing file
@@ -14796,7 +14801,7 @@ GUEST CARDS
     POST /cli/thread/answer
   Agents create those cards from the PTY:
     k2 thread ask / k2 thread secret
-  The official gateway still does NOT proxy /cli/fs/*.
+  Ask/secret create stay off the official origin (404).
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
 EOF

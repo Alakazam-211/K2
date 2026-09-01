@@ -232,6 +232,14 @@ pub fn jail_rel_path(ws_root: &str, rel: &str, for_write: bool) -> Result<PathBu
         } else if parent != root && !parent.starts_with(&root) {
             return Err("path escapes the workspace".to_string());
         }
+        // F23: parent jail is enough for a new leaf. An existing leaf
+        // symlink would let write_file follow it outside the jail.
+        match std::fs::symlink_metadata(&target) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err("path escapes the workspace".to_string());
+            }
+            _ => {}
+        }
         Ok(target)
     } else {
         let canon = target
@@ -1495,6 +1503,41 @@ mod tests {
         assert!(jail_rel_path(&root_s, "../outside", false).is_err());
         assert!(jail_rel_path(&root_s, "a/../../outside", false).is_err());
         assert!(jail_rel_path(&root_s, "notes.md", true).is_ok());
+        let _ = std::fs::remove_dir_all(keep);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skin_jail_write_refuses_existing_leaf_symlink() {
+        let (keep, root_s) = jail_temp_root();
+        let outside = keep.parent().unwrap().join(format!(
+            "k2-skin-fs-outside-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&outside, b"secret-outside").expect("outside");
+        std::os::unix::fs::symlink(&outside, keep.join("notes.md")).expect("symlink");
+        let err = jail_rel_path(&root_s, "notes.md", true).expect_err("symlink leaf");
+        assert!(
+            err.contains("escapes the workspace"),
+            "symlink write must jail, got {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&outside).expect("outside intact"),
+            "secret-outside"
+        );
+        assert!(
+            jail_rel_path(&root_s, "fresh.md", true).is_ok(),
+            "create-new-leaf must still pass parent jail"
+        );
+        assert!(
+            jail_rel_path(&root_s, "README.md", true).is_ok(),
+            "regular existing leaf must still be writable"
+        );
+        let _ = std::fs::remove_file(&outside);
         let _ = std::fs::remove_dir_all(keep);
     }
 }

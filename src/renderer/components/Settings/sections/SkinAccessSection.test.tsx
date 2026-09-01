@@ -67,6 +67,7 @@ function mockOk(): void {
       return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
     }
     if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+    if (route === 'skin/roles') return { roles: [] }
     if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
     if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
     if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
@@ -184,6 +185,8 @@ describe('parsers', () => {
         defaultRooms: [],
         defaultRoomHandles: [],
         hasPassword: false,
+        roleId: null,
+        roleName: null,
       },
     ])
     expect(parseSkinUsers([USER_BOB])).toEqual([
@@ -193,6 +196,8 @@ describe('parsers', () => {
         defaultRooms: [],
         defaultRoomHandles: [],
         hasPassword: false,
+        roleId: null,
+        roleName: null,
       },
     ])
     expect(
@@ -233,6 +238,7 @@ describe('SKIN_ACCESS_MANIFEST', () => {
     expect(SKIN_ACCESS_MANIFEST.map((e) => e.id)).toEqual([
       'skin-access.front-door',
       'skin-access.users',
+      'skin-access.roles',
       'skin-access.keys',
       'skin-access.hydra',
     ])
@@ -246,6 +252,7 @@ describe('SkinAccessSection', () => {
     const gets = h.daemonCliGet.mock.calls.map((c) => c[0])
     expect(gets).toContain('skin/front-door')
     expect(gets).toContain('skin/users')
+    expect(gets).toContain('skin/roles')
     expect(gets).toContain('skin-tokens')
     expect(gets.some((r: string) => r === 'users' || r.startsWith('users/'))).toBe(false)
     expect(screen.getByText('https://skin.acme.k2.dev')).not.toBeNull()
@@ -258,6 +265,7 @@ describe('SkinAccessSection', () => {
     h.daemonCliGet.mockImplementation(async (route: string) => {
       if (route === 'skin/front-door') return { mode: 'direct', listen: ':443' }
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin/roles') return { roles: [] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
@@ -302,6 +310,7 @@ describe('SkinAccessSection', () => {
     h.daemonCliGet.mockImplementation(async (route: string) => {
       if (route === 'skin/front-door') return CADDY_MISSING_FIXTURE
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin/roles') return { roles: [] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
@@ -319,6 +328,7 @@ describe('SkinAccessSection', () => {
     h.daemonCliGet.mockImplementation(async (route: string) => {
       if (route === 'skin/front-door') return NESTED_REGISTERED_FIXTURE
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin/roles') return { roles: [] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
@@ -336,6 +346,7 @@ describe('SkinAccessSection', () => {
         return { mode: 'connect', error: 'caddy: binary missing' }
       }
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin/roles') return { roles: [] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
@@ -487,6 +498,7 @@ describe('SkinAccessSection', () => {
         return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
       }
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin/roles') return { roles: [] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_SUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
@@ -515,6 +527,7 @@ describe('SkinAccessSection', () => {
         return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
       }
       if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin/roles') return { roles: [] }
       if (route === 'skin-tokens') {
         return { tokens: [{ ...KEY_ROW, rooms: [], roomHandles: [] }] }
       }
@@ -538,6 +551,7 @@ describe('SkinAccessSection', () => {
       if (route === 'skin/users') {
         return { users: [{ ...USER_ALICE, hasPassword: false }, USER_BOB] }
       }
+      if (route === 'skin/roles') return { roles: [] }
       if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
       if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
       if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
@@ -567,5 +581,52 @@ describe('SkinAccessSection', () => {
     expect((screen.getByRole('button', { name: 'Mint key' }) as HTMLButtonElement).disabled).toBe(
       false,
     )
+  })
+
+  it('loads skin/roles, assigns via POST, and does not offer Connect names', async () => {
+    const dentist = {
+      id: 'role-1',
+      name: 'dentist',
+      caps: ['thread:read', 'thread:post', 'files:read'],
+      rooms: ['proj-sales'],
+      roomHandles: ['sales'],
+    }
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/front-door') {
+        return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
+      }
+      if (route === 'skin/users') return { users: [USER_ALICE, USER_BOB] }
+      if (route === 'skin/roles') return { roles: [dentist] }
+      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(h.daemonCliGet.mock.calls.map((c) => c[0])).toContain('skin/roles')
+    expect(
+      screen.getByText(/Skin roles are not Connect owner\/admin\/member\/viewer/),
+    ).not.toBeNull()
+    expect(screen.getByText(/They never include the terminal/)).not.toBeNull()
+    const bobRole = screen.getByLabelText('bob role') as HTMLSelectElement
+    const optionNames = [...bobRole.options].map((o) => o.value)
+    expect(optionNames).toEqual(['', 'dentist'])
+    expect(optionNames).not.toContain('owner')
+    expect(optionNames).not.toContain('admin')
+    expect(optionNames).not.toContain('member')
+    expect(optionNames).not.toContain('viewer')
+    fireEvent.change(bobRole, { target: { value: 'dentist' } })
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/roles/assign', {
+        username: 'bob',
+        role: 'dentist',
+      })
+    })
+    expect(
+      h.daemonCliGet.mock.calls
+        .map((c) => String(c[0]))
+        .some((r) => r === 'users' || r.startsWith('users/')),
+    ).toBe(false)
   })
 })

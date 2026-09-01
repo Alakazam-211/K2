@@ -1533,6 +1533,18 @@ async fn skin_login_session_cookie_logout_and_host_fold() {
         assert_eq!(v["ok"], true, "{}", ok.body);
         let token = v["token"].as_str().expect("token").to_string();
         assert!(token.starts_with("k2skn_"), "{token}");
+        let caps = v["caps"].as_array().expect("caps");
+        assert!(
+            caps.iter().any(|c| c == "thread:read"),
+            "unassigned login Thread-only; {}",
+            ok.body
+        );
+        assert!(
+            !caps.iter().any(|c| c == "files:read"),
+            "unassigned must not silent-add files; {}",
+            ok.body
+        );
+        assert!(v["role"].is_null(), "unassigned role is null; {}", ok.body);
         let listed_sessions = http(
             port,
             "GET",
@@ -2042,5 +2054,380 @@ async fn skin_files_http_ws_rooms_and_jail() {
 
         let _ = std::fs::remove_dir_all(&sales_dir);
         let _ = std::fs::remove_dir_all(&julie_dir);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let sales = format!("sales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_sales_id, sales_dir) = seed_files_workspace(&sales);
+        add_user(port, "bob");
+        add_user(port, "cara");
+        set_password(port, "bob", "s3cret-horse");
+        set_password(port, "cara", "s3cret-horse");
+        let rooms = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/rooms?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"username":"cara","rooms":["{sales}"]}}"#)),
+        );
+        assert_eq!(rooms.status, 200, "cara default rooms; {}", rooms.body);
+
+        let username_body = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"dentist","rooms":[]}"#),
+        );
+        assert_eq!(username_body.status, 400, "{}", username_body.body);
+        assert!(
+            username_body
+                .body
+                .contains("use name (role label), not username"),
+            "{}",
+            username_body.body
+        );
+
+        for name in ["member", "admin", "owner", "viewer"] {
+            let r = http(
+                port,
+                "POST",
+                &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+                Some(&format!(r#"{{"name":"{name}","rooms":[]}}"#)),
+            );
+            assert_eq!(r.status, 400, "connect name {name}; {}", r.body);
+            assert!(
+                r.body.contains("Connect role names cannot be skin roles"),
+                "{name} {}",
+                r.body
+            );
+        }
+
+        let unknown_cap = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"xray","caps":["tickets:read"],"rooms":[]}"#),
+        );
+        assert_eq!(unknown_cap.status, 400, "{}", unknown_cap.body);
+        assert!(
+            unknown_cap.body.contains("unknown capability"),
+            "{}",
+            unknown_cap.body
+        );
+
+        let created = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","caps":["thread:read","thread:post","files:read"],"rooms":["{sales}"]}}"#
+            )),
+        );
+        assert_eq!(created.status, 200, "{}", created.body);
+        let role = json(&created.body);
+        assert_eq!(role["name"], "dentist", "{}", created.body);
+        assert!(
+            role["caps"]
+                .as_array()
+                .expect("caps")
+                .iter()
+                .any(|c| c == "files:read"),
+            "{}",
+            created.body
+        );
+
+        let dup = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"Dentist","rooms":[]}"#),
+        );
+        assert_eq!(dup.status, 400, "{}", dup.body);
+        assert!(dup.body.contains("already exists"), "{}", dup.body);
+
+        let get_roles = http(
+            port,
+            "GET",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(get_roles.status, 200, "{}", get_roles.body);
+        let listed = json(&get_roles.body);
+        assert_eq!(listed["roles"].as_array().expect("roles").len(), 1);
+
+        let get_twin = http(port, "GET", "/cli/skin/roles/update", None);
+        assert_eq!(get_twin.status, 405, "GET twin; {}", get_twin.body);
+
+        let hook = mint_scoped_hook();
+        let hook_list = http(port, "GET", &format!("/cli/skin/roles?token={hook}"), None);
+        assert_eq!(hook_list.status, 200, "hook GET roles; {}", hook_list.body);
+        let hook_post = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={hook}"),
+            Some(r#"{"name":"other","rooms":[]}"#),
+        );
+        assert_eq!(hook_post.status, 403, "{}", hook_post.body);
+        assert!(hook_post.body.contains("owner_only"), "{}", hook_post.body);
+
+        let assign = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"bob","role":"dentist"}"#),
+        );
+        assert_eq!(assign.status, 200, "{}", assign.body);
+        let users = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            None,
+        );
+        let users_v = json(&users.body);
+        let bob = users_v["users"]
+            .as_array()
+            .expect("users")
+            .iter()
+            .find(|u| u["username"] == "bob")
+            .expect("bob");
+        assert_eq!(bob["roleName"], "dentist", "{}", users.body);
+        assert!(bob["roleId"].as_str().is_some(), "{}", users.body);
+
+        let blocked_rooms = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/rooms?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"username":"bob","rooms":["{sales}"]}}"#)),
+        );
+        assert_eq!(blocked_rooms.status, 400, "{}", blocked_rooms.body);
+        assert!(
+            blocked_rooms
+                .body
+                .contains("guest 'bob' has role 'dentist'"),
+            "{}",
+            blocked_rooms.body
+        );
+
+        let login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"bob","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "{}", login.body);
+        let lv = json(&login.body);
+        let sess = lv["token"].as_str().expect("token").to_string();
+        assert_eq!(lv["role"], "dentist", "{}", login.body);
+        let login_caps = lv["caps"].as_array().expect("caps");
+        assert!(
+            login_caps.iter().any(|c| c == "files:read"),
+            "{}",
+            login.body
+        );
+        let listed_tokens = http(
+            port,
+            "GET",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert!(
+            json(&listed_tokens.body)["tokens"]
+                .as_array()
+                .expect("tokens")
+                .is_empty(),
+            "list hides session: {}",
+            listed_tokens.body
+        );
+
+        let fs = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={sess}&workspace={sales}&path=."),
+            None,
+        );
+        assert_eq!(fs.status, 200, "daemon files for role session; {}", fs.body);
+
+        let grid = http(
+            port,
+            "GET",
+            &format!("/cli/sessions/grid?token={sess}&session=nope"),
+            None,
+        );
+        assert_eq!(grid.status, 403, "grid; {}", grid.body);
+        assert_eq!(grid.body.trim(), TERMINAL_403);
+
+        let plat = mint(port, "bob", &["thread:read"], &[&sales]);
+        let plat_before = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={}&workspace={sales}&path=.", plat.1),
+            None,
+        );
+        assert_missing_cap(&plat_before, "files:read");
+
+        let no_write_yet = http(
+            port,
+            "POST",
+            &format!("/cli/fs/write-file?token={sess}"),
+            Some(&format!(
+                r#"{{"workspace":"{sales}","path":"notes.md","content":"n"}}"#
+            )),
+        );
+        assert_missing_cap(&no_write_yet, "files:write");
+
+        let updated = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/update?token={OWNER_TOKEN}"),
+            Some(
+                r#"{"name":"dentist","caps":["thread:read","thread:post","files:read","files:write"]}"#,
+            ),
+        );
+        assert_eq!(updated.status, 200, "{}", updated.body);
+        let wrote = http(
+            port,
+            "POST",
+            &format!("/cli/fs/write-file?token={sess}"),
+            Some(&format!(
+                r#"{{"workspace":"{sales}","path":"notes.md","content":"n"}}"#
+            )),
+        );
+        assert_eq!(
+            wrote.status, 200,
+            "live session gained files:write; {}",
+            wrote.body
+        );
+        let plat_after = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={}&workspace={sales}&path=.", plat.1),
+            None,
+        );
+        assert_missing_cap(&plat_after, "files:read");
+
+        let dark = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"dark","rooms":[]}"#),
+        );
+        assert_eq!(dark.status, 200, "{}", dark.body);
+        let assign_dark = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"cara","role":"dark"}"#),
+        );
+        assert_eq!(assign_dark.status, 200, "{}", assign_dark.body);
+        let cara_login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"cara","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(cara_login.status, 200, "{}", cara_login.body);
+        let cara_tok = json(&cara_login.body)["token"]
+            .as_str()
+            .expect("cara token")
+            .to_string();
+        let cara_thread = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={cara_tok}&addr={sales}"),
+            None,
+        );
+        assert_skin_room(&cara_thread);
+
+        let rm_assigned = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/remove?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"dentist"}"#),
+        );
+        assert_eq!(rm_assigned.status, 400, "{}", rm_assigned.body);
+        assert!(
+            rm_assigned
+                .body
+                .contains("role 'dentist' is assigned; unassign guests first"),
+            "{}",
+            rm_assigned.body
+        );
+        let still = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={sess}&workspace={sales}&path=."),
+            None,
+        );
+        assert_eq!(
+            still.status, 200,
+            "session still resolves after failed remove; {}",
+            still.body
+        );
+
+        let unassign = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/unassign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"bob"}"#),
+        );
+        assert_eq!(unassign.status, 200, "{}", unassign.body);
+        let rooms_again = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/rooms?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"username":"bob","rooms":["{sales}"]}}"#)),
+        );
+        assert_eq!(rooms_again.status, 200, "{}", rooms_again.body);
+        let rm = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/remove?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"dentist"}"#),
+        );
+        assert_eq!(rm.status, 200, "{}", rm.body);
+
+        let bob_login2 = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"bob","password":"s3cret-horse"}"#),
+        );
+        let bob2 = json(&bob_login2.body);
+        assert!(bob2["role"].is_null(), "{}", bob_login2.body);
+        let bob2_caps = bob2["caps"].as_array().expect("caps");
+        assert!(
+            !bob2_caps.iter().any(|c| c == "files:read"),
+            "unassigned Thread-only; {}",
+            bob_login2.body
+        );
+
+        let still_username = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"vercel","rooms":["x"]}"#),
+        );
+        assert_eq!(still_username.status, 400, "{}", still_username.body);
+        assert!(
+            still_username
+                .body
+                .contains("use name (platform label), not username"),
+            "{}",
+            still_username.body
+        );
+        let empty_plat = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"emptyplat","rooms":[]}"#),
+        );
+        assert_eq!(empty_plat.status, 400, "{}", empty_plat.body);
+
+        let _ = std::fs::remove_dir_all(&sales_dir);
     });
 }

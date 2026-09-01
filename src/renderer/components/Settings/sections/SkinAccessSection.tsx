@@ -47,6 +47,22 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
     group: 'Guests',
   },
   {
+    id: 'skin-access.roles',
+    section: 'skin-access',
+    label: 'Roles',
+    description: 'Named bundles of scopes + agents for guests. Not Connect owner/admin/member/viewer.',
+    keywords: [
+      'skin role',
+      'roles',
+      'caps',
+      'scopes',
+      'assign',
+      'dentist',
+      'bundle',
+    ],
+    group: 'Roles',
+  },
+  {
     id: 'skin-access.keys',
     section: 'skin-access',
     label: 'Platform tokens',
@@ -117,6 +133,16 @@ export type SkinUser = {
   defaultRooms: string[]
   defaultRoomHandles: string[]
   hasPassword: boolean
+  roleId: string | null
+  roleName: string | null
+}
+
+export type SkinRole = {
+  id: string
+  name: string
+  caps: string[]
+  rooms: string[]
+  roomHandles: string[]
 }
 
 export type SkinTokenRow = {
@@ -303,6 +329,24 @@ export function parseSkinUsers(raw: unknown): SkinUser[] {
       defaultRooms: parseStringList(rec.defaultRooms ?? rec.default_rooms),
       defaultRoomHandles: parseStringList(rec.defaultRoomHandles ?? rec.default_room_handles),
       hasPassword: asBool(rec.hasPassword) ?? asBool(rec.has_password) ?? false,
+      roleId: asString(rec.roleId) ?? asString(rec.role_id),
+      roleName: asString(rec.roleName) ?? asString(rec.role_name),
+    }]
+  })
+}
+
+export function parseSkinRoles(raw: unknown): SkinRole[] {
+  return asList(raw, ['roles']).flatMap((row) => {
+    const rec = asRecord(row)
+    const id = asString(rec.id)
+    const name = asString(rec.name)
+    if (!id || !name) return []
+    return [{
+      id,
+      name,
+      caps: parseCaps(rec.caps ?? rec.scopes ?? rec.capabilities),
+      rooms: parseStringList(rec.rooms),
+      roomHandles: parseStringList(rec.roomHandles ?? rec.room_handles),
     }]
   })
 }
@@ -433,6 +477,7 @@ export function SkinAccessSection(): React.JSX.Element {
   const [frontDoor, setFrontDoor] = useState<SkinFrontDoor>(DEFAULT_FRONT_DOOR)
   const [uiPortText, setUiPortText] = useState('')
   const [users, setUsers] = useState<SkinUser[]>([])
+  const [roles, setRoles] = useState<SkinRole[]>([])
   const [tokens, setTokens] = useState<SkinTokenRow[]>([])
   const [workspaces, setWorkspaces] = useState<SkinWorkspace[]>([])
   const [loading, setLoading] = useState(true)
@@ -457,6 +502,15 @@ export function SkinAccessSection(): React.JSX.Element {
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const [editKeyId, setEditKeyId] = useState<string | null>(null)
   const [editKeyRooms, setEditKeyRooms] = useState<Set<string>>(() => new Set())
+  const [newRoleName, setNewRoleName] = useState('')
+  const [newRoleCaps, setNewRoleCaps] = useState<Set<string>>(() => new Set(DEFAULT_SKIN_CAPS))
+  const [newRoleRooms, setNewRoleRooms] = useState<Set<string>>(() => new Set())
+  const [roleBusy, setRoleBusy] = useState(false)
+  const [roleError, setRoleError] = useState<string | null>(null)
+  const [editRoleId, setEditRoleId] = useState<string | null>(null)
+  const [editRoleCaps, setEditRoleCaps] = useState<Set<string>>(() => new Set())
+  const [editRoleRooms, setEditRoleRooms] = useState<Set<string>>(() => new Set())
+  const [removeRoleConfirm, setRemoveRoleConfirm] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setError(null)
@@ -475,6 +529,13 @@ export function SkinAccessSection(): React.JSX.Element {
     } catch (e) {
       failures.push(`users: ${errText(e)}`)
       setUsers([])
+    }
+    try {
+      const roleList = await daemonCliGet<unknown>('skin/roles')
+      setRoles(parseSkinRoles(roleList))
+    } catch (e) {
+      failures.push(`roles: ${errText(e)}`)
+      setRoles([])
     }
     try {
       const keys = await daemonCliGet<unknown>('skin-tokens')
@@ -640,6 +701,79 @@ export function SkinAccessSection(): React.JSX.Element {
       try {
         await daemonCliPost('skin/users/password', { username, password: password ?? '' })
         setPasswordDraft((prev) => ({ ...prev, [username]: '' }))
+        await refresh()
+      } catch (e) {
+        setAddError(errText(e))
+      }
+    },
+    [refresh],
+  )
+
+  const createRole = useCallback(async () => {
+    const name = newRoleName.trim().toLowerCase()
+    if (!name) {
+      setRoleError('Name is required')
+      return
+    }
+    setRoleBusy(true)
+    setRoleError(null)
+    try {
+      await daemonCliPost('skin/roles', {
+        name,
+        caps: [...newRoleCaps],
+        rooms: [...newRoleRooms],
+      })
+      setNewRoleName('')
+      setNewRoleCaps(new Set(DEFAULT_SKIN_CAPS))
+      setNewRoleRooms(new Set())
+      await refresh()
+    } catch (e) {
+      setRoleError(errText(e))
+    } finally {
+      setRoleBusy(false)
+    }
+  }, [newRoleName, newRoleCaps, newRoleRooms, refresh])
+
+  const saveRole = useCallback(
+    async (id: string, caps: string[], handles: string[]) => {
+      setRoleError(null)
+      setRoleBusy(true)
+      try {
+        await daemonCliPost('skin/roles/update', { id, caps, rooms: handles })
+        setEditRoleId(null)
+        await refresh()
+      } catch (e) {
+        setRoleError(errText(e))
+      } finally {
+        setRoleBusy(false)
+      }
+    },
+    [refresh],
+  )
+
+  const removeRole = useCallback(
+    async (id: string) => {
+      setRoleError(null)
+      try {
+        await daemonCliPost('skin/roles/remove', { id })
+        setRemoveRoleConfirm(null)
+        await refresh()
+      } catch (e) {
+        setRoleError(errText(e))
+      }
+    },
+    [refresh],
+  )
+
+  const setUserRole = useCallback(
+    async (username: string, role: string | null) => {
+      setAddError(null)
+      try {
+        if (role) {
+          await daemonCliPost('skin/roles/assign', { username, role })
+        } else {
+          await daemonCliPost('skin/roles/unassign', { username })
+        }
         await refresh()
       } catch (e) {
         setAddError(errText(e))
@@ -900,8 +1034,18 @@ export function SkinAccessSection(): React.JSX.Element {
             ) : (
               <div className="divide-y divide-[var(--color-border)]">
                 {visibleUsers.map((u) => {
+                  const assigned = Boolean(u.roleName || u.roleId)
+                  const assignedRole = roles.find(
+                    (r) => r.name === u.roleName || r.id === u.roleId,
+                  )
                   const selected = new Set(
-                    u.defaultRoomHandles.length ? u.defaultRoomHandles : u.defaultRooms,
+                    assigned
+                      ? (assignedRole?.roomHandles.length
+                          ? assignedRole.roomHandles
+                          : assignedRole?.rooms ?? [])
+                      : u.defaultRoomHandles.length
+                        ? u.defaultRoomHandles
+                        : u.defaultRooms,
                   )
                   return (
                   <div key={u.username} className="py-2 space-y-2">
@@ -936,18 +1080,39 @@ export function SkinAccessSection(): React.JSX.Element {
                       </button>
                     )}
                     </div>
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-[var(--color-text-muted)]">Role</span>
+                      <select
+                        aria-label={`${u.username} role`}
+                        className={INPUT_CLS}
+                        value={u.roleName ?? ''}
+                        onChange={(e) => {
+                          const next = e.target.value.trim()
+                          void setUserRole(u.username, next || null)
+                        }}
+                      >
+                        <option value="">None</option>
+                        {roles.map((r) => (
+                          <option key={r.id} value={r.name}>
+                            {r.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     {workspaces.length > 0 ? (
                       <div className="flex flex-wrap gap-x-3 gap-y-1">
                         {workspaces.map((ws) => (
                           <label
                             key={`${u.username}-${ws.id}`}
-                            className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                            className={`flex items-center gap-1.5 select-none no-drag ${assigned ? '' : 'cursor-pointer'}`}
                           >
                             <input
                               type="checkbox"
                               aria-label={`${u.username} agent ${ws.handle}`}
                               checked={selected.has(ws.handle) || selected.has(ws.id)}
+                              disabled={assigned}
                               onChange={(e) => {
+                                if (assigned) return
                                 const next = new Set(selected)
                                 if (e.target.checked) next.add(ws.handle)
                                 else {
@@ -1014,6 +1179,7 @@ export function SkinAccessSection(): React.JSX.Element {
                         </span>
                       )}
                     </form>
+                    {assigned ? null : (
                     <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
                       <input
                         type="checkbox"
@@ -1026,7 +1192,270 @@ export function SkinAccessSection(): React.JSX.Element {
                         Apply to live sessions
                       </span>
                     </label>
+                    )}
                   </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </SettingsGroup>
+
+        <SettingsGroup title="Roles">
+          <div data-settings-id="skin-access.roles" className="space-y-3">
+            <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+              Skin roles are not Connect owner/admin/member/viewer. They never include the
+              terminal. Named bundles of scopes + agents for guests; login sessions inherit.
+              Zero agents is Thread dark. Platform tokens keep their own caps and rooms.
+            </p>
+            <form
+              className="space-y-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void createRole()
+              }}
+            >
+              <input
+                className={INPUT_CLS}
+                placeholder="name (dentist)"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                value={newRoleName}
+                onChange={(e) => setNewRoleName(e.target.value)}
+                aria-label="New skin role name"
+              />
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {SKIN_CAP_CHOICES.map((cap) => (
+                  <label
+                    key={`role-cap-${cap}`}
+                    className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={`Role cap ${cap}`}
+                      checked={newRoleCaps.has(cap)}
+                      onChange={(e) => {
+                        setNewRoleCaps((prev) => {
+                          const next = new Set(prev)
+                          if (e.target.checked) next.add(cap)
+                          else next.delete(cap)
+                          return next
+                        })
+                      }}
+                    />
+                    <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                      {cap}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {workspaces.length > 0 ? (
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {workspaces.map((ws) => (
+                    <label
+                      key={`role-mint-${ws.id}`}
+                      className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`Role agent ${ws.handle}`}
+                        checked={newRoleRooms.has(ws.handle) || newRoleRooms.has(ws.id)}
+                        onChange={(e) => {
+                          setNewRoleRooms((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(ws.handle)
+                            else {
+                              next.delete(ws.handle)
+                              next.delete(ws.id)
+                            }
+                            return next
+                          })
+                        }}
+                      />
+                      <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                        {ws.handle}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[10px] text-[var(--color-text-muted)]">
+                  No workspaces yet — a role with zero agents is Thread dark.
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={roleBusy || !newRoleName.trim()}
+                className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+              >
+                {roleBusy ? 'Saving…' : 'Create role'}
+              </button>
+            </form>
+            {roleError && (
+              <p role="alert" className="text-[11px] text-[var(--color-status-error-soft)]">
+                {roleError}
+              </p>
+            )}
+            {loading ? (
+              <p className="text-[10px] text-[var(--color-text-muted)]">Loading roles…</p>
+            ) : roles.length === 0 ? (
+              <p className="text-[10px] text-[var(--color-text-muted)]">
+                No skin roles yet. Create one above — not owner/admin/member/viewer.
+              </p>
+            ) : (
+              <div className="divide-y divide-[var(--color-border)]">
+                {roles.map((r) => {
+                  const editing = editRoleId === r.id
+                  return (
+                    <div key={r.id} className="py-2 space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-xs font-mono text-[var(--color-text-primary)]">
+                          {r.name}
+                        </span>
+                        {removeRoleConfirm === r.id ? (
+                          <span className="flex items-center gap-1.5 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => void removeRole(r.id)}
+                              className="text-[10px] text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+                            >
+                              Confirm remove role
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setRemoveRoleConfirm(null)}
+                              className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-2 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditRoleId(r.id)
+                                setEditRoleCaps(new Set(r.caps))
+                                setEditRoleRooms(new Set(r.roomHandles))
+                              }}
+                              className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
+                            >
+                              Edit role
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setRemoveRoleConfirm(r.id)}
+                              className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+                            >
+                              Remove role
+                            </button>
+                          </span>
+                        )}
+                      </div>
+                      {editing ? (
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1">
+                            {SKIN_CAP_CHOICES.map((cap) => (
+                              <label
+                                key={`edit-role-cap-${r.id}-${cap}`}
+                                className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                              >
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Edit role ${r.name} cap ${cap}`}
+                                  checked={editRoleCaps.has(cap)}
+                                  onChange={(e) => {
+                                    setEditRoleCaps((prev) => {
+                                      const next = new Set(prev)
+                                      if (e.target.checked) next.add(cap)
+                                      else next.delete(cap)
+                                      return next
+                                    })
+                                  }}
+                                />
+                                <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                                  {cap}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                          <div className="flex flex-wrap gap-x-3 gap-y-1">
+                            {workspaces.map((ws) => (
+                              <label
+                                key={`edit-role-${r.id}-${ws.id}`}
+                                className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                              >
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Edit role ${r.name} agent ${ws.handle}`}
+                                  checked={editRoleRooms.has(ws.handle) || editRoleRooms.has(ws.id)}
+                                  onChange={(e) => {
+                                    setEditRoleRooms((prev) => {
+                                      const next = new Set(prev)
+                                      if (e.target.checked) next.add(ws.handle)
+                                      else {
+                                        next.delete(ws.handle)
+                                        next.delete(ws.id)
+                                      }
+                                      return next
+                                    })
+                                  }}
+                                />
+                                <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                                  {ws.handle}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              className="text-[10px] text-[var(--color-accent)] cursor-pointer"
+                              onClick={() => void saveRole(r.id, [...editRoleCaps], [...editRoleRooms])}
+                            >
+                              Save role
+                            </button>
+                            <button
+                              type="button"
+                              className="text-[10px] text-[var(--color-text-muted)] cursor-pointer"
+                              onClick={() => setEditRoleId(null)}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap gap-1">
+                            {r.caps.map((cap) => (
+                              <span
+                                key={cap}
+                                className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]"
+                              >
+                                {cap}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {r.roomHandles.length === 0 ? (
+                              <span className="text-[10px] text-[var(--color-text-muted)]">
+                                no rooms
+                              </span>
+                            ) : (
+                              r.roomHandles.map((h) => (
+                                <span
+                                  key={h}
+                                  className="text-[9px] font-mono px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)]"
+                                >
+                                  {h}
+                                </span>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )
                 })}
               </div>

@@ -823,6 +823,11 @@ async fn handle_one_request(
             | "/cli/skin/users/remove"
             | "/cli/skin/users/rooms"
             | "/cli/skin/users/password"
+            | "/cli/skin/roles"
+            | "/cli/skin/roles/update"
+            | "/cli/skin/roles/remove"
+            | "/cli/skin/roles/assign"
+            | "/cli/skin/roles/unassign"
             | "/cli/skin/login"
             | "/cli/skin/logout"
             | "/cli/skin-tokens"
@@ -5369,6 +5374,149 @@ async fn handle_one_request(
                     let body = super::http::read_post_body(&mut *stream, &mut buf).await;
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::handle_users_remove(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/roles" if is_post => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_roles_post(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/roles" => {
+                    let _ = stream.read(&mut buf).await;
+                    let (ok, _) = owner_or_scoped_hook_auth(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    );
+                    if !ok {
+                        skin_dual_auth_failure(&query, bearer_token.as_deref())
+                    } else {
+                        tokio::task::spawn_blocking(crate::skin_routes::handle_roles_get)
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                    }
+                }
+                "/cli/skin/roles/update" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_roles_update(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/roles/remove" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_roles_remove(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/roles/assign" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_roles_assign(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/roles/unassign" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::handle_roles_unassign(&body, &actor)
                     })
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))

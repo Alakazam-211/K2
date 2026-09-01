@@ -8,13 +8,16 @@
 //! (`POST /cli/skin/login`); NULL = cannot K2-login.
 //!
 //! ## Store (`~/.k2/skin.db`, WAL, own Mutex)
-//! Two tables: `principals` (guest roster) and `tokens` (hashed passes). The
-//! raw secret is returned **once** at mint and never stored. Lookup is
-//! hex SHA-256 of the presented key (same construction as API keys /
-//! connect-user session tokens — high-entropy CSPRNG, not argon2).
+//! Three tables: `principals` (guest roster), `roles` (named caps+rooms
+//! bundles), and `tokens` (hashed passes). The raw secret is returned
+//! **once** at mint and never stored. Lookup is hex SHA-256 of the
+//! presented key (same construction as API keys / connect-user session
+//! tokens — high-entropy CSPRNG, not argon2).
 //!
 //! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`.
 //! Empty/missing caps stay Thread-only — never silent-add files. Never `pty:*`.
+//! Assigned guests snapshot the role onto `session=1`; platform tokens
+//! keep their own caps+rooms (not a role).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -52,8 +55,26 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_FILES_WRITE,
 ];
 
+/// Connect / Server Access names — never a skin role.
+const CONNECT_ROLE_NAMES: &[&str] = &["owner", "admin", "member", "viewer"];
+const CONNECT_ROLE_NAME_ERR: &str = "Connect role names cannot be skin roles (owner/admin/member/viewer). Skin roles are named bundles of scopes+agents, not Server Access.";
+
 fn accepted_caps_csv() -> String {
     ACCEPTED_CAPS.join(", ")
+}
+
+fn is_connect_role_name(name: &str) -> bool {
+    CONNECT_ROLE_NAMES
+        .iter()
+        .any(|r| name.eq_ignore_ascii_case(r))
+}
+
+fn assigned_guest_rooms_err(username: &str, role_name: &str) -> String {
+    format!("guest '{username}' has role '{role_name}'; edit the role or unassign")
+}
+
+fn assigned_role_remove_err(name: &str) -> String {
+    format!("role '{name}' is assigned; unassign guests first")
 }
 
 /// Copy of Connect: 3 consecutive failures → 15-minute per-username lockout.
@@ -356,6 +377,28 @@ pub struct SkinPrincipal {
     /// True when a K2-login password is set. Never the hash.
     #[serde(default)]
     pub has_password: bool,
+    /// Assigned skin role id. `None` = unassigned (I6 Thread-only).
+    #[serde(default)]
+    pub role_id: Option<String>,
+    /// Assigned skin role name. `None` when unassigned.
+    #[serde(default)]
+    pub role_name: Option<String>,
+}
+
+/// Named bundle of caps + rooms for Skin Access guests (not Connect roles).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkinRole {
+    pub id: String,
+    pub name: String,
+    pub caps: Vec<String>,
+    /// Stored ACL: `projects.id` UUIDs. Empty = Thread dark.
+    #[serde(default)]
+    pub rooms: Vec<String>,
+    /// Display-only, resolved live from `projects.handle`. Skip missing.
+    #[serde(default)]
+    pub room_handles: Vec<String>,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -547,6 +590,24 @@ fn open_db(path: &Path) -> Result<Connection, String> {
             failed_count INTEGER NOT NULL DEFAULT 0,
             locked_until INTEGER
          );",
+    );
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS roles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            caps TEXT NOT NULL,
+            rooms TEXT NOT NULL DEFAULT '[]',
+            created_at INTEGER NOT NULL
+         );",
+    )
+    .map_err(|e| format!("skin.db schema: {e}"))?;
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS roles_name ON roles(name COLLATE NOCASE);",
+    )
+    .map_err(|e| format!("skin.db schema: {e}"))?;
+    let _ = conn.execute(
+        "ALTER TABLE principals ADD COLUMN role_id TEXT REFERENCES roles(id) ON DELETE RESTRICT",
+        [],
     );
     rebuild_tokens_table_if_needed(&mut conn)?;
     ensure_platform_name_index(&conn)?;
@@ -808,34 +869,49 @@ pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
             default_rooms: Vec::new(),
             default_room_handles: Vec::new(),
             has_password: false,
+            role_id: None,
+            role_name: None,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
     Ok(r)
 }
 
+const PRINCIPAL_SELECT: &str = "SELECT p.id, p.username, p.created_at, p.default_rooms,
+                p.password_hash, p.role_id, r.name
+         FROM principals p
+         LEFT JOIN roles r ON r.id = p.role_id";
+
+fn map_principal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinPrincipal> {
+    let rooms_raw: String = r.get(3)?;
+    let hash: Option<String> = r.get(4)?;
+    let role_id: Option<String> = r.get(5)?;
+    let role_name: Option<String> = r.get(6)?;
+    Ok(SkinPrincipal {
+        id: r.get(0)?,
+        username: r.get(1)?,
+        created_at: r.get(2)?,
+        default_rooms: rooms_from_json(&rooms_raw),
+        default_room_handles: Vec::new(),
+        has_password: password_is_set(hash.as_deref()),
+        role_id: role_id
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        role_name: role_name
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+    })
+}
+
 pub fn list_principals() -> Result<Vec<SkinPrincipal>, String> {
     with_conn(|conn| {
         let mut stmt = conn
-            .prepare(
-                "SELECT id, username, created_at, default_rooms, password_hash
-                 FROM principals ORDER BY username COLLATE NOCASE",
-            )
+            .prepare(&format!(
+                "{PRINCIPAL_SELECT} ORDER BY p.username COLLATE NOCASE"
+            ))
             .map_err(|e| format!("skin principal list: {e}"))?;
         let rows = stmt
-            .query_map([], |r| {
-                let rooms_raw: String = r.get(3)?;
-                let default_rooms = rooms_from_json(&rooms_raw);
-                let hash: Option<String> = r.get(4)?;
-                Ok(SkinPrincipal {
-                    id: r.get(0)?,
-                    username: r.get(1)?,
-                    created_at: r.get(2)?,
-                    default_room_handles: Vec::new(),
-                    default_rooms,
-                    has_password: password_is_set(hash.as_deref()),
-                })
-            })
+            .query_map([], map_principal_row)
             .map_err(|e| format!("skin principal list: {e}"))?;
         let mut out = Vec::new();
         for row in rows {
@@ -886,20 +962,9 @@ fn principal_by_username(
     username: &str,
 ) -> Result<Option<SkinPrincipal>, String> {
     conn.query_row(
-        "SELECT id, username, created_at, default_rooms, password_hash FROM principals WHERE username = ?1",
+        &format!("{PRINCIPAL_SELECT} WHERE p.username = ?1"),
         params![username],
-        |r| {
-            let rooms_raw: String = r.get(3)?;
-            let hash: Option<String> = r.get(4)?;
-            Ok(SkinPrincipal {
-                id: r.get(0)?,
-                username: r.get(1)?,
-                created_at: r.get(2)?,
-                default_rooms: rooms_from_json(&rooms_raw),
-                default_room_handles: Vec::new(),
-                has_password: password_is_set(hash.as_deref()),
-            })
-        },
+        map_principal_row,
     )
     .optional()
     .map_err(|e| format!("skin principal lookup: {e}"))
@@ -988,12 +1053,13 @@ pub fn create_token(
     Ok((attach_token_handles(r.0), r.1))
 }
 
-/// Login session mint. Copies `default_rooms` **including []** (Thread
-/// `skin_room` 403). Do **not** call [`create_token`] (R5: empty rooms 400).
-/// `session=1`, `expires_at` = now + [`crate::connect_users::session_ttl_days`].
+/// Login session mint. Assigned guests snapshot the role (caps+rooms,
+/// including `[]`). Unassigned copies `default_rooms` **including []**
+/// (Thread `skin_room` 403) with Thread-only caps. Do **not** call
+/// [`create_token`] (empty rooms 400). `session=1`, `expires_at` =
+/// now + [`crate::connect_users::session_ttl_days`].
 pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), String> {
     let username = normalize_username(username)?;
-    let caps = parse_caps(None)?;
     let id = uuid::Uuid::new_v4().to_string();
     let raw = generate_raw_key();
     debug_assert!(
@@ -1005,12 +1071,19 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
     let created_at = now_secs();
     let ttl_secs = crate::connect_users::session_ttl_days().saturating_mul(86_400);
     let expires_at = created_at.saturating_add(ttl_secs);
-    let caps_stored = caps_json(&caps);
     let r = with_conn(|conn| {
         let Some(principal) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
-        let rooms = principal.default_rooms.clone();
+        let (caps, rooms) = if let Some(rid) = principal.role_id.as_deref() {
+            let Some(role) = role_by_id_or_name(conn, rid)? else {
+                return Err(format!("unknown skin role '{rid}'"));
+            };
+            (role.caps, role.rooms)
+        } else {
+            (parse_caps(None)?, principal.default_rooms.clone())
+        };
+        let caps_stored = caps_json(&caps);
         let rooms_stored = rooms_json(&rooms);
         conn.execute(
             "INSERT INTO tokens (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at)
@@ -1075,6 +1148,8 @@ pub fn set_principal_password(
             default_rooms: p.default_rooms,
             default_room_handles: Vec::new(),
             has_password,
+            role_id: p.role_id,
+            role_name: p.role_name,
         })
     })
     .map(attach_principal_handles)
@@ -1334,6 +1409,10 @@ pub fn set_principal_default_rooms(
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
+        if p.role_id.is_some() {
+            let name = p.role_name.as_deref().unwrap_or("unknown");
+            return Err(assigned_guest_rooms_err(&username, name));
+        }
         conn.execute(
             "UPDATE principals SET default_rooms = ?1 WHERE id = ?2",
             params![stored, p.id],
@@ -1354,9 +1433,302 @@ pub fn set_principal_default_rooms(
             default_rooms: rooms,
             default_room_handles: Vec::new(),
             has_password: p.has_password,
+            role_id: p.role_id,
+            role_name: p.role_name,
         })
     })
     .map(attach_principal_handles)
+}
+
+// ── Roles ────────────────────────────────────────────────────────────
+
+fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
+    let caps_raw: String = r.get(2)?;
+    let rooms_raw: String = r.get(3)?;
+    Ok(SkinRole {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        caps: caps_from_json(&caps_raw),
+        rooms: rooms_from_json(&rooms_raw),
+        room_handles: Vec::new(),
+        created_at: r.get(4)?,
+    })
+}
+
+fn attach_role_handles(mut role: SkinRole) -> SkinRole {
+    role.room_handles = handles_for_project_ids(&role.rooms);
+    role
+}
+
+fn role_by_id_or_name(conn: &Connection, token: &str) -> Result<Option<SkinRole>, String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Ok(None);
+    }
+    let by_id: Option<SkinRole> = conn
+        .query_row(
+            "SELECT id, name, caps, rooms, created_at FROM roles WHERE id = ?1",
+            params![token],
+            map_role_row,
+        )
+        .optional()
+        .map_err(|e| format!("skin role lookup: {e}"))?;
+    if by_id.is_some() {
+        return Ok(by_id);
+    }
+    conn.query_row(
+        "SELECT id, name, caps, rooms, created_at FROM roles WHERE name = ?1 COLLATE NOCASE",
+        params![token],
+        map_role_row,
+    )
+    .optional()
+    .map_err(|e| format!("skin role lookup: {e}"))
+}
+
+fn rewrite_live_sessions(
+    conn: &Connection,
+    principal_id: &str,
+    caps: &[String],
+    rooms: &[String],
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE tokens SET caps = ?1, rooms = ?2
+         WHERE principal_id = ?3 AND session = 1 AND revoked_at IS NULL",
+        params![caps_json(caps), rooms_json(rooms), principal_id],
+    )
+    .map_err(|e| format!("skin session rewrite: {e}"))?;
+    Ok(())
+}
+
+fn rewrite_sessions_for_role(
+    conn: &Connection,
+    role_id: &str,
+    caps: &[String],
+    rooms: &[String],
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE tokens SET caps = ?1, rooms = ?2
+         WHERE session = 1 AND revoked_at IS NULL
+           AND principal_id IN (SELECT id FROM principals WHERE role_id = ?3)",
+        params![caps_json(caps), rooms_json(rooms), role_id],
+    )
+    .map_err(|e| format!("skin session rewrite: {e}"))?;
+    Ok(())
+}
+
+fn unique_role_err(name: &str, e: rusqlite::Error) -> String {
+    let s = e.to_string();
+    if s.contains("roles_name") || s.contains("UNIQUE") {
+        format!("role '{name}' already exists")
+    } else {
+        format!("skin role insert: {e}")
+    }
+}
+
+/// Mint a named caps+rooms bundle. Empty rooms allowed (Thread dark).
+pub fn create_role(
+    name: &str,
+    caps: Option<&[String]>,
+    rooms: &[String],
+) -> Result<SkinRole, String> {
+    let name = normalize_username(name)?;
+    if is_connect_role_name(&name) {
+        return Err(CONNECT_ROLE_NAME_ERR.to_string());
+    }
+    let caps = parse_caps(caps)?;
+    let rooms = normalize_room_ids(rooms);
+    let id = uuid::Uuid::new_v4().to_string();
+    let created_at = now_secs();
+    let caps_stored = caps_json(&caps);
+    let rooms_stored = rooms_json(&rooms);
+    with_conn(|conn| {
+        let taken: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM roles WHERE name = ?1 COLLATE NOCASE",
+                params![name],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("skin role name lookup: {e}"))?;
+        if taken > 0 {
+            return Err(format!("role '{name}' already exists"));
+        }
+        conn.execute(
+            "INSERT INTO roles (id, name, caps, rooms, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, name, caps_stored, rooms_stored, created_at],
+        )
+        .map_err(|e| unique_role_err(&name, e))?;
+        Ok(SkinRole {
+            id,
+            name,
+            caps,
+            rooms,
+            room_handles: Vec::new(),
+            created_at,
+        })
+    })
+    .map(attach_role_handles)
+}
+
+pub fn list_roles() -> Result<Vec<SkinRole>, String> {
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, caps, rooms, created_at FROM roles
+                 ORDER BY name COLLATE NOCASE",
+            )
+            .map_err(|e| format!("skin role list: {e}"))?;
+        let rows = stmt
+            .query_map([], map_role_row)
+            .map_err(|e| format!("skin role list: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("skin role row: {e}"))?);
+        }
+        Ok(out)
+    })
+    .map(|mut roles| {
+        for r in &mut roles {
+            r.room_handles = handles_for_project_ids(&r.rooms);
+        }
+        roles
+    })
+}
+
+/// Omitted `caps` / `rooms` stay unchanged. Always rewrites live sessions
+/// of assigned guests (never platform tokens).
+pub fn update_role(
+    id_or_name: &str,
+    caps: Option<&[String]>,
+    rooms: Option<&[String]>,
+) -> Result<SkinRole, String> {
+    let id_or_name = id_or_name.trim();
+    if id_or_name.is_empty() {
+        return Err("missing role id or name".to_string());
+    }
+    let caps = match caps {
+        Some(list) => Some(parse_caps(Some(list))?),
+        None => None,
+    };
+    let rooms = rooms.map(normalize_room_ids);
+    let role = with_conn(|conn| {
+        let Some(mut role) = role_by_id_or_name(conn, id_or_name)? else {
+            return Err(format!("unknown skin role '{id_or_name}'"));
+        };
+        if let Some(c) = caps {
+            role.caps = c;
+        }
+        if let Some(r) = rooms {
+            role.rooms = r;
+        }
+        conn.execute(
+            "UPDATE roles SET caps = ?1, rooms = ?2 WHERE id = ?3",
+            params![caps_json(&role.caps), rooms_json(&role.rooms), role.id],
+        )
+        .map_err(|e| format!("skin role update: {e}"))?;
+        rewrite_sessions_for_role(conn, &role.id, &role.caps, &role.rooms)?;
+        Ok(role)
+    })?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok(attach_role_handles(role))
+}
+
+pub fn remove_role(id_or_name: &str) -> Result<bool, String> {
+    let id_or_name = id_or_name.trim();
+    if id_or_name.is_empty() {
+        return Err("missing role id or name".to_string());
+    }
+    let r = with_conn(|conn| {
+        let Some(role) = role_by_id_or_name(conn, id_or_name)? else {
+            return Ok(false);
+        };
+        let assigned: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM principals WHERE role_id = ?1",
+                params![role.id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("skin role assigned lookup: {e}"))?;
+        if assigned > 0 {
+            return Err(assigned_role_remove_err(&role.name));
+        }
+        let n = conn
+            .execute("DELETE FROM roles WHERE id = ?1", params![role.id])
+            .map_err(|e| {
+                let s = e.to_string();
+                if s.contains("FOREIGN KEY") || s.to_ascii_lowercase().contains("constraint") {
+                    assigned_role_remove_err(&role.name)
+                } else {
+                    format!("skin role delete: {e}")
+                }
+            })?;
+        Ok(n > 0)
+    })?;
+    if r {
+        crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    }
+    Ok(r)
+}
+
+pub fn assign_role(username: &str, role: &str) -> Result<SkinPrincipal, String> {
+    let username = normalize_username(username)?;
+    let role_token = role.trim();
+    if role_token.is_empty() {
+        return Err("missing role id or name".to_string());
+    }
+    let p = with_conn(|conn| {
+        let Some(p) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        let Some(role) = role_by_id_or_name(conn, role_token)? else {
+            return Err(format!("unknown skin role '{role_token}'"));
+        };
+        conn.execute(
+            "UPDATE principals SET role_id = ?1 WHERE id = ?2",
+            params![role.id, p.id],
+        )
+        .map_err(|e| format!("skin role assign: {e}"))?;
+        rewrite_live_sessions(conn, &p.id, &role.caps, &role.rooms)?;
+        Ok(SkinPrincipal {
+            id: p.id,
+            username: p.username,
+            created_at: p.created_at,
+            default_rooms: p.default_rooms,
+            default_room_handles: Vec::new(),
+            has_password: p.has_password,
+            role_id: Some(role.id),
+            role_name: Some(role.name),
+        })
+    })?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok(attach_principal_handles(p))
+}
+
+pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
+    let username = normalize_username(username)?;
+    let thread_only = parse_caps(None)?;
+    let p = with_conn(|conn| {
+        let Some(p) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        conn.execute(
+            "UPDATE principals SET role_id = NULL WHERE id = ?1",
+            params![p.id],
+        )
+        .map_err(|e| format!("skin role unassign: {e}"))?;
+        rewrite_live_sessions(conn, &p.id, &thread_only, &p.default_rooms)?;
+        Ok(SkinPrincipal {
+            id: p.id,
+            username: p.username,
+            created_at: p.created_at,
+            default_rooms: p.default_rooms,
+            default_room_handles: Vec::new(),
+            has_password: p.has_password,
+            role_id: None,
+            role_name: None,
+        })
+    })?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok(attach_principal_handles(p))
 }
 
 /// Handle + `project_handle_aliases` + project_id UUID only.
@@ -2267,5 +2639,249 @@ mod tests {
             Some("skin.app.com".into())
         );
         assert_eq!(host_from_url("skin.app.com"), Some("skin.app.com".into()));
+    }
+
+    #[test]
+    fn unassigned_session_stays_thread_only_and_hidden_from_list() {
+        with_temp_home(|| {
+            add_principal("ada").unwrap();
+            let listed = list_principals().unwrap();
+            assert_eq!(listed.len(), 1);
+            assert!(listed[0].role_id.is_none(), "{listed:?}");
+            assert!(listed[0].role_name.is_none(), "{listed:?}");
+            let (meta, raw) = create_session_token("ada").expect("session");
+            assert!(meta.rooms.is_empty());
+            let pass = resolve_skin_token(&raw).expect("live");
+            assert!(pass.session);
+            assert_eq!(pass.username, "ada");
+            assert!(pass.has_cap(CAP_THREAD_READ));
+            assert!(pass.has_cap(CAP_THREAD_POST));
+            assert!(!pass.has_cap(CAP_FILES_READ));
+            assert!(!pass.has_cap(CAP_FILES_WRITE));
+            assert!(list_tokens().unwrap().is_empty(), "list hides sessions");
+        });
+    }
+
+    #[test]
+    fn role_create_rejects_connect_names_and_short_or_punct() {
+        with_temp_home(|| {
+            for name in ["owner", "admin", "member", "viewer", "Admin"] {
+                let err = create_role(name, None, &[]).unwrap_err();
+                assert!(
+                    err.contains("Connect role names cannot be skin roles"),
+                    "name={name} err={err}"
+                );
+                assert!(err.contains("owner/admin/member/viewer"), "{err}");
+            }
+            let err = create_role("A", None, &[]).unwrap_err();
+            assert!(err.contains("at least 2"), "{err}");
+            let err = create_role("Dentist!", None, &[]).unwrap_err();
+            assert!(err.contains("lowercase") || err.contains("only"), "{err}");
+            let role = create_role("dentist", None, &[]).expect("ok");
+            assert_eq!(role.name, "dentist");
+            assert_eq!(role.caps, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+            assert!(role.rooms.is_empty());
+            let err = create_role("Dentist", None, &[]).unwrap_err();
+            assert!(err.contains("already exists"), "{err}");
+            add_principal("bob").unwrap();
+            let guest_role = create_role("bob", None, &[]).expect("guest and role coexist");
+            assert_eq!(guest_role.name, "bob");
+        });
+    }
+
+    #[test]
+    fn role_parse_caps_rejects_unknown_verbs() {
+        with_temp_home(|| {
+            for cap in [
+                "tickets:read",
+                "store:write",
+                "pty:write",
+                "wiki:read",
+                "grid",
+            ] {
+                let err = create_role("xray", Some(&[cap.into()]), &[]).unwrap_err();
+                assert!(err.contains("unknown capability"), "{cap} {err}");
+                assert!(err.contains(cap), "{err}");
+            }
+        });
+    }
+
+    #[test]
+    fn assigned_session_snapshots_role_unassign_restores_defaults() {
+        with_temp_home(|| {
+            add_principal("bob").unwrap();
+            let sales = uuid::Uuid::new_v4().to_string();
+            set_principal_default_rooms("bob", std::slice::from_ref(&sales), false).unwrap();
+            let role = create_role(
+                "dentist",
+                Some(&[
+                    "thread:read".into(),
+                    "thread:post".into(),
+                    "files:read".into(),
+                ]),
+                std::slice::from_ref(&sales),
+            )
+            .unwrap();
+            assign_role("bob", "dentist").unwrap();
+            let listed = list_principals().unwrap();
+            assert_eq!(listed[0].role_name.as_deref(), Some("dentist"));
+            assert_eq!(listed[0].role_id.as_deref(), Some(role.id.as_str()));
+            assert_eq!(listed[0].default_rooms, vec![sales.clone()]);
+
+            let (meta, raw) = create_session_token("bob").expect("assigned session");
+            assert_eq!(meta.name, "bob");
+            assert_eq!(meta.rooms, vec![sales.clone()]);
+            let pass = resolve_skin_token(&raw).expect("live");
+            assert_eq!(pass.username, "bob");
+            assert!(pass.has_cap(CAP_FILES_READ));
+            assert!(pass.has_room(&sales));
+            assert!(list_tokens().unwrap().is_empty());
+
+            let err = set_principal_default_rooms("bob", &[], false).unwrap_err();
+            assert!(err.contains("guest 'bob' has role 'dentist'"), "{err}");
+            assert!(err.contains("edit the role or unassign"), "{err}");
+
+            let err = remove_role("dentist").unwrap_err();
+            assert!(
+                err.contains("role 'dentist' is assigned; unassign guests first"),
+                "{err}"
+            );
+            assert!(resolve_skin_token(&raw).is_some(), "session still live");
+
+            unassign_role("bob").unwrap();
+            let after = resolve_skin_token(&raw).expect("cookie stays");
+            assert!(after.has_cap(CAP_THREAD_READ));
+            assert!(after.has_cap(CAP_THREAD_POST));
+            assert!(!after.has_cap(CAP_FILES_READ), "{after:?}");
+            assert_eq!(after.rooms, vec![sales.clone()]);
+            assert!(remove_role("dentist").unwrap());
+            let (meta2, raw2) = create_session_token("bob").expect("unassigned login");
+            let pass2 = resolve_skin_token(&raw2).expect("thread-only");
+            assert_eq!(meta2.rooms, vec![sales.clone()]);
+            assert!(pass2.has_cap(CAP_THREAD_READ));
+            assert!(!pass2.has_cap(CAP_FILES_READ));
+        });
+    }
+
+    #[test]
+    fn role_update_rewrites_live_session_not_platform() {
+        with_temp_home(|| {
+            add_principal("bob").unwrap();
+            let sales = uuid::Uuid::new_v4().to_string();
+            create_role("dentist", None, std::slice::from_ref(&sales)).unwrap();
+            assign_role("bob", "dentist").unwrap();
+            let (_sess, sess_raw) = create_session_token("bob").unwrap();
+            let (plat, plat_raw) = create_token("bob", None, std::slice::from_ref(&sales)).unwrap();
+            let before = resolve_skin_token(&sess_raw).unwrap();
+            assert!(!before.has_cap(CAP_FILES_WRITE));
+
+            update_role(
+                "dentist",
+                Some(&["thread:read".into(), "files:write".into()]),
+                None,
+            )
+            .unwrap();
+            let after = resolve_skin_token(&sess_raw).expect("rewritten, not revoked");
+            assert!(after.has_cap(CAP_FILES_WRITE), "{after:?}");
+            assert!(after.has_cap(CAP_THREAD_READ));
+            assert!(!after.has_cap(CAP_FILES_READ));
+            let plat_pass = resolve_skin_token(&plat_raw).expect("platform untouched");
+            assert_eq!(plat_pass.username, "bob");
+            assert!(!plat_pass.has_cap(CAP_FILES_WRITE), "{plat_pass:?}");
+            let _ = plat;
+        });
+    }
+
+    #[test]
+    fn role_empty_rooms_is_thread_dark() {
+        with_temp_home(|| {
+            add_principal("cara").unwrap();
+            let sales = uuid::Uuid::new_v4().to_string();
+            set_principal_default_rooms("cara", std::slice::from_ref(&sales), false).unwrap();
+            create_role("dark", None, &[]).unwrap();
+            assign_role("cara", "dark").unwrap();
+            let (meta, raw) = create_session_token("cara").unwrap();
+            assert!(meta.rooms.is_empty(), "{meta:?}");
+            let pass = resolve_skin_token(&raw).unwrap();
+            assert!(pass.rooms_empty());
+            assert!(pass.has_cap(CAP_THREAD_READ));
+        });
+    }
+
+    #[test]
+    fn pre_roles_skin_db_opens_with_null_role_id() {
+        with_temp_home(|| {
+            let path = crate::paths::k2_home().join("skin.db");
+            std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE principals (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    default_rooms TEXT NOT NULL DEFAULT '[]',
+                    password_hash TEXT
+                 );
+                 CREATE TABLE tokens (
+                    id TEXT PRIMARY KEY,
+                    principal_id TEXT REFERENCES principals(id) ON DELETE CASCADE,
+                    name TEXT,
+                    key_hash TEXT NOT NULL UNIQUE,
+                    key_prefix TEXT NOT NULL,
+                    caps TEXT NOT NULL,
+                    rooms TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL,
+                    revoked_at INTEGER,
+                    session INTEGER NOT NULL DEFAULT 0,
+                    expires_at INTEGER,
+                    CHECK (
+                        (session = 1 AND principal_id IS NOT NULL AND name IS NULL)
+                        OR
+                        (session = 0 AND principal_id IS NULL AND name IS NOT NULL)
+                    )
+                 );",
+            )
+            .expect("pre-roles schema");
+            let pid = uuid::Uuid::new_v4().to_string();
+            let tid = uuid::Uuid::new_v4().to_string();
+            let raw = format!("{SKIN_KEY_PREFIX}PreRolesHashBody00000000000000000000000");
+            let key_hash = sha256_hex(&raw);
+            let prefix = display_prefix(&raw);
+            let room = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at, default_rooms)
+                 VALUES (?1, 'bob', 1, ?2)",
+                params![pid, rooms_json(std::slice::from_ref(&room))],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO tokens (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, session)
+                 VALUES (?1, NULL, 'vercel', ?2, ?3, ?4, ?5, 1, 0)",
+                params![
+                    tid,
+                    key_hash,
+                    prefix,
+                    caps_json(&parse_caps(None).unwrap()),
+                    rooms_json(std::slice::from_ref(&room))
+                ],
+            )
+            .unwrap();
+            drop(conn);
+
+            let listed = list_principals().expect("open_db + list");
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].username, "bob");
+            assert!(listed[0].role_id.is_none(), "{listed:?}");
+            assert_eq!(listed[0].default_rooms, vec![room.clone()]);
+            let pass = resolve_skin_token(&raw).expect("platform still resolves");
+            assert_eq!(pass.username, "vercel");
+            assert!(pass.principal_id.is_none());
+            let (_meta, sess) = create_session_token("bob").expect("login still Thread-only");
+            let session = resolve_skin_token(&sess).expect("session");
+            assert!(session.has_cap(CAP_THREAD_READ));
+            assert!(!session.has_cap(CAP_FILES_READ));
+            assert_eq!(session.rooms, vec![room]);
+        });
     }
 }

@@ -348,7 +348,7 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             "Skin user roster",
             SKIN_ROSTER_SOURCE,
             "live",
-            "Live list of Skin Access guests (username, live keys, scopes). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.",
+            "Live list of Skin Access guests (username, role, password, default rooms). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.",
             None,
             false,
             &["live", "roster", "skin"],
@@ -1128,8 +1128,8 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
 
 /// Live list of Skin Access guests (not Connect / Server Access).
 ///
-/// Username + has_password + default rooms. Never platform-token counts,
-/// never the raw `k2skn_` secret. Same people as `k2 skin user list`.
+/// Username + role + has_password + default rooms. Never platform-token
+/// counts, never the raw `k2skn_` secret. Same people as `k2 skin user list`.
 pub fn render_skin_roster_body(_project_path: &str) -> String {
     let users = crate::skin::list_principals().unwrap_or_default();
 
@@ -1148,9 +1148,15 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
         out.push_str("    k2 skin-token create --name vercel --agent sales\n");
         return out;
     }
-    out.push_str("| USERNAME | PASSWORD | DEFAULT ROOMS |\n");
-    out.push_str("| --- | --- | --- |\n");
+    out.push_str("| USERNAME | ROLE | PASSWORD | DEFAULT ROOMS |\n");
+    out.push_str("| --- | --- | --- | --- |\n");
     for u in users {
+        let role = u
+            .role_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("—");
         let pw = if u.has_password { "yes" } else { "no" };
         let rooms = if u.default_room_handles.is_empty() {
             if u.default_rooms.is_empty() {
@@ -1161,7 +1167,7 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
         } else {
             u.default_room_handles.join(", ")
         };
-        out.push_str(&format!("| {} | {pw} | {rooms} |\n", u.username));
+        out.push_str(&format!("| {} | {role} | {pw} | {rooms} |\n", u.username));
     }
     out
 }
@@ -2959,6 +2965,7 @@ mod tests {
                 composed.contains("Skin user roster")
                     && composed.contains("ghostbird")
                     && composed.contains("USERNAME")
+                    && composed.contains("ROLE")
                     && composed.contains("PASSWORD")
                     && !composed.contains("LIVE KEYS"),
                 "composed AGENTS.md must inline guest roster (not live keys); first 600:\n{}",

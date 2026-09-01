@@ -438,6 +438,8 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
         let ov = json(&ok.body);
         assert_eq!(ov["ok"], true, "{}", ok.body);
         assert!(ov.get("token").is_none(), "no token key: {}", ok.body);
+        assert!(ov.get("caps").is_some(), "browser JSON must include caps: {}", ok.body);
+        assert!(ov.get("role").is_some(), "browser JSON must include role: {}", ok.body);
         let set_cookie = header_value(&ok.headers, "set-cookie").expect("Set-Cookie");
         assert!(set_cookie.contains("k2_skin_ui="), "{set_cookie}");
         assert!(!set_cookie.contains("k2_skin_session"), "{set_cookie}");
@@ -470,6 +472,20 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
         let tv = json(&thread.body);
         assert_eq!(tv["ok"], true, "{}", thread.body);
         assert_eq!(tv["collection"], "thread");
+
+        let fs = http_ex(
+            gport,
+            "GET",
+            "/cli/fs/read-dir?workspace=sales&path=.",
+            None,
+            &cookie,
+        );
+        assert_eq!(fs.status, 404, "gateway files still 404; {}", fs.body);
+        assert!(
+            fs.body.contains("not found"),
+            "gateway files 404 body; {}",
+            fs.body
+        );
 
         let grid = http_ex(
             gport,

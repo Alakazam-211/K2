@@ -80,6 +80,14 @@ fn resolve_rooms_or_400(raw: Option<Vec<String>>) -> Result<Vec<String>, CliResp
     }
 }
 
+/// Roles may be Thread-dark (`[]`). Unknown handles still 400.
+fn resolve_rooms_allow_empty(raw: Option<Vec<String>>) -> Result<Vec<String>, CliResponse> {
+    match skin::resolve_room_tokens(&raw.unwrap_or_default()) {
+        Ok(ids) => Ok(ids),
+        Err(e) => Err(CliResponse::bad_request(e)),
+    }
+}
+
 fn apply_field(v: &serde_json::Value) -> bool {
     match v.get("apply").or_else(|| v.get("Apply")) {
         None => true,
@@ -280,6 +288,133 @@ pub fn handle_tokens_rooms(body: &[u8], actor: &str) -> CliResponse {
                 meta.rooms
             );
             CliResponse::ok_json(serde_json::to_string(&meta).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_roles_get() -> CliResponse {
+    match skin::list_roles() {
+        Ok(roles) => CliResponse::ok_json(serde_json::json!({ "roles": roles }).to_string()),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+pub fn handle_roles_post(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if v.get("username").is_some() {
+        return CliResponse::bad_request("use name (role label), not username");
+    }
+    let Some(name) = str_field(&v, &["name"]) else {
+        return CliResponse::bad_request("missing name");
+    };
+    let caps = caps_field(&v);
+    let rooms = match resolve_rooms_allow_empty(rooms_field(&v)) {
+        Ok(ids) => ids,
+        Err(e) => return e,
+    };
+    match skin::create_role(name, caps.as_deref(), &rooms) {
+        Ok(role) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} created role {} name={} caps={:?} rooms={:?}",
+                role.id,
+                role.name,
+                role.caps,
+                role.rooms
+            );
+            CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_roles_update(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id_or_name) = str_field(&v, &["id", "name", "role"]) else {
+        return CliResponse::bad_request("missing id or name");
+    };
+    let caps = caps_field(&v);
+    let rooms = match v.get("rooms").or_else(|| v.get("agents")) {
+        None => None,
+        Some(_) => match resolve_rooms_allow_empty(rooms_field(&v)) {
+            Ok(ids) => Some(ids),
+            Err(e) => return e,
+        },
+    };
+    match skin::update_role(id_or_name, caps.as_deref(), rooms.as_deref()) {
+        Ok(role) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} updated role {} caps={:?} rooms={:?}",
+                role.name,
+                role.caps,
+                role.rooms
+            );
+            CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_roles_remove(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id_or_name) = str_field(&v, &["id", "name", "role"]) else {
+        return CliResponse::bad_request("missing id or name");
+    };
+    match skin::remove_role(id_or_name) {
+        Ok(true) => {
+            k2_core::log_debug!("[skin] actor={actor} removed role {id_or_name}");
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Ok(false) => CliResponse::bad_request(format!("unknown skin role '{id_or_name}'")),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_roles_assign(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = str_field(&v, &["username"]) else {
+        return CliResponse::bad_request("missing username");
+    };
+    let Some(role) = str_field(&v, &["role", "name", "id"]) else {
+        return CliResponse::bad_request("missing role");
+    };
+    match skin::assign_role(username, role) {
+        Ok(p) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} assigned role {} to {}",
+                p.role_name.as_deref().unwrap_or(role),
+                p.username
+            );
+            CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_roles_unassign(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = str_field(&v, &["username", "name"]) else {
+        return CliResponse::bad_request("missing username");
+    };
+    match skin::unassign_role(username) {
+        Ok(p) => {
+            k2_core::log_debug!("[skin] actor={actor} unassigned role from {}", p.username);
+            CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
         }
         Err(e) => CliResponse::bad_request(e),
     }
@@ -494,7 +629,7 @@ pub fn owner_only_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "owner_only",
-                "hint": "requires owner/admin — ask your human (k2 skin user add/remove/password, skin-token create/revoke/rooms; use k2 skin user list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin.",
+                "hint": "requires owner/admin — ask your human (k2 skin user add/remove/password, k2 skin role create/update/remove, k2 skin user role/unassign, skin-token create/revoke/rooms; use k2 skin user list / k2 skin role list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin.",
             },
         })
         .to_string(),
@@ -677,6 +812,8 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
         "username": principal.username,
         "rooms": meta.rooms,
         "roomHandles": meta.room_handles,
+        "caps": meta.caps,
+        "role": principal.role_name,
     })
     .to_string();
     debug_assert!(

@@ -535,6 +535,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         // and users/remove stay owner). POST on these same paths is still
         // owner-gated in the dispatcher (teaching `owner_only`).
         "/cli/skin/users",
+        "/cli/skin/roles",
         "/cli/skin-tokens",
         // PR1 federation dual-auth under passports: agents may list peers,
         // pull a paired peer's roster, and send. pair/confirm/outbox/pubkey
@@ -1271,11 +1272,19 @@ mod tests {
         // front-door stay off the allowlist (dispatcher owner-gates POST
         // on the GET paths and teaches owner_only).
         assert!(is_agent_verb("/cli/skin/users"));
+        assert!(is_agent_verb("/cli/skin/roles"));
         assert!(is_agent_verb("/cli/skin-tokens"));
         assert!(
             !is_agent_verb("/cli/skin/users/remove"),
             "skin user remove is owner-only"
         );
+        assert!(
+            !is_agent_verb("/cli/skin/roles/update"),
+            "skin role mutations are owner-only"
+        );
+        assert!(!is_agent_verb("/cli/skin/roles/remove"));
+        assert!(!is_agent_verb("/cli/skin/roles/assign"));
+        assert!(!is_agent_verb("/cli/skin/roles/unassign"));
         assert!(
             !is_agent_verb("/cli/skin-tokens/revoke"),
             "skin token revoke is owner-only"

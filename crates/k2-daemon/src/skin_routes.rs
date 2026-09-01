@@ -208,8 +208,11 @@ pub fn handle_tokens_post(body: &[u8], actor: &str) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let Some(username) = str_field(&v, &["username", "name"]) else {
-        return CliResponse::bad_request("missing username");
+    if v.get("username").is_some() {
+        return CliResponse::bad_request("use name (platform label), not username");
+    }
+    let Some(name) = str_field(&v, &["name"]) else {
+        return CliResponse::bad_request("missing name");
     };
     let caps = caps_field(&v);
     let rooms = match rooms_field(&v) {
@@ -227,19 +230,19 @@ pub fn handle_tokens_post(body: &[u8], actor: &str) -> CliResponse {
             Err(e) => return e,
         },
     };
-    match skin::create_token(username, caps.as_deref(), &rooms) {
+    match skin::create_token(name, caps.as_deref(), &rooms) {
         Ok((meta, raw)) => {
             k2_core::log_debug!(
-                "[skin] actor={actor} minted token {} for {} caps={:?} rooms={:?}",
+                "[skin] actor={actor} minted platform token {} name={} caps={:?} rooms={:?}",
                 meta.id,
-                meta.username,
+                meta.name,
                 meta.caps,
                 meta.rooms
             );
             CliResponse::ok_json(
                 serde_json::json!({
                     "id": meta.id,
-                    "username": meta.username,
+                    "name": meta.name,
                     "prefix": meta.prefix,
                     "caps": meta.caps,
                     "rooms": meta.rooms,
@@ -671,7 +674,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
     let body = serde_json::json!({
         "ok": true,
         "token": raw.clone(),
-        "username": meta.username,
+        "username": principal.username,
         "rooms": meta.rooms,
         "roomHandles": meta.room_handles,
     })

@@ -1,6 +1,6 @@
-// Settings → Sidecars → Skin Access (prd-skin-system-v1 U3, prd-skin-auth-v1 S8/S11/S12).
-// Owner surface: front door (POST apply + live Caddy/nested status), skin-user
-// roster (NOT Server Access), k2skn_ keys (secret once at mint). Hydra is
+// Settings → Sidecars → Skin Access (prd-skin-identity-reshape-v1).
+// Owner surface: front door (POST apply + live Caddy/nested status), guests
+// (NOT Server Access), platform k2skn_ tokens (secret once at mint). Hydra is
 // opt-in (Linux sidecar; Mac supported=false). Enable skins ≠ start Hydra.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
@@ -31,8 +31,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
     id: 'skin-access.users',
     section: 'skin-access',
-    label: 'Skin users',
-    description: 'Guest list for skins — separate from Server Access / Connect operators',
+    label: 'Guests',
+    description: 'Guest list for skins — passwords and default rooms; not platform tokens',
     keywords: [
       'skin users',
       'roster',
@@ -44,13 +44,13 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
       'password',
       'login',
     ],
-    group: 'Skin users',
+    group: 'Guests',
   },
   {
     id: 'skin-access.keys',
     section: 'skin-access',
-    label: 'Keys',
-    description: 'Mint k2skn_ capability passes with scopes / rooms; secret shown once',
+    label: 'Platform tokens',
+    description: 'Mint platform k2skn_ tokens (name, caps, rooms); secret shown once. Not for a user.',
     keywords: [
       'skin token',
       'k2skn',
@@ -61,8 +61,10 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
       'files',
       'revoke',
       'mint',
+      'platform',
+      'name',
     ],
-    group: 'Keys',
+    group: 'Platform tokens',
   },
   {
     id: 'skin-access.hydra',
@@ -120,7 +122,7 @@ export type SkinUser = {
 export type SkinTokenRow = {
   id: string
   prefix: string
-  username: string
+  name: string
   caps: string[]
   rooms: string[]
   roomHandles: string[]
@@ -333,8 +335,8 @@ export function parseSkinTokens(raw: unknown): SkinTokenRow[] {
     const rec = asRecord(row)
     const id = asString(rec.id)
     if (!id) return []
-    const username =
-      asString(rec.username) ?? asString(rec.user) ?? asString(rec.principal) ?? ''
+    const name =
+      asString(rec.name) ?? asString(rec.username) ?? asString(rec.user) ?? ''
     const caps = parseCaps(rec.caps ?? rec.scopes ?? rec.capabilities)
     const prefix =
       asString(rec.prefix) ??
@@ -342,7 +344,7 @@ export function parseSkinTokens(raw: unknown): SkinTokenRow[] {
     return [{
       id,
       prefix,
-      username,
+      name,
       caps,
       rooms: parseStringList(rec.rooms),
       roomHandles: parseStringList(rec.roomHandles ?? rec.room_handles),
@@ -441,7 +443,7 @@ export function SkinAccessSection(): React.JSX.Element {
   const [addError, setAddError] = useState<string | null>(null)
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null)
   const [passwordDraft, setPasswordDraft] = useState<Record<string, string>>({})
-  const [mintUsername, setMintUsername] = useState('')
+  const [mintName, setMintName] = useState('')
   const [mintCaps, setMintCaps] = useState<Set<string>>(() => new Set(DEFAULT_SKIN_CAPS))
   const [mintRooms, setMintRooms] = useState<Set<string>>(() => new Set())
   const [mintBusy, setMintBusy] = useState(false)
@@ -506,13 +508,6 @@ export function SkinAccessSection(): React.JSX.Element {
   useEffect(() => {
     setUiPortText(frontDoor.uiPort == null ? '' : String(frontDoor.uiPort))
   }, [frontDoor.uiPort])
-
-  useEffect(() => {
-    const u = users.find((x) => x.username === mintUsername.trim().toLowerCase())
-    if (!u) return
-    const fromUser = u.defaultRoomHandles.length ? u.defaultRoomHandles : u.defaultRooms
-    setMintRooms(new Set(fromUser))
-  }, [mintUsername, users])
 
   const visibleUsers = useMemo(() => {
     const q = userQuery.trim().toLowerCase()
@@ -609,9 +604,9 @@ export function SkinAccessSection(): React.JSX.Element {
   )
 
   const mintKey = useCallback(async () => {
-    const username = mintUsername.trim().toLowerCase()
-    if (!username) {
-      setMintError('Username is required')
+    const name = mintName.trim().toLowerCase()
+    if (!name) {
+      setMintError('Name is required')
       return
     }
     const caps = [...mintCaps]
@@ -627,7 +622,7 @@ export function SkinAccessSection(): React.JSX.Element {
     setMintBusy(true)
     setMintError(null)
     try {
-      const res = await daemonCliPost<unknown>('skin-tokens', { username, caps, rooms })
+      const res = await daemonCliPost<unknown>('skin-tokens', { name, caps, rooms })
       const secret = mintSecretFrom(res)
       if (!secret) throw new Error('mint returned no secret')
       setMintedSecret(secret)
@@ -637,7 +632,7 @@ export function SkinAccessSection(): React.JSX.Element {
     } finally {
       setMintBusy(false)
     }
-  }, [mintUsername, mintCaps, mintRooms, refresh])
+  }, [mintName, mintCaps, mintRooms, refresh])
 
   const setUserPassword = useCallback(
     async (username: string, password: string | null) => {
@@ -741,8 +736,9 @@ export function SkinAccessSection(): React.JSX.Element {
         <div>
           <h2 className="text-base font-medium text-[var(--color-text-primary)]">Skin Access</h2>
           <p className="text-[11px] text-[var(--color-text-muted)] mt-1 max-w-2xl">
-            Guests, tokens, and scopes (caps + rooms) — not Server Access. Host the UI with
-            k2 publish (Published), not this page. Overlay Thread rooms only; never grid / PTY.
+            Guests (login sessions) and platform tokens (caps + rooms) — not Server Access.
+            Do not mint a key for a user. Host the UI with k2 publish, not this page.
+            Overlay Thread rooms only; never grid / PTY.
           </p>
         </div>
 
@@ -761,7 +757,7 @@ export function SkinAccessSection(): React.JSX.Element {
             className="border border-[var(--color-status-warning-soft)]/40 bg-[var(--color-status-warning-soft)]/10 p-3 space-y-2"
           >
             <p className="text-[11px] text-[var(--color-text-primary)]">
-              Assign agents or these guests go dark. Live keys with no rooms cannot Thread.
+              Assign agents or these platform tokens go dark. Tokens with no rooms cannot Thread.
             </p>
             <button
               type="button"
@@ -843,12 +839,12 @@ export function SkinAccessSection(): React.JSX.Element {
           </div>
         </SettingsGroup>
 
-        <SettingsGroup title="Skin users">
+        <SettingsGroup title="Guests">
           <div data-settings-id="skin-access.users" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
               Guest list for skins. Not the Server Access / Connect operator roster. Set a
               password so the skin can POST /cli/skin/login (the skin owns the login UI).
-              No public register.
+              Guests never see a secret. No public register. Do not mint a key for this user.
             </p>
             <form
               className="flex flex-wrap gap-1.5 items-center"
@@ -1027,7 +1023,7 @@ export function SkinAccessSection(): React.JSX.Element {
                         }
                       />
                       <span className="text-[10px] text-[var(--color-text-muted)]">
-                        Apply to all keys
+                        Apply to live sessions
                       </span>
                     </label>
                   </div>
@@ -1038,27 +1034,27 @@ export function SkinAccessSection(): React.JSX.Element {
           </div>
         </SettingsGroup>
 
-        <SettingsGroup title="Keys">
+        <SettingsGroup title="Platform tokens">
           <div data-settings-id="skin-access.keys" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              Each live key shows scopes / rooms. The raw secret is shown only once when minted.
-              Prefix <code className="text-[10px]">k2skn_</code> — not{' '}
+              Platform tokens are labels (vercel), not guests. The raw secret is shown only
+              once when minted. Prefix <code className="text-[10px]">k2skn_</code> — not{' '}
               <code className="text-[10px]">k2sk_</code> API keys.{' '}
               <code className="text-[10px]">thread:read</code> includes overlay WS.{' '}
               <code className="text-[10px]">files:read</code> lists/reads that agent's folder
               and <code className="text-[10px]">/cli/fs/events</code>. Write-only does not
-              grant list.
+              grant list. Do not mint for this user.
             </p>
             <div className="space-y-2">
               <input
                 className={INPUT_CLS}
-                placeholder="username"
+                placeholder="name (vercel)"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                value={mintUsername}
-                onChange={(e) => setMintUsername(e.target.value)}
-                aria-label="Mint key username"
+                value={mintName}
+                onChange={(e) => setMintName(e.target.value)}
+                aria-label="Platform token name"
               />
               <div className="flex flex-wrap gap-x-4 gap-y-1">
                 {SKIN_CAP_CHOICES.map((cap) => (
@@ -1124,7 +1120,7 @@ export function SkinAccessSection(): React.JSX.Element {
               )}
               <button
                 type="button"
-                disabled={mintBusy || !mintUsername.trim() || mintRooms.size === 0}
+                disabled={mintBusy || !mintName.trim() || mintRooms.size === 0}
                 onClick={() => void mintKey()}
                 className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
               >
@@ -1159,7 +1155,7 @@ export function SkinAccessSection(): React.JSX.Element {
               <p className="text-[11px] text-[var(--color-text-muted)]">Loading keys…</p>
             ) : tokens.length === 0 ? (
               <p className="text-[11px] text-[var(--color-text-muted)]">
-                No skin keys yet. Mint one for a skin user.
+                No platform tokens yet. Mint one with a name — not for a user.
               </p>
             ) : (
               <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
@@ -1175,9 +1171,9 @@ export function SkinAccessSection(): React.JSX.Element {
                           <span className="text-[12px] font-mono text-[var(--color-text-primary)]">
                             {prefixLabel(k.prefix)}
                           </span>
-                          {k.username && (
+                          {k.name && (
                             <span className="text-[11px] text-[var(--color-text-secondary)]">
-                              {k.username}
+                              {k.name}
                             </span>
                           )}
                         </div>

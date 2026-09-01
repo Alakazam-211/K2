@@ -72,6 +72,9 @@ assert_contains "overlay conversation query" "$skins_out" "WS /cli/overlay/event
 assert_contains "post addr text" "$skins_out" '{"addr":"<handle>","text":"…"}'
 assert_contains "gateway no files this cut" "$skins_out" "does NOT proxy /cli/fs/*"
 assert_contains "static dir is public" "$skins_out" "GET / and /assets/* are PUBLIC"
+assert_contains "platform mint --name" "$skins_out" "k2 skin-token create --name"
+assert_contains "two credentials" "$skins_out" "TWO CREDENTIALS"
+assert_absent "no mint-for-user" "$skins_out" "skin-token create <username>"
 
 echo "== k2 study people =="
 people_out="$("$K2" study people)"

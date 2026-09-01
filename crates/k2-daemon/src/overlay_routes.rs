@@ -1895,7 +1895,7 @@ mod tests {
     fn skin_pass(rooms: &[String]) -> k2_core::skin::SkinPass {
         k2_core::skin::SkinPass {
             id: "skin-pass".into(),
-            principal_id: "prin".into(),
+            principal_id: Some("prin".into()),
             username: "guest".into(),
             caps: vec!["thread:read".into(), "thread:post".into()],
             rooms: rooms.to_vec(),

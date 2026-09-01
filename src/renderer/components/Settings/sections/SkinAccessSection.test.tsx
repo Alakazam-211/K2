@@ -35,7 +35,7 @@ const USER_BOB = { username: 'bob' }
 const KEY_ROW = {
   id: 'tok-1',
   prefix: 'k2skn_deadbeefab12',
-  username: 'alice',
+  name: 'vercel',
   caps: ['thread:read', 'thread:post'],
   rooms: ['proj-sales'],
   roomHandles: ['sales'],
@@ -216,7 +216,7 @@ describe('parsers', () => {
     expect(parseSkinTokens({ tokens: [KEY_ROW] })[0]).toEqual({
       id: 'tok-1',
       prefix: 'k2skn_deadbeefab12',
-      username: 'alice',
+      name: 'vercel',
       caps: ['thread:read', 'thread:post'],
       rooms: ['proj-sales'],
       roomHandles: ['sales'],
@@ -378,20 +378,20 @@ describe('SkinAccessSection', () => {
   it('mints a secret once and lists prefix + caps without the secret', async () => {
     h.daemonCliPost.mockImplementation(async (route: string) => {
       if (route === 'skin-tokens') {
-        return { id: 'tok-new', prefix: 'k2skn_ffff', username: 'alice', secret: 'k2skn_ONCESECRET' }
+        return { id: 'tok-new', prefix: 'k2skn_ffff', name: 'vercel', secret: 'k2skn_ONCESECRET' }
       }
       return { ok: true }
     })
     render(<SkinAccessSection />)
     await loaded()
-    fireEvent.change(screen.getByLabelText('Mint key username'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
     await waitFor(() => {
       expect(screen.getByText('k2skn_ONCESECRET')).not.toBeNull()
     })
     expect(h.daemonCliPost).toHaveBeenCalledWith('skin-tokens', {
-      username: 'alice',
+      name: 'vercel',
       caps: ['thread:read', 'thread:post'],
       rooms: ['sales'],
     })
@@ -409,7 +409,7 @@ describe('SkinAccessSection', () => {
   it('offers files read/write checkboxes next to Thread and mints them when checked', async () => {
     h.daemonCliPost.mockImplementation(async (route: string) => {
       if (route === 'skin-tokens') {
-        return { id: 'tok-files', prefix: 'k2skn_ffff', username: 'alice', secret: 'k2skn_FILESECRET' }
+        return { id: 'tok-files', prefix: 'k2skn_ffff', name: 'vercel', secret: 'k2skn_FILESECRET' }
       }
       return { ok: true }
     })
@@ -417,7 +417,7 @@ describe('SkinAccessSection', () => {
     await loaded()
     expect(screen.getByLabelText('Mint cap files:read')).not.toBeNull()
     expect(screen.getByLabelText('Mint cap files:write')).not.toBeNull()
-    fireEvent.change(screen.getByLabelText('Mint key username'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByLabelText('Mint cap files:read'))
     fireEvent.click(screen.getByLabelText('Mint cap files:write'))
@@ -438,7 +438,7 @@ describe('SkinAccessSection', () => {
     h.daemonCliPost.mockResolvedValue({ id: 'tok-new', prefix: 'k2skn_ffff' })
     render(<SkinAccessSection />)
     await loaded()
-    fireEvent.change(screen.getByLabelText('Mint key username'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
     await waitFor(() => {
@@ -524,9 +524,9 @@ describe('SkinAccessSection', () => {
     })
     render(<SkinAccessSection />)
     await loaded()
-    expect(screen.getByText(/Assign agents or these guests go dark/i)).not.toBeNull()
+    expect(screen.getByText(/Assign agents or these platform tokens go dark/i)).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
-    expect(screen.queryByText(/Assign agents or these guests go dark/i)).toBeNull()
+    expect(screen.queryByText(/Assign agents or these platform tokens go dark/i)).toBeNull()
     expect(h.daemonCliPost.mock.calls.map((c) => String(c[0])).join(' ')).not.toMatch(/rooms/)
   })
 
@@ -559,7 +559,7 @@ describe('SkinAccessSection', () => {
   it('mints disabled until an agent is checked', async () => {
     render(<SkinAccessSection />)
     await loaded()
-    fireEvent.change(screen.getByLabelText('Mint key username'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
     expect((screen.getByRole('button', { name: 'Mint key' }) as HTMLButtonElement).disabled).toBe(
       true,
     )

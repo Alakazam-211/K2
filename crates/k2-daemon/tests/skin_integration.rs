@@ -325,7 +325,7 @@ fn add_user(port: u16, username: &str) {
     assert_eq!(r.status, 200, "skin user add; {}", r.body);
 }
 
-fn mint(port: u16, username: &str, caps: &[&str], rooms: &[&str]) -> (String, String) {
+fn mint(port: u16, name: &str, caps: &[&str], rooms: &[&str]) -> (String, String) {
     let caps_json = serde_json::to_string(&caps).unwrap();
     let rooms_json = serde_json::to_string(&rooms).unwrap();
     let r = http(
@@ -333,7 +333,7 @@ fn mint(port: u16, username: &str, caps: &[&str], rooms: &[&str]) -> (String, St
         "POST",
         &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
         Some(&format!(
-            r#"{{"username":"{username}","caps":{caps_json},"rooms":{rooms_json}}}"#
+            r#"{{"name":"{name}","caps":{caps_json},"rooms":{rooms_json}}}"#
         )),
     );
     assert_eq!(r.status, 200, "mint; {}", r.body);
@@ -375,7 +375,7 @@ async fn skin_slice12_thread_rooms_grid_403() {
         seed_thread_addr(&handle);
         add_user(port, "guest");
 
-        let (_id, read_tok) = mint(port, "guest", &["thread:read"], &[&handle]);
+        let (_id, read_tok) = mint(port, "guest-read", &["thread:read"], &[&handle]);
 
         let get = http(
             port,
@@ -424,7 +424,12 @@ async fn skin_slice12_thread_rooms_grid_403() {
             post.body
         );
 
-        let (_pid, post_tok) = mint(port, "guest", &["thread:read", "thread:post"], &[&handle]);
+        let (_pid, post_tok) = mint(
+            port,
+            "guest-post",
+            &["thread:read", "thread:post"],
+            &[&handle],
+        );
         let posted = http(
             port,
             "POST",
@@ -537,7 +542,7 @@ async fn skin_mint_is_owner_tier_admin_member_403() {
                 port,
                 "POST",
                 &format!("/cli/skin-tokens?token={tok}"),
-                Some(r#"{"username":"stay","caps":["thread:read"]}"#),
+                Some(r#"{"name":"stay","caps":["thread:read"]}"#),
             );
             assert_eq!(r.status, 403, "{who} must not mint; {}", r.body);
             let list = http(port, "GET", &format!("/cli/skin-tokens?token={tok}"), None);
@@ -550,7 +555,7 @@ async fn skin_mint_is_owner_tier_admin_member_403() {
             "POST",
             &format!("/cli/skin-tokens?token={owner_role}"),
             Some(&format!(
-                r#"{{"username":"stay","caps":["thread:read"],"rooms":["{handle}"]}}"#
+                r#"{{"name":"stay","caps":["thread:read"],"rooms":["{handle}"]}}"#
             )),
         );
         assert_eq!(r.status, 200, "Owner-ROLE may mint; {}", r.body);
@@ -615,7 +620,7 @@ async fn skin_workspace_agent_hook_can_list_but_not_mint() {
             port,
             "POST",
             &format!("/cli/skin-tokens?token={hook}"),
-            Some(r#"{"username":"guest","caps":["thread:read"]}"#),
+            Some(r#"{"name":"guest","caps":["thread:read"]}"#),
         );
         assert_eq!(
             mint_denied.status, 403,
@@ -1021,11 +1026,30 @@ async fn skin_mint_rooms_required_and_unknown_handle_400() {
         let handle = format!("skinsales{}", &uuid::Uuid::new_v4().to_string()[..8]);
         seed_thread_addr(&handle);
 
+        let leftover_user = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"guest","caps":["thread:read"],"rooms":["x"]}"#),
+        );
+        assert_eq!(
+            leftover_user.status, 400,
+            "username in body; {}",
+            leftover_user.body
+        );
+        assert!(
+            leftover_user
+                .body
+                .contains("use name (platform label), not username"),
+            "{}",
+            leftover_user.body
+        );
+
         let missing = http(
             port,
             "POST",
             &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
-            Some(r#"{"username":"guest","caps":["thread:read"]}"#),
+            Some(r#"{"name":"guest","caps":["thread:read"]}"#),
         );
         assert_eq!(missing.status, 400, "mint without rooms; {}", missing.body);
         assert!(
@@ -1040,7 +1064,7 @@ async fn skin_mint_rooms_required_and_unknown_handle_400() {
             port,
             "POST",
             &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
-            Some(r#"{"username":"guest","caps":["thread:read"],"rooms":[]}"#),
+            Some(r#"{"name":"guest","caps":["thread:read"],"rooms":[]}"#),
         );
         assert_eq!(empty.status, 400, "mint empty rooms; {}", empty.body);
 
@@ -1048,7 +1072,7 @@ async fn skin_mint_rooms_required_and_unknown_handle_400() {
             port,
             "POST",
             &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
-            Some(r#"{"username":"guest","caps":["thread:read"],"rooms":["not-a-handle"]}"#),
+            Some(r#"{"name":"guest","caps":["thread:read"],"rooms":["not-a-handle"]}"#),
         );
         assert_eq!(unknown.status, 400, "unknown handle; {}", unknown.body);
         assert!(
@@ -1274,8 +1298,8 @@ async fn skin_empty_rooms_dark_rename_delete_apply_hook() {
         let (sales_id, sales_pin) = seed_thread_addr(&sales);
         seed_thread_addr(&other);
         add_user(port, "guest");
-        let (id_a, tok_a) = mint(port, "guest", &["thread:read"], &[&sales]);
-        let (_id_b, tok_b) = mint(port, "guest", &["thread:read"], &[&sales]);
+        let (id_a, tok_a) = mint(port, "guest-a", &["thread:read"], &[&sales]);
+        let (id_b, tok_b) = mint(port, "guest-b", &["thread:read"], &[&sales]);
 
         let clear = http(
             port,
@@ -1332,18 +1356,29 @@ async fn skin_empty_rooms_dark_rename_delete_apply_hook() {
         let listed_v = json(&listed.body);
         let tokens = listed_v["tokens"].as_array().expect("tokens");
         for row in tokens {
-            if row["revokedAt"].is_null() {
+            if row["id"] == id_a {
                 let handles = row["roomHandles"].as_array().expect("roomHandles");
                 assert!(
-                    handles.iter().any(|h| h == &other),
-                    "apply-tokens must copy other: {row}"
+                    handles.is_empty(),
+                    "apply-tokens must not touch platform token a: {row}"
+                );
+            }
+            if row["id"] == id_b {
+                let handles = row["roomHandles"].as_array().expect("roomHandles");
+                assert!(
+                    handles.iter().any(|h| h == &new_handle || h == &sales),
+                    "apply-tokens must not rewrite platform token b: {row}"
+                );
+                assert!(
+                    !handles.iter().any(|h| h == &other),
+                    "apply-tokens is sessions only: {row}"
                 );
             }
         }
 
         add_user(port, "otherguest");
-        let (id_c, tok_c) = mint(port, "otherguest", &["thread:read"], &[&new_handle]);
-        let (id_d, _tok_d) = mint(port, "otherguest", &["thread:read"], &[&new_handle]);
+        let (id_c, tok_c) = mint(port, "other-c", &["thread:read"], &[&new_handle]);
+        let (id_d, _tok_d) = mint(port, "other-d", &["thread:read"], &[&new_handle]);
         let no_apply = http(
             port,
             "POST",
@@ -1498,6 +1533,20 @@ async fn skin_login_session_cookie_logout_and_host_fold() {
         assert_eq!(v["ok"], true, "{}", ok.body);
         let token = v["token"].as_str().expect("token").to_string();
         assert!(token.starts_with("k2skn_"), "{token}");
+        let listed_sessions = http(
+            port,
+            "GET",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(listed_sessions.status, 200, "{}", listed_sessions.body);
+        let listed_v = json(&listed_sessions.body);
+        let listed_arr = listed_v["tokens"].as_array().expect("tokens");
+        assert!(
+            listed_arr.is_empty(),
+            "list is platform-only; must hide login session: {}",
+            listed_sessions.body
+        );
         assert!(!ok.body.contains("password_hash"));
         assert!(!ok.body.contains("passwordHash"));
         let set_cookie = header_value(&ok.headers, "set-cookie").expect("Set-Cookie");
@@ -1770,7 +1819,7 @@ async fn skin_files_http_ws_rooms_and_jail() {
         let (_julie_id, julie_dir) = seed_files_workspace(&julie);
         add_user(port, "guest");
 
-        let (_id, thread_tok) = mint(port, "guest", &["thread:read"], &[&sales]);
+        let (_id, thread_tok) = mint(port, "guest-thread", &["thread:read"], &[&sales]);
         let thread_dir = http(
             port,
             "GET",
@@ -1784,7 +1833,7 @@ async fn skin_files_http_ws_rooms_and_jail() {
             thread_dir.body
         );
 
-        let (_id, write_only) = mint(port, "guest", &["files:write"], &[&sales]);
+        let (_id, write_only) = mint(port, "guest-write", &["files:write"], &[&sales]);
         let write_only_dir = http(
             port,
             "GET",
@@ -1793,7 +1842,7 @@ async fn skin_files_http_ws_rooms_and_jail() {
         );
         assert_missing_cap(&write_only_dir, "files:read");
 
-        let (_id, read_tok) = mint(port, "guest", &["files:read"], &[&sales]);
+        let (_id, read_tok) = mint(port, "guest-files", &["files:read"], &[&sales]);
         let ok = http(
             port,
             "GET",
@@ -1885,7 +1934,7 @@ async fn skin_files_http_ws_rooms_and_jail() {
         );
         assert_missing_cap(&no_write, "files:write");
 
-        let (_id, rw_tok) = mint(port, "guest", &["files:read", "files:write"], &[&sales]);
+        let (_id, rw_tok) = mint(port, "guest-rw", &["files:read", "files:write"], &[&sales]);
 
         let missing_ws = http(port, "GET", &format!("/cli/fs/events?token={rw_tok}"), None);
         assert_eq!(

@@ -1,19 +1,22 @@
-//! Skin capability passes (prd-skin-auth-v1 + umbrella slice 1+2).
+//! Skin capability passes (prd-skin-auth-v1 + skin-identity-reshape-v1).
 //!
-//! Standalone guest list + hashed `k2skn_…` tokens. **Not** Connect users,
-//! **not** `/v1` `k2sk_` API keys, **not** the owner token. Overlay Thread
-//! rooms only — grid/PTY is never a skin room. Optional `password_hash` on
-//! principals is K2-login only (`POST /cli/skin/login`); NULL = mint-only.
+//! Two `k2skn_…` classes, one prefix: guest **login session** (`session=1`,
+//! on a principal) and **platform** token (`session=0`, no principal, `name`
+//! is a label). **Not** Connect users, **not** `/v1` `k2sk_` API keys, **not**
+//! the owner token. Overlay Thread rooms only — grid/PTY is never a skin room.
+//! Optional `password_hash` on principals is K2-login only
+//! (`POST /cli/skin/login`); NULL = cannot K2-login.
 //!
 //! ## Store (`~/.k2/skin.db`, WAL, own Mutex)
-//! Two tables: `principals` (roster) and `tokens` (hashed passes). The raw
-//! secret is returned **once** at mint and never stored. Lookup is
+//! Two tables: `principals` (guest roster) and `tokens` (hashed passes). The
+//! raw secret is returned **once** at mint and never stored. Lookup is
 //! hex SHA-256 of the presented key (same construction as API keys /
 //! connect-user session tokens — high-entropy CSPRNG, not argon2).
 //!
 //! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`.
 //! Empty/missing caps stay Thread-only — never silent-add files. Never `pty:*`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -359,7 +362,8 @@ pub struct SkinPrincipal {
 #[serde(rename_all = "camelCase")]
 pub struct SkinTokenMeta {
     pub id: String,
-    pub username: String,
+    /// Platform label (`session=0`) or session stamp username (`session=1`).
+    pub name: String,
     /// Display prefix (`k2skn_…ab12`). Never the secret.
     pub prefix: String,
     pub caps: Vec<String>,
@@ -384,14 +388,16 @@ pub struct SkinAgent {
 }
 
 /// Resolved live pass. Safe to log `id` / `username` / `caps` — never a secret.
+/// `username` is the overlay stamp: session principal or platform `name`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkinPass {
     pub id: String,
-    pub principal_id: String,
+    /// `Some` for login sessions; `None` for platform tokens.
+    pub principal_id: Option<String>,
     pub username: String,
     pub caps: Vec<String>,
     pub rooms: Vec<String>,
-    /// Login-minted session pass (`session=1`). Static partner mint is `false`.
+    /// Login-minted session pass (`session=1`). Platform mint is `false`.
     pub session: bool,
 }
 
@@ -468,11 +474,30 @@ fn store_path() -> PathBuf {
     crate::paths::k2_home().join("skin.db")
 }
 
+const TOKENS_DDL: &str = "CREATE TABLE IF NOT EXISTS tokens (
+            id TEXT PRIMARY KEY,
+            principal_id TEXT REFERENCES principals(id) ON DELETE CASCADE,
+            name TEXT,
+            key_hash TEXT NOT NULL UNIQUE,
+            key_prefix TEXT NOT NULL,
+            caps TEXT NOT NULL,
+            rooms TEXT NOT NULL DEFAULT '[]',
+            created_at INTEGER NOT NULL,
+            revoked_at INTEGER,
+            session INTEGER NOT NULL DEFAULT 0,
+            expires_at INTEGER,
+            CHECK (
+                (session = 1 AND principal_id IS NOT NULL AND name IS NULL)
+                OR
+                (session = 0 AND principal_id IS NULL AND name IS NOT NULL)
+            )
+         )";
+
 fn open_db(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    let conn = Connection::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let mut conn = Connection::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
     let _ = conn.execute_batch(
         "PRAGMA journal_mode = WAL;\n\
@@ -484,17 +509,13 @@ fn open_db(path: &Path) -> Result<Connection, String> {
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
             created_at INTEGER NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS tokens (
-            id TEXT PRIMARY KEY,
-            principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
-            key_hash TEXT NOT NULL UNIQUE,
-            key_prefix TEXT NOT NULL,
-            caps TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            revoked_at INTEGER
-         );
-         CREATE TABLE IF NOT EXISTS front_door (
+         );",
+    )
+    .map_err(|e| format!("skin.db schema: {e}"))?;
+    conn.execute_batch(TOKENS_DDL)
+        .map_err(|e| format!("skin.db schema: {e}"))?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS front_door (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             mode TEXT NOT NULL,
             url TEXT,
@@ -508,6 +529,7 @@ fn open_db(path: &Path) -> Result<Connection, String> {
         "ALTER TABLE tokens ADD COLUMN rooms TEXT NOT NULL DEFAULT '[]'",
         [],
     );
+    let _ = conn.execute("ALTER TABLE tokens ADD COLUMN name TEXT", []);
     let _ = conn.execute(
         "ALTER TABLE principals ADD COLUMN default_rooms TEXT NOT NULL DEFAULT '[]'",
         [],
@@ -526,6 +548,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
             locked_until INTEGER
          );",
     );
+    rebuild_tokens_table_if_needed(&mut conn)?;
+    ensure_platform_name_index(&conn)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -534,6 +558,201 @@ fn open_db(path: &Path) -> Result<Connection, String> {
         }
     }
     Ok(conn)
+}
+
+fn tokens_principal_id_notnull(conn: &Connection) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(tokens)")
+        .map_err(|e| format!("skin.db table_info: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            let name: String = r.get(1)?;
+            let notnull: i64 = r.get(3)?;
+            Ok((name, notnull))
+        })
+        .map_err(|e| format!("skin.db table_info: {e}"))?;
+    for row in rows {
+        let (name, notnull) = row.map_err(|e| format!("skin.db table_info row: {e}"))?;
+        if name == "principal_id" {
+            return Ok(notnull != 0);
+        }
+    }
+    Ok(false)
+}
+
+fn key_prefix_last4_alnum(key_prefix: &str) -> Result<String, String> {
+    let alnum: String = key_prefix
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if alnum.len() < 4 {
+        return Err(format!(
+            "skin.db migrate: key_prefix {key_prefix:?} has no ASCII alnum last4"
+        ));
+    }
+    Ok(alnum[alnum.len() - 4..].to_ascii_lowercase())
+}
+
+fn migrate_platform_name(
+    username: &str,
+    key_prefix: &str,
+    live_taken: &HashSet<String>,
+    live: bool,
+) -> Result<String, String> {
+    let username = username.trim().to_ascii_lowercase();
+    if username.is_empty() {
+        return Err("skin.db migrate: session=0 token has empty principal username".to_string());
+    }
+    let last4 = key_prefix_last4_alnum(key_prefix)?;
+    let taken = |n: &str| live && live_taken.contains(n);
+    let mut candidate = username.clone();
+    if candidate == "owner" || taken(&candidate) {
+        candidate = format!("{username}-{last4}");
+    }
+    if candidate == "owner" {
+        return Err("skin.db migrate: platform token name 'owner' is reserved".into());
+    }
+    if taken(&candidate) {
+        return Err(format!(
+            "skin.db migrate: platform token name '{candidate}' collides after suffix"
+        ));
+    }
+    Ok(candidate)
+}
+
+fn ensure_platform_name_index(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS tokens_platform_name_live
+         ON tokens(name COLLATE NOCASE)
+         WHERE session = 0 AND revoked_at IS NULL;",
+    )
+    .map_err(|e| format!("skin.db platform name index: {e}"))
+}
+
+struct TokenRebuildRow {
+    id: String,
+    principal_id: Option<String>,
+    key_hash: String,
+    key_prefix: String,
+    caps: String,
+    rooms: String,
+    created_at: i64,
+    revoked_at: Option<i64>,
+    session: i64,
+    expires_at: Option<i64>,
+    username: Option<String>,
+}
+
+fn rebuild_tokens_table_if_needed(conn: &mut Connection) -> Result<(), String> {
+    if !tokens_principal_id_notnull(conn)? {
+        return Ok(());
+    }
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("skin.db migrate begin: {e}"))?;
+    let mut stmt = tx
+        .prepare(
+            "SELECT t.id, t.principal_id, t.key_hash, t.key_prefix, t.caps,
+                    COALESCE(t.rooms, '[]'), t.created_at, t.revoked_at,
+                    COALESCE(t.session, 0), t.expires_at, p.username
+             FROM tokens t
+             LEFT JOIN principals p ON p.id = t.principal_id",
+        )
+        .map_err(|e| format!("skin.db migrate select: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(TokenRebuildRow {
+                id: r.get(0)?,
+                principal_id: r.get(1)?,
+                key_hash: r.get(2)?,
+                key_prefix: r.get(3)?,
+                caps: r.get(4)?,
+                rooms: r.get(5)?,
+                created_at: r.get(6)?,
+                revoked_at: r.get(7)?,
+                session: r.get(8)?,
+                expires_at: r.get(9)?,
+                username: r.get(10)?,
+            })
+        })
+        .map_err(|e| format!("skin.db migrate select: {e}"))?;
+    let mut old = Vec::new();
+    for row in rows {
+        old.push(row.map_err(|e| format!("skin.db migrate row: {e}"))?);
+    }
+    drop(stmt);
+
+    tx.execute_batch(
+        "CREATE TABLE tokens_new (
+            id TEXT PRIMARY KEY,
+            principal_id TEXT REFERENCES principals(id) ON DELETE CASCADE,
+            name TEXT,
+            key_hash TEXT NOT NULL UNIQUE,
+            key_prefix TEXT NOT NULL,
+            caps TEXT NOT NULL,
+            rooms TEXT NOT NULL DEFAULT '[]',
+            created_at INTEGER NOT NULL,
+            revoked_at INTEGER,
+            session INTEGER NOT NULL DEFAULT 0,
+            expires_at INTEGER,
+            CHECK (
+                (session = 1 AND principal_id IS NOT NULL AND name IS NULL)
+                OR
+                (session = 0 AND principal_id IS NULL AND name IS NOT NULL)
+            )
+         );",
+    )
+    .map_err(|e| format!("skin.db migrate create: {e}"))?;
+
+    let mut live_taken: HashSet<String> = HashSet::new();
+    for row in &old {
+        let (principal_id, name): (Option<String>, Option<String>) = if row.session != 0 {
+            let Some(pid) = row
+                .principal_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                return Err(format!(
+                    "skin.db migrate: session=1 token {} missing principal_id",
+                    row.id
+                ));
+            };
+            (Some(pid.to_string()), None)
+        } else {
+            let username = row.username.as_deref().unwrap_or("");
+            let live = row.revoked_at.is_none();
+            let candidate = migrate_platform_name(username, &row.key_prefix, &live_taken, live)?;
+            if live {
+                live_taken.insert(candidate.clone());
+            }
+            (None, Some(candidate))
+        };
+        tx.execute(
+            "INSERT INTO tokens_new
+             (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                row.id,
+                principal_id,
+                name,
+                row.key_hash,
+                row.key_prefix,
+                row.caps,
+                row.rooms,
+                row.created_at,
+                row.revoked_at,
+                row.session,
+                row.expires_at
+            ],
+        )
+        .map_err(|e| format!("skin.db migrate insert {}: {e}", row.id))?;
+    }
+    tx.execute_batch("DROP TABLE tokens; ALTER TABLE tokens_new RENAME TO tokens;")
+        .map_err(|e| format!("skin.db migrate swap: {e}"))?;
+    tx.commit()
+        .map_err(|e| format!("skin.db migrate commit: {e}"))?;
+    Ok(())
 }
 
 fn db() -> &'static Mutex<Option<SkinDb>> {
@@ -646,8 +865,11 @@ pub fn remove_principal(username: &str) -> Result<bool, String> {
         let Some(id) = id else {
             return Ok(false);
         };
-        conn.execute("DELETE FROM tokens WHERE principal_id = ?1", params![id])
-            .map_err(|e| format!("skin token delete: {e}"))?;
+        conn.execute(
+            "DELETE FROM tokens WHERE principal_id = ?1 AND session = 1",
+            params![id],
+        )
+        .map_err(|e| format!("skin session delete: {e}"))?;
         let n = conn
             .execute("DELETE FROM principals WHERE id = ?1", params![id])
             .map_err(|e| format!("skin principal delete: {e}"))?;
@@ -695,14 +917,18 @@ fn attach_token_handles(mut meta: SkinTokenMeta) -> SkinTokenMeta {
 
 // ── Tokens ───────────────────────────────────────────────────────────
 
-/// Mint a pass. Returns `(meta, raw_secret)` — the secret is shown once.
+/// Mint a **platform** pass. Returns `(meta, raw_secret)` — the secret is shown
+/// once. No principal lookup. `name` is a box-unique label (not a guest).
 /// `rooms` are already-canonical `project_id` UUIDs. Empty → error (R5).
 pub fn create_token(
-    username: &str,
+    name: &str,
     caps: Option<&[String]>,
     rooms: &[String],
 ) -> Result<(SkinTokenMeta, String), String> {
-    let username = normalize_username(username)?;
+    let name = normalize_username(name)?;
+    if name == "owner" {
+        return Err("platform token name 'owner' is reserved".to_string());
+    }
     let caps = parse_caps(caps)?;
     let rooms = normalize_room_ids(rooms);
     if rooms.is_empty() {
@@ -720,19 +946,35 @@ pub fn create_token(
     let caps_stored = caps_json(&caps);
     let rooms_stored = rooms_json(&rooms);
     let r = with_conn(|conn| {
-        let Some(principal) = principal_by_username(conn, &username)? else {
-            return Err(format!("unknown skin user '{username}'"));
-        };
+        let taken: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tokens
+                 WHERE session = 0 AND revoked_at IS NULL AND name = ?1 COLLATE NOCASE",
+                params![name],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("skin token name lookup: {e}"))?;
+        if taken > 0 {
+            return Err(format!("platform token name '{name}' already exists"));
+        }
         conn.execute(
-            "INSERT INTO tokens (id, principal_id, key_hash, key_prefix, caps, rooms, created_at, revoked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
-            params![id, principal.id, key_hash, prefix, caps_stored, rooms_stored, created_at],
+            "INSERT INTO tokens
+             (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at)
+             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0, NULL)",
+            params![id, name, key_hash, prefix, caps_stored, rooms_stored, created_at],
         )
-        .map_err(|e| format!("skin token insert: {e}"))?;
+        .map_err(|e| {
+            let s = e.to_string();
+            if s.contains("tokens_platform_name_live") || s.contains("UNIQUE") {
+                format!("platform token name '{name}' already exists")
+            } else {
+                format!("skin token insert: {e}")
+            }
+        })?;
         Ok((
             SkinTokenMeta {
                 id,
-                username: principal.username,
+                name,
                 prefix,
                 caps,
                 rooms,
@@ -743,7 +985,6 @@ pub fn create_token(
             raw,
         ))
     })?;
-    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
     Ok((attach_token_handles(r.0), r.1))
 }
 
@@ -772,8 +1013,8 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
         let rooms = principal.default_rooms.clone();
         let rooms_stored = rooms_json(&rooms);
         conn.execute(
-            "INSERT INTO tokens (id, principal_id, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 1, ?8)",
+            "INSERT INTO tokens (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, NULL, 1, ?8)",
             params![
                 id,
                 principal.id,
@@ -789,7 +1030,7 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
         Ok((
             SkinTokenMeta {
                 id,
-                username: principal.username,
+                name: principal.username,
                 prefix,
                 caps,
                 rooms,
@@ -805,7 +1046,7 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
 }
 
 /// Set or clear the K2-login password. Empty/`None` → NULL hash (cannot
-/// K2-login; static mint still works). Revokes **session** passes only.
+/// K2-login; platform tokens still work). Revokes **session** passes only.
 /// Hashes **before** taking `skin.db` so argon2 never holds the Mutex.
 pub fn set_principal_password(
     username: &str,
@@ -961,9 +1202,9 @@ pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
     with_conn(|conn| {
         let mut stmt = conn
             .prepare(
-                "SELECT t.id, p.username, t.key_prefix, t.caps, t.rooms, t.created_at, t.revoked_at
+                "SELECT t.id, t.name, t.key_prefix, t.caps, t.rooms, t.created_at, t.revoked_at
                  FROM tokens t
-                 JOIN principals p ON p.id = t.principal_id
+                 WHERE t.session = 0
                  ORDER BY t.created_at DESC",
             )
             .map_err(|e| format!("skin token list: {e}"))?;
@@ -973,7 +1214,7 @@ pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
                 let rooms_raw: String = r.get(4)?;
                 Ok(SkinTokenMeta {
                     id: r.get(0)?,
-                    username: r.get(1)?,
+                    name: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     prefix: r.get(2)?,
                     caps: caps_from_json(&caps_raw),
                     rooms: rooms_from_json(&rooms_raw),
@@ -1020,23 +1261,31 @@ pub fn revoke_token(id: &str) -> Result<bool, String> {
 
 fn token_meta_from_row(conn: &Connection, id: &str) -> Result<Option<SkinTokenMeta>, String> {
     conn.query_row(
-        "SELECT t.id, p.username, t.key_prefix, t.caps, t.rooms, t.created_at, t.revoked_at
+        "SELECT t.id, t.session, t.name, p.username, t.key_prefix, t.caps, t.rooms, t.created_at, t.revoked_at
          FROM tokens t
-         JOIN principals p ON p.id = t.principal_id
+         LEFT JOIN principals p ON p.id = t.principal_id
          WHERE t.id = ?1",
         params![id],
         |r| {
-            let caps_raw: String = r.get(3)?;
-            let rooms_raw: String = r.get(4)?;
+            let session: i64 = r.get(1)?;
+            let token_name: Option<String> = r.get(2)?;
+            let principal_username: Option<String> = r.get(3)?;
+            let stamp = if session != 0 {
+                principal_username.unwrap_or_default()
+            } else {
+                token_name.unwrap_or_default()
+            };
+            let caps_raw: String = r.get(5)?;
+            let rooms_raw: String = r.get(6)?;
             Ok(SkinTokenMeta {
                 id: r.get(0)?,
-                username: r.get(1)?,
-                prefix: r.get(2)?,
+                name: stamp,
+                prefix: r.get(4)?,
                 caps: caps_from_json(&caps_raw),
                 rooms: rooms_from_json(&rooms_raw),
                 room_handles: Vec::new(),
-                created_at: r.get(5)?,
-                revoked_at: r.get(6)?,
+                created_at: r.get(7)?,
+                revoked_at: r.get(8)?,
             })
         },
     )
@@ -1071,7 +1320,8 @@ pub fn set_token_rooms(id: &str, rooms: &[String]) -> Result<SkinTokenMeta, Stri
     .map(attach_token_handles)
 }
 
-/// Set principal mint template. `apply_tokens` copies onto **all live** keys.
+/// Set principal default rooms. `apply_tokens` copies onto live **sessions**
+/// only — never platform tokens.
 pub fn set_principal_default_rooms(
     username: &str,
     rooms: &[String],
@@ -1091,7 +1341,8 @@ pub fn set_principal_default_rooms(
         .map_err(|e| format!("skin user rooms: {e}"))?;
         if apply_tokens {
             conn.execute(
-                "UPDATE tokens SET rooms = ?1 WHERE principal_id = ?2 AND revoked_at IS NULL",
+                "UPDATE tokens SET rooms = ?1
+                 WHERE principal_id = ?2 AND session = 1 AND revoked_at IS NULL",
                 params![stored, p.id],
             )
             .map_err(|e| format!("skin apply-tokens: {e}"))?;
@@ -1252,20 +1503,28 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
     with_conn(|conn| {
         let row = conn
             .query_row(
-                "SELECT t.id, t.principal_id, p.username, t.caps, t.rooms, t.session
+                "SELECT t.id, t.principal_id, t.session, t.name, p.username, t.caps, t.rooms
                  FROM tokens t
-                 JOIN principals p ON p.id = t.principal_id
+                 LEFT JOIN principals p ON p.id = t.principal_id
                  WHERE t.key_hash = ?1 AND t.revoked_at IS NULL
                    AND (t.expires_at IS NULL OR t.expires_at > ?2)",
                 params![key_hash, now],
                 |r| {
-                    let caps_raw: String = r.get(3)?;
-                    let rooms_raw: String = r.get(4)?;
-                    let session: i64 = r.get(5)?;
+                    let principal_id: Option<String> = r.get(1)?;
+                    let session: i64 = r.get(2)?;
+                    let token_name: Option<String> = r.get(3)?;
+                    let principal_username: Option<String> = r.get(4)?;
+                    let stamp = if session != 0 {
+                        principal_username.unwrap_or_default()
+                    } else {
+                        token_name.unwrap_or_default()
+                    };
+                    let caps_raw: String = r.get(5)?;
+                    let rooms_raw: String = r.get(6)?;
                     Ok(SkinPass {
                         id: r.get(0)?,
-                        principal_id: r.get(1)?,
-                        username: r.get(2)?,
+                        principal_id,
+                        username: stamp,
                         caps: caps_from_json(&caps_raw),
                         rooms: rooms_from_json(&rooms_raw),
                         session: session != 0,
@@ -1460,9 +1719,11 @@ mod tests {
             assert_eq!(raw.len(), SKIN_KEY_PREFIX.len() + KEY_BODY_LEN);
             assert!(meta.prefix.starts_with("k2skn_…"), "{}", meta.prefix);
             assert_eq!(meta.caps, vec!["thread:read"]);
+            assert_eq!(meta.name, "ada");
             assert_eq!(meta.rooms, vec![room.clone()]);
             let tokens = list_tokens().expect("list tokens");
             assert_eq!(tokens.len(), 1);
+            assert_eq!(tokens[0].name, "ada");
             assert!(
                 !format!("{tokens:?}").contains(&raw),
                 "secret must not leak in list"
@@ -1471,6 +1732,11 @@ mod tests {
 
             let pass = resolve_skin_token(&raw).expect("live pass");
             assert_eq!(pass.username, "ada");
+            assert!(
+                pass.principal_id.is_none(),
+                "platform mint has no principal"
+            );
+            assert!(!pass.session);
             assert!(pass.has_cap(CAP_THREAD_READ));
             assert!(!pass.has_cap(CAP_THREAD_POST));
             assert!(pass.has_room(&room));
@@ -1543,9 +1809,18 @@ mod tests {
     fn mint_requires_principal_and_rejects_unknown_caps() {
         with_temp_home(|| {
             let room = uuid::Uuid::new_v4().to_string();
-            let err = create_token("ghost", None, std::slice::from_ref(&room)).unwrap_err();
-            assert!(err.contains("unknown skin user"), "{err}");
-            add_principal("bob").unwrap();
+            let (ghost_meta, ghost_raw) =
+                create_token("ghost", None, std::slice::from_ref(&room)).expect("no principal");
+            assert_eq!(ghost_meta.name, "ghost");
+            let ghost = resolve_skin_token(&ghost_raw).expect("platform ghost");
+            assert!(ghost.principal_id.is_none(), "{ghost:?}");
+            assert!(!ghost.session);
+            assert_eq!(ghost.username, "ghost");
+
+            let err = create_token("owner", None, std::slice::from_ref(&room)).unwrap_err();
+            assert!(err.contains("owner"), "{err}");
+            assert!(err.contains("reserved"), "{err}");
+
             let err = create_token(
                 "bob",
                 Some(&["pty:write".into()]),
@@ -1562,14 +1837,18 @@ mod tests {
             let (_meta, raw) =
                 create_token("bob", None, std::slice::from_ref(&room)).expect("default caps");
             let pass = resolve_skin_token(&raw).expect("resolve");
+            assert!(pass.principal_id.is_none());
             assert!(pass.has_cap(CAP_THREAD_READ));
             assert!(pass.has_cap(CAP_THREAD_POST));
             assert!(!pass.has_cap(CAP_FILES_READ));
             assert!(!pass.has_cap(CAP_FILES_WRITE));
             assert_eq!(pass.rooms, vec![room.clone()]);
 
+            let err = create_token("bob", None, std::slice::from_ref(&room)).unwrap_err();
+            assert!(err.contains("already exists"), "{err}");
+
             let (meta, raw) = create_token(
-                "bob",
+                "bob-files",
                 Some(&["files:read".into(), "files:write".into()]),
                 std::slice::from_ref(&room),
             )
@@ -1587,11 +1866,22 @@ mod tests {
         with_temp_home(|| {
             add_principal("cara").unwrap();
             let room = uuid::Uuid::new_v4().to_string();
-            let (_meta, raw) = create_token("cara", None, std::slice::from_ref(&room)).unwrap();
-            assert!(resolve_skin_token(&raw).is_some());
+            let (_meta, platform_raw) =
+                create_token("cara", None, std::slice::from_ref(&room)).unwrap();
+            let (_sess, sess_raw) = create_session_token("cara").unwrap();
+            assert!(resolve_skin_token(&platform_raw).is_some());
+            assert!(resolve_skin_token(&sess_raw).is_some());
             assert!(remove_principal("cara").unwrap());
-            assert!(resolve_skin_token(&raw).is_none());
+            assert!(
+                resolve_skin_token(&platform_raw).is_some(),
+                "platform token survives guest delete"
+            );
+            assert!(
+                resolve_skin_token(&sess_raw).is_none(),
+                "session=1 must drop with the guest"
+            );
             assert!(list_principals().unwrap().is_empty());
+            assert_eq!(list_tokens().unwrap().len(), 1);
             assert!(!remove_principal("cara").unwrap());
         });
     }
@@ -1750,9 +2040,15 @@ mod tests {
             assert!(meta.rooms.is_empty(), "default_rooms [] must copy");
             let pass = resolve_skin_token(&raw).expect("live session");
             assert!(pass.session);
+            assert!(pass.principal_id.is_some());
+            assert_eq!(pass.username, "ada");
             assert!(pass.rooms_empty());
             assert!(pass.has_cap(CAP_THREAD_READ));
             assert!(pass.has_cap(CAP_THREAD_POST));
+            assert!(
+                list_tokens().unwrap().is_empty(),
+                "list_tokens is platform only"
+            );
         });
     }
 
@@ -1822,8 +2118,101 @@ mod tests {
             }
             assert!(
                 resolve_skin_token(&static_raw).is_some(),
-                "clearing password still leaves static mint"
+                "clearing password still leaves platform mint"
             );
+        });
+    }
+
+    #[test]
+    fn guest_and_platform_same_name_coexist_revoked_name_reusable() {
+        with_temp_home(|| {
+            add_principal("bob").unwrap();
+            let room = uuid::Uuid::new_v4().to_string();
+            let (meta, raw) = create_token("bob", None, std::slice::from_ref(&room)).unwrap();
+            assert_eq!(meta.name, "bob");
+            let pass = resolve_skin_token(&raw).expect("platform bob");
+            assert_eq!(pass.username, "bob");
+            assert!(pass.principal_id.is_none());
+            let listed = list_principals().unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].username, "bob");
+            assert!(revoke_token(&meta.id).unwrap());
+            let (meta2, raw2) =
+                create_token("bob", None, std::slice::from_ref(&room)).expect("reuse revoked name");
+            assert_eq!(meta2.name, "bob");
+            assert!(resolve_skin_token(&raw2).is_some());
+            assert!(resolve_skin_token(&raw).is_none());
+        });
+    }
+
+    #[test]
+    fn migrate_pre_reshape_static_row_fills_name_nulls_principal() {
+        with_temp_home(|| {
+            let path = crate::paths::k2_home().join("skin.db");
+            std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
+            let conn = Connection::open(&path).expect("open old db");
+            conn.execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE principals (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE tokens (
+                    id TEXT PRIMARY KEY,
+                    principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+                    key_hash TEXT NOT NULL UNIQUE,
+                    key_prefix TEXT NOT NULL,
+                    caps TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    revoked_at INTEGER,
+                    rooms TEXT NOT NULL DEFAULT '[]',
+                    session INTEGER NOT NULL DEFAULT 0,
+                    expires_at INTEGER
+                 );",
+            )
+            .expect("old schema");
+            let pid = uuid::Uuid::new_v4().to_string();
+            let tid = uuid::Uuid::new_v4().to_string();
+            let raw = format!("{SKIN_KEY_PREFIX}MigrateHashBody00000000000000000000000");
+            let key_hash = sha256_hex(&raw);
+            let prefix = display_prefix(&raw);
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at) VALUES (?1, 'bob', 1)",
+                params![pid],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO tokens (id, principal_id, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session)
+                 VALUES (?1, ?2, ?3, ?4, ?5, '[]', 1, NULL, 0)",
+                params![tid, pid, key_hash, prefix, caps_json(&parse_caps(None).unwrap())],
+            )
+            .unwrap();
+            drop(conn);
+
+            let pass = resolve_skin_token(&raw).expect("hash unchanged after rebuild");
+            assert!(pass.principal_id.is_none(), "{pass:?}");
+            assert!(!pass.session);
+            assert_eq!(pass.username, "bob");
+            let listed = list_tokens().expect("list");
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].name, "bob");
+            with_conn(|c| {
+                let notnull = tokens_principal_id_notnull(c)?;
+                assert!(!notnull, "rebuilt principal_id must be nullable");
+                let (principal_id, name, session): (Option<String>, Option<String>, i64) = c
+                    .query_row(
+                        "SELECT principal_id, name, session FROM tokens WHERE id = ?1",
+                        params![tid],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
+                    .map_err(|e| e.to_string())?;
+                assert!(principal_id.is_none(), "{principal_id:?}");
+                assert_eq!(name.as_deref(), Some("bob"));
+                assert_eq!(session, 0);
+                Ok(())
+            })
+            .unwrap();
         });
     }
 

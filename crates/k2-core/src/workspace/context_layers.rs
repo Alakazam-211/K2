@@ -1128,49 +1128,40 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
 
 /// Live list of Skin Access guests (not Connect / Server Access).
 ///
-/// Username + live (non-revoked) key count + scopes. Never the raw `k2skn_`
-/// secret. Same people as `k2 skin user list`.
+/// Username + has_password + default rooms. Never platform-token counts,
+/// never the raw `k2skn_` secret. Same people as `k2 skin user list`.
 pub fn render_skin_roster_body(_project_path: &str) -> String {
     let users = crate::skin::list_principals().unwrap_or_default();
-    let tokens = crate::skin::list_tokens().unwrap_or_default();
 
     let mut out = String::new();
     out.push_str(
-        "These are **Skin Access** guests (capability passes for custom UIs) — \
+        "These are **Skin Access** guests (K2-login sessions for custom UIs) — \
          not Connect / Server Access operators, and not workspace-agents.\n\
-         Do **not** `k2 msg` these names. CLI lookup: `k2 skin user list` / \
-         `k2 skin-token list`. Regenerated whenever K2 rewrites AGENTS.md.\n\n",
+         Do **not** `k2 msg` these names. CLI lookup: `k2 skin user list`. \
+         Platform tokens: `k2 skin-token create --name <label> --agent sales`. \
+         Regenerated whenever K2 rewrites AGENTS.md.\n\n",
     );
     if users.is_empty() {
         out.push_str("### No skin users yet\n\n");
         out.push_str("Add a guest in Settings → Skin Access, or:\n\n");
         out.push_str("    k2 skin user add <username>\n");
-        out.push_str("    k2 skin-token create <username>\n");
+        out.push_str("    k2 skin-token create --name vercel --agent sales\n");
         return out;
     }
-    out.push_str("| USERNAME | LIVE KEYS | SCOPES |\n");
+    out.push_str("| USERNAME | PASSWORD | DEFAULT ROOMS |\n");
     out.push_str("| --- | --- | --- |\n");
     for u in users {
-        let live: Vec<&crate::skin::SkinTokenMeta> = tokens
-            .iter()
-            .filter(|t| t.username == u.username && t.revoked_at.is_none())
-            .collect();
-        let n = live.len();
-        let mut caps: Vec<String> = Vec::new();
-        for t in live {
-            for c in &t.caps {
-                if !caps.iter().any(|x| x == c) {
-                    caps.push(c.clone());
-                }
+        let pw = if u.has_password { "yes" } else { "no" };
+        let rooms = if u.default_room_handles.is_empty() {
+            if u.default_rooms.is_empty() {
+                "—".to_string()
+            } else {
+                u.default_rooms.join(", ")
             }
-        }
-        caps.sort();
-        let scopes = if caps.is_empty() {
-            "—".to_string()
         } else {
-            caps.join(", ")
+            u.default_room_handles.join(", ")
         };
-        out.push_str(&format!("| {} | {n} | {scopes} |\n", u.username));
+        out.push_str(&format!("| {} | {pw} | {rooms} |\n", u.username));
     }
     out
 }
@@ -2968,8 +2959,9 @@ mod tests {
                 composed.contains("Skin user roster")
                     && composed.contains("ghostbird")
                     && composed.contains("USERNAME")
-                    && composed.contains("thread:read"),
-                "composed AGENTS.md must inline live skin roster; first 600:\n{}",
+                    && composed.contains("PASSWORD")
+                    && !composed.contains("LIVE KEYS"),
+                "composed AGENTS.md must inline guest roster (not live keys); first 600:\n{}",
                 &composed[..composed.len().min(600)]
             );
             assert!(
@@ -2998,6 +2990,14 @@ mod tests {
             assert!(
                 body.contains("k2 skin user list"),
                 "must teach k2 skin user list; body:\n{body}"
+            );
+            assert!(
+                body.contains("k2 skin-token create --name"),
+                "must teach platform mint --name, not <username>; body:\n{body}"
+            );
+            assert!(
+                !body.contains("k2 skin-token create <username>"),
+                "must not teach mint-for-user; body:\n{body}"
             );
             assert!(
                 body.contains("Skin Access") || body.contains("not Connect"),

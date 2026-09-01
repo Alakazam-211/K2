@@ -5369,13 +5369,13 @@ Usage: k2 skin <user|hydra> ...
   k2 skin user password <username> --password-stdin
                                         Set/reset K2-login password (empty stdin clears)
   k2 skin user list                     Roster (no secrets)
-  k2 skin user remove <username>        Drop principal + their passes
+  k2 skin user remove <username>        Drop principal + login sessions (platform tokens survive)
   k2 skin user rooms <username> --agent sales [--apply-tokens]
-                                        Set default rooms (mint template)
+                                        Set default rooms (apply-tokens = live sessions only)
   k2 skin hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
-  k2 skin-token create <username> [--caps thread:read,thread:post,files:read] --agent sales
-                                        Mint k2skn_ pass (secret once; ≥1 --agent)
-  k2 skin-token list                    Live/revoked passes (prefix + caps + rooms)
+  k2 skin-token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
+                                        Mint platform k2skn_ pass (secret once; ≥1 --agent; no user)
+  k2 skin-token list                    Platform tokens only (prefix + caps + rooms; hide sessions)
   k2 skin-token rooms <id> --agent sales
   k2 skin-token rooms <id> --clear      Empty rooms (Thread dark, keep secret)
   k2 skin-token revoke <id>
@@ -5704,26 +5704,34 @@ cmd_skin_token() {
     shift || true
     case "$sub" in
         create)
-            local username="" caps="" agents=()
+            local name="" caps="" agents=()
             while [[ $# -gt 0 ]]; do
                 case "$1" in
+                    --name) name="${2:-}"; shift 2 ;;
                     --caps|--cap) caps="${2:-}"; shift 2 ;;
                     --agent|--agents) agents+=("${2:-}"); shift 2 ;;
-                    --help|-h) echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2; exit 0 ;;
+                    --user|--username)
+                        echo "Error: use --name (platform label), not --user/--username" >&2
+                        echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2
+                        exit 2 ;;
+                    --help|-h) echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2; exit 0 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 1 ;;
-                    *) [[ -z "$username" ]] && username="$1"; shift ;;
+                    *)
+                        echo "Error: use --name (platform label), not a positional username" >&2
+                        echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2
+                        exit 2 ;;
                 esac
             done
-            [[ -z "$username" ]] && { echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2; exit 2; }
-            [[ ${#agents[@]} -eq 0 ]] && { echo "Error: k2 skin-token create needs ≥1 --agent <handle> (rooms). Empty rooms = Thread dark." >&2; echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2; exit 2; }
+            [[ -z "$name" ]] && { echo "Error: use --name (platform label), not a positional username" >&2; echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2; exit 2; }
+            [[ ${#agents[@]} -eq 0 ]] && { echo "Error: k2 skin-token create needs ≥1 --agent <handle> (rooms). Empty rooms = Thread dark." >&2; echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2; exit 2; }
             local agents_nl="" a
             for a in "${agents[@]}"; do
                 agents_nl="${agents_nl}${a}"$'\n'
             done
             local body raw
-            body=$(K2_SKIN_USER="$username" K2_SKIN_CAPS="$caps" K2_SKIN_AGENTS="$agents_nl" python3 -c '
+            body=$(K2_SKIN_NAME="$name" K2_SKIN_CAPS="$caps" K2_SKIN_AGENTS="$agents_nl" python3 -c '
 import json,os
-b={"username": os.environ.get("K2_SKIN_USER","")}
+b={"name": os.environ.get("K2_SKIN_NAME","")}
 c=os.environ.get("K2_SKIN_CAPS","").strip()
 if c:
     b["caps"]=[s.strip() for s in c.split(",") if s.strip()]
@@ -5734,7 +5742,7 @@ print(json.dumps(b))')
             printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
-print("Skin token created (id: %s) for %s." % (d.get("id",""), d.get("username","")))
+print("Skin token created (id: %s) name %s." % (d.get("id",""), d.get("name") or d.get("username","")))
 caps=d.get("caps") or []
 print("Capabilities: %s" % (", ".join(caps) if caps else "(none)"))
 handles=d.get("roomHandles") or d.get("room_handles") or []
@@ -5759,7 +5767,7 @@ for t in tokens:
     caps=",".join(t.get("caps") or []) or "none"
     handles=t.get("roomHandles") or t.get("room_handles") or []
     rooms=",".join(handles) if handles else "(none)"
-    print("%s  [%s]  %s  %s  caps=%s  rooms=%s" % (t.get("id",""), state, t.get("username",""), t.get("prefix",""), caps, rooms))'
+    print("%s  [%s]  %s  %s  caps=%s  rooms=%s" % (t.get("id",""), state, t.get("name") or t.get("username",""), t.get("prefix",""), caps, rooms))'
             ;;
         rooms)
             local id="" clear=0 agents=()
@@ -5808,7 +5816,7 @@ print("Skin token revoked." if d.get("success") else "No matching active token (
             ;;
         --help|-h|"")
             echo "Usage: k2 skin-token <create|list|revoke|rooms>" >&2
-            echo "  create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2
+            echo "  create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2
             echo "  list" >&2
             echo "  rooms <id> --agent sales" >&2
             echo "  rooms <id> --clear" >&2
@@ -13328,7 +13336,7 @@ cmd_schema() {
     {
       "name": "skin user remove",
       "usage": "k2 skin user remove <username>",
-      "description": "Remove a skin principal and revoke their passes.",
+      "description": "Remove a skin principal and their login sessions. Platform tokens survive.",
       "args": [{"name": "username", "required": true}],
       "flags": []
     },
@@ -13346,29 +13354,43 @@ cmd_schema() {
     },
     {
       "name": "skin-token",
-      "usage": "k2 skin-token <create|list|revoke> ...",
-      "description": "Mint/list/revoke k2skn_ capability passes (thread:read / thread:post / files:read / files:write). Secret shown once.",
+      "usage": "k2 skin-token <create|list|revoke|rooms> ...",
+      "description": "Mint/list/revoke platform k2skn_ capability passes (thread:read / thread:post / files:read / files:write). Secret shown once. List is platform-only (hides login sessions).",
       "args": [],
       "flags": []
     },
     {
       "name": "skin-token create",
-      "usage": "k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write]",
-      "description": "Mint a k2skn_ pass for a skin principal. Raw secret printed once. Default caps: thread:read + thread:post (never silent-add files).",
-      "args": [{"name": "username", "required": true}],
-      "flags": [{"name": "--caps", "arg": "list", "description": "Comma-separated verbs (thread:read, thread:post, files:read, files:write)."}]
+      "usage": "k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]",
+      "description": "Mint a platform k2skn_ pass. Name is a label (vercel), not a guest. Raw secret printed once. Default caps: thread:read + thread:post (never silent-add files).",
+      "args": [],
+      "flags": [
+        {"name": "--name", "arg": "label", "description": "Platform label (^[a-z0-9_-]{2,}$; not owner). Unique among live platform tokens."},
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle to grant (repeatable; ≥1 required)."},
+        {"name": "--caps", "arg": "list", "description": "Comma-separated verbs (thread:read, thread:post, files:read, files:write)."}
+      ]
     },
     {
       "name": "skin-token list",
       "usage": "k2 skin-token list",
-      "description": "List skin passes (prefix + caps, never the secret).",
+      "description": "List platform k2skn_ tokens (name + prefix + caps, never the secret). Hides login sessions.",
       "args": [],
       "flags": []
     },
     {
+      "name": "skin-token rooms",
+      "usage": "k2 skin-token rooms <id> --agent sales | --clear",
+      "description": "Set rooms on a platform token. --clear empties rooms (Thread dark, keep secret).",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
+        {"name": "--clear", "arg": null, "description": "Empty rooms (Thread dark)."}
+      ]
+    },
+    {
       "name": "skin-token revoke",
       "usage": "k2 skin-token revoke <id>",
-      "description": "Revoke a skin pass. Next GET / overlay is 401.",
+      "description": "Revoke a platform skin pass. Next GET / overlay is 401.",
       "args": [{"name": "id", "required": true}],
       "flags": []
     },
@@ -14331,7 +14353,7 @@ k2 study skins — Skin Access
 
 LANES (read this first)
   Hosting the UI  = k2 publish. Always. Not k2 skin.
-  k2 skin         = users + passwords + k2skn_ tokens + scopes
+  k2 skin         = guests + passwords + platform k2skn_ tokens + scopes
                     (caps + rooms). It does not serve software.
   If this page on your box still talks about two veins, Caddy,
   or k2 skin front-door as how you serve a UI, that copy is stale.
@@ -14349,8 +14371,11 @@ HOW TO MAKE ONE (copy this)
      → https://<label>.<your-sub>.k2.dev  (Pro parent)
      Local only: add --no-tunnel.
   2. Owner adds guests and passwords (Settings → Sidecars →
-     Skin Access, or `k2 skin user add` / `password`). Agents:
-     exit 3. Do not sudo k2 — that is not an owner passport.
+     Skin Access, or `k2 skin user add` / `password`). Guests
+     log in; they never copy a key. Platform tokens (BYO
+     servers) are separate: `k2 skin-token create --name vercel
+     --agent sales`. Agents: exit 3. Do not sudo k2 — that is
+     not an owner passport. Do not mint a key for this user.
   3. Browser logs in on THIS origin:
        POST /login   {"username":"…","password":"…"}
      200 body (no token):
@@ -14366,6 +14391,13 @@ HOW TO MAKE ONE (copy this)
      `token` is a Bearer session. Cookie `k2_skin_session` may
      also be set (leftover Caddy door). Prefer keeping the
      token on the SERVER so the browser never holds the pass.
+
+TWO CREDENTIALS (same prefix k2skn_)
+  Login session  = password → create_session_token on that guest.
+                   Browser JSON has no token. Gateway holds it.
+  Platform token = `k2 skin-token create --name vercel --agent sales`.
+                   User-agnostic. BYO servers. Secret shown once.
+  Do not mint a copyable key per person.
 
 Scopes = caps + rooms. Empty rooms = Thread dark. Never grid.
 
@@ -18746,7 +18778,7 @@ USERS (local daemon connect-user accounts)
 
 SKIN (guest list + k2skn_ passes — Thread rooms, never grid)
   skin user add|list|remove|password            Skin principals (not Connect users)
-  skin-token create|list|revoke                 Capability pass (secret once at create)
+  skin-token create --name|list|revoke|rooms    Platform k2skn_ pass (secret once at create)
   (host the UI with k2 publish — k2 skin does not serve software)
   skin front-door [connect|direct] [--ui-port N]
                                                 Leftover Caddy path-filter. Not how you host a skin.

@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.134 — Skin guests can use Tickets on the agents you grant
+
+A logged-in skin guest can list, open, comment, answer, and resolve Tickets **on that agent only**. Tickets on Documents does not grant Tickets on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
+
+`k2 publish run --skin` proxies those Ticket routes on the published origin (`/cli/feedback/list`, `show`, `create`, `comment`, `answer`, `resolve`). Waiting-count and assign stay off. Wiki, chat history, and Chatter are not in this cut.
+
+---
+
 ## 0.40.133 — Skin guests can use files on the agents you grant
 
 A logged-in skin guest can list, read, write, and watch files **in that agent's folder** — not the whole box. Files on Documents does not grant files on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.

@@ -17,9 +17,10 @@
 //! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`.
 //! Empty/missing caps stay Thread-only — never silent-add files. Never `pty:*`.
 //! Assigned guests snapshot the role onto `session=1`; platform tokens
-//! keep their own caps+rooms (not a role).
+//! keep their own caps+rooms (not a role). Session policy is **per-room**
+//! (`room_policy` map). Platform `--name` tokens stay flat.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -240,6 +241,137 @@ fn rooms_from_json(raw: &str) -> Vec<String> {
     parse_rooms_json(Some(raw))
 }
 
+/// `project_id` → caps in that room. Empty map = Thread dark.
+pub type RoomPolicy = BTreeMap<String, Vec<String>>;
+
+fn default_thread_caps() -> Vec<String> {
+    DEFAULT_CAPS.iter().map(|s| (*s).to_string()).collect()
+}
+
+fn cartesian_policy(caps: &[String], rooms: &[String]) -> RoomPolicy {
+    let mut out = RoomPolicy::new();
+    for id in rooms {
+        let t = id.trim();
+        if t.is_empty() {
+            continue;
+        }
+        out.insert(t.to_string(), caps.to_vec());
+    }
+    out
+}
+
+fn thread_only_policy(rooms: &[String]) -> RoomPolicy {
+    cartesian_policy(&default_thread_caps(), rooms)
+}
+
+fn union_caps(policy: &RoomPolicy) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for cap in ACCEPTED_CAPS {
+        if policy.values().any(|caps| caps.iter().any(|c| c == cap)) && !out.iter().any(|c| c == cap)
+        {
+            out.push((*cap).to_string());
+        }
+    }
+    out
+}
+
+fn rooms_from_policy(policy: &RoomPolicy) -> Vec<String> {
+    policy.keys().cloned().collect()
+}
+
+fn room_policy_json(policy: &RoomPolicy) -> String {
+    serde_json::to_string(policy).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn stored_caps_list(v: &serde_json::Value) -> Vec<String> {
+    match v {
+        serde_json::Value::Array(a) => a
+            .iter()
+            .filter_map(|x| x.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn normalize_stored_room_caps(list: Vec<String>) -> Vec<String> {
+    if list.is_empty() {
+        return default_thread_caps();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for c in list {
+        if !out.iter().any(|x| x == &c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Parse a stored `room_policy` JSON object. `None` = NULL / missing.
+/// Empty object is `Some({})` (Thread dark), not cartesian.
+fn parse_room_policy_json(raw: Option<&str>) -> Result<Option<RoomPolicy>, String> {
+    let Some(s) = raw.map(str::trim).filter(|s| !s.is_empty() && *s != "null") else {
+        return Ok(None);
+    };
+    let v: serde_json::Value =
+        serde_json::from_str(s).map_err(|e| format!("room_policy json: {e}"))?;
+    match v {
+        serde_json::Value::Object(map) => {
+            let mut out = RoomPolicy::new();
+            for (k, caps_v) in map {
+                let k = k.trim().to_string();
+                if k.is_empty() {
+                    continue;
+                }
+                out.insert(k, normalize_stored_room_caps(stored_caps_list(&caps_v)));
+            }
+            Ok(Some(out))
+        }
+        _ => Err("room_policy must be a JSON object".to_string()),
+    }
+}
+
+fn policy_or_cartesian(
+    caps: &[String],
+    rooms: &[String],
+    raw: Option<&str>,
+) -> Result<RoomPolicy, String> {
+    match parse_room_policy_json(raw)? {
+        Some(p) if p.is_empty() && !rooms.is_empty() => Ok(cartesian_policy(caps, rooms)),
+        Some(p) => Ok(p),
+        None => Ok(cartesian_policy(caps, rooms)),
+    }
+}
+
+/// Session: JSON object → use it (including `{}`); NULL → caps × rooms.
+/// Platform: always empty (flat `has_cap` && `has_room`). Never JOIN `roles`.
+fn interpret_token_policy(
+    session: bool,
+    caps: &[String],
+    rooms: &[String],
+    raw: Option<&str>,
+) -> RoomPolicy {
+    if !session {
+        return RoomPolicy::new();
+    }
+    match parse_room_policy_json(raw) {
+        Ok(Some(p)) => p,
+        Ok(None) | Err(_) => cartesian_policy(caps, rooms),
+    }
+}
+
+fn room_access_from_policy(policy: &RoomPolicy) -> Vec<SkinRoomAccess> {
+    let ids = rooms_from_policy(policy);
+    live_agents(&ids)
+        .into_iter()
+        .map(|a| SkinRoomAccess {
+            handle: a.handle,
+            caps: policy.get(&a.project_id).cloned().unwrap_or_default(),
+        })
+        .collect()
+}
+
 fn password_is_set(hash: Option<&str>) -> bool {
     hash.map(str::trim).is_some_and(|s| !s.is_empty())
 }
@@ -385,12 +517,21 @@ pub struct SkinPrincipal {
     pub role_name: Option<String>,
 }
 
-/// Named bundle of caps + rooms for Skin Access guests (not Connect roles).
+/// Per-room functions on the wire: `{handle, caps}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkinRoomAccess {
+    pub handle: String,
+    pub caps: Vec<String>,
+}
+
+/// Named bundle of per-room functions for Skin Access guests (not Connect roles).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SkinRole {
     pub id: String,
     pub name: String,
+    /// Union of caps across rooms (display / naive SPA).
     pub caps: Vec<String>,
     /// Stored ACL: `projects.id` UUIDs. Empty = Thread dark.
     #[serde(default)]
@@ -398,7 +539,13 @@ pub struct SkinRole {
     /// Display-only, resolved live from `projects.handle`. Skip missing.
     #[serde(default)]
     pub room_handles: Vec<String>,
+    /// Per-room functions. Handle is live; skip missing projects.
+    #[serde(default)]
+    pub room_access: Vec<SkinRoomAccess>,
     pub created_at: i64,
+    /// SSOT map `project_id → caps[]`. Not on the wire.
+    #[serde(skip)]
+    pub room_policy: RoomPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -416,6 +563,9 @@ pub struct SkinTokenMeta {
     /// Display-only, resolved live from `projects.handle`. Skip missing.
     #[serde(default)]
     pub room_handles: Vec<String>,
+    /// Per-room functions (session snapshot). Empty on platform tokens.
+    #[serde(default)]
+    pub room_access: Vec<SkinRoomAccess>,
     pub created_at: i64,
     pub revoked_at: Option<i64>,
 }
@@ -432,16 +582,20 @@ pub struct SkinAgent {
 
 /// Resolved live pass. Safe to log `id` / `username` / `caps` — never a secret.
 /// `username` is the overlay stamp: session principal or platform `name`.
+/// No `role_id` — snapshot only, never a live JOIN.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkinPass {
     pub id: String,
     /// `Some` for login sessions; `None` for platform tokens.
     pub principal_id: Option<String>,
     pub username: String,
+    /// Union of caps (display / naive SPA). Not a session files/thread door.
     pub caps: Vec<String>,
     pub rooms: Vec<String>,
     /// Login-minted session pass (`session=1`). Platform mint is `false`.
     pub session: bool,
+    /// Session: `project_id → caps[]`. Platform: empty (use flat `has_cap`).
+    pub room_policy: RoomPolicy,
 }
 
 impl SkinPass {
@@ -449,16 +603,47 @@ impl SkinPass {
         self.caps.iter().any(|c| c == cap)
     }
 
+    /// Session: key exists on the map. Platform: listed in `rooms`.
     pub fn has_room(&self, project_id: &str) -> bool {
         let id = project_id.trim();
         if id.is_empty() {
             return false;
         }
-        self.rooms.iter().any(|r| r == id)
+        if self.session {
+            self.room_policy.contains_key(id)
+        } else {
+            self.rooms.iter().any(|r| r == id)
+        }
+    }
+
+    /// Session: cap listed on that room. Platform: `has_cap` && `has_room`.
+    pub fn has_cap_in_room(&self, project_id: &str, cap: &str) -> bool {
+        if self.session {
+            self.room_policy
+                .get(project_id.trim())
+                .map(|caps| caps.iter().any(|c| c == cap))
+                .unwrap_or(false)
+        } else {
+            self.has_cap(cap) && self.has_room(project_id)
+        }
+    }
+
+    /// Dispatcher files/thread door. Session defers the cap until the room
+    /// is known. Platform still requires the pass-level cap.
+    pub fn dispatcher_admits_cap(&self, cap: &str) -> bool {
+        if self.session {
+            true
+        } else {
+            self.has_cap(cap)
+        }
     }
 
     pub fn rooms_empty(&self) -> bool {
-        self.rooms.is_empty()
+        if self.session {
+            self.room_policy.is_empty()
+        } else {
+            self.rooms.is_empty()
+        }
     }
 }
 
@@ -609,8 +794,14 @@ fn open_db(path: &Path) -> Result<Connection, String> {
         "ALTER TABLE principals ADD COLUMN role_id TEXT REFERENCES roles(id) ON DELETE RESTRICT",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE roles ADD COLUMN room_policy TEXT NOT NULL DEFAULT '{}'",
+        [],
+    );
     rebuild_tokens_table_if_needed(&mut conn)?;
+    let _ = conn.execute("ALTER TABLE tokens ADD COLUMN room_policy TEXT", []);
     ensure_platform_name_index(&conn)?;
+    migrate_room_policy(&conn)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -688,6 +879,96 @@ fn ensure_platform_name_index(conn: &Connection) -> Result<(), String> {
          WHERE session = 0 AND revoked_at IS NULL;",
     )
     .map_err(|e| format!("skin.db platform name index: {e}"))
+}
+
+/// Copy 132 cartesian caps onto each listed room. Then R8-rewrite live
+/// `session=1`. Platform `session=0` stay NULL forever. Fail only on SQL/JSON.
+fn migrate_room_policy(conn: &Connection) -> Result<(), String> {
+    struct RoleRow {
+        id: String,
+        caps: String,
+        rooms: String,
+        room_policy: String,
+    }
+    let mut stmt = conn
+        .prepare("SELECT id, caps, rooms, COALESCE(room_policy, '{}') FROM roles")
+        .map_err(|e| format!("skin.db room_policy roles: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(RoleRow {
+                id: r.get(0)?,
+                caps: r.get(1)?,
+                rooms: r.get(2)?,
+                room_policy: r.get(3)?,
+            })
+        })
+        .map_err(|e| format!("skin.db room_policy roles: {e}"))?;
+    let mut roles = Vec::new();
+    for row in rows {
+        roles.push(row.map_err(|e| format!("skin.db room_policy role row: {e}"))?);
+    }
+    drop(stmt);
+    for role in roles {
+        let caps = caps_from_json(&role.caps);
+        let rooms = rooms_from_json(&role.rooms);
+        let parsed = parse_room_policy_json(Some(&role.room_policy))?;
+        let leftover_132 = match &parsed {
+            Some(p) if p.is_empty() && !rooms.is_empty() => true,
+            None if !rooms.is_empty() => true,
+            _ => false,
+        };
+        if leftover_132 {
+            let policy = cartesian_policy(&caps, &rooms);
+            conn.execute(
+                "UPDATE roles SET room_policy = ?1, caps = ?2, rooms = ?3 WHERE id = ?4",
+                params![
+                    room_policy_json(&policy),
+                    caps_json(&union_caps(&policy)),
+                    rooms_json(&rooms_from_policy(&policy)),
+                    role.id
+                ],
+            )
+            .map_err(|e| format!("skin.db room_policy role update: {e}"))?;
+            rewrite_sessions_for_role(conn, &role.id, &policy)?;
+        }
+    }
+
+    struct SessRow {
+        id: String,
+        caps: String,
+        rooms: String,
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, caps, rooms FROM tokens
+             WHERE session = 1 AND room_policy IS NULL",
+        )
+        .map_err(|e| format!("skin.db room_policy sessions: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(SessRow {
+                id: r.get(0)?,
+                caps: r.get(1)?,
+                rooms: r.get(2)?,
+            })
+        })
+        .map_err(|e| format!("skin.db room_policy sessions: {e}"))?;
+    let mut sessions = Vec::new();
+    for row in rows {
+        sessions.push(row.map_err(|e| format!("skin.db room_policy session row: {e}"))?);
+    }
+    drop(stmt);
+    for row in sessions {
+        let caps = caps_from_json(&row.caps);
+        let rooms = rooms_from_json(&row.rooms);
+        let policy = cartesian_policy(&caps, &rooms);
+        conn.execute(
+            "UPDATE tokens SET room_policy = ?1 WHERE id = ?2",
+            params![room_policy_json(&policy), row.id],
+        )
+        .map_err(|e| format!("skin.db room_policy session update: {e}"))?;
+    }
+    Ok(())
 }
 
 struct TokenRebuildRow {
@@ -1044,6 +1325,7 @@ pub fn create_token(
                 caps,
                 rooms,
                 room_handles: Vec::new(),
+                room_access: Vec::new(),
                 created_at,
                 revoked_at: None,
             },
@@ -1075,19 +1357,22 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
         let Some(principal) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
-        let (caps, rooms) = if let Some(rid) = principal.role_id.as_deref() {
+        let policy = if let Some(rid) = principal.role_id.as_deref() {
             let Some(role) = role_by_id_or_name(conn, rid)? else {
                 return Err(format!("unknown skin role '{rid}'"));
             };
-            (role.caps, role.rooms)
+            role.room_policy
         } else {
-            (parse_caps(None)?, principal.default_rooms.clone())
+            thread_only_policy(&principal.default_rooms)
         };
+        let caps = union_caps(&policy);
+        let rooms = rooms_from_policy(&policy);
         let caps_stored = caps_json(&caps);
         let rooms_stored = rooms_json(&rooms);
+        let policy_stored = room_policy_json(&policy);
         conn.execute(
-            "INSERT INTO tokens (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at)
-             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, NULL, 1, ?8)",
+            "INSERT INTO tokens (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at, room_policy)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, NULL, 1, ?8, ?9)",
             params![
                 id,
                 principal.id,
@@ -1096,7 +1381,8 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
                 caps_stored,
                 rooms_stored,
                 created_at,
-                expires_at
+                expires_at,
+                policy_stored
             ],
         )
         .map_err(|e| format!("skin session insert: {e}"))?;
@@ -1108,6 +1394,7 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
                 caps,
                 rooms,
                 room_handles: Vec::new(),
+                room_access: room_access_from_policy(&policy),
                 created_at,
                 revoked_at: None,
             },
@@ -1294,6 +1581,7 @@ pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
                     caps: caps_from_json(&caps_raw),
                     rooms: rooms_from_json(&rooms_raw),
                     room_handles: Vec::new(),
+                    room_access: Vec::new(),
                     created_at: r.get(5)?,
                     revoked_at: r.get(6)?,
                 })
@@ -1359,6 +1647,7 @@ fn token_meta_from_row(conn: &Connection, id: &str) -> Result<Option<SkinTokenMe
                 caps: caps_from_json(&caps_raw),
                 rooms: rooms_from_json(&rooms_raw),
                 room_handles: Vec::new(),
+                room_access: Vec::new(),
                 created_at: r.get(7)?,
                 revoked_at: r.get(8)?,
             })
@@ -1419,12 +1708,8 @@ pub fn set_principal_default_rooms(
         )
         .map_err(|e| format!("skin user rooms: {e}"))?;
         if apply_tokens {
-            conn.execute(
-                "UPDATE tokens SET rooms = ?1
-                 WHERE principal_id = ?2 AND session = 1 AND revoked_at IS NULL",
-                params![stored, p.id],
-            )
-            .map_err(|e| format!("skin apply-tokens: {e}"))?;
+            let policy = thread_only_policy(&rooms);
+            rewrite_live_sessions(conn, &p.id, &policy)?;
         }
         Ok(SkinPrincipal {
             id: p.id,
@@ -1442,22 +1727,62 @@ pub fn set_principal_default_rooms(
 
 // ── Roles ────────────────────────────────────────────────────────────
 
+const ROLE_SELECT: &str = "SELECT id, name, caps, rooms, created_at, COALESCE(room_policy, '{}') FROM roles";
+
 fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
     let caps_raw: String = r.get(2)?;
     let rooms_raw: String = r.get(3)?;
+    let policy_raw: String = r.get(5)?;
+    let caps = caps_from_json(&caps_raw);
+    let rooms = rooms_from_json(&rooms_raw);
+    let room_policy = policy_or_cartesian(&caps, &rooms, Some(&policy_raw)).unwrap_or_else(|_| {
+        cartesian_policy(&caps, &rooms)
+    });
     Ok(SkinRole {
         id: r.get(0)?,
         name: r.get(1)?,
-        caps: caps_from_json(&caps_raw),
-        rooms: rooms_from_json(&rooms_raw),
+        caps: union_caps(&room_policy),
+        rooms: rooms_from_policy(&room_policy),
         room_handles: Vec::new(),
+        room_access: Vec::new(),
         created_at: r.get(4)?,
+        room_policy,
     })
 }
 
 fn attach_role_handles(mut role: SkinRole) -> SkinRole {
     role.room_handles = handles_for_project_ids(&role.rooms);
+    role.room_access = room_access_from_policy(&role.room_policy);
+    role.caps = union_caps(&role.room_policy);
+    role.rooms = rooms_from_policy(&role.room_policy);
     role
+}
+
+fn persist_role_policy(conn: &Connection, role_id: &str, policy: &RoomPolicy) -> Result<(), String> {
+    conn.execute(
+        "UPDATE roles SET caps = ?1, rooms = ?2, room_policy = ?3 WHERE id = ?4",
+        params![
+            caps_json(&union_caps(policy)),
+            rooms_json(&rooms_from_policy(policy)),
+            room_policy_json(policy),
+            role_id
+        ],
+    )
+    .map_err(|e| format!("skin role update: {e}"))?;
+    Ok(())
+}
+
+fn role_from_policy(id: String, name: String, created_at: i64, policy: RoomPolicy) -> SkinRole {
+    SkinRole {
+        id,
+        name,
+        caps: union_caps(&policy),
+        rooms: rooms_from_policy(&policy),
+        room_handles: Vec::new(),
+        room_access: Vec::new(),
+        created_at,
+        room_policy: policy,
+    }
 }
 
 fn role_by_id_or_name(conn: &Connection, token: &str) -> Result<Option<SkinRole>, String> {
@@ -1467,7 +1792,7 @@ fn role_by_id_or_name(conn: &Connection, token: &str) -> Result<Option<SkinRole>
     }
     let by_id: Option<SkinRole> = conn
         .query_row(
-            "SELECT id, name, caps, rooms, created_at FROM roles WHERE id = ?1",
+            &format!("{ROLE_SELECT} WHERE id = ?1"),
             params![token],
             map_role_row,
         )
@@ -1477,7 +1802,7 @@ fn role_by_id_or_name(conn: &Connection, token: &str) -> Result<Option<SkinRole>
         return Ok(by_id);
     }
     conn.query_row(
-        "SELECT id, name, caps, rooms, created_at FROM roles WHERE name = ?1 COLLATE NOCASE",
+        &format!("{ROLE_SELECT} WHERE name = ?1 COLLATE NOCASE"),
         params![token],
         map_role_row,
     )
@@ -1488,13 +1813,17 @@ fn role_by_id_or_name(conn: &Connection, token: &str) -> Result<Option<SkinRole>
 fn rewrite_live_sessions(
     conn: &Connection,
     principal_id: &str,
-    caps: &[String],
-    rooms: &[String],
+    policy: &RoomPolicy,
 ) -> Result<(), String> {
     conn.execute(
-        "UPDATE tokens SET caps = ?1, rooms = ?2
-         WHERE principal_id = ?3 AND session = 1 AND revoked_at IS NULL",
-        params![caps_json(caps), rooms_json(rooms), principal_id],
+        "UPDATE tokens SET caps = ?1, rooms = ?2, room_policy = ?3
+         WHERE principal_id = ?4 AND session = 1 AND revoked_at IS NULL",
+        params![
+            caps_json(&union_caps(policy)),
+            rooms_json(&rooms_from_policy(policy)),
+            room_policy_json(policy),
+            principal_id
+        ],
     )
     .map_err(|e| format!("skin session rewrite: {e}"))?;
     Ok(())
@@ -1503,14 +1832,18 @@ fn rewrite_live_sessions(
 fn rewrite_sessions_for_role(
     conn: &Connection,
     role_id: &str,
-    caps: &[String],
-    rooms: &[String],
+    policy: &RoomPolicy,
 ) -> Result<(), String> {
     conn.execute(
-        "UPDATE tokens SET caps = ?1, rooms = ?2
+        "UPDATE tokens SET caps = ?1, rooms = ?2, room_policy = ?3
          WHERE session = 1 AND revoked_at IS NULL
-           AND principal_id IN (SELECT id FROM principals WHERE role_id = ?3)",
-        params![caps_json(caps), rooms_json(rooms), role_id],
+           AND principal_id IN (SELECT id FROM principals WHERE role_id = ?4)",
+        params![
+            caps_json(&union_caps(policy)),
+            rooms_json(&rooms_from_policy(policy)),
+            room_policy_json(policy),
+            role_id
+        ],
     )
     .map_err(|e| format!("skin session rewrite: {e}"))?;
     Ok(())
@@ -1525,22 +1858,20 @@ fn unique_role_err(name: &str, e: rusqlite::Error) -> String {
     }
 }
 
-/// Mint a named caps+rooms bundle. Empty rooms allowed (Thread dark).
-pub fn create_role(
-    name: &str,
-    caps: Option<&[String]>,
-    rooms: &[String],
-) -> Result<SkinRole, String> {
+/// Thread-only caps on each listed room (add-room default / unassigned I6).
+pub fn thread_only_room_policy(rooms: &[String]) -> RoomPolicy {
+    thread_only_policy(&normalize_room_ids(rooms))
+}
+
+/// Mint a named per-room bundle. Empty map = Thread dark.
+pub fn create_role(name: &str, policy: &RoomPolicy) -> Result<SkinRole, String> {
     let name = normalize_username(name)?;
     if is_connect_role_name(&name) {
         return Err(CONNECT_ROLE_NAME_ERR.to_string());
     }
-    let caps = parse_caps(caps)?;
-    let rooms = normalize_room_ids(rooms);
+    let policy = normalize_policy(policy)?;
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = now_secs();
-    let caps_stored = caps_json(&caps);
-    let rooms_stored = rooms_json(&rooms);
     with_conn(|conn| {
         let taken: i64 = conn
             .query_row(
@@ -1553,18 +1884,19 @@ pub fn create_role(
             return Err(format!("role '{name}' already exists"));
         }
         conn.execute(
-            "INSERT INTO roles (id, name, caps, rooms, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, name, caps_stored, rooms_stored, created_at],
+            "INSERT INTO roles (id, name, caps, rooms, created_at, room_policy)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                id,
+                name,
+                caps_json(&union_caps(&policy)),
+                rooms_json(&rooms_from_policy(&policy)),
+                created_at,
+                room_policy_json(&policy)
+            ],
         )
         .map_err(|e| unique_role_err(&name, e))?;
-        Ok(SkinRole {
-            id,
-            name,
-            caps,
-            rooms,
-            room_handles: Vec::new(),
-            created_at,
-        })
+        Ok(role_from_policy(id, name, created_at, policy))
     })
     .map(attach_role_handles)
 }
@@ -1572,10 +1904,7 @@ pub fn create_role(
 pub fn list_roles() -> Result<Vec<SkinRole>, String> {
     with_conn(|conn| {
         let mut stmt = conn
-            .prepare(
-                "SELECT id, name, caps, rooms, created_at FROM roles
-                 ORDER BY name COLLATE NOCASE",
-            )
+            .prepare(&format!("{ROLE_SELECT} ORDER BY name COLLATE NOCASE"))
             .map_err(|e| format!("skin role list: {e}"))?;
         let rows = stmt
             .query_map([], map_role_row)
@@ -1588,48 +1917,99 @@ pub fn list_roles() -> Result<Vec<SkinRole>, String> {
     })
     .map(|mut roles| {
         for r in &mut roles {
-            r.room_handles = handles_for_project_ids(&r.rooms);
+            *r = attach_role_handles(r.clone());
         }
         roles
     })
 }
 
-/// Omitted `caps` / `rooms` stay unchanged. Always rewrites live sessions
-/// of assigned guests (never platform tokens).
+/// Present policy replaces the whole map. `None` is a no-op persist of the
+/// current snapshot (still R8-rewrites live sessions).
 pub fn update_role(
     id_or_name: &str,
-    caps: Option<&[String]>,
-    rooms: Option<&[String]>,
+    policy: Option<&RoomPolicy>,
 ) -> Result<SkinRole, String> {
     let id_or_name = id_or_name.trim();
     if id_or_name.is_empty() {
         return Err("missing role id or name".to_string());
     }
-    let caps = match caps {
-        Some(list) => Some(parse_caps(Some(list))?),
+    let policy = match policy {
+        Some(p) => Some(normalize_policy(p)?),
         None => None,
     };
-    let rooms = rooms.map(normalize_room_ids);
     let role = with_conn(|conn| {
         let Some(mut role) = role_by_id_or_name(conn, id_or_name)? else {
             return Err(format!("unknown skin role '{id_or_name}'"));
         };
-        if let Some(c) = caps {
-            role.caps = c;
+        if let Some(p) = policy {
+            role.room_policy = p;
         }
-        if let Some(r) = rooms {
-            role.rooms = r;
-        }
-        conn.execute(
-            "UPDATE roles SET caps = ?1, rooms = ?2 WHERE id = ?3",
-            params![caps_json(&role.caps), rooms_json(&role.rooms), role.id],
-        )
-        .map_err(|e| format!("skin role update: {e}"))?;
-        rewrite_sessions_for_role(conn, &role.id, &role.caps, &role.rooms)?;
+        persist_role_policy(conn, &role.id, &role.room_policy)?;
+        rewrite_sessions_for_role(conn, &role.id, &role.room_policy)?;
         Ok(role)
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
     Ok(attach_role_handles(role))
+}
+
+/// Add or replace one room on a role. Omitted caps → Thread-only.
+pub fn set_role_room(
+    id_or_name: &str,
+    project_id: &str,
+    caps: Option<&[String]>,
+) -> Result<SkinRole, String> {
+    let rooms = normalize_room_ids(std::slice::from_ref(&project_id.to_string()));
+    let Some(project_id) = rooms.into_iter().next() else {
+        return Err("missing workspace".to_string());
+    };
+    let caps = parse_caps(caps)?;
+    let role = with_conn(|conn| {
+        let Some(mut role) = role_by_id_or_name(conn, id_or_name)? else {
+            return Err(format!("unknown skin role '{id_or_name}'"));
+        };
+        role.room_policy.insert(project_id, caps);
+        persist_role_policy(conn, &role.id, &role.room_policy)?;
+        rewrite_sessions_for_role(conn, &role.id, &role.room_policy)?;
+        Ok(role)
+    })?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok(attach_role_handles(role))
+}
+
+/// Drop one room from a role (`--clear`).
+pub fn clear_role_room(id_or_name: &str, project_id: &str) -> Result<SkinRole, String> {
+    let project_id = project_id.trim();
+    if project_id.is_empty() {
+        return Err("missing workspace".to_string());
+    }
+    let role = with_conn(|conn| {
+        let Some(mut role) = role_by_id_or_name(conn, id_or_name)? else {
+            return Err(format!("unknown skin role '{id_or_name}'"));
+        };
+        role.room_policy.remove(project_id);
+        persist_role_policy(conn, &role.id, &role.room_policy)?;
+        rewrite_sessions_for_role(conn, &role.id, &role.room_policy)?;
+        Ok(role)
+    })?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok(attach_role_handles(role))
+}
+
+fn normalize_policy(policy: &RoomPolicy) -> Result<RoomPolicy, String> {
+    let mut out = RoomPolicy::new();
+    for (id, caps) in policy {
+        let t = id.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let parsed = parse_caps(if caps.is_empty() {
+            None
+        } else {
+            Some(caps.as_slice())
+        })?;
+        out.insert(t.to_string(), parsed);
+    }
+    Ok(out)
 }
 
 pub fn remove_role(id_or_name: &str) -> Result<bool, String> {
@@ -1687,7 +2067,7 @@ pub fn assign_role(username: &str, role: &str) -> Result<SkinPrincipal, String> 
             params![role.id, p.id],
         )
         .map_err(|e| format!("skin role assign: {e}"))?;
-        rewrite_live_sessions(conn, &p.id, &role.caps, &role.rooms)?;
+        rewrite_live_sessions(conn, &p.id, &role.room_policy)?;
         Ok(SkinPrincipal {
             id: p.id,
             username: p.username,
@@ -1705,7 +2085,6 @@ pub fn assign_role(username: &str, role: &str) -> Result<SkinPrincipal, String> 
 
 pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
     let username = normalize_username(username)?;
-    let thread_only = parse_caps(None)?;
     let p = with_conn(|conn| {
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
@@ -1715,7 +2094,7 @@ pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
             params![p.id],
         )
         .map_err(|e| format!("skin role unassign: {e}"))?;
-        rewrite_live_sessions(conn, &p.id, &thread_only, &p.default_rooms)?;
+        rewrite_live_sessions(conn, &p.id, &thread_only_policy(&p.default_rooms))?;
         Ok(SkinPrincipal {
             id: p.id,
             username: p.username,
@@ -1875,7 +2254,7 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
     with_conn(|conn| {
         let row = conn
             .query_row(
-                "SELECT t.id, t.principal_id, t.session, t.name, p.username, t.caps, t.rooms
+                "SELECT t.id, t.principal_id, t.session, t.name, p.username, t.caps, t.rooms, t.room_policy
                  FROM tokens t
                  LEFT JOIN principals p ON p.id = t.principal_id
                  WHERE t.key_hash = ?1 AND t.revoked_at IS NULL
@@ -1893,13 +2272,29 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                     };
                     let caps_raw: String = r.get(5)?;
                     let rooms_raw: String = r.get(6)?;
+                    let policy_raw: Option<String> = r.get(7)?;
+                    let caps = caps_from_json(&caps_raw);
+                    let rooms = rooms_from_json(&rooms_raw);
+                    let session_b = session != 0;
+                    let room_policy = interpret_token_policy(
+                        session_b,
+                        &caps,
+                        &rooms,
+                        policy_raw.as_deref(),
+                    );
+                    let (caps, rooms) = if session_b {
+                        (union_caps(&room_policy), rooms_from_policy(&room_policy))
+                    } else {
+                        (caps, rooms)
+                    };
                     Ok(SkinPass {
                         id: r.get(0)?,
                         principal_id,
                         username: stamp,
-                        caps: caps_from_json(&caps_raw),
-                        rooms: rooms_from_json(&rooms_raw),
-                        session: session != 0,
+                        caps,
+                        rooms,
+                        session: session_b,
+                        room_policy,
                     })
                 },
             )
@@ -2415,8 +2810,10 @@ mod tests {
             assert!(pass.principal_id.is_some());
             assert_eq!(pass.username, "ada");
             assert!(pass.rooms_empty());
-            assert!(pass.has_cap(CAP_THREAD_READ));
-            assert!(pass.has_cap(CAP_THREAD_POST));
+            assert!(
+                !pass.has_cap(CAP_FILES_READ),
+                "empty map is Thread dark, never files: {pass:?}"
+            );
             assert!(
                 list_tokens().unwrap().is_empty(),
                 "list_tokens is platform only"
@@ -2654,8 +3051,7 @@ mod tests {
             let pass = resolve_skin_token(&raw).expect("live");
             assert!(pass.session);
             assert_eq!(pass.username, "ada");
-            assert!(pass.has_cap(CAP_THREAD_READ));
-            assert!(pass.has_cap(CAP_THREAD_POST));
+            assert!(pass.rooms_empty());
             assert!(!pass.has_cap(CAP_FILES_READ));
             assert!(!pass.has_cap(CAP_FILES_WRITE));
             assert!(list_tokens().unwrap().is_empty(), "list hides sessions");
@@ -2666,25 +3062,26 @@ mod tests {
     fn role_create_rejects_connect_names_and_short_or_punct() {
         with_temp_home(|| {
             for name in ["owner", "admin", "member", "viewer", "Admin"] {
-                let err = create_role(name, None, &[]).unwrap_err();
+                let err = create_role(name, &RoomPolicy::new()).unwrap_err();
                 assert!(
                     err.contains("Connect role names cannot be skin roles"),
                     "name={name} err={err}"
                 );
                 assert!(err.contains("owner/admin/member/viewer"), "{err}");
             }
-            let err = create_role("A", None, &[]).unwrap_err();
+            let err = create_role("A", &RoomPolicy::new()).unwrap_err();
             assert!(err.contains("at least 2"), "{err}");
-            let err = create_role("Dentist!", None, &[]).unwrap_err();
+            let err = create_role("Dentist!", &RoomPolicy::new()).unwrap_err();
             assert!(err.contains("lowercase") || err.contains("only"), "{err}");
-            let role = create_role("dentist", None, &[]).expect("ok");
+            let role = create_role("dentist", &RoomPolicy::new()).expect("ok");
             assert_eq!(role.name, "dentist");
-            assert_eq!(role.caps, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+            assert!(role.caps.is_empty(), "empty map is Thread dark: {role:?}");
             assert!(role.rooms.is_empty());
-            let err = create_role("Dentist", None, &[]).unwrap_err();
+            assert!(role.room_access.is_empty());
+            let err = create_role("Dentist", &RoomPolicy::new()).unwrap_err();
             assert!(err.contains("already exists"), "{err}");
             add_principal("bob").unwrap();
-            let guest_role = create_role("bob", None, &[]).expect("guest and role coexist");
+            let guest_role = create_role("bob", &RoomPolicy::new()).expect("guest and role coexist");
             assert_eq!(guest_role.name, "bob");
         });
     }
@@ -2699,7 +3096,9 @@ mod tests {
                 "wiki:read",
                 "grid",
             ] {
-                let err = create_role("xray", Some(&[cap.into()]), &[]).unwrap_err();
+                let mut p = RoomPolicy::new();
+                p.insert("anna".into(), vec![cap.into()]);
+                let err = create_role("xray", &p).unwrap_err();
                 assert!(err.contains("unknown capability"), "{cap} {err}");
                 assert!(err.contains(cap), "{err}");
             }
@@ -2712,16 +3111,16 @@ mod tests {
             add_principal("bob").unwrap();
             let sales = uuid::Uuid::new_v4().to_string();
             set_principal_default_rooms("bob", std::slice::from_ref(&sales), false).unwrap();
-            let role = create_role(
-                "dentist",
-                Some(&[
-                    "thread:read".into(),
-                    "thread:post".into(),
-                    "files:read".into(),
-                ]),
-                std::slice::from_ref(&sales),
-            )
-            .unwrap();
+            let mut dentist = RoomPolicy::new();
+            dentist.insert(
+                sales.clone(),
+                vec![
+                    CAP_THREAD_READ.into(),
+                    CAP_THREAD_POST.into(),
+                    CAP_FILES_READ.into(),
+                ],
+            );
+            let role = create_role("dentist", &dentist).unwrap();
             assign_role("bob", "dentist").unwrap();
             let listed = list_principals().unwrap();
             assert_eq!(listed[0].role_name.as_deref(), Some("dentist"));
@@ -2768,23 +3167,27 @@ mod tests {
         with_temp_home(|| {
             add_principal("bob").unwrap();
             let sales = uuid::Uuid::new_v4().to_string();
-            create_role("dentist", None, std::slice::from_ref(&sales)).unwrap();
+            create_role("dentist", &thread_only_room_policy(std::slice::from_ref(&sales))).unwrap();
             assign_role("bob", "dentist").unwrap();
             let (_sess, sess_raw) = create_session_token("bob").unwrap();
             let (plat, plat_raw) = create_token("bob", None, std::slice::from_ref(&sales)).unwrap();
             let before = resolve_skin_token(&sess_raw).unwrap();
             assert!(!before.has_cap(CAP_FILES_WRITE));
+            assert!(before.has_cap_in_room(&sales, CAP_THREAD_READ));
+            assert!(!before.has_cap_in_room(&sales, CAP_FILES_WRITE));
 
-            update_role(
-                "dentist",
-                Some(&["thread:read".into(), "files:write".into()]),
-                None,
-            )
-            .unwrap();
+            let mut next = RoomPolicy::new();
+            next.insert(
+                sales.clone(),
+                vec![CAP_THREAD_READ.into(), CAP_FILES_WRITE.into()],
+            );
+            update_role("dentist", Some(&next)).unwrap();
             let after = resolve_skin_token(&sess_raw).expect("rewritten, not revoked");
             assert!(after.has_cap(CAP_FILES_WRITE), "{after:?}");
             assert!(after.has_cap(CAP_THREAD_READ));
             assert!(!after.has_cap(CAP_FILES_READ));
+            assert!(after.has_cap_in_room(&sales, CAP_FILES_WRITE));
+            assert!(!after.has_cap_in_room(&sales, CAP_FILES_READ));
             let plat_pass = resolve_skin_token(&plat_raw).expect("platform untouched");
             assert_eq!(plat_pass.username, "bob");
             assert!(!plat_pass.has_cap(CAP_FILES_WRITE), "{plat_pass:?}");
@@ -2798,13 +3201,14 @@ mod tests {
             add_principal("cara").unwrap();
             let sales = uuid::Uuid::new_v4().to_string();
             set_principal_default_rooms("cara", std::slice::from_ref(&sales), false).unwrap();
-            create_role("dark", None, &[]).unwrap();
+            create_role("dark", &RoomPolicy::new()).unwrap();
             assign_role("cara", "dark").unwrap();
             let (meta, raw) = create_session_token("cara").unwrap();
             assert!(meta.rooms.is_empty(), "{meta:?}");
             let pass = resolve_skin_token(&raw).unwrap();
             assert!(pass.rooms_empty());
-            assert!(pass.has_cap(CAP_THREAD_READ));
+            assert!(!pass.has_room(&sales));
+            assert!(!pass.has_cap_in_room(&sales, CAP_THREAD_READ));
         });
     }
 
@@ -2881,7 +3285,280 @@ mod tests {
             let session = resolve_skin_token(&sess).expect("session");
             assert!(session.has_cap(CAP_THREAD_READ));
             assert!(!session.has_cap(CAP_FILES_READ));
-            assert_eq!(session.rooms, vec![room]);
+            assert_eq!(session.rooms, vec![room.clone()]);
+            assert!(session.has_cap_in_room(&room, CAP_THREAD_READ));
+            assert!(!session.has_cap_in_room(&room, CAP_FILES_READ));
+        });
+    }
+
+    #[test]
+    fn session_has_cap_in_room_is_not_cartesian() {
+        with_temp_home(|| {
+            add_principal("bob").unwrap();
+            let anna = uuid::Uuid::new_v4().to_string();
+            let docs = uuid::Uuid::new_v4().to_string();
+            let mut policy = RoomPolicy::new();
+            policy.insert(
+                anna.clone(),
+                vec![CAP_THREAD_READ.into(), CAP_THREAD_POST.into()],
+            );
+            policy.insert(
+                docs.clone(),
+                vec![
+                    CAP_THREAD_READ.into(),
+                    CAP_THREAD_POST.into(),
+                    CAP_FILES_READ.into(),
+                ],
+            );
+            create_role("dentist", &policy).unwrap();
+            assign_role("bob", "dentist").unwrap();
+            let (_m, raw) = create_session_token("bob").unwrap();
+            let pass = resolve_skin_token(&raw).expect("session");
+            assert!(pass.session);
+            assert!(pass.has_room(&anna));
+            assert!(pass.has_room(&docs));
+            assert!(pass.has_cap(CAP_FILES_READ), "union still lists files");
+            assert!(
+                !pass.has_cap_in_room(&anna, CAP_FILES_READ),
+                "files on docs must not grant files on anna: {pass:?}"
+            );
+            assert!(pass.has_cap_in_room(&docs, CAP_FILES_READ));
+            assert!(pass.has_cap_in_room(&anna, CAP_THREAD_READ));
+            let files_only = {
+                let mut p = RoomPolicy::new();
+                p.insert(anna.clone(), vec![CAP_FILES_READ.into()]);
+                p
+            };
+            update_role("dentist", Some(&files_only)).unwrap();
+            let after = resolve_skin_token(&raw).expect("R8");
+            assert!(after.has_cap_in_room(&anna, CAP_FILES_READ));
+            assert!(
+                !after.has_cap_in_room(&anna, CAP_THREAD_READ),
+                "explicit files-only must not silent-add Thread: {after:?}"
+            );
+            assert!(!after.has_room(&docs));
+        });
+    }
+
+    #[test]
+    fn platform_stays_flat_room_policy_null() {
+        with_temp_home(|| {
+            let room = uuid::Uuid::new_v4().to_string();
+            let (meta, raw) = create_token(
+                "vercel",
+                Some(&[CAP_FILES_READ.into()]),
+                std::slice::from_ref(&room),
+            )
+            .unwrap();
+            assert!(meta.room_access.is_empty());
+            let pass = resolve_skin_token(&raw).expect("platform");
+            assert!(!pass.session);
+            assert!(pass.room_policy.is_empty(), "{pass:?}");
+            assert!(pass.has_cap(CAP_FILES_READ) && pass.has_room(&room));
+            assert!(pass.has_cap_in_room(&room, CAP_FILES_READ));
+            assert!(!pass.has_cap_in_room(&room, CAP_THREAD_READ));
+            with_conn(|conn| {
+                let policy: Option<String> = conn
+                    .query_row(
+                        "SELECT room_policy FROM tokens WHERE session = 0 AND id = ?1",
+                        params![meta.id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                assert!(policy.is_none(), "platform room_policy must stay NULL: {policy:?}");
+                Ok(())
+            })
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn apply_tokens_writes_thread_only_room_policy() {
+        with_temp_home(|| {
+            add_principal("ada").unwrap();
+            let room = uuid::Uuid::new_v4().to_string();
+            let (_m, raw) = create_session_token("ada").unwrap();
+            set_principal_default_rooms("ada", std::slice::from_ref(&room), true).unwrap();
+            let pass = resolve_skin_token(&raw).expect("rewritten");
+            assert!(pass.has_room(&room));
+            assert!(pass.has_cap_in_room(&room, CAP_THREAD_READ));
+            assert!(!pass.has_cap_in_room(&room, CAP_FILES_READ));
+            with_conn(|conn| {
+                let policy_raw: String = conn
+                    .query_row(
+                        "SELECT room_policy FROM tokens WHERE session = 1 AND revoked_at IS NULL",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                let policy = parse_room_policy_json(Some(&policy_raw))
+                    .expect("json")
+                    .expect("object");
+                assert_eq!(policy.get(&room), Some(&default_thread_caps()), "{policy:?}");
+                Ok(())
+            })
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn migrate_132_copies_caps_onto_each_room_resolve_does_not_join() {
+        with_temp_home(|| {
+            let path = crate::paths::k2_home().join("skin.db");
+            std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE principals (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    default_rooms TEXT NOT NULL DEFAULT '[]',
+                    password_hash TEXT,
+                    role_id TEXT
+                 );
+                 CREATE TABLE roles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    caps TEXT NOT NULL,
+                    rooms TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE tokens (
+                    id TEXT PRIMARY KEY,
+                    principal_id TEXT REFERENCES principals(id) ON DELETE CASCADE,
+                    name TEXT,
+                    key_hash TEXT NOT NULL UNIQUE,
+                    key_prefix TEXT NOT NULL,
+                    caps TEXT NOT NULL,
+                    rooms TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL,
+                    revoked_at INTEGER,
+                    session INTEGER NOT NULL DEFAULT 0,
+                    expires_at INTEGER,
+                    CHECK (
+                        (session = 1 AND principal_id IS NOT NULL AND name IS NULL)
+                        OR
+                        (session = 0 AND principal_id IS NULL AND name IS NOT NULL)
+                    )
+                 );",
+            )
+            .expect("132 schema");
+            let anna = uuid::Uuid::new_v4().to_string();
+            let docs = uuid::Uuid::new_v4().to_string();
+            let rid = uuid::Uuid::new_v4().to_string();
+            let pid = uuid::Uuid::new_v4().to_string();
+            let tid = uuid::Uuid::new_v4().to_string();
+            let raw = format!("{SKIN_KEY_PREFIX}Migrate132HashBody000000000000000000000");
+            let key_hash = sha256_hex(&raw);
+            let prefix = display_prefix(&raw);
+            let caps = caps_json(&[
+                CAP_THREAD_READ.to_string(),
+                CAP_THREAD_POST.to_string(),
+                CAP_FILES_READ.to_string(),
+            ]);
+            let rooms = rooms_json(&[anna.clone(), docs.clone()]);
+            conn.execute(
+                "INSERT INTO roles (id, name, caps, rooms, created_at) VALUES (?1, 'dentist', ?2, ?3, 1)",
+                params![rid, caps, rooms],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at, role_id) VALUES (?1, 'bob', 1, ?2)",
+                params![pid, rid],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO tokens (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, session)
+                 VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, 1, 1)",
+                params![tid, pid, key_hash, prefix, caps, rooms],
+            )
+            .unwrap();
+            drop(conn);
+
+            let listed = list_roles().expect("open_db migrate");
+            assert_eq!(listed.len(), 1);
+            assert!(listed[0].room_policy.contains_key(&anna), "{listed:?}");
+            assert!(listed[0].room_policy.contains_key(&docs), "{listed:?}");
+            assert_eq!(
+                listed[0].room_policy.get(&anna),
+                listed[0].room_policy.get(&docs)
+            );
+            assert!(
+                listed[0]
+                    .room_policy
+                    .get(&anna)
+                    .unwrap()
+                    .iter()
+                    .any(|c| c == CAP_FILES_READ)
+            );
+
+            let pass = resolve_skin_token(&raw).expect("migrated session");
+            assert!(pass.session);
+            assert!(pass.has_cap_in_room(&anna, CAP_FILES_READ), "{pass:?}");
+            assert!(pass.has_cap_in_room(&docs, CAP_FILES_READ), "{pass:?}");
+
+            let mut docs_only = RoomPolicy::new();
+            docs_only.insert(
+                docs.clone(),
+                vec![
+                    CAP_THREAD_READ.into(),
+                    CAP_THREAD_POST.into(),
+                    CAP_FILES_READ.into(),
+                ],
+            );
+            docs_only.insert(
+                anna.clone(),
+                vec![CAP_THREAD_READ.into(), CAP_THREAD_POST.into()],
+            );
+            update_role("dentist", Some(&docs_only)).unwrap();
+            let after = resolve_skin_token(&raw).expect("R8 no re-login");
+            assert!(
+                !after.has_cap_in_room(&anna, CAP_FILES_READ),
+                "anna lost files after R8: {after:?}"
+            );
+            assert!(after.has_cap_in_room(&docs, CAP_FILES_READ));
+            assert!(after.has_cap_in_room(&anna, CAP_THREAD_READ));
+
+            with_conn(|conn| {
+                let mut grant_anna = RoomPolicy::new();
+                grant_anna.insert(anna.clone(), vec![CAP_FILES_READ.into()]);
+                conn.execute(
+                    "UPDATE roles SET room_policy = ?1 WHERE name = 'dentist'",
+                    params![room_policy_json(&grant_anna)],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+            let still = resolve_skin_token(&raw).expect("no JOIN at resolve");
+            assert!(
+                !still.has_cap_in_room(&anna, CAP_FILES_READ),
+                "resolve must not JOIN roles: {still:?}"
+            );
+            assert!(still.has_cap_in_room(&docs, CAP_FILES_READ));
+        });
+    }
+
+    #[test]
+    fn omitted_caps_on_present_room_is_thread_only() {
+        with_temp_home(|| {
+            let sales = uuid::Uuid::new_v4().to_string();
+            let role = create_role("hygienist", &thread_only_room_policy(std::slice::from_ref(&sales)))
+                .unwrap();
+            assert_eq!(role.rooms, vec![sales.clone()]);
+            assert_eq!(
+                role.room_policy.get(&sales),
+                Some(&default_thread_caps())
+            );
+            assert!(!role.caps.iter().any(|c| c == CAP_FILES_READ));
+            let added = set_role_room("hygienist", &sales, Some(&[CAP_FILES_READ.into()])).unwrap();
+            assert_eq!(
+                added.room_policy.get(&sales),
+                Some(&vec![CAP_FILES_READ.to_string()])
+            );
+            let cleared = clear_role_room("hygienist", &sales).unwrap();
+            assert!(cleared.room_policy.is_empty());
         });
     }
 }

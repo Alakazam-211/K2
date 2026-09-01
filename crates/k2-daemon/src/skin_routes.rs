@@ -7,8 +7,10 @@
 //! Hydra stay owner-only. Mutations are POST-only (GET twins 405). Raw
 //! `k2skn_…` secret is returned once on create.
 
+use std::collections::HashSet;
+
 use crate::cli_response::CliResponse;
-use k2_core::skin::{self, CAP_FILES_READ, CAP_FILES_WRITE, CAP_THREAD_POST, CAP_THREAD_READ};
+use k2_core::skin::{self, RoomPolicy, CAP_FILES_READ, CAP_FILES_WRITE, CAP_THREAD_POST, CAP_THREAD_READ};
 use k2_core::skin_door;
 
 fn json_body(body: &[u8]) -> Result<serde_json::Value, CliResponse> {
@@ -86,6 +88,83 @@ fn resolve_rooms_allow_empty(raw: Option<Vec<String>>) -> Result<Vec<String>, Cl
     match skin::resolve_room_tokens(&raw.unwrap_or_default()) {
         Ok(ids) => Ok(ids),
         Err(e) => Err(CliResponse::bad_request(e)),
+    }
+}
+
+const ROOM_ACCESS_TEACHING: &str = "use roomAccess (per-room functions), not caps+rooms";
+
+fn room_access_value(v: &serde_json::Value) -> Option<&serde_json::Value> {
+    v.get("roomAccess").or_else(|| v.get("room_access"))
+}
+
+fn parse_room_access(v: &serde_json::Value) -> Result<RoomPolicy, CliResponse> {
+    let Some(arr) = v.as_array() else {
+        return Err(CliResponse::bad_request("roomAccess must be an array"));
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut policy = RoomPolicy::new();
+    for item in arr {
+        let Some(handle) = str_field(item, &["handle", "id"]) else {
+            return Err(CliResponse::bad_request(
+                "roomAccess item missing handle or id",
+            ));
+        };
+        let key = handle.to_ascii_lowercase();
+        if !seen.insert(key) {
+            return Err(CliResponse::bad_request(format!(
+                "duplicate handle {handle:?}"
+            )));
+        }
+        let ids = match skin::resolve_room_tokens(&[handle.to_string()]) {
+            Ok(ids) if ids.len() == 1 => ids,
+            Ok(_) => {
+                return Err(CliResponse::bad_request(format!(
+                    "unknown workspace handle {handle:?}"
+                )))
+            }
+            Err(e) => return Err(CliResponse::bad_request(e)),
+        };
+        let project_id = ids[0].clone();
+        if policy.contains_key(&project_id) {
+            return Err(CliResponse::bad_request(format!(
+                "duplicate handle {handle:?}"
+            )));
+        }
+        let caps = match skin::parse_caps(caps_field(item).as_deref()) {
+            Ok(c) => c,
+            Err(e) => return Err(CliResponse::bad_request(e)),
+        };
+        policy.insert(project_id, caps);
+    }
+    Ok(policy)
+}
+
+/// Create: missing both → empty map. Update: missing both → `None` (keep).
+fn role_policy_from_body(
+    v: &serde_json::Value,
+    is_update: bool,
+) -> Result<Option<RoomPolicy>, CliResponse> {
+    if let Some(ra) = room_access_value(v) {
+        return Ok(Some(parse_room_access(ra)?));
+    }
+    let caps = caps_field(v);
+    let rooms = rooms_field(v);
+    if caps.is_some() && rooms.is_some() {
+        return Err(CliResponse::bad_request(ROOM_ACCESS_TEACHING.to_string()));
+    }
+    if caps.is_some() && rooms.is_none() {
+        return Err(CliResponse::bad_request(
+            "caps require rooms or roomAccess (per-room functions)",
+        ));
+    }
+    if let Some(list) = rooms {
+        let ids = resolve_rooms_allow_empty(Some(list))?;
+        return Ok(Some(skin::thread_only_room_policy(&ids)));
+    }
+    if is_update {
+        Ok(None)
+    } else {
+        Ok(Some(RoomPolicy::new()))
     }
 }
 
@@ -312,12 +391,12 @@ pub fn handle_roles_post(body: &[u8], actor: &str) -> CliResponse {
     let Some(name) = str_field(&v, &["name"]) else {
         return CliResponse::bad_request("missing name");
     };
-    let caps = caps_field(&v);
-    let rooms = match resolve_rooms_allow_empty(rooms_field(&v)) {
-        Ok(ids) => ids,
+    let policy = match role_policy_from_body(&v, false) {
+        Ok(Some(p)) => p,
+        Ok(None) => RoomPolicy::new(),
         Err(e) => return e,
     };
-    match skin::create_role(name, caps.as_deref(), &rooms) {
+    match skin::create_role(name, &policy) {
         Ok(role) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} created role {} name={} caps={:?} rooms={:?}",
@@ -340,20 +419,60 @@ pub fn handle_roles_update(body: &[u8], actor: &str) -> CliResponse {
     let Some(id_or_name) = str_field(&v, &["id", "name", "role"]) else {
         return CliResponse::bad_request("missing id or name");
     };
-    let caps = caps_field(&v);
-    let rooms = match v.get("rooms").or_else(|| v.get("agents")) {
-        None => None,
-        Some(_) => match resolve_rooms_allow_empty(rooms_field(&v)) {
-            Ok(ids) => Some(ids),
-            Err(e) => return e,
-        },
+    let policy = match role_policy_from_body(&v, true) {
+        Ok(p) => p,
+        Err(e) => return e,
     };
-    match skin::update_role(id_or_name, caps.as_deref(), rooms.as_deref()) {
+    match skin::update_role(id_or_name, policy.as_ref()) {
         Ok(role) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} updated role {} caps={:?} rooms={:?}",
                 role.name,
                 role.caps,
+                role.rooms
+            );
+            CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_roles_room(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id_or_name) = str_field(&v, &["id", "name", "role"]) else {
+        return CliResponse::bad_request("missing id or name");
+    };
+    let Some(handle) = str_field(&v, &["handle", "id"]) else {
+        return CliResponse::bad_request("missing handle or id");
+    };
+    let clear = match v.get("clear") {
+        None => false,
+        Some(x) if x.is_null() => false,
+        Some(x) => x.as_bool().unwrap_or(false),
+    };
+    let ids = match skin::resolve_room_tokens(&[handle.to_string()]) {
+        Ok(ids) if ids.len() == 1 => ids,
+        Ok(_) => {
+            return CliResponse::bad_request(format!("unknown workspace handle {handle:?}"))
+        }
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let project_id = &ids[0];
+    let result = if clear {
+        skin::clear_role_room(id_or_name, project_id)
+    } else {
+        let caps = caps_field(&v);
+        skin::set_role_room(id_or_name, project_id, caps.as_deref())
+    };
+    match result {
+        Ok(role) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} role room {} handle={} clear={clear} rooms={:?}",
+                role.name,
+                handle,
                 role.rooms
             );
             CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))
@@ -576,7 +695,7 @@ pub fn skin_agents_forbidden() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "skin_token",
-                "hint": "GET /cli/skin/agents is for a skin pass with thread:read",
+                "hint": "GET /cli/skin/agents is for a live skin pass",
             },
         })
         .to_string(),
@@ -917,6 +1036,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
         "roomHandles": meta.room_handles,
         "caps": meta.caps,
         "role": principal.role_name,
+        "roomAccess": meta.room_access,
     })
     .to_string();
     debug_assert!(

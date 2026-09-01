@@ -828,6 +828,7 @@ async fn handle_one_request(
             | "/cli/skin/roles/remove"
             | "/cli/skin/roles/assign"
             | "/cli/skin/roles/unassign"
+            | "/cli/skin/roles/room"
             | "/cli/skin/login"
             | "/cli/skin/logout"
             | "/cli/skin-tokens"
@@ -1359,7 +1360,11 @@ async fn handle_one_request(
             {
                 match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
                 {
-                    Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => Some(pass),
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) =>
+                    {
+                        Some(pass)
+                    }
                     Some(_) => {
                         let _ = stream.read(&mut buf).await;
                         let r = crate::skin_routes::missing_cap_response(
@@ -1414,7 +1419,11 @@ async fn handle_one_request(
             {
                 match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
                 {
-                    Some(pass) if pass.has_cap(crate::skin_routes::FILES_READ) => Some(pass),
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::FILES_READ) =>
+                    {
+                        Some(pass)
+                    }
                     Some(_) => {
                         let _ = stream.read(&mut buf).await;
                         let r = crate::skin_routes::missing_cap_response(
@@ -4063,7 +4072,11 @@ async fn handle_one_request(
                         .await;
                         return DispatchOutcome::Done;
                     }
-                    Some(pass) if pass.has_cap(crate::skin_routes::FILES_WRITE) => Some(pass),
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::FILES_WRITE) =>
+                    {
+                        Some(pass)
+                    }
                     Some(_) => {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
                         let r = crate::skin_routes::missing_cap_response(
@@ -4170,7 +4183,7 @@ async fn handle_one_request(
                     }
                     Some(pass)
                         if skin_thread_write
-                            && pass.has_cap(crate::skin_routes::THREAD_POST) =>
+                            && pass.dispatcher_admits_cap(crate::skin_routes::THREAD_POST) =>
                     {
                         let name = pass.username.clone();
                         bound_skin = Some(pass);
@@ -5272,7 +5285,7 @@ async fn handle_one_request(
                     let presented = super::http::extract_token(&query);
                     if presented.is_some_and(k2_core::skin::is_skin_token) {
                         match presented.and_then(k2_core::skin::resolve_skin_token) {
-                            Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => {
+                            Some(pass) => {
                                 tokio::task::spawn_blocking(move || {
                                     crate::skin_routes::handle_agents_get(&pass)
                                 })
@@ -5281,9 +5294,6 @@ async fn handle_one_request(
                                     crate::cli_response::CliResponse::internal_error(e)
                                 })
                             }
-                            Some(_) => crate::skin_routes::missing_cap_response(
-                                crate::skin_routes::THREAD_READ,
-                            ),
                             None => crate::skin_routes::revoked_skin_response(),
                         }
                     } else {
@@ -5617,6 +5627,39 @@ async fn handle_one_request(
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
                             crate::skin_routes::handle_roles_unassign(&body, &actor),
+                            &actor,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/roles/room" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let actor = match owner_or_skin_manage_hook(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    ) {
+                        Ok(a) => a,
+                        Err(f) => {
+                            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            super::http::send_response(
+                                &mut *stream,
+                                f.status,
+                                f.content_type,
+                                &f.body,
+                            )
+                            .await;
+                            return DispatchOutcome::Done;
+                        }
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(
+                            crate::skin_routes::handle_roles_room(&body, &actor),
                             &actor,
                         )
                     })
@@ -6937,7 +6980,9 @@ async fn handle_one_request(
             let (auth_ok, scoped_principal) = if skin_presented && p == "/cli/thread" {
                 match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
                 {
-                    Some(pass) if pass.has_cap(crate::skin_routes::THREAD_READ) => {
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) =>
+                    {
                         bound_skin = Some(pass);
                         (true, None)
                     }
@@ -7144,7 +7189,11 @@ async fn handle_one_request(
             let skin_pass = if skin_presented {
                 match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
                 {
-                    Some(pass) if pass.has_cap(crate::skin_routes::FILES_READ) => Some(pass),
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::FILES_READ) =>
+                    {
+                        Some(pass)
+                    }
                     Some(_) => {
                         let r = crate::skin_routes::missing_cap_response(
                             crate::skin_routes::FILES_READ,

@@ -89,6 +89,19 @@ fn skin_room_denied() -> CliResponse {
     crate::skin_routes::skin_room_response()
 }
 
+fn require_skin_cap_in_resolved(
+    resolved: &ResolvedOverlay,
+    cap: &str,
+) -> Result<(), CliResponse> {
+    let Some(pass) = request_skin() else {
+        return Ok(());
+    };
+    if !pass.has_cap_in_room(&resolved.project_id, cap) {
+        return Err(crate::skin_routes::missing_cap_response(cap));
+    }
+    Ok(())
+}
+
 fn pinned_chat_id(
     conn: &rusqlite::Connection,
     project_id: &str,
@@ -331,6 +344,9 @@ fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_READ) {
+        return e;
+    }
     let principal = crate::caller_workspace::principal_from_params(params);
     if let Err(e) = authorize_read(principal.as_ref(), &resolved) {
         return e;
@@ -429,6 +445,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
+        return e;
+    }
     let principal = crate::caller_workspace::principal_from_params(params);
     // Skin: authenticated pass username only (never body `from`). Overlay
     // store and PTY stamp must match. via=compose: session actor. Else
@@ -688,6 +707,9 @@ fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
+        return e;
+    }
     let principal = crate::caller_workspace::principal_from_params(params);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
         return e;
@@ -741,6 +763,9 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
+        return e;
+    }
     let principal = crate::caller_workspace::principal_from_params(params);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
         return e;
@@ -1900,6 +1925,7 @@ mod tests {
             caps: vec!["thread:read".into(), "thread:post".into()],
             rooms: rooms.to_vec(),
             session: false,
+            room_policy: k2_core::skin::RoomPolicy::new(),
         }
     }
 

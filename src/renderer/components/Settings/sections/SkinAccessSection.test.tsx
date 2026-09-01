@@ -593,6 +593,9 @@ describe('SkinAccessSection', () => {
       caps: ['thread:read', 'thread:post', 'files:read'],
       rooms: ['proj-sales'],
       roomHandles: ['sales'],
+      roomAccess: [
+        { handle: 'sales', caps: ['thread:read', 'thread:post', 'files:read'] },
+      ],
     }
     h.daemonCliGet.mockImplementation(async (route: string) => {
       if (route === 'skin/front-door') {
@@ -612,6 +615,9 @@ describe('SkinAccessSection', () => {
       screen.getByText(/Skin roles are not Connect owner\/admin\/member\/viewer/),
     ).not.toBeNull()
     expect(screen.getByText(/They never include the terminal/)).not.toBeNull()
+    expect(
+      screen.getByText(/Files on Documents does not grant files on Anna/),
+    ).not.toBeNull()
     const bobRole = screen.getByLabelText('bob role') as HTMLSelectElement
     const optionNames = [...bobRole.options].map((o) => o.value)
     expect(optionNames).toEqual(['', 'dentist'])
@@ -631,5 +637,26 @@ describe('SkinAccessSection', () => {
         .map((c) => String(c[0]))
         .some((r) => r === 'users' || r.startsWith('users/')),
     ).toBe(false)
+  })
+
+  it('creates a role with per-room roomAccess, not caps+rooms', async () => {
+    render(<SkinAccessSection />)
+    await loaded()
+    fireEvent.change(screen.getByLabelText('New skin role name'), { target: { value: 'dentist' } })
+    fireEvent.click(screen.getByLabelText('Role agent sales'))
+    fireEvent.click(screen.getByLabelText('Role sales files:read'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create role' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/roles', {
+        name: 'dentist',
+        roomAccess: [
+          { handle: 'sales', caps: ['thread:read', 'thread:post', 'files:read'] },
+        ],
+      })
+    })
+    const posts = h.daemonCliPost.mock.calls.filter((c) => c[0] === 'skin/roles')
+    const body = posts[0][1] as { caps?: unknown; rooms?: unknown }
+    expect(body.caps).toBeUndefined()
+    expect(body.rooms).toBeUndefined()
   })
 })

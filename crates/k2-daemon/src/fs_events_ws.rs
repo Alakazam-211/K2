@@ -126,7 +126,14 @@ pub async fn serve_fs_events_connection(
 
     let resolved: SkinWorkspace = if let Some(ref pass) = skin_pass {
         match resolve_skin_workspace(pass, &workspace_q) {
-            Ok(ws) => ws,
+            Ok(ws) => {
+                if !pass.has_cap_in_room(&ws.project_id, crate::skin_routes::FILES_READ) {
+                    let r = crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_READ);
+                    write_http(stream, r.status, &r.body).await;
+                    return;
+                }
+                ws
+            }
             Err(r) => {
                 write_http(stream, r.status, &r.body).await;
                 return;

@@ -2107,11 +2107,30 @@ async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
             );
         }
 
+        let leftover_cartesian = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","caps":["thread:read","thread:post","files:read"],"rooms":["{sales}"]}}"#
+            )),
+        );
+        assert_eq!(leftover_cartesian.status, 400, "{}", leftover_cartesian.body);
+        assert!(
+            leftover_cartesian
+                .body
+                .contains("use roomAccess (per-room functions), not caps+rooms"),
+            "{}",
+            leftover_cartesian.body
+        );
+
         let unknown_cap = http(
             port,
             "POST",
             &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
-            Some(r#"{"name":"xray","caps":["tickets:read"],"rooms":[]}"#),
+            Some(&format!(
+                r#"{{"name":"xray","roomAccess":[{{"handle":"{sales}","caps":["tickets:read"]}}]}}"#
+            )),
         );
         assert_eq!(unknown_cap.status, 400, "{}", unknown_cap.body);
         assert!(
@@ -2125,7 +2144,7 @@ async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
             "POST",
             &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
             Some(&format!(
-                r#"{{"name":"dentist","caps":["thread:read","thread:post","files:read"],"rooms":["{sales}"]}}"#
+                r#"{{"name":"dentist","roomAccess":[{{"handle":"{sales}","caps":["thread:read","thread:post","files:read"]}}]}}"#
             )),
         );
         assert_eq!(created.status, 200, "{}", created.body);
@@ -2229,6 +2248,17 @@ async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
             "{}",
             login.body
         );
+        let login_access = lv["roomAccess"].as_array().expect("roomAccess");
+        assert!(
+            login_access.iter().any(|row| {
+                row["handle"] == sales
+                    && row["caps"]
+                        .as_array()
+                        .is_some_and(|c| c.iter().any(|x| x == "files:read"))
+            }),
+            "login roomAccess: {}",
+            login.body
+        );
         let listed_tokens = http(
             port,
             "GET",
@@ -2280,13 +2310,28 @@ async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
         );
         assert_missing_cap(&no_write_yet, "files:write");
 
-        let updated = http(
+        let leftover_update = http(
             port,
             "POST",
             &format!("/cli/skin/roles/update?token={OWNER_TOKEN}"),
             Some(
                 r#"{"name":"dentist","caps":["thread:read","thread:post","files:read","files:write"]}"#,
             ),
+        );
+        assert_eq!(leftover_update.status, 400, "{}", leftover_update.body);
+        assert!(
+            leftover_update.body.contains("caps require rooms or roomAccess"),
+            "{}",
+            leftover_update.body
+        );
+
+        let updated = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/update?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","roomAccess":[{{"handle":"{sales}","caps":["thread:read","thread:post","files:read","files:write"]}}]}}"#
+            )),
         );
         assert_eq!(updated.status, 200, "{}", updated.body);
         let wrote = http(
@@ -2644,12 +2689,33 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
             add.body
         );
 
-        let role = http(
+        let leftover_hook = http(
             port,
             "POST",
             &format!("/cli/skin/roles?token={hook_a}"),
             Some(&format!(
                 r#"{{"name":"dentist","caps":["thread:read"],"rooms":["{sales_handle}"]}}"#
+            )),
+        );
+        assert_eq!(
+            leftover_hook.status, 400,
+            "toggle ON leftover caps+rooms; {}",
+            leftover_hook.body
+        );
+        assert!(
+            leftover_hook
+                .body
+                .contains("use roomAccess (per-room functions), not caps+rooms"),
+            "{}",
+            leftover_hook.body
+        );
+
+        let role = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={hook_a}"),
+            Some(&format!(
+                r#"{{"name":"dentist","roomAccess":[{{"handle":"{sales_handle}","caps":["thread:read"]}}]}}"#
             )),
         );
         assert_eq!(role.status, 200, "toggle ON role create; {}", role.body);
@@ -2757,5 +2823,238 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
             Some(r#"{"username":"afteroff"}"#),
         );
         assert_owner_only(&after_off, "toggle OFF again");
+
+        let room_off = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/room?token={hook_a}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{sales_handle}","caps":["thread:read"]}}"#
+            )),
+        );
+        assert_owner_only(&room_off, "toggle OFF + hook POST roles/room");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_per_room_functions_docs_not_anna() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (anna_id, anna_pin) = seed_thread_addr(&anna);
+        let (_docs_id, docs_dir) = seed_files_workspace(&docs);
+        add_user(port, "bob");
+        set_password(port, "bob", "s3cret-horse");
+
+        let created = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"dentist"}"#),
+        );
+        assert_eq!(created.status, 200, "dark create; {}", created.body);
+        let anna_room = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{anna}","caps":["thread:read","thread:post"]}}"#
+            )),
+        );
+        assert_eq!(anna_room.status, 200, "{}", anna_room.body);
+        let omitted = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"name":"dentist","handle":"{docs}"}}"#)),
+        );
+        assert_eq!(omitted.status, 200, "omitted caps Thread-only; {}", omitted.body);
+        let omitted_v = json(&omitted.body);
+        let docs_row = omitted_v["roomAccess"]
+            .as_array()
+            .expect("roomAccess")
+            .iter()
+            .find(|r| r["handle"] == docs)
+            .expect("docs row");
+        let docs_caps = docs_row["caps"].as_array().expect("caps");
+        assert!(
+            !docs_caps.iter().any(|c| c == "files:read"),
+            "omitted caps must not grant files: {}",
+            omitted.body
+        );
+
+        let docs_files = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{docs}","caps":["thread:read","thread:post","files:read"]}}"#
+            )),
+        );
+        assert_eq!(docs_files.status, 200, "{}", docs_files.body);
+
+        let dup = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dupes","roomAccess":[{{"handle":"{anna}"}},{{"handle":"{anna}"}}]}}"#
+            )),
+        );
+        assert_eq!(dup.status, 400, "duplicate handle; {}", dup.body);
+
+        let get_twin = http(port, "GET", "/cli/skin/roles/room", None);
+        assert_eq!(get_twin.status, 405, "GET roles/room; {}", get_twin.body);
+
+        let assign = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"bob","role":"dentist"}"#),
+        );
+        assert_eq!(assign.status, 200, "{}", assign.body);
+
+        let login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"bob","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "{}", login.body);
+        let lv = json(&login.body);
+        let sess = lv["token"].as_str().expect("token").to_string();
+        assert!(lv["roomAccess"].as_array().is_some(), "{}", login.body);
+
+        let files_anna = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={sess}&workspace={anna}&path=."),
+            None,
+        );
+        assert_missing_cap(&files_anna, "files:read");
+        assert!(
+            !files_anna.body.contains("skin_room"),
+            "anna files must be missing cap not skin_room: {}",
+            files_anna.body
+        );
+        let files_docs = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-dir?token={sess}&workspace={docs}&path=."),
+            None,
+        );
+        assert_eq!(files_docs.status, 200, "docs files; {}", files_docs.body);
+
+        let thread_anna = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={sess}&addr={anna}"),
+            None,
+        );
+        assert_eq!(thread_anna.status, 200, "{}", thread_anna.body);
+        let post = http(
+            port,
+            "POST",
+            &format!("/cli/thread/post?token={sess}"),
+            Some(&format!(r#"{{"addr":"{anna}","text":"hello from bob"}}"#)),
+        );
+        assert_eq!(post.status, 200, "{}", post.body);
+        assert_eq!(json(&post.body)["from"], "bob", "{}", post.body);
+
+        let live_pin = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            WorkspaceSession::get(&conn, &anna_id)
+                .ok()
+                .flatten()
+                .and_then(|s| s.session_id)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| anna_pin.clone())
+        };
+        futures_block(async {
+            let url = format!(
+                "ws://127.0.0.1:{port}/cli/overlay/events?conversation={live_pin}&token={sess}"
+            );
+            let (_ws, resp) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("overlay anna must upgrade");
+            assert_eq!(resp.status(), 101, "overlay anna; {resp:?}");
+        });
+
+        let files_ws_anna = http(
+            port,
+            "GET",
+            &format!("/cli/fs/events?workspace={anna}&token={sess}"),
+            None,
+        );
+        assert_eq!(files_ws_anna.status, 403, "{}", files_ws_anna.body);
+        assert_missing_cap(&files_ws_anna, "files:read");
+        assert_ne!(files_ws_anna.status, 101);
+
+        let grid = http(
+            port,
+            "GET",
+            &format!("/cli/sessions/grid?token={sess}&session=nope"),
+            None,
+        );
+        assert_eq!(grid.status, 403, "{}", grid.body);
+        assert_eq!(grid.body.trim(), TERMINAL_403);
+
+        let fs_official = http(
+            port,
+            "GET",
+            &format!("/cli/fs/info?token={sess}"),
+            None,
+        );
+        assert!(
+            fs_official.status == 403 || fs_official.status == 404,
+            "official fs still not a skin door; {}",
+            fs_official.body
+        );
+
+        let files_only = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{anna}","caps":["files:read"]}}"#
+            )),
+        );
+        assert_eq!(files_only.status, 200, "{}", files_only.body);
+        let agents = http(port, "GET", &format!("/cli/skin/agents?token={sess}"), None);
+        assert_eq!(agents.status, 200, "files-only room still lists; {}", agents.body);
+        let agents_v = json(&agents.body);
+        let list = agents_v["agents"].as_array().expect("agents");
+        assert!(
+            list.iter().any(|a| a["handle"] == anna),
+            "files-only anna must appear: {}",
+            agents.body
+        );
+
+        let dark = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/update?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"dentist","roomAccess":[]}"#),
+        );
+        assert_eq!(dark.status, 200, "{}", dark.body);
+        let empty_thread = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={sess}&addr={anna}"),
+            None,
+        );
+        assert_skin_room(&empty_thread);
+
+        let plat = mint(port, "vercel", &["thread:read"], &[&anna]);
+        let plat_pass = k2_core::skin::resolve_skin_token(&plat.1).expect("platform");
+        assert!(!plat_pass.session);
+        assert!(plat_pass.room_policy.is_empty());
+
+        let _ = anna_id;
+        let _ = std::fs::remove_dir_all(&docs_dir);
     });
 }

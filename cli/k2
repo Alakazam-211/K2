@@ -5374,11 +5374,15 @@ Usage: k2 skin <user|role|hydra> ...
                                         Set default rooms (unassigned guests only)
   k2 skin user role <username> <role>   Assign a skin role (not Connect owner/admin/member/viewer)
   k2 skin user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
-  k2 skin role create <name> [--caps thread:read,thread:post,files:read] [--agent sales]
-                                        Named bundle of scopes + agents (0 agents = Thread dark)
-  k2 skin role list                     Roles (name + caps + rooms; no secrets)
-  k2 skin role update <name> [--caps …] [--agent … | --clear]
-                                        --clear empties rooms, keeps caps. Always rewrites live sessions.
+  k2 skin role create <name> [--agent sales]
+                                        Named bundle. No --agent = Thread dark. --agent without --caps = Thread-only on that room.
+  k2 skin role room <role> <handle> [--caps thread:read,thread:post,files:read]
+                                        Add/replace functions on one room. Omit --caps = Thread-only. Not --caps with --agent.
+  k2 skin role room <role> <handle> --clear
+                                        Drop that room from the role
+  k2 skin role list                     Roles (per-room lines; no secrets)
+  k2 skin role update <name> [--agent … | --clear]
+                                        --clear empties the whole map. Always rewrites live sessions.
   k2 skin role remove <name>            Drop an unassigned role
   k2 skin hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
   k2 skin-token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
@@ -5591,34 +5595,41 @@ print("Skin user %s unassigned." % d.get("username",""))'
                         case "$1" in
                             --caps|--cap) caps="${2:-}"; shift 2 ;;
                             --agent|--agents) agents+=("${2:-}"); shift 2 ;;
-                            --help|-h) echo "Usage: k2 skin role create <name> [--caps thread:read,thread:post,files:read] [--agent sales]" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 skin role create <name> [--agent sales]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$name" ]] && name="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$name" ]] && { echo "Usage: k2 skin role create <name> [--caps thread:read,thread:post,files:read] [--agent sales]" >&2; exit 1; }
+                    [[ -z "$name" ]] && { echo "Usage: k2 skin role create <name> [--agent sales]" >&2; exit 1; }
+                    if [[ -n "$caps" ]]; then
+                        echo "Error: use k2 skin role room <role> <handle> [--caps …], not --caps with --agent" >&2
+                        exit 2
+                    fi
                     local agents_nl="" a
                     for a in "${agents[@]}"; do
                         agents_nl="${agents_nl}${a}"$'\n'
                     done
                     local body raw
-                    body=$(K2_SKIN_NAME="$name" K2_SKIN_CAPS="$caps" K2_SKIN_AGENTS="$agents_nl" python3 -c '
+                    body=$(K2_SKIN_NAME="$name" K2_SKIN_AGENTS="$agents_nl" python3 -c '
 import json,os
 b={"name": os.environ.get("K2_SKIN_NAME","")}
-c=os.environ.get("K2_SKIN_CAPS","").strip()
-if c:
-    b["caps"]=[s.strip() for s in c.split(",") if s.strip()]
-b["rooms"]=[s.strip() for s in os.environ.get("K2_SKIN_AGENTS","").splitlines() if s.strip()]
+rooms=[s.strip() for s in os.environ.get("K2_SKIN_AGENTS","").splitlines() if s.strip()]
+if rooms:
+    b["rooms"]=rooms
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/roles" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
-caps=", ".join(d.get("caps") or []) or "(none)"
-handles=d.get("roomHandles") or d.get("room_handles") or []
-rooms=", ".join(handles) if handles else "(none)"
-print("Skin role created: %s  caps=%s  rooms=%s" % (d.get("name",""), caps, rooms))'
+access=d.get("roomAccess") or d.get("room_access") or []
+if not access:
+    print("Skin role created: %s  (none)" % (d.get("name",""),))
+    sys.exit(0)
+print("Skin role created: %s" % d.get("name",""))
+for a in access:
+    caps=", ".join(a.get("caps") or []) or "thread-only"
+    print("  %s  %s" % (a.get("handle") or "", caps))'
                     ;;
                 list|"")
                     local raw
@@ -5631,10 +5642,55 @@ roles=d.get("roles",[])
 if not roles:
     print("No skin roles."); sys.exit(0)
 for r in roles:
-    caps=",".join(r.get("caps") or []) or "none"
-    handles=r.get("roomHandles") or r.get("room_handles") or []
-    rooms=",".join(handles) if handles else "(none)"
-    print("%s  caps=%s  rooms=%s" % (r.get("name",""), caps, rooms))'
+    print(r.get("name") or "")
+    access=r.get("roomAccess") or r.get("room_access") or []
+    if not access:
+        print("  (none)")
+        continue
+    for a in access:
+        caps=",".join(a.get("caps") or []) or "thread-only"
+        print("  %s  %s" % (a.get("handle") or "", caps))'
+                    ;;
+                room)
+                    local role="" handle="" caps="" clear=0
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --caps|--cap) caps="${2:-}"; shift 2 ;;
+                            --clear) clear=1; shift ;;
+                            --help|-h) echo "Usage: k2 skin role room <role> <handle> [--caps thread:read,thread:post,files:read] | --clear" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *)
+                                if [[ -z "$role" ]]; then role="$1"
+                                elif [[ -z "$handle" ]]; then handle="$1"
+                                fi
+                                shift ;;
+                        esac
+                    done
+                    [[ -z "$role" || -z "$handle" ]] && { echo "Usage: k2 skin role room <role> <handle> [--caps …] | --clear" >&2; exit 1; }
+                    local body raw
+                    body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_CAPS="$caps" K2_SKIN_CLEAR="$clear" python3 -c '
+import json,os
+b={"name": os.environ.get("K2_SKIN_ROLE",""), "handle": os.environ.get("K2_SKIN_HANDLE","")}
+if os.environ.get("K2_SKIN_CLEAR","0") == "1":
+    b["clear"]=True
+else:
+    c=os.environ.get("K2_SKIN_CAPS","").strip()
+    if c:
+        b["caps"]=[s.strip() for s in c.split(",") if s.strip()]
+print(json.dumps(b))')
+                    raw=$(cli_post_json "/cli/skin/roles/room" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print("Skin role %s" % (d.get("name") or ""))
+access=d.get("roomAccess") or d.get("room_access") or []
+if not access:
+    print("  (none)")
+    sys.exit(0)
+for a in access:
+    caps=", ".join(a.get("caps") or []) or "thread-only"
+    print("  %s  %s" % (a.get("handle") or "", caps))'
                     ;;
                 update)
                     local name="" caps="" clear=0 agents=()
@@ -5643,25 +5699,26 @@ for r in roles:
                             --caps|--cap) caps="${2:-}"; shift 2 ;;
                             --agent|--agents) agents+=("${2:-}"); shift 2 ;;
                             --clear) clear=1; shift ;;
-                            --help|-h) echo "Usage: k2 skin role update <name> [--caps …] [--agent … | --clear]" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 skin role update <name> [--agent … | --clear]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$name" ]] && name="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$name" ]] && { echo "Usage: k2 skin role update <name> [--caps …] [--agent … | --clear]" >&2; exit 1; }
+                    [[ -z "$name" ]] && { echo "Usage: k2 skin role update <name> [--agent … | --clear]" >&2; exit 1; }
+                    if [[ -n "$caps" ]]; then
+                        echo "Error: use k2 skin role room <role> <handle> [--caps …], not --caps with --agent" >&2
+                        exit 2
+                    fi
                     local agents_nl="" a
                     for a in "${agents[@]}"; do
                         agents_nl="${agents_nl}${a}"$'\n'
                     done
                     local body raw
-                    body=$(K2_SKIN_NAME="$name" K2_SKIN_CAPS="$caps" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_CLEAR="$clear" python3 -c '
+                    body=$(K2_SKIN_NAME="$name" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_CLEAR="$clear" python3 -c '
 import json,os
 b={"name": os.environ.get("K2_SKIN_NAME","")}
-c=os.environ.get("K2_SKIN_CAPS","").strip()
-if c:
-    b["caps"]=[s.strip() for s in c.split(",") if s.strip()]
 if os.environ.get("K2_SKIN_CLEAR","0") == "1":
-    b["rooms"]=[]
+    b["roomAccess"]=[]
 elif os.environ.get("K2_SKIN_AGENTS","").strip():
     b["rooms"]=[s.strip() for s in os.environ.get("K2_SKIN_AGENTS","").splitlines() if s.strip()]
 print(json.dumps(b))')
@@ -5670,10 +5727,14 @@ print(json.dumps(b))')
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
-caps=", ".join(d.get("caps") or []) or "(none)"
-handles=d.get("roomHandles") or d.get("room_handles") or []
-rooms=", ".join(handles) if handles else "(none)"
-print("Skin role updated: %s  caps=%s  rooms=%s" % (d.get("name",""), caps, rooms))'
+print("Skin role updated: %s" % (d.get("name") or ""))
+access=d.get("roomAccess") or d.get("room_access") or []
+if not access:
+    print("  (none)")
+    sys.exit(0)
+for a in access:
+    caps=", ".join(a.get("caps") or []) or "thread-only"
+    print("  %s  %s" % (a.get("handle") or "", caps))'
                     ;;
                 remove|rm)
                     local name="${1:-}"
@@ -5688,11 +5749,11 @@ d=json.load(sys.stdin)
 print("Skin role removed." if d.get("success") else "No matching skin role.")'
                     ;;
                 --help|-h)
-                    echo "Usage: k2 skin role <create|list|update|remove>" >&2
+                    echo "Usage: k2 skin role <create|list|room|update|remove>" >&2
                     exit 0
                     ;;
                 *)
-                    echo "Usage: k2 skin role <create|list|update|remove>" >&2
+                    echo "Usage: k2 skin role <create|list|room|update|remove>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -14591,10 +14652,16 @@ _study_page_skins() {
     cat <<'EOF'
 k2 study skins — Skin Access
 
+FIND THE ROOM, THEN THE FUNCTIONS
+  Guests think “this user, this room, these functions in that room.”
+  Files on Documents does not grant files on Anna. One login.
+  Unassigned guests stay Thread-only. Want files on one room → assign a role.
+  Platform tokens (`k2 skin-token create --name`) stay flat.
+
 LANES (read this first)
   Hosting the UI  = k2 publish. Always. Not k2 skin.
   k2 skin         = guests + roles + passwords + platform k2skn_ tokens +
-                    scopes (caps + rooms). It does not serve software.
+                    per-room functions. It does not serve software.
   If this page on your box still talks about two veins, Caddy,
   or k2 skin front-door as how you serve a UI, that copy is stale.
   The recipe below is still the product.
@@ -14620,7 +14687,8 @@ HOW TO MAKE ONE (copy this)
        POST /login   {"username":"…","password":"…"}
      200 body (no token):
        {"ok":true,"username":"…","rooms":[…],"roomHandles":[…],
-        "caps":[…],"role":"dentist"|null}
+        "caps":[…],"role":"dentist"|null,
+        "roomAccess":[{"handle":"anna","caps":["thread:read","thread:post"]}]}
      Set-Cookie: k2_skin_ui=…; HttpOnly; SameSite=Lax; Path=/
      The gateway holds k2skn_ in helper memory. Guests re-login
      after a helper/daemon restart.
@@ -14629,7 +14697,8 @@ HOW TO MAKE ONE (copy this)
      200 body (verbatim):
        {"ok":true,"token":"k2skn_…","username":"…",
         "rooms":["<id>",…],"roomHandles":["sales",…],
-        "caps":[…],"role":"dentist"|null}
+        "caps":[…],"role":"dentist"|null,
+        "roomAccess":[{"handle":"sales","caps":[…]}]}
      `token` is a Bearer session. Cookie `k2_skin_session` may
      also be set (leftover Caddy door). Prefer keeping the
      token on the SERVER so the browser never holds the pass.
@@ -14642,7 +14711,9 @@ TWO CREDENTIALS (same prefix k2skn_)
   Do not mint a copyable key per person.
 
 ROLES (named bundles for guests — not Connect, not a platform token)
-  k2 skin role create dentist --caps thread:read,thread:post,files:read --agent sales
+  k2 skin role create dentist
+  k2 skin role room dentist anna --caps thread:read,thread:post
+  k2 skin role room dentist docs --caps thread:read,thread:post,files:read
   k2 skin user role bob dentist
   Session inherits the role at login (and live sessions rewrite on
   change). Platform token keeps its own caps+rooms — it is not a role.
@@ -14650,7 +14721,7 @@ ROLES (named bundles for guests — not Connect, not a platform token)
   files:* on a role is true on the daemon this cut; k2 publish --skin
   files is a later gateway cut. Never grid.
 
-Scopes = caps + rooms. Empty rooms = Thread dark. Never grid.
+Find the room, then the functions. Empty rooms = Thread dark. Never grid.
 
 CAPABILITY CHECK (full paths — do not shorten them)
   GET /cli/thread?addr=<room>     200 if thread:read + that room

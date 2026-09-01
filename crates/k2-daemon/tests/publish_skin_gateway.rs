@@ -446,6 +446,11 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
         assert_eq!(ov["username"], "guest", "keep username: {}", ok.body);
         assert!(ov.get("caps").is_some(), "browser JSON must include caps: {}", ok.body);
         assert!(ov.get("role").is_some(), "browser JSON must include role: {}", ok.body);
+        assert!(
+            ov.get("roomAccess").is_some(),
+            "browser JSON must include roomAccess: {}",
+            ok.body
+        );
         let set_cookie = header_value(&ok.headers, "set-cookie").expect("Set-Cookie");
         assert!(set_cookie.contains("k2_skin_ui="), "{set_cookie}");
         assert!(!set_cookie.contains("k2_skin_session"), "{set_cookie}");

@@ -70,26 +70,39 @@ pub fn skin_may_see_frame(frame: &OverlayFrame, conversation: &str, skin: bool) 
     }
 }
 
-fn skin_conversation_allowed(pass: &SkinPass, conversation: &str) -> bool {
+fn skin_overlay_gate(
+    pass: &SkinPass,
+    conversation: &str,
+) -> Result<(), crate::cli_response::CliResponse> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Ok(Some(project_id)) =
         k2_core::workspace_session_handles::project_id_for_session_id(&conn, conversation)
     else {
-        return false;
+        return Err(crate::skin_routes::skin_room_response());
     };
     if !pass.has_room(&project_id) {
-        return false;
+        return Err(crate::skin_routes::skin_room_response());
+    }
+    if !pass.has_cap_in_room(&project_id, crate::skin_routes::THREAD_READ) {
+        return Err(crate::skin_routes::missing_cap_response(
+            crate::skin_routes::THREAD_READ,
+        ));
     }
     let Ok(Some(session)) = k2_core::db::schema::WorkspaceSession::get(&conn, &project_id) else {
-        return false;
+        return Err(crate::skin_routes::skin_room_response());
     };
-    session
+    let pinned = session
         .session_id
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .is_some_and(|pin| pin == conversation)
+        .is_some_and(|pin| pin == conversation);
+    if pinned {
+        Ok(())
+    } else {
+        Err(crate::skin_routes::skin_room_response())
+    }
 }
 
 /// WS handler. Dispatcher already token-authed. Requires `conversation=`.
@@ -116,11 +129,13 @@ pub async fn serve_overlay_events_connection(
     };
 
     if let Some(ref pass) = skin_pass {
-        if !skin_conversation_allowed(pass, &conversation) {
-            let body = crate::skin_routes::SKIN_ROOM_JSON;
+        if let Err(r) = skin_overlay_gate(pass, &conversation) {
             let resp = format!(
-                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
+                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                r.status,
+                r.content_type,
+                r.body.len(),
+                r.body
             );
             let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
             return;

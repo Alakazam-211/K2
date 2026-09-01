@@ -137,12 +137,18 @@ export type SkinUser = {
   roleName: string | null
 }
 
+export type SkinRoomAccess = {
+  handle: string
+  caps: string[]
+}
+
 export type SkinRole = {
   id: string
   name: string
   caps: string[]
   rooms: string[]
   roomHandles: string[]
+  roomAccess: SkinRoomAccess[]
 }
 
 export type SkinTokenRow = {
@@ -341,12 +347,15 @@ export function parseSkinRoles(raw: unknown): SkinRole[] {
     const id = asString(rec.id)
     const name = asString(rec.name)
     if (!id || !name) return []
+    const roomAccess = parseRoomAccess(rec.roomAccess ?? rec.room_access)
+    const roomHandles = parseStringList(rec.roomHandles ?? rec.room_handles)
     return [{
       id,
       name,
       caps: parseCaps(rec.caps ?? rec.scopes ?? rec.capabilities),
       rooms: parseStringList(rec.rooms),
-      roomHandles: parseStringList(rec.roomHandles ?? rec.room_handles),
+      roomHandles: roomHandles.length ? roomHandles : roomAccess.map((r) => r.handle),
+      roomAccess,
     }]
   })
 }
@@ -359,6 +368,16 @@ export function parseWorkspaces(raw: unknown): SkinWorkspace[] {
     const handle = asString(rec.handle)
     if (!id || !handle) return []
     return [{ id, handle, name: asString(rec.name) ?? handle }]
+  })
+}
+
+function parseRoomAccess(raw: unknown): SkinRoomAccess[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((row) => {
+    const rec = asRecord(row)
+    const handle = asString(rec.handle) ?? asString(rec.id)
+    if (!handle) return []
+    return [{ handle, caps: parseCaps(rec.caps ?? rec.scopes ?? rec.capabilities) }]
   })
 }
 
@@ -503,13 +522,13 @@ export function SkinAccessSection(): React.JSX.Element {
   const [editKeyId, setEditKeyId] = useState<string | null>(null)
   const [editKeyRooms, setEditKeyRooms] = useState<Set<string>>(() => new Set())
   const [newRoleName, setNewRoleName] = useState('')
-  const [newRoleCaps, setNewRoleCaps] = useState<Set<string>>(() => new Set(DEFAULT_SKIN_CAPS))
   const [newRoleRooms, setNewRoleRooms] = useState<Set<string>>(() => new Set())
+  const [newRoleCapsByRoom, setNewRoleCapsByRoom] = useState<Record<string, Set<string>>>({})
   const [roleBusy, setRoleBusy] = useState(false)
   const [roleError, setRoleError] = useState<string | null>(null)
   const [editRoleId, setEditRoleId] = useState<string | null>(null)
-  const [editRoleCaps, setEditRoleCaps] = useState<Set<string>>(() => new Set())
   const [editRoleRooms, setEditRoleRooms] = useState<Set<string>>(() => new Set())
+  const [editRoleCapsByRoom, setEditRoleCapsByRoom] = useState<Record<string, Set<string>>>({})
   const [removeRoleConfirm, setRemoveRoleConfirm] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -718,28 +737,32 @@ export function SkinAccessSection(): React.JSX.Element {
     setRoleBusy(true)
     setRoleError(null)
     try {
-      await daemonCliPost('skin/roles', {
-        name,
-        caps: [...newRoleCaps],
-        rooms: [...newRoleRooms],
-      })
+      const roomAccess = [...newRoleRooms].map((handle) => ({
+        handle,
+        caps: [...(newRoleCapsByRoom[handle] ?? new Set(DEFAULT_SKIN_CAPS))],
+      }))
+      await daemonCliPost('skin/roles', { name, roomAccess })
       setNewRoleName('')
-      setNewRoleCaps(new Set(DEFAULT_SKIN_CAPS))
       setNewRoleRooms(new Set())
+      setNewRoleCapsByRoom({})
       await refresh()
     } catch (e) {
       setRoleError(errText(e))
     } finally {
       setRoleBusy(false)
     }
-  }, [newRoleName, newRoleCaps, newRoleRooms, refresh])
+  }, [newRoleName, newRoleRooms, newRoleCapsByRoom, refresh])
 
   const saveRole = useCallback(
-    async (id: string, caps: string[], handles: string[]) => {
+    async (id: string, handles: string[], capsByRoom: Record<string, Set<string>>) => {
       setRoleError(null)
       setRoleBusy(true)
       try {
-        await daemonCliPost('skin/roles/update', { id, caps, rooms: handles })
+        const roomAccess = handles.map((handle) => ({
+          handle,
+          caps: [...(capsByRoom[handle] ?? new Set(DEFAULT_SKIN_CAPS))],
+        }))
+        await daemonCliPost('skin/roles/update', { id, roomAccess })
         setEditRoleId(null)
         await refresh()
       } catch (e) {
@@ -1099,20 +1122,52 @@ export function SkinAccessSection(): React.JSX.Element {
                         ))}
                       </select>
                     </label>
-                    {workspaces.length > 0 ? (
+                    {assigned && assignedRole ? (
+                      <div className="space-y-1.5">
+                        {(assignedRole.roomAccess.length
+                          ? assignedRole.roomAccess
+                          : assignedRole.roomHandles.map((handle) => ({
+                              handle,
+                              caps: [...DEFAULT_SKIN_CAPS],
+                            }))
+                        ).map((row) => (
+                          <div key={`${u.username}-${row.handle}`} className="space-y-1">
+                            <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                              {row.handle}
+                            </span>
+                            <div className="flex flex-wrap gap-x-3 gap-y-1">
+                              {SKIN_CAP_CHOICES.map((cap) => (
+                                <label
+                                  key={`${u.username}-${row.handle}-${cap}`}
+                                  className="flex items-center gap-1.5 select-none no-drag"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`${u.username} ${row.handle} ${cap}`}
+                                    checked={row.caps.includes(cap)}
+                                    disabled
+                                  />
+                                  <span className="text-[10px] font-mono text-[var(--color-text-muted)]">
+                                    {cap}
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : workspaces.length > 0 ? (
                       <div className="flex flex-wrap gap-x-3 gap-y-1">
                         {workspaces.map((ws) => (
                           <label
                             key={`${u.username}-${ws.id}`}
-                            className={`flex items-center gap-1.5 select-none no-drag ${assigned ? '' : 'cursor-pointer'}`}
+                            className="flex items-center gap-1.5 select-none no-drag cursor-pointer"
                           >
                             <input
                               type="checkbox"
                               aria-label={`${u.username} agent ${ws.handle}`}
                               checked={selected.has(ws.handle) || selected.has(ws.id)}
-                              disabled={assigned}
                               onChange={(e) => {
-                                if (assigned) return
                                 const next = new Set(selected)
                                 if (e.target.checked) next.add(ws.handle)
                                 else {
@@ -1205,8 +1260,9 @@ export function SkinAccessSection(): React.JSX.Element {
           <div data-settings-id="skin-access.roles" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
               Skin roles are not Connect owner/admin/member/viewer. They never include the
-              terminal. Named bundles of scopes + agents for guests; login sessions inherit.
-              Zero agents is Thread dark. Platform tokens keep their own caps and rooms.
+              terminal. Access is per agent. Files on Documents does not grant files on Anna.
+              Adding a room starts Thread-only. Zero agents is Thread dark. Platform tokens
+              stay flat.
             </p>
             <form
               className="space-y-2"
@@ -1225,59 +1281,73 @@ export function SkinAccessSection(): React.JSX.Element {
                 onChange={(e) => setNewRoleName(e.target.value)}
                 aria-label="New skin role name"
               />
-              <div className="flex flex-wrap gap-x-4 gap-y-1">
-                {SKIN_CAP_CHOICES.map((cap) => (
-                  <label
-                    key={`role-cap-${cap}`}
-                    className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
-                  >
-                    <input
-                      type="checkbox"
-                      aria-label={`Role cap ${cap}`}
-                      checked={newRoleCaps.has(cap)}
-                      onChange={(e) => {
-                        setNewRoleCaps((prev) => {
-                          const next = new Set(prev)
-                          if (e.target.checked) next.add(cap)
-                          else next.delete(cap)
-                          return next
-                        })
-                      }}
-                    />
-                    <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
-                      {cap}
-                    </span>
-                  </label>
-                ))}
-              </div>
               {workspaces.length > 0 ? (
-                <div className="flex flex-wrap gap-x-3 gap-y-1">
-                  {workspaces.map((ws) => (
-                    <label
-                      key={`role-mint-${ws.id}`}
-                      className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
-                    >
-                      <input
-                        type="checkbox"
-                        aria-label={`Role agent ${ws.handle}`}
-                        checked={newRoleRooms.has(ws.handle) || newRoleRooms.has(ws.id)}
-                        onChange={(e) => {
-                          setNewRoleRooms((prev) => {
-                            const next = new Set(prev)
-                            if (e.target.checked) next.add(ws.handle)
-                            else {
-                              next.delete(ws.handle)
-                              next.delete(ws.id)
-                            }
-                            return next
-                          })
-                        }}
-                      />
-                      <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
-                        {ws.handle}
-                      </span>
-                    </label>
-                  ))}
+                <div className="space-y-2">
+                  {workspaces.map((ws) => {
+                    const included = newRoleRooms.has(ws.handle) || newRoleRooms.has(ws.id)
+                    const caps = newRoleCapsByRoom[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS)
+                    return (
+                      <div key={`role-mint-${ws.id}`} className="space-y-1">
+                        <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
+                          <input
+                            type="checkbox"
+                            aria-label={`Role agent ${ws.handle}`}
+                            checked={included}
+                            onChange={(e) => {
+                              setNewRoleRooms((prev) => {
+                                const next = new Set(prev)
+                                if (e.target.checked) next.add(ws.handle)
+                                else {
+                                  next.delete(ws.handle)
+                                  next.delete(ws.id)
+                                }
+                                return next
+                              })
+                              setNewRoleCapsByRoom((prev) => {
+                                const next = { ...prev }
+                                if (e.target.checked) {
+                                  next[ws.handle] = new Set(DEFAULT_SKIN_CAPS)
+                                } else {
+                                  delete next[ws.handle]
+                                }
+                                return next
+                              })
+                            }}
+                          />
+                          <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                            {ws.handle}
+                          </span>
+                        </label>
+                        {included ? (
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5">
+                            {SKIN_CAP_CHOICES.map((cap) => (
+                              <label
+                                key={`role-${ws.handle}-${cap}`}
+                                className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                              >
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Role ${ws.handle} ${cap}`}
+                                  checked={caps.has(cap)}
+                                  onChange={(e) => {
+                                    setNewRoleCapsByRoom((prev) => {
+                                      const nextSet = new Set(prev[ws.handle] ?? DEFAULT_SKIN_CAPS)
+                                      if (e.target.checked) nextSet.add(cap)
+                                      else nextSet.delete(cap)
+                                      return { ...prev, [ws.handle]: nextSet }
+                                    })
+                                  }}
+                                />
+                                <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                                  {cap}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })}
                 </div>
               ) : (
                 <p className="text-[10px] text-[var(--color-text-muted)]">
@@ -1336,8 +1406,12 @@ export function SkinAccessSection(): React.JSX.Element {
                               type="button"
                               onClick={() => {
                                 setEditRoleId(r.id)
-                                setEditRoleCaps(new Set(r.caps))
                                 setEditRoleRooms(new Set(r.roomHandles))
+                                const byRoom: Record<string, Set<string>> = {}
+                                for (const row of r.roomAccess) {
+                                  byRoom[row.handle] = new Set(row.caps)
+                                }
+                                setEditRoleCapsByRoom(byRoom)
                               }}
                               className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
                             >
@@ -1355,64 +1429,84 @@ export function SkinAccessSection(): React.JSX.Element {
                       </div>
                       {editing ? (
                         <div className="space-y-2">
-                          <div className="flex flex-wrap gap-x-4 gap-y-1">
-                            {SKIN_CAP_CHOICES.map((cap) => (
-                              <label
-                                key={`edit-role-cap-${r.id}-${cap}`}
-                                className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
-                              >
-                                <input
-                                  type="checkbox"
-                                  aria-label={`Edit role ${r.name} cap ${cap}`}
-                                  checked={editRoleCaps.has(cap)}
-                                  onChange={(e) => {
-                                    setEditRoleCaps((prev) => {
-                                      const next = new Set(prev)
-                                      if (e.target.checked) next.add(cap)
-                                      else next.delete(cap)
-                                      return next
-                                    })
-                                  }}
-                                />
-                                <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
-                                  {cap}
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                          <div className="flex flex-wrap gap-x-3 gap-y-1">
-                            {workspaces.map((ws) => (
-                              <label
-                                key={`edit-role-${r.id}-${ws.id}`}
-                                className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
-                              >
-                                <input
-                                  type="checkbox"
-                                  aria-label={`Edit role ${r.name} agent ${ws.handle}`}
-                                  checked={editRoleRooms.has(ws.handle) || editRoleRooms.has(ws.id)}
-                                  onChange={(e) => {
-                                    setEditRoleRooms((prev) => {
-                                      const next = new Set(prev)
-                                      if (e.target.checked) next.add(ws.handle)
-                                      else {
-                                        next.delete(ws.handle)
-                                        next.delete(ws.id)
-                                      }
-                                      return next
-                                    })
-                                  }}
-                                />
-                                <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
-                                  {ws.handle}
-                                </span>
-                              </label>
-                            ))}
+                          <div className="space-y-2">
+                            {workspaces.map((ws) => {
+                              const included =
+                                editRoleRooms.has(ws.handle) || editRoleRooms.has(ws.id)
+                              const caps =
+                                editRoleCapsByRoom[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS)
+                              return (
+                                <div key={`edit-role-${r.id}-${ws.id}`} className="space-y-1">
+                                  <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
+                                    <input
+                                      type="checkbox"
+                                      aria-label={`Edit role ${r.name} agent ${ws.handle}`}
+                                      checked={included}
+                                      onChange={(e) => {
+                                        setEditRoleRooms((prev) => {
+                                          const next = new Set(prev)
+                                          if (e.target.checked) next.add(ws.handle)
+                                          else {
+                                            next.delete(ws.handle)
+                                            next.delete(ws.id)
+                                          }
+                                          return next
+                                        })
+                                        setEditRoleCapsByRoom((prev) => {
+                                          const next = { ...prev }
+                                          if (e.target.checked) {
+                                            next[ws.handle] = new Set(DEFAULT_SKIN_CAPS)
+                                          } else {
+                                            delete next[ws.handle]
+                                          }
+                                          return next
+                                        })
+                                      }}
+                                    />
+                                    <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                                      {ws.handle}
+                                    </span>
+                                  </label>
+                                  {included ? (
+                                    <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5">
+                                      {SKIN_CAP_CHOICES.map((cap) => (
+                                        <label
+                                          key={`edit-role-${r.name}-${ws.handle}-${cap}`}
+                                          className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            aria-label={`Edit role ${r.name} ${ws.handle} ${cap}`}
+                                            checked={caps.has(cap)}
+                                            onChange={(ev) => {
+                                              setEditRoleCapsByRoom((prev) => {
+                                                const nextSet = new Set(
+                                                  prev[ws.handle] ?? DEFAULT_SKIN_CAPS,
+                                                )
+                                                if (ev.target.checked) nextSet.add(cap)
+                                                else nextSet.delete(cap)
+                                                return { ...prev, [ws.handle]: nextSet }
+                                              })
+                                            }}
+                                          />
+                                          <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
+                                            {cap}
+                                          </span>
+                                        </label>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )
+                            })}
                           </div>
                           <div className="flex gap-2">
                             <button
                               type="button"
                               className="text-[10px] text-[var(--color-accent)] cursor-pointer"
-                              onClick={() => void saveRole(r.id, [...editRoleCaps], [...editRoleRooms])}
+                              onClick={() =>
+                                void saveRole(r.id, [...editRoleRooms], editRoleCapsByRoom)
+                              }
                             >
                               Save role
                             </button>
@@ -1427,32 +1521,27 @@ export function SkinAccessSection(): React.JSX.Element {
                         </div>
                       ) : (
                         <div className="space-y-1">
-                          <div className="flex flex-wrap gap-1">
-                            {r.caps.map((cap) => (
-                              <span
-                                key={cap}
-                                className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]"
-                              >
-                                {cap}
-                              </span>
-                            ))}
-                          </div>
-                          <div className="flex flex-wrap gap-1">
-                            {r.roomHandles.length === 0 ? (
-                              <span className="text-[10px] text-[var(--color-text-muted)]">
-                                no rooms
-                              </span>
-                            ) : (
-                              r.roomHandles.map((h) => (
-                                <span
-                                  key={h}
-                                  className="text-[9px] font-mono px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)]"
-                                >
-                                  {h}
+                          {r.roomAccess.length === 0 ? (
+                            <span className="text-[10px] text-[var(--color-text-muted)]">
+                              no rooms
+                            </span>
+                          ) : (
+                            r.roomAccess.map((row) => (
+                              <div key={row.handle} className="flex flex-wrap items-center gap-1">
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
+                                  {row.handle}
                                 </span>
-                              ))
-                            )}
-                          </div>
+                                {row.caps.map((cap) => (
+                                  <span
+                                    key={cap}
+                                    className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]"
+                                  >
+                                    {cap}
+                                  </span>
+                                ))}
+                              </div>
+                            ))
+                          )}
                         </div>
                       )}
                     </div>

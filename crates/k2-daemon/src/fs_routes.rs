@@ -374,6 +374,9 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
         Ok(r) => r,
         Err(e) => return e,
     };
+    if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_READ) {
+        return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_READ);
+    }
     let rel = match need_rel_path(params) {
         Ok(p) => p,
         Err(e) => return e,
@@ -412,6 +415,9 @@ fn handle_skin_read_file(params: &HashMap<String, String>, pass: &SkinPass) -> C
         Ok(r) => r,
         Err(e) => return e,
     };
+    if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_READ) {
+        return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_READ);
+    }
     let rel = match need_rel_path(params) {
         Ok(p) => p,
         Err(e) => return e,
@@ -463,6 +469,9 @@ fn handle_skin_write_file(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_WRITE) {
+        return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_WRITE);
+    }
     let jailed = match jail_rel_path(&resolved.path, &rel, true) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),

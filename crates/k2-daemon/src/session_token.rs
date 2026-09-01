@@ -544,6 +544,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/skin/roles/remove",
         "/cli/skin/roles/assign",
         "/cli/skin/roles/unassign",
+        "/cli/skin/roles/room",
         "/cli/skin-tokens",
         "/cli/skin-tokens/revoke",
         "/cli/skin-tokens/rooms",
@@ -1290,6 +1291,7 @@ mod tests {
         assert!(is_agent_verb("/cli/skin/roles/remove"));
         assert!(is_agent_verb("/cli/skin/roles/assign"));
         assert!(is_agent_verb("/cli/skin/roles/unassign"));
+        assert!(is_agent_verb("/cli/skin/roles/room"));
         assert!(is_agent_verb("/cli/skin-tokens"));
         assert!(is_agent_verb("/cli/skin-tokens/revoke"));
         assert!(is_agent_verb("/cli/skin-tokens/rooms"));

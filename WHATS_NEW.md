@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.133 — Skin guests can use files on the agents you grant
+
+A logged-in skin guest can list, read, write, and watch files **in that agent's folder** — not the whole box. Files on Documents does not grant files on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
+
+`k2 publish run --skin` now proxies those file routes on the published origin (`read-dir`, `read-file`, `write-file`, and a per-agent live watch). Login still guards Thread and files; `/` and `/assets/*` stay public.
+
+---
+
 ## 0.40.132 — Skin access is per agent, then what they may do there
 
 Skin Access roles grant a guest **specific agents**, and **specific functions on each one** (Thread, files). Files on Documents does not grant files on Anna. Guests still log in with a username and password; they never copy a key. Grid and the terminal stay off.

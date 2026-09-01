@@ -954,6 +954,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0114_published_services_kind",
             include_str!("../../drizzle_sql/0114_published_services_kind.sql"),
         ),
+        // 0115 — per-workspace agents-may-manage-Skin-Access passport.
+        // Column on k2so.db `projects` (not skin.db). Default 0.
+        (
+            "0115_project_agents_can_manage_skin",
+            include_str!("../../drizzle_sql/0115_project_agents_can_manage_skin.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1555,7 +1561,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0114_published_services_kind",
+            last_name, "0115_project_agents_can_manage_skin",
             "unexpected last migration name: {last_name}"
         );
     }

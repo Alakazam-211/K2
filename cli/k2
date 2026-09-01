@@ -14711,9 +14711,14 @@ ROSTER
   Opt-in: `k2 agent context add skin:roster`. See `k2 study people`.
 
 OWNER VS AGENT
-  List roster / list tokens: workspace agent ok (no secrets).
-  Add users, passwords, mint, revoke: owner. Exit 3 `owner_only`
-  if you try — ask `k2 feedback ask`, do not retry, do not sudo.
+  List roster / list tokens: workspace agent always (no secrets).
+  Toggle off does not hide the roster.
+  Mutations (user add/password/remove/rooms, role create/update/remove/assign/unassign,
+  skin-token create/rooms/revoke): if this workspace's Agent-tab toggle is on
+  (Settings → Workspaces → Agent → Allow this agent to manage Skin Access).
+  Leftover front-door / hydra: still owner, even when the toggle is on.
+  Do not sudo. Exit 3 `owner_only` if the toggle is off — ask `k2 feedback ask`,
+  do not retry.
 
 GUEST CARDS
   Guests tap a choice or fill a secret via

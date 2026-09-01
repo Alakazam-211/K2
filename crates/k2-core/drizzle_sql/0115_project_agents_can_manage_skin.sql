@@ -1,0 +1,11 @@
+-- Chunk 2.2 — per-workspace agents-may-manage-Skin-Access opt-in.
+--
+-- When 1, that workspace's scoped hook (canonical + sidecars sharing
+-- the workspace UUID) may run existing `k2 skin` / `k2 skin-token`
+-- mutations. Default 0 (OFF), fail-closed. No global master.
+-- Owner / Owner-ROLE always may. Leftover front-door / Hydra stay
+-- owner-only even when this is ON.
+--
+-- Column lives on k2so.db `projects` (passport like 0085), not skin.db.
+-- Existing rows backfill to 0.
+ALTER TABLE projects ADD COLUMN agents_can_manage_skin INTEGER NOT NULL DEFAULT 0;

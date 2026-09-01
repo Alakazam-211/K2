@@ -259,6 +259,9 @@ interface Project {
   // Missing / empty → treat as `'off'`. No global master. Written via
   // POST workspace/set `db_agent_access`.
   dbAgentAccess?: 'off' | 'read' | 'write'
+  // Chunk 2.2 — per-workspace agents-may-manage-Skin-Access (0/1, default 0).
+  // No global master. Written via POST /cli/agents-manage-skin (not workspace/set).
+  agentsCanManageSkin?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

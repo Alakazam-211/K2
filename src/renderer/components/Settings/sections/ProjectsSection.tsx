@@ -81,6 +81,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'Per-workspace default LLM model for new sessions', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
   { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Pass workspace default model when resuming a session', keywords: ['resume', 'model', 'force'] },
   { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Per-workspace passport for k2 db create (create-only; existing DBs stay usable)', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
+  { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Allow this agent to manage Skin Access', description: 'Per-workspace passport for k2 skin / k2 skin-token mutations (guests, roles, platform tokens for this box)', keywords: ['agents_can_manage_skin', 'skin', 'passport', 'agent', 'guests', 'roles', 'skin-token'] },
 ]
 
 export function ProjectsSection(): React.JSX.Element {
@@ -1516,6 +1517,9 @@ function ProjectDetail({
             <SettingsGroup title="Database">
               <DbAgentCreateToggle project={project} />
             </SettingsGroup>
+            <SettingsGroup title="Skin Access">
+              <AgentsManageSkinToggle project={project} />
+            </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
               <button
@@ -2071,6 +2075,85 @@ function DbAgentCreateToggle({
           <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
             Existing databases this workspace owns or is granted are usable without this toggle;
             it only gates <span className="font-mono">k2 db create</span>.
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Chunk 2.2 — per-workspace agents-may-manage-Skin-Access. DEFAULTS OFF.
+// No global master. Writes POST /cli/agents-manage-skin `{project, enable: 0|1}`.
+// Optimistic store patch; do not fetchProjects() on this path. Never GET /cli/users.
+function AgentsManageSkinToggle({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const enabled = (project.agentsCanManageSkin ?? 0) === 1
+
+  const toggle = async (): Promise<void> => {
+    if (busy) return
+    const next = !enabled
+    const before = project.agentsCanManageSkin
+    setBusy(true)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, agentsCanManageSkin: next ? 1 : 0 } : p,
+      ),
+    }))
+    try {
+      await daemonCliPost('agents-manage-skin', {
+        project: project.path,
+        enable: next ? 1 : 0,
+      })
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === project.id ? { ...p, agentsCanManageSkin: before } : p,
+        ),
+      }))
+      console.error('[agents-manage-skin] write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          disabled={busy}
+          data-settings-id="projects.agents-can-manage-skin"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={
+            enabled
+              ? 'This agent may manage Skin Access for this box'
+              : 'This agent cannot manage Skin Access'
+          }
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Allow this agent to manage Skin Access.
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            {enabled
+              ? 'This agent may add guests, roles, and platform tokens for this box. You (the owner) can always manage Skin Access.'
+              : 'Off (recommended): guests, roles, and platform tokens for this box stay owner-managed. Turn on to let this workspace\'s agent drive existing k2 skin / k2 skin-token mutations. You (the owner) can always manage Skin Access.'}
           </div>
         </div>
       </div>

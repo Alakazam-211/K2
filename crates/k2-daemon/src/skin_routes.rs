@@ -1,10 +1,11 @@
 //! Skin roster / passes / front-door (`/cli/skin*`).
 //!
 //! GET `/cli/skin/users` and GET `/cli/skin-tokens` admit owner-tier
-//! (`owner_role_identity`) **or** a workspace-agent scoped hook. Mint and
-//! other mutations stay `owner_role_identity` only (valid hooks get teaching
-//! `owner_only`). Mutations are POST-only (GET twins 405). Raw `k2skn_…`
-//! secret is returned once on create.
+//! (`owner_role_identity`) **or** a workspace-agent scoped hook. Manage
+//! mutations admit owner-tier **or** a scoped hook when that workspace's
+//! Agent-tab `agents_can_manage_skin` column is ON. Leftover front-door /
+//! Hydra stay owner-only. Mutations are POST-only (GET twins 405). Raw
+//! `k2skn_…` secret is returned once on create.
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::{self, CAP_FILES_READ, CAP_FILES_WRITE, CAP_THREAD_POST, CAP_THREAD_READ};
@@ -617,11 +618,11 @@ pub const THREAD_POST: &str = CAP_THREAD_POST;
 pub const FILES_READ: &str = CAP_FILES_READ;
 pub const FILES_WRITE: &str = CAP_FILES_WRITE;
 
-/// Stable teaching response for a valid scoped agent passport on a
-/// skin owner surface (mint / remove / revoke / front-door). CLI maps
-/// `owner_only` + 403 → exit 3. Missing/garbage credentials stay
-/// [`CliResponse::forbidden`].
-pub fn owner_only_response() -> CliResponse {
+const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 skin user add/remove/password, k2 skin role create/update/remove, k2 skin user role/unassign, skin-token create/revoke/rooms; use k2 skin user list / k2 skin role list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin.";
+
+const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 skin user add/remove/password, k2 skin role create/update/remove, k2 skin user role/unassign, skin-token create/revoke/rooms; use k2 skin user list / k2 skin role list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin. To let this workspace's agent manage Skin Access, Settings → Workspaces → (this workspace) → Agent → Allow this agent to manage Skin Access.";
+
+fn owner_only_with_hint(hint: &str) -> CliResponse {
     CliResponse {
         status: "403 Forbidden",
         content_type: "application/json",
@@ -629,10 +630,112 @@ pub fn owner_only_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "owner_only",
-                "hint": "requires owner/admin — ask your human (k2 skin user add/remove/password, k2 skin role create/update/remove, k2 skin user role/unassign, skin-token create/revoke/rooms; use k2 skin user list / k2 skin role list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin.",
+                "hint": hint,
             },
         })
         .to_string(),
+    }
+}
+
+/// Stable teaching response for leftover owner surfaces (front-door /
+/// Hydra). CLI maps `owner_only` + 403 → exit 3. Missing/garbage
+/// credentials stay [`CliResponse::forbidden`].
+pub fn owner_only_response() -> CliResponse {
+    owner_only_with_hint(OWNER_ONLY_HINT)
+}
+
+/// Teaching response for Skin Access **manage** mutations when a valid
+/// scoped hook hits a workspace whose Agent-tab toggle is OFF.
+pub fn owner_only_manage_response() -> CliResponse {
+    owner_only_with_hint(OWNER_ONLY_MANAGE_HINT)
+}
+
+/// Actor label for a scoped hook that passed the manage gate.
+/// `agent:<handle>` from [`workspace_address_name_shared`]. Never
+/// `"owner"` / `"owner-token"`.
+pub fn skin_manage_actor_label(principal: &crate::session_token::HookPrincipal) -> String {
+    let handle = k2_core::workspace_session_handles::workspace_address_name_shared(
+        principal.workspace_uuid.trim(),
+    )
+    .ok()
+    .filter(|s| !s.is_empty())
+    .or_else(|| {
+        let addr = principal.agent_address.trim();
+        if !addr.is_empty() {
+            Some(addr.to_string())
+        } else {
+            None
+        }
+    })
+    .unwrap_or_else(|| "agent".to_string());
+    format!("agent:{handle}")
+}
+
+/// Attach the non-secret actor string to a 200 JSON object so tests
+/// can assert it is not `"owner-token"` when a hook mutated.
+pub fn stamp_actor(mut r: CliResponse, actor: &str) -> CliResponse {
+    if !r.status.starts_with("200") {
+        return r;
+    }
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&r.body) {
+        if v.is_object() {
+            v["actor"] = serde_json::json!(actor);
+            r.body = v.to_string();
+        }
+    }
+    r
+}
+
+fn enable_field(v: &serde_json::Value) -> Option<bool> {
+    let raw = v.get("enable")?;
+    if let Some(n) = raw.as_i64() {
+        return match n {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        };
+    }
+    if let Some(s) = raw.as_str() {
+        return match s.trim() {
+            "0" => Some(false),
+            "1" => Some(true),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// `POST /cli/agents-manage-skin` `{project, enable: 0|1}` — owner-only
+/// writer for `projects.agents_can_manage_skin`. Not `workspace/set`.
+pub fn handle_agents_manage_skin(body: &[u8]) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(project) = str_field(&v, &["project"]) else {
+        return CliResponse::bad_request("missing project");
+    };
+    let Some(enable) = enable_field(&v) else {
+        return CliResponse::bad_request("enable must be 0 or 1");
+    };
+    let Some(path) = crate::workspace_msg::resolve_workspace(project) else {
+        return crate::workspace_routes::workspace_not_found_response(project);
+    };
+    match k2_core::workspace::settings::set_agents_can_manage_skin(&path, enable) {
+        Ok(()) => {
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::SyncProjects,
+                serde_json::Value::Null,
+            );
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "success": true,
+                    "agentsCanManageSkin": enable,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
     }
 }
 
@@ -890,10 +993,68 @@ mod tests {
             "hint should teach owner/human: {hint}"
         );
         assert!(
+            !hint.contains("Allow this agent to manage Skin Access"),
+            "leftover/hydra keep today's hint without the Agent-tab sentence: {hint}"
+        );
+        assert!(
             !r.body.contains("Invalid or missing auth token"),
             "must not look like a broken passport: {}",
             r.body
         );
+    }
+
+    #[test]
+    fn owner_only_manage_response_adds_agent_tab_sentence() {
+        let r = owner_only_manage_response();
+        assert_eq!(r.status, "403 Forbidden");
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "owner_only");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(
+            hint.contains("Allow this agent to manage Skin Access"),
+            "manage OFF must teach the Agent-tab toggle: {hint}"
+        );
+        assert!(
+            !r.body.contains("gated"),
+            "must stay owner_only, not gated: {}",
+            r.body
+        );
+    }
+
+    #[test]
+    fn skin_manage_actor_label_is_agent_handle_never_owner_token() {
+        k2_core::db::init_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let id = uuid::Uuid::new_v4().to_string();
+        let handle = format!("sales{}", &id[..8]);
+        let path = format!("/tmp/k2-skin-actor-{id}");
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+            rusqlite::params![id, handle, path],
+        )
+        .expect("seed");
+        drop(conn);
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: id,
+            agent_address: "sidecar".to_string(),
+        };
+        let actor = skin_manage_actor_label(&principal);
+        assert_eq!(actor, format!("agent:{handle}"));
+        assert_ne!(actor, "owner");
+        assert_ne!(actor, "owner-token");
+    }
+
+    #[test]
+    fn stamp_actor_skips_non_200_and_sets_field_on_ok() {
+        let denied = owner_only_manage_response();
+        let stamped = stamp_actor(denied, "agent:sales");
+        assert!(!stamped.body.contains("agent:sales"), "{}", stamped.body);
+        let ok = CliResponse::ok_json(r#"{"username":"bob"}"#.to_string());
+        let stamped = stamp_actor(ok, "agent:sales");
+        let v: serde_json::Value = serde_json::from_str(&stamped.body).expect("json");
+        assert_eq!(v["actor"], "agent:sales");
+        assert_eq!(v["username"], "bob");
     }
 
     #[test]

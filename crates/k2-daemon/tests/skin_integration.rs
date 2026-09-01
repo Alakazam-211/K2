@@ -2431,3 +2431,331 @@ async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
         let _ = std::fs::remove_dir_all(&sales_dir);
     });
 }
+
+fn set_agents_manage_skin(port: u16, project: &str, enable: i64) -> Resp {
+    http(
+        port,
+        "POST",
+        &format!("/cli/agents-manage-skin?token={OWNER_TOKEN}"),
+        Some(&format!(r#"{{"project":"{project}","enable":{enable}}}"#)),
+    )
+}
+
+fn assert_owner_only(r: &Resp, label: &str) {
+    assert_eq!(r.status, 403, "{label}; {}", r.body);
+    assert!(
+        r.body.contains("owner_only"),
+        "{label} must teach owner_only: {}",
+        r.body
+    );
+    assert!(
+        !r.body.contains("Invalid or missing auth token"),
+        "{label} must not look like a broken passport: {}",
+        r.body
+    );
+    assert!(
+        !r.body.contains("\"gated\""),
+        "{label} must stay owner_only not gated: {}",
+        r.body
+    );
+}
+
+fn assert_classic_forbidden(r: &Resp, label: &str) {
+    assert_eq!(r.status, 403, "{label}; {}", r.body);
+    assert!(
+        r.body.contains("Invalid or missing auth token"),
+        "{label} must stay classic forbidden: {}",
+        r.body
+    );
+    assert!(
+        !r.body.contains("owner_only"),
+        "{label} must not be owner_only: {}",
+        r.body
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let sales_handle = format!("skinsales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other_handle = format!("skinother{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (sales_id, _) = seed_thread_addr(&sales_handle);
+        let (other_id, _) = seed_thread_addr(&other_handle);
+
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let col: i64 = conn
+                .query_row(
+                    "SELECT agents_can_manage_skin FROM projects WHERE id = ?1",
+                    params![sales_id],
+                    |r| r.get(0),
+                )
+                .expect("column on k2so.db projects");
+            assert_eq!(col, 0, "existing projects row must default 0");
+        }
+
+        add_user(port, "stay");
+        let skin_db = k2_core::paths::k2_home().join("skin.db");
+        assert!(skin_db.exists(), "skin.db exists after roster write");
+        let skin_conn = rusqlite::Connection::open(&skin_db).expect("open skin.db");
+        let mut stmt = skin_conn
+            .prepare("SELECT name FROM pragma_table_info('principals')")
+            .expect("pragma");
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .expect("cols")
+            .filter_map(Result::ok)
+            .collect();
+        assert!(
+            !cols.iter().any(|c| c == "agents_can_manage_skin"),
+            "drizzle 0115 is k2so.db projects, not skin.db: {cols:?}"
+        );
+
+        let hook_a = mint_scoped_hook_for(&sales_id);
+        let hook_b = mint_scoped_hook_for(&other_id);
+
+        let list_off = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users?token={hook_a}"),
+            None,
+        );
+        assert_eq!(
+            list_off.status, 200,
+            "GET list stays ungated toggle-off; {}",
+            list_off.body
+        );
+
+        let owner_add = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"ownerbob"}"#),
+        );
+        assert_eq!(owner_add.status, 200, "owner works toggle-off; {}", owner_add.body);
+
+        let mutate_off = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={hook_a}"),
+            Some(r#"{"username":"bob"}"#),
+        );
+        assert_owner_only(&mutate_off, "default OFF agent mutate");
+        assert!(
+            mutate_off
+                .body
+                .contains("Allow this agent to manage Skin Access"),
+            "manage OFF hint must name the Agent-tab toggle: {}",
+            mutate_off.body
+        );
+
+        let missing = http(port, "POST", "/cli/skin/users", Some(r#"{"username":"x"}"#));
+        assert_classic_forbidden(&missing, "missing token mutate");
+        let garbage = http(
+            port,
+            "POST",
+            "/cli/skin/users?token=not-a-real-passport",
+            Some(r#"{"username":"x"}"#),
+        );
+        assert_classic_forbidden(&garbage, "garbage token mutate");
+
+        let get_toggle = http(port, "GET", "/cli/agents-manage-skin", None);
+        assert_eq!(
+            get_toggle.status, 405,
+            "GET toggle writer 405; {}",
+            get_toggle.body
+        );
+
+        let agent_toggle = http(
+            port,
+            "POST",
+            &format!("/cli/agents-manage-skin?token={hook_a}"),
+            Some(&format!(r#"{{"project":"{sales_id}","enable":1}}"#)),
+        );
+        assert_owner_only(&agent_toggle, "agent cannot flip the toggle");
+
+        let member = provision_role(port, "skinmember2", "hunter2-strong-9", "member");
+        let member_toggle = http(
+            port,
+            "POST",
+            &format!("/cli/agents-manage-skin?token={member}"),
+            Some(&format!(r#"{{"project":"{sales_id}","enable":1}}"#)),
+        );
+        assert_classic_forbidden(&member_toggle, "Connect member toggle");
+        let member_mutate = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={member}"),
+            Some(r#"{"username":"frommember"}"#),
+        );
+        assert_classic_forbidden(&member_mutate, "Connect member skin mutate");
+
+        let ws_set = http(
+            port,
+            "POST",
+            &format!("/cli/workspace/set?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"project":"{sales_id}","fields":{{"agents_can_manage_skin":1}}}}"#
+            )),
+        );
+        assert_eq!(ws_set.status, 400, "workspace/set unknown field; {}", ws_set.body);
+        assert!(
+            ws_set.body.contains("unknown setting field")
+                || ws_set.body.contains("unknown setting"),
+            "must name the unknown field: {}",
+            ws_set.body
+        );
+        {
+            let db = k2_core::db::shared();
+            let col: i64 = db
+                .lock()
+                .query_row(
+                    "SELECT agents_can_manage_skin FROM projects WHERE id = ?1",
+                    params![sales_id],
+                    |r| r.get(0),
+                )
+                .expect("column");
+            assert_eq!(col, 0, "workspace/set must not write the column");
+        }
+
+        let on = set_agents_manage_skin(port, &sales_id, 1);
+        assert_eq!(on.status, 200, "owner enable; {}", on.body);
+        let on_v = json(&on.body);
+        assert_eq!(on_v["agentsCanManageSkin"], true, "{}", on.body);
+
+        let add = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={hook_a}"),
+            Some(r#"{"username":"bob"}"#),
+        );
+        assert_eq!(add.status, 200, "toggle ON user add; {}", add.body);
+        let add_v = json(&add.body);
+        let actor = add_v["actor"].as_str().expect("actor");
+        assert_ne!(actor, "owner-token", "{}", add.body);
+        assert_ne!(actor, "owner", "{}", add.body);
+        assert!(
+            actor.starts_with("agent:"),
+            "actor must be agent:<handle>: {}",
+            add.body
+        );
+
+        let role = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={hook_a}"),
+            Some(&format!(
+                r#"{{"name":"dentist","caps":["thread:read"],"rooms":["{sales_handle}"]}}"#
+            )),
+        );
+        assert_eq!(role.status, 200, "toggle ON role create; {}", role.body);
+        let role_v = json(&role.body);
+        assert_ne!(role_v["actor"], "owner-token", "{}", role.body);
+
+        let assign = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={hook_a}"),
+            Some(r#"{"username":"bob","role":"dentist"}"#),
+        );
+        assert_eq!(assign.status, 200, "toggle ON user role; {}", assign.body);
+
+        let tok = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={hook_a}"),
+            Some(&format!(
+                r#"{{"name":"vercel","caps":["thread:read"],"rooms":["{sales_handle}"]}}"#
+            )),
+        );
+        assert_eq!(tok.status, 200, "toggle ON skin-token create; {}", tok.body);
+        let tok_v = json(&tok.body);
+        let secret = tok_v["token"].as_str().expect("secret once");
+        assert!(secret.starts_with("k2skn_"), "{secret}");
+        assert_ne!(tok_v["actor"], "owner-token", "{}", tok.body);
+
+        let list_after = http(
+            port,
+            "GET",
+            &format!("/cli/skin-tokens?token={hook_a}"),
+            None,
+        );
+        assert_eq!(list_after.status, 200, "{}", list_after.body);
+        assert!(
+            !list_after.body.contains(secret),
+            "list must not echo the raw secret"
+        );
+
+        let cross = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={hook_b}"),
+            Some(r#"{"username":"fromb"}"#),
+        );
+        assert_owner_only(&cross, "hook from B while A is ON");
+
+        let door = http(
+            port,
+            "POST",
+            &format!("/cli/skin/front-door?token={hook_a}"),
+            Some(r#"{"mode":"direct"}"#),
+        );
+        assert_owner_only(&door, "front-door still owner-only with toggle ON");
+        assert!(
+            !door.body.contains("Allow this agent to manage Skin Access"),
+            "leftover keeps today's hint: {}",
+            door.body
+        );
+        let hydra = http(
+            port,
+            "POST",
+            &format!("/cli/skin/hydra?token={hook_a}"),
+            Some(r#"{"enabled":true}"#),
+        );
+        assert_owner_only(&hydra, "hydra still owner-only with toggle ON");
+        assert!(
+            !hydra.body.contains("Allow this agent to manage Skin Access"),
+            "leftover hydra keeps today's hint: {}",
+            hydra.body
+        );
+
+        let guest_mutate = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={secret}"),
+            Some(r#"{"username":"fromguest"}"#),
+        );
+        assert_classic_forbidden(&guest_mutate, "k2skn_ never manages roster");
+
+        let key = http(
+            port,
+            "POST",
+            &format!("/cli/api-keys/create?token={OWNER_TOKEN}"),
+            Some(r#"{"label":"skin-v1-key"}"#),
+        );
+        assert_eq!(key.status, 200, "mint k2sk_; {}", key.body);
+        let k2sk = json(&key.body)["key"].as_str().expect("k2sk_").to_string();
+        assert!(k2sk.starts_with("k2sk_"), "{k2sk}");
+        let v1_mutate = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={k2sk}"),
+            Some(r#"{"username":"fromv1"}"#),
+        );
+        assert_classic_forbidden(&v1_mutate, "/v1 k2sk_ never manages");
+
+        let off = set_agents_manage_skin(port, &sales_id, 0);
+        assert_eq!(off.status, 200, "owner disable; {}", off.body);
+        let after_off = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={hook_a}"),
+            Some(r#"{"username":"afteroff"}"#),
+        );
+        assert_owner_only(&after_off, "toggle OFF again");
+    });
+}

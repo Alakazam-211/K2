@@ -242,6 +242,9 @@ describe('SKIN_ACCESS_MANIFEST', () => {
       'skin-access.keys',
       'skin-access.hydra',
     ])
+    expect(SKIN_ACCESS_MANIFEST.map((e) => e.id).join(' ')).not.toContain(
+      'agents-can-manage-skin',
+    )
   })
 })
 

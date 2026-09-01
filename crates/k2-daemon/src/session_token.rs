@@ -530,13 +530,23 @@ pub fn is_agent_verb(path: &str) -> bool {
         // always bypasses; agents need the effective toggle ON). List is
         // free for any authenticated agent principal.
         "/cli/connections",
-        // Skin roster GET (`k2 skin user list` / `k2 skin-token list`).
-        // Exact paths only — do not prefix `/cli/skin/` (front-door, hydra,
-        // and users/remove stay owner). POST on these same paths is still
-        // owner-gated in the dispatcher (teaching `owner_only`).
+        // Skin roster GET + manage mutations (`k2 skin` / `k2 skin-token`).
+        // Exact paths only — never prefix `/cli/skin/` (front-door / hydra
+        // stay owner even when the Agent-tab toggle is ON). POST mutate is
+        // further gated by `agents_can_manage_skin_for_path` in the
+        // dispatcher. `/cli/agents-manage-skin` is owner-only (not here).
         "/cli/skin/users",
+        "/cli/skin/users/remove",
+        "/cli/skin/users/password",
+        "/cli/skin/users/rooms",
         "/cli/skin/roles",
+        "/cli/skin/roles/update",
+        "/cli/skin/roles/remove",
+        "/cli/skin/roles/assign",
+        "/cli/skin/roles/unassign",
         "/cli/skin-tokens",
+        "/cli/skin-tokens/revoke",
+        "/cli/skin-tokens/rooms",
         // PR1 federation dual-auth under passports: agents may list peers,
         // pull a paired peer's roster, and send. pair/confirm/outbox/pubkey
         // stay owner-or-admin only (not on this allowlist). send forces
@@ -1268,27 +1278,21 @@ mod tests {
             !is_agent_verb("/cli/auth/whoami"),
             "/cli/auth/whoami is connect-user identity — not an agent verb"
         );
-        // Skin roster GET for workspace-agent passports. Mutations and
-        // front-door stay off the allowlist (dispatcher owner-gates POST
-        // on the GET paths and teaches owner_only).
+        // Skin roster GET + manage mutations for workspace-agent passports.
+        // Dispatcher still gates POST mutate on the Agent-tab column.
+        // front-door / hydra / prefix / the toggle writer stay off.
         assert!(is_agent_verb("/cli/skin/users"));
+        assert!(is_agent_verb("/cli/skin/users/remove"));
+        assert!(is_agent_verb("/cli/skin/users/password"));
+        assert!(is_agent_verb("/cli/skin/users/rooms"));
         assert!(is_agent_verb("/cli/skin/roles"));
+        assert!(is_agent_verb("/cli/skin/roles/update"));
+        assert!(is_agent_verb("/cli/skin/roles/remove"));
+        assert!(is_agent_verb("/cli/skin/roles/assign"));
+        assert!(is_agent_verb("/cli/skin/roles/unassign"));
         assert!(is_agent_verb("/cli/skin-tokens"));
-        assert!(
-            !is_agent_verb("/cli/skin/users/remove"),
-            "skin user remove is owner-only"
-        );
-        assert!(
-            !is_agent_verb("/cli/skin/roles/update"),
-            "skin role mutations are owner-only"
-        );
-        assert!(!is_agent_verb("/cli/skin/roles/remove"));
-        assert!(!is_agent_verb("/cli/skin/roles/assign"));
-        assert!(!is_agent_verb("/cli/skin/roles/unassign"));
-        assert!(
-            !is_agent_verb("/cli/skin-tokens/revoke"),
-            "skin token revoke is owner-only"
-        );
+        assert!(is_agent_verb("/cli/skin-tokens/revoke"));
+        assert!(is_agent_verb("/cli/skin-tokens/rooms"));
         assert!(
             !is_agent_verb("/cli/skin/front-door"),
             "must not allow-prefix /cli/skin/ (front-door is owner-only)"
@@ -1300,6 +1304,10 @@ mod tests {
         assert!(
             !is_agent_verb("/cli/skin/"),
             "must not allow-prefix all of /cli/skin/"
+        );
+        assert!(
+            !is_agent_verb("/cli/agents-manage-skin"),
+            "toggle writer is owner-only, not an agent verb"
         );
     }
 

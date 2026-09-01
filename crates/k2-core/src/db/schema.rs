@@ -148,6 +148,14 @@ pub struct Project {
     /// No global master (unlike DNS/connections). Default off.
     #[serde(default)]
     pub db_agent_access: String,
+    /// Chunk 2.2 — per-workspace agents-may-manage-Skin-Access opt-in
+    /// (migration 0115). 1 = this workspace's scoped hook may run
+    /// existing `k2 skin` / `k2 skin-token` mutations; 0 (default) =
+    /// deny. No global master. Owner / Owner-ROLE always may.
+    /// Fail-closed: default 0. Leftover front-door / Hydra stay
+    /// owner-only even when this is ON.
+    #[serde(default)]
+    pub agents_can_manage_skin: i64,
 }
 
 impl Project {
@@ -163,7 +171,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -206,6 +214,7 @@ impl Project {
                     let t = raw.trim();
                     if t.is_empty() { "off".to_string() } else { t.to_string() }
                 },
+                agents_can_manage_skin: row.get(30).unwrap_or(0),
             })
         })?;
         rows.collect()
@@ -216,7 +225,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -259,6 +268,7 @@ impl Project {
                         let t = raw.trim();
                         if t.is_empty() { "off".to_string() } else { t.to_string() }
                     },
+                    agents_can_manage_skin: row.get(30).unwrap_or(0),
                 })
             },
         )
@@ -4208,6 +4218,35 @@ mod unit_tests {
         assert_eq!(
             serde_json::to_value(&written).unwrap()["dbAgentAccess"],
             "write"
+        );
+    }
+
+    #[test]
+    fn project_agents_can_manage_skin_defaults_off_and_serializes_camel_case() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-agents-manage-skin");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.agents_can_manage_skin, 0);
+        let listed = Project::list(&conn).unwrap();
+        let listed_p = listed.iter().find(|x| x.id == id).expect("listed");
+        assert_eq!(listed_p.agents_can_manage_skin, 0);
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["agentsCanManageSkin"], 0);
+        assert!(
+            json.get("agents_can_manage_skin").is_none(),
+            "must serialize camelCase, not snake: {json}"
+        );
+
+        conn.execute(
+            "UPDATE projects SET agents_can_manage_skin = 1 WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        let written = Project::get(&conn, &id).unwrap();
+        assert_eq!(written.agents_can_manage_skin, 1);
+        assert_eq!(
+            serde_json::to_value(&written).unwrap()["agentsCanManageSkin"],
+            1
         );
     }
 

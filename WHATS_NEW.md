@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.132 — Skin access is per agent, then what they may do there
+
+Skin Access roles grant a guest **specific agents**, and **specific functions on each one** (Thread, files). Files on Documents does not grant files on Anna. Guests still log in with a username and password; they never copy a key. Grid and the terminal stay off.
+
+`k2 publish run --skin <dir>` serves your `login.html` when that file is in the folder (otherwise the bundled sign-in). Guests can tap Thread choice cards and fill secrets. A workspace Agent-tab toggle (off by default) lets that agent run existing `k2 skin` / `k2 skin-token` commands.
+
+---
+
 ## 0.40.131 — Skin platform tokens are not per-guest keys
 
 Skin Access mint is a **named platform token** (`k2 skin-token create --name vercel --agent sales`), not a key hung off a guest. Guests still sign in; that session is their access. Login does not hand them a copyable key. Grid and the terminal stay off. Existing static mints become platform tokens on first boot (name from the old username).

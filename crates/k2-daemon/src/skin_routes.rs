@@ -468,7 +468,7 @@ pub fn skin_host_forbidden(path: &str) -> Option<CliResponse> {
         content_type: "application/json",
         body: serde_json::json!({
             "error": skin_door::PATH_FILTER_ERROR,
-            "hint": "https://skin.<sub>.k2.dev is Thread-only. Grid/PTY stays on the operator <sub>.k2.dev kingdom door.",
+            "hint": "Grid/PTY is not available with a skin token. Use Thread (and files if scoped).",
         })
         .to_string(),
     })
@@ -491,7 +491,7 @@ pub fn owner_only_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "owner_only",
-                "hint": "requires owner/admin — ask your human (k2 skin user add/remove, skin-token create/revoke, front-door apply, and hydra on/off are owner surfaces; use k2 skin user list / k2 skin-token list to read the roster)",
+                "hint": "requires owner/admin — ask your human (k2 skin user add/remove/password, skin-token create/revoke/rooms; use k2 skin user list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin.",
             },
         })
         .to_string(),

@@ -603,6 +603,38 @@ fn nested_target(loopback_port: u16) -> String {
     format!("127.0.0.1:{loopback_port}")
 }
 
+/// True when `host` (no scheme; port optional) is the Caddy front door:
+/// reserved `skin.*` **or** a nested Connect label whose target is this
+/// box's Caddy loopback (`127.0.0.1:38472`). A nested label pointed at
+/// an SPA port (NSI `dannon` → `:3847`) is **not** the front door.
+pub fn is_front_door_host(host: &str) -> bool {
+    let host = host.trim().to_ascii_lowercase();
+    let host = host.split(':').next().unwrap_or("").trim_end_matches('.');
+    if host.is_empty() {
+        return false;
+    }
+    if host == "skin" || host.starts_with("skin.") {
+        return true;
+    }
+    match crate::tunnel::subdomains::current().route_for_host(host) {
+        crate::tunnel::subdomains::Route::Internal(target) => target_is_caddy_loopback(&target),
+        _ => false,
+    }
+}
+
+fn target_is_caddy_loopback(target: &str) -> bool {
+    let t = target.trim().to_ascii_lowercase();
+    let t = t.strip_prefix("http://").or_else(|| t.strip_prefix("https://")).unwrap_or(&t);
+    let t = t.split('/').next().unwrap_or(t);
+    let want = LOOPBACK_PORT.to_string();
+    matches!(
+        t.split_once(':'),
+        Some((h, p))
+            if p == want
+                && (h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1")
+    )
+}
+
 fn nested_host_from_cfg(cfg: &crate::tunnel::config::TunnelConfig) -> Option<String> {
     let sub = cfg.subdomain.trim();
     if sub.is_empty() {
@@ -1259,5 +1291,38 @@ mod tests {
             assert!(!st.nested.registered);
             assert!(st.ui_port.is_none());
         });
+    }
+
+    #[test]
+    fn is_front_door_host_skin_prefix_and_nested_caddy_target() {
+        assert!(is_front_door_host("skin.dtl.k2.dev"));
+        assert!(is_front_door_host("Skin.DTL.k2.dev:443"));
+        assert!(!is_front_door_host("dtl.k2.dev"));
+        assert!(!is_front_door_host("agents.dtl.k2.dev"));
+
+        let prev = crate::tunnel::subdomains::current();
+        let mut targets = std::collections::HashMap::new();
+        targets.insert("agents".into(), "127.0.0.1:38472".into());
+        crate::tunnel::subdomains::store(crate::tunnel::subdomains::SubdomainMap {
+            primary: "dtl".into(),
+            targets,
+        });
+        assert!(
+            is_front_door_host("agents.dtl.k2.dev"),
+            "nested label targeting Caddy loopback is the front door"
+        );
+        assert!(!is_front_door_host("dtl.k2.dev"), "kingdom host is not");
+
+        let mut spa = std::collections::HashMap::new();
+        spa.insert("dannon".into(), "127.0.0.1:3847".into());
+        crate::tunnel::subdomains::store(crate::tunnel::subdomains::SubdomainMap {
+            primary: "nsi".into(),
+            targets: spa,
+        });
+        assert!(
+            !is_front_door_host("dannon.nsi.k2.dev"),
+            "nested label targeting the SPA is not the Caddy front door"
+        );
+        crate::tunnel::subdomains::store((*prev).clone());
     }
 }

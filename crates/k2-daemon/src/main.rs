@@ -177,6 +177,7 @@ mod overlay_ws;
 mod fs_events_ws;
 mod skin_hydra;
 mod skin_routes;
+mod skin_gateway;
 
 #[cfg(test)]
 #[path = "test_support.rs"]
@@ -282,6 +283,9 @@ fn main() {
     //
     // Also short-circuit --help. Real boot never sees these args.
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().skip(1).any(|a| a == "--skin-gateway") {
+        std::process::exit(skin_gateway::run_from_args(&args));
+    }
     if let Some(code) = early_cli_dispatch(&args) {
         std::process::exit(code);
     }
@@ -341,7 +345,9 @@ fn print_daemon_help() {
            k2-daemon --version | -V  Print version and exit (does NOT boot)\n\
            k2-daemon --help | -h     Show this help and exit\n\
            k2-daemon --llm-worker <payload_path>\n\
-                                     Internal: one-shot LLM worker child\n\n\
+                                     Internal: one-shot LLM worker child\n\
+           k2-daemon --skin-gateway --listen 127.0.0.1:N --upstream http://127.0.0.1:DAEMON [--root DIR]\n\
+                                     Internal: official skin site helper (published kind=skin)\n\n\
          Do not run a second bare `k2-daemon` next to the supervised service —\n\
          a singleton lock refuses a concurrent boot (see ~/.k2/daemon.lock).",
         env!("CARGO_PKG_VERSION")
@@ -693,6 +699,7 @@ async fn async_main() {
         }
     };
     let port = claimed.port;
+    publish_runtime::set_loopback_port(port);
     k2_core::listen::set_lan_bound(lan);
     if claimed.reused {
         log_debug!(

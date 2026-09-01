@@ -703,8 +703,13 @@ async fn reserved_nested_label_skin_is_400_loud() {
             r.body
         );
         assert!(
-            r.body.contains("skin.<sub>.k2.dev"),
-            "must name the front door: {}",
+            r.body.contains("Pick another nested label") || r.body.contains("k2 study skins"),
+            "must point at another label, not a Caddy hostname: {}",
+            r.body
+        );
+        assert!(
+            !r.body.contains("38472"),
+            "must not teach 38472 as a publish target: {}",
             r.body
         );
 

@@ -949,6 +949,11 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0113_sql_grants_agent_secret",
             include_str!("../../drizzle_sql/0113_sql_grants_agent_secret.sql"),
         ),
+        // 0114 — published_services.kind + skin_root (official skin gateway).
+        (
+            "0114_published_services_kind",
+            include_str!("../../drizzle_sql/0114_published_services_kind.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1550,7 +1555,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0113_sql_grants_agent_secret",
+            last_name, "0114_published_services_kind",
             "unexpected last migration name: {last_name}"
         );
     }

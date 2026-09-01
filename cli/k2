@@ -5359,8 +5359,10 @@ sys.exit(1)
 
 _skin_usage() {
     cat >&2 <<'EOF'
-Usage: k2 skin <user|front-door|hydra> ...
+Usage: k2 skin <user|hydra> ...
        k2 skin-token <create|list|revoke|rooms> ...
+
+  Hosting a skin UI is k2 publish, not this command. See k2 study skins.
 
   k2 skin user add <username> [--password-stdin]
                                         Add a skin principal (not a Connect user)
@@ -5370,8 +5372,7 @@ Usage: k2 skin <user|front-door|hydra> ...
   k2 skin user remove <username>        Drop principal + their passes
   k2 skin user rooms <username> --agent sales [--apply-tokens]
                                         Set default rooms (mint template)
-  k2 skin front-door [connect|direct]   Show or persist+apply the Skin front door
-  k2 skin hydra [on|off] [--json]       OIDC issuer sidecar (Linux; owner/admin)
+  k2 skin hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
   k2 skin-token create <username> [--caps thread:read,thread:post,files:read] --agent sales
                                         Mint k2skn_ pass (secret once; ≥1 --agent)
   k2 skin-token list                    Live/revoked passes (prefix + caps + rooms)
@@ -5379,11 +5380,24 @@ Usage: k2 skin <user|front-door|hydra> ...
   k2 skin-token rooms <id> --clear      Empty rooms (Thread dark, keep secret)
   k2 skin-token revoke <id>
 
+WHAT THIS IS
+  Users + tokens + scopes (caps + rooms). Never a host. Never grid.
+
+HOST THE UI WITH k2 publish (k2 publish --help / k2 study skins)
+  k2 publish run <label> --skin --port N
+  Custom files: --skin <dir>. k2 skin does not serve software.
+
 Caps: thread:read (GET /cli/thread + overlay WS), thread:post (POST /cli/thread/post),
 files:read (GET /cli/fs/read-dir|read-file + WS /cli/fs/events), files:write (POST /cli/fs/write-file).
-Write-only does not grant list. Empty --caps stays Thread-only (never silent-add files).
-Rooms: workspace handles this guest may Thread / files. Empty = no Thread, not all agents.
-Grid/PTY is never a skin room.
+Rooms: workspace handles. Empty = Thread dark.
+Grid/PTY is never a skin room. Capability check paths (full):
+  GET /cli/sessions/grid  and  GET /cli/sessions/bytes
+  → 403 {"error":"skin tokens cannot use the terminal"}
+  Do not probe /cli/grid or /cli/pty for that string.
+
+LEFTOVER (not how you host a skin)
+  k2 skin front-door [connect|direct] [--ui-port N] [--url URL] [--hint TEXT] [--json]
+                                        Optional Caddy path-filter (owner). Not required.
 EOF
 }
 
@@ -5700,7 +5714,8 @@ cmd_skin_token() {
                     *) [[ -z "$username" ]] && username="$1"; shift ;;
                 esac
             done
-            [[ -z "$username" ]] && { echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2; exit 1; }
+            [[ -z "$username" ]] && { echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2; exit 2; }
+            [[ ${#agents[@]} -eq 0 ]] && { echo "Error: k2 skin-token create needs ≥1 --agent <handle> (rooms). Empty rooms = Thread dark." >&2; echo "Usage: k2 skin-token create <username> [--caps thread:read,thread:post,files:read,files:write] --agent sales" >&2; exit 2; }
             local agents_nl="" a
             for a in "${agents[@]}"; do
                 agents_nl="${agents_nl}${a}"$'\n'
@@ -8509,6 +8524,7 @@ same pipe. This command does not start k2 tunnel.
 
 USAGE
   k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]
+  k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel]
   k2 publish start|stop|logs <name>
   k2 publish rm <name> [--keep-hostname]
   k2 publish ps|status [--json]
@@ -8522,6 +8538,10 @@ run
     https://k2.dev/dashboard
   --no-tunnel: process only, no public URL, no Pro required.
   Same <name> already running: error — stop first. Does not overwrite.
+  --cmd and --skin are mutually exclusive. --cwd is for --cmd only.
+
+  --skin [<dir>]   Official skin site (login + Thread proxy). Not k2 skin.
+                   No dir = bundled UI. Dir = your static files + same BFF.
 
 start / stop
   start <name>: uses the saved --cmd/--port/--cwd. Do not pass them again.
@@ -8544,6 +8564,13 @@ subdomain  (Pro) hostname for a port that is ALREADY listening.
   rm     <label>                             delete the name (not the process)
   claim / unclaim <label>                    show or hide that name on THIS
                                              workspace's Published list
+
+  Skins: official gateway is `k2 publish run <label> --skin --port N`.
+    k2 publish run agents --skin --port 8788
+  → https://agents.<host>.k2.dev  (login + Thread; no grid)
+  Custom static files: --skin <dir> (workspace-relative). Label `skin`
+  is reserved. Off-platform custom domains are not created here.
+  k2 skin is users/tokens/scopes — it does not serve software.
 
 logs <name> [--tail]   dump the log file; --tail follows
 
@@ -8764,9 +8791,10 @@ cmd_publish() {
 }
 
 # `k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]`
+# `k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel]`
 cmd_publish_run() {
     if _wants_help "$@"; then _publish_usage; exit 0; fi
-    local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false
+    local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --cmd)
@@ -8784,12 +8812,27 @@ cmd_publish_run() {
                 cwd="$2"; shift 2 ;;
             --cwd=*)
                 cwd="${1#--cwd=}"; shift ;;
+            --skin)
+                skin=1; shift
+                # Optional operand iff the next argv does not start with `-`.
+                # Do not stat to decide (flags vs dir).
+                if [ $# -gt 0 ]; then
+                    case "$1" in
+                        -*) ;;
+                        *) skin_root="$1"; shift ;;
+                    esac
+                fi
+                ;;
+            --skin=*)
+                skin=1
+                skin_root="${1#--skin=}"
+                shift ;;
             --no-tunnel) no_tunnel=1; shift ;;
             --json) as_json=true; shift ;;
             --help|-h) _publish_usage; exit 0 ;;
             -*)
                 as_json="$as_json" _publish_err "usage" \
-                    "unknown flag '$1' — usage: k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]"
+                    "unknown flag '$1' — usage: k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>]"
                 exit 2 ;;
             *)
                 if [ -z "$name" ]; then
@@ -8800,29 +8843,68 @@ cmd_publish_run() {
                 fi ;;
         esac
     done
-    if [ -z "$name" ] || [ -z "$cmd" ] || [ -z "$port" ]; then
+    if [ "$skin" = 1 ] && [ -n "$cmd" ]; then
+        as_json="$as_json" _publish_err "usage" "--cmd and --skin are mutually exclusive"
+        exit 2
+    fi
+    if [ "$skin" = 1 ] && [ -n "$cwd" ]; then
+        as_json="$as_json" _publish_err "usage" "--cwd and --skin are mutually exclusive"
+        exit 2
+    fi
+    if [ -z "$name" ] || [ -z "$port" ]; then
         as_json="$as_json" _publish_err "usage" \
-            "usage: k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]"
+            "usage: k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>]"
+        exit 2
+    fi
+    if [ "$skin" != 1 ] && [ -z "$cmd" ]; then
+        as_json="$as_json" _publish_err "usage" \
+            "usage: k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>]"
         exit 2
     fi
     if ! _publish_is_port "$port"; then
         as_json="$as_json" _publish_err "usage" "--port must be an integer 1-65535"
         exit 2
     fi
-    [ -z "$cwd" ] && cwd="$PROJECT"
+    if [ "$skin" = 1 ] && [ -n "$skin_root" ]; then
+        case "$skin_root" in
+            /*|~*|[A-Za-z]:*)
+                as_json="$as_json" _publish_err "usage" "skinRoot must be a workspace-relative directory"
+                exit 2 ;;
+        esac
+        case "$skin_root" in
+            *..*)
+                as_json="$as_json" _publish_err "usage" "skinRoot must not contain .."
+                exit 2 ;;
+        esac
+        if [ ! -d "$PROJECT/$skin_root" ]; then
+            as_json="$as_json" _publish_err "usage" "skinRoot is not a directory: $skin_root"
+            exit 2
+        fi
+    fi
+    [ -z "$cwd" ] && [ "$skin" != 1 ] && cwd="$PROJECT"
     local body RESP
     body=$(P_NAME="$name" P_CMD="$cmd" P_PORT="$port" P_CWD="$cwd" \
-           P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" python3 -c '
+           P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" \
+           P_SKIN="$skin" P_SKIN_ROOT="$skin_root" python3 -c '
 import json, os
 b = {
     "name": os.environ["P_NAME"],
-    "cmd": os.environ["P_CMD"],
     "port": int(os.environ["P_PORT"]),
-    "cwd": os.environ["P_CWD"],
     "project": os.environ["P_PROJECT"],
 }
+cmd = os.environ.get("P_CMD") or ""
+if cmd:
+    b["cmd"] = cmd
+cwd = os.environ.get("P_CWD") or ""
+if cwd:
+    b["cwd"] = cwd
 if os.environ.get("P_NO_TUNNEL") == "1":
     b["noTunnel"] = True
+if os.environ.get("P_SKIN") == "1":
+    b["skin"] = True
+    root = os.environ.get("P_SKIN_ROOT") or ""
+    if root:
+        b["skinRoot"] = root
 print(json.dumps(b))
 ')
     RESP=$(cli_send cli_post_json "/cli/publish/run" "$body") || RESP=""
@@ -9186,7 +9268,7 @@ _refuse_reserved_nested_label() {
     local label
     label=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
     if [ "$label" = "skin" ]; then
-        echo "Error: reserved_label: 'skin' is reserved for the Skin front door (https://skin.<sub>.k2.dev). Pick another nested label." >&2
+        echo "Error: reserved_label: 'skin' is reserved. Pick another nested label for your UI (k2 study skins)." >&2
         exit 1
     fi
 }
@@ -13108,14 +13190,15 @@ cmd_schema() {
     },
     {
       "name": "publish run",
-      "usage": "k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>] [--json]",
-      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
+      "usage": "k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--json]",
+      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --skin is the official login+Thread gateway (not k2 skin). --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
       "args": [{"name": "name", "required": true}],
       "flags": [
-        {"name": "--cmd", "arg": "shell", "description": "Shell command to run (sh -c / cmd.exe /c)."},
+        {"name": "--cmd", "arg": "shell", "description": "Shell command to run (sh -c / cmd.exe /c). Mutually exclusive with --skin."},
+        {"name": "--skin", "arg": "dir", "description": "Official skin site (login + Thread proxy). Optional dir = static files + same BFF; omit = bundled UI. Mutually exclusive with --cmd/--cwd."},
         {"name": "--port", "arg": "n", "description": "Required listen port."},
         {"name": "--no-tunnel", "arg": null, "description": "Do not create/point a nested hostname (local only)."},
-        {"name": "--cwd", "arg": "path", "description": "Working directory (default: this workspace)."},
+        {"name": "--cwd", "arg": "path", "description": "Working directory (default: this workspace). For --cmd only."},
         {"name": "--json", "arg": null, "description": "JSON service object on stdout."}
       ]
     },
@@ -13213,7 +13296,7 @@ cmd_schema() {
     {
       "name": "skin",
       "usage": "k2 skin <user|front-door> ...",
-      "description": "Skin Access guest list + front-door stub. Separate from Connect users. Owner-tier.",
+      "description": "Skin Access: guests, tokens, scopes (caps + rooms). Not a host — use k2 publish. Separate from Connect users.",
       "args": [],
       "flags": []
     },
@@ -13252,7 +13335,7 @@ cmd_schema() {
     {
       "name": "skin front-door",
       "usage": "k2 skin front-door [connect|direct] [--url URL] [--hint TEXT] [--ui-port N] [--json]",
-      "description": "Show or persist+apply the Skin front door (Caddy path-filter). connect registers nested https://skin.<sub>.k2.dev on the existing tunnel.",
+      "description": "Optional Caddy path-filter (not required to host a skin). Host the UI with k2 publish on any nested label; see k2 study skins.",
       "args": [{"name": "mode", "required": false}],
       "flags": [
         {"name": "--url", "arg": "URL", "description": "Optional public URL."},
@@ -14216,8 +14299,8 @@ WHAT THE CLI TOUCHES
 
 WHAT NOT TO CONFUSE
   Connect users (`k2 users`) are humans on this daemon — study people.
-  Skin nested hostname is a Skin front-door vein, not a second
-  Connect product. See `k2 study skins`.
+  Skin Access is guests+passes+websocket rooms. Host the UI with
+  k2 publish on any nested label. See `k2 study skins`.
   Federation (`agent::host`) is peer messaging, not Connect login.
 
 WHAT THIS PAGE WILL NOT DO
@@ -14246,45 +14329,74 @@ _study_page_skins() {
     cat <<'EOF'
 k2 study skins — Skin Access
 
-Skin Access is a guest list for custom UIs that talk to agents
-WITHOUT a terminal. It is not Connect users, not /v1 API keys, not
-a grid login.
+LANES (read this first)
+  Hosting the UI  = k2 publish. Always. Not k2 skin.
+  k2 skin         = users + passwords + k2skn_ tokens + scopes
+                    (caps + rooms). It does not serve software.
+  If this page on your box still talks about two veins, Caddy,
+  or k2 skin front-door as how you serve a UI, that copy is stale.
+  The recipe below is still the product.
 
-PRINCIPALS AND PASSES
-  k2 skin user add|list|remove     guests (usernames, no secrets)
-  k2 skin user add … --password-stdin
-  k2 skin user password … --password-stdin
-  k2 skin-token create|list|revoke capability pass (secret once)
-  Workspace agents may list users/tokens (no raw secrets). Minting
-  and the front door are owner-only; a valid agent passport gets
-  owner_only (exit 3), not "invalid token".
+A skin is a custom UI that talks to agents WITHOUT a terminal.
+Not Connect users, not /v1 API keys, not a grid login, not a
+special hostname.
 
-PASSES NEVER GRID
-  A k2skn_ prefix pass is Thread capability (read/post) — never a
-  grid / PTY room. Do not paste the secret after create. List shows
-  prefix + caps, not the secret.
+HOW TO MAKE ONE (copy this)
+  1. Official site (bundled login + Thread):
+       k2 publish run <label> --skin --port N
+     Custom static files + the same BFF:
+       k2 publish run <label> --skin <dir> --port N
+     → https://<label>.<your-sub>.k2.dev  (Pro parent)
+     Local only: add --no-tunnel.
+  2. Owner adds guests and passwords (Settings → Sidecars →
+     Skin Access, or `k2 skin user add` / `password`). Agents:
+     exit 3. Do not sudo k2 — that is not an owner passport.
+  3. Browser logs in on THIS origin:
+       POST /login   {"username":"…","password":"…"}
+     200 body (no token):
+       {"ok":true,"username":"…","rooms":[…],"roomHandles":[…]}
+     Set-Cookie: k2_skin_ui=…; HttpOnly; SameSite=Lax; Path=/
+     The gateway holds k2skn_ in helper memory. Guests re-login
+     after a helper/daemon restart.
+  4. Daemon login (unchanged, if you are not using the gateway):
+       POST /cli/skin/login   {"username":"…","password":"…"}
+     200 body (verbatim):
+       {"ok":true,"token":"k2skn_…","username":"…",
+        "rooms":["<id>",…],"roomHandles":["sales",…]}
+     `token` is a Bearer session. Cookie `k2_skin_session` may
+     also be set (leftover Caddy door). Prefer keeping the
+     token on the SERVER so the browser never holds the pass.
 
-TWO VEINS (front door)
-  Connect nested   path-filter on the existing tunnel as a nested
-                   skin hostname under the paired Connect subdomain.
-  Direct           on-box listener; Caddy path-filters Thread /
-                   overlay. Grid, login, and /v1 stay closed.
-  `k2 skin front-door [connect|direct]` persists+applies. This page
-  is not a Caddyfile. Optional UI port proxies a same-origin app
-  for `/` `/assets` — not the whole daemon.
+Scopes = caps + rooms. Empty rooms = Thread dark. Never grid.
+
+CAPABILITY CHECK (full paths — do not shorten them)
+  GET /cli/thread?addr=<room>     200 if thread:read + that room
+  GET /cli/sessions/grid          403 {"error":"skin tokens cannot use the terminal"}
+  GET /cli/sessions/bytes         403 same teaching string
+  GET /cli/sessions/events        403 invalid or missing token
+  GET /cli/grid  and  GET /cli/pty  also 403, DIFFERENT body
+     ("Invalid or missing auth token") — not the teaching
+     string. A test against those short paths goes red with
+     a perfectly good pass.
+
+NOT THIS
+  Do not require Caddy, `k2 skin front-door`, or port 38472.
+  Nested label `skin` is reserved — pick any other name.
+  Do not CNAME a customer domain here (no Connect cert).
+  Do not apt install caddy for a skin. If a leftover install
+  already happened: stop AND disable the systemd unit
+  (it binds *:80 on all interfaces). Binary-on-PATH is enough
+  for leftover apply; new skins do not need it.
+  Do not k2 msg skin usernames. See `k2 study people`.
 
 ROSTER
   Skin guests are people-list 3. Never `k2 msg` those names.
   Opt-in: `k2 agent context add skin:roster`. See `k2 study people`.
 
-NOT THIS PAGE
-  No Caddyfile dump. No raw pass material. No login-provider runbook.
-  Caps today: thread:read, thread:post, files:read, files:write. Grid/PTY is never a skin room.
-
 OWNER VS AGENT
   List roster / list tokens: workspace agent ok (no secrets).
-  Mint, revoke, front-door apply: owner. Exit 3 `owner_only` if you
-  try. Ask `k2 feedback ask` — do not retry.
+  Add users, passwords, mint, revoke: owner. Exit 3 `owner_only`
+  if you try — ask `k2 feedback ask`, do not retry, do not sudo.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
 EOF
@@ -18575,6 +18687,7 @@ TUNNEL (device → primary *.k2.dev; not custom DNS zones)
 PUBLISH (host a process on this machine, optionally a nested URL)
   publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]
                                                 Daemon-owned process; default nested URL (Pro)
+  publish run <name> --skin [<dir>] --port <n>  Official skin site (login + Thread). Not k2 skin.
   publish start|stop <name>                     Start/stop a saved service
   publish rm <name> [--keep-hostname]           Stop + forget (not: subdomain rm)
   publish ps [--json]                           Hosted processes for THIS workspace
@@ -18603,7 +18716,9 @@ USERS (local daemon connect-user accounts)
 SKIN (guest list + k2skn_ passes — Thread rooms, never grid)
   skin user add|list|remove|password            Skin principals (not Connect users)
   skin-token create|list|revoke                 Capability pass (secret once at create)
-  skin front-door [connect|direct]              Persist+apply Caddy path-filter; nested https://skin.<sub>.k2.dev
+  (host the UI with k2 publish — k2 skin does not serve software)
+  skin front-door [connect|direct] [--ui-port N]
+                                                Leftover Caddy path-filter. Not how you host a skin.
 
 REMOTE SESSION (owner/admin Layer 0 + grants + shell PTY)
   remote-session status [--json]                Master switch + grants/sessions/denials

@@ -175,20 +175,19 @@ pub(crate) fn host_is_web_app(headers_blob: &str) -> bool {
         .contains(WEB_APP_HOST_MARKER)
 }
 
-/// Nested Skin door (`skin.<sub>.k2.dev`) forwarded by Caddy. Dual filter
-/// with the Caddy path-allow list: even a Connect token on this Host must
-/// not get grid / PTY / login / `/v1`.
+/// Caddy front door: reserved `skin.*` **or** a nested Connect label
+/// whose target is Caddy loopback 38472. Dual filter with the Caddy
+/// path-allow list: even a Connect token on this Host must not get
+/// grid / PTY / Connect login / `/v1`.
 pub(crate) fn host_is_skin_front_door(headers_blob: &str) -> bool {
     let Some(host) = extract_host(headers_blob) else {
         return false;
     };
-    host_no_port(host)
-        .to_ascii_lowercase()
-        .starts_with("skin.")
+    k2_core::skin_door::is_front_door_host(host_no_port(host))
 }
 
-/// Cookie class: nested `skin.*` **or** Direct `front_door.url` host.
-/// Operator `*.k2.dev` (no `skin.` prefix) is false.
+/// Cookie class: front-door Host **or** Direct `front_door.url` host.
+/// Operator `<sub>.k2.dev` (kingdom) is false.
 pub(crate) fn host_is_skin_cookie_class(headers_blob: &str) -> bool {
     if host_is_skin_front_door(headers_blob) {
         return true;
@@ -2306,5 +2305,11 @@ mod tests {
         assert!(!host_is_skin_front_door(
             "GET /cli/thread HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
         ));
+        assert!(
+            !host_is_skin_front_door(
+                "GET /cli/thread HTTP/1.1\r\nHost: agents.dtl.k2.dev\r\n\r\n"
+            ),
+            "nested label without a Caddy target is not the front door"
+        );
     }
 }

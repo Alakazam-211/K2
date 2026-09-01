@@ -176,6 +176,7 @@ pub mod overlay_ws;
 pub mod fs_events_ws;
 pub mod skin_hydra;
 pub mod skin_routes;
+pub mod skin_gateway;
 
 #[cfg(test)]
 mod test_support;
@@ -268,6 +269,7 @@ pub mod test_harness {
         });
         let local_addr = std_listener.local_addr().expect("local_addr");
         let port = local_addr.port();
+        crate::publish_runtime::set_loopback_port(port);
         k2_core::listen::set_lan_bound(local_addr.ip().is_unspecified());
         std_listener
             .set_nonblocking(true)

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in — K2</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <main class="card">
+    <h1>K2</h1>
+    <p class="lede">Sign in to Thread. This origin never puts the pass in the browser.</p>
+    <form id="f">
+      <label>Username <input name="username" autocomplete="username" required></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+      <p id="err" class="err" hidden></p>
+      <button type="submit">Sign in</button>
+    </form>
+    <p class="fine">K2 is source-available Fair Source, not MIT. To talk in this chat, use Thread.</p>
+  </main>
+  <script>
+    const err = document.getElementById("err");
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.hidden = true;
+      const fd = new FormData(e.target);
+      const body = JSON.stringify({
+        username: fd.get("username"),
+        password: fd.get("password"),
+      });
+      const r = await fetch("/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        credentials: "same-origin",
+      });
+      const t = await r.text();
+      if (!r.ok) {
+        err.textContent = "invalid username or password";
+        err.hidden = false;
+        return;
+      }
+      if (t.includes("k2skn_")) {
+        err.textContent = "server leaked a pass — refuse";
+        err.hidden = false;
+        return;
+      }
+      location.href = "/";
+    });
+  </script>
+</body>
+</html>

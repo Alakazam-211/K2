@@ -11,16 +11,18 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use k2_core::db::schema::SubdomainWorkspace;
 use k2_core::log_debug;
+
 use k2_core::published_services::{
-    self as ps, ServiceJson, DESIRED_RUNNING, DESIRED_STOPPED, EXPOSE_LOCAL, EXPOSE_TUNNEL,
-    STATUS_EXITED, STATUS_RUNNING, STATUS_STARTING, STATUS_STOPPED, STATUS_UNHEALTHY,
+    self as ps, ServiceJson, CMD_SKIN_SENTINEL, DESIRED_RUNNING, DESIRED_STOPPED, EXPOSE_LOCAL,
+    EXPOSE_TUNNEL, KIND_CMD, KIND_SKIN, STATUS_EXITED, STATUS_RUNNING, STATUS_STARTING,
+    STATUS_STOPPED, STATUS_UNHEALTHY,
 };
 use k2_core::terminal::login_path;
 use k2_core::tunnel::config as tunnel_config;
@@ -29,6 +31,26 @@ use k2_core::tunnel::subdomains;
 const LOG_CAP: u64 = 2 * 1024 * 1024;
 const KILL_GRACE: Duration = Duration::from_millis(400);
 const DEFAULT_PROBE: Duration = Duration::from_secs(15);
+
+/// Current k2-daemon loopback port. Used to synthesize skin-gateway `--upstream`.
+/// Never persisted in `published_services.cmd`.
+static LOOPBACK_PORT: AtomicU16 = AtomicU16::new(0);
+
+pub fn set_loopback_port(port: u16) {
+    LOOPBACK_PORT.store(port, Ordering::SeqCst);
+}
+
+pub fn loopback_port() -> u16 {
+    let p = LOOPBACK_PORT.load(Ordering::SeqCst);
+    if p != 0 {
+        return p;
+    }
+    let path = k2_core::paths::k2_home().join("daemon.port");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
 
 #[derive(Debug)]
 pub struct PublishError {
@@ -297,26 +319,21 @@ fn enrich_path(cmd: &mut Command) {
     }
 }
 
-fn spawn_child(
-    cmd: &str,
-    cwd: &Path,
+fn spawn_prepared(
+    mut c: Command,
     project_id: &str,
     name: &str,
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
     let _ = open_log(project_id, name)?;
     let log_p = log_path(project_id, name);
+    c.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    enrich_path(&mut c);
 
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let mut c = Command::new("sh");
-        c.arg("-c")
-            .arg(cmd)
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        enrich_path(&mut c);
         unsafe {
             c.pre_exec(|| {
                 if libc::setsid() == -1 {
@@ -334,14 +351,6 @@ fn spawn_child(
     }
     #[cfg(windows)]
     {
-        let mut c = Command::new("cmd.exe");
-        c.arg("/c")
-            .arg(cmd)
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        enrich_path(&mut c);
         let (mut child, job) = win_job::spawn_in_job(&mut c)?;
         let pid = child.id() as i32;
         if let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) {
@@ -351,9 +360,143 @@ fn spawn_child(
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (cmd, cwd, project_id, name, log_p);
+        let _ = (c, project_id, name, log_p);
         Err("published services require Unix or Windows".into())
     }
+}
+
+fn spawn_child(
+    cmd: &str,
+    cwd: &Path,
+    project_id: &str,
+    name: &str,
+) -> Result<(Child, i32, Option<WinJobSlot>), String> {
+    #[cfg(unix)]
+    {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(cmd).current_dir(cwd);
+        spawn_prepared(c, project_id, name)
+    }
+    #[cfg(windows)]
+    {
+        let mut c = Command::new("cmd.exe");
+        c.arg("/c").arg(cmd).current_dir(cwd);
+        spawn_prepared(c, project_id, name)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (cmd, cwd, project_id, name);
+        Err("published services require Unix or Windows".into())
+    }
+}
+
+fn spawn_argv(
+    exe: &Path,
+    args: &[String],
+    cwd: &Path,
+    project_id: &str,
+    name: &str,
+) -> Result<(Child, i32, Option<WinJobSlot>), String> {
+    let mut c = Command::new(exe);
+    c.args(args).current_dir(cwd);
+    spawn_prepared(c, project_id, name)
+}
+
+/// Resolve the k2-daemon binary for `--skin-gateway`. Prefer the live
+/// daemon's current_exe; tests fall back to CARGO_BIN_EXE / sibling.
+pub fn resolve_skin_gateway_exe() -> Result<PathBuf, String> {
+    if let Ok(p) = std::env::var("K2_SKIN_GATEWAY_EXE") {
+        let pb = PathBuf::from(p);
+        if pb.is_file() {
+            return Ok(pb);
+        }
+    }
+    if let Ok(p) = std::env::var("CARGO_BIN_EXE_k2-daemon") {
+        let pb = PathBuf::from(p);
+        if pb.is_file() {
+            return Ok(pb);
+        }
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let name = exe
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if name == "k2-daemon" || name == "k2-daemon.exe" {
+        return Ok(exe);
+    }
+    if let Some(dir) = exe.parent() {
+        for cand in ["k2-daemon", "k2-daemon.exe"] {
+            let p = dir.join(cand);
+            if p.is_file() {
+                return Ok(p);
+            }
+            if let Some(parent) = dir.parent() {
+                let p = parent.join(cand);
+                if p.is_file() {
+                    return Ok(p);
+                }
+            }
+        }
+    }
+    Err("could not resolve k2-daemon binary for --skin-gateway".into())
+}
+
+/// Workspace-relative UI dir. Empty = bundled. Reject abs / `..` / escape.
+pub fn validate_skin_root(workspace: &Path, raw: &str) -> Result<String, String> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(String::new());
+    }
+    let p = Path::new(t);
+    if p.is_absolute() {
+        return Err("skinRoot must be a workspace-relative directory".into());
+    }
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err("skinRoot must not contain ..".into());
+    }
+    let ws = workspace
+        .canonicalize()
+        .map_err(|e| format!("workspace path: {e}"))?;
+    let joined = ws.join(p);
+    if !joined.is_dir() {
+        return Err(format!(
+            "skinRoot is not a directory: {}",
+            p.display()
+        ));
+    }
+    let canon = joined
+        .canonicalize()
+        .map_err(|e| format!("skinRoot: {e}"))?;
+    if !canon.starts_with(&ws) {
+        return Err("skinRoot escapes the workspace".into());
+    }
+    Ok(t.replace('\\', "/"))
+}
+
+fn spawn_skin_helper(
+    row: &ps::PublishedService,
+    project_id: &str,
+    name: &str,
+) -> Result<(Child, i32, Option<WinJobSlot>), String> {
+    let daemon_port = loopback_port();
+    if daemon_port == 0 {
+        return Err("skin gateway: daemon loopback port is unknown".into());
+    }
+    let exe = resolve_skin_gateway_exe()?;
+    let cwd = PathBuf::from(&row.cwd);
+    let root = if row.skin_root.trim().is_empty() {
+        None
+    } else {
+        let joined = cwd.join(row.skin_root.trim());
+        let canon = joined
+            .canonicalize()
+            .map_err(|e| format!("skinRoot: {e}"))?;
+        Some(canon)
+    };
+    let args = crate::skin_gateway::helper_argv(row.port as u16, daemon_port, root.as_deref());
+    spawn_argv(&exe, &args, &cwd, project_id, name)
 }
 
 #[cfg(not(windows))]
@@ -650,16 +793,41 @@ pub struct RunSpec {
     pub port: u16,
     pub no_tunnel: bool,
     pub replace_spec: bool,
+    pub skin: bool,
+    pub skin_root: String,
+    /// True when the caller passed `--cwd` / `cwd=` (forbidden with `--skin`).
+    pub cwd_explicit: bool,
 }
 
 pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
     let name = ps::normalize_name(&spec.name).map_err(PublishError::bad)?;
-    if spec.cmd.trim().is_empty() {
+    if spec.skin && spec.cwd_explicit {
+        return Err(PublishError::bad(
+            "--cwd and --skin are mutually exclusive",
+        ));
+    }
+    if spec.skin && !spec.cmd.trim().is_empty() {
+        return Err(PublishError::bad(
+            "--cmd and --skin are mutually exclusive",
+        ));
+    }
+    if !spec.skin && spec.cmd.trim().is_empty() {
         return Err(PublishError::bad("Missing cmd"));
     }
     if spec.port == 0 {
         return Err(PublishError::bad("Missing port"));
     }
+    let skin_root = if spec.skin {
+        validate_skin_root(&spec.cwd, &spec.skin_root).map_err(PublishError::bad)?
+    } else {
+        String::new()
+    };
+    let cmd = if spec.skin {
+        CMD_SKIN_SENTINEL.to_string()
+    } else {
+        spec.cmd.trim().to_string()
+    };
+    let kind = if spec.skin { KIND_SKIN } else { KIND_CMD };
     if !spec.cwd.is_dir() {
         return Err(PublishError::bad(format!(
             "cwd is not a directory: {}",
@@ -692,10 +860,12 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
                 &conn,
                 &spec.project_id,
                 &name,
-                spec.cmd.trim(),
+                &cmd,
                 &spec.cwd.to_string_lossy(),
                 spec.port,
                 expose,
+                kind,
+                &skin_root,
             );
             let _ = ps::set_desired(&conn, &spec.project_id, &name, DESIRED_STOPPED);
             let _ = ps::set_error(&conn, &spec.project_id, &name, None);
@@ -704,11 +874,13 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
                 &conn,
                 &spec.project_id,
                 &name,
-                spec.cmd.trim(),
+                &cmd,
                 &spec.cwd.to_string_lossy(),
                 spec.port,
                 expose,
                 DESIRED_STOPPED,
+                kind,
+                &skin_root,
             )
             .map_err(|e| {
                 if ps::is_unique_violation(&e) {
@@ -774,7 +946,11 @@ fn start_inner(project_id: &str, name: &str, want_tunnel: bool) -> Result<Servic
     }
 
     let cwd = PathBuf::from(&row.cwd);
-    let (child, pid, job) = spawn_child(&row.cmd, &cwd, project_id, name).map_err(PublishError::fail)?;
+    let (child, pid, job) = if row.kind == KIND_SKIN {
+        spawn_skin_helper(&row, project_id, name).map_err(PublishError::fail)?
+    } else {
+        spawn_child(&row.cmd, &cwd, project_id, name).map_err(PublishError::fail)?
+    };
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1303,6 +1479,9 @@ mod tests {
             port,
             no_tunnel: true,
             replace_spec: false,
+            skin: false,
+            skin_root: String::new(),
+            cwd_explicit: false,
         };
         let json = run(spec).expect("run");
         assert_eq!(
@@ -1351,6 +1530,9 @@ mod tests {
             port,
             no_tunnel: true,
             replace_spec: false,
+            skin: false,
+            skin_root: String::new(),
+            cwd_explicit: false,
         })
         .expect("run --no-tunnel");
         assert_eq!(json.expose, EXPOSE_LOCAL);
@@ -1393,6 +1575,9 @@ mod tests {
             port: 9,
             no_tunnel: false,
             replace_spec: false,
+            skin: false,
+            skin_root: String::new(),
+            cwd_explicit: false,
         })
         .expect_err("not Pro must fail");
         assert!(
@@ -1478,6 +1663,9 @@ mod tests {
             port,
             no_tunnel: false,
             replace_spec: false,
+            skin: false,
+            skin_root: String::new(),
+            cwd_explicit: false,
         })
         .expect_err("hostname fail");
         match prev {
@@ -1525,11 +1713,73 @@ mod tests {
             port,
             no_tunnel: true,
             replace_spec: false,
+            skin: false,
+            skin_root: String::new(),
+            cwd_explicit: false,
         };
         run(spec()).expect("first run");
         let err = run(spec()).expect_err("second must fail");
         assert!(err.message.contains("stop first"), "got: {}", err.message);
         cleanup(&project_id, &name);
+    }
+
+    #[test]
+    fn skin_and_cmd_are_mutually_exclusive() {
+        let _home = crate::test_support::TempHome::new();
+        let dir = _home.path().join("ws-skin-xor");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let err = run(RunSpec {
+            project_id: project_id.clone(),
+            name: unique("xor"),
+            cmd: "echo hi".into(),
+            cwd: dir.clone(),
+            port: 9,
+            no_tunnel: true,
+            replace_spec: false,
+            skin: true,
+            skin_root: String::new(),
+            cwd_explicit: false,
+        })
+        .expect_err("cmd+skin");
+        assert!(
+            err.message.contains("--cmd and --skin are mutually exclusive"),
+            "got: {}",
+            err.message
+        );
+        let err = run(RunSpec {
+            project_id,
+            name: unique("cwdxor"),
+            cmd: String::new(),
+            cwd: dir,
+            port: 9,
+            no_tunnel: true,
+            replace_spec: false,
+            skin: true,
+            skin_root: String::new(),
+            cwd_explicit: true,
+        })
+        .expect_err("cwd+skin");
+        assert!(
+            err.message.contains("--cwd and --skin are mutually exclusive"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn validate_skin_root_rejects_abs_dotdot_and_escape() {
+        let tmp = std::env::temp_dir().join(format!("k2-skin-root-{}", std::process::id()));
+        let ws = tmp.join("ws");
+        let outside = tmp.join("outside");
+        fs::create_dir_all(ws.join("ui")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        assert_eq!(validate_skin_root(&ws, "").unwrap(), "");
+        assert_eq!(validate_skin_root(&ws, "ui").unwrap(), "ui");
+        assert!(validate_skin_root(&ws, "/tmp").unwrap_err().contains("workspace-relative"));
+        assert!(validate_skin_root(&ws, "../outside").unwrap_err().contains(".."));
+        assert!(validate_skin_root(&ws, "missing").unwrap_err().contains("not a directory"));
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -13,8 +13,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
     id: 'skin-access.front-door',
     section: 'skin-access',
-    label: 'Front door',
-    description: 'Use K2 Connect (skin.<sub>.k2.dev) or Direct/this box (Caddy → daemon loopback)',
+    label: 'Leftover Caddy (optional)',
+    description: 'Leftover optional Caddy. Host skins with k2 publish — not required.',
     keywords: [
       'front door',
       'connect',
@@ -26,7 +26,7 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
       'ui port',
       'listen',
     ],
-    group: 'Front door',
+    group: 'Leftover Caddy (optional)',
   },
   {
     id: 'skin-access.users',
@@ -741,8 +741,8 @@ export function SkinAccessSection(): React.JSX.Element {
         <div>
           <h2 className="text-base font-medium text-[var(--color-text-primary)]">Skin Access</h2>
           <p className="text-[11px] text-[var(--color-text-muted)] mt-1 max-w-2xl">
-            Skin users and capability passes — not Server Access (Connect operators). Overlay
-            Thread rooms only; grid / PTY never. Hydra stays off until you ask.
+            Guests, tokens, and scopes (caps + rooms) — not Server Access. Host the UI with
+            k2 publish (Published), not this page. Overlay Thread rooms only; never grid / PTY.
           </p>
         </div>
 
@@ -773,10 +773,13 @@ export function SkinAccessSection(): React.JSX.Element {
           </div>
         ) : null}
 
-        <SettingsGroup title="Front door">
+        <SettingsGroup title="Leftover Caddy (optional)">
           <div data-settings-id="skin-access.front-door" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              How packets arrive. Same pass / rooms either way.
+              Not how you host a skin. Hosting is k2 publish → the UI port that is
+              already listening. This leftover path-filter is optional. Do not apt
+              install caddy for a new skin; if a distro unit is already on, stop and
+              disable it (it binds *:80).
             </p>
             <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
               <input
@@ -806,9 +809,8 @@ export function SkinAccessSection(): React.JSX.Element {
                 </span>
                 <span className="block text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
                   Caddy on this box → daemon loopback. DNS A/AAAA has no port (use :443 in
-                  production). Do not bind k2-daemon to the LAN. Pretty names on the tunnel are
-                  CNAME to <code className="text-[10px]">{'skin.<sub>.k2.dev'}</code>, not this
-                  radio.
+                  production). Do not bind k2-daemon to the LAN. Nested public names are
+                  k2 publish labels, not a CNAME onto a customer domain.
                 </span>
               </span>
             </label>

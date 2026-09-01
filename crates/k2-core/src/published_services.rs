@@ -19,6 +19,13 @@ pub const EXPOSE_TUNNEL: &str = "tunnel";
 pub const DESIRED_RUNNING: &str = "running";
 pub const DESIRED_STOPPED: &str = "stopped";
 
+/// `published_services.kind`. Existing rows (pre-0114) are `cmd`.
+pub const KIND_CMD: &str = "cmd";
+/// Official Dannon skin gateway helper (not a user shell).
+pub const KIND_SKIN: &str = "skin";
+/// Display sentinel stored in `cmd` for `kind=skin`. Never a shell string.
+pub const CMD_SKIN_SENTINEL: &str = "(skin)";
+
 /// Computed runtime status (not a SQLite column).
 pub const STATUS_RUNNING: &str = "running";
 pub const STATUS_STARTING: &str = "starting";
@@ -74,6 +81,10 @@ pub struct PublishedService {
     pub error: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// `cmd` or `skin`. Always present after 0114.
+    pub kind: String,
+    /// Workspace-relative UI dir. Empty = bundled login + Thread chrome.
+    pub skin_root: String,
 }
 
 /// Frozen HTTP Service object (`GET /cli/publish/list`).
@@ -93,6 +104,8 @@ pub struct ServiceJson {
     pub target: String,
     pub error: Option<String>,
     pub last_exit_code: Option<i32>,
+    /// Always present (`cmd` or `skin`). Existing rows serialize as `cmd`.
+    pub kind: String,
 }
 
 impl ServiceJson {
@@ -120,12 +133,18 @@ impl ServiceJson {
             target: format!("127.0.0.1:{port}"),
             error: row.error.clone(),
             last_exit_code: row.last_exit_code.map(|c| c as i32),
+            kind: if row.kind.trim().is_empty() {
+                KIND_CMD.to_string()
+            } else {
+                row.kind.clone()
+            },
         }
     }
 }
 
 const COLS: &str = "id, project_id, name, cmd, cwd, port, expose, desired, pid, \
-     last_exit_code, last_started_at, last_exited_at, error, created_at, updated_at";
+     last_exit_code, last_started_at, last_exited_at, error, created_at, updated_at, \
+     kind, skin_root";
 
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PublishedService> {
     Ok(PublishedService {
@@ -144,6 +163,8 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PublishedService> {
         error: row.get(12)?,
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
+        kind: row.get::<_, String>(15).unwrap_or_else(|_| KIND_CMD.to_string()),
+        skin_root: row.get::<_, String>(16).unwrap_or_default(),
     })
 }
 
@@ -158,14 +179,21 @@ pub fn insert(
     port: u16,
     expose: &str,
     desired: &str,
+    kind: &str,
+    skin_root: &str,
 ) -> Result<PublishedService> {
     let name = name.trim().to_ascii_lowercase();
+    let kind = if kind.trim().is_empty() {
+        KIND_CMD
+    } else {
+        kind.trim()
+    };
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_unix();
     conn.execute(
         "INSERT INTO published_services \
-         (id, project_id, name, cmd, cwd, port, expose, desired, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+         (id, project_id, name, cmd, cwd, port, expose, desired, created_at, updated_at, kind, skin_root) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11)",
         params![
             id,
             project_id,
@@ -175,7 +203,9 @@ pub fn insert(
             port as i64,
             expose,
             desired,
-            now
+            now,
+            kind,
+            skin_root,
         ],
     )?;
     get_by_id(conn, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
@@ -231,12 +261,29 @@ pub fn update_spec(
     cwd: &str,
     port: u16,
     expose: &str,
+    kind: &str,
+    skin_root: &str,
 ) -> Result<bool> {
     let name = name.trim().to_ascii_lowercase();
+    let kind = if kind.trim().is_empty() {
+        KIND_CMD
+    } else {
+        kind.trim()
+    };
     let n = conn.execute(
         "UPDATE published_services SET cmd = ?1, cwd = ?2, port = ?3, expose = ?4, \
-         updated_at = ?5 WHERE project_id = ?6 AND name = ?7",
-        params![cmd, cwd, port as i64, expose, now_unix(), project_id, name],
+         kind = ?5, skin_root = ?6, updated_at = ?7 WHERE project_id = ?8 AND name = ?9",
+        params![
+            cmd,
+            cwd,
+            port as i64,
+            expose,
+            kind,
+            skin_root,
+            now_unix(),
+            project_id,
+            name
+        ],
     )?;
     Ok(n > 0)
 }
@@ -377,12 +424,16 @@ mod tests {
             3000,
             EXPOSE_TUNNEL,
             DESIRED_STOPPED,
+            KIND_CMD,
+            "",
         )
         .expect("insert");
         assert_eq!(row.name, "web", "name is stored lowercase");
         assert_eq!(row.port, 3000);
         assert_eq!(row.expose, EXPOSE_TUNNEL);
         assert_eq!(row.desired, DESIRED_STOPPED);
+        assert_eq!(row.kind, KIND_CMD);
+        assert_eq!(row.skin_root, "");
         assert!(row.pid.is_none());
         assert!(row.error.is_none());
 
@@ -397,12 +448,12 @@ mod tests {
         let conn = fresh();
         let a = project(&conn, "/tmp/pub-a");
         let b = project(&conn, "/tmp/pub-b");
-        insert(&conn, &a, "web", "a", "/a", 1, EXPOSE_LOCAL, DESIRED_STOPPED).unwrap();
-        let dup = insert(&conn, &a, "web", "a2", "/a", 2, EXPOSE_LOCAL, DESIRED_STOPPED);
+        insert(&conn, &a, "web", "a", "/a", 1, EXPOSE_LOCAL, DESIRED_STOPPED, KIND_CMD, "").unwrap();
+        let dup = insert(&conn, &a, "web", "a2", "/a", 2, EXPOSE_LOCAL, DESIRED_STOPPED, KIND_CMD, "");
         assert!(dup.is_err(), "same project+name must UNIQUE-fail");
         assert!(is_unique_violation(dup.as_ref().unwrap_err()));
         // Same name on another workspace is fine (local-only may collide).
-        insert(&conn, &b, "web", "b", "/b", 3, EXPOSE_LOCAL, DESIRED_STOPPED)
+        insert(&conn, &b, "web", "b", "/b", 3, EXPOSE_LOCAL, DESIRED_STOPPED, KIND_CMD, "")
             .expect("cross-workspace name collision is allowed");
         assert_eq!(list_for_project(&conn, &a).unwrap().len(), 1);
         assert_eq!(list_for_project(&conn, &b).unwrap().len(), 1);
@@ -421,6 +472,8 @@ mod tests {
             8090,
             EXPOSE_LOCAL,
             DESIRED_RUNNING,
+            KIND_CMD,
+            "",
         )
         .unwrap();
         set_runtime(&conn, &pid, "api", Some(4242), None, Some(now_unix())).unwrap();
@@ -440,9 +493,11 @@ mod tests {
             "target",
             "error",
             "lastExitCode",
+            "kind",
         ] {
             assert!(v.get(key).is_some(), "Service JSON must carry {key}");
         }
+        assert_eq!(v["kind"], KIND_CMD);
         assert!(v["url"].is_null(), "local-only url is explicit null");
         assert!(v["error"].is_null());
         assert!(v["lastExitCode"].is_null());
@@ -466,6 +521,8 @@ mod tests {
             9,
             EXPOSE_LOCAL,
             DESIRED_RUNNING,
+            KIND_CMD,
+            "",
         )
         .unwrap();
         set_runtime(&conn, &pid, "worker", Some(99), None, Some(now_unix())).unwrap();
@@ -490,6 +547,8 @@ mod tests {
             3000,
             EXPOSE_TUNNEL,
             DESIRED_RUNNING,
+            KIND_CMD,
+            "",
         )
         .unwrap();
         mark_hostname_failed(&conn, &pid, "web", "claim did not land").unwrap();
@@ -522,10 +581,73 @@ mod tests {
             "must fail loud with reserved_label, got {err}"
         );
         assert!(
-            err.contains("skin.<sub>.k2.dev"),
-            "must name the Skin front door, got {err}"
+            err.contains("Pick another nested label"),
+            "must tell them to pick another name, not a Caddy port: {err}"
+        );
+        assert!(
+            !err.contains("38472"),
+            "must not teach 38472 as a publish target: {err}"
         );
         assert!(normalize_name("Skin").is_err());
         assert!(normalize_name("staging").is_ok());
+    }
+
+    #[test]
+    fn kind_defaults_cmd_and_skin_roundtrips() {
+        let conn = fresh();
+        let pid = project(&conn, "/tmp/pub-kind");
+        let cmd_row = insert(
+            &conn,
+            &pid,
+            "web",
+            "npm start",
+            "/tmp/pub-kind",
+            3000,
+            EXPOSE_LOCAL,
+            DESIRED_STOPPED,
+            KIND_CMD,
+            "",
+        )
+        .unwrap();
+        assert_eq!(cmd_row.kind, KIND_CMD);
+        assert_eq!(cmd_row.skin_root, "");
+        let json = ServiceJson::from_row(&cmd_row, STATUS_STOPPED, None, None);
+        let v = serde_json::to_value(&json).unwrap();
+        assert_eq!(v["kind"], "cmd", "kind is always present camelCase");
+
+        let skin_row = insert(
+            &conn,
+            &pid,
+            "agents",
+            CMD_SKIN_SENTINEL,
+            "/tmp/pub-kind",
+            8788,
+            EXPOSE_LOCAL,
+            DESIRED_STOPPED,
+            KIND_SKIN,
+            "ui",
+        )
+        .unwrap();
+        assert_eq!(skin_row.kind, KIND_SKIN);
+        assert_eq!(skin_row.cmd, CMD_SKIN_SENTINEL);
+        assert_eq!(skin_row.skin_root, "ui");
+        let json = ServiceJson::from_row(&skin_row, STATUS_STOPPED, None, None);
+        let v = serde_json::to_value(&json).unwrap();
+        assert_eq!(v["kind"], "skin");
+        assert_eq!(v["cmd"], CMD_SKIN_SENTINEL);
+
+        let bad = insert(
+            &conn,
+            &pid,
+            "nope",
+            "x",
+            "/tmp/pub-kind",
+            1,
+            EXPOSE_LOCAL,
+            DESIRED_STOPPED,
+            "python",
+            "",
+        );
+        assert!(bad.is_err(), "CHECK (kind IN cmd|skin) must reject other kinds");
     }
 }

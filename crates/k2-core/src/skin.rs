@@ -317,7 +317,7 @@ pub fn is_reserved_nested_label(name: &str) -> bool {
 pub fn reserved_nested_label_error(label: &str) -> String {
     let label = label.trim().to_ascii_lowercase();
     format!(
-        "reserved_label: '{label}' is reserved for the Skin front door (https://skin.<sub>.k2.dev). Pick another nested label."
+        "reserved_label: '{label}' is reserved. Pick another nested label for your UI (k2 study skins)."
     )
 }
 
@@ -1416,7 +1416,14 @@ mod tests {
         assert!(!is_reserved_nested_label("staging"));
         let err = reserved_nested_label_error("skin");
         assert!(err.contains("reserved_label"), "{err}");
-        assert!(err.contains("skin.<sub>.k2.dev"), "{err}");
+        assert!(
+            err.contains("Pick another nested label"),
+            "must tell them to pick another name, not a Caddy port: {err}"
+        );
+        assert!(
+            !err.contains("38472"),
+            "must not teach 38472 as a publish target: {err}"
+        );
     }
 
     #[test]

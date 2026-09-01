@@ -159,6 +159,17 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         return CliResponse::bad_request("Missing name");
     }
     let cmd = str_param(params, "cmd");
+    let skin = boolish(params, &["skin"]);
+    let skin_root = opt_param(params, "skinRoot")
+        .or_else(|| opt_param(params, "skin_root"))
+        .unwrap_or_default();
+    let cwd_explicit = opt_param(params, "cwd").is_some();
+    if skin && cwd_explicit {
+        return CliResponse::bad_request("--cwd and --skin are mutually exclusive");
+    }
+    if skin && !cmd.trim().is_empty() {
+        return CliResponse::bad_request("--cmd and --skin are mutually exclusive");
+    }
     let port = match parse_port(params) {
         Ok(p) => p,
         Err(resp) => return resp,
@@ -176,6 +187,9 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         port,
         no_tunnel,
         replace_spec: true,
+        skin,
+        skin_root,
+        cwd_explicit,
     }) {
         Ok(svc) => CliResponse::ok_json(serde_json::to_string(&svc).unwrap_or_else(|_| "{}".into())),
         Err(e) => err_to_resp(e),

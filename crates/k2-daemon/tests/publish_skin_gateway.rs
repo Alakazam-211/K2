@@ -413,6 +413,11 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
             "bundled login: {}",
             login_page.body
         );
+        let cc = header_value(&login_page.headers, "cache-control").expect("Cache-Control");
+        assert!(
+            cc.to_ascii_lowercase().contains("no-store"),
+            "GET /login Cache-Control: {cc}"
+        );
 
         let bad = http(
             gport,
@@ -438,6 +443,7 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
         let ov = json(&ok.body);
         assert_eq!(ov["ok"], true, "{}", ok.body);
         assert!(ov.get("token").is_none(), "no token key: {}", ok.body);
+        assert_eq!(ov["username"], "guest", "keep username: {}", ok.body);
         assert!(ov.get("caps").is_some(), "browser JSON must include caps: {}", ok.body);
         assert!(ov.get("role").is_some(), "browser JSON must include role: {}", ok.body);
         let set_cookie = header_value(&ok.headers, "set-cookie").expect("Set-Cookie");
@@ -608,5 +614,386 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
             Some(&format!(r#"{{"name":"agents","project":"{path}"}}"#)),
         );
         let _ = std::fs::remove_dir_all(&path);
+    });
+}
+
+fn mint(port: u16, name: &str, caps: &[&str], rooms: &[&str]) -> String {
+    let caps_json = serde_json::to_string(&caps).expect("caps json");
+    let rooms_json = serde_json::to_string(&rooms).expect("rooms json");
+    let r = http(
+        port,
+        "POST",
+        &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+        Some(&format!(
+            r#"{{"name":"{name}","caps":{caps_json},"rooms":{rooms_json}}}"#
+        )),
+    );
+    assert_eq!(r.status, 200, "mint; {}", r.body);
+    json(&r.body)["token"]
+        .as_str()
+        .expect("token once")
+        .to_string()
+}
+
+fn write_skin_ui(ws: &str, login_title: Option<&str>) {
+    let ui = format!("{ws}/ui");
+    std::fs::create_dir_all(&ui).expect("ui dir");
+    std::fs::write(
+        format!("{ui}/index.html"),
+        "<!DOCTYPE html><title>overlay</title><body>ok</body>",
+    )
+    .expect("index.html");
+    if let Some(title) = login_title {
+        std::fs::write(
+            format!("{ui}/login.html"),
+            format!(
+                "<!DOCTYPE html><html><head><title>{title}</title></head><body><form method=\"post\" action=\"/login\"><input name=\"username\"><input name=\"password\" type=\"password\"></form></body></html>"
+            ),
+        )
+        .expect("login.html");
+    }
+}
+
+fn publish_skin(dport: u16, path: &str, gport: u16, skin_root: Option<&str>) {
+    let root_json = match skin_root {
+        Some(r) => format!(r#","skinRoot":"{r}""#),
+        None => String::new(),
+    };
+    let run = http(
+        dport,
+        "POST",
+        &format!("/cli/publish/run?token={OWNER_TOKEN}"),
+        Some(&format!(
+            r#"{{"name":"agents","skin":true,"port":{gport},"project":"{path}","noTunnel":true{root_json}}}"#
+        )),
+    );
+    assert_eq!(run.status, 200, "run skin; {}", run.body);
+    assert!(
+        wait_port(gport, 8000),
+        "skin gateway must listen on 127.0.0.1:{gport}"
+    );
+}
+
+fn stop_skin(dport: u16, path: &str) {
+    let _ = http(
+        dport,
+        "POST",
+        &format!("/cli/publish/rm?token={OWNER_TOKEN}"),
+        Some(&format!(r#"{{"name":"agents","project":"{path}"}}"#)),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_custom_login_html_or_bundled() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("psglog{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        add_user(dport, "guest");
+        set_rooms(dport, "guest", &handle);
+        set_password(dport, "guest", "s3cret-horse");
+
+        write_skin_ui(&path, None);
+        let gport_missing = free_port();
+        publish_skin(dport, &path, gport_missing, Some("ui"));
+        let missing = http(gport_missing, "GET", "/login", None);
+        assert_eq!(
+            missing.status, 200,
+            "missing login.html must not 404; {}",
+            missing.body
+        );
+        assert!(
+            missing.body.contains("Sign in — K2") || missing.body.contains("password"),
+            "dir without login.html stays bundled: {}",
+            missing.body
+        );
+        let cc = header_value(&missing.headers, "cache-control").expect("Cache-Control");
+        assert!(
+            cc.to_ascii_lowercase().contains("no-store"),
+            "missing login.html Cache-Control: {cc}"
+        );
+        stop_skin(dport, &path);
+        std::thread::sleep(Duration::from_millis(200));
+
+        let title = "Custom Skin Login 2.1";
+        write_skin_ui(&path, Some(title));
+        let gport = free_port();
+        publish_skin(dport, &path, gport, Some("ui"));
+        let custom = http(gport, "GET", "/login", None);
+        assert_eq!(custom.status, 200, "{}", custom.body);
+        assert!(
+            custom.body.contains(title),
+            "custom login.html title: {}",
+            custom.body
+        );
+        assert!(
+            !custom.body.contains("Sign in — K2"),
+            "must not serve bundled title: {}",
+            custom.body
+        );
+        let cc2 = header_value(&custom.headers, "cache-control").expect("Cache-Control");
+        assert!(
+            cc2.to_ascii_lowercase().contains("no-store"),
+            "custom login Cache-Control: {cc2}"
+        );
+
+        let ok = http(
+            gport,
+            "POST",
+            "/login",
+            Some(r#"{"username":"guest","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(
+            ok.status, 200,
+            "POST /login through custom page plumbing; {}",
+            ok.body
+        );
+        assert!(!ok.body.contains("k2skn_"), "{}", ok.body);
+        let ov = json(&ok.body);
+        assert!(ov.get("token").is_none(), "no token key: {}", ok.body);
+        assert_eq!(ov["username"], "guest", "{}", ok.body);
+        let set_cookie = header_value(&ok.headers, "set-cookie").expect("Set-Cookie");
+        assert!(set_cookie.contains("k2_skin_ui="), "{set_cookie}");
+        assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_thread_answer_not_ask_or_fs() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("psgans{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        add_user(dport, "guest");
+        set_rooms(dport, "guest", &handle);
+        set_password(dport, "guest", "s3cret-horse");
+
+        let gport = free_port();
+        publish_skin(dport, &path, gport, None);
+
+        let ask = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"addr":"{handle}","prompt":"Ship it?","options":"Go,Stop"}}"#
+            )),
+        );
+        assert_eq!(ask.status, 200, "owner ask; {}", ask.body);
+        let card_id = json(&ask.body)["id"].as_str().expect("card id").to_string();
+        assert!(!card_id.is_empty(), "ask id: {}", ask.body);
+
+        let login = http(
+            gport,
+            "POST",
+            "/login",
+            Some(r#"{"username":"guest","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "{}", login.body);
+        let sid = cookie_k2_skin_ui(
+            &header_value(&login.headers, "set-cookie").expect("Set-Cookie"),
+        )
+        .expect("opaque id");
+        let cookie = format!("Cookie: k2_skin_ui={sid}");
+
+        let answered = http_ex(
+            gport,
+            "POST",
+            "/cli/thread/answer",
+            Some(&format!(
+                r#"{{"addr":"{handle}","id":"{card_id}","answer":"Go"}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(answered.status, 200, "gateway answer; {}", answered.body);
+        let av = json(&answered.body);
+        assert_eq!(av["ok"], true, "{}", answered.body);
+        assert_eq!(av["status"], "answered", "{}", answered.body);
+        assert_eq!(av["answer"], "Go", "{}", answered.body);
+
+        let ask_gw = http_ex(
+            gport,
+            "POST",
+            "/cli/thread/ask",
+            Some(&format!(
+                r#"{{"addr":"{handle}","prompt":"nope","options":"A,B"}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(ask_gw.status, 404, "ask must 404 on gateway; {}", ask_gw.body);
+        assert!(
+            ask_gw.body.contains("not found"),
+            "ask 404 body: {}",
+            ask_gw.body
+        );
+
+        let fs = http_ex(gport, "GET", "/cli/fs/read-dir", None, &cookie);
+        assert_eq!(fs.status, 404, "fs must 404 on gateway; {}", fs.body);
+        assert!(
+            fs.body.contains("not found"),
+            "fs 404 body: {}",
+            fs.body
+        );
+
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_daemon_thread_answer_void_caps_and_rooms() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("psgdans{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("psgdoth{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        let (_oid, _oconv, opath) = seed_workspace(&other);
+        add_user(dport, "guest");
+        set_rooms(dport, "guest", &handle);
+        set_password(dport, "guest", "s3cret-horse");
+
+        let login = http(
+            dport,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"guest","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "{}", login.body);
+        let sess = json(&login.body)["token"]
+            .as_str()
+            .expect("session token")
+            .to_string();
+        assert!(sess.starts_with("k2skn_"), "{sess}");
+
+        let ask = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"addr":"{handle}","prompt":"Ship it?","options":"Go,Stop"}}"#
+            )),
+        );
+        assert_eq!(ask.status, 200, "{}", ask.body);
+        let card_id = json(&ask.body)["id"].as_str().expect("id").to_string();
+
+        let answered = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/answer?token={sess}"),
+            Some(&format!(
+                r#"{{"addr":"{handle}","id":"{card_id}","answer":"Go"}}"#
+            )),
+        );
+        assert_eq!(answered.status, 200, "session answer; {}", answered.body);
+
+        let ask2 = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"addr":"{handle}","prompt":"Void?","options":"Go,Stop"}}"#
+            )),
+        );
+        assert_eq!(ask2.status, 200, "{}", ask2.body);
+        let id2 = json(&ask2.body)["id"].as_str().expect("id2").to_string();
+        let voided = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/void?token={sess}"),
+            Some(&format!(r#"{{"addr":"{handle}","id":"{id2}"}}"#)),
+        );
+        assert_eq!(voided.status, 200, "session void; {}", voided.body);
+
+        let grid = http(
+            dport,
+            "GET",
+            &format!("/cli/sessions/grid?token={sess}&session=nope"),
+            None,
+        );
+        assert_eq!(grid.status, 403, "grid; {}", grid.body);
+        assert_eq!(grid.body.trim(), TERMINAL_403);
+
+        let read_tok = mint(dport, "guest-read", &["thread:read"], &[&handle]);
+        let no_post = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/answer?token={read_tok}"),
+            Some(&format!(
+                r#"{{"addr":"{handle}","id":"{card_id}","answer":"Go"}}"#
+            )),
+        );
+        assert_eq!(no_post.status, 403, "missing cap; {}", no_post.body);
+        assert!(
+            no_post.body.contains("missing capability thread:post"),
+            "missing-cap body: {}",
+            no_post.body
+        );
+
+        let other_ask = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/ask?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"addr":"{other}","prompt":"Other?","options":"A,B"}}"#
+            )),
+        );
+        assert_eq!(other_ask.status, 200, "{}", other_ask.body);
+        let other_id = json(&other_ask.body)["id"]
+            .as_str()
+            .expect("other id")
+            .to_string();
+        let room_deny = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/answer?token={sess}"),
+            Some(&format!(
+                r#"{{"addr":"{other}","id":"{other_id}","answer":"A"}}"#
+            )),
+        );
+        assert_eq!(room_deny.status, 403, "skin_room; {}", room_deny.body);
+        let rv = json(&room_deny.body);
+        assert_eq!(rv["error"]["code"], "skin_room", "{}", room_deny.body);
+
+        let secret_val = "s3cr3t-NEVER-IN-DAEMON-ANSWER-xyz";
+        let secret = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/secret?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"addr":"{handle}","name":"API_TOKEN","prompt":"Paste"}}"#
+            )),
+        );
+        assert_eq!(secret.status, 200, "{}", secret.body);
+        let sid = json(&secret.body)["id"]
+            .as_str()
+            .expect("secret id")
+            .to_string();
+        let filled = http(
+            dport,
+            "POST",
+            &format!("/cli/thread/answer?token={sess}"),
+            Some(&format!(
+                r#"{{"addr":"{handle}","id":"{sid}","secret":"{secret_val}"}}"#
+            )),
+        );
+        assert_eq!(filled.status, 200, "secret fill; {}", filled.body);
+        assert!(
+            !filled.body.contains(secret_val),
+            "must not echo secret: {}",
+            filled.body
+        );
+        let fv = json(&filled.body);
+        assert_eq!(fv["status"], "set", "{}", filled.body);
+
+        let _ = std::fs::remove_dir_all(&path);
+        let _ = std::fs::remove_dir_all(&opath);
     });
 }

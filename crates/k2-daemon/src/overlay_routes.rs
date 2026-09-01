@@ -684,7 +684,7 @@ fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
     if card_id.is_empty() {
         return usage("missing card id");
     }
-    let resolved = match resolve_addr(&addr) {
+    let resolved = match resolve_thread_addr(&addr) {
         Ok(r) => r,
         Err(e) => return e,
     };
@@ -737,7 +737,7 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
     if card_id.is_empty() {
         return usage("missing card id");
     }
-    let resolved = match resolve_addr(&addr) {
+    let resolved = match resolve_thread_addr(&addr) {
         Ok(r) => r,
         Err(e) => return e,
     };
@@ -2091,5 +2091,174 @@ mod tests {
             "skin post must stamp the pass username, not the room handle: {skin_posted}"
         );
         assert_ne!(skin_posted["from"], handle);
+    }
+
+    #[test]
+    fn skin_answer_and_void_use_thread_rooms() {
+        let handle = format!("ovlskans{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("ovlskoth{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let (other_id, _) = seed(&other);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        pin(&other_id, &uuid::Uuid::new_v4().to_string());
+        let pass = skin_pass(&[project_id.clone()]);
+
+        let ask = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "prompt": "Ship it?",
+                "options": "Go,Stop",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(ask.status, "200 OK", "ask failed: {}", ask.body);
+        let id = json_body(&ask)["id"].as_str().expect("id").to_string();
+        assert!(!id.is_empty(), "ask must return an id: {}", ask.body);
+
+        let other_ask = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": other,
+                "prompt": "Other?",
+                "options": "A,B",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(other_ask.status, "200 OK", "{}", other_ask.body);
+        let other_id = json_body(&other_ask)["id"]
+            .as_str()
+            .expect("other id")
+            .to_string();
+
+        let denied = with_request_skin(Some(pass.clone()), || {
+            dispatch_post(
+                "/cli/thread/answer",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": other,
+                    "id": other_id,
+                    "answer": "A",
+                })
+                .to_string()
+                .as_bytes(),
+            )
+        });
+        assert_eq!(denied.status, "403 Forbidden", "{}", denied.body);
+        assert!(
+            denied.body.contains("skin_room"),
+            "addr not in rooms must be skin_room: {}",
+            denied.body
+        );
+
+        let answered = with_request_skin(Some(pass.clone()), || {
+            dispatch_post(
+                "/cli/thread/answer",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": handle,
+                    "id": id,
+                    "answer": "Go",
+                })
+                .to_string()
+                .as_bytes(),
+            )
+        });
+        assert_eq!(answered.status, "200 OK", "skin answer: {}", answered.body);
+        let body = json_body(&answered);
+        assert_eq!(body["ok"], true, "{body}");
+        assert_eq!(body["status"], "answered", "{body}");
+        assert_eq!(body["answer"], "Go", "{body}");
+
+        let ask2 = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "prompt": "Void me?",
+                "options": "Go,Stop",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(ask2.status, "200 OK", "{}", ask2.body);
+        let id2 = json_body(&ask2)["id"].as_str().expect("id2").to_string();
+        let voided = with_request_skin(Some(pass), || {
+            dispatch_post(
+                "/cli/thread/void",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": handle,
+                    "id": id2,
+                })
+                .to_string()
+                .as_bytes(),
+            )
+        });
+        assert_eq!(voided.status, "200 OK", "skin void: {}", voided.body);
+        let vbody = json_body(&voided);
+        assert_eq!(vbody["ok"], true, "{vbody}");
+        assert_eq!(vbody["status"], "voided", "{vbody}");
+    }
+
+    #[test]
+    fn skin_secret_answer_omits_value() {
+        let handle = format!("ovlsksec{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let secret_val = "s3cr3t-NEVER-IN-SKIN-ANSWER-xyz";
+        let posted = dispatch_post(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": handle,
+                "name": "API_TOKEN",
+                "prompt": "Paste the token",
+                "from": "k2",
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(posted.status, "200 OK", "{}", posted.body);
+        let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+        let pass = skin_pass(&[project_id]);
+        let set = with_request_skin(Some(pass), || {
+            dispatch_post(
+                "/cli/thread/answer",
+                &HashMap::new(),
+                serde_json::json!({
+                    "addr": handle,
+                    "id": id,
+                    "secret": secret_val,
+                })
+                .to_string()
+                .as_bytes(),
+            )
+        });
+        assert_eq!(set.status, "200 OK", "{}", set.body);
+        assert!(
+            !set.body.contains(secret_val),
+            "answer JSON must not contain secret: {}",
+            set.body
+        );
+        let set_body = json_body(&set);
+        assert_eq!(set_body["ok"], true, "{set_body}");
+        assert_eq!(set_body["status"], "set", "{set_body}");
+        assert_eq!(set_body["name"], "API_TOKEN", "{set_body}");
+        assert!(
+            set_body.get("secret").is_none() || set_body["secret"].as_str().is_none(),
+            "must not echo secret value: {set_body}"
+        );
+        assert!(
+            set_body.get("value").is_none(),
+            "must not echo value: {set_body}"
+        );
     }
 }

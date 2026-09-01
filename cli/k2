@@ -14691,8 +14691,10 @@ STATIC DIR (--skin <dir>)
   GET / and /assets/* are PUBLIC. No cookie. Login only
   guards Thread. Do not copy wiki, contracts, or any private
   files into that folder — the URL fetches them with no auth.
-  GET /login is the gateway's sign-in page even with --skin
-  <dir> (do not require login.html in the folder).
+  Custom dir may ship login.html. GET /login serves that
+  file when present (Cache-Control: no-store). Missing file
+  still bundled — never 404. POST /login is always the
+  gateway; custom HTML must POST to /login on this origin.
 
 NOT THIS
   Do not require Caddy, `k2 skin front-door`, or port 38472.
@@ -14712,6 +14714,13 @@ OWNER VS AGENT
   List roster / list tokens: workspace agent ok (no secrets).
   Add users, passwords, mint, revoke: owner. Exit 3 `owner_only`
   if you try — ask `k2 feedback ask`, do not retry, do not sudo.
+
+GUEST CARDS
+  Guests tap a choice or fill a secret via
+    POST /cli/thread/answer
+  Agents create those cards from the PTY:
+    k2 thread ask / k2 thread secret
+  The official gateway still does NOT proxy /cli/fs/*.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
 EOF

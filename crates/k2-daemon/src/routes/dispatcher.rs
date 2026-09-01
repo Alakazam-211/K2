@@ -4146,6 +4146,10 @@ async fn handle_one_request(
                 None
             };
             let mut bound_skin = None;
+            let skin_thread_write = matches!(
+                p,
+                "/cli/thread/post" | "/cli/thread/answer" | "/cli/thread/void"
+            );
             let (auth_ok, scoped_principal, skin_author) = if skin_presented {
                 match skin_pass {
                     None => {
@@ -4161,14 +4165,14 @@ async fn handle_one_request(
                         return DispatchOutcome::Done;
                     }
                     Some(pass)
-                        if p == "/cli/thread/post"
+                        if skin_thread_write
                             && pass.has_cap(crate::skin_routes::THREAD_POST) =>
                     {
                         let name = pass.username.clone();
                         bound_skin = Some(pass);
                         (true, None, Some(name))
                     }
-                    Some(_) if p == "/cli/thread/post" => {
+                    Some(_) if skin_thread_write => {
                         let _ = stream.read(&mut buf).await;
                         let r = crate::skin_routes::missing_cap_response(
                             crate::skin_routes::THREAD_POST,

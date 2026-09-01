@@ -193,6 +193,8 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("GET", "/cli/thread")
             | ("HEAD", "/cli/thread")
             | ("POST", "/cli/thread/post")
+            | ("POST", "/cli/thread/answer")
+            | ("POST", "/cli/thread/void")
     )
 }
 
@@ -548,15 +550,25 @@ async fn handle_logout(gw: &Gateway, stream: &mut TcpStream, cookie: Option<&str
     .await;
 }
 
+/// GET `/login`: `<dir>/login.html` when `--root` has it; else bundled.
+/// Missing file is bundled, never 404 (130 regression).
+fn login_static_bytes(root: Option<&Path>) -> Vec<u8> {
+    if let Some(root) = root {
+        if let Ok((_, bytes)) = read_static_file(root, "/login") {
+            return bytes;
+        }
+    }
+    LOGIN_HTML.as_bytes().to_vec()
+}
+
 async fn serve_static(gw: &Gateway, stream: &mut TcpStream, path: &str, head_only: bool) {
-    // GET /login is gateway-owned even with --skin <dir>. Custom trees
-    // rarely ship login.html; the bundled client redirects 401 here.
     if path == "/login" {
+        let body = login_static_bytes(gw.root.as_deref());
         write_bytes(
             stream,
             "200 OK",
             "text/html; charset=utf-8",
-            LOGIN_HTML.as_bytes(),
+            &body,
             head_only,
         )
         .await;
@@ -942,15 +954,58 @@ mod tests {
     fn allowlist_is_exact_not_thread_star() {
         assert!(allowlisted_http("GET", "/cli/thread"));
         assert!(allowlisted_http("POST", "/cli/thread/post"));
+        assert!(allowlisted_http("POST", "/cli/thread/answer"));
+        assert!(allowlisted_http("POST", "/cli/thread/void"));
         assert!(!allowlisted_http("GET", "/cli/thread/post"));
         assert!(!allowlisted_http("GET", "/cli/thread/foo"));
+        assert!(!allowlisted_http("GET", "/cli/thread/answer"));
         assert!(!allowlisted_http("POST", "/cli/thread"));
+        assert!(!allowlisted_http("POST", "/cli/thread/ask"));
+        assert!(!allowlisted_http("POST", "/cli/thread/secret"));
         assert!(allowlisted_ws("/cli/overlay/events?conversation=abc"));
         assert!(!allowlisted_ws("/cli/sessions/events"));
         assert!(!allowlisted_ws("/cli/fs/events"));
         assert!(!allowlisted_http("GET", "/cli/fs/read-dir"));
         assert!(!allowlisted_http("GET", "/cli/fs/read-file"));
         assert!(!allowlisted_http("POST", "/cli/fs/write-file"));
+    }
+
+    #[test]
+    fn login_html_uses_root_file_else_bundled_never_404() {
+        let bundled = login_static_bytes(None);
+        let bundled_s = String::from_utf8_lossy(&bundled);
+        assert!(
+            bundled_s.contains("Sign in — K2"),
+            "no --root must be bundled: {bundled_s}"
+        );
+
+        let dir = std::env::temp_dir().join(format!(
+            "k2-skin-login-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp skin dir");
+        let missing = login_static_bytes(Some(&dir));
+        let missing_s = String::from_utf8_lossy(&missing);
+        assert!(
+            missing_s.contains("Sign in — K2"),
+            "missing login.html must stay bundled, never 404: {missing_s}"
+        );
+        assert_eq!(missing, bundled);
+
+        let custom = "<!DOCTYPE html><title>Custom Skin Login 2.1</title>";
+        std::fs::write(dir.join("login.html"), custom).expect("write login.html");
+        let served = login_static_bytes(Some(&dir));
+        let served_s = String::from_utf8_lossy(&served);
+        assert!(
+            served_s.contains("Custom Skin Login 2.1"),
+            "present login.html must be served: {served_s}"
+        );
+        assert!(
+            !served_s.contains("Sign in — K2"),
+            "custom login must not be the bundled K2 title: {served_s}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

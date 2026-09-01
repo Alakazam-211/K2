@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.129 — Host a skin UI with k2 publish
+
+`k2 publish run <name> --skin --port <n>` puts a login + Thread site on a nested URL (`https://<name>.<your-host>.k2.dev`). Guests use the username and password from Skin Access. The pass stays on the server — not in the browser. Grid and the terminal stay off. Your own static files: `--skin <dir>`. `k2 skin` is still the guest list, tokens, and rooms; it does not serve the site. Caddy / `skin.` as a special hostname is not required.
+
+---
+
 ## 0.40.128 — Granted workspaces run SQL as that workspace’s Postgres role
 
 A workspace granted onto a shared database — and `k2 store` from that workspace — connect as **that workspace’s** Postgres role, not the owner’s agent and not the migrator. Dump RLS keyed to the role now applies to both the agent (`k2 db dsn` / `k2 store`) and a human who shares that DSN. The owner still connects as `{dbname}_agent`. Migrate, dump, and restore stay the migrator. `k2 db dsn --workspace` fetches that workspace’s LOGIN (owner backend), and restore recreates grant roles so dump policies bind on a fresh box.

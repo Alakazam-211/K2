@@ -218,6 +218,13 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("HEAD", "/cli/store/get")
             | ("GET", "/cli/store/query")
             | ("HEAD", "/cli/store/query")
+            | ("GET", "/cli/db/tables")
+            | ("HEAD", "/cli/db/tables")
+            | ("GET", "/cli/db/rows")
+            | ("HEAD", "/cli/db/rows")
+            | ("POST", "/cli/db/rows")
+            | ("POST", "/cli/db/rows/update")
+            | ("POST", "/cli/db/rows/delete")
     )
 }
 
@@ -1062,6 +1069,19 @@ mod tests {
         assert!(!allowlisted_http("GET", "/cli/db/list"));
         assert!(!allowlisted_http("GET", "/cli/db/status"));
         assert!(!allowlisted_http("POST", "/cli/db/create"));
+        assert!(allowlisted_http("GET", "/cli/db/tables"));
+        assert!(allowlisted_http("HEAD", "/cli/db/tables"));
+        assert!(allowlisted_http("GET", "/cli/db/rows"));
+        assert!(allowlisted_http("HEAD", "/cli/db/rows"));
+        assert!(allowlisted_http("POST", "/cli/db/rows"));
+        assert!(allowlisted_http("POST", "/cli/db/rows/update"));
+        assert!(allowlisted_http("POST", "/cli/db/rows/delete"));
+        assert!(!allowlisted_http("POST", "/cli/db/rows/foo"));
+        assert!(!allowlisted_http("GET", "/cli/db/foo"));
+        assert!(!allowlisted_http("GET", "/cli/db/dump"));
+        assert!(!allowlisted_http("GET", "/cli/db/migrate"));
+        assert!(!allowlisted_ws("/cli/db/tables"));
+        assert!(!allowlisted_ws("/cli/db/rows"));
         assert!(!allowlisted_ws("/cli/store/list"));
         assert!(!allowlisted_ws("/cli/store/get"));
         assert!(!allowlisted_ws("/cli/store/query"));

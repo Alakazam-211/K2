@@ -2268,6 +2268,356 @@ pub fn store_drop(
     Ok(serde_json::json!({ "ok": true, "dropped": name }))
 }
 
+fn dump_ident_ok(n: &str) -> bool {
+    let mut chars = n.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn dump_ident_forbidden(folded: &str) -> bool {
+    folded.starts_with("_k2_") || folded.starts_with("pg_") || folded == "information_schema"
+}
+
+fn validate_dump_table(name: &str) -> Result<String, OpsError> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err(OpsError::Usage("missing table".into()));
+    }
+    if n.len() > 63 || !dump_ident_ok(n) {
+        return Err(OpsError::Usage("invalid table name".into()));
+    }
+    let folded = n.to_ascii_lowercase();
+    if dump_ident_forbidden(&folded) {
+        return Err(OpsError::Usage("invalid table name".into()));
+    }
+    Ok(folded)
+}
+
+fn validate_dump_column(name: &str) -> Result<String, OpsError> {
+    let n = name.trim();
+    if n.is_empty() || n.len() > 63 || !dump_ident_ok(n) {
+        return Err(OpsError::Usage("invalid table name".into()));
+    }
+    let folded = n.to_ascii_lowercase();
+    if dump_ident_forbidden(&folded) {
+        return Err(OpsError::Usage("invalid table name".into()));
+    }
+    Ok(folded)
+}
+
+fn json_to_sql(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Null => "NULL".into(),
+        serde_json::Value::Bool(true) => "TRUE".into(),
+        serde_json::Value::Bool(false) => "FALSE".into(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => pg_quote_literal(s),
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+            format!("{}::jsonb", pg_quote_literal(&v.to_string()))
+        }
+    }
+}
+
+fn map_dump_engine(err: String) -> OpsError {
+    let low = err.to_ascii_lowercase();
+    if low.contains("does not exist") || low.contains("undefined_table") || low.contains("42p01") {
+        return OpsError::NotFound("table not found".into());
+    }
+    if low.contains("permission denied")
+        || low.contains("42501")
+        || low.contains("insufficient_privilege")
+    {
+        return OpsError::Forbidden(err);
+    }
+    if low.contains("row-level security") || low.contains("with check") || low.contains("44000") {
+        return OpsError::Usage(err);
+    }
+    OpsError::Engine(err)
+}
+
+fn dump_exec(
+    ops: &dyn SystemOps,
+    dml: &StoreDml,
+    sql: &str,
+    skin_principal: Option<&str>,
+) -> Result<String, OpsError> {
+    match exec_as_role(
+        ops,
+        &dml.row.name,
+        &dml.user,
+        &dml.password,
+        sql,
+        dml.bind.as_deref(),
+        skin_principal,
+    ) {
+        Ok(s) => Ok(s),
+        Err(OpsError::Engine(e)) => Err(map_dump_engine(e)),
+        Err(e) => Err(e),
+    }
+}
+
+fn dump_qualify(table: &str) -> String {
+    format!("{}.{}", pg_quote_ident("public"), pg_quote_ident(table))
+}
+
+fn dump_table_exists(
+    ops: &dyn SystemOps,
+    dml: &StoreDml,
+    table: &str,
+    skin_principal: Option<&str>,
+) -> Result<bool, OpsError> {
+    let sql = format!(
+        "SELECT to_regclass({});",
+        pg_quote_literal(&format!("public.{table}"))
+    );
+    let raw = dump_exec(ops, dml, &sql, skin_principal)?;
+    let t = raw.trim();
+    Ok(!t.is_empty() && !t.eq_ignore_ascii_case("null"))
+}
+
+fn dump_has_id_column(
+    ops: &dyn SystemOps,
+    dml: &StoreDml,
+    table: &str,
+    skin_principal: Option<&str>,
+) -> Result<bool, OpsError> {
+    let sql = format!(
+        "SELECT a.attname \
+         FROM pg_catalog.pg_attribute a \
+         JOIN pg_catalog.pg_class c ON a.attrelid = c.oid \
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+         WHERE c.relname = {} \
+           AND n.nspname = 'public' \
+           AND c.relkind = 'r' \
+           AND a.attname = 'id' \
+           AND a.attnum > 0 \
+           AND NOT a.attisdropped \
+         LIMIT 1;",
+        pg_quote_literal(table)
+    );
+    let raw = dump_exec(ops, dml, &sql, skin_principal)?;
+    Ok(!raw.trim().is_empty())
+}
+
+fn dump_need_table(
+    ops: &dyn SystemOps,
+    dml: &StoreDml,
+    table: &str,
+    skin_principal: Option<&str>,
+) -> Result<(), OpsError> {
+    if dump_table_exists(ops, dml, table, skin_principal)? {
+        Ok(())
+    } else {
+        Err(OpsError::NotFound("table not found".into()))
+    }
+}
+
+fn dump_need_id_column(
+    ops: &dyn SystemOps,
+    dml: &StoreDml,
+    table: &str,
+    skin_principal: Option<&str>,
+) -> Result<(), OpsError> {
+    if dump_has_id_column(ops, dml, table, skin_principal)? {
+        Ok(())
+    } else {
+        Err(OpsError::Usage("missing id column".into()))
+    }
+}
+
+fn parse_dump_row_json(raw: &str) -> Result<serde_json::Value, OpsError> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Err(OpsError::NotFound("row not found".into()));
+    }
+    serde_json::from_str(t).map_err(|e| OpsError::Engine(format!("row json: {e}")))
+}
+
+pub fn dump_list_tables(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    skin_principal: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    let sql = "SELECT c.relname \
+               FROM pg_catalog.pg_class c \
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+               WHERE n.nspname = 'public' \
+                 AND c.relkind = 'r' \
+                 AND c.relname NOT ILIKE '_k2_%' \
+               ORDER BY c.relname;";
+    let raw = dump_exec(ops, &dml, sql, skin_principal).unwrap_or_default();
+    let tables: Vec<&str> = raw
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("null"))
+        .collect();
+    Ok(serde_json::json!({ "ok": true, "tables": tables }))
+}
+
+pub fn dump_list_rows(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    table: &str,
+    limit: u32,
+    skin_principal: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
+    let table = validate_dump_table(table)?;
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    dump_need_table(ops, &dml, &table, skin_principal)?;
+    let q = dump_qualify(&table);
+    let lim = limit.max(1).min(500);
+    let sql = format!("SELECT row_to_json(t) FROM (SELECT * FROM {q} LIMIT {lim}) t;");
+    let raw = dump_exec(ops, &dml, &sql, skin_principal).unwrap_or_default();
+    let mut rows = Vec::new();
+    for line in raw.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.eq_ignore_ascii_case("null") {
+            continue;
+        }
+        match serde_json::from_str::<serde_json::Value>(t) {
+            Ok(v) => rows.push(v),
+            Err(_) => rows.push(serde_json::Value::String(t.to_string())),
+        }
+    }
+    Ok(serde_json::json!({ "ok": true, "table": table, "rows": rows }))
+}
+
+pub fn dump_get_row(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    table: &str,
+    id: &str,
+    skin_principal: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
+    let table = validate_dump_table(table)?;
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(OpsError::Usage("missing id".into()));
+    }
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    dump_need_table(ops, &dml, &table, skin_principal)?;
+    dump_need_id_column(ops, &dml, &table, skin_principal)?;
+    let q = dump_qualify(&table);
+    let sql = format!(
+        "SELECT row_to_json(t) FROM (SELECT * FROM {q} WHERE id::text = {id}) t;",
+        id = pg_quote_literal(id),
+    );
+    let raw = dump_exec(ops, &dml, &sql, skin_principal)?;
+    let row = parse_dump_row_json(&raw)?;
+    Ok(serde_json::json!({ "ok": true, "table": table, "id": id, "row": row }))
+}
+
+pub fn dump_insert(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    table: &str,
+    row: &serde_json::Value,
+    skin_principal: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
+    let table = validate_dump_table(table)?;
+    let obj = row
+        .as_object()
+        .ok_or_else(|| OpsError::Usage("row must be a JSON object".into()))?;
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    dump_need_table(ops, &dml, &table, skin_principal)?;
+    let q = dump_qualify(&table);
+    let qt = pg_quote_ident(&table);
+    let sql = if obj.is_empty() {
+        format!("INSERT INTO {q} DEFAULT VALUES RETURNING row_to_json({qt}.*);")
+    } else {
+        let mut cols = Vec::new();
+        let mut vals = Vec::new();
+        for (k, v) in obj {
+            let col = validate_dump_column(k)?;
+            cols.push(pg_quote_ident(&col));
+            vals.push(json_to_sql(v));
+        }
+        format!(
+            "INSERT INTO {q} ({cols}) VALUES ({vals}) RETURNING row_to_json({qt}.*);",
+            cols = cols.join(", "),
+            vals = vals.join(", "),
+        )
+    };
+    let raw = dump_exec(ops, &dml, &sql, skin_principal)?;
+    let out = parse_dump_row_json(&raw)?;
+    Ok(serde_json::json!({ "ok": true, "table": table, "row": out }))
+}
+
+pub fn dump_update(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    table: &str,
+    id: &str,
+    row: &serde_json::Value,
+    skin_principal: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
+    let table = validate_dump_table(table)?;
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(OpsError::Usage("missing id".into()));
+    }
+    let obj = row
+        .as_object()
+        .ok_or_else(|| OpsError::Usage("row must be a JSON object".into()))?;
+    if obj.is_empty() {
+        return Err(OpsError::Usage("missing row".into()));
+    }
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    dump_need_table(ops, &dml, &table, skin_principal)?;
+    dump_need_id_column(ops, &dml, &table, skin_principal)?;
+    let q = dump_qualify(&table);
+    let qt = pg_quote_ident(&table);
+    let mut sets = Vec::new();
+    for (k, v) in obj {
+        let col = validate_dump_column(k)?;
+        sets.push(format!("{} = {}", pg_quote_ident(&col), json_to_sql(v)));
+    }
+    let sql = format!(
+        "UPDATE {q} SET {sets} WHERE id::text = {id} RETURNING row_to_json({qt}.*);",
+        sets = sets.join(", "),
+        id = pg_quote_literal(id),
+    );
+    let raw = dump_exec(ops, &dml, &sql, skin_principal)?;
+    let out = parse_dump_row_json(&raw)?;
+    Ok(serde_json::json!({ "ok": true, "table": table, "id": id, "row": out }))
+}
+
+pub fn dump_delete(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    table: &str,
+    id: &str,
+    skin_principal: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
+    let table = validate_dump_table(table)?;
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(OpsError::Usage("missing id".into()));
+    }
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    dump_need_table(ops, &dml, &table, skin_principal)?;
+    dump_need_id_column(ops, &dml, &table, skin_principal)?;
+    let q = dump_qualify(&table);
+    let qt = pg_quote_ident(&table);
+    let sql = format!(
+        "DELETE FROM {q} WHERE id::text = {id} RETURNING row_to_json({qt}.*);",
+        id = pg_quote_literal(id),
+    );
+    let raw = dump_exec(ops, &dml, &sql, skin_principal)?;
+    let out = parse_dump_row_json(&raw)?;
+    Ok(serde_json::json!({ "ok": true, "table": table, "id": id, "row": out }))
+}
+
 fn validate_collection(name: &str) -> Result<String, OpsError> {
     let n = name.trim();
     if n.is_empty()
@@ -2352,5 +2702,47 @@ mod tests {
             split_psql_fields("0001_init\tabc\t2026-01-01 00:00:00+00"),
             vec!["0001_init", "abc", "2026-01-01 00:00:00+00"]
         );
+    }
+
+    #[test]
+    fn dump_table_ident_rejects_catalog_and_k2_prefix() {
+        assert_eq!(validate_dump_table("Example").expect("ok"), "example");
+        assert_eq!(validate_dump_table("notes_1").expect("ok"), "notes_1");
+        for bad in [
+            "",
+            "1bad",
+            "has-dash",
+            "has space",
+            "has.dot",
+            "_k2_store",
+            "_K2_store",
+            "pg_class",
+            "PG_roles",
+            "information_schema",
+            "INFORMATION_SCHEMA",
+        ] {
+            let err = validate_dump_table(bad).expect_err(bad);
+            let hint = err.hint();
+            if bad.is_empty() {
+                assert_eq!(hint, "missing table", "{bad}");
+            } else {
+                assert_eq!(hint, "invalid table name", "{bad} → {hint}");
+            }
+        }
+    }
+
+    #[test]
+    fn dump_json_to_sql_typed_binds() {
+        assert_eq!(json_to_sql(&serde_json::Value::Null), "NULL");
+        assert_eq!(json_to_sql(&serde_json::json!(true)), "TRUE");
+        assert_eq!(json_to_sql(&serde_json::json!(false)), "FALSE");
+        assert_eq!(json_to_sql(&serde_json::json!(3)), "3");
+        assert_eq!(json_to_sql(&serde_json::json!(1.5)), "1.5");
+        assert_eq!(json_to_sql(&serde_json::json!("o'reilly")), "'o''reilly'");
+        let obj = json_to_sql(&serde_json::json!({"a": 1}));
+        assert!(obj.ends_with("::jsonb"), "{obj}");
+        assert!(obj.starts_with("'"), "{obj}");
+        let arr = json_to_sql(&serde_json::json!([1, 2]));
+        assert!(arr.ends_with("::jsonb"), "{arr}");
     }
 }

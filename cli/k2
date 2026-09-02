@@ -14658,8 +14658,8 @@ FIND THE ROOM, THEN THE FUNCTIONS
   does not grant tickets on Sales. Wiki on Documents does not grant wiki
   on Sales. Store on Documents does not grant store on Sales. One login.
   Unassigned guests stay Thread-only. Want files, tickets, wiki, or store
-  on one room → `k2 skin role room`. Platform tokens (`k2 skin-token
-  create --name`) stay flat.
+  (store:read / store:write) on one room → `k2 skin role room`. Platform
+  tokens (`k2 skin-token create --name`) stay flat.
 
 LANES (read this first)
   Hosting the UI  = k2 publish. Always. Not k2 skin.
@@ -14729,12 +14729,12 @@ TWO CREDENTIALS (same prefix k2skn_)
 ROLES (named bundles for guests — not Connect, not a platform token)
   k2 skin role create dentist
   k2 skin role room dentist sales --caps thread:read,thread:post
-  k2 skin role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post,wiki:read,store:read
+  k2 skin role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post,wiki:read,store:read,store:write
   k2 skin user role bob dentist
   Session inherits the role at login (and live sessions rewrite on
   change). Platform token keeps its own caps+rooms — it is not a role.
   Empty rooms on a role = Thread dark, not omnipotent.
-  files:*, tickets:*, wiki:read, and store:read on a role are has_cap_in_room (per room, not union).
+  files:*, tickets:*, wiki:read, store:read, and store:write on a role are has_cap_in_room (per room, not union).
   Never grid. Never a DSN.
 
 Find the room, then the functions. Empty rooms = Thread dark. Never grid.
@@ -14807,12 +14807,22 @@ STORE
     GET|HEAD /cli/store/list?workspace=<handle>
     GET|HEAD /cli/store/get?workspace=<handle>&name=<coll>&id=<id>
     GET|HEAD /cli/store/query?workspace=<handle>&name=<coll>
+    GET|HEAD /cli/db/tables?workspace=<handle>
+    GET|HEAD /cli/db/rows?workspace=<handle>&table=<name>
+    GET|HEAD /cli/db/rows?workspace=<handle>&table=<name>&id=<id>
+    POST     /cli/db/rows         {"workspace":"<handle>","table":"<name>","row":{…}}
+    POST     /cli/db/rows/update  {"workspace":"<handle>","table":"<name>","id":"<id>","row":{…}}
+    POST     /cli/db/rows/delete  {"workspace":"<handle>","table":"<name>","id":"<id>"}
   workspace= is handle or uuid only — never a folder basename or absolute path.
   Doors are has_cap_in_room: store on Documents does not grant store on Sales.
-  Session store reads stamp GUC k2.skin_principal on the workspace LOGIN
-  (SELECT set_config('k2.skin_principal', '<uuid>', true)). Guests never hold
-  a DSN. Never GET /cli/db/dsn. Never POST put/create/rm/drop. Never /cli/store/foo.
-  Never /cli/db/*. Platform --name tokens 403 store. Never glob. Never store WS.
+  store:read = store GET + dump SELECT. store:write = dump insert/update/delete
+  only — not POST /cli/store/put.
+  Session store and dump stamp GUC k2.skin_principal on the workspace LOGIN
+  (SELECT set_config('k2.skin_principal', '<uuid>', true)). Policies may call
+  k2.skin_uid(). Guests never hold a DSN. GET /cli/db/dsn teaching 403.
+  Never /cli/db/list. Never /cli/db/dump. Never /cli/db/migrate. Never /cli/db/foo.
+  Never POST put/create/rm/drop. Never /cli/store/foo. Platform --name tokens
+  403 store. Never glob. Never store WS. Never dump WS.
 
 STATIC DIR (--skin <dir>)
   GET / and /assets/* are PUBLIC. No cookie. Login guards

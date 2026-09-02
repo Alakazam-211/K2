@@ -69,6 +69,17 @@ mod tests {
         let up = t.to_ascii_uppercase();
         assert!(t.contains("set_config('k2.skin_principal'"), "{t}");
         assert!(t.contains("current_setting('k2.skin_principal'"), "{t}");
+        assert!(t.contains("CREATE SCHEMA IF NOT EXISTS k2;"), "{t}");
+        assert!(t.contains("GRANT USAGE ON SCHEMA k2 TO PUBLIC;"), "{t}");
+        assert!(
+            t.contains("CREATE OR REPLACE FUNCTION k2.skin_uid()"),
+            "{t}"
+        );
+        assert!(
+            t.contains("GRANT EXECUTE ON FUNCTION k2.skin_uid() TO PUBLIC;"),
+            "{t}"
+        );
+        assert!(t.contains("k2.skin_uid()"), "{t}");
         assert!(up.contains("CREATE POLICY"), "{t}");
         assert!(t.contains("principal_id"), "{t}");
         assert!(
@@ -2077,6 +2088,7 @@ mod tests {
             k2_core::skin::CAP_THREAD_READ,
             k2_core::skin::CAP_THREAD_POST,
             k2_core::skin::CAP_STORE_READ,
+            k2_core::skin::CAP_STORE_WRITE,
         ] {
             if policy.values().any(|room| room.iter().any(|x| x == c))
                 && !caps.iter().any(|x| x == c)
@@ -2329,5 +2341,370 @@ mod tests {
         let _ = std::fs::remove_dir_all(docs_dir);
         let _ = std::fs::remove_dir_all(anna_dir);
         let _ = (docs_id, anna_id);
+    }
+
+    fn seed_dump_table(
+        ops: &FakeSystemOps,
+        db: &str,
+        table: &str,
+        id: &str,
+        row: serde_json::Value,
+    ) {
+        let mut pg = ops.pg.lock().unwrap();
+        pg.tables.insert((db.to_string(), table.to_string()));
+        pg.dump_rows
+            .entry((db.to_string(), table.to_string()))
+            .or_default()
+            .insert(id.to_string(), row);
+    }
+
+    #[test]
+    fn dump_handlers_unsupported_off_linux() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-dump-unsup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-dump-unsup", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let mut params = std::collections::HashMap::new();
+        params.insert("project".into(), path.clone());
+        let r = routes::handle_dump_tables(&params);
+        if !sql_supported() {
+            assert_eq!(r.status, "409 Conflict", "{}", r.body);
+            assert!(r.body.contains("unsupported"), "{}", r.body);
+            assert!(
+                r.body.contains(
+                    "the SQL sidecar only works on Linux deployments; this daemon is not Linux"
+                ),
+                "{}",
+                r.body
+            );
+        } else {
+            assert!(!r.body.contains("this daemon is not Linux"), "{}", r.body);
+        }
+        let body = serde_json::json!({
+            "project": path,
+            "table": "example",
+            "row": {"n": 1}
+        });
+        let r = routes::handle_dump_insert(body.to_string().as_bytes());
+        if !sql_supported() {
+            assert_eq!(r.status, "409 Conflict", "{}", r.body);
+            assert!(r.body.contains("unsupported"), "{}", r.body);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dump_invalid_table_names_fail_loud() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-dump-ident-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-dump-ident", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        for bad in [
+            "_k2_store",
+            "pg_class",
+            "information_schema",
+            "1bad",
+            "has-dash",
+        ] {
+            let err = ops::dump_get_row(&ops, &secrets, &pid, bad, "a", None).expect_err(bad);
+            assert_eq!(err.status(), "400 Bad Request", "{bad} {}", err.hint());
+            assert_eq!(err.hint(), "invalid table name", "{bad}");
+        }
+        let err = ops::dump_get_row(&ops, &secrets, &pid, "", "a", None).expect_err("empty");
+        assert_eq!(err.hint(), "missing table");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skin_session_dump_stamps_guc_after_set_role_agent_does_not() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-dump-guc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let handle = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let pid = insert_project_handle("sql-dump-guc", &path, &handle);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        seed_dump_table(
+            &ops,
+            &db_name,
+            "example",
+            "a",
+            serde_json::json!({"id": "a", "n": 1}),
+        );
+        ops::bind_role(&ops, Some(&db_name), Some(&pid), "app_reader").expect("bind");
+
+        let dentist_a = uuid::Uuid::new_v4().to_string();
+        let dentist_b = uuid::Uuid::new_v4().to_string();
+        let n = ops.recorded().len();
+        let got = ops::dump_get_row(&ops, &secrets, &pid, "example", "a", Some(&dentist_a))
+            .expect("session get A");
+        assert_eq!(got["row"]["n"], 1, "{got}");
+        let rec = ops.recorded()[n..].join("\n");
+        assert!(
+            rec.contains("set_config('k2.skin_principal'"),
+            "session dump GET must stamp GUC: {rec}"
+        );
+        assert!(rec.contains(&dentist_a), "GUC must be dentist A: {rec}");
+        assert!(
+            !rec.contains(&dentist_b),
+            "dentist A GUC must not stamp dentist B: {rec}"
+        );
+        assert!(
+            rec.contains(&format!("-U {db_name}_agent")),
+            "session dump still logs in as workspace agent: {rec}"
+        );
+        assert!(rec.contains("SET ROLE"), "owned bind still SET ROLE: {rec}");
+        let set_pos = rec.find("SET ROLE").expect("SET ROLE pos");
+        let guc_pos = rec.find("set_config('k2.skin_principal'").expect("guc pos");
+        assert!(guc_pos > set_pos, "GUC -c must follow bind SET ROLE: {rec}");
+
+        let n = ops.recorded().len();
+        ops::dump_get_row(&ops, &secrets, &pid, "example", "a", Some(&dentist_b))
+            .expect("session get B");
+        let rec_b = ops.recorded()[n..].join("\n");
+        assert!(rec_b.contains(&dentist_b), "GUC must be dentist B: {rec_b}");
+        assert!(
+            !rec_b.contains(&dentist_a),
+            "dentist B GUC must not stamp dentist A: {rec_b}"
+        );
+
+        let n = ops.recorded().len();
+        ops::dump_insert(
+            &ops,
+            &secrets,
+            &pid,
+            "example",
+            &serde_json::json!({"id": "b", "n": 2}),
+            Some(&dentist_a),
+        )
+        .expect("session insert stamps GUC");
+        let rec_w = ops.recorded()[n..].join("\n");
+        assert!(
+            rec_w.contains("set_config('k2.skin_principal'"),
+            "dump WRITE must stamp GUC (not copy store_put None): {rec_w}"
+        );
+        assert!(
+            rec_w.contains(&dentist_a),
+            "write GUC is dentist A: {rec_w}"
+        );
+        let set_pos = rec_w.find("SET ROLE").expect("SET ROLE pos write");
+        let guc_pos = rec_w
+            .find("set_config('k2.skin_principal'")
+            .expect("guc pos write");
+        assert!(
+            guc_pos > set_pos,
+            "write GUC -c must follow bind SET ROLE: {rec_w}"
+        );
+
+        let n = ops.recorded().len();
+        ops::dump_get_row(&ops, &secrets, &pid, "example", "a", None).expect("agent get");
+        let rec_agent = ops.recorded()[n..].join("\n");
+        assert!(
+            !rec_agent.contains("set_config('k2.skin_principal'"),
+            "agent dump must not stamp GUC: {rec_agent}"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skin_dump_gated_has_cap_in_room_and_platform_403() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let docs_dir =
+            std::env::temp_dir().join(format!("k2-sql-dump-docs-{}", uuid::Uuid::new_v4()));
+        let sales_dir =
+            std::env::temp_dir().join(format!("k2-sql-dump-sales-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::create_dir_all(&sales_dir).unwrap();
+        let docs_path = docs_dir.to_string_lossy().into_owned();
+        let sales_path = sales_dir.to_string_lossy().into_owned();
+        let docs_h = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let sales_h = format!("sales{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs_id = insert_project_handle("sql-dump-docs", &docs_path, &docs_h);
+        let sales_id = insert_project_handle("sql-dump-sales", &sales_path, &sales_h);
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        let created =
+            ops::create_database(fake, &secrets, &docs_id, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        seed_dump_table(
+            fake,
+            &db_name,
+            "example",
+            "a",
+            serde_json::json!({"id": "a", "n": 1}),
+        );
+
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(
+            sales_id.clone(),
+            vec![
+                k2_core::skin::CAP_THREAD_READ.into(),
+                k2_core::skin::CAP_THREAD_POST.into(),
+            ],
+        );
+        policy.insert(
+            docs_id.clone(),
+            vec![
+                k2_core::skin::CAP_THREAD_READ.into(),
+                k2_core::skin::CAP_THREAD_POST.into(),
+                k2_core::skin::CAP_STORE_READ.into(),
+                k2_core::skin::CAP_STORE_WRITE.into(),
+            ],
+        );
+        let pass = skin_session("bob", policy);
+
+        routes::with_fake_ops(fake, || {
+            let n = fake.recorded().len();
+            let docs = routes::handle_dump_rows_gated(
+                &store_ws_params(&docs_h, &[("table", "example"), ("id", "a")]),
+                Some(pass.clone()),
+            );
+            assert_eq!(docs.status, "200 OK", "{}", docs.body);
+            let rec = fake.recorded()[n..].join("\n");
+            assert!(
+                rec.contains("set_config('k2.skin_principal'"),
+                "session gated dump GET stamps GUC: {rec}"
+            );
+
+            let sales = routes::handle_dump_rows_gated(
+                &store_ws_params(&sales_h, &[("table", "example"), ("id", "a")]),
+                Some(pass.clone()),
+            );
+            assert_eq!(sales.status, "403 Forbidden", "{}", sales.body);
+            assert!(
+                sales.body.contains("missing capability store:read"),
+                "thread-only dump must be missing cap, not skin_room: {}",
+                sales.body
+            );
+            assert!(!sales.body.contains("skin_room"), "{}", sales.body);
+
+            let missing_table =
+                routes::handle_dump_rows_gated(&store_ws_params(&docs_h, &[]), Some(pass.clone()));
+            assert_eq!(
+                missing_table.status, "400 Bad Request",
+                "{}",
+                missing_table.body
+            );
+            assert!(
+                missing_table.body.contains("missing table"),
+                "{}",
+                missing_table.body
+            );
+
+            let empty_id = routes::handle_dump_rows_gated(
+                &store_ws_params(&docs_h, &[("table", "example"), ("id", "")]),
+                Some(pass.clone()),
+            );
+            assert_eq!(empty_id.status, "400 Bad Request", "{}", empty_id.body);
+            assert!(empty_id.body.contains("missing id"), "{}", empty_id.body);
+
+            let no_ws = routes::handle_dump_tables_gated(
+                &std::collections::HashMap::new(),
+                Some(pass.clone()),
+            );
+            assert_eq!(no_ws.status, "400 Bad Request", "{}", no_ws.body);
+            assert!(no_ws.body.contains("workspace"), "{}", no_ws.body);
+
+            let ins = routes::handle_dump_insert_gated(
+                serde_json::json!({
+                    "workspace": docs_h,
+                    "table": "example",
+                    "row": {"id": "b", "n": true}
+                })
+                .to_string()
+                .as_bytes(),
+                Some(pass.clone()),
+            );
+            assert_eq!(ins.status, "200 OK", "{}", ins.body);
+
+            let no_ws_post = routes::handle_dump_insert_gated(
+                serde_json::json!({"table": "example", "row": {"n": 1}})
+                    .to_string()
+                    .as_bytes(),
+                Some(pass.clone()),
+            );
+            assert_eq!(no_ws_post.status, "400 Bad Request", "{}", no_ws_post.body);
+            assert!(
+                no_ws_post.body.contains("missing workspace"),
+                "{}",
+                no_ws_post.body
+            );
+
+            let platform = k2_core::skin::SkinPass {
+                id: uuid::Uuid::new_v4().to_string(),
+                principal_id: None,
+                username: "vercel".into(),
+                caps: vec![
+                    k2_core::skin::CAP_STORE_READ.into(),
+                    k2_core::skin::CAP_STORE_WRITE.into(),
+                ],
+                rooms: vec![docs_id.clone()],
+                session: false,
+                room_policy: k2_core::skin::RoomPolicy::new(),
+            };
+            let n = fake.recorded().len();
+            let plat =
+                routes::handle_dump_tables_gated(&store_ws_params(&docs_h, &[]), Some(platform));
+            assert_eq!(plat.status, "403 Forbidden", "{}", plat.body);
+            assert!(
+                plat.body.contains("platform tokens cannot use store"),
+                "{}",
+                plat.body
+            );
+            let rec_plat = fake.recorded()[n..].join("\n");
+            assert!(
+                !rec_plat.contains("set_config('k2.skin_principal'"),
+                "platform dump GET must not stamp GUC: {rec_plat}"
+            );
+        });
+
+        let _ = std::fs::remove_dir_all(docs_dir);
+        let _ = std::fs::remove_dir_all(sales_dir);
+        let _ = (docs_id, sales_id);
+    }
+
+    #[test]
+    fn dump_missing_id_column_is_400() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-dump-noid-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-dump-noid", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        {
+            let mut pg = ops.pg.lock().unwrap();
+            pg.tables.insert((db_name.clone(), "notes".into()));
+            pg.missing_id.insert((db_name.clone(), "notes".into()));
+        }
+        let err = ops::dump_get_row(&ops, &secrets, &pid, "notes", "a", None)
+            .expect_err("missing id column");
+        assert_eq!(err.status(), "400 Bad Request", "{}", err.hint());
+        assert_eq!(err.hint(), "missing id column");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

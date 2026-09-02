@@ -294,6 +294,10 @@ pub struct FakePg {
     pub store: HashMap<(String, String), HashMap<String, serde_json::Value>>,
     /// Databases that have `CREATE TABLE _k2_store` (any helper/psql blob).
     pub tables: HashSet<(String, String)>,
+    /// Dump-table rows keyed by (db, table) → id → row JSON.
+    pub dump_rows: HashMap<(String, String), HashMap<String, serde_json::Value>>,
+    /// Dump tables that exist but have no `id` column.
+    pub missing_id: HashSet<(String, String)>,
     pub dump_marker: Vec<u8>,
     /// Live GUC map (`current_setting`). Defaults look like stock Postgres
     /// so doctor fails loudly until `install-ram-fence` / ALTER SYSTEM pins.
@@ -320,6 +324,8 @@ impl Default for FakePg {
             select_field_sep: "|",
             store: HashMap::new(),
             tables: HashSet::new(),
+            dump_rows: HashMap::new(),
+            missing_id: HashSet::new(),
             dump_marker: Vec::new(),
             gucs,
         }
@@ -468,6 +474,123 @@ impl FakePg {
         }
         if trimmed.contains("_k2_store") {
             return self.exec_store(db_name, trimmed);
+        }
+        self.exec_dump(db_name, trimmed)
+    }
+
+    fn exec_dump(&mut self, db: &str, sql: &str) -> Result<String, String> {
+        let up = sql.to_ascii_uppercase();
+        if up.contains("CREATE TABLE") {
+            if let Some(name) = extract_create_table_name(sql) {
+                self.tables
+                    .insert((db.to_string(), name.to_ascii_lowercase()));
+            }
+            return Ok(String::new());
+        }
+        if up.contains("TO_REGCLASS") || up.contains("REGCLASS") {
+            if let Some(reg) = nth_sql_string(sql, 0) {
+                let name = reg
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(&reg)
+                    .trim()
+                    .to_ascii_lowercase();
+                if self.tables.contains(&(db.to_string(), name.clone())) {
+                    return Ok(name);
+                }
+            }
+            return Ok(String::new());
+        }
+        if up.contains("PG_ATTRIBUTE") {
+            let name = nth_sql_string(sql, 0)
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if self.missing_id.contains(&(db.to_string(), name.clone())) {
+                return Ok(String::new());
+            }
+            if self.tables.contains(&(db.to_string(), name)) {
+                return Ok("id".into());
+            }
+            return Ok(String::new());
+        }
+        if up.contains("PG_CLASS") && up.contains("RELKIND") && !up.contains("PG_ATTRIBUTE") {
+            let mut names: Vec<String> = self
+                .tables
+                .iter()
+                .filter(|(d, n)| d == db && !n.starts_with("_k2_"))
+                .map(|(_, n)| n.clone())
+                .collect();
+            names.sort();
+            return Ok(names.join("\n"));
+        }
+        let table = extract_public_table(sql).unwrap_or_default();
+        if table.is_empty() {
+            return Ok(String::new());
+        }
+        if !self.tables.contains(&(db.to_string(), table.clone())) {
+            return Err(format!("relation \"{table}\" does not exist"));
+        }
+        let id = extract_id_text(sql);
+        if up.starts_with("INSERT") {
+            let rid = id.clone().unwrap_or_else(|| "new".into());
+            let row = serde_json::json!({ "id": rid });
+            self.dump_rows
+                .entry((db.to_string(), table.clone()))
+                .or_default()
+                .insert(rid.clone(), row.clone());
+            return Ok(row.to_string());
+        }
+        if up.starts_with("UPDATE") {
+            let Some(rid) = id else {
+                return Ok(String::new());
+            };
+            let map = self
+                .dump_rows
+                .entry((db.to_string(), table.clone()))
+                .or_default();
+            if let Some(existing) = map.get_mut(&rid) {
+                if let Some(obj) = existing.as_object_mut() {
+                    obj.insert("id".into(), serde_json::json!(rid));
+                }
+                return Ok(existing.to_string());
+            }
+            return Ok(String::new());
+        }
+        if up.starts_with("DELETE") {
+            let Some(rid) = id else {
+                return Ok(String::new());
+            };
+            if let Some(row) = self
+                .dump_rows
+                .entry((db.to_string(), table.clone()))
+                .or_default()
+                .remove(&rid)
+            {
+                return Ok(row.to_string());
+            }
+            return Ok(String::new());
+        }
+        if up.contains("ROW_TO_JSON") {
+            if let Some(rid) = id {
+                if let Some(row) = self
+                    .dump_rows
+                    .get(&(db.to_string(), table.clone()))
+                    .and_then(|m| m.get(&rid))
+                {
+                    return Ok(row.to_string());
+                }
+                return Ok(String::new());
+            }
+            let map = self
+                .dump_rows
+                .get(&(db.to_string(), table))
+                .cloned()
+                .unwrap_or_default();
+            let mut lines = Vec::new();
+            for row in map.values() {
+                lines.push(row.to_string());
+            }
+            return Ok(lines.join("\n"));
         }
         Ok(String::new())
     }
@@ -625,6 +748,53 @@ fn extract_quoted_after(sql: &str, keyword: &str) -> Option<String> {
         None
     } else {
         Some(ident.to_string())
+    }
+}
+
+#[cfg(test)]
+fn extract_public_table(sql: &str) -> Option<String> {
+    let key = "\"public\".";
+    let idx = sql.find(key)?;
+    let rest = sql[idx + key.len()..].strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_ascii_lowercase())
+}
+
+#[cfg(test)]
+fn extract_id_text(sql: &str) -> Option<String> {
+    let up = sql.to_ascii_uppercase();
+    let marker = "ID::TEXT";
+    let idx = up.find(marker)?;
+    nth_sql_string(&sql[idx..], 0)
+}
+
+#[cfg(test)]
+fn extract_create_table_name(sql: &str) -> Option<String> {
+    let up = sql.to_ascii_uppercase();
+    let idx = up.find("CREATE TABLE")?;
+    let mut rest = sql[idx + "CREATE TABLE".len()..].trim_start();
+    if rest.len() >= 15 && rest[..15].eq_ignore_ascii_case("IF NOT EXISTS ") {
+        rest = rest[15..].trim_start();
+    }
+    if let Some(stripped) = rest.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        let name = &stripped[..end];
+        if name.eq_ignore_ascii_case("public") {
+            let after = stripped[end + 1..].trim_start().strip_prefix('.')?;
+            let after = after.strip_prefix('"')?;
+            let end = after.find('"')?;
+            return Some(after[..end].to_string());
+        }
+        return Some(name.to_string());
+    }
+    let ident: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if ident.is_empty() {
+        None
+    } else {
+        Some(ident)
     }
 }
 

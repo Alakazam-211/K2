@@ -660,6 +660,9 @@ async fn handle_one_request(
             | "/cli/store/put"
             | "/cli/store/rm"
             | "/cli/store/drop"
+            | "/cli/db/rows"
+            | "/cli/db/rows/update"
+            | "/cli/db/rows/delete"
             // DNS K1 — principal-bound control-plane proxy. JSON-bodied
             // POSTs; token_ok OR scoped require_hook in the dedicated arm
             // below (mirrors mail). Zone create/delete are owner-only
@@ -4500,6 +4503,107 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // Dump-table writes — exact paths before the skin 404 glob so
+        // store PUT/create/rm/drop stay 404 for skin. Never starts_with
+        // `/cli/db/rows`.
+        p if is_post
+            && post_allowed
+            && (p == "/cli/db/rows"
+                || p == "/cli/db/rows/update"
+                || p == "/cli/db/rows/delete") =>
+        {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let mut scoped_principal = None;
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    Some(pass) if !pass.session => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::platform_store_forbidden();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::STORE_WRITE) =>
+                    {
+                        Some(pass)
+                    }
+                    Some(_) => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::STORE_WRITE,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let (auth_ok, principal) = token_or_scoped_hook_auth(
+                    p,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                );
+                if !auth_ok {
+                    let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let r = sql_dual_auth_failure(p, &query, bearer_token.as_deref());
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        .await;
+                    return DispatchOutcome::Done;
+                }
+                scoped_principal = principal;
+                None
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    match p_owned.as_str() {
+                        "/cli/db/rows/update" => {
+                            crate::sql::routes::handle_dump_update_gated(&body_bytes, skin_pass)
+                        }
+                        "/cli/db/rows/delete" => {
+                            crate::sql::routes::handle_dump_delete_gated(&body_bytes, skin_pass)
+                        }
+                        _ => crate::sql::routes::handle_dump_insert_gated(&body_bytes, skin_pass),
+                    }
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // Skin cannot mutate store/db. Dedicated arm before the owner glob.
         p if is_post
             && post_allowed
@@ -7100,6 +7204,94 @@ async fn handle_one_request(
                             crate::sql::routes::handle_store_get_gated(&params, skin_pass)
                         }
                         _ => crate::sql::routes::handle_store_query_gated(&params, skin_pass),
+                    }
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // Dump-table GET — exact tables/rows before the db/store glob.
+        // Platform `--name` is 403 even with store:read (no principal to stamp).
+        p if p == "/cli/db/tables" || p == "/cli/db/rows" => {
+            let _ = stream.read(&mut buf).await;
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let mut scoped_principal = None;
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    Some(pass) if !pass.session => {
+                        let r = crate::skin_routes::platform_store_forbidden();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::STORE_READ) =>
+                    {
+                        Some(pass)
+                    }
+                    Some(_) => {
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::STORE_READ,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let (auth_ok, principal) = token_or_scoped_hook_auth(
+                    p,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                );
+                if !auth_ok {
+                    let r = sql_dual_auth_failure(p, &query, bearer_token.as_deref());
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        .await;
+                    return DispatchOutcome::Done;
+                }
+                scoped_principal = principal;
+                None
+            };
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    if p_owned == "/cli/db/tables" {
+                        crate::sql::routes::handle_dump_tables_gated(&params, skin_pass)
+                    } else {
+                        crate::sql::routes::handle_dump_rows_gated(&params, skin_pass)
                     }
                 })
             })

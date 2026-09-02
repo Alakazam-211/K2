@@ -17,6 +17,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/store/list" => routes::handle_store_list(params),
         "/cli/store/get" => routes::handle_store_get(params),
         "/cli/store/query" => routes::handle_store_query(params),
+        "/cli/db/tables" => routes::handle_dump_tables(params),
+        "/cli/db/rows" => routes::handle_dump_rows(params),
         "/cli/db/server/enable"
         | "/cli/db/server/disable"
         | "/cli/db/server/uninstall"
@@ -28,6 +30,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/db/grant"
         | "/cli/db/revoke"
         | "/cli/db/bind"
+        | "/cli/db/rows/update"
+        | "/cli/db/rows/delete"
         | "/cli/store/create"
         | "/cli/store/put"
         | "/cli/store/rm"
@@ -55,6 +59,9 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/store/put" => routes::handle_store_put(body),
         "/cli/store/rm" => routes::handle_store_rm(body),
         "/cli/store/drop" => routes::handle_store_drop(body),
+        "/cli/db/rows" => routes::handle_dump_insert(body),
+        "/cli/db/rows/update" => routes::handle_dump_update(body),
+        "/cli/db/rows/delete" => routes::handle_dump_delete(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -115,6 +122,14 @@ mod tests {
     #[test]
     fn get_restore_405() {
         let r = dispatch("/cli/db/restore", &HashMap::new()).unwrap();
+        assert_eq!(r.status, "405 Method Not Allowed");
+    }
+
+    #[test]
+    fn get_dump_update_delete_405() {
+        let r = dispatch("/cli/db/rows/update", &HashMap::new()).unwrap();
+        assert_eq!(r.status, "405 Method Not Allowed");
+        let r = dispatch("/cli/db/rows/delete", &HashMap::new()).unwrap();
         assert_eq!(r.status, "405 Method Not Allowed");
     }
 }

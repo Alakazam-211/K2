@@ -2341,10 +2341,69 @@ async fn publish_run_skin_gateway_store_per_room() {
         let foo = http_ex(gport, "GET", "/cli/store/foo", None, &cookie);
         assert_eq!(foo.status, 404, "store foo; {}", foo.body);
 
+        let tables = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/db/tables?workspace={docs}"),
+            None,
+            &cookie,
+        );
+        assert_ne!(
+            tables.status, 401,
+            "allowlisted dump tables; {}",
+            tables.body
+        );
+        assert!(
+            !tables.body.contains("missing capability store:read"),
+            "docs store:read must list dump tables: {}",
+            tables.body
+        );
+
+        let anna_tables = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/db/tables?workspace={anna}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(
+            anna_tables.status, 403,
+            "anna dump tables; {}",
+            anna_tables.body
+        );
+        assert!(
+            anna_tables.body.contains("missing capability store:read"),
+            "anna dump tables must be missing cap: {}",
+            anna_tables.body
+        );
+
+        let dump_ins = http_ex(
+            gport,
+            "POST",
+            "/cli/db/rows",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","table":"example","row":{{"n":1}}}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(
+            dump_ins.status, 403,
+            "store:read does not grant dump write; {}",
+            dump_ins.body
+        );
+        assert!(
+            dump_ins.body.contains("missing capability store:write"),
+            "{}",
+            dump_ins.body
+        );
+
+        let db_foo = http_ex(gport, "GET", "/cli/db/foo", None, &cookie);
+        assert_eq!(db_foo.status, 404, "db foo; {}", db_foo.body);
+
         let db_list = http_ex(gport, "GET", "/cli/db/list", None, &cookie);
         assert_eq!(
             db_list.status, 404,
-            "--skin /cli/db/* 404; {}",
+            "--skin /cli/db/list 404; {}",
             db_list.body
         );
 

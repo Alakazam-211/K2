@@ -665,6 +665,369 @@ fn handle_skin_store_query(params: &HashMap<String, String>, pass: &SkinPass) ->
     }
 }
 
+fn dump_linux_gate() -> Result<(), CliResponse> {
+    if sql_supported() {
+        return Ok(());
+    }
+    #[cfg(test)]
+    if test_ops().is_some() {
+        return Ok(());
+    }
+    Err(unsupported())
+}
+
+fn dump_owner_project(params: &HashMap<String, String>) -> Result<String, CliResponse> {
+    if let Some(ws) = params
+        .get("workspace")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        return resolve_caller(ws).map(|(_, id)| id);
+    }
+    resolve_caller_params(params).map(|(_, id)| id)
+}
+
+fn skin_dump_room(
+    params: &HashMap<String, String>,
+    pass: &SkinPass,
+    cap: &str,
+) -> Result<String, CliResponse> {
+    let ws = need_skin_workspace(params)?;
+    let resolved = crate::fs_routes::resolve_skin_workspace(pass, &ws)?;
+    if !pass.has_cap_in_room(&resolved.project_id, cap) {
+        return Err(crate::skin_routes::missing_cap_response(cap));
+    }
+    Ok(resolved.project_id)
+}
+
+fn skin_dump_workspace_body(
+    workspace: &str,
+    pass: &SkinPass,
+    cap: &str,
+) -> Result<String, CliResponse> {
+    let ws = workspace.trim();
+    if ws.is_empty() {
+        return Err(CliResponse::bad_request("missing workspace"));
+    }
+    let resolved = crate::fs_routes::resolve_skin_workspace(pass, ws)?;
+    if !pass.has_cap_in_room(&resolved.project_id, cap) {
+        return Err(crate::skin_routes::missing_cap_response(cap));
+    }
+    Ok(resolved.project_id)
+}
+
+pub fn handle_dump_tables(params: &HashMap<String, String>) -> CliResponse {
+    let project_id = match dump_owner_project(params) {
+        Ok(id) => id,
+        Err(r) => return r,
+    };
+    if let Err(resp) = interact_for(&project_id, "read") {
+        return resp;
+    }
+    if let Err(r) = dump_linux_gate() {
+        return r;
+    }
+    let secrets = FileSecretStore::default();
+    match ops::dump_list_tables(ops(), &secrets, &project_id, None) {
+        Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
+pub fn handle_dump_rows(params: &HashMap<String, String>) -> CliResponse {
+    let project_id = match dump_owner_project(params) {
+        Ok(id) => id,
+        Err(r) => return r,
+    };
+    if let Err(resp) = interact_for(&project_id, "read") {
+        return resp;
+    }
+    if let Err(r) = dump_linux_gate() {
+        return r;
+    }
+    dump_rows_for(params, &project_id, None)
+}
+
+pub fn handle_dump_tables_gated(
+    params: &HashMap<String, String>,
+    skin: Option<SkinPass>,
+) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_dump_tables(params, &pass),
+        None => handle_dump_tables(params),
+    }
+}
+
+pub fn handle_dump_rows_gated(
+    params: &HashMap<String, String>,
+    skin: Option<SkinPass>,
+) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_dump_rows(params, &pass),
+        None => handle_dump_rows(params),
+    }
+}
+
+fn handle_skin_dump_tables(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let guc = match skin_store_guc(pass) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let project_id = match skin_dump_room(params, pass, crate::skin_routes::STORE_READ) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    if let Err(r) = dump_linux_gate() {
+        return r;
+    }
+    let secrets = FileSecretStore::default();
+    match ops::dump_list_tables(ops(), &secrets, &project_id, guc) {
+        Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
+fn handle_skin_dump_rows(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let guc = match skin_store_guc(pass) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let project_id = match skin_dump_room(params, pass, crate::skin_routes::STORE_READ) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let table = params.get("table").map(String::as_str).unwrap_or("");
+    if table.trim().is_empty() {
+        return CliResponse::bad_request("missing table");
+    }
+    if params.contains_key("id") {
+        let id = params.get("id").map(String::as_str).unwrap_or("");
+        if id.trim().is_empty() {
+            return CliResponse::bad_request("missing id");
+        }
+    }
+    if let Err(r) = dump_linux_gate() {
+        return r;
+    }
+    dump_rows_for(params, &project_id, guc)
+}
+
+fn dump_rows_for(
+    params: &HashMap<String, String>,
+    project_id: &str,
+    guc: Option<&str>,
+) -> CliResponse {
+    let table = params.get("table").map(String::as_str).unwrap_or("");
+    if table.trim().is_empty() {
+        return CliResponse::bad_request("missing table");
+    }
+    let secrets = FileSecretStore::default();
+    if params.contains_key("id") {
+        let id = params.get("id").map(String::as_str).unwrap_or("");
+        if id.trim().is_empty() {
+            return CliResponse::bad_request("missing id");
+        }
+        match ops::dump_get_row(ops(), &secrets, project_id, table, id, guc) {
+            Ok(v) => ok_json(v),
+            Err(e) => ops_err(e),
+        }
+    } else {
+        let limit = params
+            .get("limit")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(50);
+        match ops::dump_list_rows(ops(), &secrets, project_id, table, limit, guc) {
+            Ok(v) => ok_json(v),
+            Err(e) => ops_err(e),
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default)]
+struct DumpBody {
+    workspace: Option<String>,
+    project: Option<String>,
+    table: Option<String>,
+    id: Option<String>,
+    row: Option<serde_json::Value>,
+}
+
+fn parse_dump_body(body: &[u8]) -> Result<DumpBody, CliResponse> {
+    serde_json::from_slice(body).map_err(|e| {
+        err_json(
+            "400 Bad Request",
+            "usage",
+            format!("invalid JSON body: {e}"),
+        )
+    })
+}
+
+fn dump_owner_project_body(b: &DumpBody) -> Result<String, CliResponse> {
+    let claim = b
+        .workspace
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            b.project
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or("");
+    resolve_caller(claim).map(|(_, id)| id)
+}
+
+pub fn handle_dump_insert(body: &[u8]) -> CliResponse {
+    let b = match parse_dump_body(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let project_id = match dump_owner_project_body(&b) {
+        Ok(id) => id,
+        Err(r) => return r,
+    };
+    if let Err(resp) = interact_for(&project_id, "write") {
+        return resp;
+    }
+    if let Err(r) = dump_linux_gate() {
+        return r;
+    }
+    dump_insert_for(&b, &project_id, None)
+}
+
+pub fn handle_dump_update(body: &[u8]) -> CliResponse {
+    let b = match parse_dump_body(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let project_id = match dump_owner_project_body(&b) {
+        Ok(id) => id,
+        Err(r) => return r,
+    };
+    if let Err(resp) = interact_for(&project_id, "write") {
+        return resp;
+    }
+    if let Err(r) = dump_linux_gate() {
+        return r;
+    }
+    dump_update_for(&b, &project_id, None)
+}
+
+pub fn handle_dump_delete(body: &[u8]) -> CliResponse {
+    let b = match parse_dump_body(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let project_id = match dump_owner_project_body(&b) {
+        Ok(id) => id,
+        Err(r) => return r,
+    };
+    if let Err(resp) = interact_for(&project_id, "write") {
+        return resp;
+    }
+    if let Err(r) = dump_linux_gate() {
+        return r;
+    }
+    dump_delete_for(&b, &project_id, None)
+}
+
+pub fn handle_dump_insert_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_dump_write(body, &pass, "insert"),
+        None => handle_dump_insert(body),
+    }
+}
+
+pub fn handle_dump_update_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_dump_write(body, &pass, "update"),
+        None => handle_dump_update(body),
+    }
+}
+
+pub fn handle_dump_delete_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_dump_write(body, &pass, "delete"),
+        None => handle_dump_delete(body),
+    }
+}
+
+fn handle_skin_dump_write(body: &[u8], pass: &SkinPass, kind: &str) -> CliResponse {
+    let guc = match skin_store_guc(pass) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let b = match parse_dump_body(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let ws = b.workspace.as_deref().unwrap_or("");
+    let project_id = match skin_dump_workspace_body(ws, pass, crate::skin_routes::STORE_WRITE) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    if let Err(r) = dump_linux_gate() {
+        return r;
+    }
+    match kind {
+        "insert" => dump_insert_for(&b, &project_id, guc),
+        "update" => dump_update_for(&b, &project_id, guc),
+        _ => dump_delete_for(&b, &project_id, guc),
+    }
+}
+
+fn dump_insert_for(b: &DumpBody, project_id: &str, guc: Option<&str>) -> CliResponse {
+    let table = b.table.as_deref().unwrap_or("");
+    if table.trim().is_empty() {
+        return CliResponse::bad_request("missing table");
+    }
+    let Some(row) = b.row.as_ref() else {
+        return CliResponse::bad_request("row must be a JSON object");
+    };
+    let secrets = FileSecretStore::default();
+    match ops::dump_insert(ops(), &secrets, project_id, table, row, guc) {
+        Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
+fn dump_update_for(b: &DumpBody, project_id: &str, guc: Option<&str>) -> CliResponse {
+    let table = b.table.as_deref().unwrap_or("");
+    if table.trim().is_empty() {
+        return CliResponse::bad_request("missing table");
+    }
+    let id = b.id.as_deref().unwrap_or("");
+    if id.trim().is_empty() {
+        return CliResponse::bad_request("missing id");
+    }
+    let Some(row) = b.row.as_ref() else {
+        return CliResponse::bad_request("row must be a JSON object");
+    };
+    let secrets = FileSecretStore::default();
+    match ops::dump_update(ops(), &secrets, project_id, table, id, row, guc) {
+        Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
+fn dump_delete_for(b: &DumpBody, project_id: &str, guc: Option<&str>) -> CliResponse {
+    let table = b.table.as_deref().unwrap_or("");
+    if table.trim().is_empty() {
+        return CliResponse::bad_request("missing table");
+    }
+    let id = b.id.as_deref().unwrap_or("");
+    if id.trim().is_empty() {
+        return CliResponse::bad_request("missing id");
+    }
+    let secrets = FileSecretStore::default();
+    match ops::dump_delete(ops(), &secrets, project_id, table, id, guc) {
+        Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
 pub fn handle_store_rm(body: &[u8]) -> CliResponse {
     let (_path, project_id, b) = match store_ident(body) {
         Ok(v) => v,

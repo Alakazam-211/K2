@@ -15,9 +15,10 @@
 //! tokens — high-entropy CSPRNG, not argon2).
 //!
 //! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`,
-//! `tickets:read`, `tickets:post`, `wiki:read`, `store:read`. Empty/missing
-//! caps stay Thread-only — never silent-add files, tickets, wiki, or store.
-//! Never `pty:*`. `store:write` stays unknown (400).
+//! `tickets:read`, `tickets:post`, `wiki:read`, `store:read`, `store:write`.
+//! Empty/missing caps stay Thread-only — never silent-add files, tickets,
+//! wiki, or store. Never `pty:*`. `store:write` is dump insert/update/delete
+//! only — it does not grant `_k2_store` PUT.
 //! Assigned guests snapshot the role onto `session=1`; platform tokens
 //! keep their own caps+rooms (not a role). Session policy is **per-room**
 //! (`room_policy` map). Platform `--name` tokens stay flat.
@@ -51,8 +52,12 @@ pub const CAP_TICKETS_READ: &str = "tickets:read";
 pub const CAP_TICKETS_POST: &str = "tickets:post";
 /// Wiki read (`GET /cli/wiki/index`, `GET /cli/wiki/note`). Does not imply write.
 pub const CAP_WIKI_READ: &str = "wiki:read";
-/// Workspace dump store read (`GET /cli/store/list|get|query`). Does not imply write.
+/// Workspace dump store read (`GET /cli/store/list|get|query` and dump SELECT).
+/// Does not imply write.
 pub const CAP_STORE_READ: &str = "store:read";
+/// Dump-table insert/update/delete (`POST /cli/db/rows|rows/update|rows/delete`).
+/// Does not imply `_k2_store` PUT/create/rm/drop.
+pub const CAP_STORE_WRITE: &str = "store:write";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -68,6 +73,7 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_TICKETS_POST,
     CAP_WIKI_READ,
     CAP_STORE_READ,
+    CAP_STORE_WRITE,
 ];
 
 /// Connect / Server Access names — never a skin role.
@@ -176,10 +182,10 @@ pub fn normalize_username(raw: &str) -> Result<String, String> {
 }
 
 /// Parse + validate cap names. Empty/missing → default Thread read+post
-/// (never silent-add `files:*`, `tickets:*`, `wiki:read`, or `store:read`).
-/// Unknown names fail loud. Write-only is accepted at mint; list/read still
-/// require `files:read` / `tickets:read` / `wiki:read` / `store:read` listed.
-/// `store:write` is unknown (400).
+/// (never silent-add `files:*`, `tickets:*`, `wiki:read`, `store:read`,
+/// or `store:write`). Unknown names fail loud. Write-only is accepted at
+/// mint; list/read still require `files:read` / `tickets:read` /
+/// `wiki:read` / `store:read` listed. `store:write` is dump DML only.
 pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     match raw {
@@ -2540,16 +2546,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_caps_still_rejects_store_write() {
-        let err = parse_caps(Some(&["store:write".into()])).unwrap_err();
-        assert!(err.contains("unknown capability"), "{err}");
-        assert!(err.contains("store:write"), "{err}");
+    fn parse_caps_accepts_store_write() {
+        let write = parse_caps(Some(&["store:write".into()])).expect("store:write");
+        assert_eq!(write, vec![CAP_STORE_WRITE]);
         assert!(
             parse_caps(Some(&["thread:read".into()])).is_ok(),
             "thread:read remains accepted"
         );
-        let err = parse_caps(Some(&["thread:read".into(), "store:write".into()])).unwrap_err();
-        assert!(err.contains("store:write"), "{err}");
+        let mixed = parse_caps(Some(&["thread:read".into(), "store:write".into()])).expect("mixed");
+        assert_eq!(mixed, vec![CAP_THREAD_READ, CAP_STORE_WRITE]);
+        let err = parse_caps(Some(&["pty:write".into()])).unwrap_err();
+        assert!(err.contains("unknown capability"), "{err}");
+        assert!(err.contains("pty:write"), "{err}");
     }
 
     #[test]
@@ -2655,13 +2663,17 @@ mod tests {
         let empty = parse_caps(None).expect("empty default");
         assert_eq!(empty, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
         assert!(
-            !empty.iter().any(|c| c == CAP_STORE_READ),
+            !empty
+                .iter()
+                .any(|c| c == CAP_STORE_READ || c == CAP_STORE_WRITE),
             "empty caps must stay Thread-only, never silent-add store: {empty:?}"
         );
         let missing = parse_caps(Some(&[])).expect("missing default");
         assert_eq!(missing, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
         assert!(
-            !missing.iter().any(|c| c == CAP_STORE_READ),
+            !missing
+                .iter()
+                .any(|c| c == CAP_STORE_READ || c == CAP_STORE_WRITE),
             "missing caps must stay Thread-only: {missing:?}"
         );
 
@@ -2669,12 +2681,21 @@ mod tests {
         assert_eq!(read, vec![CAP_STORE_READ]);
         let mixed = parse_caps(Some(&["store:read".into(), "thread:read".into()])).expect("mixed");
         assert_eq!(mixed, vec![CAP_STORE_READ, CAP_THREAD_READ]);
+        let write = parse_caps(Some(&["store:write".into()])).expect("store:write");
+        assert_eq!(write, vec![CAP_STORE_WRITE]);
+        let both = parse_caps(Some(&[
+            "store:read".into(),
+            "store:write".into(),
+            "thread:read".into(),
+        ]))
+        .expect("store both");
+        assert_eq!(both, vec![CAP_STORE_READ, CAP_STORE_WRITE, CAP_THREAD_READ]);
 
-        let err = parse_caps(Some(&["store:write".into()])).unwrap_err();
-        assert!(err.contains("unknown capability"), "{err}");
-        assert!(err.contains("store:write"), "{err}");
         let err = parse_caps(Some(&["pty:write".into()])).unwrap_err();
+        assert!(err.contains("unknown capability"), "{err}");
         assert!(err.contains("pty:write"), "{err}");
+        let err = parse_caps(Some(&["wiki:write".into()])).unwrap_err();
+        assert!(err.contains("wiki:write"), "{err}");
         let err = parse_caps(Some(&["grid".into()])).unwrap_err();
         assert!(err.contains("grid"), "{err}");
     }
@@ -3208,7 +3229,10 @@ mod tests {
             let mut store_ok = RoomPolicy::new();
             store_ok.insert("anna".into(), vec![CAP_STORE_READ.into()]);
             create_role("records", &store_ok).expect("store:read is accepted");
-            for cap in ["store:write", "pty:write", "wiki:write", "grid"] {
+            let mut store_write_ok = RoomPolicy::new();
+            store_write_ok.insert("docs".into(), vec![CAP_STORE_WRITE.into()]);
+            create_role("charting", &store_write_ok).expect("store:write is accepted");
+            for cap in ["pty:write", "wiki:write", "grid"] {
                 let mut p = RoomPolicy::new();
                 p.insert("anna".into(), vec![cap.into()]);
                 let err = create_role("xray", &p).unwrap_err();
@@ -3557,6 +3581,45 @@ mod tests {
             );
             assert!(pass.has_cap_in_room(&docs, CAP_STORE_READ));
             assert!(pass.has_cap_in_room(&anna, CAP_THREAD_READ));
+        });
+    }
+
+    #[test]
+    fn session_store_write_has_cap_in_room_is_not_cartesian() {
+        with_temp_home(|| {
+            add_principal("bob").unwrap();
+            let sales = uuid::Uuid::new_v4().to_string();
+            let docs = uuid::Uuid::new_v4().to_string();
+            let mut policy = RoomPolicy::new();
+            policy.insert(
+                sales.clone(),
+                vec![CAP_THREAD_READ.into(), CAP_THREAD_POST.into()],
+            );
+            policy.insert(
+                docs.clone(),
+                vec![
+                    CAP_THREAD_READ.into(),
+                    CAP_THREAD_POST.into(),
+                    CAP_STORE_READ.into(),
+                    CAP_STORE_WRITE.into(),
+                ],
+            );
+            create_role("dentist", &policy).unwrap();
+            assign_role("bob", "dentist").unwrap();
+            let (_m, raw) = create_session_token("bob").unwrap();
+            let pass = resolve_skin_token(&raw).expect("session");
+            assert!(
+                pass.has_cap(CAP_STORE_WRITE),
+                "union still lists store:write"
+            );
+            assert!(
+                !pass.has_cap_in_room(&sales, CAP_STORE_WRITE),
+                "store:write on docs must not grant store:write on sales: {pass:?}"
+            );
+            assert!(!pass.has_cap_in_room(&sales, CAP_STORE_READ));
+            assert!(pass.has_cap_in_room(&docs, CAP_STORE_WRITE));
+            assert!(pass.has_cap_in_room(&docs, CAP_STORE_READ));
+            assert!(pass.has_cap_in_room(&sales, CAP_THREAD_READ));
         });
     }
 

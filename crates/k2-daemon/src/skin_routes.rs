@@ -11,8 +11,8 @@ use std::collections::HashSet;
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::{
-    self, RoomPolicy, CAP_FILES_READ, CAP_FILES_WRITE, CAP_STORE_READ, CAP_THREAD_POST,
-    CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ, CAP_WIKI_READ,
+    self, RoomPolicy, CAP_FILES_READ, CAP_FILES_WRITE, CAP_STORE_READ, CAP_STORE_WRITE,
+    CAP_THREAD_POST, CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ, CAP_WIKI_READ,
 };
 use k2_core::skin_door;
 
@@ -759,6 +759,7 @@ pub const TICKETS_READ: &str = CAP_TICKETS_READ;
 pub const TICKETS_POST: &str = CAP_TICKETS_POST;
 pub const WIKI_READ: &str = CAP_WIKI_READ;
 pub const STORE_READ: &str = CAP_STORE_READ;
+pub const STORE_WRITE: &str = CAP_STORE_WRITE;
 
 const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 skin user add/remove/password, k2 skin role create/update/remove, k2 skin user role/unassign, skin-token create/revoke/rooms; use k2 skin user list / k2 skin role list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin.";
 

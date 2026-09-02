@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.140 — Project pane shortcuts follow Message agent
+
+On a project board, ⌘1–⌘9 now follow **When moving between workspaces, auto-select**. If that’s Message agent, the shortcut lands in that pane’s message box — not the terminal. Terminal still focuses the grid when that’s the setting.
+
+---
+
 ## 0.40.139 — Skin guests can have an email for password reset
 
 Skin Access guests have an optional email. Username is still required. Forgot-password only mints a reset when that guest has both a password and an email — then the site (not the browser) gets the address to send mail. Guests can type the username or the email on login and forgot. K2 still does not email guests. Official `--skin` still cannot mint or send. Grid and the terminal stay off.

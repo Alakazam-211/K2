@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.135 — Skin guests can read wiki on the agents you grant
+
+A logged-in skin guest can list and open that agent's wiki — **that workspace only**. Wiki on Documents does not grant wiki on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
+
+`k2 publish run --skin` proxies `GET /cli/wiki/index` and `GET /cli/wiki/note` on the published origin. Fleet wiki, seed, serve, and public chat stay off. Chat history and Chatter are not in this cut.
+
+---
+
 ## 0.40.134 — Skin guests can use Tickets on the agents you grant
 
 A logged-in skin guest can list, open, comment, answer, and resolve Tickets **on that agent only**. Tickets on Documents does not grant Tickets on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.

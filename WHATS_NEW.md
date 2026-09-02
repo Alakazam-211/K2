@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.139 — Skin guests can have an email for password reset
+
+Skin Access guests have an optional email. Username is still required. Forgot-password only mints a reset when that guest has both a password and an email — then the site (not the browser) gets the address to send mail. Guests can type the username or the email on login and forgot. K2 still does not email guests. Official `--skin` still cannot mint or send. Grid and the terminal stay off.
+
+Owner sets email in Skin Access or `k2 skin user add --email` / `k2 skin user email`. Empty email clears it. Guests with a password but no email cannot use forgot until the owner fills the address.
+
+---
+
 ## 0.40.138 — Skin guests can reset and change their password
 
 A logged-in skin guest can change their own password. A guest who forgot can set a new one from a reset link the site operator sends — K2 does not email guests. Official `k2 publish run --skin` hosts `/reset` and saves the new password; it cannot mint or send the mail. Old sessions die. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.

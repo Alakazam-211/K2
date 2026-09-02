@@ -14698,7 +14698,7 @@ HOW TO MAKE ONE (copy this)
   4. Daemon login (unchanged, if you are not using the gateway):
        POST /cli/skin/login   {"username":"…","password":"…"}
      200 body (verbatim):
-       {"ok":true,"token":"k2skn_…","username":"…",
+       {"ok":true,"token":"k2skn_…","username":"…","principalId":"<uuid>",
         "rooms":["<id>",…],"roomHandles":["sales",…],
         "caps":[…],"role":"dentist"|null,
         "roomAccess":[{"handle":"sales","caps":[…]}]}
@@ -14706,11 +14706,24 @@ HOW TO MAKE ONE (copy this)
      also be set (leftover Caddy door). Prefer keeping the
      token on the SERVER so the browser never holds the pass.
 
+BYO BFF (not --skin)
+  Same permission system as official --skin. Same Skin Access roster,
+  same POST /cli/skin/login, same session k2skn_ (session=1), same
+  has_cap_in_room, same HTTP and WS doors (Thread, overlay, files,
+  tickets, wiki, store). Attach Authorization: Bearer <session> on
+  HTTP and on WS /cli/overlay/events and /cli/fs/events.
+  --skin is only the cookie (k2_skin_ui) + allowlist proxy. BYO does
+  that job itself. Keep the pass on the SERVER (Dannon). Never
+  ?token= in the browser. Never a platform --name token for "this
+  dentist" (no principal; 403 store; K2 cannot tell users apart).
+  --cmd and --skin are mutually exclusive on one published name.
+
 TWO CREDENTIALS (same prefix k2skn_)
   Login session  = password → create_session_token on that guest.
-                   Browser JSON has no token. Gateway holds it.
+                   Official --skin: browser JSON has no token; gateway holds it.
+                   BYO BFF: step 4 JSON includes token; hold it on the server.
   Platform token = `k2 skin-token create --name vercel --agent sales`.
-                   User-agnostic. BYO servers. Secret shown once.
+                   User-agnostic site key. Not a guest. Secret shown once.
   Do not mint a copyable key per person.
 
 ROLES (named bundles for guests — not Connect, not a platform token)

@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.137 — Skin guests can CRUD that agent's database tables, as themselves
+
+A logged-in skin guest can list tables and read, insert, update, and delete **rows in that agent's Postgres** — that workspace only. Store on Documents does not grant store on Sales. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Guests never get a database password. Grid and the terminal stay off.
+
+`k2 publish run --skin` proxies `GET /cli/db/tables` and `GET|POST /cli/db/rows` on the published origin. Session reads and writes stamp `k2.skin_principal` so dump RLS can filter per guest. Named platform tokens cannot use store. `_k2_store` writes stay off.
+
+---
+
 ## 0.40.136 — Skin guests can read that agent's store, as themselves
 
 A logged-in skin guest can list, get, and query **that agent's store** — that workspace only. Store on Documents does not grant store on Sales. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Guests never get a database password. Grid and the terminal stay off.

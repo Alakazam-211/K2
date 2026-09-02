@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.138 — Skin guests can reset and change their password
+
+A logged-in skin guest can change their own password. A guest who forgot can set a new one from a reset link the site operator sends — K2 does not email guests. Official `k2 publish run --skin` hosts `/reset` and saves the new password; it cannot mint or send the mail. Old sessions die. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
+
+Owner password in Skin Access is unchanged. Guests with no K2 password reset at their identity provider.
+
+---
+
 ## 0.40.137 — Skin guests can CRUD that agent's database tables, as themselves
 
 A logged-in skin guest can list tables and read, insert, update, and delete **rows in that agent's Postgres** — that workspace only. Store on Documents does not grant store on Sales. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Guests never get a database password. Grid and the terminal stay off.

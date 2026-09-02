@@ -671,7 +671,7 @@ fn exec_as(
     password: &str,
     sql: &str,
 ) -> Result<String, OpsError> {
-    exec_as_role(ops, db, user, password, sql, None)
+    exec_as_role(ops, db, user, password, sql, None, None)
 }
 
 fn exec_as_role(
@@ -681,14 +681,25 @@ fn exec_as_role(
     password: &str,
     sql: &str,
     set_role: Option<&str>,
+    skin_principal: Option<&str>,
 ) -> Result<String, OpsError> {
     // `-tA` without `-F` uses `|` as the unaligned field separator.
     // Force tab so SELECT version, checksum is unambiguous; the parser
     // still accepts `|` for older fakes / forgotten `-F`.
     // Bind SET ROLE is `-c` so Fake `recorded()` shows it (stdin is dropped).
+    // Skin session GUC is a second `-c` after bind SET ROLE.
     let set_sql = set_role
         .filter(|role| *role != user)
         .map(|role| format!("SET ROLE {}", pg_quote_ident(role)));
+    let guc_sql = skin_principal
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            format!(
+                "SELECT set_config('k2.skin_principal', {}, true)",
+                pg_quote_literal(id)
+            )
+        });
     let mut args: Vec<&str> = vec![
         "-h",
         "127.0.0.1",
@@ -705,6 +716,10 @@ fn exec_as_role(
     if let Some(ref set_sql) = set_sql {
         args.push("-c");
         args.push(set_sql.as_str());
+    }
+    if let Some(ref guc_sql) = guc_sql {
+        args.push("-c");
+        args.push(guc_sql.as_str());
     }
     let out = ops
         .run_cmd(
@@ -2078,6 +2093,7 @@ pub fn store_list(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     project_id: &str,
+    skin_principal: Option<&str>,
 ) -> Result<serde_json::Value, OpsError> {
     let dml = store_dml_creds(ops, secrets, project_id)?;
     let raw = exec_as_role(
@@ -2087,6 +2103,7 @@ pub fn store_list(
         &dml.password,
         "SELECT collection FROM _k2_store GROUP BY collection ORDER BY collection;",
         dml.bind.as_deref(),
+        skin_principal,
     )
     .unwrap_or_default();
     let names: Vec<&str> = raw
@@ -2126,6 +2143,7 @@ pub fn store_put(
         &dml.password,
         &sql,
         dml.bind.as_deref(),
+        None,
     )?;
     Ok(serde_json::json!({ "ok": true, "id": id, "collection": name }))
 }
@@ -2136,6 +2154,7 @@ pub fn store_get(
     project_id: &str,
     collection: &str,
     id: &str,
+    skin_principal: Option<&str>,
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
     let dml = store_dml_creds(ops, secrets, project_id)?;
@@ -2151,6 +2170,7 @@ pub fn store_get(
         &dml.password,
         &sql,
         dml.bind.as_deref(),
+        skin_principal,
     )?;
     if raw.is_empty() {
         return Err(OpsError::NotFound(format!(
@@ -2168,6 +2188,7 @@ pub fn store_query(
     project_id: &str,
     collection: &str,
     limit: u32,
+    skin_principal: Option<&str>,
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
     let dml = store_dml_creds(ops, secrets, project_id)?;
@@ -2183,6 +2204,7 @@ pub fn store_query(
         &dml.password,
         &sql,
         dml.bind.as_deref(),
+        skin_principal,
     )
     .unwrap_or_default();
     let mut docs = Vec::new();
@@ -2217,6 +2239,7 @@ pub fn store_rm(
         &dml.password,
         &sql,
         dml.bind.as_deref(),
+        None,
     )?;
     Ok(serde_json::json!({ "ok": true, "removed": id }))
 }
@@ -2240,6 +2263,7 @@ pub fn store_drop(
         &dml.password,
         &sql,
         dml.bind.as_deref(),
+        None,
     )?;
     Ok(serde_json::json!({ "ok": true, "dropped": name }))
 }

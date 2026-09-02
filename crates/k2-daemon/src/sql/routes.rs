@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::caller_workspace::{principal_from_params, request_principal};
 use crate::cli_response::CliResponse;
+use k2_core::skin::SkinPass;
 
 use super::identity::{resolve_caller, resolve_caller_params};
 use super::ops::{self, OpsError};
@@ -484,7 +485,7 @@ pub fn handle_store_list(params: &HashMap<String, String>) -> CliResponse {
         return resp;
     }
     let secrets = FileSecretStore::default();
-    match ops::store_list(ops(), &secrets, &project_id) {
+    match ops::store_list(ops(), &secrets, &project_id, None) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -519,7 +520,7 @@ pub fn handle_store_get(params: &HashMap<String, String>) -> CliResponse {
     let name = params.get("name").map(String::as_str).unwrap_or("");
     let id = params.get("id").map(String::as_str).unwrap_or("");
     let secrets = FileSecretStore::default();
-    match ops::store_get(ops(), &secrets, &project_id, name, id) {
+    match ops::store_get(ops(), &secrets, &project_id, name, id, None) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -539,7 +540,126 @@ pub fn handle_store_query(params: &HashMap<String, String>) -> CliResponse {
         .and_then(|s| s.parse().ok())
         .unwrap_or(50);
     let secrets = FileSecretStore::default();
-    match ops::store_query(ops(), &secrets, &project_id, name, limit) {
+    match ops::store_query(ops(), &secrets, &project_id, name, limit, None) {
+        Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
+/// Skin store GET list. Owner/Connect use [`handle_store_list`].
+pub fn handle_store_list_gated(
+    params: &HashMap<String, String>,
+    skin: Option<SkinPass>,
+) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_store_list(params, &pass),
+        None => handle_store_list(params),
+    }
+}
+
+pub fn handle_store_get_gated(
+    params: &HashMap<String, String>,
+    skin: Option<SkinPass>,
+) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_store_get(params, &pass),
+        None => handle_store_get(params),
+    }
+}
+
+pub fn handle_store_query_gated(
+    params: &HashMap<String, String>,
+    skin: Option<SkinPass>,
+) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_store_query(params, &pass),
+        None => handle_store_query(params),
+    }
+}
+
+fn need_skin_workspace(params: &HashMap<String, String>) -> Result<String, CliResponse> {
+    params
+        .get("workspace")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| CliResponse::bad_request("missing workspace query parameter"))
+}
+
+fn skin_store_guc(pass: &SkinPass) -> Result<Option<&str>, CliResponse> {
+    if !pass.session {
+        return Err(crate::skin_routes::platform_store_forbidden());
+    }
+    Ok(pass
+        .principal_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty()))
+}
+
+fn skin_store_room(
+    params: &HashMap<String, String>,
+    pass: &SkinPass,
+) -> Result<String, CliResponse> {
+    let ws = need_skin_workspace(params)?;
+    let resolved = crate::fs_routes::resolve_skin_workspace(pass, &ws)?;
+    if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::STORE_READ) {
+        return Err(crate::skin_routes::missing_cap_response(
+            crate::skin_routes::STORE_READ,
+        ));
+    }
+    Ok(resolved.project_id)
+}
+
+fn handle_skin_store_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let guc = match skin_store_guc(pass) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let project_id = match skin_store_room(params, pass) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let secrets = FileSecretStore::default();
+    match ops::store_list(ops(), &secrets, &project_id, guc) {
+        Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
+fn handle_skin_store_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let guc = match skin_store_guc(pass) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let project_id = match skin_store_room(params, pass) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let name = params.get("name").map(String::as_str).unwrap_or("");
+    let id = params.get("id").map(String::as_str).unwrap_or("");
+    let secrets = FileSecretStore::default();
+    match ops::store_get(ops(), &secrets, &project_id, name, id, guc) {
+        Ok(v) => ok_json(v),
+        Err(e) => ops_err(e),
+    }
+}
+
+fn handle_skin_store_query(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let guc = match skin_store_guc(pass) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let project_id = match skin_store_room(params, pass) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let name = params.get("name").map(String::as_str).unwrap_or("");
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50);
+    let secrets = FileSecretStore::default();
+    match ops::store_query(ops(), &secrets, &project_id, name, limit, guc) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }

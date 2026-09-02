@@ -212,6 +212,12 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("HEAD", "/cli/wiki/index")
             | ("GET", "/cli/wiki/note")
             | ("HEAD", "/cli/wiki/note")
+            | ("GET", "/cli/store/list")
+            | ("HEAD", "/cli/store/list")
+            | ("GET", "/cli/store/get")
+            | ("HEAD", "/cli/store/get")
+            | ("GET", "/cli/store/query")
+            | ("HEAD", "/cli/store/query")
     )
 }
 
@@ -1040,6 +1046,25 @@ mod tests {
         assert!(!allowlisted_http("POST", "/cli/wiki/index"));
         assert!(!allowlisted_ws("/cli/wiki/index"));
         assert!(!allowlisted_ws("/cli/wiki/note"));
+        assert!(allowlisted_http("GET", "/cli/store/list"));
+        assert!(allowlisted_http("HEAD", "/cli/store/list"));
+        assert!(allowlisted_http("GET", "/cli/store/get"));
+        assert!(allowlisted_http("HEAD", "/cli/store/get"));
+        assert!(allowlisted_http("GET", "/cli/store/query"));
+        assert!(allowlisted_http("HEAD", "/cli/store/query"));
+        assert!(!allowlisted_http("POST", "/cli/store/put"));
+        assert!(!allowlisted_http("POST", "/cli/store/create"));
+        assert!(!allowlisted_http("POST", "/cli/store/rm"));
+        assert!(!allowlisted_http("POST", "/cli/store/drop"));
+        assert!(!allowlisted_http("GET", "/cli/store/put"));
+        assert!(!allowlisted_http("GET", "/cli/store/foo"));
+        assert!(!allowlisted_http("GET", "/cli/db/dsn"));
+        assert!(!allowlisted_http("GET", "/cli/db/list"));
+        assert!(!allowlisted_http("GET", "/cli/db/status"));
+        assert!(!allowlisted_http("POST", "/cli/db/create"));
+        assert!(!allowlisted_ws("/cli/store/list"));
+        assert!(!allowlisted_ws("/cli/store/get"));
+        assert!(!allowlisted_ws("/cli/store/query"));
     }
 
     #[test]

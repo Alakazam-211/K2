@@ -12,13 +12,13 @@ pub mod secrets;
 pub mod supervisor;
 pub mod sysops;
 
-/// Optional `skin_*` dump template (not auto-applied by create_database).
-/// Commented `CREATE ROLE skin_<id> NOLOGIN` + POLICY; no FORCE RLS.
+/// Optional dump template (not auto-applied by create_database).
+/// GUC `k2.skin_principal` + POLICY example; no per-dentist role; no FORCE RLS.
 #[allow(dead_code)]
 pub const SKIN_RLS_TEMPLATE: &str = include_str!("skin_rls_template.sql");
 
 /// Help/doctor pointer — copy into `.k2/db/migrations` only if wanted.
-pub const SKIN_RLS_TEMPLATE_HINT: &str = "crates/k2-daemon/src/sql/skin_rls_template.sql — commented CREATE ROLE skin_<id> NOLOGIN + POLICY; no FORCE RLS; not auto-applied; no SET ROLE.";
+pub const SKIN_RLS_TEMPLATE_HINT: &str = "crates/k2-daemon/src/sql/skin_rls_template.sql — GUC k2.skin_principal + POLICY; no CREATE ROLE skin_*; no FORCE RLS; not auto-applied; no SET ROLE.";
 
 /// The single capability gate for the SQL sidecar (D4): V1 runs on
 /// **Linux deployments only**. RUNTIME `cfg!`, not a compile-time
@@ -64,13 +64,21 @@ mod tests {
     }
 
     #[test]
-    fn skin_rls_template_is_commented_nologin_policy_without_force() {
+    fn skin_rls_template_is_guc_policy_without_skin_role_or_force() {
         let t = SKIN_RLS_TEMPLATE;
         let up = t.to_ascii_uppercase();
-        assert!(t.contains("CREATE ROLE skin_<id> NOLOGIN"), "{t}");
-        assert!(up.contains("NOLOGIN"), "{t}");
+        assert!(t.contains("set_config('k2.skin_principal'"), "{t}");
+        assert!(t.contains("current_setting('k2.skin_principal'"), "{t}");
         assert!(up.contains("CREATE POLICY"), "{t}");
         assert!(t.contains("principal_id"), "{t}");
+        assert!(
+            !t.contains("CREATE ROLE skin_"),
+            "template must not mint skin_* roles: {t}"
+        );
+        assert!(
+            !up.contains("CREATE ROLE SKIN_"),
+            "template must not mint skin_* roles: {t}"
+        );
         assert!(
             !up.contains("FORCE ROW LEVEL"),
             "template must not contain FORCE ROW LEVEL (migrate refuses that substring even in comments): {t}"
@@ -82,6 +90,10 @@ mod tests {
         );
         assert!(
             SKIN_RLS_TEMPLATE_HINT.contains("no FORCE RLS"),
+            "{SKIN_RLS_TEMPLATE_HINT}"
+        );
+        assert!(
+            SKIN_RLS_TEMPLATE_HINT.contains("no CREATE ROLE skin_"),
             "{SKIN_RLS_TEMPLATE_HINT}"
         );
     }
@@ -624,9 +636,9 @@ mod tests {
             !rec.contains("_migrator"),
             "store_put DML must not use migrator, got {rec}"
         );
-        let got = ops::store_get(&ops, &secrets, &pid, "items", "a").expect("get");
+        let got = ops::store_get(&ops, &secrets, &pid, "items", "a", None).expect("get");
         assert_eq!(got["doc"]["n"], 1);
-        let q = ops::store_query(&ops, &secrets, &pid, "items", 10).expect("query");
+        let q = ops::store_query(&ops, &secrets, &pid, "items", 10, None).expect("query");
         assert!(q["docs"].as_array().is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -2044,5 +2056,278 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(dir_a);
         let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    fn insert_project_handle(name: &str, path: &str, handle: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, name, path, handle],
+        )
+        .expect("insert project handle");
+        id
+    }
+
+    fn skin_session(username: &str, policy: k2_core::skin::RoomPolicy) -> k2_core::skin::SkinPass {
+        let rooms: Vec<String> = policy.keys().cloned().collect();
+        let mut caps = Vec::new();
+        for c in [
+            k2_core::skin::CAP_THREAD_READ,
+            k2_core::skin::CAP_THREAD_POST,
+            k2_core::skin::CAP_STORE_READ,
+        ] {
+            if policy.values().any(|room| room.iter().any(|x| x == c))
+                && !caps.iter().any(|x| x == c)
+            {
+                caps.push(c.to_string());
+            }
+        }
+        k2_core::skin::SkinPass {
+            id: uuid::Uuid::new_v4().to_string(),
+            principal_id: Some(uuid::Uuid::new_v4().to_string()),
+            username: username.to_string(),
+            caps,
+            rooms,
+            session: true,
+            room_policy: policy,
+        }
+    }
+
+    fn store_ws_params(
+        workspace: &str,
+        extra: &[(&str, &str)],
+    ) -> std::collections::HashMap<String, String> {
+        let mut p =
+            std::collections::HashMap::from([("workspace".to_string(), workspace.to_string())]);
+        for (k, v) in extra {
+            p.insert(k.to_string(), v.to_string());
+        }
+        p
+    }
+
+    #[test]
+    fn skin_session_store_get_stamps_guc_agent_does_not() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-skin-guc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let handle = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let pid = insert_project_handle("sql-skin-guc", &path, &handle);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::store_create(&ops, &secrets, &pid, "items").expect("coll");
+        ops::store_put(
+            &ops,
+            &secrets,
+            &pid,
+            "items",
+            "a",
+            &serde_json::json!({"n": 1}),
+        )
+        .expect("seed");
+        ops::bind_role(&ops, Some(&db_name), Some(&pid), "app_reader").expect("bind");
+
+        let dentist_a = uuid::Uuid::new_v4().to_string();
+        let dentist_b = uuid::Uuid::new_v4().to_string();
+        let n = ops.recorded().len();
+        let got = ops::store_get(&ops, &secrets, &pid, "items", "a", Some(&dentist_a))
+            .expect("session get A");
+        assert_eq!(got["doc"]["n"], 1);
+        let rec = ops.recorded()[n..].join("\n");
+        assert!(
+            rec.contains("set_config('k2.skin_principal'"),
+            "session store GET must stamp GUC: {rec}"
+        );
+        assert!(rec.contains(&dentist_a), "GUC must be dentist A: {rec}");
+        assert!(
+            !rec.contains(&dentist_b),
+            "dentist A GUC must not stamp dentist B: {rec}"
+        );
+        assert!(
+            rec.contains(&format!("-U {db_name}_agent")),
+            "session store still logs in as workspace agent: {rec}"
+        );
+        assert!(rec.contains("SET ROLE"), "owned bind still SET ROLE: {rec}");
+        let set_pos = rec.find("SET ROLE").expect("SET ROLE pos");
+        let guc_pos = rec.find("set_config('k2.skin_principal'").expect("guc pos");
+        assert!(guc_pos > set_pos, "GUC -c must follow bind SET ROLE: {rec}");
+
+        let n = ops.recorded().len();
+        ops::store_get(&ops, &secrets, &pid, "items", "a", Some(&dentist_b))
+            .expect("session get B");
+        let rec_b = ops.recorded()[n..].join("\n");
+        assert!(rec_b.contains(&dentist_b), "GUC must be dentist B: {rec_b}");
+        assert!(
+            !rec_b.contains(&dentist_a),
+            "dentist B GUC must not stamp dentist A: {rec_b}"
+        );
+        assert_ne!(
+            rec.contains(&format!("'{dentist_a}'")),
+            rec_b.contains(&format!("'{dentist_a}'")),
+            "dentist A GUC ≠ dentist B"
+        );
+
+        let n = ops.recorded().len();
+        ops::store_get(&ops, &secrets, &pid, "items", "a", None).expect("agent get");
+        let rec_agent = ops.recorded()[n..].join("\n");
+        assert!(
+            !rec_agent.contains("set_config('k2.skin_principal'"),
+            "agent store must not stamp GUC: {rec_agent}"
+        );
+        assert!(
+            !rec_agent.contains(&dentist_a) && !rec_agent.contains(&dentist_b),
+            "agent store must not stamp a dentist UUID: {rec_agent}"
+        );
+        assert!(
+            rec_agent.contains(&format!("-U {db_name}_agent")),
+            "agent store still -U workspace agent: {rec_agent}"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = path;
+    }
+
+    #[test]
+    fn skin_store_get_gated_has_cap_in_room_and_platform_403() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let docs_dir =
+            std::env::temp_dir().join(format!("k2-sql-skin-docs-{}", uuid::Uuid::new_v4()));
+        let anna_dir =
+            std::env::temp_dir().join(format!("k2-sql-skin-anna-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::create_dir_all(&anna_dir).unwrap();
+        let docs_path = docs_dir.to_string_lossy().into_owned();
+        let anna_path = anna_dir.to_string_lossy().into_owned();
+        let docs_h = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let anna_h = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs_id = insert_project_handle("sql-skin-docs", &docs_path, &docs_h);
+        let anna_id = insert_project_handle("sql-skin-anna", &anna_path, &anna_h);
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        ops::create_database(fake, &secrets, &docs_id, 1, None, None).expect("create");
+        ops::store_create(fake, &secrets, &docs_id, "items").expect("coll");
+        ops::store_put(
+            fake,
+            &secrets,
+            &docs_id,
+            "items",
+            "a",
+            &serde_json::json!({"n": 1}),
+        )
+        .expect("seed");
+
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(
+            anna_id.clone(),
+            vec![
+                k2_core::skin::CAP_THREAD_READ.into(),
+                k2_core::skin::CAP_THREAD_POST.into(),
+            ],
+        );
+        policy.insert(
+            docs_id.clone(),
+            vec![
+                k2_core::skin::CAP_THREAD_READ.into(),
+                k2_core::skin::CAP_THREAD_POST.into(),
+                k2_core::skin::CAP_STORE_READ.into(),
+            ],
+        );
+        let pass = skin_session("bob", policy);
+
+        routes::with_fake_ops(fake, || {
+            let n = fake.recorded().len();
+            let docs = routes::handle_store_get_gated(
+                &store_ws_params(&docs_h, &[("name", "items"), ("id", "a")]),
+                Some(pass.clone()),
+            );
+            assert_eq!(docs.status, "200 OK", "{}", docs.body);
+            let rec = fake.recorded()[n..].join("\n");
+            assert!(
+                rec.contains("set_config('k2.skin_principal'"),
+                "session gated GET stamps GUC: {rec}"
+            );
+            let pid = pass.principal_id.as_deref().unwrap_or("");
+            assert!(rec.contains(pid), "GUC is this session principal: {rec}");
+
+            let anna = routes::handle_store_get_gated(
+                &store_ws_params(&anna_h, &[("name", "items"), ("id", "a")]),
+                Some(pass.clone()),
+            );
+            assert_eq!(anna.status, "403 Forbidden", "{}", anna.body);
+            assert!(
+                anna.body.contains("missing capability store:read"),
+                "thread-only store must be missing cap, not skin_room: {}",
+                anna.body
+            );
+            assert!(!anna.body.contains("skin_room"), "{}", anna.body);
+
+            let abs = routes::handle_store_get_gated(
+                &store_ws_params(&docs_path, &[("name", "items"), ("id", "a")]),
+                Some(pass.clone()),
+            );
+            assert_eq!(abs.status, "403 Forbidden", "{}", abs.body);
+            assert!(abs.body.contains("skin_room"), "{}", abs.body);
+
+            let missing = routes::handle_store_get_gated(
+                &std::collections::HashMap::new(),
+                Some(pass.clone()),
+            );
+            assert_eq!(missing.status, "400 Bad Request", "{}", missing.body);
+            assert!(missing.body.contains("workspace"), "{}", missing.body);
+
+            let platform = k2_core::skin::SkinPass {
+                id: uuid::Uuid::new_v4().to_string(),
+                principal_id: None,
+                username: "vercel".into(),
+                caps: vec![k2_core::skin::CAP_STORE_READ.into()],
+                rooms: vec![docs_id.clone()],
+                session: false,
+                room_policy: k2_core::skin::RoomPolicy::new(),
+            };
+            let n = fake.recorded().len();
+            let plat = routes::handle_store_get_gated(
+                &store_ws_params(&docs_h, &[("name", "items"), ("id", "a")]),
+                Some(platform),
+            );
+            assert_eq!(plat.status, "403 Forbidden", "{}", plat.body);
+            assert!(
+                plat.body.contains("platform tokens cannot use store"),
+                "{}",
+                plat.body
+            );
+            let rec_plat = fake.recorded()[n..].join("\n");
+            assert!(
+                !rec_plat.contains("set_config('k2.skin_principal'"),
+                "platform store GET must not stamp GUC: {rec_plat}"
+            );
+
+            let owner = routes::handle_store_get_gated(
+                &{
+                    let mut p = std::collections::HashMap::new();
+                    p.insert("project".into(), docs_path.clone());
+                    p.insert("name".into(), "items".into());
+                    p.insert("id".into(), "a".into());
+                    p
+                },
+                None,
+            );
+            assert_eq!(
+                owner.status, "200 OK",
+                "owner path still works: {}",
+                owner.body
+            );
+        });
+
+        let _ = std::fs::remove_dir_all(docs_dir);
+        let _ = std::fs::remove_dir_all(anna_dir);
+        let _ = (docs_id, anna_id);
     }
 }

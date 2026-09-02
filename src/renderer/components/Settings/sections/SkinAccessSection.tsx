@@ -96,7 +96,8 @@ export const DEFAULT_SKIN_CAPS = ['thread:read', 'thread:post'] as const
 export const SKIN_FILE_CAPS = ['files:read', 'files:write'] as const
 export const SKIN_TICKET_CAPS = ['tickets:read', 'tickets:post'] as const
 export const SKIN_WIKI_CAPS = ['wiki:read'] as const
-export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS] as const
+export const SKIN_STORE_CAPS = ['store:read'] as const
+export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS] as const
 
 export type FrontDoorMode = 'connect' | 'direct'
 

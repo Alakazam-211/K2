@@ -11,8 +11,8 @@ use std::collections::HashSet;
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::{
-    self, RoomPolicy, CAP_FILES_READ, CAP_FILES_WRITE, CAP_THREAD_POST, CAP_THREAD_READ,
-    CAP_TICKETS_POST, CAP_TICKETS_READ, CAP_WIKI_READ,
+    self, RoomPolicy, CAP_FILES_READ, CAP_FILES_WRITE, CAP_STORE_READ, CAP_THREAD_POST,
+    CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ, CAP_WIKI_READ,
 };
 use k2_core::skin_door;
 
@@ -711,6 +711,24 @@ pub fn skin_terminal_forbidden() -> CliResponse {
     }
 }
 
+/// `GET /cli/db/dsn` with a skin token — guests never hold a DSN.
+pub fn skin_dsn_forbidden() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: r#"{"error":"skin tokens cannot use database credentials"}"#.to_string(),
+    }
+}
+
+/// Platform `--name` tokens cannot store-read (no principal to stamp).
+pub fn platform_store_forbidden() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: r#"{"error":"platform tokens cannot use store"}"#.to_string(),
+    }
+}
+
 /// Host belt: `Host: skin.*` must never be a kingdom door even for
 /// `token_ok` / Connect sessions. Teaching JSON, fail loud.
 pub fn skin_host_forbidden(path: &str) -> Option<CliResponse> {
@@ -740,6 +758,7 @@ pub const FILES_WRITE: &str = CAP_FILES_WRITE;
 pub const TICKETS_READ: &str = CAP_TICKETS_READ;
 pub const TICKETS_POST: &str = CAP_TICKETS_POST;
 pub const WIKI_READ: &str = CAP_WIKI_READ;
+pub const STORE_READ: &str = CAP_STORE_READ;
 
 const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 skin user add/remove/password, k2 skin role create/update/remove, k2 skin user role/unassign, skin-token create/revoke/rooms; use k2 skin user list / k2 skin role list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin.";
 
@@ -1036,6 +1055,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
         "ok": true,
         "token": raw.clone(),
         "username": principal.username,
+        "principalId": principal.id,
         "rooms": meta.rooms,
         "roomHandles": meta.room_handles,
         "caps": meta.caps,

@@ -15,8 +15,9 @@
 //! tokens — high-entropy CSPRNG, not argon2).
 //!
 //! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`,
-//! `tickets:read`, `tickets:post`, `wiki:read`. Empty/missing caps stay
-//! Thread-only — never silent-add files, tickets, or wiki. Never `pty:*`.
+//! `tickets:read`, `tickets:post`, `wiki:read`, `store:read`. Empty/missing
+//! caps stay Thread-only — never silent-add files, tickets, wiki, or store.
+//! Never `pty:*`. `store:write` stays unknown (400).
 //! Assigned guests snapshot the role onto `session=1`; platform tokens
 //! keep their own caps+rooms (not a role). Session policy is **per-room**
 //! (`room_policy` map). Platform `--name` tokens stay flat.
@@ -50,11 +51,13 @@ pub const CAP_TICKETS_READ: &str = "tickets:read";
 pub const CAP_TICKETS_POST: &str = "tickets:post";
 /// Wiki read (`GET /cli/wiki/index`, `GET /cli/wiki/note`). Does not imply write.
 pub const CAP_WIKI_READ: &str = "wiki:read";
+/// Workspace dump store read (`GET /cli/store/list|get|query`). Does not imply write.
+pub const CAP_STORE_READ: &str = "store:read";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// Empty/missing `--caps` stay Thread-only. Never silent-add files, tickets, or wiki.
+/// Empty/missing `--caps` stay Thread-only. Never silent-add files, tickets, wiki, or store.
 const DEFAULT_CAPS: &[&str] = &[CAP_THREAD_READ, CAP_THREAD_POST];
 const ACCEPTED_CAPS: &[&str] = &[
     CAP_THREAD_READ,
@@ -64,6 +67,7 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_TICKETS_READ,
     CAP_TICKETS_POST,
     CAP_WIKI_READ,
+    CAP_STORE_READ,
 ];
 
 /// Connect / Server Access names — never a skin role.
@@ -172,9 +176,10 @@ pub fn normalize_username(raw: &str) -> Result<String, String> {
 }
 
 /// Parse + validate cap names. Empty/missing → default Thread read+post
-/// (never silent-add `files:*`, `tickets:*`, or `wiki:read`). Unknown names
-/// fail loud. Write-only is accepted at mint; list/read still require
-/// `files:read` / `tickets:read` / `wiki:read` listed.
+/// (never silent-add `files:*`, `tickets:*`, `wiki:read`, or `store:read`).
+/// Unknown names fail loud. Write-only is accepted at mint; list/read still
+/// require `files:read` / `tickets:read` / `wiki:read` / `store:read` listed.
+/// `store:write` is unknown (400).
 pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     match raw {
@@ -2646,6 +2651,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_caps_accepts_store_read_never_silent_add() {
+        let empty = parse_caps(None).expect("empty default");
+        assert_eq!(empty, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+        assert!(
+            !empty.iter().any(|c| c == CAP_STORE_READ),
+            "empty caps must stay Thread-only, never silent-add store: {empty:?}"
+        );
+        let missing = parse_caps(Some(&[])).expect("missing default");
+        assert_eq!(missing, vec![CAP_THREAD_READ, CAP_THREAD_POST]);
+        assert!(
+            !missing.iter().any(|c| c == CAP_STORE_READ),
+            "missing caps must stay Thread-only: {missing:?}"
+        );
+
+        let read = parse_caps(Some(&["store:read".into()])).expect("store:read");
+        assert_eq!(read, vec![CAP_STORE_READ]);
+        let mixed = parse_caps(Some(&["store:read".into(), "thread:read".into()])).expect("mixed");
+        assert_eq!(mixed, vec![CAP_STORE_READ, CAP_THREAD_READ]);
+
+        let err = parse_caps(Some(&["store:write".into()])).unwrap_err();
+        assert!(err.contains("unknown capability"), "{err}");
+        assert!(err.contains("store:write"), "{err}");
+        let err = parse_caps(Some(&["pty:write".into()])).unwrap_err();
+        assert!(err.contains("pty:write"), "{err}");
+        let err = parse_caps(Some(&["grid".into()])).unwrap_err();
+        assert!(err.contains("grid"), "{err}");
+    }
+
+    #[test]
     fn mint_requires_principal_and_rejects_unknown_caps() {
         with_temp_home(|| {
             let room = uuid::Uuid::new_v4().to_string();
@@ -2683,6 +2717,7 @@ mod tests {
             assert!(!pass.has_cap(CAP_FILES_READ));
             assert!(!pass.has_cap(CAP_FILES_WRITE));
             assert!(!pass.has_cap(CAP_WIKI_READ));
+            assert!(!pass.has_cap(CAP_STORE_READ));
             assert_eq!(pass.rooms, vec![room.clone()]);
 
             let err = create_token("bob", None, std::slice::from_ref(&room)).unwrap_err();
@@ -3170,6 +3205,9 @@ mod tests {
             let mut wiki_ok = RoomPolicy::new();
             wiki_ok.insert("anna".into(), vec![CAP_WIKI_READ.into()]);
             create_role("archivist", &wiki_ok).expect("wiki:read is accepted");
+            let mut store_ok = RoomPolicy::new();
+            store_ok.insert("anna".into(), vec![CAP_STORE_READ.into()]);
+            create_role("records", &store_ok).expect("store:read is accepted");
             for cap in ["store:write", "pty:write", "wiki:write", "grid"] {
                 let mut p = RoomPolicy::new();
                 p.insert("anna".into(), vec![cap.into()]);
@@ -3485,6 +3523,39 @@ mod tests {
                 "wiki on docs must not grant wiki on anna: {pass:?}"
             );
             assert!(pass.has_cap_in_room(&docs, CAP_WIKI_READ));
+            assert!(pass.has_cap_in_room(&anna, CAP_THREAD_READ));
+        });
+    }
+
+    #[test]
+    fn session_store_has_cap_in_room_is_not_cartesian() {
+        with_temp_home(|| {
+            add_principal("bob").unwrap();
+            let anna = uuid::Uuid::new_v4().to_string();
+            let docs = uuid::Uuid::new_v4().to_string();
+            let mut policy = RoomPolicy::new();
+            policy.insert(
+                anna.clone(),
+                vec![CAP_THREAD_READ.into(), CAP_THREAD_POST.into()],
+            );
+            policy.insert(
+                docs.clone(),
+                vec![
+                    CAP_THREAD_READ.into(),
+                    CAP_THREAD_POST.into(),
+                    CAP_STORE_READ.into(),
+                ],
+            );
+            create_role("dentist", &policy).unwrap();
+            assign_role("bob", "dentist").unwrap();
+            let (_m, raw) = create_session_token("bob").unwrap();
+            let pass = resolve_skin_token(&raw).expect("session");
+            assert!(pass.has_cap(CAP_STORE_READ), "union still lists store");
+            assert!(
+                !pass.has_cap_in_room(&anna, CAP_STORE_READ),
+                "store on docs must not grant store on anna: {pass:?}"
+            );
+            assert!(pass.has_cap_in_room(&docs, CAP_STORE_READ));
             assert!(pass.has_cap_in_room(&anna, CAP_THREAD_READ));
         });
     }

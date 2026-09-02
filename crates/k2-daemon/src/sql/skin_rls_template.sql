@@ -1,27 +1,26 @@
--- Optional dump template for a skin_* Postgres role
--- (prd-workspace-data-sidecar-v1 D28). Copy into the workspace
+-- Optional dump template for skin row isolation via GUC
+-- (prd-skin-chunk-db-rls-v1). Copy into the workspace
 -- `.k2/db/migrations` only if you want this policy in the dump.
 -- `k2 db create` does NOT apply this file and does not SET ROLE.
+--
+-- K2 stamps `k2.skin_principal` on session store reads:
+--   SELECT set_config('k2.skin_principal', '<uuid>', true)
+-- LOGIN is the workspace agent (`ws_*_agent`). Guests never hold a DSN.
+-- Do not mint a per-dentist Postgres role. Do not FORCE RLS.
 --
 -- subject / principal id = the K2 skin principal UUID from SQLite
 -- (not Hydra, not Connect). Hydra `sub` (when the OIDC sidecar is on)
 -- is that same id.
 --
--- Do not FORCE RLS — empty FORCE = zero rows. K2 refuses FORCE in v1.
 -- create_database GRANTs to ws_*_agent stay unchanged.
--- NOLOGIN: skins do not log in to Postgres; a later SET ROLE helper
--- is deferred.
 
--- CREATE ROLE skin_<id> NOLOGIN;
-
--- Example (replace <id> with the skin principal UUID, hyphens → underscores):
--- CREATE ROLE skin_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee NOLOGIN;
+-- Example POLICY (dentist A and dentist B see different rows because
+-- their session GUC differs — not because they hold different roles):
 --
--- GRANT SELECT ON TABLE public.example TO skin_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee;
+-- ALTER TABLE public.example ENABLE ROW LEVEL SECURITY;
 --
 -- CREATE POLICY skin_own_rows ON public.example
 --   FOR SELECT
---   TO skin_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee
---   USING (principal_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+--   USING (principal_id::text = current_setting('k2.skin_principal', true));
 --
 -- Do not FORCE RLS on public.example (K2 migrate refuses FORCE).

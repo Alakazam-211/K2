@@ -463,6 +463,13 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
             "browser JSON must include roomAccess: {}",
             ok.body
         );
+        let pid = ov["principalId"].as_str().unwrap_or("");
+        assert!(
+            !pid.is_empty() && uuid::Uuid::parse_str(pid).is_ok(),
+            "session login JSON may include principalId UUID: {}",
+            ok.body
+        );
+        assert!(!pid.starts_with("k2skn_"), "{}", ok.body);
         let set_cookie = header_value(&ok.headers, "set-cookie").expect("Set-Cookie");
         assert!(set_cookie.contains("k2_skin_ui="), "{set_cookie}");
         assert!(!set_cookie.contains("k2_skin_session"), "{set_cookie}");
@@ -575,6 +582,30 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
             wiki.body
         );
         assert_ne!(wiki.status, 404, "unassigned wiki must not 404");
+
+        let store = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/store/list?workspace={handle}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(
+            store.status, 403,
+            "unassigned thread-only store:read; {}",
+            store.body
+        );
+        assert!(
+            store.body.contains("missing capability store:read"),
+            "must be missing cap, not 404: {}",
+            store.body
+        );
+        assert!(
+            !store.body.contains("skin_room"),
+            "thread-only store must not be skin_room: {}",
+            store.body
+        );
+        assert_ne!(store.status, 404, "unassigned store must not 404");
 
         let grid = http_ex(
             gport,
@@ -2179,5 +2210,212 @@ async fn publish_run_skin_gateway_wiki_per_room() {
         let _ = std::fs::remove_dir_all(&anna_path);
         let _ = std::fs::remove_dir_all(&docs_path);
         let _ = anna_id;
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_store_per_room() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_anna_id, _anna_conv, anna_path) = seed_workspace(&anna);
+        let (_docs_id, _docs_conv, docs_path) = seed_workspace(&docs);
+        add_user(dport, "bob");
+        set_password(dport, "bob", "s3cret-horse");
+
+        let created = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"dentist"}"#),
+        );
+        assert_eq!(created.status, 200, "role create; {}", created.body);
+        let anna_room = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{anna}","caps":["thread:read","thread:post"]}}"#
+            )),
+        );
+        assert_eq!(anna_room.status, 200, "anna room; {}", anna_room.body);
+        let docs_room = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"dentist","handle":"{docs}","caps":["thread:read","thread:post","store:read"]}}"#
+            )),
+        );
+        assert_eq!(docs_room.status, 200, "docs room; {}", docs_room.body);
+        let assign = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/assign?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"bob","role":"dentist"}"#),
+        );
+        assert_eq!(assign.status, 200, "assign; {}", assign.body);
+
+        let gport = free_port();
+        publish_skin(dport, &anna_path, gport, None);
+
+        let login = http(
+            gport,
+            "POST",
+            "/login",
+            Some(r#"{"username":"bob","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "gateway login; {}", login.body);
+        assert!(!login.body.contains("k2skn_"), "{}", login.body);
+        let set_cookie = header_value(&login.headers, "set-cookie").expect("Set-Cookie");
+        let sid = cookie_k2_skin_ui(&set_cookie).expect("opaque id");
+        let cookie = format!("Cookie: k2_skin_ui={sid}");
+
+        let docs_list = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/store/list?workspace={docs}"),
+            None,
+            &cookie,
+        );
+        assert_ne!(
+            docs_list.status, 401,
+            "allowlisted store; {}",
+            docs_list.body
+        );
+        assert!(
+            !docs_list.body.contains("missing capability store:read"),
+            "docs with store:read must not be missing cap: {}",
+            docs_list.body
+        );
+        assert!(!docs_list.body.contains("k2skn_"), "{}", docs_list.body);
+
+        let anna_list = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/store/list?workspace={anna}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(anna_list.status, 403, "anna store list; {}", anna_list.body);
+        assert!(
+            anna_list.body.contains("missing capability store:read"),
+            "anna list must be missing cap, not skin_room: {}",
+            anna_list.body
+        );
+        assert!(
+            !anna_list.body.contains("skin_room"),
+            "anna list must not be skin_room: {}",
+            anna_list.body
+        );
+
+        let abs_list = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/store/list?workspace={docs_path}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(abs_list.status, 403, "abs workspace=; {}", abs_list.body);
+        assert!(
+            abs_list.body.contains("skin_room"),
+            "abs path workspace= must be skin_room: {}",
+            abs_list.body
+        );
+
+        let put = http_ex(
+            gport,
+            "POST",
+            "/cli/store/put",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","name":"items","id":"a","json":{{}}}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(put.status, 404, "put 404 on gateway; {}", put.body);
+        assert!(put.body.contains("not found"), "{}", put.body);
+
+        let foo = http_ex(gport, "GET", "/cli/store/foo", None, &cookie);
+        assert_eq!(foo.status, 404, "store foo; {}", foo.body);
+
+        let db_list = http_ex(gport, "GET", "/cli/db/list", None, &cookie);
+        assert_eq!(
+            db_list.status, 404,
+            "--skin /cli/db/* 404; {}",
+            db_list.body
+        );
+
+        let gw_dsn = http_ex(gport, "GET", "/cli/db/dsn", None, &cookie);
+        assert_eq!(gw_dsn.status, 404, "gateway dsn 404; {}", gw_dsn.body);
+
+        let daemon_login = http(
+            dport,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"bob","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(daemon_login.status, 200, "{}", daemon_login.body);
+        let session_tok = json(&daemon_login.body)["token"]
+            .as_str()
+            .expect("session token")
+            .to_string();
+        assert!(session_tok.starts_with("k2skn_"), "{session_tok}");
+        let dsn = http(
+            dport,
+            "GET",
+            &format!("/cli/db/dsn?token={session_tok}"),
+            None,
+        );
+        assert_eq!(dsn.status, 403, "k2skn_ dsn; {}", dsn.body);
+        assert!(
+            dsn.body
+                .contains("skin tokens cannot use database credentials"),
+            "teaching 403: {}",
+            dsn.body
+        );
+        assert!(
+            !dsn.body.contains("postgres://"),
+            "must not invent DSN: {}",
+            dsn.body
+        );
+
+        let plat = mint(
+            dport,
+            "vercel-store",
+            &["store:read", "thread:read"],
+            &[&docs],
+        );
+        let plat_store = http(
+            dport,
+            "GET",
+            &format!("/cli/store/list?token={plat}&workspace={docs}"),
+            None,
+        );
+        assert_eq!(
+            plat_store.status, 403,
+            "platform mint cannot store; {}",
+            plat_store.body
+        );
+        assert!(
+            plat_store.body.contains("platform tokens cannot use store"),
+            "{}",
+            plat_store.body
+        );
+        let plat_dsn = http(dport, "GET", &format!("/cli/db/dsn?token={plat}"), None);
+        assert_eq!(plat_dsn.status, 403, "platform dsn; {}", plat_dsn.body);
+        assert!(
+            plat_dsn
+                .body
+                .contains("skin tokens cannot use database credentials"),
+            "{}",
+            plat_dsn.body
+        );
+
+        stop_skin(dport, &anna_path);
+        let _ = std::fs::remove_dir_all(&anna_path);
+        let _ = std::fs::remove_dir_all(&docs_path);
     });
 }

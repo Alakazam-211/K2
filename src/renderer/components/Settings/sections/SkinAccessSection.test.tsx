@@ -188,6 +188,7 @@ describe('parsers', () => {
         hasPassword: false,
         roleId: null,
         roleName: null,
+        email: null,
       },
     ])
     expect(parseSkinUsers([USER_BOB])).toEqual([
@@ -199,8 +200,12 @@ describe('parsers', () => {
         hasPassword: false,
         roleId: null,
         roleName: null,
+        email: null,
       },
     ])
+    expect(
+      parseSkinUsers({ users: [{ username: 'cara', email: 'cara@clinic.com' }] })[0].email,
+    ).toBe('cara@clinic.com')
     expect(
       parseSkinUsers({ users: [{ username: 'cara', hasPassword: true }] })[0].hasPassword,
     ).toBe(true)
@@ -578,6 +583,53 @@ describe('SkinAccessSection', () => {
       })
     })
     expect(h.daemonCliPost.mock.calls.map((c) => String(c[0]))).not.toContain('users/set-password')
+  })
+
+  it('adds a guest with optional email and sets per-row email via skin/users/email', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'skin/front-door') {
+        return { mode: 'connect', connectUrl: 'https://skin.acme.k2.dev', subdomain: 'acme' }
+      }
+      if (route === 'skin/users') {
+        return { users: [{ ...USER_ALICE, email: 'alice@clinic.com' }, USER_BOB] }
+      }
+      if (route === 'skin/roles') return { roles: [] }
+      if (route === 'skin-tokens') return { tokens: [KEY_ROW] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      throw new Error(`unexpected GET ${route}`)
+    })
+    render(<SkinAccessSection />)
+    await loaded()
+    fireEvent.change(screen.getByLabelText('New skin username'), { target: { value: 'carol' } })
+    fireEvent.change(screen.getByLabelText('New skin email'), {
+      target: { value: 'carol@clinic.com' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users', {
+        username: 'carol',
+        email: 'carol@clinic.com',
+      })
+    })
+    fireEvent.change(screen.getByLabelText('alice email'), {
+      target: { value: 'alice@docs.com' },
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Set email' })[0])
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/email', {
+        username: 'alice',
+        email: 'alice@docs.com',
+      })
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Clear email' })[0])
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/email', {
+        username: 'alice',
+        email: '',
+      })
+    })
+    expect(h.daemonCliPost.mock.calls.map((c) => String(c[0]))).not.toContain('users/email')
   })
 
   it('mints disabled until an agent is checked', async () => {

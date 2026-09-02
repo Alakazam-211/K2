@@ -215,6 +215,17 @@ pub fn handle_users_get() -> CliResponse {
     }
 }
 
+fn email_field(v: &serde_json::Value) -> Result<Option<&str>, CliResponse> {
+    match v.get("email") {
+        None => Ok(None),
+        Some(x) if x.is_null() => Ok(None),
+        Some(x) => match x.as_str() {
+            Some(s) => Ok(Some(s)),
+            None => Err(CliResponse::bad_request("invalid email")),
+        },
+    }
+}
+
 pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
@@ -223,7 +234,11 @@ pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username", "name"]) else {
         return CliResponse::bad_request("missing username");
     };
-    match skin::add_principal(username) {
+    let email = match email_field(&v) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    match skin::add_principal_with_email(username, email) {
         Ok(p) => {
             k2_core::log_debug!("[skin] actor={actor} added principal {}", p.username);
             let password = str_field(&v, &["password"]);
@@ -237,6 +252,31 @@ pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {
                     Err(e) => return CliResponse::bad_request(e),
                 }
             }
+            CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_users_email(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = str_field(&v, &["username", "name"]) else {
+        return CliResponse::bad_request("missing username");
+    };
+    let email = match email_field(&v) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    match skin::set_principal_email(username, email) {
+        Ok(p) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} set email for {} has_email={}",
+                p.username,
+                p.email.is_some()
+            );
             CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
         }
         Err(e) => CliResponse::bad_request(e),
@@ -1068,6 +1108,12 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
         !body.contains("password_hash") && !body.contains("passwordHash"),
         "password_hash must never be on the wire"
     );
+    debug_assert!(
+        serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .map_or(true, |v| v.get("email").is_none()),
+        "login JSON must not include email"
+    );
     SkinLoginReply {
         response: CliResponse::ok_json(body),
         token: Some(raw),
@@ -1197,8 +1243,14 @@ pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str) -> Cl
         Err(e) => return CliResponse::internal_error(e),
     }
     match skin::mint_password_reset(&username) {
-        Ok(Some(token)) => {
-            let body = serde_json::json!({ "ok": true, "token": token }).to_string();
+        Ok(Some(mint)) => {
+            let body = serde_json::json!({
+                "ok": true,
+                "token": mint.token,
+                "expiresAt": mint.expires_at,
+                "email": mint.email,
+            })
+            .to_string();
             debug_assert!(
                 !body.contains("k2skn_"),
                 "reset mint must not be a skin pass"

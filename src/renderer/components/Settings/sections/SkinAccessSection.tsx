@@ -32,7 +32,7 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
     id: 'skin-access.users',
     section: 'skin-access',
     label: 'Guests',
-    description: 'Guest list for skins — passwords and default rooms; not platform tokens',
+    description: 'Guest list for skins — passwords, email, and default rooms; not platform tokens',
     keywords: [
       'skin users',
       'roster',
@@ -42,6 +42,7 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
       'remove',
       'search',
       'password',
+      'email',
       'login',
     ],
     group: 'Guests',
@@ -138,6 +139,7 @@ export type SkinUser = {
   hasPassword: boolean
   roleId: string | null
   roleName: string | null
+  email: string | null
 }
 
 export type SkinRoomAccess = {
@@ -340,6 +342,7 @@ export function parseSkinUsers(raw: unknown): SkinUser[] {
       hasPassword: asBool(rec.hasPassword) ?? asBool(rec.has_password) ?? false,
       roleId: asString(rec.roleId) ?? asString(rec.role_id),
       roleName: asString(rec.roleName) ?? asString(rec.role_name),
+      email: asString(rec.email),
     }]
   })
 }
@@ -506,10 +509,12 @@ export function SkinAccessSection(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [userQuery, setUserQuery] = useState('')
   const [newUsername, setNewUsername] = useState('')
+  const [newEmail, setNewEmail] = useState('')
   const [addBusy, setAddBusy] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null)
   const [passwordDraft, setPasswordDraft] = useState<Record<string, string>>({})
+  const [emailDraft, setEmailDraft] = useState<Record<string, string>>({})
   const [mintName, setMintName] = useState('')
   const [mintCaps, setMintCaps] = useState<Set<string>>(() => new Set(DEFAULT_SKIN_CAPS))
   const [mintRooms, setMintRooms] = useState<Set<string>>(() => new Set())
@@ -595,7 +600,10 @@ export function SkinAccessSection(): React.JSX.Element {
   const visibleUsers = useMemo(() => {
     const q = userQuery.trim().toLowerCase()
     if (!q) return users
-    return users.filter((u) => u.username.toLowerCase().includes(q))
+    return users.filter(
+      (u) =>
+        u.username.toLowerCase().includes(q) || (u.email ?? '').toLowerCase().includes(q),
+    )
   }, [users, userQuery])
 
   const persistDoor = useCallback(
@@ -659,18 +667,22 @@ export function SkinAccessSection(): React.JSX.Element {
   const addUser = useCallback(async () => {
     const username = newUsername.trim().toLowerCase()
     if (!username) return
+    const email = newEmail.trim()
     setAddBusy(true)
     setAddError(null)
     try {
-      await daemonCliPost('skin/users', { username })
+      const body: { username: string; email?: string } = { username }
+      if (email) body.email = email
+      await daemonCliPost('skin/users', body)
       setNewUsername('')
+      setNewEmail('')
       await refresh()
     } catch (e) {
       setAddError(errText(e))
     } finally {
       setAddBusy(false)
     }
-  }, [newUsername, refresh])
+  }, [newUsername, newEmail, refresh])
 
   const removeUser = useCallback(
     async (username: string) => {
@@ -723,6 +735,24 @@ export function SkinAccessSection(): React.JSX.Element {
       try {
         await daemonCliPost('skin/users/password', { username, password: password ?? '' })
         setPasswordDraft((prev) => ({ ...prev, [username]: '' }))
+        await refresh()
+      } catch (e) {
+        setAddError(errText(e))
+      }
+    },
+    [refresh],
+  )
+
+  const setUserEmail = useCallback(
+    async (username: string, email: string | null) => {
+      setAddError(null)
+      try {
+        await daemonCliPost('skin/users/email', { username, email: email ?? '' })
+        setEmailDraft((prev) => {
+          const next = { ...prev }
+          delete next[username]
+          return next
+        })
         await refresh()
       } catch (e) {
         setAddError(errText(e))
@@ -1004,7 +1034,9 @@ export function SkinAccessSection(): React.JSX.Element {
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
               Guest list for skins. Not the Server Access / Connect operator roster. Set a
               password so the skin can POST /cli/skin/login (the skin owns the login UI).
-              Guests never see a secret. No public register. Do not mint a key for this user.
+              Email is optional — needed to mint a password-reset token. K2 never emails
+              guests. Guests never see a secret. No public register. Do not mint a key for
+              this user.
             </p>
             <form
               className="flex flex-wrap gap-1.5 items-center"
@@ -1022,6 +1054,17 @@ export function SkinAccessSection(): React.JSX.Element {
                 value={newUsername}
                 onChange={(e) => setNewUsername(e.target.value)}
                 aria-label="New skin username"
+              />
+              <input
+                className={`${INPUT_CLS} flex-1 min-w-[8rem]`}
+                placeholder="email (optional)"
+                type="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                aria-label="New skin email"
               />
               <button
                 type="submit"
@@ -1234,6 +1277,48 @@ export function SkinAccessSection(): React.JSX.Element {
                       ) : (
                         <span className="text-[10px] text-[var(--color-text-muted)]">
                           no K2 login
+                        </span>
+                      )}
+                    </form>
+                    <form
+                      className="flex flex-wrap gap-1.5 items-center"
+                      onSubmit={(e) => {
+                        e.preventDefault()
+                        const em = (emailDraft[u.username] ?? u.email ?? '').trim()
+                        void setUserEmail(u.username, em)
+                      }}
+                    >
+                      <input
+                        type="email"
+                        className={`${INPUT_CLS} flex-1 min-w-[8rem]`}
+                        placeholder={u.email ? 'email' : 'set email'}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        autoComplete="off"
+                        aria-label={`${u.username} email`}
+                        value={emailDraft[u.username] ?? u.email ?? ''}
+                        onChange={(e) =>
+                          setEmailDraft((prev) => ({ ...prev, [u.username]: e.target.value }))
+                        }
+                      />
+                      <button
+                        type="submit"
+                        className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
+                      >
+                        Set email
+                      </button>
+                      {u.email ? (
+                        <button
+                          type="button"
+                          onClick={() => void setUserEmail(u.username, null)}
+                          className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
+                        >
+                          Clear email
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-[var(--color-text-muted)]">
+                          no email
                         </span>
                       )}
                     </form>

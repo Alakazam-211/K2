@@ -5364,11 +5364,13 @@ Usage: k2 skin <user|role|hydra> ...
 
   Hosting a skin UI is k2 publish, not this command. See k2 study skins.
 
-  k2 skin user add <username> [--password-stdin]
+  k2 skin user add <username> [--email e] [--password-stdin]
                                         Add a skin principal (not a Connect user)
+  k2 skin user email <username> [--email e]
+                                        Set/clear guest email (omit/empty clears)
   k2 skin user password <username> --password-stdin
                                         Set/reset K2-login password (empty stdin clears)
-  k2 skin user list                     Roster (username  role|—  rooms|—; no secrets)
+  k2 skin user list                     Roster (username  role|—  rooms|—  email|—; no secrets)
   k2 skin user remove <username>        Drop principal + login sessions (platform tokens survive)
   k2 skin user rooms <username> --agent sales [--apply-tokens]
                                         Set default rooms (unassigned guests only)
@@ -5429,26 +5431,31 @@ cmd_skin() {
             shift || true
             case "$action" in
                 add)
-                    local username="" password_stdin=0
+                    local username="" password_stdin=0 email=""
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --password-stdin) password_stdin=1; shift ;;
-                            --help|-h) echo "Usage: k2 skin user add <username> [--password-stdin]" >&2; exit 0 ;;
+                            --email) email="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --email=*) email="${1#--email=}"; shift ;;
+                            --help|-h) echo "Usage: k2 skin user add <username> [--email e] [--password-stdin]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$username" ]] && username="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$username" ]] && { echo "Usage: k2 skin user add <username> [--password-stdin]" >&2; exit 1; }
+                    [[ -z "$username" ]] && { echo "Usage: k2 skin user add <username> [--email e] [--password-stdin]" >&2; exit 1; }
                     local pw=""
                     if [[ "$password_stdin" -eq 1 ]]; then
                         pw=$(cat)
                     fi
                     local body raw
-                    body=$(K2_SKIN_USER="$username" K2_SKIN_PW="$pw" K2_SKIN_PW_SET="$password_stdin" python3 -c '
+                    body=$(K2_SKIN_USER="$username" K2_SKIN_PW="$pw" K2_SKIN_PW_SET="$password_stdin" K2_SKIN_EMAIL="$email" python3 -c '
 import json,os
 b={"username": os.environ["K2_SKIN_USER"]}
 if os.environ.get("K2_SKIN_PW_SET","0") == "1":
     b["password"]=os.environ.get("K2_SKIN_PW","")
+em=os.environ.get("K2_SKIN_EMAIL","")
+if em:
+    b["email"]=em
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/users" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
@@ -5482,6 +5489,30 @@ import json,sys
 d=json.load(sys.stdin)
 print("Skin password %s for %s" % ("set" if d.get("hasPassword") else "cleared", d.get("username","")))'
                     ;;
+                email)
+                    local username="" email=""
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --email) email="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --email=*) email="${1#--email=}"; shift ;;
+                            --help|-h) echo "Usage: k2 skin user email <username> [--email e]" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$username" ]] && username="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" ]] && { echo "Usage: k2 skin user email <username> [--email e]" >&2; exit 1; }
+                    local body raw
+                    body=$(K2_SKIN_USER="$username" K2_SKIN_EMAIL="$email" python3 -c '
+import json,os
+print(json.dumps({"username": os.environ["K2_SKIN_USER"], "email": os.environ.get("K2_SKIN_EMAIL","")}))')
+                    raw=$(cli_post_json "/cli/skin/users/email" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+em=d.get("email") or ""
+print("Skin email %s for %s" % (("set to %s" % em) if em else "cleared", d.get("username","")))'
+                    ;;
                 list|"")
                     local raw roles_raw
                     raw=$(cli_request "/cli/skin/users")
@@ -5503,7 +5534,8 @@ for u in users:
     else:
         handles=u.get("defaultRoomHandles") or u.get("default_room_handles") or []
     rooms=", ".join(handles) if handles else "—"
-    print("%s  %s  %s" % (name, role, rooms))'
+    email=u.get("email") or "—"
+    print("%s  %s  %s  %s" % (name, role, rooms, email))'
                     ;;
                 remove|rm)
                     local username="${1:-}"
@@ -5574,7 +5606,7 @@ d=json.load(sys.stdin)
 print("Skin user %s unassigned." % d.get("username",""))'
                     ;;
                 *)
-                    echo "Usage: k2 skin user <add|list|remove|rooms|password|role|unassign>" >&2
+                    echo "Usage: k2 skin user <add|list|remove|rooms|password|email|role|unassign>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -13542,11 +13574,21 @@ cmd_schema() {
     },
     {
       "name": "skin user add",
-      "usage": "k2 skin user add <username> [--password-stdin]",
-      "description": "Add a skin principal (not a Connect user / not a /v1 API key). Optional password from stdin for K2 skin login.",
+      "usage": "k2 skin user add <username> [--email e] [--password-stdin]",
+      "description": "Add a skin principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 skin login.",
       "args": [{"name": "username", "required": true}],
       "flags": [
+        {"name": "--email", "arg": "e", "description": "Optional guest email (password-reset plumbing; K2 never mails guests)."},
         {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."}
+      ]
+    },
+    {
+      "name": "skin user email",
+      "usage": "k2 skin user email <username> [--email e]",
+      "description": "Set or clear a Skin Access guest email. Omit or empty --email clears. Needed to mint a password-reset token.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--email", "arg": "e", "description": "Guest email. Omit or empty clears."}
       ]
     },
     {
@@ -13561,7 +13603,7 @@ cmd_schema() {
     {
       "name": "skin user list",
       "usage": "k2 skin user list",
-      "description": "List skin principals as username  role|—  rooms|— (no secrets).",
+      "description": "List skin principals as username  role|—  rooms|—  email|— (no secrets).",
       "args": [],
       "flags": []
     },
@@ -14681,11 +14723,12 @@ HOW TO MAKE ONE (copy this)
      → https://<label>.<your-sub>.k2.dev  (Pro parent)
      Local only: add --no-tunnel.
   2. Owner adds guests and passwords (Settings → Sidecars →
-     Skin Access, or `k2 skin user add` / `password`). Guests
-     log in; they never copy a key. Platform tokens (BYO
-     servers) are separate: `k2 skin-token create --name vercel
-     --agent sales`. Agents: exit 3. Do not sudo k2 — that is
-     not an owner passport. Do not mint a key for this user.
+     Skin Access, or `k2 skin user add` / `password` / `email`).
+     Email is optional. Guests log in; they never copy a key.
+     Platform tokens (BYO servers) are separate: `k2 skin-token
+     create --name vercel --agent sales`. Agents: exit 3. Do not
+     sudo k2 — that is not an owner passport. Do not mint a key
+     for this user.
   3. Browser logs in on THIS origin:
        POST /login   {"username":"…","password":"…"}
      200 body (no token):
@@ -14721,13 +14764,16 @@ BYO BFF (not --skin)
 PASSWORD RESET
   Three exact POST paths (never a /cli/skin/password glob):
     POST /cli/skin/password/forgot  {"username":"…"}
+      username field matches username OR email.
       Mint = platform --name or owner. Guest session / agent hook /
-      Connect member → 403. 200 {ok:true, token} once when the guest
-      has a password; unknown / invalid username / no password →
-      200 {ok:true} no token. 60s per username string (even when no
-      user). Delivery is the operator BYO BFF. K2 never emails
-      guests. Never k2 mail. BFF must not return forgot JSON token
-      to the browser. Official --skin: this path 404s.
+      Connect member → 403. 200 {ok:true, token, expiresAt, email}
+      once when the guest has a password AND an email; unknown /
+      invalid username / invalid email string / no password / no
+      email → 200 {ok:true} no extra keys. 60s per presented string
+      (even when no user). Delivery is the operator BYO BFF. BFF
+      uses forgot JSON email. K2 never emails guests. Never k2 mail.
+      BFF must not return forgot JSON token to the browser.
+      Official --skin: this path 404s.
     POST /cli/skin/password/reset   {"token":"…","password":"…"}
       PUBLIC consume. Body only — never token= on the consume POST.
       Mail link may be /reset?token= (page query). Does not mint a
@@ -19201,7 +19247,7 @@ USERS (local daemon connect-user accounts)
                                                 Create account (password via prompt or stdin)
 
 SKIN (guest list + roles + k2skn_ passes — Thread rooms, never grid)
-  skin user add|list|remove|password|rooms      Skin principals (not Connect users)
+  skin user add|list|remove|password|email|rooms Skin principals (not Connect users)
   skin user role|unassign                       Assign/clear a skin role (not Connect --role)
   skin role create|list|update|remove           Named bundles of scopes + agents for guests
   skin-token create --name|list|revoke|rooms    Platform k2skn_ pass (secret once at create)

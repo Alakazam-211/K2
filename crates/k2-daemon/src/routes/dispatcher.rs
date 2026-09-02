@@ -826,6 +826,7 @@ async fn handle_one_request(
             | "/cli/skin/users/remove"
             | "/cli/skin/users/rooms"
             | "/cli/skin/users/password"
+            | "/cli/skin/users/email"
             | "/cli/skin/roles"
             | "/cli/skin/roles/update"
             | "/cli/skin/roles/remove"
@@ -5674,6 +5675,39 @@ async fn handle_one_request(
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
                             crate::skin_routes::handle_users_password(&body, &actor),
+                            &actor,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/users/email" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let actor = match owner_or_skin_manage_hook(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    ) {
+                        Ok(a) => a,
+                        Err(f) => {
+                            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            super::http::send_response(
+                                &mut *stream,
+                                f.status,
+                                f.content_type,
+                                &f.body,
+                            )
+                            .await;
+                            return DispatchOutcome::Done;
+                        }
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(
+                            crate::skin_routes::handle_users_email(&body, &actor),
                             &actor,
                         )
                     })

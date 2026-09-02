@@ -1208,6 +1208,10 @@ mod tests {
         );
         assert!(!allowlisted_http("GET", "/cli/skin/password/change"));
         assert!(!allowlisted_http("POST", "/cli/skin/users/password"));
+        assert!(
+            !allowlisted_http("POST", "/cli/skin/users/email"),
+            "users/email is roster mutate, not --skin"
+        );
     }
 
     #[test]

@@ -1641,6 +1641,17 @@ mod tests {
         );
         assert!(change.is_some(), "change is session-authed; CSRF required");
         assert_eq!(change.unwrap().status, "403 Forbidden");
+        let users_email = cookie_csrf_gate(
+            "POST",
+            "/cli/skin/users/email",
+            true,
+            "POST /cli/skin/users/email HTTP/1.1\r\n",
+        );
+        assert!(
+            users_email.is_some(),
+            "users/email is roster mutate; CSRF required"
+        );
+        assert_eq!(users_email.unwrap().status, "403 Forbidden");
     }
 
     #[test]

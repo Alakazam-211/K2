@@ -1467,6 +1467,26 @@ fn set_password(port: u16, username: &str, password: &str) {
     );
 }
 
+fn set_email(port: u16, username: &str, email: &str) {
+    let r = http(
+        port,
+        "POST",
+        &format!("/cli/skin/users/email?token={OWNER_TOKEN}"),
+        Some(&format!(r#"{{"username":"{username}","email":"{email}"}}"#)),
+    );
+    assert_eq!(r.status, 200, "set email; {}", r.body);
+}
+
+fn assert_forgot_miss(body: &str) {
+    let v = json(body);
+    assert_eq!(v["ok"], true, "{body}");
+    let obj = v.as_object().expect("object");
+    assert!(
+        obj.keys().all(|k| k == "ok"),
+        "miss must have no extra keys: {body}"
+    );
+}
+
 fn cookie_get(port: u16, path: &str, host: &str, cookie: &str) -> Resp {
     http_host_ex(port, "GET", path, None, host, &format!("Cookie: {cookie}"))
 }
@@ -3094,6 +3114,7 @@ async fn skin_password_forgot_reset_change_matrix() {
         seed_thread_addr(&handle);
         add_user(port, "cara");
         set_password(port, "cara", "s3cret-horse");
+        set_email(port, "cara", "cara@clinic.com");
         add_user(port, "mintonly");
         let (_plat_id, plat_tok) = mint(port, "ops", &["thread:read"], &[&handle]);
 
@@ -3186,9 +3207,7 @@ async fn skin_password_forgot_reset_change_matrix() {
             Some(r#"{"username":"ghost-user"}"#),
         );
         assert_eq!(owner_ghost.status, 200, "{}", owner_ghost.body);
-        let gv = json(&owner_ghost.body);
-        assert_eq!(gv["ok"], true, "{}", owner_ghost.body);
-        assert!(gv.get("token").is_none(), "unknown: {}", owner_ghost.body);
+        assert_forgot_miss(&owner_ghost.body);
 
         let owner_ghost2 = http(
             port,
@@ -3209,11 +3228,7 @@ async fn skin_password_forgot_reset_change_matrix() {
             Some(r#"{"username":"X"}"#),
         );
         assert_eq!(invalid.status, 200, "invalid format; {}", invalid.body);
-        assert!(
-            json(&invalid.body).get("token").is_none(),
-            "{}",
-            invalid.body
-        );
+        assert_forgot_miss(&invalid.body);
 
         let null_hash = http(
             port,
@@ -3222,11 +3237,7 @@ async fn skin_password_forgot_reset_change_matrix() {
             Some(r#"{"username":"mintonly"}"#),
         );
         assert_eq!(null_hash.status, 200, "{}", null_hash.body);
-        assert!(
-            json(&null_hash.body).get("token").is_none(),
-            "NULL hash: {}",
-            null_hash.body
-        );
+        assert_forgot_miss(&null_hash.body);
 
         let first = http(
             port,
@@ -3235,13 +3246,13 @@ async fn skin_password_forgot_reset_change_matrix() {
             Some(r#"{"username":"cara"}"#),
         );
         assert_eq!(first.status, 200, "{}", first.body);
-        let t1 = json(&first.body)["token"]
-            .as_str()
-            .expect("token once")
-            .to_string();
+        let fv = json(&first.body);
+        let t1 = fv["token"].as_str().expect("token once").to_string();
         assert!(!t1.starts_with("k2skn_"), "{t1}");
         assert!(!t1.is_empty());
         assert!(!first.body.contains("k2skn_"), "{}", first.body);
+        assert_eq!(fv["email"], "cara@clinic.com", "{}", first.body);
+        assert!(fv["expiresAt"].as_i64().is_some(), "{}", first.body);
 
         let first_again = http(
             port,
@@ -3266,7 +3277,7 @@ async fn skin_password_forgot_reset_change_matrix() {
             "platform --name other username; {}",
             plat_mint.body
         );
-        assert!(json(&plat_mint.body).get("token").is_none());
+        assert_forgot_miss(&plat_mint.body);
 
         let consume_old_sess = http(
             port,
@@ -3439,5 +3450,179 @@ async fn skin_password_forgot_reset_change_matrix() {
             "platform cannot users/password; {}",
             plat_users_pw.body
         );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_guest_email_create_login_forgot_matrix() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("pwemail{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+        let created = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"jane","email":"Jane@Clinic.COM","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(created.status, 200, "{}", created.body);
+        let cv = json(&created.body);
+        assert_eq!(cv["username"], "jane", "{}", created.body);
+        assert_eq!(cv["email"], "jane@clinic.com", "{}", created.body);
+        assert_eq!(cv["hasPassword"], true, "{}", created.body);
+
+        let get_email = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users/email?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(get_email.status, 405, "GET users/email; {}", get_email.body);
+
+        let dup = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"bob","email":"jane@clinic.com"}"#),
+        );
+        assert_eq!(dup.status, 400, "duplicate email; {}", dup.body);
+        assert!(
+            dup.body.contains("already in use") || dup.body.contains("invalid"),
+            "{}",
+            dup.body
+        );
+
+        let invalid = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/email?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"jane","email":"not-an-email"}"#),
+        );
+        assert_eq!(invalid.status, 400, "owner invalid email; {}", invalid.body);
+
+        let login_email = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"jane@clinic.com","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login_email.status, 200, "{}", login_email.body);
+        let lv = json(&login_email.body);
+        assert_eq!(lv["ok"], true, "{}", login_email.body);
+        assert_eq!(lv["username"], "jane", "{}", login_email.body);
+        assert!(
+            lv.get("email").is_none(),
+            "login JSON must not include email; {}",
+            login_email.body
+        );
+        assert!(lv["token"].as_str().unwrap().starts_with("k2skn_"));
+
+        let login_user = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"jane","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login_user.status, 200, "{}", login_user.body);
+
+        let bad_email_login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"not-an-email@","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(
+            bad_email_login.status, 401,
+            "invalid email login is generic; {}",
+            bad_email_login.body
+        );
+
+        let sess = lv["token"].as_str().expect("session").to_string();
+        let guest_email = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/email?token={sess}"),
+            Some(r#"{"username":"jane","email":"other@clinic.com"}"#),
+        );
+        assert_eq!(
+            guest_email.status, 403,
+            "session cannot users/email; {}",
+            guest_email.body
+        );
+
+        let (_plat_id, plat_tok) = mint(port, "ops", &["thread:read"], &[&handle]);
+        let plat_email = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/email?token={plat_tok}"),
+            Some(r#"{"username":"jane","email":"other@clinic.com"}"#),
+        );
+        assert_eq!(
+            plat_email.status, 403,
+            "platform cannot users/email; {}",
+            plat_email.body
+        );
+
+        let plat_at = http(
+            port,
+            "POST",
+            &format!("/cli/skin-tokens?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"jane@clinic.com","caps":["thread:read"],"rooms":["{handle}"]}}"#
+            )),
+        );
+        assert_eq!(
+            plat_at.status, 400,
+            "platform --name still rejects @; {}",
+            plat_at.body
+        );
+
+        let forgot_email = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"jane@clinic.com"}"#),
+        );
+        assert_eq!(forgot_email.status, 200, "{}", forgot_email.body);
+        let fe = json(&forgot_email.body);
+        assert_eq!(fe["ok"], true, "{}", forgot_email.body);
+        assert!(fe["token"].as_str().is_some(), "{}", forgot_email.body);
+        assert_eq!(fe["email"], "jane@clinic.com", "{}", forgot_email.body);
+        assert!(fe["expiresAt"].as_i64().is_some(), "{}", forgot_email.body);
+
+        let forgot_bad = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"not-an-email@"}"#),
+        );
+        assert_eq!(
+            forgot_bad.status, 200,
+            "invalid email forgot is miss not 400; {}",
+            forgot_bad.body
+        );
+        assert_forgot_miss(&forgot_bad.body);
+
+        add_user(port, "noemail");
+        set_password(port, "noemail", "s3cret-horse");
+        let no_email_mint = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"noemail"}"#),
+        );
+        assert_eq!(no_email_mint.status, 200, "{}", no_email_mint.body);
+        assert_forgot_miss(&no_email_mint.body);
+
+        let cleared = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/email?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"jane","email":""}"#),
+        );
+        assert_eq!(cleared.status, 200, "{}", cleared.body);
+        assert!(json(&cleared.body)["email"].is_null(), "{}", cleared.body);
     });
 }

@@ -189,6 +189,7 @@ fn display_prefix(raw: &str) -> String {
 }
 
 /// Normalize a skin username: lowercase, `^[a-z0-9_-]{2,}$`.
+/// Do **not** accept `@` here — platform `--name` shares this charset.
 pub fn normalize_username(raw: &str) -> Result<String, String> {
     let lowered = raw.trim().to_ascii_lowercase();
     if lowered.len() < 2 {
@@ -201,6 +202,48 @@ pub fn normalize_username(raw: &str) -> Result<String, String> {
         return Err("username may contain only lowercase letters, digits, '_' and '-'".to_string());
     }
     Ok(lowered)
+}
+
+/// Trim + lowercase. Empty → `Ok(None)` (store NULL). Else
+/// `^[^@\s]+@[^@\s]+\.[^@\s]+$` or `Err` (owner routes 400).
+pub fn normalize_email(raw: &str) -> Result<Option<String>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if email_shape_ok(&lowered) {
+        Ok(Some(lowered))
+    } else {
+        Err("invalid email".to_string())
+    }
+}
+
+/// `^[^@\s]+@[^@\s]+\.[^@\s]+$` without a regex crate.
+fn email_shape_ok(s: &str) -> bool {
+    if s.chars().any(|c| c.is_whitespace()) {
+        return false;
+    }
+    let mut parts = s.split('@');
+    let Some(local) = parts.next() else {
+        return false;
+    };
+    let Some(domain) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some() || local.is_empty() || domain.is_empty() {
+        return false;
+    }
+    let Some(dot) = domain.find('.') else {
+        return false;
+    };
+    let host = &domain[..dot];
+    let rest = &domain[dot + 1..];
+    !host.is_empty() && !rest.is_empty()
+}
+
+fn presented_looks_like_email(raw: &str) -> bool {
+    raw.contains('@')
 }
 
 /// Parse + validate cap names. Empty/missing → default Thread read+post
@@ -566,6 +609,9 @@ pub struct SkinPrincipal {
     /// Assigned skin role name. `None` when unassigned.
     #[serde(default)]
     pub role_name: Option<String>,
+    /// Optional guest email. Serialized `null` when unset. Not a username.
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 /// Per-room functions on the wire: `{handle, caps}`.
@@ -861,6 +907,13 @@ fn open_db(path: &Path) -> Result<Connection, String> {
         "ALTER TABLE principals ADD COLUMN role_id TEXT REFERENCES roles(id) ON DELETE RESTRICT",
         [],
     );
+    let _ = conn.execute("ALTER TABLE principals ADD COLUMN email TEXT", []);
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS principals_email
+         ON principals(email COLLATE NOCASE)
+         WHERE email IS NOT NULL AND trim(email) != '';",
+    )
+    .map_err(|e| format!("skin.db schema: {e}"))?;
     let _ = conn.execute(
         "ALTER TABLE roles ADD COLUMN room_policy TEXT NOT NULL DEFAULT '{}'",
         [],
@@ -1190,7 +1243,19 @@ fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, 
 // ── Principals ───────────────────────────────────────────────────────
 
 pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
+    add_principal_with_email(username, None)
+}
+
+/// Create-only. `email` None/empty → NULL. Invalid or duplicate → Err (400).
+pub fn add_principal_with_email(
+    username: &str,
+    email: Option<&str>,
+) -> Result<SkinPrincipal, String> {
     let username = normalize_username(username)?;
+    let email = match email {
+        Some(raw) => normalize_email(raw)?,
+        None => None,
+    };
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = now_secs();
     let r = with_conn(|conn| {
@@ -1205,11 +1270,14 @@ pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
         if exists.is_some() {
             return Err(format!("skin user '{username}' already exists"));
         }
+        if let Some(ref em) = email {
+            ensure_email_free(conn, em, None)?;
+        }
         conn.execute(
-            "INSERT INTO principals (id, username, created_at) VALUES (?1, ?2, ?3)",
-            params![id, username, created_at],
+            "INSERT INTO principals (id, username, created_at, email) VALUES (?1, ?2, ?3, ?4)",
+            params![id, username, created_at, email],
         )
-        .map_err(|e| format!("skin principal insert: {e}"))?;
+        .map_err(|e| unique_email_err(email.as_deref(), e, "skin principal insert"))?;
         Ok(SkinPrincipal {
             id,
             username,
@@ -1219,6 +1287,7 @@ pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
             has_password: false,
             role_id: None,
             role_name: None,
+            email,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -1226,15 +1295,20 @@ pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
 }
 
 const PRINCIPAL_SELECT: &str = "SELECT p.id, p.username, p.created_at, p.default_rooms,
-                p.password_hash, p.role_id, r.name
+                p.password_hash, p.role_id, r.name, p.email
          FROM principals p
          LEFT JOIN roles r ON r.id = p.role_id";
+
+fn email_from_stored(raw: Option<String>) -> Option<String> {
+    raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
 
 fn map_principal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinPrincipal> {
     let rooms_raw: String = r.get(3)?;
     let hash: Option<String> = r.get(4)?;
     let role_id: Option<String> = r.get(5)?;
     let role_name: Option<String> = r.get(6)?;
+    let email: Option<String> = r.get(7)?;
     Ok(SkinPrincipal {
         id: r.get(0)?,
         username: r.get(1)?,
@@ -1248,7 +1322,52 @@ fn map_principal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinPrincipal> {
         role_name: role_name
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
+        email: email_from_stored(email),
     })
+}
+
+fn unique_email_err(email: Option<&str>, e: rusqlite::Error, ctx: &str) -> String {
+    let s = e.to_string();
+    if s.contains("principals_email") || s.contains("principals.email") {
+        match email {
+            Some(em) => format!("email '{em}' already in use"),
+            None => "email already in use".to_string(),
+        }
+    } else {
+        format!("{ctx}: {e}")
+    }
+}
+
+fn ensure_email_free(
+    conn: &Connection,
+    email: &str,
+    except_id: Option<&str>,
+) -> Result<(), String> {
+    let taken: i64 = match except_id {
+        Some(id) => conn
+            .query_row(
+                "SELECT COUNT(*) FROM principals
+                 WHERE email = ?1 COLLATE NOCASE
+                   AND email IS NOT NULL AND trim(email) != ''
+                   AND id != ?2",
+                params![email, id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("skin email lookup: {e}"))?,
+        None => conn
+            .query_row(
+                "SELECT COUNT(*) FROM principals
+                 WHERE email = ?1 COLLATE NOCASE
+                   AND email IS NOT NULL AND trim(email) != ''",
+                params![email],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("skin email lookup: {e}"))?,
+    };
+    if taken > 0 {
+        return Err(format!("email '{email}' already in use"));
+    }
+    Ok(())
 }
 
 pub fn list_principals() -> Result<Vec<SkinPrincipal>, String> {
@@ -1504,6 +1623,41 @@ pub fn set_principal_password(
             has_password,
             role_id: p.role_id,
             role_name: p.role_name,
+            email: p.email,
+        })
+    })
+    .map(attach_principal_handles)
+}
+
+/// Set or clear guest email. Empty/`None` → NULL. Invalid or duplicate → Err (400).
+pub fn set_principal_email(username: &str, email: Option<&str>) -> Result<SkinPrincipal, String> {
+    let username = normalize_username(username)?;
+    let email = match email {
+        Some(raw) => normalize_email(raw)?,
+        None => None,
+    };
+    with_conn(|conn| {
+        let Some(p) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        if let Some(ref em) = email {
+            ensure_email_free(conn, em, Some(&p.id))?;
+        }
+        conn.execute(
+            "UPDATE principals SET email = ?1 WHERE id = ?2",
+            params![email, p.id],
+        )
+        .map_err(|e| unique_email_err(email.as_deref(), e, "skin email update"))?;
+        Ok(SkinPrincipal {
+            id: p.id,
+            username: p.username,
+            created_at: p.created_at,
+            default_rooms: p.default_rooms,
+            default_room_handles: Vec::new(),
+            has_password: p.has_password,
+            role_id: p.role_id,
+            role_name: p.role_name,
+            email,
         })
     })
     .map(attach_principal_handles)
@@ -1548,23 +1702,26 @@ pub fn password_reset_throttled(username: &str) -> Result<bool, String> {
     })
 }
 
-/// Mint a one-hour consume token. Unknown / invalid username / NULL hash →
-/// dummy argon2 and `Ok(None)`. Does **not** rate-limit.
-pub fn mint_password_reset(username: &str) -> Result<Option<String>, String> {
-    let key = username.trim().to_ascii_lowercase();
-    let stored = with_conn(|conn| {
-        let row: Option<(String, Option<String>)> = conn
-            .query_row(
-                "SELECT id, password_hash FROM principals WHERE username = ?1",
-                params![key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()
-            .map_err(|e| format!("skin reset mint lookup: {e}"))?;
-        Ok(row)
-    })?;
+/// Privileged forgot hit. Miss is `Ok(None)` (HTTP `{ok:true}` no extra keys).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkinResetMint {
+    pub token: String,
+    pub expires_at: i64,
+    pub email: String,
+}
+
+/// Mint a one-hour consume token. `username` field matches username **or**
+/// email (`@` → email lookup). Token only if password **and** populated
+/// email. Unknown / invalid / no hash / no email → dummy argon2 and
+/// `Ok(None)`. Invalid email string is a miss, not 400. Does **not** rate-limit.
+pub fn mint_password_reset(username: &str) -> Result<Option<SkinResetMint>, String> {
+    let presented = username.trim().to_ascii_lowercase();
+    let stored = with_conn(|conn| lookup_reset_principal(conn, &presented))?;
     match stored {
-        Some((pid, hash)) if password_is_set(hash.as_deref()) => {
+        Some((pid, hash, email))
+            if password_is_set(hash.as_deref()) && email_from_stored(email.clone()).is_some() =>
+        {
+            let email = email_from_stored(email).expect("populated email");
             let raw = generate_reset_raw();
             let token_hash = sha256_hex(&raw);
             let now = now_secs();
@@ -1586,12 +1743,44 @@ pub fn mint_password_reset(username: &str) -> Result<Option<String>, String> {
                 .map_err(|e| format!("skin reset token insert: {e}"))?;
                 Ok(())
             })?;
-            Ok(Some(raw))
+            Ok(Some(SkinResetMint {
+                token: raw,
+                expires_at: expires,
+                email,
+            }))
         }
         _ => {
             dummy_verify("k2-skin-dummy-verify-target");
             Ok(None)
         }
+    }
+}
+
+fn lookup_reset_principal(
+    conn: &Connection,
+    presented: &str,
+) -> Result<Option<(String, Option<String>, Option<String>)>, String> {
+    if presented_looks_like_email(presented) {
+        let Ok(Some(email)) = normalize_email(presented) else {
+            return Ok(None);
+        };
+        conn.query_row(
+            "SELECT id, password_hash, email FROM principals
+             WHERE email = ?1 COLLATE NOCASE
+               AND email IS NOT NULL AND trim(email) != ''",
+            params![email],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| format!("skin reset mint lookup: {e}"))
+    } else {
+        conn.query_row(
+            "SELECT id, password_hash, email FROM principals WHERE username = ?1",
+            params![presented],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| format!("skin reset mint lookup: {e}"))
     }
 }
 
@@ -1690,7 +1879,14 @@ pub enum SkinLoginOutcome {
 }
 
 pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcome {
-    let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
+    // Lockout 3/15 stays on the presented string (trim+lowercase). `@` →
+    // email lookup; else username. Invalid email is a miss, not 400.
+    let presented = username.trim().to_ascii_lowercase();
+    let key = if presented_looks_like_email(&presented) {
+        presented.clone()
+    } else {
+        normalize_username(username).unwrap_or_else(|_| presented.clone())
+    };
 
     let locked = with_conn(|conn| {
         let row: Option<(i64, Option<i64>)> = conn
@@ -1718,20 +1914,9 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
         return SkinLoginOutcome::LockedOut;
     }
 
-    let stored = with_conn(|conn| {
-        let hash: Option<Option<String>> = conn
-            .query_row(
-                "SELECT password_hash FROM principals WHERE username = ?1",
-                params![key],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| format!("skin password lookup: {e}"))?;
-        Ok(hash.flatten().filter(|s| !s.trim().is_empty()))
-    })
-    .unwrap_or(None);
+    let stored = with_conn(|conn| lookup_login_hash(conn, &presented)).unwrap_or(None);
 
-    let ok = match stored.as_deref() {
+    let ok = match stored.as_ref().map(|(_, h)| h.as_str()) {
         Some(h) => verify_hash(password, h),
         None => {
             dummy_verify(password);
@@ -1781,9 +1966,46 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
     if !ok {
         return SkinLoginOutcome::BadCreds;
     }
-    match with_conn(|conn| principal_by_username(conn, &key)) {
+    let resolved_username = stored
+        .as_ref()
+        .map(|(u, _)| u.as_str())
+        .unwrap_or(key.as_str());
+    match with_conn(|conn| principal_by_username(conn, resolved_username)) {
         Ok(Some(p)) => SkinLoginOutcome::Ok(attach_principal_handles(p)),
         _ => SkinLoginOutcome::BadCreds,
+    }
+}
+
+fn lookup_login_hash(
+    conn: &Connection,
+    presented: &str,
+) -> Result<Option<(String, String)>, String> {
+    if presented_looks_like_email(presented) {
+        let Ok(Some(email)) = normalize_email(presented) else {
+            return Ok(None);
+        };
+        let row: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT username, password_hash FROM principals
+                 WHERE email = ?1 COLLATE NOCASE
+                   AND email IS NOT NULL AND trim(email) != ''",
+                params![email],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("skin password lookup: {e}"))?;
+        Ok(row.and_then(|(u, h)| h.filter(|s| !s.trim().is_empty()).map(|hash| (u, hash))))
+    } else {
+        let key = normalize_username(presented).unwrap_or_else(|_| presented.to_string());
+        let row: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT username, password_hash FROM principals WHERE username = ?1",
+                params![key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("skin password lookup: {e}"))?;
+        Ok(row.and_then(|(u, h)| h.filter(|s| !s.trim().is_empty()).map(|hash| (u, hash))))
     }
 }
 
@@ -1947,6 +2169,7 @@ pub fn set_principal_default_rooms(
             has_password: p.has_password,
             role_id: p.role_id,
             role_name: p.role_name,
+            email: p.email,
         })
     })
     .map(attach_principal_handles)
@@ -2305,6 +2528,7 @@ pub fn assign_role(username: &str, role: &str) -> Result<SkinPrincipal, String> 
             has_password: p.has_password,
             role_id: Some(role.id),
             role_name: Some(role.name),
+            email: p.email,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -2332,6 +2556,7 @@ pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
             has_password: p.has_password,
             role_id: None,
             role_name: None,
+            email: p.email,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -3391,6 +3616,15 @@ mod tests {
                 assert!(cols.contains("expires_at"), "{cols}");
                 assert!(cols.contains("used_at"), "{cols}");
                 assert!(!cols.contains("email"), "no email column: {cols}");
+                let pcols: String = conn
+                    .prepare("PRAGMA table_info(principals)")
+                    .map_err(|e| e.to_string())?
+                    .query_map([], |r| r.get::<_, String>(1))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?
+                    .join(",");
+                assert!(pcols.contains("email"), "principals.email missing: {pcols}");
                 Ok(())
             })
             .unwrap();
@@ -3417,6 +3651,16 @@ mod tests {
                 Ok(None) => {}
                 other => panic!("NULL hash must not mint, got {other:?}"),
             }
+            add_principal("cara").unwrap();
+            set_principal_password("cara", Some("s3cret-horse")).unwrap();
+            match mint_password_reset("cara") {
+                Ok(None) => {}
+                other => panic!("password without email must not mint, got {other:?}"),
+            }
+            match mint_password_reset("not-an-email@") {
+                Ok(None) => {}
+                other => panic!("invalid email string is a miss, got {other:?}"),
+            }
         });
     }
 
@@ -3425,12 +3669,16 @@ mod tests {
         with_temp_home(|| {
             add_principal("cara").unwrap();
             set_principal_password("cara", Some("s3cret-horse")).unwrap();
+            set_principal_email("cara", Some("cara@clinic.com")).unwrap();
             let first = mint_password_reset("cara")
                 .unwrap()
-                .expect("known user with hash mints");
-            assert!(!first.starts_with(SKIN_KEY_PREFIX), "{first}");
-            assert!(!first.starts_with("k2sk_"), "{first}");
-            assert_eq!(first.len(), 64, "{first}");
+                .expect("known user with hash and email mints");
+            assert!(!first.token.starts_with(SKIN_KEY_PREFIX), "{}", first.token);
+            assert!(!first.token.starts_with("k2sk_"), "{}", first.token);
+            assert_eq!(first.token.len(), 64, "{}", first.token);
+            assert_eq!(first.email, "cara@clinic.com");
+            assert!(first.expires_at > now_secs());
+            let first = first.token;
             let stored = with_conn(|conn| {
                 let h: String = conn
                     .query_row(
@@ -3452,7 +3700,10 @@ mod tests {
             .unwrap();
             assert_eq!(stored.0, sha256_hex(&first));
             assert_eq!(stored.1, 1);
-            let second = mint_password_reset("cara").unwrap().expect("second mint");
+            let second = mint_password_reset("cara")
+                .unwrap()
+                .expect("second mint")
+                .token;
             assert_ne!(first, second);
             let n: i64 = with_conn(|conn| {
                 conn.query_row(
@@ -3488,7 +3739,8 @@ mod tests {
         with_temp_home(|| {
             add_principal("cara").unwrap();
             set_principal_password("cara", Some("s3cret-horse")).unwrap();
-            let raw = mint_password_reset("cara").unwrap().expect("mint");
+            set_principal_email("cara", Some("cara@clinic.com")).unwrap();
+            let raw = mint_password_reset("cara").unwrap().expect("mint").token;
             with_conn(|conn| {
                 conn.execute("UPDATE password_reset_tokens SET expires_at = 1", [])
                     .map_err(|e| e.to_string())?;
@@ -3521,7 +3773,8 @@ mod tests {
             let (_sm, static_raw) =
                 create_token("cara", None, std::slice::from_ref(&room)).unwrap();
             let (_sess, sess_raw) = create_session_token("cara").unwrap();
-            let raw = mint_password_reset("cara").unwrap().expect("mint");
+            set_principal_email("cara", Some("cara@clinic.com")).unwrap();
+            let raw = mint_password_reset("cara").unwrap().expect("mint").token;
             match consume_password_reset(&raw, "new-pass-word") {
                 Ok(SkinResetConsume::Ok) => {}
                 other => panic!("consume, got {other:?}"),
@@ -3566,6 +3819,98 @@ mod tests {
                 !password_reset_throttled("ghost-user").unwrap(),
                 "window elapsed allows another attempt"
             );
+        });
+    }
+
+    #[test]
+    fn normalize_email_trim_lower_empty_null_invalid() {
+        assert_eq!(
+            normalize_email("  Jane@Clinic.COM ").unwrap(),
+            Some("jane@clinic.com".into())
+        );
+        assert_eq!(normalize_email("").unwrap(), None);
+        assert_eq!(normalize_email("   ").unwrap(), None);
+        assert!(normalize_email("not-an-email").is_err());
+        assert!(normalize_email("jane@clinic").is_err());
+        assert!(normalize_email("jane@ clinic.com").is_err());
+        assert!(normalize_email("@clinic.com").is_err());
+        assert!(normalize_email("jane@").is_err());
+        assert!(normalize_email("jane@@clinic.com").is_err());
+        assert!(normalize_username("jane@clinic.com").is_err());
+        assert!(normalize_username("jane").is_ok());
+    }
+
+    #[test]
+    fn platform_name_still_rejects_at() {
+        with_temp_home(|| {
+            let room = uuid::Uuid::new_v4().to_string();
+            let err =
+                create_token("jane@clinic.com", None, std::slice::from_ref(&room)).unwrap_err();
+            assert!(err.contains("lowercase") || err.contains("only"), "{err}");
+        });
+    }
+
+    #[test]
+    fn guest_email_set_duplicate_clear_and_login_by_email() {
+        with_temp_home(|| {
+            let jane = add_principal_with_email("jane", Some("Jane@Clinic.COM")).unwrap();
+            assert_eq!(jane.email.as_deref(), Some("jane@clinic.com"));
+            set_principal_password("jane", Some("s3cret-horse")).unwrap();
+            add_principal("bob").unwrap();
+            let dup = set_principal_email("bob", Some("jane@clinic.com")).unwrap_err();
+            assert!(dup.contains("already in use"), "{dup}");
+            let bad = set_principal_email("bob", Some("not-an-email")).unwrap_err();
+            assert!(bad.contains("invalid email"), "{bad}");
+            let listed = list_principals().unwrap();
+            let jane_row = listed.iter().find(|p| p.username == "jane").unwrap();
+            assert_eq!(jane_row.email.as_deref(), Some("jane@clinic.com"));
+            match check_and_record_login("jane@clinic.com", "s3cret-horse") {
+                SkinLoginOutcome::Ok(p) => {
+                    assert_eq!(p.username, "jane");
+                    assert_eq!(p.email.as_deref(), Some("jane@clinic.com"));
+                }
+                other => panic!("email login, got {other:?}"),
+            }
+            match check_and_record_login("jane", "s3cret-horse") {
+                SkinLoginOutcome::Ok(p) => assert_eq!(p.username, "jane"),
+                other => panic!("username login still works, got {other:?}"),
+            }
+            match mint_password_reset("Jane@Clinic.COM") {
+                Ok(Some(m)) => {
+                    assert_eq!(m.email, "jane@clinic.com");
+                    assert_eq!(m.token.len(), 64);
+                }
+                other => panic!("mint by email, got {other:?}"),
+            }
+            match check_and_record_login("not-an-email@", "s3cret-horse") {
+                SkinLoginOutcome::BadCreds => {}
+                other => panic!("invalid email login is generic, got {other:?}"),
+            }
+            for _ in 0..3 {
+                match check_and_record_login("jane@clinic.com", "wrong") {
+                    SkinLoginOutcome::BadCreds => {}
+                    other => panic!("pre-lockout on presented email, got {other:?}"),
+                }
+            }
+            match check_and_record_login("jane@clinic.com", "s3cret-horse") {
+                SkinLoginOutcome::LockedOut => {}
+                other => panic!("lockout is on presented email, got {other:?}"),
+            }
+            match check_and_record_login("jane", "s3cret-horse") {
+                SkinLoginOutcome::Ok(_) => {}
+                other => panic!("username lockout is a different slot, got {other:?}"),
+            }
+            set_principal_email("jane", None).unwrap();
+            let cleared = list_principals()
+                .unwrap()
+                .into_iter()
+                .find(|p| p.username == "jane")
+                .unwrap();
+            assert!(cleared.email.is_none(), "{cleared:?}");
+            match mint_password_reset("jane") {
+                Ok(None) => {}
+                other => panic!("cleared email must not mint, got {other:?}"),
+            }
         });
     }
 

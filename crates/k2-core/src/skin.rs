@@ -103,6 +103,12 @@ fn assigned_role_remove_err(name: &str) -> String {
 const LOCKOUT_THRESHOLD: u32 = 3;
 const LOCKOUT_DURATION_SECS: i64 = 15 * 60;
 
+/// Public consume/change min length (Connect default). Owner `users/password`
+/// empty still clears via [`set_principal_password`].
+pub const PUBLIC_PASSWORD_MIN_LEN: usize = 8;
+const RESET_TTL_SECS: i64 = 60 * 60;
+const RESET_THROTTLE_SECS: i64 = 60;
+
 /// True iff `raw` is a skin-class credential (prefix only — may be revoked).
 pub fn is_skin_token(raw: &str) -> bool {
     raw.starts_with(SKIN_KEY_PREFIX)
@@ -129,6 +135,22 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Opaque CSPRNG hex (64 chars). Never a `k2skn_` / `k2sk_` pass.
+fn generate_reset_raw() -> String {
+    use argon2::password_hash::rand_core::{OsRng, RngCore};
+    let mut buf = [0u8; 32];
+    OsRng.fill_bytes(&mut buf);
+    let mut hex = String::with_capacity(64);
+    for b in buf {
+        hex.push_str(&format!("{b:02x}"));
+    }
+    debug_assert!(
+        !hex.starts_with(SKIN_KEY_PREFIX) && !hex.starts_with("k2sk_"),
+        "reset token must not use a skin/API prefix"
+    );
+    hex
 }
 
 fn generate_raw_key() -> String {
@@ -427,6 +449,12 @@ fn build_dummy_hash() -> String {
                 "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
         })
+}
+
+fn dummy_verify(password: &str) {
+    static DUMMY_HASH: OnceLock<String> = OnceLock::new();
+    let dummy = DUMMY_HASH.get_or_init(build_dummy_hash);
+    let _ = verify_hash(password, dummy);
 }
 
 /// Host of Direct-mode `front_door.url` (no port). None when mode is not
@@ -797,6 +825,22 @@ fn open_db(path: &Path) -> Result<Connection, String> {
             username TEXT PRIMARY KEY,
             failed_count INTEGER NOT NULL DEFAULT 0,
             locked_until INTEGER
+         );",
+    );
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id TEXT PRIMARY KEY,
+            principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at INTEGER NOT NULL,
+            used_at INTEGER,
+            created_at INTEGER NOT NULL
+         );",
+    );
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS password_reset_throttle (
+            username TEXT PRIMARY KEY,
+            last_attempt INTEGER NOT NULL
          );",
     );
     conn.execute_batch(
@@ -1474,6 +1518,168 @@ fn revoke_sessions_for_principal(conn: &Connection, principal_id: &str) -> Resul
     .map_err(|e| format!("skin session revoke: {e}"))
 }
 
+/// 60s per lowercase/trim username string (even when no user). True = 429.
+/// Does not look up principals. Call after auth 403, before mint lookup.
+pub fn password_reset_throttled(username: &str) -> Result<bool, String> {
+    let key = username.trim().to_ascii_lowercase();
+    let now = now_secs();
+    with_conn(|conn| {
+        let last: Option<i64> = conn
+            .query_row(
+                "SELECT last_attempt FROM password_reset_throttle WHERE username = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("skin reset throttle lookup: {e}"))?;
+        if let Some(last) = last {
+            if now.saturating_sub(last) < RESET_THROTTLE_SECS {
+                return Ok(true);
+            }
+        }
+        conn.execute(
+            "INSERT INTO password_reset_throttle (username, last_attempt)
+             VALUES (?1, ?2)
+             ON CONFLICT(username) DO UPDATE SET last_attempt = excluded.last_attempt",
+            params![key, now],
+        )
+        .map_err(|e| format!("skin reset throttle set: {e}"))?;
+        Ok(false)
+    })
+}
+
+/// Mint a one-hour consume token. Unknown / invalid username / NULL hash →
+/// dummy argon2 and `Ok(None)`. Does **not** rate-limit.
+pub fn mint_password_reset(username: &str) -> Result<Option<String>, String> {
+    let key = username.trim().to_ascii_lowercase();
+    let stored = with_conn(|conn| {
+        let row: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT id, password_hash FROM principals WHERE username = ?1",
+                params![key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("skin reset mint lookup: {e}"))?;
+        Ok(row)
+    })?;
+    match stored {
+        Some((pid, hash)) if password_is_set(hash.as_deref()) => {
+            let raw = generate_reset_raw();
+            let token_hash = sha256_hex(&raw);
+            let now = now_secs();
+            let expires = now.saturating_add(RESET_TTL_SECS);
+            let id = uuid::Uuid::new_v4().to_string();
+            with_conn(|conn| {
+                conn.execute(
+                    "DELETE FROM password_reset_tokens
+                     WHERE principal_id = ?1 AND used_at IS NULL",
+                    params![pid],
+                )
+                .map_err(|e| format!("skin reset replace unused: {e}"))?;
+                conn.execute(
+                    "INSERT INTO password_reset_tokens
+                     (id, principal_id, token_hash, expires_at, used_at, created_at)
+                     VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+                    params![id, pid, token_hash, expires, now],
+                )
+                .map_err(|e| format!("skin reset token insert: {e}"))?;
+                Ok(())
+            })?;
+            Ok(Some(raw))
+        }
+        _ => {
+            dummy_verify("k2-skin-dummy-verify-target");
+            Ok(None)
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SkinResetConsume {
+    Ok,
+    BadToken,
+}
+
+/// Consume a reset token. Hashed lookup, TTL, single-use. Success calls
+/// [`set_principal_password`] (revokes session=1). Empty password is refused
+/// so this door never clears a hash. Does not mint a session.
+pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetConsume, String> {
+    let token = token.trim();
+    if token.is_empty() {
+        dummy_verify(password);
+        return Ok(SkinResetConsume::BadToken);
+    }
+    if password.trim().is_empty() {
+        return Err("password must not be empty".to_string());
+    }
+    let hash = sha256_hex(token);
+    let now = now_secs();
+    let row = with_conn(|conn| {
+        let row: Option<(String, String, i64, Option<i64>)> = conn
+            .query_row(
+                "SELECT t.id, p.username, t.expires_at, t.used_at
+                 FROM password_reset_tokens t
+                 JOIN principals p ON p.id = t.principal_id
+                 WHERE t.token_hash = ?1",
+                params![hash],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(|e| format!("skin reset consume lookup: {e}"))?;
+        Ok(row)
+    })?;
+    let Some((id, username, expires_at, used_at)) = row else {
+        dummy_verify(password);
+        return Ok(SkinResetConsume::BadToken);
+    };
+    if used_at.is_some() || expires_at <= now {
+        dummy_verify(password);
+        return Ok(SkinResetConsume::BadToken);
+    }
+    set_principal_password(&username, Some(password))?;
+    with_conn(|conn| {
+        conn.execute(
+            "UPDATE password_reset_tokens SET used_at = ?1 WHERE id = ?2",
+            params![now_secs(), id],
+        )
+        .map_err(|e| format!("skin reset mark used: {e}"))?;
+        Ok(())
+    })?;
+    Ok(SkinResetConsume::Ok)
+}
+
+/// Verify a guest's current password. Dummy argon2 on miss / NULL hash.
+/// Does **not** bump `login_lockouts`.
+pub fn verify_principal_password(username: &str, password: &str) -> bool {
+    let key = match normalize_username(username) {
+        Ok(k) => k,
+        Err(_) => {
+            dummy_verify(password);
+            return false;
+        }
+    };
+    let stored = with_conn(|conn| {
+        let hash: Option<Option<String>> = conn
+            .query_row(
+                "SELECT password_hash FROM principals WHERE username = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("skin password verify lookup: {e}"))?;
+        Ok(hash.flatten().filter(|s| !s.trim().is_empty()))
+    })
+    .unwrap_or(None);
+    match stored.as_deref() {
+        Some(h) => verify_hash(password, h),
+        None => {
+            dummy_verify(password);
+            false
+        }
+    }
+}
+
 /// Login gate: lockout then dummy-argon2 verify. Never holds `skin.db`
 /// across hashing.
 #[derive(Debug)]
@@ -1525,12 +1731,10 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
     })
     .unwrap_or(None);
 
-    static DUMMY_HASH: OnceLock<String> = OnceLock::new();
-    let dummy = DUMMY_HASH.get_or_init(build_dummy_hash);
     let ok = match stored.as_deref() {
         Some(h) => verify_hash(password, h),
         None => {
-            let _ = verify_hash(password, dummy);
+            dummy_verify(password);
             false
         }
     };
@@ -3149,6 +3353,255 @@ mod tests {
             let room = uuid::Uuid::new_v4().to_string();
             let (_m, raw) = create_token("mintonly", None, std::slice::from_ref(&room)).unwrap();
             assert!(resolve_skin_token(&raw).is_some());
+        });
+    }
+
+    #[test]
+    fn password_reset_tables_exist_and_are_not_login_lockouts() {
+        with_temp_home(|| {
+            with_conn(|conn| {
+                let n: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master
+                         WHERE type='table' AND name='password_reset_tokens'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                assert_eq!(n, 1, "password_reset_tokens missing");
+                let n: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master
+                         WHERE type='table' AND name='password_reset_throttle'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                assert_eq!(n, 1, "password_reset_throttle missing");
+                let cols: String = conn
+                    .prepare("PRAGMA table_info(password_reset_tokens)")
+                    .map_err(|e| e.to_string())?
+                    .query_map([], |r| r.get::<_, String>(1))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?
+                    .join(",");
+                assert!(cols.contains("principal_id"), "{cols}");
+                assert!(cols.contains("token_hash"), "{cols}");
+                assert!(cols.contains("expires_at"), "{cols}");
+                assert!(cols.contains("used_at"), "{cols}");
+                assert!(!cols.contains("email"), "no email column: {cols}");
+                Ok(())
+            })
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn mint_password_reset_unknown_invalid_null_hash_no_token() {
+        with_temp_home(|| {
+            add_principal("mintonly").unwrap();
+            match mint_password_reset("ghost-user") {
+                Ok(None) => {}
+                other => panic!("unknown must be 200-no-token, got {other:?}"),
+            }
+            match mint_password_reset("X") {
+                Ok(None) => {}
+                other => panic!("invalid username must not 400, got {other:?}"),
+            }
+            match mint_password_reset("has space") {
+                Ok(None) => {}
+                other => panic!("invalid format must not 400, got {other:?}"),
+            }
+            match mint_password_reset("mintonly") {
+                Ok(None) => {}
+                other => panic!("NULL hash must not mint, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn mint_password_reset_replaces_unused_and_is_not_k2skn() {
+        with_temp_home(|| {
+            add_principal("cara").unwrap();
+            set_principal_password("cara", Some("s3cret-horse")).unwrap();
+            let first = mint_password_reset("cara")
+                .unwrap()
+                .expect("known user with hash mints");
+            assert!(!first.starts_with(SKIN_KEY_PREFIX), "{first}");
+            assert!(!first.starts_with("k2sk_"), "{first}");
+            assert_eq!(first.len(), 64, "{first}");
+            let stored = with_conn(|conn| {
+                let h: String = conn
+                    .query_row(
+                        "SELECT token_hash FROM password_reset_tokens
+                         WHERE used_at IS NULL",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                let n: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM password_reset_tokens WHERE used_at IS NULL",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok((h, n))
+            })
+            .unwrap();
+            assert_eq!(stored.0, sha256_hex(&first));
+            assert_eq!(stored.1, 1);
+            let second = mint_password_reset("cara").unwrap().expect("second mint");
+            assert_ne!(first, second);
+            let n: i64 = with_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM password_reset_tokens WHERE used_at IS NULL",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())
+            })
+            .unwrap();
+            assert_eq!(n, 1, "one unused row per principal");
+            match consume_password_reset(&first, "new-pass-word") {
+                Ok(SkinResetConsume::BadToken) => {}
+                other => panic!("replaced unused must be dead, got {other:?}"),
+            }
+            match consume_password_reset(&second, "new-pass-word") {
+                Ok(SkinResetConsume::Ok) => {}
+                other => panic!("live unused must consume, got {other:?}"),
+            }
+            match consume_password_reset(&second, "another-pw") {
+                Ok(SkinResetConsume::BadToken) => {}
+                other => panic!("single-use, got {other:?}"),
+            }
+            match check_and_record_login("cara", "new-pass-word") {
+                SkinLoginOutcome::Ok(p) => assert_eq!(p.username, "cara"),
+                other => panic!("hash must change, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn consume_password_reset_ttl_and_empty_refused() {
+        with_temp_home(|| {
+            add_principal("cara").unwrap();
+            set_principal_password("cara", Some("s3cret-horse")).unwrap();
+            let raw = mint_password_reset("cara").unwrap().expect("mint");
+            with_conn(|conn| {
+                conn.execute("UPDATE password_reset_tokens SET expires_at = 1", [])
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+            match consume_password_reset(&raw, "new-pass-word") {
+                Ok(SkinResetConsume::BadToken) => {}
+                other => panic!("expired must be BadToken, got {other:?}"),
+            }
+            match consume_password_reset("not-a-token", "new-pass-word") {
+                Ok(SkinResetConsume::BadToken) => {}
+                other => panic!("unknown token must be BadToken, got {other:?}"),
+            }
+            let err = consume_password_reset("x", "").unwrap_err();
+            assert!(err.contains("empty"), "{err}");
+            match check_and_record_login("cara", "s3cret-horse") {
+                SkinLoginOutcome::Ok(_) => {}
+                other => panic!("expired consume must not change hash, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn consume_password_reset_revokes_sessions_not_platform() {
+        with_temp_home(|| {
+            add_principal("cara").unwrap();
+            set_principal_password("cara", Some("s3cret-horse")).unwrap();
+            let room = uuid::Uuid::new_v4().to_string();
+            let (_sm, static_raw) =
+                create_token("cara", None, std::slice::from_ref(&room)).unwrap();
+            let (_sess, sess_raw) = create_session_token("cara").unwrap();
+            let raw = mint_password_reset("cara").unwrap().expect("mint");
+            match consume_password_reset(&raw, "new-pass-word") {
+                Ok(SkinResetConsume::Ok) => {}
+                other => panic!("consume, got {other:?}"),
+            }
+            assert!(
+                resolve_skin_token(&sess_raw).is_none(),
+                "consume revokes session=1"
+            );
+            assert!(
+                resolve_skin_token(&static_raw).is_some(),
+                "platform token survives consume"
+            );
+        });
+    }
+
+    #[test]
+    fn password_reset_throttle_is_per_username_string() {
+        with_temp_home(|| {
+            assert!(!password_reset_throttled("ghost-user").unwrap());
+            assert!(
+                password_reset_throttled("ghost-user").unwrap(),
+                "second mint inside 60s even when no user"
+            );
+            assert!(
+                password_reset_throttled("  GHOST-USER  ").unwrap(),
+                "lowercase/trim same slot"
+            );
+            assert!(
+                !password_reset_throttled("cara").unwrap(),
+                "other username is a different slot"
+            );
+            with_conn(|conn| {
+                conn.execute(
+                    "UPDATE password_reset_throttle SET last_attempt = 1 WHERE username = 'ghost-user'",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+            assert!(
+                !password_reset_throttled("ghost-user").unwrap(),
+                "window elapsed allows another attempt"
+            );
+        });
+    }
+
+    #[test]
+    fn verify_principal_password_dummy_on_miss_does_not_lockout() {
+        with_temp_home(|| {
+            add_principal("eve").unwrap();
+            set_principal_password("eve", Some("right-password")).unwrap();
+            assert!(verify_principal_password("eve", "right-password"));
+            assert!(!verify_principal_password("eve", "wrong"));
+            assert!(!verify_principal_password("ghost-user", "nope"));
+            add_principal("mintonly").unwrap();
+            assert!(!verify_principal_password("mintonly", "anything"));
+            match check_and_record_login("eve", "right-password") {
+                SkinLoginOutcome::Ok(_) => {}
+                other => panic!("verify must not bump login_lockouts, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn set_principal_password_empty_none_still_clears() {
+        with_temp_home(|| {
+            add_principal("cara").unwrap();
+            set_principal_password("cara", Some("s3cret-horse")).unwrap();
+            set_principal_password("cara", None).unwrap();
+            match check_and_record_login("cara", "s3cret-horse") {
+                SkinLoginOutcome::BadCreds => {}
+                other => panic!("None still clears, got {other:?}"),
+            }
+            set_principal_password("cara", Some("s3cret-horse")).unwrap();
+            set_principal_password("cara", Some("")).unwrap();
+            match check_and_record_login("cara", "s3cret-horse") {
+                SkinLoginOutcome::BadCreds => {}
+                other => panic!("empty still clears, got {other:?}"),
+            }
         });
     }
 

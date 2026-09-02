@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 pub const COOKIE_NAME: &str = "k2_skin_ui";
 pub const GATEWAY_FORBIDDEN_JSON: &str = r#"{"error":"not allowed"}"#;
 const LOGIN_HTML: &str = include_str!("login.html");
+const RESET_HTML: &str = include_str!("reset.html");
 const APP_HTML: &str = include_str!("app.html");
 const APP_CSS: &str = include_str!("app.css");
 const APP_JS: &str = include_str!("app.js");
@@ -225,6 +226,7 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("POST", "/cli/db/rows")
             | ("POST", "/cli/db/rows/update")
             | ("POST", "/cli/db/rows/delete")
+            | ("POST", "/cli/skin/password/change")
     )
 }
 
@@ -237,7 +239,7 @@ pub fn allowlisted_ws(path: &str) -> bool {
 
 pub fn is_static_path(path: &str) -> bool {
     let p = path_only(path);
-    p == "/" || p == "/login" || p == "/index.html" || p.starts_with("/assets")
+    p == "/" || p == "/login" || p == "/reset" || p == "/index.html" || p.starts_with("/assets")
 }
 
 fn path_only(path: &str) -> &str {
@@ -351,6 +353,13 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
         }
         ("POST", "/logout") => {
             handle_logout(&gw, &mut stream, cookie.as_deref()).await;
+        }
+        // Public consume; do not require cookie.
+        ("POST", "/cli/skin/password/reset") => {
+            handle_password_reset(&gw, &mut stream, &body).await;
+        }
+        ("POST", "/cli/skin/password/change") => {
+            handle_password_change(&gw, &mut stream, cookie.as_deref(), &body, secure).await;
         }
         (m, p) if (m == "GET" || m == "HEAD") && is_static_path(p) => {
             serve_static(&gw, &mut stream, p, m == "HEAD").await;
@@ -583,6 +592,77 @@ async fn handle_logout(gw: &Gateway, stream: &mut TcpStream, cookie: Option<&str
     .await;
 }
 
+async fn handle_password_reset(gw: &Gateway, stream: &mut TcpStream, body: &[u8]) {
+    match upstream_json(
+        gw,
+        "POST",
+        "/cli/skin/password/reset",
+        Some(body),
+        None,
+    )
+    .await
+    {
+        Ok((status, resp_body)) => {
+            let body = if resp_body.contains("k2skn_") {
+                r#"{"error":"invalid or expired reset token"}"#.to_string()
+            } else {
+                resp_body
+            };
+            write_json(stream, status_line(status), &body).await;
+        }
+        Err(_) => {
+            write_json(stream, "502 Bad Gateway", r#"{"error":"reset upstream"}"#).await;
+        }
+    }
+}
+
+async fn handle_password_change(
+    gw: &Gateway,
+    stream: &mut TcpStream,
+    cookie: Option<&str>,
+    body: &[u8],
+    secure: bool,
+) {
+    let Some(sid) = cookie else {
+        write_json(stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
+        return;
+    };
+    let token = {
+        let g = gw.sessions.lock().await;
+        g.get(sid).map(|s| s.token.clone())
+    };
+    let Some(token) = token else {
+        write_json(stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
+        return;
+    };
+    match upstream_json(
+        gw,
+        "POST",
+        "/cli/skin/password/change",
+        Some(body),
+        Some(&token),
+    )
+    .await
+    {
+        Ok((status, resp_body)) => {
+            let body = if resp_body.contains("k2skn_") {
+                r#"{"error":"invalid password"}"#.to_string()
+            } else {
+                resp_body
+            };
+            if status == 200 {
+                gw.sessions.lock().await.remove(sid);
+                write_json_cookie(stream, "200 OK", &body, &clear_cookie_value(secure)).await;
+            } else {
+                write_json(stream, status_line(status), &body).await;
+            }
+        }
+        Err(_) => {
+            write_json(stream, "502 Bad Gateway", r#"{"error":"change upstream"}"#).await;
+        }
+    }
+}
+
 /// GET `/login`: `<dir>/login.html` when `--root` has it; else bundled.
 /// Missing file is bundled, never 404 (130 regression).
 fn login_static_bytes(root: Option<&Path>) -> Vec<u8> {
@@ -594,9 +674,32 @@ fn login_static_bytes(root: Option<&Path>) -> Vec<u8> {
     LOGIN_HTML.as_bytes().to_vec()
 }
 
+/// GET `/reset`: `<dir>/reset.html` when `--root` has it; else bundled.
+/// Missing file is bundled, never 404.
+fn reset_static_bytes(root: Option<&Path>) -> Vec<u8> {
+    if let Some(root) = root {
+        if let Ok((_, bytes)) = read_static_file(root, "/reset") {
+            return bytes;
+        }
+    }
+    RESET_HTML.as_bytes().to_vec()
+}
+
 async fn serve_static(gw: &Gateway, stream: &mut TcpStream, path: &str, head_only: bool) {
     if path == "/login" {
         let body = login_static_bytes(gw.root.as_deref());
+        write_bytes(
+            stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            &body,
+            head_only,
+        )
+        .await;
+        return;
+    }
+    if path == "/reset" {
+        let body = reset_static_bytes(gw.root.as_deref());
         write_bytes(
             stream,
             "200 OK",
@@ -621,6 +724,7 @@ async fn serve_static(gw: &Gateway, stream: &mut TcpStream, path: &str, head_onl
     let (ct, body) = match path {
         "/" | "/index.html" => ("text/html; charset=utf-8", APP_HTML.as_bytes()),
         "/login" => ("text/html; charset=utf-8", LOGIN_HTML.as_bytes()),
+        "/reset" => ("text/html; charset=utf-8", RESET_HTML.as_bytes()),
         "/assets/app.css" => ("text/css; charset=utf-8", APP_CSS.as_bytes()),
         "/assets/app.js" => ("text/javascript; charset=utf-8", APP_JS.as_bytes()),
         _ => {
@@ -635,6 +739,7 @@ fn read_static_file(root: &Path, url_path: &str) -> Result<(String, Vec<u8>), ()
     let rel = match url_path {
         "/" | "/index.html" => "index.html",
         "/login" => "login.html",
+        "/reset" => "reset.html",
         p if p.starts_with('/') => &p[1..],
         p => p,
     };
@@ -928,6 +1033,7 @@ fn status_line(code: u16) -> &'static str {
         403 => "403 Forbidden",
         404 => "404 Not Found",
         400 => "400 Bad Request",
+        429 => "429 Too Many Requests",
         502 => "502 Bad Gateway",
         _ => "500 Internal Server Error",
     }
@@ -991,6 +1097,9 @@ mod tests {
         assert!(!never_proxy("/cli/thread/post"));
         assert!(!never_proxy("/cli/overlay/events"));
         assert!(!never_proxy("/cli/skin/agents"));
+        assert!(!never_proxy("/cli/skin/password/reset"));
+        assert!(!never_proxy("/cli/skin/password/change"));
+        assert!(!never_proxy("/cli/skin/password/forgot"));
     }
 
     #[test]
@@ -1085,6 +1194,20 @@ mod tests {
         assert!(!allowlisted_ws("/cli/store/list"));
         assert!(!allowlisted_ws("/cli/store/get"));
         assert!(!allowlisted_ws("/cli/store/query"));
+        assert!(
+            allowlisted_http("POST", "/cli/skin/password/change"),
+            "change is cookie→Bearer"
+        );
+        assert!(
+            !allowlisted_http("POST", "/cli/skin/password/reset"),
+            "reset is public, not cookie-gated"
+        );
+        assert!(
+            !allowlisted_http("POST", "/cli/skin/password/forgot"),
+            "forgot 404s on --skin"
+        );
+        assert!(!allowlisted_http("GET", "/cli/skin/password/change"));
+        assert!(!allowlisted_http("POST", "/cli/skin/users/password"));
     }
 
     #[test]
@@ -1141,6 +1264,53 @@ mod tests {
             true,
             "bundled GET /login must be a form, not a 404"
         );
+    }
+
+    #[test]
+    fn reset_path_is_static_and_not_never_proxy() {
+        assert!(is_static_path("/reset"));
+        assert!(!never_proxy("/reset"));
+        let bundled = reset_static_bytes(None);
+        let bundled_s = String::from_utf8_lossy(&bundled);
+        assert!(
+            bundled_s.contains("Reset password"),
+            "no --root must be bundled: {bundled_s}"
+        );
+        assert!(
+            bundled_s.contains("/cli/skin/password/reset"),
+            "page POSTs consume body, not ?token=: {bundled_s}"
+        );
+        assert!(
+            !bundled_s.contains("/cli/skin/password/reset?"),
+            "consume must not put token on the URL: {bundled_s}"
+        );
+        assert!(
+            bundled_s.contains("k2skn_"),
+            "leak check must refuse k2skn_ in the response"
+        );
+
+        let dir = std::env::temp_dir().join(format!(
+            "k2-skin-reset-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp skin dir");
+        let missing = reset_static_bytes(Some(&dir));
+        let missing_s = String::from_utf8_lossy(&missing);
+        assert!(
+            missing_s.contains("Reset password"),
+            "missing reset.html must stay bundled, never 404: {missing_s}"
+        );
+        assert_eq!(missing, bundled);
+        let custom = "<!DOCTYPE html><title>Custom Skin Reset</title>";
+        std::fs::write(dir.join("reset.html"), custom).expect("write reset.html");
+        let served = reset_static_bytes(Some(&dir));
+        let served_s = String::from_utf8_lossy(&served);
+        assert!(
+            served_s.contains("Custom Skin Reset"),
+            "present reset.html must be served: {served_s}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

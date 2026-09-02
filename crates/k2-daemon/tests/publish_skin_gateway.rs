@@ -2478,3 +2478,141 @@ async fn publish_run_skin_gateway_store_per_room() {
         let _ = std::fs::remove_dir_all(&docs_path);
     });
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_password_reset_and_change() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("pwgw{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        add_user(dport, "guest");
+        set_rooms(dport, "guest", &handle);
+        set_password(dport, "guest", "s3cret-horse");
+
+        let gport = free_port();
+        publish_skin(dport, &path, gport, None);
+
+        let reset_page = http(gport, "GET", "/reset", None);
+        assert_eq!(reset_page.status, 200, "{}", reset_page.body);
+        assert!(
+            reset_page.body.contains("Reset password") || reset_page.body.contains("password"),
+            "bundled /reset never 404: {}",
+            reset_page.body
+        );
+        let cc = header_value(&reset_page.headers, "cache-control").expect("Cache-Control");
+        assert!(
+            cc.to_ascii_lowercase().contains("no-store"),
+            "GET /reset Cache-Control: {cc}"
+        );
+
+        let forgot_gw = http(
+            gport,
+            "POST",
+            "/cli/skin/password/forgot",
+            Some(r#"{"username":"guest"}"#),
+        );
+        assert_eq!(
+            forgot_gw.status, 404,
+            "forgot 404 on --skin; {}",
+            forgot_gw.body
+        );
+
+        let mint = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"guest"}"#),
+        );
+        assert_eq!(mint.status, 200, "{}", mint.body);
+        let raw = json(&mint.body)["token"]
+            .as_str()
+            .expect("reset token")
+            .to_string();
+        assert!(!raw.starts_with("k2skn_"), "{raw}");
+
+        let consume = http(
+            gport,
+            "POST",
+            "/cli/skin/password/reset",
+            Some(&format!(
+                r#"{{"token":"{raw}","password":"new-pass-word"}}"#
+            )),
+        );
+        assert_eq!(
+            consume.status, 200,
+            "public consume no cookie; {}",
+            consume.body
+        );
+        assert!(!consume.body.contains("k2skn_"), "{}", consume.body);
+        assert_eq!(json(&consume.body)["ok"], true);
+        assert!(
+            header_value(&consume.headers, "set-cookie")
+                .map(|c| !c.contains("k2_skin_ui="))
+                .unwrap_or(true),
+            "consume must not mint a gateway session; {}",
+            consume.headers
+        );
+
+        let login = http(
+            gport,
+            "POST",
+            "/login",
+            Some(r#"{"username":"guest","password":"new-pass-word"}"#),
+        );
+        assert_eq!(login.status, 200, "{}", login.body);
+        let set_cookie = header_value(&login.headers, "set-cookie").expect("Set-Cookie");
+        let sid = cookie_k2_skin_ui(&set_cookie).expect("opaque id");
+        let cookie = format!("Cookie: k2_skin_ui={sid}");
+
+        let grid = http_ex(
+            gport,
+            "GET",
+            "/cli/sessions/grid?session=nope",
+            None,
+            &cookie,
+        );
+        assert_eq!(grid.status, 403, "grid still 403; {}", grid.body);
+
+        let change = http_ex(
+            gport,
+            "POST",
+            "/cli/skin/password/change",
+            Some(r#"{"oldPassword":"new-pass-word","password":"third-pass"}"#),
+            &cookie,
+        );
+        assert_eq!(change.status, 200, "{}", change.body);
+        let clear = header_value(&change.headers, "set-cookie").expect("clear cookie");
+        assert!(clear.contains("Max-Age=0"), "{clear}");
+        assert!(clear.contains("k2_skin_ui="), "{clear}");
+
+        let after = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/thread?addr={handle}"),
+            None,
+            &cookie,
+        );
+        assert_eq!(
+            after.status, 401,
+            "dead cookie after change; {}",
+            after.body
+        );
+
+        let change_nocookie = http(
+            gport,
+            "POST",
+            "/cli/skin/password/change",
+            Some(r#"{"oldPassword":"third-pass","password":"fourth-pw"}"#),
+        );
+        assert_eq!(
+            change_nocookie.status, 401,
+            "change requires cookie; {}",
+            change_nocookie.body
+        );
+
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
+    });
+}

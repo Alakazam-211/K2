@@ -224,6 +224,7 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     push_handle(out, "/boot-status*", daemon);
     push_handle(out, "/cli/skin/login", daemon);
     push_handle(out, "/cli/skin/logout", daemon);
+    push_handle(out, "/cli/skin/password/reset", daemon);
     push_handle(out, "/cli/thread", daemon);
     push_handle(out, "/cli/thread/*", daemon);
     push_handle(out, "/cli/overlay/events*", daemon);
@@ -238,7 +239,7 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
         // Exact `/` plus SPA prefixes. Never `/*` — catch-all stays 403.
         // Grid / login / `/v1` are not in this matcher.
         // `/login*` is the skin SPA (not a daemon HTML page).
-        out.push_str("\t@skinUi path / /login* /assets* /_next* /app*\n");
+        out.push_str("\t@skinUi path / /login* /reset* /assets* /_next* /app*\n");
         out.push_str("\thandle @skinUi {\n");
         out.push_str("\t\treverse_proxy 127.0.0.1:");
         out.push_str(&ui.to_string());
@@ -624,7 +625,10 @@ pub fn is_front_door_host(host: &str) -> bool {
 
 fn target_is_caddy_loopback(target: &str) -> bool {
     let t = target.trim().to_ascii_lowercase();
-    let t = t.strip_prefix("http://").or_else(|| t.strip_prefix("https://")).unwrap_or(&t);
+    let t = t
+        .strip_prefix("http://")
+        .or_else(|| t.strip_prefix("https://"))
+        .unwrap_or(&t);
     let t = t.split('/').next().unwrap_or(t);
     let want = LOOPBACK_PORT.to_string();
     matches!(
@@ -984,9 +988,17 @@ mod tests {
             "info stays closed at the door: {file}"
         );
         assert!(file.contains("/boot-status"), "{file}");
-        assert!(!file.contains("handle /login\n") && !file.contains("handle /login {"), "{file}");
+        assert!(
+            !file.contains("handle /login\n") && !file.contains("handle /login {"),
+            "{file}"
+        );
         assert!(file.contains("handle /cli/skin/login"), "{file}");
         assert!(file.contains("handle /cli/skin/logout"), "{file}");
+        assert!(file.contains("handle /cli/skin/password/reset"), "{file}");
+        assert!(
+            !file.contains("/cli/skin/password/forgot"),
+            "forgot stays off the leftover door: {file}"
+        );
         assert!(
             file.contains(PATH_FILTER_ERROR),
             "catch-all 403 JSON missing: {file}"
@@ -1030,8 +1042,13 @@ mod tests {
         let file = render_caddyfile(&spec(Some(5173), None));
         assert!(file.contains("127.0.0.1:5173"), "{file}");
         assert!(file.contains("@skinUi"), "{file}");
-        assert!(file.contains("path / /login* /assets* /_next* /app*"), "{file}");
+        assert!(
+            file.contains("path / /login* /reset* /assets* /_next* /app*"),
+            "{file}"
+        );
         assert!(file.contains("handle /cli/skin/login"), "{file}");
+        assert!(file.contains("handle /cli/skin/password/reset"), "{file}");
+        assert!(file.contains("/reset*"), "{file}");
         assert!(!file.contains("handle /login\n"), "{file}");
         assert!(file.contains("/assets*"), "{file}");
         assert!(file.contains("/_next*"), "{file}");

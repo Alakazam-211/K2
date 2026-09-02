@@ -453,9 +453,11 @@ pub(crate) fn cookie_csrf_gate(
     }
     // Public login is password-authed, not session-authed. Skin SPA POSTs
     // `/cli/skin/login` and `/cli/skin/logout` without `X-K2-Client: web`.
+    // Public consume is the same class; change stays CSRF-gated.
     if path == "/cli/auth/login"
         || path == "/cli/skin/login"
         || path == "/cli/skin/logout"
+        || path == "/cli/skin/password/reset"
     {
         return None;
     }
@@ -1624,6 +1626,21 @@ mod tests {
             "POST /cli/skin/logout HTTP/1.1\r\n",
         )
         .is_none());
+        assert!(cookie_csrf_gate(
+            "POST",
+            "/cli/skin/password/reset",
+            true,
+            "POST /cli/skin/password/reset HTTP/1.1\r\n",
+        )
+        .is_none());
+        let change = cookie_csrf_gate(
+            "POST",
+            "/cli/skin/password/change",
+            true,
+            "POST /cli/skin/password/change HTTP/1.1\r\n",
+        );
+        assert!(change.is_some(), "change is session-authed; CSRF required");
+        assert_eq!(change.unwrap().status, "403 Forbidden");
     }
 
     #[test]

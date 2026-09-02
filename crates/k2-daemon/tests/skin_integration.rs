@@ -1772,6 +1772,12 @@ async fn skin_login_empty_rooms_thread_403_connect_cookie_not_a_pass() {
         assert!(caddy.contains("handle /cli/skin/login"), "{caddy}");
         assert!(caddy.contains("/login*"), "{caddy}");
         assert!(caddy.contains("handle /cli/skin/logout"), "{caddy}");
+        assert!(caddy.contains("handle /cli/skin/password/reset"), "{caddy}");
+        assert!(caddy.contains("/reset*"), "{caddy}");
+        assert!(
+            !caddy.contains("/cli/skin/password/forgot"),
+            "forgot stays off leftover Caddy: {caddy}"
+        );
     });
 }
 
@@ -2115,7 +2121,11 @@ async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
                 r#"{{"name":"dentist","caps":["thread:read","thread:post","files:read"],"rooms":["{sales}"]}}"#
             )),
         );
-        assert_eq!(leftover_cartesian.status, 400, "{}", leftover_cartesian.body);
+        assert_eq!(
+            leftover_cartesian.status, 400,
+            "{}",
+            leftover_cartesian.body
+        );
         assert!(
             leftover_cartesian
                 .body
@@ -2320,7 +2330,9 @@ async fn skin_roles_http_assign_snapshot_rewrite_and_connect_names() {
         );
         assert_eq!(leftover_update.status, 400, "{}", leftover_update.body);
         assert!(
-            leftover_update.body.contains("caps require rooms or roomAccess"),
+            leftover_update
+                .body
+                .contains("caps require rooms or roomAccess"),
             "{}",
             leftover_update.body
         );
@@ -2581,7 +2593,11 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
             &format!("/cli/skin/users?token={OWNER_TOKEN}"),
             Some(r#"{"username":"ownerbob"}"#),
         );
-        assert_eq!(owner_add.status, 200, "owner works toggle-off; {}", owner_add.body);
+        assert_eq!(
+            owner_add.status, 200,
+            "owner works toggle-off; {}",
+            owner_add.body
+        );
 
         let mutate_off = http(
             port,
@@ -2647,7 +2663,11 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
                 r#"{{"project":"{sales_id}","fields":{{"agents_can_manage_skin":1}}}}"#
             )),
         );
-        assert_eq!(ws_set.status, 400, "workspace/set unknown field; {}", ws_set.body);
+        assert_eq!(
+            ws_set.status, 400,
+            "workspace/set unknown field; {}",
+            ws_set.body
+        );
         assert!(
             ws_set.body.contains("unknown setting field")
                 || ws_set.body.contains("unknown setting"),
@@ -2784,7 +2804,9 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
         );
         assert_owner_only(&hydra, "hydra still owner-only with toggle ON");
         assert!(
-            !hydra.body.contains("Allow this agent to manage Skin Access"),
+            !hydra
+                .body
+                .contains("Allow this agent to manage Skin Access"),
             "leftover hydra keeps today's hint: {}",
             hydra.body
         );
@@ -2871,7 +2893,11 @@ async fn skin_per_room_functions_docs_not_anna() {
             &format!("/cli/skin/roles/room?token={OWNER_TOKEN}"),
             Some(&format!(r#"{{"name":"dentist","handle":"{docs}"}}"#)),
         );
-        assert_eq!(omitted.status, 200, "omitted caps Thread-only; {}", omitted.body);
+        assert_eq!(
+            omitted.status, 200,
+            "omitted caps Thread-only; {}",
+            omitted.body
+        );
         let omitted_v = json(&omitted.body);
         let docs_row = omitted_v["roomAccess"]
             .as_array()
@@ -3003,12 +3029,7 @@ async fn skin_per_room_functions_docs_not_anna() {
         assert_eq!(grid.status, 403, "{}", grid.body);
         assert_eq!(grid.body.trim(), TERMINAL_403);
 
-        let fs_official = http(
-            port,
-            "GET",
-            &format!("/cli/fs/info?token={sess}"),
-            None,
-        );
+        let fs_official = http(port, "GET", &format!("/cli/fs/info?token={sess}"), None);
         assert!(
             fs_official.status == 403 || fs_official.status == 404,
             "official fs still not a skin door; {}",
@@ -3025,7 +3046,11 @@ async fn skin_per_room_functions_docs_not_anna() {
         );
         assert_eq!(files_only.status, 200, "{}", files_only.body);
         let agents = http(port, "GET", &format!("/cli/skin/agents?token={sess}"), None);
-        assert_eq!(agents.status, 200, "files-only room still lists; {}", agents.body);
+        assert_eq!(
+            agents.status, 200,
+            "files-only room still lists; {}",
+            agents.body
+        );
         let agents_v = json(&agents.body);
         let list = agents_v["agents"].as_array().expect("agents");
         assert!(
@@ -3056,5 +3081,363 @@ async fn skin_per_room_functions_docs_not_anna() {
 
         let _ = anna_id;
         let _ = std::fs::remove_dir_all(&docs_dir);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_password_forgot_reset_change_matrix() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("pwreset{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+        add_user(port, "cara");
+        set_password(port, "cara", "s3cret-horse");
+        add_user(port, "mintonly");
+        let (_plat_id, plat_tok) = mint(port, "ops", &["thread:read"], &[&handle]);
+
+        for p in [
+            "/cli/skin/password/forgot",
+            "/cli/skin/password/reset",
+            "/cli/skin/password/change",
+        ] {
+            let g = http(port, "GET", p, None);
+            assert_eq!(g.status, 405, "GET {p}; {}", g.body);
+            assert!(
+                g.body.contains("POST required") || g.body.contains("method not allowed"),
+                "GET {p}; {}",
+                g.body
+            );
+        }
+
+        let login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"cara","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "{}", login.body);
+        let sess = json(&login.body)["token"]
+            .as_str()
+            .expect("session")
+            .to_string();
+
+        let guest_forgot = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={sess}"),
+            Some(r#"{"username":"cara"}"#),
+        );
+        assert_eq!(
+            guest_forgot.status, 403,
+            "guest session; {}",
+            guest_forgot.body
+        );
+        assert_ne!(guest_forgot.status, 200);
+
+        let hook = mint_scoped_hook();
+        let hook_forgot = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={hook}"),
+            Some(r#"{"username":"cara"}"#),
+        );
+        assert_eq!(hook_forgot.status, 403, "agent hook; {}", hook_forgot.body);
+        assert!(
+            hook_forgot.body.contains("owner_only") || hook_forgot.body.contains("forbidden"),
+            "{}",
+            hook_forgot.body
+        );
+
+        let member = provision_role(port, "opuser", "op-pass-word", "member");
+        let member_forgot = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={member}"),
+            Some(r#"{"username":"cara"}"#),
+        );
+        assert_eq!(
+            member_forgot.status, 403,
+            "Connect member; {}",
+            member_forgot.body
+        );
+
+        let missing = http(
+            port,
+            "POST",
+            "/cli/skin/password/forgot",
+            Some(r#"{"username":"cara"}"#),
+        );
+        assert_eq!(missing.status, 401, "missing token; {}", missing.body);
+
+        let garbage = http(
+            port,
+            "POST",
+            "/cli/skin/password/forgot?token=not-a-real-passport",
+            Some(r#"{"username":"cara"}"#),
+        );
+        assert_eq!(garbage.status, 401, "garbage; {}", garbage.body);
+
+        let owner_ghost = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"ghost-user"}"#),
+        );
+        assert_eq!(owner_ghost.status, 200, "{}", owner_ghost.body);
+        let gv = json(&owner_ghost.body);
+        assert_eq!(gv["ok"], true, "{}", owner_ghost.body);
+        assert!(gv.get("token").is_none(), "unknown: {}", owner_ghost.body);
+
+        let owner_ghost2 = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"ghost-user"}"#),
+        );
+        assert_eq!(
+            owner_ghost2.status, 429,
+            "60s even when no user; {}",
+            owner_ghost2.body
+        );
+
+        let invalid = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"X"}"#),
+        );
+        assert_eq!(invalid.status, 200, "invalid format; {}", invalid.body);
+        assert!(
+            json(&invalid.body).get("token").is_none(),
+            "{}",
+            invalid.body
+        );
+
+        let null_hash = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"mintonly"}"#),
+        );
+        assert_eq!(null_hash.status, 200, "{}", null_hash.body);
+        assert!(
+            json(&null_hash.body).get("token").is_none(),
+            "NULL hash: {}",
+            null_hash.body
+        );
+
+        let first = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"cara"}"#),
+        );
+        assert_eq!(first.status, 200, "{}", first.body);
+        let t1 = json(&first.body)["token"]
+            .as_str()
+            .expect("token once")
+            .to_string();
+        assert!(!t1.starts_with("k2skn_"), "{t1}");
+        assert!(!t1.is_empty());
+        assert!(!first.body.contains("k2skn_"), "{}", first.body);
+
+        let first_again = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"cara"}"#),
+        );
+        assert_eq!(
+            first_again.status, 429,
+            "second owner mint 60s; {}",
+            first_again.body
+        );
+
+        let plat_mint = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/forgot?token={plat_tok}"),
+            Some(r#"{"username":"docs-guest"}"#),
+        );
+        assert_eq!(
+            plat_mint.status, 200,
+            "platform --name other username; {}",
+            plat_mint.body
+        );
+        assert!(json(&plat_mint.body).get("token").is_none());
+
+        let consume_old_sess = http(
+            port,
+            "POST",
+            "/cli/skin/password/reset",
+            Some(&format!(r#"{{"token":"{t1}","password":"new-pass-word"}}"#)),
+        );
+        assert_eq!(consume_old_sess.status, 200, "{}", consume_old_sess.body);
+        let cv = json(&consume_old_sess.body);
+        assert_eq!(cv["ok"], true, "{}", consume_old_sess.body);
+        assert!(cv.get("token").is_none(), "consume must not mint a session");
+        assert!(!consume_old_sess.body.contains("k2skn_"));
+        assert!(
+            header_value(&consume_old_sess.headers, "set-cookie").is_none(),
+            "consume must not Set-Cookie; {}",
+            consume_old_sess.headers
+        );
+
+        let dead_sess = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={sess}&addr={handle}"),
+            None,
+        );
+        assert_eq!(dead_sess.status, 401, "old session; {}", dead_sess.body);
+        let plat_live = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={plat_tok}&addr={handle}"),
+            None,
+        );
+        assert_eq!(
+            plat_live.status, 200,
+            "platform survives consume; {}",
+            plat_live.body
+        );
+
+        let reuse = http(
+            port,
+            "POST",
+            "/cli/skin/password/reset",
+            Some(&format!(r#"{{"token":"{t1}","password":"new-pass-word"}}"#)),
+        );
+        assert_eq!(reuse.status, 401, "single-use; {}", reuse.body);
+        assert_eq!(
+            reuse.body.trim(),
+            r#"{"error":"invalid or expired reset token"}"#
+        );
+
+        let bad = http(
+            port,
+            "POST",
+            "/cli/skin/password/reset",
+            Some(r#"{"token":"not-a-token","password":"new-pass-word"}"#),
+        );
+        assert_eq!(bad.status, 401, "{}", bad.body);
+        assert_eq!(bad.body, reuse.body, "bad and used share the 401 body");
+
+        let empty = http(
+            port,
+            "POST",
+            "/cli/skin/password/reset",
+            Some(r#"{"token":"x","password":""}"#),
+        );
+        assert_eq!(empty.status, 400, "{}", empty.body);
+        let short = http(
+            port,
+            "POST",
+            "/cli/skin/password/reset",
+            Some(r#"{"token":"x","password":"short"}"#),
+        );
+        assert_eq!(short.status, 400, "{}", short.body);
+
+        let query_only = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/reset?token={t1}"),
+            Some(r#"{"password":"new-pass-word"}"#),
+        );
+        assert_eq!(
+            query_only.status, 400,
+            "body-only token; {}",
+            query_only.body
+        );
+
+        let relogin = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"cara","password":"new-pass-word"}"#),
+        );
+        assert_eq!(relogin.status, 200, "{}", relogin.body);
+        let sess2 = json(&relogin.body)["token"]
+            .as_str()
+            .expect("session2")
+            .to_string();
+
+        let wrong_old = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/change?token={sess2}"),
+            Some(r#"{"oldPassword":"nope-nope","password":"third-pass"}"#),
+        );
+        assert_eq!(wrong_old.status, 401, "{}", wrong_old.body);
+        assert_eq!(wrong_old.body.trim(), r#"{"error":"invalid password"}"#);
+
+        let plat_change = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/change?token={plat_tok}"),
+            Some(r#"{"oldPassword":"new-pass-word","password":"third-pass"}"#),
+        );
+        assert_eq!(plat_change.status, 403, "platform; {}", plat_change.body);
+
+        let change = http(
+            port,
+            "POST",
+            &format!("/cli/skin/password/change?token={sess2}"),
+            Some(
+                r#"{"oldPassword":"new-pass-word","password":"third-pass","username":"mintonly"}"#,
+            ),
+        );
+        assert_eq!(change.status, 200, "{}", change.body);
+        assert_eq!(json(&change.body)["ok"], true);
+
+        let dead2 = http(
+            port,
+            "GET",
+            &format!("/cli/thread?token={sess2}&addr={handle}"),
+            None,
+        );
+        assert_eq!(dead2.status, 401, "change revokes caller; {}", dead2.body);
+
+        let relogin3 = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"cara","password":"third-pass"}"#),
+        );
+        assert_eq!(relogin3.status, 200, "new password; {}", relogin3.body);
+        assert!(
+            json(&relogin3.body).get("token").is_some(),
+            "{}",
+            relogin3.body
+        );
+
+        let sess3 = json(&relogin3.body)["token"]
+            .as_str()
+            .expect("session3")
+            .to_string();
+        let guest_users_pw = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/password?token={sess3}"),
+            Some(r#"{"username":"cara","password":"nope"}"#),
+        );
+        assert_eq!(
+            guest_users_pw.status, 403,
+            "session cannot users/password; {}",
+            guest_users_pw.body
+        );
+        let plat_users_pw = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/password?token={plat_tok}"),
+            Some(r#"{"username":"cara","password":"nope"}"#),
+        );
+        assert_eq!(
+            plat_users_pw.status, 403,
+            "platform cannot users/password; {}",
+            plat_users_pw.body
+        );
     });
 }

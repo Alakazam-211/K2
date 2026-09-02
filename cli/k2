@@ -14718,6 +14718,27 @@ BYO BFF (not --skin)
   dentist" (no principal; 403 store; K2 cannot tell users apart).
   --cmd and --skin are mutually exclusive on one published name.
 
+PASSWORD RESET
+  Three exact POST paths (never a /cli/skin/password glob):
+    POST /cli/skin/password/forgot  {"username":"…"}
+      Mint = platform --name or owner. Guest session / agent hook /
+      Connect member → 403. 200 {ok:true, token} once when the guest
+      has a password; unknown / invalid username / no password →
+      200 {ok:true} no token. 60s per username string (even when no
+      user). Delivery is the operator BYO BFF. K2 never emails
+      guests. Never k2 mail. BFF must not return forgot JSON token
+      to the browser. Official --skin: this path 404s.
+    POST /cli/skin/password/reset   {"token":"…","password":"…"}
+      PUBLIC consume. Body only — never token= on the consume POST.
+      Mail link may be /reset?token= (page query). Does not mint a
+      session. Password min length 8. Official consume POST on this
+      origin. GET /reset serves the bundled page (never 404).
+    POST /cli/skin/password/change  {"oldPassword":"…","password":"…"}
+      session k2skn_ only (session=1). No username field. Platform
+      403. Success revokes every session=1; caller logs in again.
+  Never put an owner or platform token in the browser.
+  OIDC issuer still this password file. RP/Google reset at the IdP.
+
 TWO CREDENTIALS (same prefix k2skn_)
   Login session  = password → create_session_token on that guest.
                    Official --skin: browser JSON has no token; gateway holds it.

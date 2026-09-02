@@ -1311,6 +1311,18 @@ mod tests {
             !is_agent_verb("/cli/agents-manage-skin"),
             "toggle writer is owner-only, not an agent verb"
         );
+        assert!(
+            !is_agent_verb("/cli/skin/password/forgot"),
+            "forgot is owner|platform, not an agent verb"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin/password/reset"),
+            "reset is public, not an agent verb"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin/password/change"),
+            "change is session k2skn_, not an agent verb"
+        );
     }
 
     #[test]

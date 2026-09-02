@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reset password — K2</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <main class="card">
+    <h1>K2</h1>
+    <p class="lede">Choose a new password. This origin never puts the pass in the browser.</p>
+    <form id="f">
+      <label>New password <input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+      <p id="err" class="err" hidden></p>
+      <p id="ok" class="lede" hidden>Password updated. Sign in with the new password.</p>
+      <button type="submit">Reset password</button>
+    </form>
+    <p class="fine"><a href="/login">Sign in</a>. K2 is source-available Fair Source, not MIT.</p>
+  </main>
+  <script>
+    const err = document.getElementById("err");
+    const ok = document.getElementById("ok");
+    const token = new URLSearchParams(location.search).get("token") || "";
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.hidden = true;
+      ok.hidden = true;
+      if (!token) {
+        err.textContent = "missing reset token";
+        err.hidden = false;
+        return;
+      }
+      const fd = new FormData(e.target);
+      const body = JSON.stringify({
+        token,
+        password: fd.get("password"),
+      });
+      const r = await fetch("/cli/skin/password/reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        credentials: "same-origin",
+      });
+      const t = await r.text();
+      if (t.includes("k2skn_")) {
+        err.textContent = "server leaked a pass — refuse";
+        err.hidden = false;
+        return;
+      }
+      if (!r.ok) {
+        err.textContent = r.status === 400
+          ? "password must be at least 8 characters"
+          : "invalid or expired reset token";
+        err.hidden = false;
+        return;
+      }
+      ok.hidden = false;
+    });
+  </script>
+</body>
+</html>

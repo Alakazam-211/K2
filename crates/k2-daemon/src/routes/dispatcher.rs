@@ -834,6 +834,9 @@ async fn handle_one_request(
             | "/cli/skin/roles/room"
             | "/cli/skin/login"
             | "/cli/skin/logout"
+            | "/cli/skin/password/forgot"
+            | "/cli/skin/password/reset"
+            | "/cli/skin/password/change"
             | "/cli/skin-tokens"
             | "/cli/skin-tokens/revoke"
             | "/cli/skin-tokens/rooms"
@@ -985,6 +988,7 @@ async fn handle_one_request(
         && (path.starts_with("/cli/") || path == "/events")
         && path != "/cli/skin/login"
         && path != "/cli/skin/logout"
+        && path != "/cli/skin/password/reset"
         && super::http::is_web_client_request(&headers_blob)
     {
         let _ = stream.read(&mut buf).await;
@@ -2739,6 +2743,54 @@ async fn handle_one_request(
                 Some(&clear),
             )
             .await;
+        }
+        // POST /cli/skin/password/forgot — owner | platform --name.
+        // Exact arm before `/cli/skin*` so the roster prefix cannot 403
+        // platform mint or let 2.2 agents mint mail tokens.
+        "/cli/skin/password/forgot" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let query = query.clone();
+            let owner = state.token.as_str().to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::skin_routes::handle_password_forgot(&body_bytes, &query, &owner)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/skin/password/reset — PUBLIC (no token gate). Ignore
+        // presented auth. 500 ms on 401 like login. Does not mint a session.
+        "/cli/skin/password/reset" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || {
+                crate::skin_routes::handle_password_reset(&body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            if r.status.starts_with("401") {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // POST /cli/skin/password/change — session k2skn_ only (session=1).
+        "/cli/skin/password/change" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let presented = super::http::extract_token(&query).map(str::to_string);
+            let r = tokio::task::spawn_blocking(move || {
+                crate::skin_routes::handle_password_change(&body_bytes, presented.as_deref())
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // GET /cli/presence/roster — S1 (presence/multiplayer arc).
         // AUTHORIZED (owner OR connect-user session) — same gate as

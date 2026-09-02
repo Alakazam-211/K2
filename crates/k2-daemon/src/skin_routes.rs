@@ -1104,6 +1104,185 @@ pub fn handle_logout(presented: Option<&str>) -> CliResponse {
     }
 }
 
+const FORGOT_OK_JSON: &str = r#"{"ok":true}"#;
+const RESET_FAILED_JSON: &str = r#"{"error":"invalid or expired reset token"}"#;
+const CHANGE_FAILED_JSON: &str = r#"{"error":"invalid password"}"#;
+const FORGOT_THROTTLED_JSON: &str = r#"{"error":"too many requests"}"#;
+const FORGOT_FORBIDDEN_JSON: &str = r#"{"error":"forbidden"}"#;
+const FORGOT_UNAUTHORIZED_JSON: &str = r#"{"error":"invalid or missing auth token"}"#;
+
+fn forgot_unauthorized() -> CliResponse {
+    CliResponse {
+        status: "401 Unauthorized",
+        content_type: "application/json",
+        body: FORGOT_UNAUTHORIZED_JSON.to_string(),
+    }
+}
+
+fn forgot_forbidden() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: FORGOT_FORBIDDEN_JSON.to_string(),
+    }
+}
+
+fn reset_failed() -> CliResponse {
+    CliResponse {
+        status: "401 Unauthorized",
+        content_type: "application/json",
+        body: RESET_FAILED_JSON.to_string(),
+    }
+}
+
+fn change_failed() -> CliResponse {
+    CliResponse {
+        status: "401 Unauthorized",
+        content_type: "application/json",
+        body: CHANGE_FAILED_JSON.to_string(),
+    }
+}
+
+/// Owner-ROLE or platform `--name`. Guest session / hook / Connect member
+/// 403 before lookup. Missing/invalid → 401. Does not use `token_ok`.
+fn forgot_auth(query: &str, owner_token: &str) -> Result<(), CliResponse> {
+    let presented = crate::routes::http::extract_token(query).unwrap_or("");
+    if presented.is_empty() {
+        return Err(forgot_unauthorized());
+    }
+    if crate::routes::http::owner_role_identity(query, owner_token).is_some() {
+        return Ok(());
+    }
+    if skin::is_skin_token(presented) {
+        return match skin::resolve_skin_token(presented) {
+            Some(pass) if !pass.session => Ok(()),
+            Some(_) => Err(forgot_forbidden()),
+            None => Err(forgot_unauthorized()),
+        };
+    }
+    if crate::session_token::validate_hook(presented).is_some() {
+        return Err(owner_only_response());
+    }
+    if k2_core::connect_users::validate_session(presented).is_some() {
+        return Err(forgot_forbidden());
+    }
+    Err(forgot_unauthorized())
+}
+
+/// `POST /cli/skin/password/forgot` `{username}` — owner | platform `--name`.
+pub fn handle_password_forgot(body: &[u8], query: &str, owner_token: &str) -> CliResponse {
+    if let Err(r) = forgot_auth(query, owner_token) {
+        return r;
+    }
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let username = v
+        .get("username")
+        .or_else(|| v.get("name"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    match skin::password_reset_throttled(&username) {
+        Ok(true) => {
+            return CliResponse {
+                status: "429 Too Many Requests",
+                content_type: "application/json",
+                body: FORGOT_THROTTLED_JSON.to_string(),
+            };
+        }
+        Ok(false) => {}
+        Err(e) => return CliResponse::internal_error(e),
+    }
+    match skin::mint_password_reset(&username) {
+        Ok(Some(token)) => {
+            let body = serde_json::json!({ "ok": true, "token": token }).to_string();
+            debug_assert!(
+                !body.contains("k2skn_"),
+                "reset mint must not be a skin pass"
+            );
+            CliResponse::ok_json(body)
+        }
+        Ok(None) => CliResponse::ok_json(FORGOT_OK_JSON.to_string()),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+/// Public `POST /cli/skin/password/reset` `{token, password}`. Ignore
+/// presented auth. Empty or `<8` → 400. Bad/expired/used → 401 + dummy.
+/// Does not mint a session. Caller adds the 500 ms 401 delay.
+pub fn handle_password_reset(body: &[u8]) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(token) = str_field(&v, &["token"]) else {
+        return CliResponse::bad_request("missing token");
+    };
+    let password = v.get("password").and_then(|x| x.as_str()).unwrap_or("");
+    if password.is_empty() || password.len() < skin::PUBLIC_PASSWORD_MIN_LEN {
+        return CliResponse::bad_request("password must be at least 8 characters");
+    }
+    match skin::consume_password_reset(token, password) {
+        Ok(skin::SkinResetConsume::Ok) => {
+            let out = r#"{"ok":true}"#.to_string();
+            debug_assert!(
+                !out.contains("k2skn_") && !out.contains("token"),
+                "consume must not mint a session"
+            );
+            CliResponse::ok_json(out)
+        }
+        Ok(skin::SkinResetConsume::BadToken) => reset_failed(),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+/// Session `k2skn_` only. Body `{oldPassword, password}` — no username.
+/// Platform 403. Success revokes all session=1 including caller.
+pub fn handle_password_change(body: &[u8], presented: Option<&str>) -> CliResponse {
+    let Some(raw) = presented.map(str::trim).filter(|s| !s.is_empty()) else {
+        return CliResponse {
+            status: "401 Unauthorized",
+            content_type: "application/json",
+            body: r#"{"error":"invalid or revoked skin token"}"#.to_string(),
+        };
+    };
+    let Some(pass) = skin::resolve_skin_token(raw) else {
+        return CliResponse {
+            status: "401 Unauthorized",
+            content_type: "application/json",
+            body: r#"{"error":"invalid or revoked skin token"}"#.to_string(),
+        };
+    };
+    if !pass.session {
+        return CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: r#"{"error":"static skin tokens cannot change password"}"#.to_string(),
+        };
+    }
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(old) = str_field(&v, &["oldPassword", "old_password"]) else {
+        return CliResponse::bad_request("missing oldPassword");
+    };
+    let password = v.get("password").and_then(|x| x.as_str()).unwrap_or("");
+    if password.is_empty() || password.len() < skin::PUBLIC_PASSWORD_MIN_LEN {
+        return CliResponse::bad_request("password must be at least 8 characters");
+    }
+    if !skin::verify_principal_password(&pass.username, old) {
+        return change_failed();
+    }
+    match skin::set_principal_password(&pass.username, Some(password)) {
+        Ok(_) => CliResponse::ok_json(r#"{"ok":true}"#.to_string()),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1123,6 +1302,21 @@ mod tests {
         assert_eq!(a.status, "401 Unauthorized");
         assert!(!a.body.contains("guest"));
         assert_eq!(a.body, LOGIN_FAILED_JSON);
+    }
+
+    #[test]
+    fn reset_and_change_failures_are_generic() {
+        let a = reset_failed();
+        let b = reset_failed();
+        assert_eq!(a.status, "401 Unauthorized");
+        assert_eq!(a.body, b.body);
+        assert_eq!(a.body, RESET_FAILED_JSON);
+        assert!(!a.body.contains("expired") || a.body.contains("invalid or expired"));
+        let c = change_failed();
+        assert_eq!(c.status, "401 Unauthorized");
+        assert_eq!(c.body, CHANGE_FAILED_JSON);
+        assert!(!c.body.contains("username"));
+        assert!(!c.body.contains("k2skn_"));
     }
 
     #[test]

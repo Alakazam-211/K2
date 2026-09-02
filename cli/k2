@@ -14713,7 +14713,7 @@ BYO BFF (not --skin)
   tickets, wiki, store). Attach Authorization: Bearer <session> on
   HTTP and on WS /cli/overlay/events and /cli/fs/events.
   --skin is only the cookie (k2_skin_ui) + allowlist proxy. BYO does
-  that job itself. Keep the pass on the SERVER (Dannon). Never
+  that job itself. Keep the pass on the SERVER. Never
   ?token= in the browser. Never a platform --name token for "this
   dentist" (no principal; 403 store; K2 cannot tell users apart).
   --cmd and --skin are mutually exclusive on one published name.

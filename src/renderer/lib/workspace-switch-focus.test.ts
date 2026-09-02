@@ -19,6 +19,7 @@ vi.mock('@/stores/page-view', () => ({
 import {
   applyWorkspaceSwitchFocus,
   findVisibleComposeTextarea,
+  tryFocusPreferredInputInDashboardPane,
   __resetWorkspaceSwitchFocusForTests,
 } from './workspace-switch-focus'
 
@@ -162,5 +163,104 @@ describe('applyWorkspaceSwitchFocus', () => {
 
     expect(document.activeElement).toBe(terminal)
     expect(document.activeElement).not.toBe(textarea)
+  })
+})
+
+function mountDashPane(
+  workspaceId: string,
+  opts: { compose?: boolean; otherPane?: boolean } = {},
+): {
+  compose: HTMLTextAreaElement | null
+  terminal: HTMLDivElement
+  kessel: HTMLTextAreaElement
+} {
+  const pane = document.createElement('div')
+  pane.setAttribute('data-dash-pane-ws', workspaceId)
+  const terminal = document.createElement('div')
+  terminal.setAttribute('data-terminal-container', '')
+  terminal.tabIndex = -1
+  const kessel = document.createElement('textarea')
+  kessel.setAttribute('data-kessel-shadow', '')
+  terminal.appendChild(kessel)
+  pane.appendChild(terminal)
+  let compose: HTMLTextAreaElement | null = null
+  if (opts.compose) {
+    const bar = document.createElement('div')
+    bar.setAttribute('data-compose-bar', '')
+    compose = document.createElement('textarea')
+    bar.appendChild(compose)
+    pane.appendChild(bar)
+  }
+  document.body.appendChild(pane)
+
+  if (opts.otherPane) {
+    const other = document.createElement('div')
+    other.setAttribute('data-dash-pane-ws', 'other-ws')
+    const otherBar = document.createElement('div')
+    otherBar.setAttribute('data-compose-bar', '')
+    const otherTa = document.createElement('textarea')
+    otherTa.setAttribute('data-test', 'other')
+    otherBar.appendChild(otherTa)
+    other.appendChild(otherBar)
+    document.body.appendChild(other)
+  }
+
+  return { compose, terminal, kessel }
+}
+
+describe('tryFocusPreferredInputInDashboardPane', () => {
+  beforeEach(() => {
+    workspaceSwitchFocus = 'terminal'
+    settingsOpen = false
+    page = 'projects'
+    document.body.innerHTML = ''
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('⌘N with Message agent focuses that pane compose bar, not kessel', () => {
+    const { compose, kessel } = mountDashPane('ws-a', { compose: true, otherPane: true })
+    workspaceSwitchFocus = 'composer'
+    kessel.focus()
+
+    const ok = tryFocusPreferredInputInDashboardPane('ws-a')
+    expect(ok).toBe(true)
+    expect(document.activeElement).toBe(compose)
+    expect(document.activeElement).not.toBe(kessel)
+    const other = document.querySelector('[data-test="other"]')
+    expect(document.activeElement).not.toBe(other)
+  })
+
+  it('⌘N with Terminal focuses the pane terminal, not compose', () => {
+    const { compose, terminal } = mountDashPane('ws-a', { compose: true })
+    workspaceSwitchFocus = 'terminal'
+    compose?.focus()
+
+    const ok = tryFocusPreferredInputInDashboardPane('ws-a')
+    expect(ok).toBe(true)
+    expect(document.activeElement).toBe(terminal)
+    expect(document.activeElement).not.toBe(compose)
+  })
+
+  it('composer pref does not fall through to kessel when the bar is missing', () => {
+    const { kessel } = mountDashPane('ws-a', { compose: false })
+    workspaceSwitchFocus = 'composer'
+    kessel.focus()
+
+    const ok = tryFocusPreferredInputInDashboardPane('ws-a')
+    expect(ok).toBe(false)
+    expect(document.activeElement).toBe(kessel)
+  })
+
+  it('unknown pane id is a no-op', () => {
+    const { compose } = mountDashPane('ws-a', { compose: true })
+    workspaceSwitchFocus = 'composer'
+    compose?.blur()
+
+    const ok = tryFocusPreferredInputInDashboardPane('missing')
+    expect(ok).toBe(false)
+    expect(document.activeElement).not.toBe(compose)
   })
 })

@@ -64,7 +64,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
   { id: 'general.active-window-hours', section: 'general', group: 'Workspaces', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
   { id: 'general.completion-sound', section: 'general', group: 'Workspaces', label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
-  { id: 'general.workspace-switch-focus', section: 'general', group: 'Workspaces', label: 'When moving between workspaces, auto-select', description: 'Switching workspaces focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input'] },
+  { id: 'general.workspace-switch-focus', section: 'general', group: 'Workspaces', label: 'When moving between workspaces, auto-select', description: 'Switching workspaces or project panes (⌘1–⌘9) focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input', 'pane', 'project'] },
   { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
   { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
@@ -532,8 +532,8 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
           When moving between workspaces, auto-select
         </span>
         <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          Switching workspaces focuses the terminal or the agent message
-          box so you can type immediately.
+          Switching workspaces — and ⌘1–⌘9 on a project board — focuses
+          the terminal or the agent message box so you can type immediately.
         </p>
       </div>
       <SettingDropdown

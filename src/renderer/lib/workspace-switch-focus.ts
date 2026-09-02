@@ -67,6 +67,49 @@ export function preferredWorkspaceSwitchFocus(): 'terminal' | 'composer' {
     : 'terminal'
 }
 
+function dashPaneRoot(workspaceId: string): HTMLElement | null {
+  if (typeof document === 'undefined') return null
+  const escaped =
+    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+      ? CSS.escape(workspaceId)
+      : workspaceId.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  const el = document.querySelector(`[data-dash-pane-ws="${escaped}"]`)
+  return el instanceof HTMLElement ? el : null
+}
+
+/** Projects dashboard ⌘1…⌘9 (and Esc-to-pane): focus the configured
+ *  input **inside that pane**, not the first visible bar on the page.
+ *  Composer pref never falls through to the kessel textarea. */
+export function tryFocusPreferredInputInDashboardPane(workspaceId: string): boolean {
+  const pane = dashPaneRoot(workspaceId)
+  if (!pane || isEffectivelyHidden(pane)) return false
+
+  if (preferredWorkspaceSwitchFocus() === 'composer') {
+    const nodes = pane.querySelectorAll('[data-compose-bar] textarea')
+    for (const el of nodes) {
+      if (!(el instanceof HTMLTextAreaElement)) continue
+      if (isEffectivelyHidden(el)) continue
+      el.focus()
+      return true
+    }
+    return false
+  }
+
+  const terminals = pane.querySelectorAll('[data-terminal-container]')
+  for (const el of terminals) {
+    if (!(el instanceof HTMLElement)) continue
+    if (isEffectivelyHidden(el)) continue
+    el.focus()
+    return true
+  }
+  const fallback = pane.querySelector('textarea')
+  if (fallback instanceof HTMLTextAreaElement && !isEffectivelyHidden(fallback)) {
+    fallback.focus()
+    return true
+  }
+  return false
+}
+
 /** One-shot: focus the configured target if it is already in the DOM.
  *  Returns true when something was focused (or we should stop trying). */
 export function tryFocusPreferredWorkspaceInput(): boolean {

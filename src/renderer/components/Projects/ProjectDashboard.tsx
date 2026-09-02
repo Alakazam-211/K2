@@ -56,6 +56,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { tryFocusPreferredInputInDashboardPane } from '@/lib/workspace-switch-focus'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
 import { activateProject } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
@@ -598,8 +599,7 @@ export default function ProjectDashboard({
   )
 
   const focusPaneInput = useCallback((workspaceId: string): void => {
-    const el = document.querySelector<HTMLElement>(`[data-dash-pane-ws="${workspaceId}"]`)
-    el?.querySelector<HTMLTextAreaElement>('textarea')?.focus()
+    tryFocusPreferredInputInDashboardPane(workspaceId)
   }, [])
 
   useEffect(() => {
@@ -663,6 +663,7 @@ export default function ProjectDashboard({
     if (existing !== null) {
       flashFocus(existing)
       notePaneFocus(paneRequest.workspaceId)
+      focusPaneInput(paneRequest.workspaceId)
       return
     }
     if (noteViewerInteractionBlocked()) {
@@ -675,7 +676,7 @@ export default function ProjectDashboard({
     applyRoot(next, true)
     flashFocus(`t:${paneRequest.workspaceId}`)
     notePaneFocus(paneRequest.workspaceId)
-  }, [paneRequest, applyRoot, flashFocus, notePaneFocus])
+  }, [paneRequest, applyRoot, flashFocus, notePaneFocus, focusPaneInput])
 
   // ── Presets (§6.8.4 — the tab-row menu re-tiles the open tree) ─────────
   useEffect(() => {
@@ -688,10 +689,10 @@ export default function ProjectDashboard({
   }, [applyRoot])
 
   // ── ⌘1…⌘9 pane switching (the page-level capture keydown lands
-  //    here via the dashboard-dnd registry) — the Esc-to-pane focus
-  //    path: terminal panes flash + take keyboard focus; htmlDoc/
-  //    unknown panes just flash (every pane is already on screen in
-  //    the tiled grid). Focus-only, so viewers get it too. ───────────────
+  //    here via the dashboard-dnd registry). Terminal panes flash and
+  //    take the General → Workspaces auto-select input (compose bar
+  //    vs kessel); htmlDoc/unknown panes just flash. Focus-only, so
+  //    viewers get it too. ─────────────────────────────────────────────
   useEffect(() => {
     return registerPaneShortcutHandler((num) => {
       const entry = paneByNumber(rootRef.current, num)

@@ -5,7 +5,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.40.136 — Skin guests can read that agent's store, as themselves
 
-A logged-in skin guest can list, get, and query **that agent's store** — that workspace only. Store on Documents does not grant store on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Guests never get a database password. Grid and the terminal stay off.
+A logged-in skin guest can list, get, and query **that agent's store** — that workspace only. Store on Documents does not grant store on Sales. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Guests never get a database password. Grid and the terminal stay off.
 
 `k2 publish run --skin` proxies `GET /cli/store/list`, `get`, and `query` on the published origin. Session reads stamp `k2.skin_principal` so dump policies can filter per guest. Named platform tokens cannot use store. Writes stay off.
 
@@ -13,7 +13,7 @@ A logged-in skin guest can list, get, and query **that agent's store** — that 
 
 ## 0.40.135 — Skin guests can read wiki on the agents you grant
 
-A logged-in skin guest can list and open that agent's wiki — **that workspace only**. Wiki on Documents does not grant wiki on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
+A logged-in skin guest can list and open that agent's wiki — **that workspace only**. Wiki on Documents does not grant wiki on Sales. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
 
 `k2 publish run --skin` proxies `GET /cli/wiki/index` and `GET /cli/wiki/note` on the published origin. Fleet wiki, seed, serve, and public chat stay off. Chat history and Chatter are not in this cut.
 
@@ -21,7 +21,7 @@ A logged-in skin guest can list and open that agent's wiki — **that workspace 
 
 ## 0.40.134 — Skin guests can use Tickets on the agents you grant
 
-A logged-in skin guest can list, open, comment, answer, and resolve Tickets **on that agent only**. Tickets on Documents does not grant Tickets on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
+A logged-in skin guest can list, open, comment, answer, and resolve Tickets **on that agent only**. Tickets on Documents does not grant Tickets on Sales. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
 
 `k2 publish run --skin` proxies those Ticket routes on the published origin (`/cli/feedback/list`, `show`, `create`, `comment`, `answer`, `resolve`). Waiting-count and assign stay off. Wiki, chat history, and Chatter are not in this cut.
 
@@ -29,7 +29,7 @@ A logged-in skin guest can list, open, comment, answer, and resolve Tickets **on
 
 ## 0.40.133 — Skin guests can use files on the agents you grant
 
-A logged-in skin guest can list, read, write, and watch files **in that agent's folder** — not the whole box. Files on Documents does not grant files on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
+A logged-in skin guest can list, read, write, and watch files **in that agent's folder** — not the whole box. Files on Documents does not grant files on Sales. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.
 
 `k2 publish run --skin` now proxies those file routes on the published origin (`read-dir`, `read-file`, `write-file`, and a per-agent live watch). Login still guards Thread and files; `/` and `/assets/*` stay public.
 
@@ -37,7 +37,7 @@ A logged-in skin guest can list, read, write, and watch files **in that agent's 
 
 ## 0.40.132 — Skin access is per agent, then what they may do there
 
-Skin Access roles grant a guest **specific agents**, and **specific functions on each one** (Thread, files). Files on Documents does not grant files on Anna. Guests still log in with a username and password; they never copy a key. Grid and the terminal stay off.
+Skin Access roles grant a guest **specific agents**, and **specific functions on each one** (Thread, files). Files on Documents does not grant files on Sales. Guests still log in with a username and password; they never copy a key. Grid and the terminal stay off.
 
 `k2 publish run --skin <dir>` serves your `login.html` when that file is in the folder (otherwise the bundled sign-in). Guests can tap Thread choice cards and fill secrets. A workspace Agent-tab toggle (off by default) lets that agent run existing `k2 skin` / `k2 skin-token` commands.
 

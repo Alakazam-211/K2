@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.136 — Skin guests can read that agent's store, as themselves
+
+A logged-in skin guest can list, get, and query **that agent's store** — that workspace only. Store on Documents does not grant store on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Guests never get a database password. Grid and the terminal stay off.
+
+`k2 publish run --skin` proxies `GET /cli/store/list`, `get`, and `query` on the published origin. Session reads stamp `k2.skin_principal` so dump policies can filter per guest. Named platform tokens cannot use store. Writes stay off.
+
+---
+
 ## 0.40.135 — Skin guests can read wiki on the agents you grant
 
 A logged-in skin guest can list and open that agent's wiki — **that workspace only**. Wiki on Documents does not grant wiki on Anna. Unassigned guests stay Thread-only. The pass stays on the server (cookie), never in the browser. Grid and the terminal stay off.

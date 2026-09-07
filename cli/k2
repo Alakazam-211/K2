@@ -14556,6 +14556,23 @@ listens on loopback only. There is no `k2 db expose`. Off-box reach
 is a hostname pointed at an already-listening port (`k2 publish
 subdomain create`), not "publish run Postgres".
 
+TWO ACTORS
+  migrate = `{db}_migrator` (owner). `k2 db dsn` = `{db}_agent`.
+  After each file, K2 GRANTs USAGE + table DML + sequences on every
+  migrator-owned schema to the agent. Do not `CREATE ROLE` /
+  `CREATE USER` in `.k2/db/migrations` (roles are cluster-wide).
+  Do not hard-code `ws_*_agent` in files. Do not hand-mint cluster
+  roles; use `k2 db create --test` for two-role tests.
+
+--test (disposable scratch; not cap)
+  `k2 db create --test` while the live Skin occupies cap=1. JSON is
+  agent `dsn` + `migratorDsn`. Owner or owning-workspace cell only.
+  Guest GET dsn is 403; guests never hold a DSN. Grant-path 403.
+  `k2 db dsn --test` agent; `--test --actor migrator` migrator.
+  `k2 db drop --test --yes` loads status=test only (404 if missing,
+  never the live Skin). No `migrate --test` — apply SQL via psql
+  on the migrator DSN. Do not point destructive tests at the live DB.
+
 PASSPORT VS OWNERSHIP
   `db_agent_access` (off / read / write, default off) is create-only.
   It only gates `k2 db create`.
@@ -14565,9 +14582,11 @@ PASSPORT VS OWNERSHIP
 
 AGENT VERBS (workspace identity from the token)
   k2 db create [--id <key>] [--db-access write] [--json]
-  k2 db list | dsn
+  k2 db create --test
+  k2 db list | dsn | dsn --test | dsn --test --actor migrator
   k2 db migrate [--dir .k2/db/migrations]
   k2 db dump / restore <workspace-relative-file>
+  k2 db drop --yes | drop --test --yes
   k2 store put <name> --id <id> --json '{…}'
 
 OWNER VERBS (agents exit 3)
@@ -14576,11 +14595,26 @@ OWNER VERBS (agents exit 3)
 
 DSN
   Re-fetch with `k2 db dsn` when you need it. Never log it, never
-  paste it into study notes, never commit it.
+  paste it into study notes, never commit it. Unflagged dsn is the
+  live agent. Dump-table HTTP is the guest path that never holds a DSN.
 
 MIGRATIONS
   Numbered `0001_name.sql` files. Empty or `init.sql` is a loud error.
   Unchanged re-run skips. A rewritten already-applied file is refused.
+  Comments may mention FORCE RLS; executable FORCE is Usage.
+
+BYO BFF (principal helpers)
+  On create and migrate K2 ensures schema `k2` + `skin_uid` +
+  `set_principal(uuid)` + `clear_principal` + `principal_hygiene`.
+  Pool connect: `SELECT k2.clear_principal();` then assert
+  `k2.principal_hygiene()` is true. Per request: BEGIN;
+  `SELECT k2.set_principal($principalId);` — uuid from login JSON
+  `principalId`. A BFF that fell back to username when principalId
+  was missing will **error** at set_principal, not degrade. Empty
+  GUC = no rows. Hygiene true means empty now, not anti-spoof —
+  the BFF LOGIN can still SET another guest's uuid. Example POLICY
+  stays copy-into-migrations (not auto-applied). No FORCE RLS.
+  `k2.skin_uid()` is a typed accessor, not a stronger identity source.
 
 STORE
   `k2 store` is JSONB in the same DB. Create-new-DB still needs the
@@ -14760,6 +14794,13 @@ BYO BFF (not --skin)
   ?token= in the browser. Never a platform --name token for "this
   dentist" (no principal; 403 store; K2 cannot tell users apart).
   --cmd and --skin are mutually exclusive on one published name.
+  Guests never hold a Postgres DSN (dump-table HTTP is their path;
+  the daemon stamps GUC). Next-class pool: on checkout
+  `SELECT k2.clear_principal()` and assert `k2.principal_hygiene()`;
+  per request SET LOCAL via `k2.set_principal($principalId)` (uuid
+  from login JSON). Username in the GUC errors, it does not degrade.
+  Hygiene true means the GUC is empty now — not anti-spoof (Keep 128:
+  the BFF LOGIN can still SET another uuid). Do not CREATE ROLE skin_*.
 
 PASSWORD RESET
   Three exact POST paths (never a /cli/skin/password glob):
@@ -26636,13 +26677,20 @@ elif verb == "create":
         body["name"] = os.environ["D_NAME"]
     if os.environ.get("D_ACCESS"):
         body["access"] = os.environ["D_ACCESS"]
+    if os.environ.get("D_TEST") == "true":
+        body["test"] = True
     status, raw = request("POST", "/cli/db/create", body=body)
     d = load(raw)
 elif verb == "list":
     status, raw = request("GET", "/cli/db/list", {"project": ws_path})
     d = load(raw)
 elif verb == "dsn":
-    status, raw = request("GET", "/cli/db/dsn", {"project": ws_path})
+    params = {"project": ws_path}
+    if os.environ.get("D_TEST") == "true":
+        params["test"] = "1"
+    if os.environ.get("D_ACTOR"):
+        params["actor"] = os.environ["D_ACTOR"]
+    status, raw = request("GET", "/cli/db/dsn", params)
     d = load(raw)
 elif verb == "migrate":
     body = {"project": ws_path}
@@ -26662,6 +26710,8 @@ elif verb == "restore":
     d = load(raw)
 elif verb == "drop":
     body = {"project": ws_path, "yes": os.environ.get("D_YES") == "true"}
+    if os.environ.get("D_TEST") == "true":
+        body["test"] = True
     status, raw = request("POST", "/cli/db/drop", body=body)
     d = load(raw)
 elif verb == "grant":
@@ -26751,6 +26801,8 @@ elif verb == "create":
     print("created %s" % d.get("name"))
     if d.get("dsn"):
         print("dsn: %s" % d.get("dsn"))
+    if d.get("migratorDsn"):
+        print("migratorDsn: %s" % d.get("migratorDsn"))
     cap = d.get("cap") or {}
     if cap:
         print("cap %s/%s used" % (cap.get("used"), cap.get("cap")))
@@ -26829,19 +26881,35 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
 AGENT (workspace — identity from token, never body project=)
   create [--id <client-id>] [--db-access off|read|write] [--json]
                                  needs db_agent_access=write (create-only passport)
-  list [--json]                  owned + granted; empty list is success (not 403)
+  create --test                  disposable scratch DB (not cap; owner/cell only)
+  list [--json]                  active + test (no dropped tombstones)
   dsn | creds [--json] [--workspace <ws>]
                                  owned or granted; always re-fetchable; never logged
+  dsn --test                     agent DSN on the test DB
+  dsn --test --actor migrator    migrator DSN on the test DB (two-role tests)
   migrate [--dir .k2/db/migrations]
   dump  [--out .k2/db/dumps/<ts>.dump]
   restore <file>                 workspace-relative (no .. / abs)
-  drop --yes
+  drop --yes                     live Skin only
+  drop --test --yes              test DB only (404 if missing; never the live Skin)
   grant <workspace> --db … --level read|write [--manage]
   revoke <workspace> --db …
+
+TWO ACTORS
+  migrate runs as {db}_migrator (owner). k2 db dsn is {db}_agent.
+  After each migration file, K2 GRANTs USAGE + table DML + sequences on
+  every migrator-owned schema to the agent (do not hard-code ws_*_agent;
+  do not CREATE ROLE / CREATE USER in .k2/db/migrations — roles are
+  cluster-wide). Comments may mention FORCE RLS; executable FORCE is Usage.
 
 Passport: db_agent_access (off/read/write, default off) only gates create.
 list/dsn/migrate/dump/restore/drop/store work when this workspace owns a DB
 or has a sql_grants row covering the verb.
+--test create/dsn/drop and migrator DSN are owner or owning-workspace cell
+only (Connect members and grants: 403). Guests never receive a DSN.
+
+--test does not consume cap. One test DB per workspace. Live and test
+cannot share a name. No migrate --test (apply SQL via the migrator DSN).
 
 Postgres stays loopback. Off-box *.k2.dev:
   k2 publish subdomain create <label> --target localhost:<port>
@@ -26849,8 +26917,13 @@ Postgres stays loopback. Off-box *.k2.dev:
 
 Documents: k2 store … (same DB). Files: workspace FS. No k2 hostdb.
 
-Skin RLS (optional, not auto-applied; no FORCE RLS / no SET ROLE):
-  crates/k2-daemon/src/sql/skin_rls_template.sql — commented CREATE ROLE skin_<id> NOLOGIN + POLICY.
+Skin helpers (ensured on create and migrate; POLICY is still copy-in):
+  k2.skin_uid() / k2.set_principal(uuid) / k2.clear_principal() /
+  k2.principal_hygiene(). set_principal is SET LOCAL. A username in the
+  GUC errors (does not degrade). Hygiene true means the GUC is empty now
+  — not anti-spoof; the BFF LOGIN can still SET another uuid.
+  crates/k2-daemon/src/sql/skin_rls_template.sql — GUC POLICY example;
+  no CREATE ROLE skin_*; no FORCE RLS; not auto-applied; no SET ROLE.
 
 Exit: 0 ok · 1 error · 2 usage · 3 owner-only / gated
 EOF
@@ -26939,26 +27012,43 @@ cmd_db() {
             while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
             D_VERB="doctor" D_JSON="$as_json" _db_py ;;
         create)
-            local access=""
+            local access="" test=false
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --id) client_id="${2:-}"; shift 2 ;;
                     --name) name="${2:-}"; shift 2 ;;
                     --db-access|--access) access="${2:-}"; shift 2 ;;
+                    --test) test=true; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done
             if [ -n "$access" ]; then
                 case "$access" in off|read|write) ;; *) _db_err "usage" "--db-access must be off, read, or write"; exit 2 ;; esac
             fi
-            D_VERB="create" D_JSON="$as_json" D_ID="$client_id" D_NAME="$name" D_ACCESS="$access" _db_py ;;
+            if $test && [ -n "$name" ]; then
+                _db_err "usage" "k2 db create --test does not take --name"
+                exit 2
+            fi
+            D_VERB="create" D_JSON="$as_json" D_ID="$client_id" D_NAME="$name" D_ACCESS="$access" D_TEST="$test" _db_py ;;
         list)
             while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
             D_VERB="list" D_JSON="$as_json" _db_py ;;
         dsn|creds)
-            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
-            D_VERB="dsn" D_JSON="$as_json" _db_py ;;
+            local test=false actor=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --test) test=true; shift ;;
+                    --actor) actor="${2:-}"; shift 2 ;;
+                    *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
+                esac
+            done
+            if [ -n "$actor" ] && [ "$actor" != "migrator" ]; then
+                _db_err "usage" "--actor must be migrator"
+                exit 2
+            fi
+            D_VERB="dsn" D_JSON="$as_json" D_TEST="$test" D_ACTOR="$actor" _db_py ;;
         migrate)
             while [ $# -gt 0 ]; do
                 case "$1" in
@@ -26983,14 +27073,16 @@ cmd_db() {
             [ -n "$file" ] || { _db_err "usage" "k2 db restore <file>"; exit 2; }
             D_VERB="restore" D_JSON="$as_json" D_FILE="$file" _db_py ;;
         drop)
+            local test=false
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --yes) yes=true; shift ;;
+                    --test) test=true; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done
-            D_VERB="drop" D_JSON="$as_json" D_YES="$yes" _db_py ;;
+            D_VERB="drop" D_JSON="$as_json" D_YES="$yes" D_TEST="$test" _db_py ;;
         grant)
             local grantee="" db_spec="" level="" manage=false
             while [ $# -gt 0 ]; do

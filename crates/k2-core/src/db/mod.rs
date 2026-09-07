@@ -960,6 +960,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0115_project_agents_can_manage_skin",
             include_str!("../../drizzle_sql/0115_project_agents_can_manage_skin.sql"),
         ),
+        // 0116 — sql_databases.status admits 'test' (cap-exempt scratch DB).
+        // CHECK rebuild; one test row per workspace; live/test names disjoint.
+        (
+            "0116_sql_databases_status_test",
+            include_str!("../../drizzle_sql/0116_sql_databases_status_test.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1561,7 +1567,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0115_project_agents_can_manage_skin",
+            last_name, "0116_sql_databases_status_test",
             "unexpected last migration name: {last_name}"
         );
     }

@@ -74,6 +74,43 @@ pub fn is_sql_owner_surface(path: &str) -> bool {
     is_owner_level_mutation(path)
 }
 
+pub fn test_db_forbidden_response() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "forbidden",
+                "hint": "k2 db --test is owner or owning-workspace cell only — Connect members and grants cannot mint or fetch a migrator DSN",
+            },
+        })
+        .to_string(),
+    }
+}
+
+pub fn body_requests_test(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("test").cloned())
+        .map(|t| match t {
+            serde_json::Value::Bool(b) => b,
+            serde_json::Value::Number(n) => n.as_u64() == Some(1),
+            serde_json::Value::String(s) => s == "1" || s.eq_ignore_ascii_case("true"),
+            _ => false,
+        })
+        .unwrap_or(false)
+}
+
+pub fn query_requests_test_or_migrator(params: &std::collections::HashMap<String, String>) -> bool {
+    let test = params.get("test").is_some_and(|s| {
+        let t = s.trim();
+        t == "1" || t.eq_ignore_ascii_case("true")
+    });
+    let actor = params.get("actor").is_some_and(|s| !s.trim().is_empty());
+    test || actor
+}
+
 pub fn owner_only_response() -> CliResponse {
     CliResponse {
         status: "403 Forbidden",

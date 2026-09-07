@@ -43,7 +43,7 @@ mod tests {
     use crate::caller_workspace::with_request_principal;
     use crate::session_token::HookPrincipal;
     use crate::sql::secrets::{MemSecretStore, SecretStore};
-    use crate::sql::sysops::FakeSystemOps;
+    use crate::sql::sysops::{FakeSystemOps, SystemOps};
     use crate::sql_routes;
 
     fn insert_project(name: &str, path: &str) -> String {
@@ -143,6 +143,11 @@ mod tests {
         assert!(!s.contains("superuser"), "{s}");
         assert!(!s.contains("postgres://postgres"), "{s}");
         assert_eq!(v["role"], "agent");
+        assert!(v.get("migratorDsn").is_none(), "{v}");
+        assert!(
+            !s.contains("_migrator:"),
+            "unflagged create JSON must not leak migrator: {s}"
+        );
         assert!(
             v["dsn"].as_str().expect("dsn").contains("_agent"),
             "{}",
@@ -2706,5 +2711,512 @@ mod tests {
         assert_eq!(err.status(), "400 Bad Request", "{}", err.hint());
         assert_eq!(err.hint(), "missing id column");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_app_schema_grants_agent_insert_no_ws_agent_in_file() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-p7-app-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        let file = "CREATE SCHEMA app; CREATE TABLE app.t (id serial primary key);\n";
+        assert!(
+            !file.contains("ws_") && !file.contains("_agent"),
+            "migration file must not hard-code ws_*_agent: {file}"
+        );
+        std::fs::write(mig.join("0001_app.sql"), file.as_bytes()).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-p7-app", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::migrate(&ops, &secrets, &pid, &path, None).expect("migrate");
+        let psql = ops.pg.lock().expect("pg").psql_sql.join("\n");
+        assert!(
+            psql.contains("CREATE SCHEMA app") && psql.contains("CREATE TABLE app.t"),
+            "file must be executed as-is: {psql}"
+        );
+        assert!(
+            !file.contains(&format!("{db_name}_agent")),
+            "file must not name the agent"
+        );
+        let sync = ops::privilege_sync_sql(&db_name, &[]);
+        assert!(sync.contains("pg_namespace"), "{sync}");
+        assert!(
+            psql.contains("$k2priv$") || psql.contains("GRANT USAGE ON SCHEMA"),
+            "P7 privilege sync must run after the file: {psql}"
+        );
+        let insert = ops
+            .run_cmd(
+                crate::sql::sysops::PSQL_PATH,
+                &[
+                    "-h",
+                    "127.0.0.1",
+                    "-U",
+                    &format!("{db_name}_agent"),
+                    "-d",
+                    &db_name,
+                ],
+                &[("PGPASSWORD", "x")],
+                Some(b"INSERT INTO app.t DEFAULT VALUES;"),
+            )
+            .expect("agent INSERT");
+        let _ = insert;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_reapplies_write_and_read_sql_grants() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-p7-a-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-p7-b-{}", uuid::Uuid::new_v4()));
+        let dir_c = std::env::temp_dir().join(format!("k2-sql-p7-c-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir_a.join(".k2/db/migrations")).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        std::fs::create_dir_all(&dir_c).unwrap();
+        std::fs::write(
+            dir_a.join(".k2/db/migrations/0001_app.sql"),
+            b"CREATE SCHEMA app; CREATE TABLE app.t (id serial primary key);\n",
+        )
+        .unwrap();
+        let id_a = insert_project("sql-p7-ga", &dir_a.to_string_lossy());
+        let id_b = insert_project("sql-p7-gb", &dir_b.to_string_lossy());
+        let id_c = insert_project("sql-p7-gc", &dir_c.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_b, "write", false).expect("write");
+        ops::grant_access(&ops, &secrets, None, &db_name, &id_c, "read", false).expect("read");
+        ops::migrate(&ops, &secrets, &id_a, &dir_a.to_string_lossy(), None).expect("migrate");
+        let write_role = ops::default_agent_role(&id_b);
+        let read_role = ops::default_agent_role(&id_c);
+        let sync = ops::privilege_sync_sql(
+            &db_name,
+            &[
+                (write_role.clone(), "write".into()),
+                (read_role.clone(), "read".into()),
+            ],
+        );
+        assert!(sync.contains(&write_role), "{sync}");
+        assert!(sync.contains(&read_role), "{sync}");
+        assert!(
+            sync.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES"),
+            "{sync}"
+        );
+        assert!(sync.contains("GRANT SELECT ON ALL TABLES"), "{sync}");
+        let psql = ops.pg.lock().expect("pg").psql_sql.join("\n");
+        assert!(psql.contains(&write_role), "write grant reapplied: {psql}");
+        assert!(psql.contains(&read_role), "read grant reapplied: {psql}");
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+        let _ = std::fs::remove_dir_all(dir_c);
+    }
+
+    #[test]
+    fn migrate_comments_only_force_applies_executable_usage() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-force-cmt-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        std::fs::write(
+            mig.join("0001_init.sql"),
+            b"-- Do not ALTER TABLE t FORCE ROW LEVEL SECURITY;\nCREATE TABLE t (id int);\n",
+        )
+        .unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-force-cmt", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let ok = ops::migrate(&ops, &secrets, &pid, &path, None).expect("comments-only FORCE");
+        assert_eq!(ok["noop"], false, "{ok}");
+        std::fs::write(
+            mig.join("0002_force.sql"),
+            b"ALTER TABLE t FORCE ROW LEVEL SECURITY;\n",
+        )
+        .unwrap();
+        let err = ops::migrate(&ops, &secrets, &pid, &path, None).expect_err("executable FORCE");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        assert!(err.hint().contains("FORCE RLS"), "{}", err.hint());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_refuses_create_role_comment_mention_applies() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-cr-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        std::fs::write(
+            mig.join("0001_init.sql"),
+            b"-- do not CREATE ROLE app_x in migrations\nCREATE TABLE t (id int);\n",
+        )
+        .unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-cr", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        ops::migrate(&ops, &secrets, &pid, &path, None).expect("comment CREATE ROLE");
+        std::fs::write(mig.join("0002_role.sql"), b"CREATE ROLE app_x;\n").unwrap();
+        let err = ops::migrate(&ops, &secrets, &pid, &path, None).expect_err("CREATE ROLE");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        assert!(err.hint().contains("cluster-wide"), "{}", err.hint());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn drop_then_create_list_one_active_no_dropped_tombstone() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-list-drop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-list-drop", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let name = created["name"].as_str().expect("name").to_string();
+        ops::drop_database(&ops, &pid).expect("drop");
+        let cat_mid = ops::catalog_json(None);
+        let dbs_mid = cat_mid["databases"].as_array().expect("databases");
+        assert!(
+            dbs_mid.iter().all(|d| d["status"] != "dropped"),
+            "list must omit dropped: {cat_mid}"
+        );
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("recreate");
+        let cat = ops::catalog_json(Some(&pid));
+        let dbs = cat["databases"].as_array().expect("databases");
+        let named: Vec<_> = dbs.iter().filter(|d| d["name"] == name).collect();
+        assert_eq!(named.len(), 1, "{cat}");
+        assert_eq!(named[0]["status"], "active", "{cat}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_helper_sql_includes_sequence_default_privileges() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-p8-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid = insert_project("sql-p8", &dir.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let v = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let s = v.to_string();
+        assert!(!s.contains("migratorDsn"), "{s}");
+        assert!(!s.contains("_migrator:"), "{s}");
+        assert_eq!(v["role"], "agent", "{v}");
+        let helper = ops
+            .pg
+            .lock()
+            .expect("pg")
+            .helper_sql
+            .join("\n")
+            .to_ascii_uppercase();
+        assert!(
+            helper.contains("GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA PUBLIC"),
+            "{helper}"
+        );
+        assert!(
+            helper.contains("ALTER DEFAULT PRIVILEGES FOR ROLE")
+                && helper.contains("GRANT USAGE, SELECT, UPDATE ON SEQUENCES"),
+            "{helper}"
+        );
+        for stmt in helper.split(';') {
+            let grant_on_sequences = stmt.contains("GRANT") && stmt.contains("ON ALL SEQUENCES");
+            assert!(
+                !grant_on_sequences || (!stmt.contains("INSERT") && !stmt.contains("DELETE")),
+                "sequence GRANT must not include INSERT/DELETE: {stmt}"
+            );
+        }
+        assert!(helper.contains("K2.SET_PRINCIPAL"), "{helper}");
+        assert!(helper.contains("K2.PRINCIPAL_HYGIENE"), "{helper}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_test_skips_cap_returns_both_dsns() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-testcap-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-testcap", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let live = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("live");
+        assert_eq!(live["cap"]["used"], 1, "{live}");
+        assert_eq!(live["role"], "agent", "{live}");
+        assert!(live.get("migratorDsn").is_none(), "{live}");
+        let test = ops::create_test_database(&ops, &secrets, &pid, 1, None).expect("test");
+        assert_eq!(test["cap"]["used"], 1, "cap.used stays live-only: {test}");
+        assert_eq!(test["test"], true, "{test}");
+        assert!(test.get("role").is_none(), "test create omits role: {test}");
+        let agent = test["dsn"].as_str().expect("dsn");
+        let mig = test["migratorDsn"].as_str().expect("migratorDsn");
+        assert!(agent.contains("_agent"), "{agent}");
+        assert!(mig.contains("_migrator"), "{mig}");
+        assert_ne!(agent, mig, "{test}");
+        let live_name = live["name"].as_str().expect("live name");
+        let test_name = test["name"].as_str().expect("test name");
+        assert_ne!(live_name, test_name, "live and test names must differ");
+        assert!(test_name.ends_with("_test"), "{test_name}");
+        let live_dsn = ops::dsn_for_project(&ops, &secrets, &pid, 1).expect("unflagged dsn");
+        assert!(
+            live_dsn["dsn"].as_str().expect("dsn").contains(live_name),
+            "unflagged dsn is live: {live_dsn}"
+        );
+        assert_eq!(live_dsn["role"], "agent", "{live_dsn}");
+        assert!(live_dsn.get("migratorDsn").is_none(), "{live_dsn}");
+        let err =
+            ops::create_test_database(&ops, &secrets, &pid, 1, None).expect_err("second test");
+        assert_eq!(err.status(), "409 Conflict", "{}", err.hint());
+        let cat = ops::catalog_json(Some(&pid));
+        let dbs = cat["databases"].as_array().expect("databases");
+        assert_eq!(dbs.len(), 2, "{cat}");
+        let test_row = dbs.iter().find(|d| d["test"] == true).expect("test listed");
+        assert_eq!(test_row["status"], "test", "{test_row}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn drop_test_missing_404_then_recreate_ok_does_not_touch_live() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-testdrop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid = insert_project("sql-testdrop", &dir.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let live = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("live");
+        let live_name = live["name"].as_str().expect("name").to_string();
+        let err = ops::drop_test_database(&ops, &pid).expect_err("no test");
+        assert_eq!(err.status(), "404 Not Found", "{}", err.hint());
+        let still = ops::dsn_for_project(&ops, &secrets, &pid, 1).expect("live still");
+        assert!(
+            still["dsn"].as_str().expect("dsn").contains(&live_name),
+            "missing test drop must not touch live: {still}"
+        );
+        let test = ops::create_test_database(&ops, &secrets, &pid, 1, None).expect("test");
+        let test_name = test["name"].as_str().expect("test name").to_string();
+        ops::drop_test_database(&ops, &pid).expect("drop test");
+        let again = ops::create_test_database(&ops, &secrets, &pid, 1, None).expect("recreate");
+        assert_eq!(again["name"], test_name, "{again}");
+        let live2 = ops::dsn_for_project(&ops, &secrets, &pid, 1).expect("live after");
+        assert!(
+            live2["dsn"].as_str().expect("dsn").contains(&live_name),
+            "drop --test must not drop live: {live2}"
+        );
+        let helper = ops.pg.lock().expect("pg").helper_sql.join("\n");
+        assert!(
+            !helper.to_ascii_uppercase().contains("DROP ROLE"),
+            "no DROP ROLE this cut: {helper}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dsn_test_actor_migrator_and_name_with_test_is_400() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-dsnact-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-dsnact", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("live");
+        ops::create_test_database(&ops, &secrets, &pid, 1, None).expect("test");
+        let agent =
+            ops::dsn_for_project_opts(&ops, &secrets, &pid, 1, true, false).expect("test agent");
+        assert_eq!(agent["role"], "agent", "{agent}");
+        assert!(
+            agent["dsn"].as_str().expect("dsn").contains("_agent"),
+            "{agent}"
+        );
+        let mig = ops::dsn_for_project_opts(&ops, &secrets, &pid, 1, true, true).expect("migrator");
+        assert_eq!(mig["role"], "migrator", "{mig}");
+        assert!(
+            mig["dsn"].as_str().expect("dsn").contains("_migrator"),
+            "{mig}"
+        );
+        let err = ops::dsn_for_project_opts(&ops, &secrets, &pid, 1, false, true)
+            .expect_err("live migrator");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        routes::with_fake_ops(fake, || {
+            let create = routes::handle_create(
+                serde_json::json!({ "project": path, "test": true, "name": "custom" })
+                    .to_string()
+                    .as_bytes(),
+            );
+            assert_eq!(create.status, "400 Bad Request", "{}", create.body);
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grant_path_test_dsn_is_403_guest_create_stays_404_shape() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir_a = std::env::temp_dir().join(format!("k2-sql-gt-a-{}", uuid::Uuid::new_v4()));
+        let dir_b = std::env::temp_dir().join(format!("k2-sql-gt-b-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let path_a = dir_a.to_string_lossy().into_owned();
+        let path_b = dir_b.to_string_lossy().into_owned();
+        let id_a = insert_project("sql-gt-a", &path_a);
+        let id_b = insert_project("sql-gt-b", &path_b);
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        let created = ops::create_database(fake, &secrets, &id_a, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::grant_access(fake, &secrets, None, &db_name, &id_b, "write", false).expect("grant");
+        let principal = HookPrincipal {
+            workspace_uuid: id_b.clone(),
+            agent_address: "b".into(),
+        };
+        with_request_principal(Some(principal), || {
+            routes::with_fake_ops(fake, || {
+                let mut params = std::collections::HashMap::new();
+                params.insert("project".into(), path_b.clone());
+                params.insert("test".into(), "1".into());
+                let dsn = routes::handle_dsn(&params);
+                assert_eq!(dsn.status, "403 Forbidden", "{}", dsn.body);
+                let create = routes::handle_create(
+                    serde_json::json!({ "project": path_b, "test": true })
+                        .to_string()
+                        .as_bytes(),
+                );
+                assert_eq!(create.status, "403 Forbidden", "{}", create.body);
+                assert!(
+                    !create.body.contains("migratorDsn"),
+                    "grant-path must not receive migratorDsn: {}",
+                    create.body
+                );
+            });
+        });
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+        let _ = path_a;
+        let _ = id_a;
+    }
+
+    #[test]
+    fn helpers_exist_after_create_set_principal_uuid_and_hygiene() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-hygiene-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid = insert_project("sql-hygiene", &dir.to_string_lossy());
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        let helper = ops.pg.lock().expect("pg").helper_sql.join("\n");
+        assert!(helper.contains("k2.set_principal"), "{helper}");
+        assert!(helper.contains("k2.clear_principal"), "{helper}");
+        assert!(helper.contains("k2.principal_hygiene"), "{helper}");
+        assert!(helper.contains("k2.skin_uid"), "{helper}");
+        assert!(
+            helper.contains("set_config('k2.skin_principal', COALESCE(p::text, ''), true)"),
+            "{helper}"
+        );
+        let uid = uuid::Uuid::new_v4().to_string();
+        let bad = ops
+            .run_cmd(
+                crate::sql::sysops::PSQL_PATH,
+                &["-d", &db_name],
+                &[],
+                Some(format!("SELECT k2.set_principal('not-a-uuid');").as_bytes()),
+            )
+            .expect_err("non-uuid");
+        assert!(bad.contains("uuid"), "{bad}");
+        ops.run_cmd(
+            crate::sql::sysops::PSQL_PATH,
+            &["-d", &db_name],
+            &[],
+            Some(format!("BEGIN; SELECT k2.set_principal('{uid}'); COMMIT;").as_bytes()),
+        )
+        .expect("T1 LOCAL");
+        let after = ops
+            .run_cmd(
+                crate::sql::sysops::PSQL_PATH,
+                &["-d", &db_name],
+                &[],
+                Some(b"SELECT k2.skin_uid(); SELECT k2.principal_hygiene();"),
+            )
+            .expect("T2");
+        let after_s = String::from_utf8_lossy(&after);
+        assert!(
+            after_s.contains('t') || after_s.trim().is_empty() || after_s.contains("t"),
+            "after COMMIT hygiene true / skin_uid empty: {after_s:?}"
+        );
+        ops.run_cmd(
+            crate::sql::sysops::PSQL_PATH,
+            &["-d", &db_name],
+            &[],
+            Some(format!("SELECT set_config('k2.skin_principal', '{uid}', false);").as_bytes()),
+        )
+        .expect("session set");
+        let dirty = ops
+            .run_cmd(
+                crate::sql::sysops::PSQL_PATH,
+                &["-d", &db_name],
+                &[],
+                Some(b"SELECT k2.principal_hygiene();"),
+            )
+            .expect("hygiene dirty");
+        assert_eq!(String::from_utf8_lossy(&dirty).trim(), "f", "{dirty:?}");
+        let cleared = ops
+            .run_cmd(
+                crate::sql::sysops::PSQL_PATH,
+                &["-d", &db_name],
+                &[],
+                Some(b"SELECT k2.clear_principal(); SELECT k2.principal_hygiene();"),
+            )
+            .expect("clear");
+        assert_eq!(String::from_utf8_lossy(&cleared).trim(), "t", "{cleared:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn connect_member_shaped_token_ok_must_not_see_migrator_dsn_helper() {
+        assert!(crate::sql_routes::body_requests_test(
+            br#"{"project":"x","test":true}"#
+        ));
+        assert!(!crate::sql_routes::body_requests_test(
+            br#"{"project":"x"}"#
+        ));
+        let mut p = std::collections::HashMap::new();
+        p.insert("test".into(), "1".into());
+        assert!(crate::sql_routes::query_requests_test_or_migrator(&p));
+        p.clear();
+        p.insert("actor".into(), "migrator".into());
+        assert!(crate::sql_routes::query_requests_test_or_migrator(&p));
+        p.clear();
+        assert!(!crate::sql_routes::query_requests_test_or_migrator(&p));
+        let r = crate::sql_routes::test_db_forbidden_response();
+        assert_eq!(r.status, "403 Forbidden");
+        assert!(r.body.contains("migrator DSN"), "{}", r.body);
+        assert!(!r.body.contains("migratorDsn"), "{}", r.body);
     }
 }

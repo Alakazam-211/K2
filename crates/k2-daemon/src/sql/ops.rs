@@ -180,6 +180,184 @@ fn refuse_dangerous_role_sql(sql: &str) -> Result<(), OpsError> {
     Ok(())
 }
 
+/// Strip `--` to EOL and non-nested `/* */` (P9/P26). Dollar-quotes and
+/// string literals are not parsed — leftover FORCE / CREATE ROLE is Usage.
+pub(crate) fn strip_sql_comments(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            if i + 1 < bytes.len() {
+                i += 2;
+            } else {
+                i = bytes.len();
+            }
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// P9/P10/P25: scan the **user migration file** after comment strip only.
+/// Never call this on `ensure_role_sql` / bind helper SQL.
+pub(crate) fn refuse_user_migration_sql(sql: &str) -> Result<(), OpsError> {
+    let stripped = strip_sql_comments(sql);
+    let up = stripped.to_ascii_uppercase();
+    if up.contains("FORCE ROW LEVEL") {
+        return Err(OpsError::Usage(
+            "FORCE RLS is not enabled in v1 — remove FORCE ROW LEVEL SECURITY from migrations"
+                .into(),
+        ));
+    }
+    if up.contains("CREATE ROLE") || up.contains("CREATE USER") {
+        return Err(OpsError::Usage(
+            "do not CREATE ROLE / CREATE USER in .k2/db/migrations — roles are cluster-wide; \
+             grant to {db}_agent via migrate (USAGE + table DML + sequences). Do not hand-mint cluster roles."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// P5/P17 platform helpers. No CREATE ROLE. Idempotent CREATE OR REPLACE.
+pub(crate) fn ensure_k2_helpers_sql() -> &'static str {
+    r#"CREATE SCHEMA IF NOT EXISTS k2;
+GRANT USAGE ON SCHEMA k2 TO PUBLIC;
+CREATE OR REPLACE FUNCTION k2.skin_uid() RETURNS uuid
+LANGUAGE sql
+STABLE
+AS $k2fn$
+  SELECT nullif(current_setting('k2.skin_principal', true), '')::uuid
+$k2fn$;
+GRANT EXECUTE ON FUNCTION k2.skin_uid() TO PUBLIC;
+CREATE OR REPLACE FUNCTION k2.set_principal(p uuid) RETURNS void
+LANGUAGE plpgsql
+AS $k2fn$
+BEGIN
+  PERFORM set_config('k2.skin_principal', COALESCE(p::text, ''), true);
+END;
+$k2fn$;
+GRANT EXECUTE ON FUNCTION k2.set_principal(uuid) TO PUBLIC;
+CREATE OR REPLACE FUNCTION k2.clear_principal() RETURNS void
+LANGUAGE sql
+AS $k2fn$
+  SELECT set_config('k2.skin_principal', '', true)
+$k2fn$;
+GRANT EXECUTE ON FUNCTION k2.clear_principal() TO PUBLIC;
+CREATE OR REPLACE FUNCTION k2.principal_hygiene() RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $k2fn$
+  SELECT coalesce(current_setting('k2.skin_principal', true), '') = ''
+$k2fn$;
+GRANT EXECUTE ON FUNCTION k2.principal_hygiene() TO PUBLIC;
+"#
+}
+
+/// P7: after each applied file, GRANT USAGE + DML + sequences on every
+/// migrator-owned non-system schema to `{db}_agent` and sql_grants roles.
+pub(crate) fn privilege_sync_sql(db_name: &str, extra_grants: &[(String, String)]) -> String {
+    let agent = format!("{db_name}_agent");
+    let migrator = format!("{db_name}_migrator");
+    let mut targets: Vec<(String, bool)> = vec![(agent, true)];
+    for (role, level) in extra_grants {
+        if targets.iter().any(|(r, _)| r == role) {
+            continue;
+        }
+        targets.push((role.clone(), level == "write"));
+    }
+    let mig_lit = pg_quote_literal(&migrator);
+    let mut body = String::new();
+    for (role, write) in &targets {
+        let role_lit = pg_quote_literal(role);
+        if *write {
+            body.push_str(&format!(
+                "    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', sch, {role_lit});\n\
+                 EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', sch, {role_lit});\n\
+                 EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I', sch, {role_lit});\n\
+                 EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', {mig_lit}, sch, {role_lit});\n\
+                 EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I', {mig_lit}, sch, {role_lit});\n"
+            ));
+        } else {
+            body.push_str(&format!(
+                "    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', sch, {role_lit});\n\
+                 EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO %I', sch, {role_lit});\n\
+                 EXECUTE format('GRANT SELECT ON ALL SEQUENCES IN SCHEMA %I TO %I', sch, {role_lit});\n\
+                 EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT ON TABLES TO %I', {mig_lit}, sch, {role_lit});\n\
+                 EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT ON SEQUENCES TO %I', {mig_lit}, sch, {role_lit});\n"
+            ));
+        }
+    }
+    format!(
+        "DO $k2priv$\n\
+         DECLARE\n\
+           sch text;\n\
+         BEGIN\n\
+           FOR sch IN\n\
+             SELECT n.nspname\n\
+             FROM pg_namespace n\n\
+             JOIN pg_roles r ON r.oid = n.nspowner\n\
+             WHERE r.rolname = current_user\n\
+               AND n.nspname <> 'pg_catalog'\n\
+               AND n.nspname <> 'information_schema'\n\
+               AND n.nspname NOT LIKE 'pg_toast%'\n\
+               AND n.nspname NOT LIKE 'pg_temp%'\n\
+           LOOP\n\
+         {body}\
+           END LOOP;\n\
+         END\n\
+         $k2priv$;"
+    )
+}
+
+fn privilege_sync_for_row(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    row: &DbRow,
+) -> Result<(), OpsError> {
+    let extra: Vec<(String, String)> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        grants_for(&conn, &row.id)
+            .into_iter()
+            .map(|g| (default_agent_role(&g.project_id), g.level))
+            .collect()
+    };
+    let sql = privilege_sync_sql(&row.name, &extra);
+    let (user, pw) = migrator_creds(secrets, row)?;
+    exec_as(ops, &row.name, &user, &pw, &sql)?;
+    Ok(())
+}
+
+fn ensure_k2_helpers(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    row: &DbRow,
+) -> Result<(), OpsError> {
+    let sql = ensure_k2_helpers_sql();
+    debug_assert!(
+        !sql.to_ascii_uppercase().contains("CREATE ROLE"),
+        "P5 helpers must not contain CREATE ROLE"
+    );
+    let (user, pw) = migrator_creds(secrets, row)?;
+    exec_as(ops, &row.name, &user, &pw, sql)?;
+    Ok(())
+}
+
 fn agent_login_for(row: &DbRow) -> String {
     format!("{}_agent", row.name)
 }
@@ -263,6 +441,44 @@ fn load_active_default(conn: &rusqlite::Connection, project_id: &str) -> Option<
         db_row_from,
     )
     .ok()
+}
+
+fn load_test_row(conn: &rusqlite::Connection, project_id: &str) -> Option<DbRow> {
+    conn.query_row(
+        &format!(
+            "SELECT {DB_ROW_COLS} FROM sql_databases \
+             WHERE project_id = ?1 AND status = 'test' LIMIT 1"
+        ),
+        rusqlite::params![project_id],
+        db_row_from,
+    )
+    .ok()
+}
+
+fn load_test_by_client(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    client_id: &str,
+) -> Option<DbRow> {
+    conn.query_row(
+        &format!(
+            "SELECT {DB_ROW_COLS} FROM sql_databases \
+             WHERE project_id = ?1 AND client_id = ?2 AND status = 'test'"
+        ),
+        rusqlite::params![project_id, client_id],
+        db_row_from,
+    )
+    .ok()
+}
+
+fn test_row(project_id: &str) -> Result<DbRow, OpsError> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    load_test_row(&conn, project_id).ok_or_else(|| {
+        OpsError::NotFound(
+            "no test database for this workspace — run 'k2 db create --test' first".into(),
+        )
+    })
 }
 
 /// First active database this workspace is granted (not owned).
@@ -383,6 +599,25 @@ fn json_create(name: &str, dsn: &str, existing: bool, used: u32, cap: u32) -> se
     })
 }
 
+fn json_create_test(
+    name: &str,
+    agent_dsn: &str,
+    migrator_dsn: &str,
+    existing: bool,
+    used: u32,
+    cap: u32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "ok": true,
+        "name": name,
+        "dsn": agent_dsn,
+        "migratorDsn": migrator_dsn,
+        "existing": existing,
+        "cap": { "used": used, "cap": cap },
+        "test": true,
+    })
+}
+
 fn assert_no_superuser_json(v: &serde_json::Value) {
     let s = v.to_string().to_ascii_lowercase();
     debug_assert!(!s.contains("superuser"));
@@ -398,8 +633,50 @@ pub fn create_database(
     client_id: Option<&str>,
     name_override: Option<&str>,
 ) -> Result<serde_json::Value, OpsError> {
+    create_database_inner(
+        ops,
+        secrets,
+        project_id,
+        cap,
+        client_id,
+        name_override,
+        false,
+    )
+}
+
+/// Cap-exempt disposable test database (P11/P16). Name is `{ws}_test`.
+pub fn create_test_database(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    cap: u32,
+    client_id: Option<&str>,
+) -> Result<serde_json::Value, OpsError> {
+    create_database_inner(ops, secrets, project_id, cap, client_id, None, true)
+}
+
+fn create_database_inner(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    cap: u32,
+    client_id: Option<&str>,
+    name_override: Option<&str>,
+    test: bool,
+) -> Result<serde_json::Value, OpsError> {
     require_running()?;
-    let default_name = pg_ident_for_project(project_id);
+    if test {
+        if name_override.map(str::trim).is_some_and(|s| !s.is_empty()) {
+            return Err(OpsError::Usage(
+                "k2 db create --test does not take --name (name is {workspace}_test)".into(),
+            ));
+        }
+    }
+    let default_name = if test {
+        format!("{}_test", pg_ident_for_project(project_id))
+    } else {
+        pg_ident_for_project(project_id)
+    };
     let name = name_override
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -425,44 +702,61 @@ pub fn create_database(
     let (used, existing) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        if let Some(cid) = client_id {
-            if let Some(row) = load_active_by_client(&conn, project_id, cid) {
-                if row.status == "active" {
+        if test {
+            if let Some(cid) = client_id {
+                if let Some(row) = load_test_by_client(&conn, project_id, cid) {
                     let used = count_active(&conn, project_id);
-                    return dsn_json(
-                        ops,
-                        secrets,
-                        &row,
-                        ResolvedVia::Owned,
-                        project_id,
-                        true,
-                        used,
-                        cap,
-                    );
+                    return test_dsn_json(ops, secrets, &row, true, used, cap);
                 }
             }
-        }
-        if let Some(row) = load_active_by_name(&conn, project_id, &name) {
+            if load_test_row(&conn, project_id).is_some() {
+                return Err(OpsError::CapReached(
+                    "a test database already exists for this workspace — drop it with 'k2 db drop --test --yes'"
+                        .into(),
+                ));
+            }
             let used = count_active(&conn, project_id);
-            return dsn_json(
-                ops,
-                secrets,
-                &row,
-                ResolvedVia::Owned,
-                project_id,
-                true,
-                used,
-                cap,
-            );
+            (used, false)
+        } else {
+            if let Some(cid) = client_id {
+                if let Some(row) = load_active_by_client(&conn, project_id, cid) {
+                    if row.status == "active" {
+                        let used = count_active(&conn, project_id);
+                        return dsn_json(
+                            ops,
+                            secrets,
+                            &row,
+                            ResolvedVia::Owned,
+                            project_id,
+                            true,
+                            used,
+                            cap,
+                        );
+                    }
+                }
+            }
+            if let Some(row) = load_active_by_name(&conn, project_id, &name) {
+                let used = count_active(&conn, project_id);
+                return dsn_json(
+                    ops,
+                    secrets,
+                    &row,
+                    ResolvedVia::Owned,
+                    project_id,
+                    true,
+                    used,
+                    cap,
+                );
+            }
+            let used = count_active(&conn, project_id);
+            if cap != 0 && used >= cap {
+                return Err(OpsError::CapReached(format!(
+                    "database cap reached ({used}/{cap}). Drop one with 'k2 db drop --yes' \
+                     or ask your human to raise the cap."
+                )));
+            }
+            (used, false)
         }
-        let used = count_active(&conn, project_id);
-        if cap != 0 && used >= cap {
-            return Err(OpsError::CapReached(format!(
-                "database cap reached ({used}/{cap}). Drop one with 'k2 db drop --yes' \
-                 or ask your human to raise the cap."
-            )));
-        }
-        (used, false)
     };
     let _ = existing;
 
@@ -519,6 +813,9 @@ pub fn create_database(
          GRANT CREATE ON SCHEMA public TO {migrator};\n\
          ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {agent};\n\
+         GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {agent};\n\
+         ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} IN SCHEMA public \
+           GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO {agent};\n\
          CREATE TABLE IF NOT EXISTS _k2_migrations (\n\
            version TEXT PRIMARY KEY,\n\
            checksum TEXT NOT NULL DEFAULT '',\n\
@@ -533,10 +830,12 @@ pub fn create_database(
          );\n\
          ALTER TABLE _k2_migrations OWNER TO {migrator};\n\
          ALTER TABLE _k2_store OWNER TO {migrator};\n\
-         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};\n",
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};\n\
+         {helpers}",
         db = pg_quote_ident(&name),
         agent = pg_quote_ident(&agent),
         migrator = pg_quote_ident(&migrator),
+        helpers = ensure_k2_helpers_sql(),
     );
     ops.run_helper(
         &["psql", "-d", &name, "-v", "ON_ERROR_STOP=1"],
@@ -557,18 +856,20 @@ pub fn create_database(
         .store("migrator", &migrator_pw)
         .map_err(OpsError::Engine)?;
     let id = uuid::Uuid::new_v4().to_string();
+    let status = if test { "test" } else { "active" };
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         conn.execute(
             "INSERT INTO sql_databases (id, project_id, name, client_id, status, \
              agent_secret_ref, migrator_secret_ref, created_at) \
-             VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 id,
                 project_id,
                 name,
                 client_id,
+                status,
                 agent_ref,
                 migrator_ref,
                 now_secs()
@@ -576,10 +877,26 @@ pub fn create_database(
         )
         .map_err(|e| OpsError::Engine(format!("catalog insert: {e}")))?;
     }
-    let used = used + 1;
+    let used = if test { used } else { used + 1 };
     let dsn = dsn_for(&name, &agent, &agent_pw);
-    let v = json_create(&name, &dsn, false, used, cap);
+    let v = if test {
+        let migrator_dsn = dsn_for(&name, &migrator, &migrator_pw);
+        json_create_test(&name, &dsn, &migrator_dsn, false, used, cap)
+    } else {
+        json_create(&name, &dsn, false, used, cap)
+    };
     assert_no_superuser_json(&v);
+    if test {
+        debug_assert!(
+            !v.to_string().contains("\"role\""),
+            "test create JSON must not add role (Keep 128 live shape is separate)"
+        );
+    } else {
+        debug_assert!(
+            !v.to_string().contains("migratorDsn") && !v.to_string().contains("_migrator:"),
+            "unflagged create JSON must stay agent-only"
+        );
+    }
     Ok(v)
 }
 
@@ -607,6 +924,30 @@ fn dsn_json(
     Ok(v)
 }
 
+fn test_dsn_json(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    row: &DbRow,
+    existing: bool,
+    used: u32,
+    cap: u32,
+) -> Result<serde_json::Value, OpsError> {
+    let _ = ops;
+    let agent = agent_login_for(row);
+    let agent_pw = owner_agent_password(secrets, row)?;
+    let (mig_user, mig_pw) = migrator_creds(secrets, row)?;
+    let v = json_create_test(
+        &row.name,
+        &dsn_for(&row.name, &agent, &agent_pw),
+        &dsn_for(&row.name, &mig_user, &mig_pw),
+        existing,
+        used,
+        cap,
+    );
+    assert_no_superuser_json(&v);
+    Ok(v)
+}
+
 pub fn list_databases(project_id: &str) -> serde_json::Value {
     catalog_json(Some(project_id))
 }
@@ -617,13 +958,53 @@ pub fn dsn_for_project(
     project_id: &str,
     cap: u32,
 ) -> Result<serde_json::Value, OpsError> {
+    dsn_for_project_opts(ops, secrets, project_id, cap, false, false)
+}
+
+/// `test`: load `status=test` only. `migrator`: return the migrator DSN
+/// (`"role":"migrator"`). Migrator requires `--test`.
+pub fn dsn_for_project_opts(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    cap: u32,
+    test: bool,
+    migrator: bool,
+) -> Result<serde_json::Value, OpsError> {
     require_running()?;
-    let (row, via) = active_resolved(project_id)?;
+    if migrator && !test {
+        return Err(OpsError::Usage(
+            "migrator DSN is only available with k2 db dsn --test --actor migrator".into(),
+        ));
+    }
     let used = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         count_active(&conn, project_id)
     };
+    if test {
+        let row = test_row(project_id)?;
+        if migrator {
+            let (user, pw) = migrator_creds(secrets, &row)?;
+            let v = serde_json::json!({
+                "ok": true,
+                "name": row.name,
+                "dsn": dsn_for(&row.name, &user, &pw),
+                "role": "migrator",
+                "existing": true,
+                "cap": { "used": used, "cap": cap },
+                "test": true,
+            });
+            assert_no_superuser_json(&v);
+            return Ok(v);
+        }
+        let agent = agent_login_for(&row);
+        let pw = owner_agent_password(secrets, &row)?;
+        let v = json_create(&row.name, &dsn_for(&row.name, &agent, &pw), true, used, cap);
+        assert_no_superuser_json(&v);
+        return Ok(v);
+    }
+    let (row, via) = active_resolved(project_id)?;
     dsn_json(ops, secrets, &row, via, project_id, true, used, cap)
 }
 
@@ -886,6 +1267,8 @@ pub fn migrate(
     let discovered = matching.len();
 
     ensure_migrations_table(ops, &row.name, &user, &pw)?;
+    ensure_k2_helpers(ops, secrets, &row)?;
+    privilege_sync_for_row(ops, secrets, &row)?;
     let applied = load_applied_checksums(ops, &row.name, &user, &pw)?;
 
     let mut ran = Vec::new();
@@ -906,12 +1289,7 @@ pub fn migrate(
                 "migration {version} already applied with checksum {prev}, file is {checksum} — refuse"
             )));
         }
-        if sql.to_ascii_uppercase().contains("FORCE ROW LEVEL") {
-            return Err(OpsError::Usage(
-                "FORCE RLS is not enabled in v1 — remove FORCE ROW LEVEL SECURITY from migrations"
-                    .into(),
-            ));
-        }
+        refuse_user_migration_sql(&sql)?;
         exec_as(ops, &row.name, &user, &pw, &sql)?;
         let insert = format!(
             "INSERT INTO _k2_migrations (version, checksum) VALUES ({ver}, {sum});",
@@ -919,6 +1297,7 @@ pub fn migrate(
             sum = pg_quote_literal(&checksum),
         );
         exec_as(ops, &row.name, &user, &pw, &insert)?;
+        privilege_sync_for_row(ops, secrets, &row)?;
         ran.push(version);
     }
     Ok(serde_json::json!({
@@ -1326,6 +1705,42 @@ pub fn drop_database(ops: &dyn SystemOps, project_id: &str) -> Result<serde_json
         .map_err(|e| OpsError::Engine(format!("catalog drop: {e}")))?;
     }
     Ok(serde_json::json!({ "ok": true, "dropped": row.name }))
+}
+
+/// Drop the workspace test database (`status=test` only). Missing → 404,
+/// never the live Skin. No DROP ROLE (leftover-role contract).
+pub fn drop_test_database(
+    ops: &dyn SystemOps,
+    project_id: &str,
+) -> Result<serde_json::Value, OpsError> {
+    require_running()?;
+    let row = test_row(project_id)?;
+    let sql = format!(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = {name};\n\
+         DROP DATABASE IF EXISTS {ident};",
+        name = pg_quote_literal(&row.name),
+        ident = pg_quote_ident(&row.name),
+    );
+    ops.run_helper(
+        &["psql", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        Some(sql.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "DELETE FROM sql_grants WHERE database_id = ?1",
+            rusqlite::params![row.id],
+        )
+        .map_err(|e| OpsError::Engine(format!("catalog grant drop: {e}")))?;
+        conn.execute(
+            "UPDATE sql_databases SET status = 'dropped', dropped_at = ?1 WHERE id = ?2",
+            rusqlite::params![now_secs(), row.id],
+        )
+        .map_err(|e| OpsError::Engine(format!("catalog drop: {e}")))?;
+    }
+    Ok(serde_json::json!({ "ok": true, "dropped": row.name, "test": true }))
 }
 
 /// Default PG role for a workspace (`ws_<id>_agent`). D22 bind overrides
@@ -1920,6 +2335,9 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
         .unwrap_or_default();
     let mut out = Vec::new();
     for (row, created_at) in loaded {
+        if row.status == "dropped" {
+            continue;
+        }
         let grants = grants_for(&conn, &row.id);
         let your = if let Some(v) = viewer {
             if v == row.project_id {
@@ -1948,7 +2366,7 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
             .iter()
             .map(|g| participant_json(&conn, &g.project_id, &g.level, g.can_manage))
             .collect();
-        out.push(serde_json::json!({
+        let mut item = serde_json::json!({
             "id": row.id,
             "name": row.name,
             "status": row.status,
@@ -1963,7 +2381,11 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
             "grants": grant_json,
             "yourLevel": your,
             "dbAgentAccess": project_db_agent_access(&conn, &row.project_id),
-        }));
+        });
+        if row.status == "test" {
+            item["test"] = serde_json::json!(true);
+        }
+        out.push(item);
     }
     serde_json::json!({ "ok": true, "databases": out })
 }
@@ -2744,5 +3166,109 @@ mod tests {
         assert!(obj.starts_with("'"), "{obj}");
         let arr = json_to_sql(&serde_json::json!([1, 2]));
         assert!(arr.ends_with("::jsonb"), "{arr}");
+    }
+
+    #[test]
+    fn strip_sql_comments_removes_line_and_block() {
+        let s = strip_sql_comments(
+            "-- FORCE ROW LEVEL SECURITY\nCREATE TABLE t (id int);\n/* CREATE ROLE app_x */\n",
+        );
+        let up = s.to_ascii_uppercase();
+        assert!(!up.contains("FORCE ROW LEVEL"), "{s}");
+        assert!(!up.contains("CREATE ROLE"), "{s}");
+        assert!(up.contains("CREATE TABLE T"), "{s}");
+    }
+
+    #[test]
+    fn refuse_user_migration_sql_comments_only_ok_executable_usage() {
+        refuse_user_migration_sql(
+            "-- ALTER TABLE t FORCE ROW LEVEL SECURITY;\nCREATE TABLE t (id int);\n",
+        )
+        .expect("comments-only FORCE");
+        refuse_user_migration_sql("/* CREATE ROLE app_x */\nCREATE TABLE t (id int);\n")
+            .expect("comment CREATE ROLE");
+        let err = refuse_user_migration_sql("ALTER TABLE t FORCE ROW LEVEL SECURITY;\n")
+            .expect_err("executable FORCE");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        let err = refuse_user_migration_sql("CREATE ROLE app_x;\n").expect_err("CREATE ROLE");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        assert!(err.hint().contains("cluster-wide"), "{}", err.hint());
+        let err = refuse_user_migration_sql("CREATE USER app_x;\n").expect_err("CREATE USER");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+        let err = refuse_user_migration_sql("$tag$ CREATE ROLE inside $tag$;\n")
+            .expect_err("dollar-quote leftover is fail-closed");
+        assert_eq!(err.code(), "usage", "{}", err.hint());
+    }
+
+    #[test]
+    fn ensure_k2_helpers_sql_is_set_local_uuid_no_create_role() {
+        let sql = ensure_k2_helpers_sql();
+        let up = sql.to_ascii_uppercase();
+        assert!(!up.contains("CREATE ROLE"), "{sql}");
+        assert!(!up.contains("FORCE ROW LEVEL"), "{sql}");
+        assert!(sql.contains("k2.set_principal"), "{sql}");
+        assert!(sql.contains("k2.clear_principal"), "{sql}");
+        assert!(sql.contains("k2.principal_hygiene"), "{sql}");
+        assert!(sql.contains("k2.skin_uid"), "{sql}");
+        assert!(sql.contains("set_config('k2.skin_principal'"), "{sql}");
+        assert!(
+            sql.contains("set_config('k2.skin_principal', COALESCE(p::text, ''), true)"),
+            "set_principal must be SET LOCAL: {sql}"
+        );
+        assert!(sql.contains("p uuid"), "{sql}");
+        assert!(sql.contains("GRANT USAGE ON SCHEMA k2 TO PUBLIC"), "{sql}");
+        assert!(
+            sql.contains("GRANT EXECUTE ON FUNCTION k2.set_principal(uuid) TO PUBLIC"),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn privilege_sync_sql_walks_schemas_write_and_read() {
+        let sql = privilege_sync_sql(
+            "ws_docs",
+            &[
+                ("ws_sales_agent".into(), "write".into()),
+                ("ws_read_agent".into(), "read".into()),
+            ],
+        );
+        let up = sql.to_ascii_uppercase();
+        assert!(up.contains("PG_NAMESPACE"), "{sql}");
+        assert!(up.contains("PG_CATALOG"), "{sql}");
+        assert!(up.contains("INFORMATION_SCHEMA"), "{sql}");
+        assert!(up.contains("PG_TOAST"), "{sql}");
+        assert!(up.contains("PG_TEMP"), "{sql}");
+        assert!(up.contains("GRANT USAGE ON SCHEMA"), "{sql}");
+        assert!(
+            up.contains("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES"),
+            "{sql}"
+        );
+        assert!(
+            up.contains("GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES"),
+            "{sql}"
+        );
+        assert!(up.contains("ALTER DEFAULT PRIVILEGES FOR ROLE"), "{sql}");
+        assert!(up.contains("GRANT SELECT ON ALL TABLES"), "{sql}");
+        assert!(up.contains("GRANT SELECT ON ALL SEQUENCES"), "{sql}");
+        assert!(!up.contains("GRANT CREATE ON SCHEMA"), "{sql}");
+        assert!(!up.contains("WS_*_AGENT"), "{sql}");
+        for stmt in up.split(';') {
+            let grant_on_sequences = stmt.contains("GRANT") && stmt.contains("ON ALL SEQUENCES");
+            assert!(
+                !grant_on_sequences || (!stmt.contains("INSERT") && !stmt.contains("DELETE")),
+                "sequence GRANT must not include INSERT/DELETE: {stmt}"
+            );
+        }
+        assert!(sql.contains("ws_docs_agent"), "{sql}");
+        assert!(sql.contains("ws_sales_agent"), "{sql}");
+        assert!(sql.contains("ws_read_agent"), "{sql}");
+    }
+
+    #[test]
+    fn refuse_user_migration_does_not_scan_ensure_role_sql() {
+        let role = ensure_role_sql("ws_docs_agent", "secret");
+        assert!(role.to_ascii_uppercase().contains("CREATE ROLE"), "{role}");
+        refuse_user_migration_sql("-- platform CREATE ROLE lives elsewhere\nSELECT 1;\n")
+            .expect("comment mentioning CREATE ROLE applies");
     }
 }

@@ -286,6 +286,8 @@ pub struct FakePg {
     pub roles: Vec<String>,
     pub role_sql: Vec<String>,
     pub helper_sql: Vec<String>,
+    /// Stdin SQL from unprivileged `psql` (`run_cmd`) — migrate files + P7.
+    pub psql_sql: Vec<String>,
     /// (version, checksum) rows per database name.
     pub migrations: HashMap<String, Vec<(String, String)>>,
     /// Unaligned `psql -tA` field separator. Real psql defaults to `|`
@@ -302,6 +304,12 @@ pub struct FakePg {
     /// Live GUC map (`current_setting`). Defaults look like stock Postgres
     /// so doctor fails loudly until `install-ram-fence` / ALTER SYSTEM pins.
     pub gucs: HashMap<String, String>,
+    /// Session-level `k2.skin_principal` (set_config is_local=false).
+    pub skin_principal_session: Option<String>,
+    /// Transaction-local `k2.skin_principal` (set_config is_local=true).
+    pub skin_principal_local: Option<String>,
+    pub in_txn: bool,
+    pub schemas: HashSet<String>,
 }
 
 #[cfg(test)]
@@ -320,6 +328,7 @@ impl Default for FakePg {
             roles: Vec::new(),
             role_sql: Vec::new(),
             helper_sql: Vec::new(),
+            psql_sql: Vec::new(),
             migrations: HashMap::new(),
             select_field_sep: "|",
             store: HashMap::new(),
@@ -328,6 +337,10 @@ impl Default for FakePg {
             missing_id: HashSet::new(),
             dump_marker: Vec::new(),
             gucs,
+            skin_principal_session: None,
+            skin_principal_local: None,
+            in_txn: false,
+            schemas: HashSet::new(),
         }
     }
 }
@@ -341,10 +354,119 @@ pub fn pin_k2_gucs(gucs: &mut HashMap<String, String>) {
 
 #[cfg(test)]
 impl FakePg {
+    fn skin_principal_now(&self) -> String {
+        self.skin_principal_local
+            .clone()
+            .or_else(|| self.skin_principal_session.clone())
+            .unwrap_or_default()
+    }
+
+    fn apply_set_config(&mut self, value: &str, is_local: bool) {
+        if is_local {
+            self.skin_principal_local = Some(value.to_string());
+            if !self.in_txn {
+                // implicit statement txn: keep for this script, drop after.
+            }
+        } else {
+            self.skin_principal_session = Some(value.to_string());
+            self.skin_principal_local = None;
+        }
+    }
+
+    fn exec_k2_helpers(&mut self, sql: &str) -> Option<Result<String, String>> {
+        let up = sql.to_ascii_uppercase();
+        if up.contains("CREATE SCHEMA") {
+            for ident in ["k2", "app", "public"] {
+                let needle = format!("CREATE SCHEMA IF NOT EXISTS {ident}");
+                if up.contains(&needle.to_ascii_uppercase())
+                    || up.contains(&format!("CREATE SCHEMA {ident}").to_ascii_uppercase())
+                {
+                    self.schemas.insert(ident.to_string());
+                }
+            }
+            if let Some(name) = extract_quoted_after(sql, "CREATE SCHEMA") {
+                self.schemas.insert(name);
+            }
+        }
+        if up.contains("BEGIN") && !up.contains("BEGIN\n") && up.trim() == "BEGIN" {
+            self.in_txn = true;
+            return Some(Ok(String::new()));
+        }
+        if up.trim() == "BEGIN;" || up.trim() == "BEGIN" {
+            self.in_txn = true;
+            return Some(Ok(String::new()));
+        }
+        if up.trim() == "COMMIT;" || up.trim() == "COMMIT" {
+            self.skin_principal_local = None;
+            self.in_txn = false;
+            return Some(Ok(String::new()));
+        }
+        let calling = !up.contains("CREATE FUNCTION") && !up.contains("CREATE OR REPLACE");
+        if calling && up.contains("K2.SET_PRINCIPAL") {
+            if let Some(arg) = nth_sql_string(sql, 0) {
+                if uuid::Uuid::parse_str(&arg).is_err() {
+                    return Some(Err(format!(
+                        "invalid input syntax for type uuid: \"{arg}\""
+                    )));
+                }
+                self.apply_set_config(&arg, true);
+                return Some(Ok(String::new()));
+            }
+        }
+        if calling && up.contains("K2.CLEAR_PRINCIPAL") {
+            self.apply_set_config("", true);
+            return Some(Ok(String::new()));
+        }
+        if calling && up.contains("K2.PRINCIPAL_HYGIENE") {
+            let empty = self.skin_principal_now().is_empty();
+            return Some(Ok(if empty { "t".into() } else { "f".into() }));
+        }
+        if calling && up.contains("K2.SKIN_UID()") {
+            let now = self.skin_principal_now();
+            if now.is_empty() {
+                return Some(Ok(String::new()));
+            }
+            return Some(Ok(now));
+        }
+        if calling && up.contains("SET_CONFIG") && sql.contains("k2.skin_principal") {
+            let val = nth_sql_string(sql, 1).unwrap_or_default();
+            let is_local = if let Some(idx) = up.rfind(',') {
+                up[idx..].contains("TRUE")
+            } else {
+                true
+            };
+            self.apply_set_config(&val, is_local);
+            return Some(Ok(val));
+        }
+        None
+    }
+
     pub(crate) fn exec_sql(&mut self, db: Option<&str>, sql: &str) -> Result<String, String> {
         let trimmed = sql.trim();
         if trimmed.is_empty() {
             return Ok(String::new());
+        }
+        // Multi-statement scripts (tests 10–11): run each piece. Never
+        // split CREATE FUNCTION bodies.
+        {
+            let up = trimmed.to_ascii_uppercase();
+            let helper_call = !up.contains("CREATE FUNCTION")
+                && !up.contains("CREATE OR REPLACE")
+                && (up.contains("K2.SET_PRINCIPAL")
+                    || up.contains("K2.CLEAR_PRINCIPAL")
+                    || up.contains("K2.PRINCIPAL_HYGIENE")
+                    || up.contains("K2.SKIN_UID")
+                    || (up.contains("SET_CONFIG") && trimmed.contains("k2.skin_principal")));
+            if helper_call && trimmed.contains(';') {
+                let mut last = String::new();
+                for part in split_simple_sql(trimmed) {
+                    last = self.exec_sql(db, &part)?;
+                }
+                return Ok(last);
+            }
+        }
+        if let Some(r) = self.exec_k2_helpers(trimmed) {
+            return r;
         }
         if let Some(name) = extract_quoted_after(trimmed, "CREATE DATABASE") {
             if !self.dbs.iter().any(|d| d == &name) {
@@ -414,7 +536,11 @@ impl FakePg {
             }
             return Ok(String::new());
         }
-        if up.contains("CURRENT_SETTING") || up.contains("PG_SETTINGS") {
+        if up.contains("PG_SETTINGS")
+            || (up.contains("CURRENT_SETTING")
+                && !sql.contains("k2.skin_principal")
+                && !up.contains("CREATE FUNCTION"))
+        {
             let mut lines = Vec::new();
             for (name, _) in GUC_PINNED {
                 if let Some(v) = self.gucs.get(*name) {
@@ -731,6 +857,15 @@ fn extract_policy_to_roles(sql: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
+fn split_simple_sql(sql: &str) -> Vec<String> {
+    sql.split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+#[cfg(test)]
 fn extract_quoted_after(sql: &str, keyword: &str) -> Option<String> {
     let idx = sql
         .to_ascii_uppercase()
@@ -754,10 +889,41 @@ fn extract_quoted_after(sql: &str, keyword: &str) -> Option<String> {
 #[cfg(test)]
 fn extract_public_table(sql: &str) -> Option<String> {
     let key = "\"public\".";
-    let idx = sql.find(key)?;
-    let rest = sql[idx + key.len()..].strip_prefix('"')?;
-    let end = rest.find('"')?;
-    Some(rest[..end].to_ascii_lowercase())
+    if let Some(idx) = sql.find(key) {
+        let rest = sql[idx + key.len()..].strip_prefix('"')?;
+        let end = rest.find('"')?;
+        return Some(rest[..end].to_ascii_lowercase());
+    }
+    let trimmed = sql.trim_start();
+    let up = trimmed.to_ascii_uppercase();
+    if !(up.starts_with("INSERT")
+        || up.starts_with("UPDATE")
+        || up.starts_with("DELETE")
+        || up.starts_with("SELECT"))
+    {
+        return None;
+    }
+    for needle in ["INTO ", "UPDATE ", "FROM "] {
+        if let Some(idx) = up.find(needle) {
+            let rest = trimmed[idx + needle.len()..].trim_start();
+            let ident: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
+                .collect();
+            if ident.is_empty() {
+                continue;
+            }
+            let table = ident
+                .rsplit_once('.')
+                .map(|(_, t)| t)
+                .unwrap_or(&ident)
+                .to_ascii_lowercase();
+            if table != "pg_stat_activity" && table != "pg_namespace" {
+                return Some(table);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -789,10 +955,12 @@ fn extract_create_table_name(sql: &str) -> Option<String> {
     }
     let ident: String = rest
         .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
         .collect();
     if ident.is_empty() {
         None
+    } else if let Some((_, table)) = ident.rsplit_once('.') {
+        Some(table.to_string())
     } else {
         Some(ident)
     }
@@ -1078,6 +1246,9 @@ impl SystemOps for FakeSystemOps {
             .find(|w| w[0] == "-d")
             .map(|w| w[1].to_string());
         let mut pg = self.pg.lock().unwrap_or_else(|p| p.into_inner());
+        if !sql.is_empty() {
+            pg.psql_sql.push(sql.clone());
+        }
         pg.exec_sql(db.as_deref(), &sql).map(|s| s.into_bytes())
     }
     fn sleep_ms(&self, _ms: u64) {}

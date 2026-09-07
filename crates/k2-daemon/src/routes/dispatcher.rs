@@ -4698,6 +4698,16 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            if (p == "/cli/db/create" || p == "/cli/db/drop")
+                && crate::sql_routes::body_requests_test(&body_bytes)
+                && !super::http::token_is_owner(&query, state.token.as_str())
+                && scoped_principal.is_none()
+            {
+                let r = crate::sql_routes::test_db_forbidden_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
                 crate::caller_workspace::with_request_principal(scoped_principal, || {
@@ -7421,6 +7431,16 @@ async fn handle_one_request(
             let mut params = super::http::parse_params(&path, &query);
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            if p == "/cli/db/dsn"
+                && crate::sql_routes::query_requests_test_or_migrator(&params)
+                && !super::http::token_is_owner(&query, state.token.as_str())
+                && scoped_principal.is_none()
+            {
+                let r = crate::sql_routes::test_db_forbidden_response();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
             }
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {

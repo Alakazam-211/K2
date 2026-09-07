@@ -229,6 +229,33 @@ struct CreateBody {
     /// `off` | `read` | `write` — persist create-only `db_agent_access`.
     #[serde(alias = "dbAccess", alias = "db_access")]
     access: Option<String>,
+    /// Disposable cap-exempt test database (P11).
+    test: bool,
+}
+
+fn truthy_param(params: &HashMap<String, String>, key: &str) -> bool {
+    params
+        .get(key)
+        .map(|s| {
+            let t = s.trim();
+            t == "1" || t.eq_ignore_ascii_case("true")
+        })
+        .unwrap_or(false)
+}
+
+fn grant_path_blocks_test(project_id: &str) -> bool {
+    matches!(
+        ops::unscoped_access(project_id),
+        Some(a) if a.resolved_via == ops::ResolvedVia::Grant
+    )
+}
+
+fn test_db_forbidden() -> CliResponse {
+    err_json(
+        "403 Forbidden",
+        "forbidden",
+        "k2 db --test is owner or owning-workspace cell only — Connect members and grants cannot mint or fetch a migrator DSN",
+    )
 }
 
 pub fn handle_create(body: &[u8]) -> CliResponse {
@@ -246,6 +273,22 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    if b.test {
+        if b.name
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty())
+        {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                "k2 db create --test does not take --name (name is {workspace}_test)",
+            );
+        }
+        if grant_path_blocks_test(&project_id) {
+            return test_db_forbidden();
+        }
+    }
     if let Err(resp) = access_for(&path, "write") {
         return resp;
     }
@@ -253,14 +296,25 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
         return ops_err(e);
     }
     let secrets = FileSecretStore::default();
-    match ops::create_database(
-        ops(),
-        &secrets,
-        &project_id,
-        cap_for(&path),
-        b.client_id.as_deref(),
-        b.name.as_deref(),
-    ) {
+    let created = if b.test {
+        ops::create_test_database(
+            ops(),
+            &secrets,
+            &project_id,
+            cap_for(&path),
+            b.client_id.as_deref(),
+        )
+    } else {
+        ops::create_database(
+            ops(),
+            &secrets,
+            &project_id,
+            cap_for(&path),
+            b.client_id.as_deref(),
+            b.name.as_deref(),
+        )
+    };
+    match created {
         Ok(v) => {
             let s = v.to_string().to_ascii_lowercase();
             if s.contains("superuser") || s.contains("postgres://postgres") {
@@ -305,12 +359,45 @@ pub fn handle_dsn(params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = interact_for(&project_id, "read") {
+    let test = truthy_param(params, "test");
+    let actor = params
+        .get("actor")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let migrator = if let Some(ref a) = actor {
+        if a != "migrator" {
+            return err_json(
+                "400 Bad Request",
+                "usage",
+                "actor must be 'migrator' (or omit for the agent DSN)",
+            );
+        }
+        true
+    } else {
+        false
+    };
+    if test || migrator {
+        if grant_path_blocks_test(&project_id) {
+            return test_db_forbidden();
+        }
+    } else if let Err(resp) = interact_for(&project_id, "read") {
         return resp;
     }
     let secrets = FileSecretStore::default();
-    match ops::dsn_for_project(ops(), &secrets, &project_id, cap_for(&path)) {
-        Ok(v) => ok_json(v),
+    match ops::dsn_for_project_opts(ops(), &secrets, &project_id, cap_for(&path), test, migrator) {
+        Ok(v) => {
+            if !test {
+                let s = v.to_string();
+                if s.contains("migratorDsn") || s.contains("_migrator:") {
+                    return err_json(
+                        "500 Internal Server Error",
+                        "engine",
+                        "refusing to return a migrator DSN on the live path",
+                    );
+                }
+            }
+            ok_json(v)
+        }
         Err(e) => ops_err(e),
     }
 }
@@ -324,6 +411,7 @@ struct ProjectBody {
     out: Option<String>,
     file: Option<String>,
     yes: Option<bool>,
+    test: bool,
 }
 
 pub fn handle_migrate(body: &[u8]) -> CliResponse {
@@ -427,12 +515,22 @@ pub fn handle_drop(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = interact_for(&project_id, "write") {
-        return resp;
-    }
-    match ops::drop_database(ops(), &project_id) {
-        Ok(v) => ok_json(v),
-        Err(e) => ops_err(e),
+    if b.test {
+        if grant_path_blocks_test(&project_id) {
+            return test_db_forbidden();
+        }
+        match ops::drop_test_database(ops(), &project_id) {
+            Ok(v) => ok_json(v),
+            Err(e) => ops_err(e),
+        }
+    } else {
+        if let Err(resp) = interact_for(&project_id, "write") {
+            return resp;
+        }
+        match ops::drop_database(ops(), &project_id) {
+            Ok(v) => ok_json(v),
+            Err(e) => ops_err(e),
+        }
     }
 }
 

@@ -3290,7 +3290,7 @@ pub struct SqlDatabase {
     pub project_id: String,
     pub name: String,
     pub client_id: Option<String>,
-    /// `active` | `dropped`.
+    /// `active` | `dropped` | `test`.
     pub status: String,
     pub agent_secret_ref: Option<String>,
     pub migrator_secret_ref: Option<String>,
@@ -3723,6 +3723,75 @@ mod unit_tests {
             .query_row("SELECT COUNT(*) FROM sql_grants WHERE database_id = 'd1'", [], |r| r.get(0))
             .expect("count");
         assert_eq!(n, 0);
+    }
+
+    /// 0116: status CHECK admits `test`; one test row per workspace;
+    /// live and test cannot share `name`; dropped still allows name reuse.
+    #[test]
+    fn sql_databases_status_test_0116_check_and_uniques() {
+        let conn = fresh();
+        conn.execute(
+            "INSERT INTO sql_databases (id, project_id, name, created_at) \
+             VALUES ('d-live', 'p1', 'ws_p1', 100)",
+            [],
+        )
+        .expect("live insert");
+        conn.execute(
+            "INSERT INTO sql_databases (id, project_id, name, status, created_at) \
+             VALUES ('d-test', 'p1', 'ws_p1_test', 'test', 101)",
+            [],
+        )
+        .expect("test insert");
+        let status: String = conn
+            .query_row("SELECT status FROM sql_databases WHERE id = 'd-test'", [], |r| r.get(0))
+            .expect("test status");
+        assert_eq!(status, "test");
+        assert!(
+            conn.execute(
+                "INSERT INTO sql_databases (id, project_id, name, status, created_at) \
+                 VALUES ('d-test-2', 'p1', 'ws_p1_other', 'test', 102)",
+                [],
+            )
+            .is_err(),
+            "one test row per workspace"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO sql_databases (id, project_id, name, status, created_at) \
+                 VALUES ('d-clash', 'p1', 'ws_p1', 'test', 103)",
+                [],
+            )
+            .is_err(),
+            "live and test cannot share name"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO sql_databases (id, project_id, name, status, created_at) \
+                 VALUES ('d-bogus', 'p1', 'ws_p1_bogus', 'scratch', 104)",
+                [],
+            )
+            .is_err(),
+            "status CHECK must reject values other than active|dropped|test"
+        );
+        conn.execute(
+            "UPDATE sql_databases SET status = 'dropped', dropped_at = 200 WHERE id = 'd-test'",
+            [],
+        )
+        .expect("drop test");
+        conn.execute(
+            "INSERT INTO sql_databases (id, project_id, name, status, created_at) \
+             VALUES ('d-test-re', 'p1', 'ws_p1_test', 'test', 201)",
+            [],
+        )
+        .expect("reuse test name after drop");
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sql_databases WHERE project_id = 'p1' AND status = 'test'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count test");
+        assert_eq!(n, 1, "still one live test row after recreate");
     }
 
     /// 0113: sql_grants.agent_secret_ref is nullable (upgrade path).

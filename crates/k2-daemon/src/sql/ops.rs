@@ -343,18 +343,28 @@ fn privilege_sync_for_row(
     Ok(())
 }
 
-fn ensure_k2_helpers(
-    ops: &dyn SystemOps,
-    secrets: &dyn SecretStore,
-    row: &DbRow,
-) -> Result<(), OpsError> {
+fn ensure_k2_helpers(ops: &dyn SystemOps, row: &DbRow) -> Result<(), OpsError> {
     let sql = ensure_k2_helpers_sql();
     debug_assert!(
         !sql.to_ascii_uppercase().contains("CREATE ROLE"),
         "P5 helpers must not contain CREATE ROLE"
     );
-    let (user, pw) = migrator_creds(secrets, row)?;
-    exec_as(ops, &row.name, &user, &pw, sql)?;
+    // Privileged helper (postgres), not `{db}_migrator`: create already
+    // installed schema `k2` as postgres; migrator cannot CREATE OR REPLACE
+    // functions there (AX41: permission denied for schema k2).
+    ops.run_helper(
+        &["psql", "-d", &row.name, "-v", "ON_ERROR_STOP=1"],
+        Some(sql.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
+    let owner = format!(
+        "ALTER SCHEMA k2 OWNER TO {migrator};",
+        migrator = pg_quote_ident(&format!("{}_migrator", row.name)),
+    );
+    let _ = ops.run_helper(
+        &["psql", "-d", &row.name, "-v", "ON_ERROR_STOP=1"],
+        Some(owner.as_bytes()),
+    );
     Ok(())
 }
 
@@ -831,7 +841,8 @@ fn create_database_inner(
          ALTER TABLE _k2_migrations OWNER TO {migrator};\n\
          ALTER TABLE _k2_store OWNER TO {migrator};\n\
          GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};\n\
-         {helpers}",
+         {helpers}\n\
+         ALTER SCHEMA k2 OWNER TO {migrator};",
         db = pg_quote_ident(&name),
         agent = pg_quote_ident(&agent),
         migrator = pg_quote_ident(&migrator),
@@ -1267,7 +1278,7 @@ pub fn migrate(
     let discovered = matching.len();
 
     ensure_migrations_table(ops, &row.name, &user, &pw)?;
-    ensure_k2_helpers(ops, secrets, &row)?;
+    ensure_k2_helpers(ops, &row)?;
     privilege_sync_for_row(ops, secrets, &row)?;
     let applied = load_applied_checksums(ops, &row.name, &user, &pw)?;
 

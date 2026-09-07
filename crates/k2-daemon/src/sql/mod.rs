@@ -3137,6 +3137,10 @@ mod tests {
         assert!(helper.contains("k2.principal_hygiene"), "{helper}");
         assert!(helper.contains("k2.skin_uid"), "{helper}");
         assert!(
+            helper.contains("ALTER SCHEMA k2 OWNER TO"),
+            "create must hand schema k2 to migrator: {helper}"
+        );
+        assert!(
             helper.contains("set_config('k2.skin_principal', COALESCE(p::text, ''), true)"),
             "{helper}"
         );

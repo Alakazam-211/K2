@@ -142,7 +142,7 @@ export default function TabbedPanel({
     <Surface
       role2="surface"
       bordered={false}
-      className="relative flex flex-col h-full overflow-hidden"
+      className="relative flex flex-col h-full min-h-0 overflow-hidden"
       style={{ width }}
     >
       <PanelResizeHandle side={resizeSide} onWidthChange={onWidthChange} currentWidth={width} />
@@ -170,7 +170,7 @@ export default function TabbedPanel({
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-hidden">{children}</div>
+      <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
     </Surface>
   )
 }

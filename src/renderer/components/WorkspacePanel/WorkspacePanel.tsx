@@ -129,9 +129,9 @@ export default function WorkspacePanel(): React.JSX.Element {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="h-full min-h-0 flex flex-col overflow-hidden">
       {/* ── Status ── */}
-      <div className="px-3 py-3 border-b border-[var(--color-border)]">
+      <div className="flex-shrink-0 px-3 py-3 border-b border-[var(--color-border)]">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1 space-y-1">
             {(displayName || activeProject.name) && (
@@ -193,6 +193,19 @@ export default function WorkspacePanel(): React.JSX.Element {
         </div>
       </div>
 
+      {showWorktreeDialog && (
+        <WorktreeDialog
+          projectId={activeProject.id}
+          projectPath={activeProject.path}
+          open={true}
+          onClose={() => setShowWorktreeDialog(false)}
+        />
+      )}
+
+      {/* One scrollbar for the whole drawer body. Heartbeats / Published /
+          API used to sit above a worktrees-only overflow-y-auto, so when
+          those sections grew the panel clipped with nothing to scroll. */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
       {/* ── Heartbeats ── HeartbeatsPanel renders its own full-width
           collapsible header (matching the Worktrees pattern below)
           and a content area, both with their own border-b dividers
@@ -268,47 +281,37 @@ export default function WorkspacePanel(): React.JSX.Element {
         </span>
       </button>
 
-      {showWorktreeDialog && (
-        <WorktreeDialog
-          projectId={activeProject.id}
-          projectPath={activeProject.path}
-          open={true}
-          onClose={() => setShowWorktreeDialog(false)}
-        />
-      )}
-
       {worktreesOpen && (
-        <div className="flex-1 overflow-y-auto">
-          {worktrees.length === 0 ? (
-            <div className="p-3">
-              <p className="text-[10px] text-[var(--color-text-muted)]">
-                No worktrees open. Click + to create one or let the manager delegate work.
-              </p>
-            </div>
-          ) : (
-            worktrees.map((ws) => {
-              // Strip agent/<name>/ prefix from display name
-              const displayName = ws.name?.replace(/^agent\/[^/]+\//, '') || ws.branch || 'worktree'
-              // Check if this was created by our agent system
-              const agentMatch = ws.name?.match(/^agent\/([^/]+)\//)
-              const agentTemplate = agentMatch?.[1]
+        worktrees.length === 0 ? (
+          <div className="p-3">
+            <p className="text-[10px] text-[var(--color-text-muted)]">
+              No worktrees open. Click + to create one or let the manager delegate work.
+            </p>
+          </div>
+        ) : (
+          worktrees.map((ws) => {
+            // Strip agent/<name>/ prefix from display name
+            const displayName = ws.name?.replace(/^agent\/[^/]+\//, '') || ws.branch || 'worktree'
+            // Check if this was created by our agent system
+            const agentMatch = ws.name?.match(/^agent\/([^/]+)\//)
+            const agentTemplate = agentMatch?.[1]
 
-              return (
-                <WorktreeRow
-                  key={ws.id}
-                  workspaceId={ws.id}
-                  projectId={activeProject.id}
-                  projectPath={activeProject.path}
-                  worktreePath={ws.worktreePath}
-                  displayName={displayName}
-                  branch={ws.branch}
-                  agentTemplate={agentTemplate}
-                />
-              )
-            })
-          )}
-        </div>
+            return (
+              <WorktreeRow
+                key={ws.id}
+                workspaceId={ws.id}
+                projectId={activeProject.id}
+                projectPath={activeProject.path}
+                worktreePath={ws.worktreePath}
+                displayName={displayName}
+                branch={ws.branch}
+                agentTemplate={agentTemplate}
+              />
+            )
+          })
+        )
       )}
+      </div>
     </div>
   )
 }

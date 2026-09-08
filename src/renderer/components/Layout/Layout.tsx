@@ -75,7 +75,7 @@ export default function Layout({
 
         {/* Left auxiliary panel (tabbed) */}
         {leftPanelOpen && leftPanel && (
-          <div className="flex-shrink-0 border-r border-[var(--color-border)]">
+          <div className="flex h-full min-h-0 flex-shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)]">
             {leftPanel}
           </div>
         )}
@@ -85,7 +85,7 @@ export default function Layout({
 
         {/* Right auxiliary panel (tabbed) */}
         {rightPanelOpen && rightPanel && (
-          <div className="flex-shrink-0 border-l border-[var(--color-border)]">
+          <div className="flex h-full min-h-0 flex-shrink-0 flex-col overflow-hidden border-l border-[var(--color-border)]">
             {rightPanel}
           </div>
         )}

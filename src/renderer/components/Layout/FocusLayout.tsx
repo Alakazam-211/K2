@@ -140,7 +140,7 @@ export default function FocusLayout({
       <div className="flex flex-1 overflow-hidden">
         {/* Left auxiliary panel */}
         {leftPanelOpen && leftPanel && (
-          <div className="flex-shrink-0 border-r border-[var(--color-border)]">
+          <div className="flex h-full min-h-0 flex-shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)]">
             {leftPanel}
           </div>
         )}
@@ -150,7 +150,7 @@ export default function FocusLayout({
 
         {/* Right auxiliary panel */}
         {rightPanelOpen && rightPanel && (
-          <div className="flex-shrink-0 border-l border-[var(--color-border)]">
+          <div className="flex h-full min-h-0 flex-shrink-0 flex-col overflow-hidden border-l border-[var(--color-border)]">
             {rightPanel}
           </div>
         )}

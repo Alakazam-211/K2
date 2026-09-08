@@ -163,8 +163,6 @@ pub async fn projects_open_focus_window(
     app: tauri::AppHandle,
     project_id: String,
 ) -> Result<serde_json::Value, String> {
-    use tauri::WebviewWindowBuilder;
-
     // Look up the project name via the daemon (the only DB reader now).
     let projects: Vec<Project> = daemon()?.cli_get_json("/cli/projects/list", &[])?;
     let project_name = projects
@@ -179,14 +177,9 @@ pub async fn projects_open_focus_window(
         return Ok(serde_json::json!({ "focused": true }));
     }
 
-    let webview_url = if cfg!(debug_assertions) {
-        let url_str = format!("http://localhost:5173#focus={}", project_id);
-        tauri::WebviewUrl::External(url::Url::parse(&url_str).map_err(|e| e.to_string())?)
-    } else {
-        tauri::WebviewUrl::App(format!("index.html#focus={}", project_id).into())
-    };
-
-    let builder = WebviewWindowBuilder::new(&app, &label, webview_url)
+    let fragment = format!("focus={project_id}");
+    let webview_url = crate::k2_app_window::k2_app_webview_url(&app, Some(&fragment));
+    let builder = crate::k2_app_window::k2_app_window_builder(&app, &label, webview_url)
         .title(&project_name)
         .inner_size(1200.0, 800.0)
         .min_inner_size(600.0, 400.0);

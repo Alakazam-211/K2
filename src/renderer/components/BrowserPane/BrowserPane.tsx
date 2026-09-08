@@ -6,7 +6,15 @@ import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
 import { useWindowFocusStore } from '@/stores/window-focus'
+import { useConnectHostStore } from '@/stores/connect-host'
+import {
+  LOOPBACK_ON_REMOTE_ERROR,
+  loopbackForbiddenOnRemote,
+} from '@/lib/loopback-remote'
 import { webFeatures } from '@/web/features'
+import { normalizeUrl } from './normalizeUrl'
+
+export { normalizeUrl }
 
 /**
  * Embedded Browser Tab pane (PRD .k2/prds/prd-browser-pane-v1.md).
@@ -62,12 +70,12 @@ interface Rect {
 /** Message shown when the Rust stub (browser-pane feature off) rejects. */
 const STUB_ERROR_FRAGMENT = 'not enabled in this build'
 
-/** Prefix bare hostnames with https:// so "example.com" just works. */
-function normalizeUrl(raw: string): string {
-  const trimmed = raw.trim()
-  if (!trimmed) return ''
-  if (/^https?:\/\//i.test(trimmed)) return trimmed
-  return `https://${trimmed}`
+function refuseLoopbackOnRemote(targetUrl: string): string | null {
+  const activeHost = useConnectHostStore.getState().activeHost
+  if (loopbackForbiddenOnRemote(activeHost, targetUrl)) {
+    return LOOPBACK_ON_REMOTE_ERROR
+  }
+  return null
 }
 
 /** Stable parent window label for this renderer instance. */
@@ -158,6 +166,12 @@ export function BrowserPane({
     }
     const normalized = normalizeUrl(targetUrl)
     if (!normalized) return
+    const remoteErr = refuseLoopbackOnRemote(normalized)
+    if (remoteErr) {
+      pendingUrlRef.current = ''
+      setError(remoteErr)
+      return
+    }
     pendingUrlRef.current = normalized
     if (createdRef.current || createInFlightRef.current) return
     const rect = measureRect()
@@ -234,6 +248,11 @@ export function BrowserPane({
   }, [scheduleBoundsPush])
 
   const navigateView = useCallback(async (targetUrl: string): Promise<void> => {
+    const remoteErr = refuseLoopbackOnRemote(targetUrl)
+    if (remoteErr) {
+      setError(remoteErr)
+      return
+    }
     setError(null)
     try {
       await invoke('browser_navigate', { itemId, url: targetUrl, parentWindow })

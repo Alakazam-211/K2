@@ -3,8 +3,9 @@
 //! Rust-side lifecycle for CHILD webviews docked inside the *invoking*
 //! Tauri window (tauri `unstable` multiwebview). Creation/positioning lives
 //! HERE, not in the renderer, so `core:webview:allow-create-webview` is never
-//! granted to renderer code — the browsed page's webview label appears in NO
-//! capability and therefore has zero Tauri IPC surface (§6.5 security seam).
+//! granted to renderer code. Default capability lists `webviews` (`main`,
+//! `window-*`, `focus-*`) and omits `windows` — a window glob would still
+//! IPC `browser-*` children of that window (§6.5 security seam).
 //!
 //! Multi-window: each browser child is parented via `parent_window` (the
 //! caller's window label — `main` or `window-{uuid}`). Labels and registry
@@ -24,7 +25,7 @@ mod real {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use tauri::webview::WebviewBuilder;
+    use tauri::webview::{NewWindowResponse, WebviewBuilder};
     use tauri::{
         AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl,
     };
@@ -239,9 +240,12 @@ mod real {
 
         // on_navigation: scheme gate for EVERY in-page navigation, not just our
         // own `navigate` calls — the return bool vetoes the load (§6.5).
+        // Loopback is ordinary http here (Gmail OAuth redirects to this Mac).
+        // on_new_window: Deny — never `window.open` into a window labeled `main`.
         let make_builder = |u: Url| {
             WebviewBuilder::new(&label, WebviewUrl::External(u))
                 .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
+                .on_new_window(|_url, _features| NewWindowResponse::Deny)
                 .focused(false)
         };
 

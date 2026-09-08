@@ -3,6 +3,7 @@
   "app": {
     "windows": [
       {
+        "create": false,
         "decorations": false
       }
     ]

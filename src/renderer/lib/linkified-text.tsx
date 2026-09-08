@@ -1,8 +1,9 @@
 // Render plain text with clickable http(s) URLs. Used by Tickets + Project
-// chat so threads stay selectable/copyable while links open externally.
+// chat so threads stay selectable/copyable while links open in the in-app
+// Browser (desktop) or the opener shim (web).
 
 import React, { type CSSProperties } from 'react'
-import { openUrl } from '@tauri-apps/plugin-opener'
+import { openOffOriginHttp } from '@/lib/open-off-origin-http'
 
 const URL_RE = /(https?:\/\/[^\s<>"'`]+)/gi
 
@@ -49,10 +50,7 @@ export function LinkifiedText({
                 onClick={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
-                  void openUrl(href).catch(() => {
-                    // Fallback for non-Tauri / web: try window.open.
-                    window.open(href, '_blank', 'noopener,noreferrer')
-                  })
+                  openOffOriginHttp(href)
                 }}
                 // Keep link clicks from starting a selection drag that
                 // parent panels would swallow; plain text still selects.

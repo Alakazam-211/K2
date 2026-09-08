@@ -80,6 +80,7 @@ pub use k2_core::terminal;
 // daemon owns the TerminalEventSink now (broadcasts events over
 // /events WS). Tauri's `daemon_events.rs` re-emits them via
 // AppHandle::emit so the renderer's listeners are unchanged.
+mod k2_app_window;
 mod watcher;
 mod window;
 
@@ -1248,6 +1249,10 @@ pub fn run() {
             // value is harmless — the writers don't touch disk if the
             // file already matches. Block deleted; daemon owns the pass.
 
+            // Conf window is `create: false` so we can attach `on_navigation`
+            // (builder-only). Must exist before restore / close / watchdog.
+            crate::k2_app_window::create_main_k2_window(app.handle())?;
+
             // Restore last good frame, or center a default 1400×900 if
             // the saved rect is missing / tiny / off every current display.
             window::apply_restored_frame(app.handle());
@@ -1468,33 +1473,14 @@ pub fn run() {
                 // Capture the app URL NOW, at spawn time, before anything can
                 // break — the hard-renavigate fallback below needs a known-good
                 // destination even when the webview's own URL has gone blank.
-                // If it's already unreadable/blank (pathological launch),
-                // reconstruct from config: dev → the configured devUrl, prod →
-                // the tauri://localhost custom-protocol origin.
-                //
-                // Never capture a stale `localhost:5173` URL in a production
-                // binary (plain `cargo build -p k2 --release` without
-                // `cargo tauri build` can leave the window on the vite
-                // devUrl). Renavigating there is how we got the black
-                // window + "K2 couldn't load" sheet on Windows.
-                let app_url = win
-                    .url()
-                    .ok()
-                    .filter(|u| {
-                        let s = u.as_str();
-                        !s.is_empty()
-                            && s != "about:blank"
-                            && (tauri::is_dev() || !s.contains("localhost:5173"))
-                    })
-                    .or_else(|| {
-                        if tauri::is_dev() {
-                            app.config().build.dev_url.clone()
-                        } else {
-                            None
-                        }
-                    })
-                    .or_else(|| "http://tauri.localhost".parse().ok())
-                    .or_else(|| "tauri://localhost".parse().ok());
+                // Loopback hosts are rejected unless they are the exact
+                // configured `devUrl` in `tauri::is_dev()` — never recover to
+                // `http://127.0.0.1:8788`.
+                let app_url = crate::k2_app_window::watchdog_capture_app_url(
+                    win.url().ok().as_ref(),
+                    app.config().build.dev_url.as_ref(),
+                    tauri::is_dev(),
+                );
                 std::thread::spawn(move || {
                     use std::sync::atomic::Ordering;
                     // Check cadence. Recovery latency ≈ MIN_STALE_STREAK

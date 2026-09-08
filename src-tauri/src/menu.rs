@@ -230,16 +230,9 @@ pub fn window_new(app: AppHandle) -> Result<(), String> {
 }
 
 pub fn open_new_window(app: &AppHandle) -> Result<(), tauri::Error> {
-    use tauri::WebviewWindowBuilder;
-
     let label = format!("window-{}", uuid::Uuid::new_v4());
-    let webview_url = if cfg!(debug_assertions) {
-        tauri::WebviewUrl::External(url::Url::parse("http://localhost:5173").unwrap())
-    } else {
-        tauri::WebviewUrl::App("index.html".into())
-    };
-
-    let builder = WebviewWindowBuilder::new(app, &label, webview_url)
+    let webview_url = crate::k2_app_window::k2_app_webview_url(app, None);
+    let builder = crate::k2_app_window::k2_app_window_builder(app, &label, webview_url)
         .title("K2")
         .inner_size(1400.0, 900.0)
         .min_inner_size(800.0, 600.0);

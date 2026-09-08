@@ -1,21 +1,14 @@
 /**
  * Global click interceptor that routes non-HTTP URL schemes through
  * macOS LaunchServices instead of letting Tauri's WKWebView swallow
- * the click.
- *
- * The webview only knows how to navigate http(s) URLs; clicking a
- * `message://...` (Apple Mail), `tel:`, `facetime:`, `slack://...`,
- * `vscode://...`, `cursor://...`, etc. link in markdown content
- * (released chat history, notes pasted into the workspace, AI
- * assistant output) just silently fails. macOS knows how to route
- * those — we just need to forward them via the opener plugin so the
- * OS resolves the registered handler app.
+ * the click, and keeps off-origin http(s) out of the K2 chrome webview.
  *
  * Installed once at app boot from `index.tsx`. Capture-phase listener
  * so it runs before component-level click handlers.
  */
 
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { openOffOriginHttp } from '@/lib/open-off-origin-http'
 
 /**
  * Walk up the DOM looking for the nearest `<a>` ancestor with an
@@ -30,12 +23,20 @@ function findLinkAncestor(target: EventTarget | null): HTMLAnchorElement | null 
   return null
 }
 
+function isSameOriginHttp(href: string): boolean {
+  try {
+    const resolved = new URL(href, window.location.href)
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return false
+    return resolved.origin === window.location.origin
+  } catch {
+    return false
+  }
+}
+
 export function installExternalLinkHandler(): void {
   document.addEventListener(
     'click',
     (e) => {
-      // Bail on modifier-clicks; webview has no concept of new tab/window
-      // anyway, but be defensive.
       if (e.defaultPrevented) return
 
       const link = findLinkAncestor(e.target)
@@ -48,12 +49,17 @@ export function installExternalLinkHandler(): void {
       if (colonIdx === -1) return
       const scheme = href.slice(0, colonIdx).toLowerCase()
 
-      // Plain http(s): leave alone for now — many in-app surfaces use
-      // these for SPA navigation (Markdown TOC, anchors, etc.) or rely
-      // on Tauri's existing webview behavior. Future enhancement could
-      // route external https → user's default browser, but that's a
-      // larger UX change.
-      if (scheme === 'http' || scheme === 'https' || scheme === 'javascript') {
+      // javascript: must not run in the K2 chrome (do not `return` and allow it).
+      if (scheme === 'javascript') {
+        e.preventDefault()
+        return
+      }
+
+      if (scheme === 'http' || scheme === 'https') {
+        // Same-origin path/hash/SPA stays in the React webview.
+        if (isSameOriginHttp(href)) return
+        e.preventDefault()
+        openOffOriginHttp(href)
         return
       }
 

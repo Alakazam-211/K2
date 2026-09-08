@@ -91,6 +91,16 @@ describe('feedback store event wiring', () => {
     expect(ev.handlers).toHaveLength(1)
   })
 
+  it('F10: re-calling initFeedbackEvents(false) does not flip notify (first caller wins)', async () => {
+    // beforeEach already inited with notify=true. A later PageTabs-style
+    // call with false must be a no-op — otherwise main would lose desktop
+    // notifications once AppRoot owns the first-caller lock.
+    initFeedbackEvents(false)
+    expect(ev.handlers).toHaveLength(1)
+    fire('created')
+    await vi.waitFor(() => expect(notification.send).toHaveBeenCalled())
+  })
+
   it("reason 'commented' bumps revision without touching the badge", async () => {
     const before = useFeedbackStore.getState().revision
     fire('commented')

@@ -18,7 +18,6 @@ import RemoteFolderPicker from './components/RemoteFolderPicker/RemoteFolderPick
 import { pickWorkspaceFolder } from './lib/pick-workspace-folder'
 import RemoveWorkspaceDialog from './components/RemoveWorkspaceDialog/RemoveWorkspaceDialog'
 import CloneToDialog from './components/CloneToDialog/CloneToDialog'
-import WorktreeBar from './components/FocusWindow/WorktreeBar'
 import CommandPalette from './components/CommandPalette/CommandPalette'
 import ContextMenu from './components/ContextMenu/ContextMenu'
 import ConfirmDialog from './components/ConfirmDialog/ConfirmDialog'
@@ -50,6 +49,8 @@ import FeedbackPage from './components/Feedback/FeedbackPage'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
 import { usePageViewStore } from './stores/page-view'
+import { initFeedbackEvents } from './stores/feedback'
+import { initProjectGroupEvents } from './stores/project-groups'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
@@ -215,27 +216,6 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
           </div>
         )}
       </FocusLayout>
-      <GitInitDialog />
-      <AddWorkspaceDialog />
-      <RemoteFolderPicker />
-      <RemoveWorkspaceDialog />
-      <CloneToDialog />
-      <CommandPalette />
-      <RunningAgentsPanel />
-      <FeedbackPage />
-      <ProjectsPage />
-      <WikiPage />
-      <ContextMenu />
-      <ConfirmDialog />
-      <WhatsNewModal />
-      <MemoryWatcher />
-      <UnsavedChangesModalHost />
-      <HeartbeatScheduleDialog />
-      <MergeDialog />
-      <Toast />
-      <TransferProgress />
-      <AssistantBar />
-      <MemoDialog />
     </FocusErrorBoundary>
   )
 }
@@ -372,6 +352,20 @@ function AppRoot(): React.JSX.Element {
   // behind the rest of the initial render.
   useEffect(() => {
     prewarmDaemonWs()
+  }, [])
+
+  // Focus has no PageTabs until an overlay opens, so wire the feedback
+  // + project-group buses here (idempotent; first caller wins). Desktop
+  // notify stays main-window only — never hardcode false.
+  useEffect(() => {
+    let notify = true
+    try {
+      notify = getCurrentTauriWindow().label === 'main'
+    } catch {
+      /* outside Tauri (tests) — default main */
+    }
+    initFeedbackEvents(notify)
+    initProjectGroupEvents()
   }, [])
 
   // #672 — open the single app-level Active-state subscription once at

@@ -7,6 +7,7 @@ import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
+import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 
 interface FocusLayoutProps {
@@ -41,7 +42,10 @@ export default function FocusLayout({
           minHeight: TOPBAR_HEIGHT
         }}
       >
-        <DesktopChromeLeft />
+        <div className="flex items-center gap-2">
+          <DesktopChromeLeft />
+          <ServerSwitcher />
+        </div>
 
         {/* Center: workspace name + branch */}
         <div className="flex items-center gap-1.5 text-xs">

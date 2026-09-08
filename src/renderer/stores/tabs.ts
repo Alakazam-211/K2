@@ -2513,8 +2513,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // The split landed in 0.36.0: each agent gets up to two pinned tabs.
     // Canonical order is Chat first, Inbox second — fixed regardless of
     // creation history. Workspace-board mode (`__workspace__`) is the
-    // exception — it has no chat surface, just the kanban — so we
-    // create only the Inbox tab in that case.
+    // exception — it has no chat surface, just the Inbox/Work Board
+    // pane — so we create only the Inbox tab in that case.
     const isWorkspaceBoard = agentName === '__workspace__'
     const wantSections: Array<'inbox' | 'chat'> = isWorkspaceBoard
       ? ['inbox']

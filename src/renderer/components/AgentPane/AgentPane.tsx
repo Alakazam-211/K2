@@ -31,7 +31,7 @@ interface AgentPaneProps {
  *
  * - `__wt:<id>` → WorktreeDetailPane (Task / Chat / Review for a worktree)
  * - `section === 'chat'` → AgentChatPane (persistent Claude chat)
- * - default ('inbox' or unset) → AgentInboxPane (work-queue kanban)
+ * - default ('inbox' or unset) → AgentInboxPane (view-only inbox browser)
  *
  * CLAUDE.md and AGENT.md edit surfaces moved out — they live in
  * Workspace Settings now (the existing "Edit AGENT.md" / "Edit CLAUDE.md"

@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.141 — Local sites in Browser, and k2 db for BYO skins
+
+Opening `http://127.0.0.1` (a local preview, `k2 publish`, a markdown link) no longer replaces the K2 window or crashes it. Those links open in an in-app Browser tab. The Browser tab can still load local sites on this Mac. If you are connected to a remote host, loopback in that pane is this Mac — not the server — and K2 refuses it.
+
+`k2 db migrate` now grants the workspace agent on new schemas and identity sequences, not only `public` tables. SQL comments are not mistaken for FORCE RLS. Migrations that try to `CREATE ROLE` are refused (roles are cluster-wide). `k2 db --test` mints a disposable database that does not count against the cap. SQL helpers `k2.set_principal` / `k2.clear_principal` / `k2.principal_hygiene` SET LOCAL on a checkout so a BYO pool starts empty.
+
+---
+
 ## 0.40.140 — Project pane shortcuts follow Message agent
 
 On a project board, ⌘1–⌘9 now follow **When moving between workspaces, auto-select**. If that’s Message agent, the shortcut lands in that pane’s message box — not the terminal. Terminal still focuses the grid when that’s the setting.

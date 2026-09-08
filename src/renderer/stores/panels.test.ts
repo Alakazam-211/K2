@@ -1,20 +1,13 @@
-// Phase 2 Tier 2.3 — vitest coverage for the `hasLoadedFromDaemon`
-// persist-gate added in Phase 2.5 fix #547. The gate's contract:
+// Per-window drawer chrome + remaining hasLoadedFromDaemon persist-gate
+// for tab-list settingsUpdate (Phase 2.5 fix #547).
 //
-//   1. On first import the gate is `false` — settings_update calls
-//      from store mutators are SUPPRESSED (UI state still updates
-//      locally so interactions stay responsive).
-//   2. A successful `initFromSettings()` flips the gate to `true` so
-//      subsequent mutations DO persist via `settingsUpdate`.
-//   3. A failed (rejected) `settingsGet()` leaves the gate `false`.
-//      The daemon-reconnect listener will re-run init when the daemon
-//      comes back online.
-//
-// We test panels.ts specifically because it's the only store that
-// exposes the test reset hook `__resetPanelsLoadGateForTests()`. The
-// other gated stores (focus-groups, projects, timer) follow the same
-// pattern but keep their gate module-private — exercising one store's
-// gate against a mocked daemon proves the pattern works.
+// Chrome contract (prd-per-window-chrome-v1):
+//   1. toggleLeft/Right write local `k2.windowChrome.<label>` and must
+//      NOT settingsUpdate leftPanelOpen / rightPanelOpen.
+//   2. After a local close, initFromSettings with daemon leftPanelOpen
+//      true must NOT reopen.
+//   3. Tab lists may still refresh from daemon; persist gate still wraps
+//      tab-list settingsUpdate.
 //
 // The store's import-time side-effect (`initFromSettings()` called
 // immediately at module load) means we MUST set up `vi.mock` BEFORE
@@ -23,9 +16,6 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-// Per-test promise that `settingsGet()` returns. Tests assign to
-// `settingsGetImpl.value` before importing the store (or invoking
-// initFromSettings) to control whether the gate flips.
 const settingsUpdateCalls: Array<Record<string, unknown>> = []
 const settingsResetCalls: Array<void> = []
 
@@ -41,14 +31,43 @@ function freshSettingsGetPromise(): Promise<Record<string, unknown>> {
   return settingsGetPromise
 }
 
-// Mock the daemon-settings client. `vi.mock` is hoisted so this runs
-// BEFORE the panels store imports `settingsGet`/`settingsUpdate`.
+class MemoryStorage {
+  private map = new Map<string, string>()
+  getItem(k: string): string | null {
+    return this.map.has(k) ? this.map.get(k)! : null
+  }
+  setItem(k: string, v: string): void {
+    this.map.set(k, v)
+  }
+  removeItem(k: string): void {
+    this.map.delete(k)
+  }
+  clear(): void {
+    this.map.clear()
+  }
+  key(i: number): string | null {
+    return Array.from(this.map.keys())[i] ?? null
+  }
+  get length(): number {
+    return this.map.size
+  }
+}
+
+const localMem = new MemoryStorage()
+vi.stubGlobal('localStorage', localMem)
+vi.stubGlobal('sessionStorage', new MemoryStorage())
+
+const windowLabel = vi.hoisted(() => ({ value: 'main' }))
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({ label: windowLabel.value }),
+}))
+
+vi.mock('@/lib/is-web', () => ({
+  isWebClient: () => false,
+}))
+
 vi.mock('@/lib/daemon-settings', () => ({
   settingsGet: vi.fn(() => {
-    // Default behaviour for module-load init: return a pending promise
-    // so the gate stays false until a test resolves it. Tests that
-    // want a successful init build a fresh resolver via
-    // `prepareSettingsGetSuccess()`.
     return settingsGetPromise ?? freshSettingsGetPromise()
   }),
   settingsUpdate: vi.fn((updates: Record<string, unknown>) => {
@@ -61,21 +80,14 @@ vi.mock('@/lib/daemon-settings', () => ({
   }),
 }))
 
-// Mock the daemon-reconnect bus — its real impl uses Tauri's `listen`
-// which isn't available in the vitest Node env.
 vi.mock('@/lib/daemon-reconnect', () => ({
   onDaemonConnected: vi.fn(),
 }))
 
-// Mock the toast store — panels.ts pulls it but we don't exercise
-// toast behavior here.
 vi.mock('./toast', () => ({
   useToastStore: { getState: () => ({ showToast: vi.fn() }) },
 }))
 
-// Mock daemon-cli + daemon-ws (transitively imported via daemon-settings'
-// retry paths). With daemon-settings fully mocked, this is overkill but
-// safe.
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(() => Promise.resolve({ port: 0, token: '', host: '127.0.0.1', secure: false })),
   invalidateDaemonWs: vi.fn(),
@@ -83,114 +95,226 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonWsBase: (c: { host: string; port: number }) => `ws://${c.host}:${c.port}`,
 }))
 
-// Initialize the pending promise BEFORE importing the store so the
-// store's module-load init() suspends rather than rejecting.
 freshSettingsGetPromise()
 
-// NOW import the store — its top-level `initFromSettings()` will
-// suspend on `await settingsGet()` because we haven't resolved yet.
 import {
   usePanelsStore,
   __resetPanelsLoadGateForTests,
 } from './panels'
+import {
+  readWindowChrome,
+  windowChromeKey,
+  writeWindowChrome,
+} from '@/lib/window-chrome'
 
-describe('panels store — hasLoadedFromDaemon persist gate', () => {
+type PanelTab = 'files' | 'changes' | 'history' | 'workspace'
+const DEFAULT_TABS: {
+  leftPanelActiveTab: PanelTab
+  rightPanelActiveTab: PanelTab
+  leftPanelTabs: PanelTab[]
+  rightPanelTabs: PanelTab[]
+} = {
+  leftPanelActiveTab: 'files',
+  rightPanelActiveTab: 'history',
+  leftPanelTabs: ['files', 'workspace'],
+  rightPanelTabs: ['history', 'changes'],
+}
+
+function chromeUpdates(
+  calls: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return calls.filter(
+    (c) =>
+      Object.prototype.hasOwnProperty.call(c, 'leftPanelOpen') ||
+      Object.prototype.hasOwnProperty.call(c, 'rightPanelOpen') ||
+      Object.prototype.hasOwnProperty.call(c, 'sidebarCollapsed'),
+  )
+}
+
+function resetPanelState(): void {
+  usePanelsStore.setState({
+    leftPanelOpen: true,
+    rightPanelOpen: true,
+    ...DEFAULT_TABS,
+  })
+}
+
+describe('panels store — per-window chrome + tab persist gate', () => {
   beforeEach(() => {
-    // Reset both the module-level gate AND the captured call lists
-    // so tests are independent.
     __resetPanelsLoadGateForTests()
     settingsUpdateCalls.length = 0
     settingsResetCalls.length = 0
-    // Fresh pending promise so the next initFromSettings call can
-    // be controlled per test.
+    localMem.clear()
+    windowLabel.value = 'main'
+    resetPanelState()
     freshSettingsGetPromise()
   })
 
-  it('suppresses settingsUpdate before init resolves (gate=false)', () => {
-    // Gate has just been reset, no init has run yet (or the previous
-    // run was reset by __resetPanelsLoadGateForTests). The store's
-    // mutators MUST NOT call settingsUpdate.
+  it('suppresses tab settingsUpdate before init resolves (gate=false)', () => {
     expect(settingsUpdateCalls).toHaveLength(0)
-
-    // Toggle a panel — the mutator runs `if (shouldSuppressPersist()) return;`
-    // BEFORE calling `settingsUpdate`.
-    usePanelsStore.getState().toggleLeftPanel()
-
-    expect(settingsUpdateCalls).toHaveLength(
-      0,
-    )
-    // The UI state still updated locally even though we didn't persist.
-    // (Sanity that we exercised the mutator's local-set path.)
-    // Default `leftPanelOpen` is true → toggle flips to false.
-    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
+    usePanelsStore.getState().setLeftPanelActiveTab('workspace')
+    expect(settingsUpdateCalls).toHaveLength(0)
+    expect(usePanelsStore.getState().leftPanelActiveTab).toBe('workspace')
   })
 
-  it('persists settingsUpdate after init resolves (gate=true)', async () => {
-    // Trigger the store's init (we already reset the gate in beforeEach).
+  it('toggles do not settingsUpdate chrome keys, even after init', async () => {
     const initPromise = usePanelsStore.getState().initFromSettings()
-
-    // Resolve the daemon's settings response with a non-default body so
-    // initFromSettings completes without throwing.
     settingsGetResolver!({
       leftPanelOpen: true,
       rightPanelOpen: true,
-      leftPanelActiveTab: 'files',
-      rightPanelActiveTab: 'history',
-      leftPanelTabs: ['files', 'workspace'],
-      rightPanelTabs: ['history', 'changes'],
+      sidebarCollapsed: false,
+      ...DEFAULT_TABS,
     })
     await initPromise
 
-    // The gate is now true. A mutation should persist.
     usePanelsStore.getState().toggleRightPanel()
-    expect(settingsUpdateCalls).toHaveLength(1)
-    expect(settingsUpdateCalls[0]).toEqual({ rightPanelOpen: false })
+    usePanelsStore.getState().toggleLeftPanel()
+    expect(chromeUpdates(settingsUpdateCalls)).toEqual([])
+    expect(usePanelsStore.getState().rightPanelOpen).toBe(false)
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
+    expect(readWindowChrome('main')).toEqual({
+      leftOpen: false,
+      rightOpen: false,
+      sidebarCollapsed: false,
+    })
+  })
+
+  it('local chrome writes are not gated on hasLoadedFromDaemon', () => {
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(true)
+    usePanelsStore.getState().toggleLeftPanel()
+    expect(settingsUpdateCalls).toHaveLength(0)
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
+    expect(readWindowChrome('main')).toEqual({
+      leftOpen: false,
+      rightOpen: true,
+      sidebarCollapsed: false,
+    })
+  })
+
+  it('initFromSettings with daemon leftPanelOpen true does not reopen after local close', async () => {
+    usePanelsStore.getState().toggleLeftPanel()
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
+
+    const initPromise = usePanelsStore.getState().initFromSettings()
+    settingsGetResolver!({
+      leftPanelOpen: true,
+      rightPanelOpen: true,
+      sidebarCollapsed: false,
+      ...DEFAULT_TABS,
+    })
+    await initPromise
+
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
+    expect(readWindowChrome('main')?.leftOpen).toBe(false)
+
+    freshSettingsGetPromise()
+    const again = usePanelsStore.getState().initFromSettings()
+    settingsGetResolver!({
+      leftPanelOpen: true,
+      rightPanelOpen: true,
+      sidebarCollapsed: false,
+      leftPanelActiveTab: 'workspace',
+      rightPanelActiveTab: 'changes',
+      leftPanelTabs: ['files', 'workspace'],
+      rightPanelTabs: ['history', 'changes'],
+    })
+    await again
+
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
+    expect(usePanelsStore.getState().leftPanelActiveTab).toBe('workspace')
+  })
+
+  it('host switch / later init does not restamp chrome from a new daemon', async () => {
+    writeWindowChrome({ leftOpen: false, rightOpen: false, sidebarCollapsed: true }, 'main')
+    usePanelsStore.setState({ leftPanelOpen: false, rightPanelOpen: false })
+
+    const initPromise = usePanelsStore.getState().initFromSettings()
+    settingsGetResolver!({
+      leftPanelOpen: true,
+      rightPanelOpen: true,
+      sidebarCollapsed: false,
+      leftPanelActiveTab: 'workspace',
+      rightPanelActiveTab: 'changes',
+      leftPanelTabs: ['workspace'],
+      rightPanelTabs: ['changes'],
+    })
+    await initPromise
+
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
+    expect(usePanelsStore.getState().rightPanelOpen).toBe(false)
+    expect(readWindowChrome('main')).toEqual({
+      leftOpen: false,
+      rightOpen: false,
+      sidebarCollapsed: true,
+    })
+    expect(usePanelsStore.getState().leftPanelTabs).toEqual(['workspace'])
+    expect(localMem.getItem(windowChromeKey('main'))).toBeTruthy()
+  })
+
+  it('activateTab is memory-only (does not write chrome or settingsUpdate)', async () => {
+    usePanelsStore.setState({ leftPanelOpen: false, rightPanelOpen: false })
+    writeWindowChrome({ leftOpen: false, rightOpen: false, sidebarCollapsed: false }, 'main')
+
+    usePanelsStore.getState().activateTab('files')
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(true)
+    expect(readWindowChrome('main')?.leftOpen).toBe(false)
+    expect(settingsUpdateCalls).toHaveLength(0)
   })
 
   it('leaves gate=false when settingsGet rejects (so retry can win later)', async () => {
-    // Reset to ensure the gate is false.
     __resetPanelsLoadGateForTests()
     settingsUpdateCalls.length = 0
 
     const initPromise = usePanelsStore.getState().initFromSettings()
-    // Reject the get — initFromSettings's try/catch swallows it.
     settingsGetRejecter!(new Error('daemon down'))
-    await initPromise // does not throw — catch handles it
+    await initPromise
 
-    // A mutation must STILL be suppressed because the gate stayed false.
-    usePanelsStore.getState().toggleLeftPanel()
+    usePanelsStore.getState().setLeftPanelActiveTab('workspace')
     expect(settingsUpdateCalls).toHaveLength(0)
   })
 
-  it('a successful retry after failure flips the gate', async () => {
-    // First attempt fails.
+  it('a successful retry after failure flips the tab persist gate', async () => {
     let initPromise = usePanelsStore.getState().initFromSettings()
     settingsGetRejecter!(new Error('first attempt fails'))
     await initPromise
 
-    // Sanity: still suppressed.
-    usePanelsStore.getState().toggleLeftPanel()
+    usePanelsStore.getState().setRightPanelActiveTab('changes')
     expect(settingsUpdateCalls).toHaveLength(0)
 
-    // Second attempt succeeds (simulates daemon-reconnect retry).
     freshSettingsGetPromise()
     initPromise = usePanelsStore.getState().initFromSettings()
     settingsGetResolver!({
       leftPanelOpen: true,
       rightPanelOpen: true,
-      leftPanelActiveTab: 'files',
-      rightPanelActiveTab: 'history',
-      leftPanelTabs: ['files', 'workspace'],
-      rightPanelTabs: ['history', 'changes'],
+      sidebarCollapsed: false,
+      ...DEFAULT_TABS,
     })
     await initPromise
 
-    // Gate is now true — mutations persist.
-    usePanelsStore.getState().toggleRightPanel()
-    // toggleRightPanel was already called once before, so we expect
-    // exactly one NEW settingsUpdate call.
+    usePanelsStore.getState().setRightPanelActiveTab('history')
     expect(settingsUpdateCalls.length).toBeGreaterThanOrEqual(1)
     const last = settingsUpdateCalls[settingsUpdateCalls.length - 1]
-    expect(last).toHaveProperty('rightPanelOpen')
+    expect(last).toEqual({ rightPanelActiveTab: 'history' })
+    expect(last).not.toHaveProperty('rightPanelOpen')
+    expect(last).not.toHaveProperty('leftPanelOpen')
+  })
+
+  it('per-label chrome keys stay independent from this window', () => {
+    windowLabel.value = 'main'
+    usePanelsStore.getState().toggleLeftPanel()
+    writeWindowChrome({ leftOpen: true, rightOpen: false, sidebarCollapsed: true }, 'focus-x')
+    writeWindowChrome({ leftOpen: false, rightOpen: false, sidebarCollapsed: true }, 'window-y')
+
+    expect(readWindowChrome('main')?.leftOpen).toBe(false)
+    expect(readWindowChrome('focus-x')).toEqual({
+      leftOpen: true,
+      rightOpen: false,
+      sidebarCollapsed: false,
+    })
+    expect(readWindowChrome('window-y')).toEqual({
+      leftOpen: false,
+      rightOpen: false,
+      sidebarCollapsed: true,
+    })
   })
 })

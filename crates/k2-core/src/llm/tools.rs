@@ -46,7 +46,7 @@ Tools:
 Settings paths:
 editor: theme(k2so-dark|github-light|monokai|solarized-dark|nord|dracula|gruvbox|catppuccin|rose-pine|tokyo-night|one-dark|ayu-dark) fontSize(8-32) fontFamily(str) tabSize(1-8) cursorStyle(bar|block|underline) wordWrap(bool) showWhitespace(bool) indentGuides(bool) lineNumbers(bool) highlightActiveLine(bool) bracketMatching(bool) autocomplete(bool) foldGutter(bool) vimMode(bool) formatOnSave(bool) diffStyle(gutter|inline) scrollbarAnnotations(bool) ligatures(bool) minimap(bool) stickyScroll(bool)
 terminal: fontSize(8-32) fontFamily(str) cursorStyle(bar|block|underline) scrollback(500-50000) naturalTextEditing(bool)
-app: sidebarCollapsed(bool) leftPanelOpen(bool) rightPanelOpen(bool) defaultAgent(claude|codex|gemini|aider|cursor-agent|opencode) aiAssistantEnabled(bool) agenticSystemsEnabled(bool) focusGroupsEnabled(bool)
+app: defaultAgent(claude|codex|gemini|aider|cursor-agent|opencode) aiAssistantEnabled(bool) agenticSystemsEnabled(bool) focusGroupsEnabled(bool)
 
 Rules:
 - Output ONLY valid JSON: {"tool_calls":[...]}

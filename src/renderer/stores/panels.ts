@@ -11,6 +11,11 @@ import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // #625 — re-init panel layout against the NEW host on a host switch.
 import { onActiveHostChange } from '@/stores/connect-host'
+import {
+  readWindowChrome,
+  seedWindowChromeIfMissing,
+  writeWindowChrome,
+} from '@/lib/window-chrome'
 
 type PanelTab = 'files' | 'changes' | 'history' | 'workspace'
 
@@ -61,13 +66,26 @@ let panelsInitialized = false
  *  A's port stability + Sub-fix C's reconnect retry should make this
  *  gate non-triggering in steady state; it exists for the edge case
  *  where the user clicks a panel toggle in the window between app
- *  boot and the first successful `initFromSettings`. */
+ *  boot and the first successful `initFromSettings`.
+ *
+ *  Drawer open flags are per-window chrome (local storage), not this
+ *  gate. Toggles write `k2.windowChrome.<label>` even before daemon
+ *  load; the gate only wraps remaining tab-list `settingsUpdate`s. */
 let hasLoadedFromDaemon = false
+
+/** First successful chrome hydrate for this window. Later
+ *  `initFromSettings` (sync:settings / host switch) must not restamp
+ *  open flags from daemon or from the local key (activateTab is
+ *  memory-only). */
+let drawersHydrated = false
+
+const bootChrome = readWindowChrome()
 
 /** Test-only — reset both gates so tests don't leak state. */
 export function __resetPanelsLoadGateForTests(): void {
   panelsInitialized = false
   hasLoadedFromDaemon = false
+  drawersHydrated = false
 }
 
 /** Suppress a settings write when we haven't yet confirmed the
@@ -83,12 +101,12 @@ function shouldSuppressPersist(): boolean {
 }
 
 export const usePanelsStore = create<PanelsState>((set, get) => ({
-  leftPanelOpen: true,
+  leftPanelOpen: bootChrome?.leftOpen ?? true,
   leftPanelWidth: SIDEBAR_DEFAULT_WIDTH,
   leftPanelActiveTab: 'files',
   leftPanelTabs: ['files', 'workspace'],
 
-  rightPanelOpen: true,
+  rightPanelOpen: bootChrome?.rightOpen ?? true,
   rightPanelWidth: SIDEBAR_DEFAULT_WIDTH,
   rightPanelActiveTab: 'history',
   rightPanelTabs: ['history', 'changes'],
@@ -98,14 +116,12 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
   toggleLeftPanel: () => {
     const next = !get().leftPanelOpen
     set({ leftPanelOpen: next })
-    if (shouldSuppressPersist()) return
-    settingsUpdate({ leftPanelOpen: next }).catch((e: unknown) => console.error('[panels]', e))
+    writeWindowChrome({ leftOpen: next })
   },
   toggleRightPanel: () => {
     const next = !get().rightPanelOpen
     set({ rightPanelOpen: next })
-    if (shouldSuppressPersist()) return
-    settingsUpdate({ rightPanelOpen: next }).catch((e: unknown) => console.error('[panels]', e))
+    writeWindowChrome({ rightOpen: next })
   },
 
   setLeftPanelWidth: (width) =>
@@ -236,13 +252,27 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
       if (!rightTabs.includes(rightActive)) rightActive = rightTabs[0]
 
       set({
-        leftPanelOpen: settings.leftPanelOpen,
-        rightPanelOpen: settings.rightPanelOpen,
         leftPanelActiveTab: leftActive,
         rightPanelActiveTab: rightActive,
         leftPanelTabs: leftTabs,
         rightPanelTabs: rightTabs,
       })
+
+      // Chrome: one-shot seed if the per-label key is missing, then
+      // never restamp open flags from settingsGet (sync:settings and
+      // host switch still call this fn for tab lists).
+      if (!drawersHydrated) {
+        const chrome = seedWindowChromeIfMissing({
+          leftPanelOpen: settings.leftPanelOpen,
+          rightPanelOpen: settings.rightPanelOpen,
+          sidebarCollapsed: settings.sidebarCollapsed,
+        })
+        set({
+          leftPanelOpen: chrome.leftOpen,
+          rightPanelOpen: chrome.rightOpen,
+        })
+        drawersHydrated = true
+      }
 
       // CRITICAL: flip the persist gate ONLY on success. A
       // catch-and-default branch (below) leaves it false, so a
@@ -287,15 +317,13 @@ onDaemonConnected(() => {
   usePanelsStore.getState().initFromSettings()
 })
 
-// #625 — on a real active-host CHANGE, drop BOTH load gates (mirroring
-// `__resetPanelsLoadGateForTests`) and re-init the panel layout from the
-// NEW host's daemon. `initFromSettings()` uses host-aware `settingsGet()`
-// (reads `activeHost` at call time), and `onActiveHostChange` fires AFTER
-// the flip, so this targets the new host. Resetting `hasLoadedFromDaemon`
-// re-arms the suppress-persist gate until the new host's baseline lands;
-// resetting `panelsInitialized` lets the one-time tab-migration persist
-// run once against the new host.
+// #625 — on a real active-host CHANGE, drop tab persist gates and
+// re-init tab lists from the NEW host's daemon. `initFromSettings()`
+// uses host-aware `settingsGet()` (reads `activeHost` at call time).
+// Drawer chrome is this window, not the host: do not clear the local
+// chrome key, and do not restamp open flags from the new daemon.
 onActiveHostChange(() => {
-  __resetPanelsLoadGateForTests()
+  panelsInitialized = false
+  hasLoadedFromDaemon = false
   void usePanelsStore.getState().initFromSettings()
 })

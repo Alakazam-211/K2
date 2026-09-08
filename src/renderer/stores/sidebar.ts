@@ -4,8 +4,14 @@ import {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH
 } from '../../shared/constants'
-// Phase 2 Unit 7a — settings live in the daemon.
-import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
+import { settingsGet } from '@/lib/daemon-settings'
+import {
+  getWindowLabel,
+  isFocusWindowLabel,
+  readWindowChrome,
+  seedWindowChromeIfMissing,
+  writeWindowChrome,
+} from '@/lib/window-chrome'
 
 interface SidebarState {
   isCollapsed: boolean
@@ -18,14 +24,31 @@ interface SidebarState {
   initFromSettings: () => Promise<void>
 }
 
+/** First chrome hydrate. Later sync:settings must not restamp collapsed
+ *  from the daemon. No host-change hook — chrome is this window. */
+let railHydrated = false
+
+const bootLabel = getWindowLabel()
+const bootChrome = isFocusWindowLabel(bootLabel) ? null : readWindowChrome(bootLabel)
+
+function persistCollapsed(next: boolean): void {
+  const label = getWindowLabel()
+  if (isFocusWindowLabel(label)) return
+  writeWindowChrome({ sidebarCollapsed: next }, label)
+}
+
+export function __resetSidebarChromeForTests(): void {
+  railHydrated = false
+}
+
 export const useSidebarStore = create<SidebarState>((set, get) => ({
-  isCollapsed: false,
+  isCollapsed: bootChrome?.sidebarCollapsed ?? false,
   width: SIDEBAR_DEFAULT_WIDTH,
 
   toggle: () => {
     const next = !get().isCollapsed
     set({ isCollapsed: next })
-    settingsUpdate({ sidebarCollapsed: next }).catch((e: unknown) => console.error('[sidebar]', e))
+    persistCollapsed(next)
   },
 
   setWidth: (width: number) =>
@@ -33,20 +56,33 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
 
   collapse: () => {
     set({ isCollapsed: true })
-    settingsUpdate({ sidebarCollapsed: true }).catch((e: unknown) => console.error('[sidebar]', e))
+    persistCollapsed(true)
   },
 
   expand: () => {
     set({ isCollapsed: false })
-    settingsUpdate({ sidebarCollapsed: false }).catch((e: unknown) => console.error('[sidebar]', e))
+    persistCollapsed(false)
   },
 
   initFromSettings: async () => {
+    if (railHydrated) return
+    const label = getWindowLabel()
+    if (isFocusWindowLabel(label)) {
+      railHydrated = true
+      return
+    }
     try {
       const settings = await settingsGet()
-      set({ isCollapsed: settings.sidebarCollapsed })
+      if (railHydrated) return
+      const chrome = seedWindowChromeIfMissing({
+        leftPanelOpen: settings.leftPanelOpen,
+        rightPanelOpen: settings.rightPanelOpen,
+        sidebarCollapsed: settings.sidebarCollapsed,
+      }, label)
+      set({ isCollapsed: chrome.sidebarCollapsed })
+      railHydrated = true
     } catch {
-      // ignore — use defaults
+      // ignore — use defaults / local chrome
     }
   }
 }))

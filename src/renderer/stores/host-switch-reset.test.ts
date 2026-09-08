@@ -39,6 +39,36 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => undefined),
   listen: vi.fn(async () => () => undefined),
 }))
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({ label: 'main' }),
+}))
+vi.mock('@/lib/is-web', () => ({
+  isWebClient: () => false,
+}))
+
+class HostSwitchMemoryStorage {
+  private map = new Map<string, string>()
+  getItem(k: string): string | null {
+    return this.map.has(k) ? this.map.get(k)! : null
+  }
+  setItem(k: string, v: string): void {
+    this.map.set(k, v)
+  }
+  removeItem(k: string): void {
+    this.map.delete(k)
+  }
+  clear(): void {
+    this.map.clear()
+  }
+  key(i: number): string | null {
+    return Array.from(this.map.keys())[i] ?? null
+  }
+  get length(): number {
+    return this.map.size
+  }
+}
+vi.stubGlobal('localStorage', new HostSwitchMemoryStorage())
+vi.stubGlobal('sessionStorage', new HostSwitchMemoryStorage())
 
 // daemon-cli — the host-aware HTTP layer. loadWorkspaceSessionsFromDb
 // calls daemonCliGet('workspace-layouts/load-all'); return an empty list
@@ -84,6 +114,8 @@ import { useActiveAgentsStore } from './active-agents'
 import { useSettingsStore } from './settings'
 import { useFocusGroupsStore } from './focus-groups'
 import { usePanelsStore, __resetPanelsLoadGateForTests } from './panels'
+import { useSidebarStore } from './sidebar'
+import { readWindowChrome, writeWindowChrome } from '@/lib/window-chrome'
 import { useTimerStore } from './timer'
 import { useCustomThemesStore } from './custom-themes'
 import { useProjectsStore } from './projects'
@@ -328,6 +360,27 @@ describe('#625 host-switch re-fetches all remaining daemon-backed stores', () =>
 
     useConnectHostStore.getState().selectHost('local')
     expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it('host switch keeps local drawer/rail chrome (does not restamp from the new daemon)', async () => {
+    writeWindowChrome({ leftOpen: false, rightOpen: false, sidebarCollapsed: true }, 'main')
+    usePanelsStore.setState({ leftPanelOpen: false, rightPanelOpen: false })
+    useSidebarStore.setState({ isCollapsed: true })
+
+    const spy = vi.spyOn(usePanelsStore.getState(), 'initFromSettings')
+
+    useConnectHostStore.getState().selectHost(makeRemoteHost())
+    expect(spy).toHaveBeenCalledTimes(1)
+    await spy.mock.results[0]?.value
+
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
+    expect(usePanelsStore.getState().rightPanelOpen).toBe(false)
+    expect(useSidebarStore.getState().isCollapsed).toBe(true)
+    expect(readWindowChrome('main')).toEqual({
+      leftOpen: false,
+      rightOpen: false,
+      sidebarCollapsed: true,
+    })
   })
 
   it('timer.initFromSettings re-fires on a host change (and switch-back)', () => {

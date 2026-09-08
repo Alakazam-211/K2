@@ -68,7 +68,6 @@ const ALLOWED_SETTINGS_PATHS = new Set([
   'editor.stickyScroll',
   'terminal.fontSize', 'terminal.fontFamily', 'terminal.cursorStyle',
   'terminal.scrollback', 'terminal.naturalTextEditing',
-  'sidebarCollapsed', 'leftPanelOpen', 'rightPanelOpen',
   'defaultAgent', 'aiAssistantEnabled',
   'claudeAuthAutoRefresh', 'focusGroupsEnabled',
 ])

@@ -963,6 +963,9 @@ pub fn list_databases(project_id: &str) -> serde_json::Value {
     catalog_json(Some(project_id))
 }
 
+/// Test helper: live (non-`--test`) agent DSN. Production routes call
+/// [`dsn_for_project_opts`] so this is unused in the bin (`-D warnings`).
+#[cfg(test)]
 pub fn dsn_for_project(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,

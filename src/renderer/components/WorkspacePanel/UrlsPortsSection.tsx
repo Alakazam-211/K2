@@ -2,13 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
+import { useConnectHostStore } from '@/stores/connect-host'
 import { onAppHello, onPublishServicesChanged } from '@/stores/session-events'
+import { PublishedServiceDetailsModal } from './PublishedServiceDetailsModal'
 import {
   PUBLISH_RUN_EXAMPLE,
   byoWorkspaceTargets,
   isServiceStoppable,
   nestedPublicUrl,
   parsePublishList,
+  publishedHostLabel,
+  publishListErrorMessage,
   serviceListenLabel,
   servicePublicUrl,
   sortedServices,
@@ -65,10 +69,19 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
     supportsPublish ? undefined : [],
   )
   const [busyName, setBusyName] = useState<string | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
+  const [detailsName, setDetailsName] = useState<string | null>(null)
+  const activeHost = useConnectHostStore((s) => s.activeHost)
+  const hostLabel = publishedHostLabel(activeHost === 'local' ? 'local' : activeHost)
+
+  useEffect(() => {
+    setDetailsName(null)
+  }, [projectId])
 
   useEffect(() => {
     if (!supportsPublish || !projectId) {
       setServices([])
+      setListError(null)
       return
     }
     let cancelled = false
@@ -76,9 +89,17 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
     const refresh = async (): Promise<void> => {
       try {
         const raw = await daemonCliGet<unknown>('publish/list', { project: projectId })
-        if (!cancelled) setServices(parsePublishList(raw))
-      } catch {
-        if (!cancelled) setServices((prev) => prev ?? [])
+        if (!cancelled) {
+          setServices(parsePublishList(raw))
+          setListError(null)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          // Keep prior rows when we have them; never coerce a first failure
+          // into empty-success “ask your agent…”.
+          setServices((prev) => prev ?? [])
+          setListError(publishListErrorMessage(err))
+        }
       }
     }
     void refresh()
@@ -104,6 +125,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
         await daemonCliPost(`publish/${action}`, { name, project: projectId })
         const raw = await daemonCliGet<unknown>('publish/list', { project: projectId })
         setServices(parsePublishList(raw))
+        setListError(null)
       } catch {
         /* list refresh / next event converges; keep the drawer quiet */
       } finally {
@@ -128,6 +150,13 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   const loadingServices = supportsPublish && services === undefined
   const loadingSubs = subs === undefined
   const unavailable = !supportsPublish && subs === null
+  const detailsSvc = detailsName
+    ? (serviceList.find((s) => s.name === detailsName) ?? null)
+    : null
+
+  useEffect(() => {
+    if (detailsName && !detailsSvc) setDetailsName(null)
+  }, [detailsName, detailsSvc])
 
   return (
     <>
@@ -174,7 +203,15 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
 
       {open && (
         <div className="px-3 py-2 border-b border-[var(--color-border)]">
-          {(loadingSubs || loadingServices) && !hasAny ? (
+          {listError ? (
+            <p
+              className={`text-[10px] text-[var(--color-status-error)] ${hasAny ? 'mb-1.5' : ''}`}
+              data-published-list-error=""
+            >
+              {listError}
+            </p>
+          ) : null}
+          {(loadingSubs || loadingServices) && !hasAny && !listError ? (
             <p className="text-[10px] text-[var(--color-text-muted)]">
               Checking Published…
             </p>
@@ -182,12 +219,12 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
             <p className="text-[10px] text-[var(--color-text-muted)]">
               Not available on this daemon.
             </p>
-          ) : !hasAny ? (
+          ) : !hasAny && !listError ? (
             <p className="text-[10px] text-[var(--color-text-muted)]">
               Ask your agent to publish it with{' '}
               <span className="font-mono">{PUBLISH_RUN_EXAMPLE}</span>
             </p>
-          ) : (
+          ) : hasAny ? (
             <div className="space-y-1.5">
               {serviceRows.map((svc) => {
                 const listen = serviceListenLabel(svc)
@@ -195,7 +232,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                 const stoppable = isServiceStoppable(svc)
                 const busy = busyName === svc.name
                 return (
-                  <div key={`svc:${svc.name}`} className="min-w-0">
+                  <div key={`svc:${svc.name}`} className="min-w-0" data-published-service={svc.name}>
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span
                         className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusDotClass(svc.status)}`}
@@ -214,12 +251,28 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                           {stoppable ? 'Stop' : 'Start'}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => setDetailsName(svc.name)}
+                        className="text-[9px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag flex-shrink-0"
+                      >
+                        Details
+                      </button>
                     </div>
-                    {listen ? (
-                      <span className="block text-[10px] font-mono text-[var(--color-text-muted)] truncate">
-                        {listen}
-                      </span>
-                    ) : null}
+                    <div className="flex items-center gap-1.5 min-w-0 text-[10px] text-[var(--color-text-muted)]">
+                      <span className="flex-shrink-0">{svc.status || 'unknown'}</span>
+                      {svc.pid !== null ? (
+                        <span className="flex-shrink-0 tabular-nums">PID {svc.pid}</span>
+                      ) : null}
+                      {svc.kind === 'skin' ? (
+                        <span className="flex-shrink-0 text-[9px] font-medium uppercase tracking-wide px-1 py-px bg-[var(--color-wash-1)] text-[var(--color-text-secondary)]">
+                          Skin
+                        </span>
+                      ) : null}
+                      {listen ? (
+                        <span className="font-mono truncate">{listen}</span>
+                      ) : null}
+                    </div>
                     {url ? (
                       <a
                         href={url}
@@ -241,7 +294,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
               {nestedRows.map(([label, info]) => {
                 const url = nestedPublicUrl(label, primary, publicUrl)
                 return (
-                  <div key={`byo:${label}`} className="min-w-0">
+                  <div key={`byo:${label}`} className="min-w-0" data-published-byo={label}>
                     {url ? (
                       <a
                         href={url}
@@ -263,7 +316,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                 )
               })}
             </div>
-          )}
+          ) : null}
           {hint ? (
             <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               {hint}
@@ -271,6 +324,14 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
           ) : null}
         </div>
       )}
+
+      {detailsSvc ? (
+        <PublishedServiceDetailsModal
+          service={detailsSvc}
+          hostLabel={hostLabel}
+          onClose={() => setDetailsName(null)}
+        />
+      ) : null}
     </>
   )
 }

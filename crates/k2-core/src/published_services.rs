@@ -106,6 +106,10 @@ pub struct ServiceJson {
     pub last_exit_code: Option<i32>,
     /// Always present (`cmd` or `skin`). Existing rows serialize as `cmd`.
     pub kind: String,
+    /// Workspace-relative UI dir. Empty = bundled skin chrome. Always present
+    /// on the wire; `default` only so older JSON still deserializes.
+    #[serde(default)]
+    pub skin_root: String,
 }
 
 impl ServiceJson {
@@ -138,6 +142,7 @@ impl ServiceJson {
             } else {
                 row.kind.clone()
             },
+            skin_root: row.skin_root.clone(),
         }
     }
 }
@@ -494,10 +499,12 @@ mod tests {
             "error",
             "lastExitCode",
             "kind",
+            "skinRoot",
         ] {
             assert!(v.get(key).is_some(), "Service JSON must carry {key}");
         }
         assert_eq!(v["kind"], KIND_CMD);
+        assert_eq!(v["skinRoot"], "", "empty skinRoot is present, never omitted");
         assert!(v["url"].is_null(), "local-only url is explicit null");
         assert!(v["error"].is_null());
         assert!(v["lastExitCode"].is_null());
@@ -614,6 +621,7 @@ mod tests {
         let json = ServiceJson::from_row(&cmd_row, STATUS_STOPPED, None, None);
         let v = serde_json::to_value(&json).unwrap();
         assert_eq!(v["kind"], "cmd", "kind is always present camelCase");
+        assert_eq!(v["skinRoot"], "", "cmd rows still serialize skinRoot");
 
         let skin_row = insert(
             &conn,
@@ -635,6 +643,7 @@ mod tests {
         let v = serde_json::to_value(&json).unwrap();
         assert_eq!(v["kind"], "skin");
         assert_eq!(v["cmd"], CMD_SKIN_SENTINEL);
+        assert_eq!(v["skinRoot"], "ui");
 
         let bad = insert(
             &conn,

@@ -5,12 +5,20 @@ import {
   PUBLISH_RUN_EXAMPLE,
   byoWorkspaceTargets,
   isLocalOnly,
+  isServiceHealthy,
   isServiceStoppable,
   nestedPublicUrl,
   normalizeTargets,
+  parsePublishedService,
   parsePublishList,
+  publishedHostLabel,
+  publishListErrorMessage,
+  serviceKindLabel,
+  serviceLaunchLabel,
   serviceListenLabel,
+  servicePidLabel,
   servicePublicUrl,
+  serviceSkinUiLabel,
   sortedServices,
   sortedTargets,
   unattributedCount,
@@ -191,6 +199,8 @@ function svc(over: Partial<PublishedService> & { name: string }): PublishedServi
     target: 'localhost:3000',
     error: null,
     lastExitCode: null,
+    kind: 'cmd',
+    skinRoot: '',
     ...over,
   }
 }
@@ -253,6 +263,43 @@ describe('parsePublishList', () => {
         services: [{ name: 'web', last_exit_code: 1, status: 'exited' }],
       })[0]?.lastExitCode,
     ).toBe(1)
+  })
+
+  it('keeps kind, pid, and skinRoot when present', () => {
+    const parsed = parsePublishList({
+      services: [
+        {
+          name: 'agents',
+          kind: 'skin',
+          pid: 4242,
+          skinRoot: 'ui',
+          cmd: '(skin)',
+          status: 'running',
+        },
+      ],
+    })[0]
+    expect(parsed?.kind).toBe('skin')
+    expect(parsed?.pid).toBe(4242)
+    expect(parsed?.skinRoot).toBe('ui')
+  })
+
+  it('missing kind → cmd; missing skinRoot → empty string (old remotes)', () => {
+    const parsed = parsePublishedService({ name: 'web', pid: 9, status: 'running' })
+    expect(parsed?.kind).toBe('cmd')
+    expect(parsed?.skinRoot).toBe('')
+    expect(parsed?.pid).toBe(9)
+  })
+
+  it('unknown kind is cmd (no Skin badge on junk wire)', () => {
+    expect(parsePublishedService({ name: 'web', kind: 'python' })?.kind).toBe('cmd')
+    expect(parsePublishedService({ name: 'web', kind: '' })?.kind).toBe('cmd')
+    expect(parsePublishedService({ name: 'web', kind: 'Skin' })?.kind).toBe('cmd')
+  })
+
+  it('accepts snake_case skin_root when camelCase is absent', () => {
+    expect(parsePublishedService({ name: 'agents', kind: 'skin', skin_root: 'skins/app' })?.skinRoot).toBe(
+      'skins/app',
+    )
   })
 })
 
@@ -360,5 +407,65 @@ describe('PUBLISH_RUN_EXAMPLE (empty-state copy)', () => {
     expect(PUBLISH_RUN_EXAMPLE).toBe('k2 publish run <name> --cmd "…" --port <n>')
     expect(PUBLISH_RUN_EXAMPLE).toContain('k2 publish run')
     expect(PUBLISH_RUN_EXAMPLE).not.toBe('k2 publish')
+  })
+})
+
+describe('isServiceHealthy (P6 — status running, no HTTP probe)', () => {
+  it('is healthy only when status is running', () => {
+    expect(isServiceHealthy(svc({ name: 'web', status: 'running' }))).toBe(true)
+    expect(isServiceHealthy(svc({ name: 'web', status: 'unhealthy' }))).toBe(false)
+    expect(isServiceHealthy(svc({ name: 'web', status: 'starting' }))).toBe(false)
+    expect(isServiceHealthy(svc({ name: 'web', status: 'stopped' }))).toBe(false)
+  })
+})
+
+describe('servicePidLabel / serviceKindLabel', () => {
+  it('PID field is the number or “not running”', () => {
+    expect(servicePidLabel(svc({ name: 'web', pid: 4242 }))).toBe('4242')
+    expect(servicePidLabel(svc({ name: 'web', pid: null }))).toBe('not running')
+  })
+
+  it('Kind is Skin vs site', () => {
+    expect(serviceKindLabel(svc({ name: 'web', kind: 'cmd' }))).toBe('site')
+    expect(serviceKindLabel(svc({ name: 'agents', kind: 'skin' }))).toBe('Skin')
+  })
+})
+
+describe('serviceLaunchLabel / serviceSkinUiLabel (P17)', () => {
+  it('cmd rows show the shell command', () => {
+    expect(serviceLaunchLabel(svc({ name: 'web', kind: 'cmd', cmd: 'npm start' }))).toBe('npm start')
+    expect(serviceSkinUiLabel(svc({ name: 'web', kind: 'cmd' }))).toBeNull()
+  })
+
+  it('skin rows are the official gateway, never the (skin) sentinel', () => {
+    const skin = svc({ name: 'agents', kind: 'skin', cmd: '(skin)', skinRoot: '' })
+    expect(serviceLaunchLabel(skin)).toBe('Official skin gateway')
+    expect(serviceLaunchLabel(skin)).not.toBe('(skin)')
+    expect(serviceSkinUiLabel(skin)).toBe('bundled')
+  })
+
+  it('non-empty skinRoot is the workspace-relative dir', () => {
+    expect(serviceSkinUiLabel(svc({ name: 'agents', kind: 'skin', skinRoot: 'ui' }))).toBe('ui')
+  })
+})
+
+describe('publishedHostLabel (P13)', () => {
+  it('local daemon is This Mac', () => {
+    expect(publishedHostLabel('local')).toBe('This Mac')
+  })
+
+  it('remote uses label, then hostname — never This Mac', () => {
+    expect(publishedHostLabel({ label: 'Hetzner box', hostname: 'box.example' })).toBe('Hetzner box')
+    expect(publishedHostLabel({ label: '', hostname: 'rosson.k2.dev' })).toBe('rosson.k2.dev')
+    expect(publishedHostLabel({ label: '  ', hostname: 'k2e-01' })).toBe('k2e-01')
+    expect(publishedHostLabel({ label: 'Web', hostname: 'rosson.k2.dev' })).not.toBe('This Mac')
+  })
+})
+
+describe('publishListErrorMessage (P11)', () => {
+  it('prefers the thrown message, else a generic loud line', () => {
+    expect(publishListErrorMessage(new Error('daemon down'))).toBe('daemon down')
+    expect(publishListErrorMessage('nope')).toBe('nope')
+    expect(publishListErrorMessage({})).toBe('Failed to load published services')
   })
 })

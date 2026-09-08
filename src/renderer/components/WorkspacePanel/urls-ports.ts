@@ -116,6 +116,9 @@ export function sortedTargets(
 /** Canonical empty-state example — not bare `k2 publish`. */
 export const PUBLISH_RUN_EXAMPLE = 'k2 publish run <name> --cmd "…" --port <n>'
 
+/** Wire `kind` after tolerant parse. Unknown / missing → `cmd`. */
+export type PublishedServiceKind = 'cmd' | 'skin'
+
 /** One row from GET `/cli/publish/list` after wire normalization. */
 export interface PublishedService {
   name: string
@@ -130,6 +133,9 @@ export interface PublishedService {
   target: string | null
   error: string | null
   lastExitCode: number | null
+  kind: PublishedServiceKind
+  /** Workspace-relative UI dir. Empty = bundled skin chrome. */
+  skinRoot: string
 }
 
 function asString(value: unknown): string {
@@ -144,7 +150,19 @@ function asFiniteOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-function parsePublishedService(raw: unknown): PublishedService | null {
+/** Missing / unknown kind → `cmd` so old remotes never get a Skin badge. */
+function parseKind(raw: unknown): PublishedServiceKind {
+  return asString(raw).trim() === 'skin' ? 'skin' : 'cmd'
+}
+
+/** Prefer camelCase wire; accept snake_case; missing → `''`. */
+function parseSkinRoot(o: Record<string, unknown>): string {
+  if (typeof o.skinRoot === 'string') return o.skinRoot
+  if (typeof o.skin_root === 'string') return o.skin_root
+  return ''
+}
+
+export function parsePublishedService(raw: unknown): PublishedService | null {
   if (!raw || typeof raw !== 'object') return null
   const o = raw as Record<string, unknown>
   const name = asString(o.name).trim()
@@ -162,6 +180,8 @@ function parsePublishedService(raw: unknown): PublishedService | null {
     target: asStringOrNull(o.target),
     error: asStringOrNull(o.error),
     lastExitCode: asFiniteOrNull(o.lastExitCode ?? o.last_exit_code),
+    kind: parseKind(o.kind),
+    skinRoot: parseSkinRoot(o),
   }
 }
 
@@ -225,4 +245,52 @@ export function unattributedHint(count: number): string | null {
   if (count <= 0) return null
   const noun = count === 1 ? '1 nested URL is' : `${count} nested URLs are`
   return `${noun} not claimed to a workspace — k2 publish subdomain claim <label>`
+}
+
+/** Healthy in the details modal = daemon `status === 'running'` (not an HTTP probe). */
+export function isServiceHealthy(service: PublishedService): boolean {
+  return service.status === 'running'
+}
+
+/** Modal PID field: the live pid, or “not running” when unset. */
+export function servicePidLabel(service: PublishedService): string {
+  return service.pid !== null ? String(service.pid) : 'not running'
+}
+
+/** Kind copy: Skin vs site. */
+export function serviceKindLabel(service: PublishedService): string {
+  return service.kind === 'skin' ? 'Skin' : 'site'
+}
+
+/**
+ * Launch copy. Skin rows are the official gateway — never the `(skin)`
+ * sentinel as a shell command. Cmd rows show `cmd` as stored.
+ */
+export function serviceLaunchLabel(service: PublishedService): string {
+  if (service.kind === 'skin') return 'Official skin gateway'
+  return service.cmd
+}
+
+/** Skin UI dir: empty `skinRoot` → bundled; otherwise the workspace-relative path. */
+export function serviceSkinUiLabel(service: PublishedService): string | null {
+  if (service.kind !== 'skin') return null
+  const root = service.skinRoot.trim()
+  return root ? root : 'bundled'
+}
+
+/** Connect host field: local daemon → “This Mac”; else label, then hostname. */
+export type PublishedHostRef = 'local' | { label?: string | null; hostname?: string | null }
+
+export function publishedHostLabel(activeHost: PublishedHostRef): string {
+  if (activeHost === 'local') return 'This Mac'
+  const label = (activeHost.label ?? '').trim()
+  if (label) return label
+  return (activeHost.hostname ?? '').trim()
+}
+
+/** List GET failure copy — never an empty success. */
+export function publishListErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) return err.message.trim()
+  if (typeof err === 'string' && err.trim()) return err.trim()
+  return 'Failed to load published services'
 }

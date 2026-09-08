@@ -158,8 +158,15 @@ pub fn projects_refresh_editors() -> Result<Vec<EditorInfo>, String> {
 
 /// HOST: opens a new Tauri WebviewWindow. Window create + management
 /// is a Tauri-only API; the daemon has nothing equivalent.
+///
+/// **Sync** (same as `window_new` / `open_new_window`). This handler
+/// uses `reqwest::blocking` (`daemon().cli_get_json`) and
+/// `WebviewWindowBuilder::build()`. Running those on the async
+/// command runtime panics: "Cannot drop a runtime in a context where
+/// blocking is not allowed" — menu/hotkey then look like no-ops
+/// (renderer only `console.warn`s the invoke error).
 #[tauri::command]
-pub async fn projects_open_focus_window(
+pub fn projects_open_focus_window(
     app: tauri::AppHandle,
     project_id: String,
 ) -> Result<serde_json::Value, String> {

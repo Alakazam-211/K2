@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
-import { PublishedServiceDetailsModal } from './PublishedServiceDetailsModal'
+import {
+  PublishedByoDetailsModal,
+  PublishedServiceDetailsModal,
+} from './PublishedServiceDetailsModal'
 import type { PublishedService } from './urls-ports'
 
 afterEach(() => {
@@ -106,5 +109,26 @@ describe('PublishedServiceDetailsModal', () => {
     )
     expect(screen.getByText('unhealthy')).toBeTruthy()
     expect(screen.queryByText('running · healthy')).toBeNull()
+  })
+
+  it('BYO leftover modal has target and URL, no PID, no Start/Stop', () => {
+    render(
+      <PublishedByoDetailsModal
+        leftover={{
+          label: 'staging',
+          url: 'https://staging.rosson.k2.dev',
+          target: 'localhost:4000',
+        }}
+        hostLabel="This Mac"
+        onClose={() => {}}
+      />,
+    )
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('staging')).toBeTruthy()
+    expect(within(dialog).getByText('https://staging.rosson.k2.dev')).toBeTruthy()
+    expect(within(dialog).getByText('localhost:4000')).toBeTruthy()
+    expect(within(dialog).queryByText(/PID/)).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Start' })).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Stop' })).toBeNull()
   })
 })

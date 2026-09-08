@@ -20,6 +20,12 @@ interface PublishedServiceDetailsModalProps {
   onClose: () => void
 }
 
+export interface PublishedByoDetails {
+  label: string
+  url: string | null
+  target: string
+}
+
 function Field({
   label,
   children,
@@ -130,6 +136,83 @@ export function PublishedServiceDetailsModal({
           <Field label="Expose">{dash(service.expose)}</Field>
           <Field label="Kind">{serviceKindLabel(service)}</Field>
           <Field label="Host">{dash(hostLabel)}</Field>
+        </div>
+      </DialogFrame>
+    </>
+  )
+}
+
+/** Leftover nested URL (`k2 publish subdomain create`) — no process, no PID. */
+export function PublishedByoDetailsModal({
+  leftover,
+  hostLabel,
+  onClose,
+}: {
+  leftover: PublishedByoDetails
+  hostLabel: string
+  onClose: () => void
+}): React.JSX.Element {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [onClose])
+
+  return (
+    <>
+      <DialogScrim
+        onMouseDown={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
+      />
+      <DialogFrame
+        data-published-byo-details=""
+        role="dialog"
+        aria-label={leftover.label}
+        style={{
+          width: 420,
+          maxWidth: 'calc(100vw - 48px)',
+          maxHeight: 'calc(100vh - 96px)',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
+          <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate pr-2">
+            {leftover.label}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors flex-shrink-0"
+            title="Close (Esc)"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <line x1="2" y1="2" x2="10" y2="10" />
+              <line x1="10" y1="2" x2="2" y2="10" />
+            </svg>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+          <Field label="Kind">Nested URL</Field>
+          <Field label="Public URL" mono>
+            {dash(leftover.url)}
+          </Field>
+          <Field label="Target" mono>
+            {leftover.target}
+          </Field>
+          <Field label="Host">{dash(hostLabel)}</Field>
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            Created with <span className="font-mono">k2 publish subdomain create</span>
+            . No <span className="font-mono">publish run</span> process on this row.
+          </p>
         </div>
       </DialogFrame>
     </>

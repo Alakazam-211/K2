@@ -137,7 +137,7 @@ describe('UrlsPortsSection', () => {
     expect(within(dialog).queryByRole('button', { name: 'Stop' })).toBeNull()
   })
 
-  it('BYO leftover has no Details and no fake PID (P15)', async () => {
+  it('BYO leftover Details is on the target row and opens with no fake PID', async () => {
     daemonCliGet.mockResolvedValue({ services: [] })
     tunnelState.subs = {
       primary: 'rosson',
@@ -147,10 +147,16 @@ describe('UrlsPortsSection', () => {
     await waitFor(() => {
       expect(screen.getByText('→ localhost:4000')).toBeTruthy()
     })
-    expect(document.querySelector('[data-published-byo="staging"]')).toBeTruthy()
-    expect(screen.queryByText('Details')).toBeNull()
+    const row = document.querySelector('[data-published-byo="staging"]')
+    expect(row).toBeTruthy()
     expect(screen.queryByText(/PID/)).toBeNull()
-    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(within(row as HTMLElement).getByText('Details'))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('localhost:4000')).toBeTruthy()
+    expect(within(dialog).getByText('Nested URL')).toBeTruthy()
+    expect(within(dialog).queryByText(/PID/)).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Start' })).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Stop' })).toBeNull()
   })
 
   it('modal binds by name to the live list and closes when the row is gone (P14)', async () => {

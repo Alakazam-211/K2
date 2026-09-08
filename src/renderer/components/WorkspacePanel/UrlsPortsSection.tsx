@@ -4,7 +4,10 @@ import { useServerSupports } from '@/lib/server-capabilities'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { onAppHello, onPublishServicesChanged } from '@/stores/session-events'
-import { PublishedServiceDetailsModal } from './PublishedServiceDetailsModal'
+import {
+  PublishedByoDetailsModal,
+  PublishedServiceDetailsModal,
+} from './PublishedServiceDetailsModal'
 import {
   PUBLISH_RUN_EXAMPLE,
   byoWorkspaceTargets,
@@ -22,6 +25,9 @@ import {
   workspaceTargets,
   type PublishedService,
 } from './urls-ports'
+
+const DETAILS_BTN =
+  'px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer flex-shrink-0'
 
 // Published — a collapsible Workspace-drawer section showing THIS
 // workspace's daemon-owned hosted services plus leftover BYO nested
@@ -71,11 +77,13 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   const [busyName, setBusyName] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [detailsName, setDetailsName] = useState<string | null>(null)
+  const [detailsByo, setDetailsByo] = useState<string | null>(null)
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const hostLabel = publishedHostLabel(activeHost === 'local' ? 'local' : activeHost)
 
   useEffect(() => {
     setDetailsName(null)
+    setDetailsByo(null)
   }, [projectId])
 
   useEffect(() => {
@@ -153,10 +161,17 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   const detailsSvc = detailsName
     ? (serviceList.find((s) => s.name === detailsName) ?? null)
     : null
+  const detailsLeftover = detailsByo
+    ? nestedRows.find(([label]) => label === detailsByo) ?? null
+    : null
 
   useEffect(() => {
     if (detailsName && !detailsSvc) setDetailsName(null)
   }, [detailsName, detailsSvc])
+
+  useEffect(() => {
+    if (detailsByo && !detailsLeftover) setDetailsByo(null)
+  }, [detailsByo, detailsLeftover])
 
   return (
     <>
@@ -251,13 +266,6 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                           {stoppable ? 'Stop' : 'Start'}
                         </button>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => setDetailsName(svc.name)}
-                        className="px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer flex-shrink-0"
-                      >
-                        Details
-                      </button>
                     </div>
                     <div className="flex items-center gap-1.5 min-w-0 text-[10px] text-[var(--color-text-muted)]">
                       <span className="flex-shrink-0">{svc.status || 'unknown'}</span>
@@ -272,6 +280,16 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                       {listen ? (
                         <span className="font-mono truncate">{listen}</span>
                       ) : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDetailsByo(null)
+                          setDetailsName(svc.name)
+                        }}
+                        className={`${DETAILS_BTN} ml-auto`}
+                      >
+                        Details
+                      </button>
                     </div>
                     {url ? (
                       <a
@@ -309,9 +327,21 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                         {label}
                       </span>
                     )}
-                    <span className="block text-[10px] text-[var(--color-text-muted)] truncate">
-                      → {info.target}
-                    </span>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-[10px] text-[var(--color-text-muted)] truncate flex-1">
+                        → {info.target}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDetailsName(null)
+                          setDetailsByo(label)
+                        }}
+                        className={DETAILS_BTN}
+                      >
+                        Details
+                      </button>
+                    </div>
                   </div>
                 )
               })}
@@ -330,6 +360,17 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
           service={detailsSvc}
           hostLabel={hostLabel}
           onClose={() => setDetailsName(null)}
+        />
+      ) : null}
+      {detailsLeftover ? (
+        <PublishedByoDetailsModal
+          leftover={{
+            label: detailsLeftover[0],
+            url: nestedPublicUrl(detailsLeftover[0], primary, publicUrl),
+            target: detailsLeftover[1].target,
+          }}
+          hostLabel={hostLabel}
+          onClose={() => setDetailsByo(null)}
         />
       ) : null}
     </>

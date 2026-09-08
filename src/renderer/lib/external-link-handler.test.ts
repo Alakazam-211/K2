@@ -2,14 +2,14 @@
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 
-const openOffOriginHttp = vi.fn()
+const openOffOriginHttp = vi.fn<(href: string) => void>()
 vi.mock('@/lib/open-off-origin-http', () => ({
-  openOffOriginHttp: (...args: unknown[]) => openOffOriginHttp(...args),
+  openOffOriginHttp: (href: string) => openOffOriginHttp(href),
 }))
 
-const openUrl = vi.fn(async () => {})
+const openUrl = vi.fn<(url: string) => Promise<void>>()
 vi.mock('@tauri-apps/plugin-opener', () => ({
-  openUrl: (...args: unknown[]) => openUrl(...args),
+  openUrl: (url: string) => openUrl(url),
 }))
 
 import { installExternalLinkHandler } from './external-link-handler'

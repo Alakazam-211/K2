@@ -254,7 +254,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                       <button
                         type="button"
                         onClick={() => setDetailsName(svc.name)}
-                        className="text-[9px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag flex-shrink-0"
+                        className="px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer flex-shrink-0"
                       >
                         Details
                       </button>

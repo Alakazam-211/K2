@@ -2,12 +2,15 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { agentDisplayName } from '@/lib/workspace-agent'
 import { daemonCliGet, isHostSwitchedError } from '@/lib/daemon-cli'
+import { useProjectsStore } from '@/stores/projects'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
+import { InboxChatAboutDialog } from './InboxChatAboutDialog'
 import {
   MAIL_PAGE_LIMIT,
   TRAY_SOURCE_ID,
   buildSourceList,
+  chatAboutRowTitle,
   formatInboxError,
   formatMailDate,
   formatMailFrom,
@@ -22,6 +25,7 @@ import {
   preferMailHtml,
   stripExternalEmailMarkers,
   traySource,
+  type ChatAboutStamp,
   type InboxBrowserSource,
   type InboxItem,
   type MailMessageFull,
@@ -70,6 +74,12 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
   const [bodyError, setBodyError] = useState<string | null>(null)
   const [bodyLoading, setBodyLoading] = useState(false)
   const [showHtml, setShowHtml] = useState(false)
+  const [chatAboutStamp, setChatAboutStamp] = useState<ChatAboutStamp | null>(null)
+  const [chatAboutOpen, setChatAboutOpen] = useState(false)
+
+  const workspaceId = useProjectsStore(
+    (s) => s.projects.find((p) => p.path === projectPath)?.id ?? null,
+  )
 
   const sources = useMemo(() => buildSourceList(mailSources), [mailSources])
   const selectedSource = sources.find((s) => s.id === selectedSourceId) ?? traySource()
@@ -155,6 +165,8 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     setMailBody(null)
     setBodyError(null)
     setShowHtml(false)
+    setChatAboutStamp(null)
+    setChatAboutOpen(false)
     setMailMessages([])
     setMailNextOffset(null)
     setListError(null)
@@ -195,6 +207,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     setSelectedRow({ kind: 'tray', id: item.id })
     setMailBody(null)
     setShowHtml(false)
+    setChatAboutStamp(null)
     setBodyLoading(true)
     setBodyError(null)
     try {
@@ -203,9 +216,15 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
         id: item.id,
       })
       setTrayBody(parseTrayRead(raw).content)
+      setChatAboutStamp({
+        kind: 'tray',
+        id: item.id,
+        title: chatAboutRowTitle('tray', item),
+      })
     } catch (err) {
       if (shouldIgnoreFetchError(err)) return
       setTrayBody(null)
+      setChatAboutStamp(null)
       setBodyError(formatInboxError(err))
     } finally {
       setBodyLoading(false)
@@ -216,8 +235,10 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     setSelectedRow({ kind: 'mail', id: item.id })
     setTrayBody(null)
     setShowHtml(false)
+    setChatAboutStamp(null)
     setBodyLoading(true)
     setBodyError(null)
+    const stampKind = selectedSource.kind
     try {
       const raw = await daemonCliGet<unknown>('mail/read', {
         project: projectPath,
@@ -229,9 +250,17 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
       setMailMessages((prev) =>
         prev.map((m) => (m.id === item.id ? { ...m, unread: false } : m)),
       )
+      if (stampKind === 'hosted' || stampKind === 'linked') {
+        setChatAboutStamp({
+          kind: stampKind,
+          id: message.id || item.id,
+          title: chatAboutRowTitle(stampKind, { subject: message.subject ?? item.subject }),
+        })
+      }
     } catch (err) {
       if (shouldIgnoreFetchError(err)) return
       setMailBody(null)
+      setChatAboutStamp(null)
       setBodyError(formatInboxError(err))
     } finally {
       setBodyLoading(false)
@@ -251,8 +280,10 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
 
   const headerLabel = isWorkspaceBoard ? 'Work Board' : displayName
   const emptyCatalog = catalogLoaded && mailSources.length === 0 && !catalogError
+  const canChatAbout = Boolean(chatAboutStamp) && !bodyLoading && !bodyError
 
   return (
+    <>
     <div
       className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden"
       data-testid="inbox-browser"
@@ -292,9 +323,20 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
           bodyLoading={bodyLoading}
           showHtml={showHtml}
           onShowHtml={setShowHtml}
+          canChatAbout={canChatAbout}
+          onChatAbout={() => { if (canChatAbout) setChatAboutOpen(true) }}
         />
       </div>
     </div>
+    {chatAboutOpen && chatAboutStamp && (
+      <InboxChatAboutDialog
+        stamp={chatAboutStamp}
+        projectPath={projectPath}
+        workspaceId={workspaceId}
+        onClose={() => setChatAboutOpen(false)}
+      />
+    )}
+    </>
   )
 }
 
@@ -499,6 +541,8 @@ function BodyColumn({
   bodyLoading,
   showHtml,
   onShowHtml,
+  canChatAbout,
+  onChatAbout,
 }: {
   selectedRow: SelectedRow
   trayBody: string | null
@@ -507,6 +551,8 @@ function BodyColumn({
   bodyLoading: boolean
   showHtml: boolean
   onShowHtml: (v: boolean) => void
+  canChatAbout: boolean
+  onChatAbout: () => void
 }): React.JSX.Element {
   const useHtml = mailBody
     ? preferMailHtml(mailBody.text, mailBody.html, showHtml)
@@ -514,6 +560,7 @@ function BodyColumn({
   const htmlHasContent = Boolean(mailBody && !mailHtmlIsEmpty(mailBody.html))
   const textHasContent = Boolean(mailBody && !mailTextIsEmpty(mailBody.text))
   const showToggle = htmlHasContent && textHasContent
+  const showTrailing = canChatAbout || showToggle
 
   return (
     <div className="flex-1 min-w-0 flex flex-col min-h-0" data-testid="inbox-body">
@@ -524,15 +571,29 @@ function BodyColumn({
         {selectedRow?.kind === 'mail' && (
           <span className="text-[10px] text-[var(--color-text-muted)]">Marks read</span>
         )}
-        {showToggle && (
-          <button
-            type="button"
-            data-testid="inbox-html-toggle"
-            onClick={() => onShowHtml(!showHtml)}
-            className="ml-auto text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
-          >
-            {useHtml ? 'Show text' : 'Show HTML'}
-          </button>
+        {showTrailing && (
+          <div className="ml-auto flex items-center gap-2">
+            {canChatAbout && (
+              <button
+                type="button"
+                data-testid="inbox-chat-about"
+                onClick={onChatAbout}
+                className="px-2 py-0.5 text-[9px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer flex-shrink-0"
+              >
+                Chat about this
+              </button>
+            )}
+            {showToggle && (
+              <button
+                type="button"
+                data-testid="inbox-html-toggle"
+                onClick={() => onShowHtml(!showHtml)}
+                className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
+              >
+                {useHtml ? 'Show text' : 'Show HTML'}
+              </button>
+            )}
+          </div>
         )}
       </div>
       {bodyError && (

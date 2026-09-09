@@ -229,3 +229,55 @@ export function formatMailDate(date: string | null | undefined): string {
   if (Number.isNaN(ms)) return date
   return new Date(ms).toLocaleString()
 }
+
+/** Stamp kinds Chat about this may inject. Postal/p5 are omitted this cut. */
+export type ChatAboutKind = 'tray' | 'hosted' | 'linked'
+
+export type ChatAboutStamp = {
+  kind: ChatAboutKind
+  id: string
+  title: string
+}
+
+/** One line for the stamp title; CR/LF become spaces. Empty → fallback. */
+export function oneLineInboxTitle(value: string | null | undefined, fallback = ''): string {
+  const clean = (s: string): string => s.replace(/[\r\n]+/g, ' ').replace(/[ \t]+/g, ' ').trim()
+  const primary = clean(value ?? '')
+  if (primary) return primary
+  return clean(fallback)
+}
+
+/** Tray uses title then filename; mail uses subject or `(no subject)`. */
+export function chatAboutRowTitle(
+  kind: ChatAboutKind,
+  row: { title?: string | null; filename?: string | null; subject?: string | null },
+): string {
+  if (kind === 'tray') {
+    const title = oneLineInboxTitle(row.title)
+    if (title) return title
+    return oneLineInboxTitle(row.filename)
+  }
+  return oneLineInboxTitle(row.subject, '(no subject)')
+}
+
+export function chatAboutKindPrefix(kind: ChatAboutKind): 'k2' | 'hosted' | 'linked' {
+  return kind === 'tray' ? 'k2' : kind
+}
+
+export function chatAboutStampLine(stamp: ChatAboutStamp): string {
+  const title = stamp.kind === 'tray'
+    ? oneLineInboxTitle(stamp.title)
+    : oneLineInboxTitle(stamp.title, '(no subject)')
+  const head = `[${chatAboutKindPrefix(stamp.kind)} inboxID:${stamp.id}]`
+  return title ? `${head} ${title}` : head
+}
+
+export function chatAboutOpenLine(stamp: ChatAboutStamp): string {
+  if (stamp.kind === 'tray') return `Open: k2 inbox read ${stamp.id}`
+  return `Open: k2 mail read ${stamp.id}`
+}
+
+/** Stamp + Open: + blank + note. No body paste, no legacy `[inbox:]`. */
+export function formatChatAboutPayload(stamp: ChatAboutStamp, note: string): string {
+  return `${chatAboutStampLine(stamp)}\n${chatAboutOpenLine(stamp)}\n\n${note}`
+}

@@ -4,8 +4,13 @@ import {
   EXTERNAL_EMAIL_END,
   MAIL_PAGE_LIMIT,
   buildSourceList,
+  chatAboutOpenLine,
+  chatAboutRowTitle,
+  chatAboutStampLine,
+  formatChatAboutPayload,
   formatInboxError,
   mailHtmlSrcDoc,
+  oneLineInboxTitle,
   parseMailCatalog,
   parseMailMessages,
   parseMailRead,
@@ -107,5 +112,47 @@ describe('inbox-browser helpers', () => {
       error: { code: 'engine', hint: 'IMAP auth failed' },
     })))).toBe('IMAP auth failed')
     expect(formatInboxError(new Error('boom'))).toBe('boom')
+  })
+
+  it('collapses CR/LF in Chat about this titles to one line', () => {
+    expect(oneLineInboxTitle('Wake\r\npackage')).toBe('Wake package')
+    expect(oneLineInboxTitle('Hello\n\nhost', '(no subject)')).toBe('Hello host')
+    expect(oneLineInboxTitle('  \n  ', '(no subject)')).toBe('(no subject)')
+    expect(chatAboutRowTitle('tray', { title: '', filename: 'pkg-1.md' })).toBe('pkg-1.md')
+    expect(chatAboutRowTitle('hosted', { subject: null })).toBe('(no subject)')
+  })
+
+  it('stamps tray/hosted/linked without a legacy [inbox:] token', () => {
+    const tray = formatChatAboutPayload(
+      { kind: 'tray', id: 'pkg-1', title: 'Wake\npackage' },
+      'look at this',
+    )
+    expect(tray).toBe(
+      '[k2 inboxID:pkg-1] Wake package\nOpen: k2 inbox read pkg-1\n\nlook at this',
+    )
+    expect(chatAboutStampLine({ kind: 'tray', id: 'pkg-1', title: 'Wake package' }))
+      .toBe('[k2 inboxID:pkg-1] Wake package')
+    expect(chatAboutOpenLine({ kind: 'tray', id: 'pkg-1', title: 'Wake package' }))
+      .toBe('Open: k2 inbox read pkg-1')
+    expect(tray).not.toMatch(/\[inbox:/)
+    expect(tray.split('\n')[0]).not.toMatch(/[\r\n]/)
+
+    const hosted = formatChatAboutPayload(
+      { kind: 'hosted', id: 'm_host', title: 'Hello host' },
+      'note',
+    )
+    expect(hosted).toBe(
+      '[hosted inboxID:m_host] Hello host\nOpen: k2 mail read m_host\n\nnote',
+    )
+
+    const linked = formatChatAboutPayload(
+      { kind: 'linked', id: 'm_link', title: '' },
+      'note',
+    )
+    expect(linked).toBe(
+      '[linked inboxID:m_link] (no subject)\nOpen: k2 mail read m_link\n\nnote',
+    )
+    expect(hosted).not.toMatch(/\[inbox:/)
+    expect(linked).not.toMatch(/\[inbox:/)
   })
 })

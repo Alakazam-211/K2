@@ -18,7 +18,7 @@ import {
 } from './inbox-browser'
 
 describe('inbox-browser helpers', () => {
-  it('always prefixes K2 tray and never emits a Postal row', () => {
+  it('always prefixes K2 Inbox and never emits a Postal row', () => {
     const catalog = parseMailCatalog({
       ok: true,
       inboxes: [

@@ -64,7 +64,7 @@ export type MailMessageFull = {
 }
 
 export function traySource(): InboxBrowserSource {
-  return { id: TRAY_SOURCE_ID, kind: 'tray', label: 'K2 tray' }
+  return { id: TRAY_SOURCE_ID, kind: 'tray', label: 'K2 Inbox' }
 }
 
 export function formatInboxError(err: unknown): string {

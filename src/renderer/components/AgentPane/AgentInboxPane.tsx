@@ -527,7 +527,7 @@ function MessageColumn({
             })}
         {empty && !listError && !listLoading && (
           <div className="px-3 py-6 text-[11px] text-[var(--color-text-muted)] text-center">
-            {isTray ? 'No packages' : 'No messages'}
+            No messages
           </div>
         )}
         {nextOffset != null && (

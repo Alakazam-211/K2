@@ -159,12 +159,12 @@ describe('AgentInboxPane module locks', () => {
 })
 
 describe('AgentInboxPane sources + tray', () => {
-  it('always shows K2 tray, loads workspace catalog with project=, omits Postal', async () => {
+  it('always shows K2 Inbox, loads workspace catalog with project=, omits Postal', async () => {
     mockDaemon({ inboxes: { ok: true, inboxes: [HOSTED, LINKED, POSTAL] } })
     render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
 
     await waitFor(() => {
-      expect(screen.getByTestId('inbox-source-tray').textContent).toContain('K2 tray')
+      expect(screen.getByTestId('inbox-source-tray').textContent).toContain('K2 Inbox')
     })
     expect(screen.getByTestId('inbox-source-mail-you@host.k2').textContent).toContain('Hosted')
     expect(screen.getByTestId('inbox-source-mail-you@gmail.com').textContent).toContain('Linked')
@@ -302,7 +302,7 @@ describe('AgentInboxPane mail', () => {
 })
 
 describe('AgentInboxPane errors + view-only', () => {
-  it('catalog failure is a loud one-line error, still shows K2 tray, not silent empty mail', async () => {
+  it('catalog failure is a loud one-line error, still shows K2 Inbox, not silent empty mail', async () => {
     mockDaemon({ catalogThrow: new Error('catalog down') })
     render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
     await waitFor(() => expect(screen.getByTestId('inbox-catalog-error').textContent).toContain('catalog down'))

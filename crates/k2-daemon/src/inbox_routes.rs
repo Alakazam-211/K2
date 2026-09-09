@@ -142,14 +142,17 @@ fn deliver_federated_files(
 // ── GET handlers (query-string) ────────────────────────────────────────
 
 /// GET /cli/inbox/list?project=<path>&folder=<name>
-/// Empty/missing folder → top-level inbox.
+/// Missing `folder` → all items (root + every existing subfolder).
+/// Present `folder` (including empty string) → that folder only.
 pub fn handle_list(params: &HashMap<String, String>) -> CliResponse {
     let workspace = match need_project_path(params) {
         Ok(p) => p,
         Err(r) => return r,
     };
-    let folder = str_param(params, "folder");
-    let items = k2_core::inbox::list_folder(&workspace, &folder);
+    let items = match params.get("folder") {
+        Some(folder) => k2_core::inbox::list_folder(&workspace, folder),
+        None => k2_core::inbox::list_all(&workspace),
+    };
     CliResponse::ok_json(
         serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string()),
     )
@@ -992,5 +995,84 @@ mod tests {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]);
+    }
+
+    fn seed_list_workspace() -> std::path::PathBuf {
+        let ws = std::env::temp_dir().join(format!(
+            "k2-inbox-list-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(ws.join(".k2so")).unwrap();
+        let root = k2_core::inbox::inbox_root(&ws);
+        std::fs::create_dir_all(root.join("active")).unwrap();
+        std::fs::create_dir_all(root.join("done")).unwrap();
+        std::fs::write(
+            root.join("root.md"),
+            "---\ntitle: Root\ncreated: 2026-01-01T00:00:00Z\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("active").join("in-flight.md"),
+            "---\ntitle: Active leftover\ncreated: 2026-01-03T00:00:00Z\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("done").join("archived.md"),
+            "---\ntitle: Done leftover\ncreated: 2026-01-02T00:00:00Z\n---\n",
+        )
+        .unwrap();
+        ws
+    }
+
+    fn parse_listed(body: &str) -> Vec<k2_core::inbox::InboxItem> {
+        serde_json::from_str(body).unwrap_or_else(|e| panic!("inbox list JSON: {e}: {body}"))
+    }
+
+    #[test]
+    fn handle_list_missing_folder_uses_list_all() {
+        let ws = seed_list_workspace();
+        let mut params = HashMap::new();
+        params.insert("project".into(), ws.display().to_string());
+        let resp = handle_list(&params);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let items = parse_listed(&resp.body);
+        let folders: Vec<&str> = items.iter().map(|i| i.folder.as_str()).collect();
+        assert!(
+            folders.contains(&"") && folders.contains(&"active") && folders.contains(&"done"),
+            "missing folder must list root + leftover dirs, got {folders:?}"
+        );
+        assert_eq!(items.len(), 3, "got {:?}", items.iter().map(|i| &i.id).collect::<Vec<_>>());
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn handle_list_folder_active_lists_only_that_folder() {
+        let ws = seed_list_workspace();
+        let mut params = HashMap::new();
+        params.insert("project".into(), ws.display().to_string());
+        params.insert("folder".into(), "active".into());
+        let resp = handle_list(&params);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let items = parse_listed(&resp.body);
+        assert_eq!(items.len(), 1, "folder=active must not leak root/done: {items:?}");
+        assert_eq!(items[0].folder, "active");
+        assert_eq!(items[0].id, "in-flight");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn handle_list_empty_folder_key_lists_root_only() {
+        let ws = seed_list_workspace();
+        let mut params = HashMap::new();
+        params.insert("project".into(), ws.display().to_string());
+        params.insert("folder".into(), String::new());
+        let resp = handle_list(&params);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let items = parse_listed(&resp.body);
+        assert_eq!(items.len(), 1, "folder= must stay list_folder root: {items:?}");
+        assert_eq!(items[0].folder, "");
+        assert_eq!(items[0].id, "root");
+        let _ = std::fs::remove_dir_all(&ws);
     }
 }

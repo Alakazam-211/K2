@@ -6,11 +6,10 @@
 //! - [`status`] — update the agent's `agent_sessions.status_message`.
 //!   Also writes a `status` activity-feed entry so the UI history
 //!   shows what the agent was doing at each tick.
-//! - [`done`] — mark the workspace's in-flight work item complete:
-//!   move the first item in `.k2so/inbox/active/` to `done/` via the
-//!   unified `crate::inbox::*` primitive, flip the session to
-//!   `sleeping`, log `task.done` (or `task.blocked` when the caller
-//!   passes a reason).
+//! - [`done`] — if leftover items still sit in `.k2so/inbox/active/`,
+//!   archive the first to `done/` via `crate::inbox::*`, flip the
+//!   session to `sleeping`, log `task.done` (or `task.blocked` when
+//!   the caller passes a reason). `active/` is not a workflow status.
 //! - [`reserve`] — claim a set of filesystem paths for exclusive
 //!   editing. Writes a JSON registry at `.k2so/reservations.json`.
 //!   Callers include a comma-separated path list; the function
@@ -65,17 +64,16 @@ pub fn status(
     Ok(serde_json::json!({ "success": true }))
 }
 
-/// Complete (or block) the workspace's in-flight work item. Moves
-/// the first item in `.k2so/inbox/active/` to `.k2so/inbox/done/`,
+/// Complete (or block) leftover in-flight work, if any. Moves the
+/// first item still sitting in `.k2so/inbox/active/` to `done/`,
 /// flips the session to `sleeping`, logs an activity entry.
 /// `blocked = Some(reason)` swaps the event type to `task.blocked`.
+/// `active/` is a leftover directory, not a workflow status — if
+/// nothing is there, this is a no-op archive (`"no active task"`).
 ///
-/// Post-Phase-2.5b the workspace IS the agent — so "the agent's
-/// in-flight task" lives at workspace level in the unified inbox,
-/// not in the retired per-agent `.k2so/agents/<name>/work/` tree.
-/// Routes through `crate::inbox::*` so the same primitive that
-/// powers `checkin` / `inbox` / scheduler reads governs the
-/// completion write too.
+/// Post-Phase-2.5b the workspace IS the agent. Routes through
+/// `crate::inbox::*` so the same primitive that powers `checkin` /
+/// `inbox` / scheduler reads governs the completion write too.
 pub fn done(
     project_path: String,
     agent: String,

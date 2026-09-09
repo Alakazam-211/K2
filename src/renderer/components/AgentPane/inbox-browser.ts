@@ -132,23 +132,6 @@ export function parseTrayRead(raw: unknown): { id: string; content: string } {
   }
 }
 
-export function parseFolderList(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return []
-  return raw.filter((x): x is string => typeof x === 'string' && x.length > 0 && !x.startsWith('.'))
-}
-
-/** Default folder is the empty string (top-level tray). Always offer Inbox/active/done. */
-export function trayFolderOptions(folders: string[]): string[] {
-  const extra = folders.filter((f) => f !== 'active' && f !== 'done')
-  extra.sort()
-  return ['', 'active', 'done', ...extra]
-}
-
-export function trayFolderLabel(folder: string): string {
-  if (folder === '') return 'Inbox'
-  return folder
-}
-
 export type MailListPage = {
   messages: MailMessageSummary[]
   nextOffset: number | null

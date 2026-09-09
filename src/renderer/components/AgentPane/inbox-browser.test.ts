@@ -13,7 +13,6 @@ import {
   parseTrayRead,
   preferMailHtml,
   stripExternalEmailMarkers,
-  trayFolderOptions,
   traySource,
 } from './inbox-browser'
 
@@ -93,8 +92,13 @@ describe('inbox-browser helpers', () => {
     expect(stripExternalEmailMarkers(raw).hadMarkers).toBe(true)
   })
 
-  it('default tray folder is empty string and chips include Inbox/active/done', () => {
-    expect(trayFolderOptions(['projects', 'done'])).toEqual(['', 'active', 'done', 'projects'])
+  it('keeps leftover folder names on tray items without inventing status chips', () => {
+    const items = parseTrayList([
+      { id: 'a', folder: '', title: 'root' },
+      { id: 'b', folder: 'active', title: 'was active' },
+      { id: 'c', folder: 'done', title: 'was done' },
+    ])
+    expect(items.map((i) => i.folder)).toEqual(['', 'active', 'done'])
   })
 
   it('formats nested mail error JSON as a one-line hint', () => {

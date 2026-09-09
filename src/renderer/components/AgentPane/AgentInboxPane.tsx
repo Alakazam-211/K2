@@ -12,7 +12,6 @@ import {
   formatMailDate,
   formatMailFrom,
   mailHtmlSrcDoc,
-  parseFolderList,
   parseMailCatalog,
   parseMailMessages,
   parseMailRead,
@@ -22,8 +21,6 @@ import {
   mailTextIsEmpty,
   preferMailHtml,
   stripExternalEmailMarkers,
-  trayFolderLabel,
-  trayFolderOptions,
   traySource,
   type InboxBrowserSource,
   type InboxItem,
@@ -59,8 +56,6 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
   const [catalogLoaded, setCatalogLoaded] = useState(false)
 
   const [selectedSourceId, setSelectedSourceId] = useState<string>(TRAY_SOURCE_ID)
-  const [trayFolder, setTrayFolder] = useState<string>('')
-  const [folders, setFolders] = useState<string[]>([])
 
   const [trayItems, setTrayItems] = useState<InboxItem[]>([])
   const [mailMessages, setMailMessages] = useState<MailMessageSummary[]>([])
@@ -81,7 +76,6 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
   const selectedKind = selectedSource.kind
   const selectedAddress = selectedSource.address
   const isTray = selectedKind === 'tray'
-  const folderChips = useMemo(() => trayFolderOptions(folders), [folders])
 
   const fetchCatalog = useCallback(async () => {
     if (!projectPath) return
@@ -98,25 +92,12 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     }
   }, [projectPath])
 
-  const fetchFolders = useCallback(async () => {
-    if (!projectPath) return
-    try {
-      const raw = await daemonCliGet<unknown>('inbox/folders', { project: projectPath })
-      setFolders(parseFolderList(raw))
-    } catch (err) {
-      if (shouldIgnoreFetchError(err)) return
-      // Folder chips still work with the built-in Inbox/active/done set.
-      setFolders([])
-    }
-  }, [projectPath])
-
   const fetchTrayList = useCallback(async () => {
     if (!projectPath) return
     setListLoading(true)
     try {
       const raw = await daemonCliGet<unknown>('inbox/list', {
         project: projectPath,
-        folder: trayFolder,
       })
       setTrayItems(parseTrayList(raw))
       setListError(null)
@@ -126,7 +107,7 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     } finally {
       setListLoading(false)
     }
-  }, [projectPath, trayFolder])
+  }, [projectPath])
 
   const fetchMailList = useCallback(async (opts?: { offset?: number; append?: boolean }) => {
     if (!projectPath || selectedKind === 'tray' || !selectedAddress) return
@@ -167,10 +148,6 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
   useEffect(() => {
     void fetchCatalog()
   }, [fetchCatalog])
-
-  useEffect(() => {
-    if (isTray) void fetchFolders()
-  }, [isTray, fetchFolders])
 
   useEffect(() => {
     setSelectedRow(null)
@@ -270,7 +247,6 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     if (id === selectedSourceId) return
     setSelectedSourceId(id)
     setListError(null)
-    setTrayFolder('')
   }
 
   const headerLabel = isWorkspaceBoard ? 'Work Board' : displayName
@@ -297,9 +273,6 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
         />
         <MessageColumn
           isTray={isTray}
-          folder={trayFolder}
-          folders={folderChips}
-          onFolder={setTrayFolder}
           trayItems={trayItems}
           mailMessages={mailMessages}
           selectedRow={selectedRow}
@@ -392,9 +365,6 @@ function SourceColumn({
 
 function MessageColumn({
   isTray,
-  folder,
-  folders,
-  onFolder,
   trayItems,
   mailMessages,
   selectedRow,
@@ -407,9 +377,6 @@ function MessageColumn({
   onLoadMore,
 }: {
   isTray: boolean
-  folder: string
-  folders: string[]
-  onFolder: (folder: string) => void
   trayItems: InboxItem[]
   mailMessages: MailMessageSummary[]
   selectedRow: SelectedRow
@@ -430,28 +397,6 @@ function MessageColumn({
       <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
         Messages
       </div>
-      {isTray && (
-        <div className="px-2 pb-2 flex flex-wrap gap-1" data-testid="inbox-folder-filter">
-          {folders.map((f) => {
-            const selected = f === folder
-            return (
-              <button
-                key={f || 'inbox'}
-                type="button"
-                data-testid={`inbox-folder-${f || 'inbox'}`}
-                onClick={() => onFolder(f)}
-                className={`text-[10px] px-1.5 py-0.5 cursor-pointer ${
-                  selected
-                    ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
-                    : 'bg-[var(--color-wash-1)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
-                }`}
-              >
-                {trayFolderLabel(f)}
-              </button>
-            )
-          })}
-        </div>
-      )}
       {listError && (
         <div
           className="mx-2 mb-2 px-2 py-1 text-[11px] text-[var(--color-status-error-soft)]"

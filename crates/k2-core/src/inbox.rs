@@ -7,11 +7,9 @@
 //! triage by filing items into folders it creates on demand — there's
 //! no system-imposed taxonomy.
 //!
-//! Standard folders (sentinel names that always work):
-//!
-//! - `<root>/`              → top-level new arrivals (untriaged)
-//! - `<root>/active/`       → items the agent is currently working on
-//! - `<root>/done/`         → items the agent has archived
+//! `active/` and `done/` are leftover directories, not workflow statuses.
+//! [`list_all`] returns root plus every existing subfolder; those names
+//! are not created unless something is moved there.
 //!
 //! Custom folders (agent-created via `inbox move <id> <folder>`) live
 //! at `<root>/<folder>/<id>.md`. The folder is created on first use.
@@ -150,6 +148,18 @@ pub fn list_folder(workspace: &Path, folder: &str) -> Vec<InboxItem> {
             }
         }
     }
+    items
+}
+
+/// List every item on disk: inbox root plus each existing subfolder.
+/// Does not create `active/` or `done/`. Preserves each item's `folder`.
+/// Sorted by `created` descending, then `id` ascending.
+pub fn list_all(workspace: &Path) -> Vec<InboxItem> {
+    let mut items = list_folder(workspace, "");
+    for folder in list_folders(workspace) {
+        items.extend(list_folder(workspace, &folder));
+    }
+    items.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| a.id.cmp(&b.id)));
     items
 }
 
@@ -1257,6 +1267,50 @@ mod tests {
         let items = list_root(ws.path());
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|i| i.folder.is_empty()));
+    }
+
+    fn write_listed_item(path: &Path, title: &str, created: &str) {
+        fs::write(
+            path,
+            format!("---\ntitle: {title}\ncreated: {created}\n---\n\nbody\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn list_all_returns_root_plus_active_and_done_sorted_created_desc() {
+        let ws = make_ws();
+        let root = inbox_root(ws.path());
+        fs::create_dir_all(root.join("active")).unwrap();
+        fs::create_dir_all(root.join("done")).unwrap();
+        write_listed_item(&root.join("root.md"), "Root", "2026-01-01T00:00:00Z");
+        write_listed_item(
+            &root.join("active").join("in-flight.md"),
+            "Active leftover",
+            "2026-01-03T00:00:00Z",
+        );
+        write_listed_item(
+            &root.join("done").join("archived.md"),
+            "Done leftover",
+            "2026-01-02T00:00:00Z",
+        );
+
+        let items = list_all(ws.path());
+        assert_eq!(
+            items.len(),
+            3,
+            "list_all must include root + leftover active/ + done/; got {items:?}"
+        );
+        assert_eq!(items[0].id, "in-flight");
+        assert_eq!(items[0].folder, "active");
+        assert_eq!(items[1].id, "archived");
+        assert_eq!(items[1].folder, "done");
+        assert_eq!(items[2].id, "root");
+        assert_eq!(items[2].folder, "");
+        assert!(
+            !root.join("projects").exists(),
+            "list_all must not invent folders"
+        );
     }
 
     #[test]

@@ -3,13 +3,10 @@
 //!
 //! Serves `/cli/checkin`. Composes:
 //!
-//! - `task`: first item in the workspace inbox's `active/` folder
-//!   (structured). Post-Phase-2.1 the workspace IS the agent, so
-//!   "the agent's current task" lives in `.k2so/inbox/active/`,
-//!   not the retired per-agent `.k2so/agents/<name>/work/active/`.
-//! - `inbox.work`: every item at the workspace inbox root
-//!   (`.k2so/inbox/*.md`) — the untriaged arrivals the workspace
-//!   agent needs to see on wake.
+//! - `task`: first leftover item in `active/` if that directory still
+//!   exists; otherwise null. `active/` is not a workflow status.
+//! - `inbox.work`: every on-disk inbox item (root + existing subfolders)
+//!   via [`crate::inbox::list_all`].
 //! - `inbox.messages`: unread DB messages addressed to this agent.
 //!   Marked read on retrieval.
 //! - `peers`: `agent_sessions` rows for every connected workspace
@@ -95,12 +92,8 @@ pub fn checkin(project_path: &str, agent: &str) -> Result<String, String> {
     let project_id = resolve_project_id(&conn, project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
 
-    // Current task: first item in the workspace inbox's standard
-    // `active/` folder. Post-Phase-2.1 the workspace IS the agent,
-    // so the agent's "in-flight" task lives at workspace level
-    // (`.k2so/inbox/active/`), not under a per-agent subtree.
-    // Touched via the unified `crate::inbox::*` primitive so the
-    // checkin / scheduler / triage call sites all share one shape.
+    // Leftover `active/` is not in-flight status. If items still sit
+    // there, surface the first as `task`; otherwise null.
     let workspace_path = Path::new(project_path);
     let active_items = crate::inbox::list_folder(workspace_path, "active");
     let task: serde_json::Value = match active_items.into_iter().next() {
@@ -112,12 +105,9 @@ pub fn checkin(project_path: &str, agent: &str) -> Result<String, String> {
         None => serde_json::Value::Null,
     };
 
-    // Workspace inbox: root-level items only (sub-foldered items have
-    // already been organized by the workspace agent and aren't part
-    // of the "untriaged arrivals" the agent needs to see on wake).
+    // All on-disk items (root + leftover/custom folders), not "untriaged root".
     let mut work_items: Vec<serde_json::Value> = Vec::new();
-    let ws_inbox_items = crate::inbox::list_folder(workspace_path, "");
-    for item in ws_inbox_items {
+    for item in crate::inbox::list_all(workspace_path) {
         let content = crate::inbox::read_by_id(workspace_path, &item.id)
             .unwrap_or_default();
         work_items.push(parse_work_item(&item.filename, &content));
@@ -342,9 +332,9 @@ mod tests {
             .unwrap();
         }
 
-        // Set up the post-Phase-2.5b workspace shape:
-        //   .k2so/inbox/active/in-flight.md   ← current task
-        //   .k2so/inbox/new-arrival.md        ← untriaged inbox item
+        // Post-Phase-2.5b workspace shape (leftover dirs, not statuses):
+        //   .k2so/inbox/active/in-flight.md   ← leftover `active/`
+        //   .k2so/inbox/new-arrival.md        ← root item
         // and explicitly DO NOT create `.k2so/agents/`.
         let inbox_root = project_path.join(".k2so").join("inbox");
         fs::create_dir_all(inbox_root.join("active")).unwrap();
@@ -366,24 +356,26 @@ mod tests {
         let result = checkin(&project_path.to_string_lossy(), "any-agent").unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
 
-        // `task` populated from `.k2so/inbox/active/`.
+        // Leftover `active/` still surfaces as `task` if present.
         assert_eq!(
             v.get("task").and_then(|t| t.get("title")).and_then(|t| t.as_str()),
             Some("Working on this"),
-            "task should come from workspace inbox active folder; got: {v}",
+            "task should come from leftover active/ if present; got: {v}",
         );
 
-        // `inbox.work` populated from `.k2so/inbox/` root (not active/).
+        // `inbox.work` is list_all: root + leftover folders.
         let work = v
             .get("inbox")
             .and_then(|i| i.get("work"))
             .and_then(|w| w.as_array())
             .expect("inbox.work array");
-        assert_eq!(work.len(), 1, "expected one root-level inbox item; got {work:?}");
-        assert_eq!(
-            work[0].get("title").and_then(|t| t.as_str()),
-            Some("New arrival"),
-        );
+        let titles: Vec<&str> = work
+            .iter()
+            .map(|row| row.get("title").and_then(|t| t.as_str()).unwrap())
+            .collect();
+        assert_eq!(work.len(), 2, "expected root + leftover active item; got {work:?}");
+        assert!(titles.contains(&"New arrival"), "got {titles:?}");
+        assert!(titles.contains(&"Working on this"), "got {titles:?}");
 
         let _ = fs::remove_dir_all(&project_path);
     }

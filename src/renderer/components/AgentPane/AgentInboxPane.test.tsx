@@ -180,10 +180,8 @@ describe('AgentInboxPane sources + tray', () => {
     await waitFor(() => {
       expect(calls('inbox/list').length).toBeGreaterThan(0)
     })
-    expect(calls('inbox/list')[0][1]).toEqual(expect.objectContaining({
-      project: '/ws',
-      folder: '',
-    }))
+    expect(calls('inbox/list')[0][1]).toEqual({ project: '/ws' })
+    expect(calls('inbox/list')[0][1]).not.toHaveProperty('folder')
     expect(h.invoke).not.toHaveBeenCalled()
     expect(h.daemonCliPost).not.toHaveBeenCalled()
   })
@@ -206,16 +204,31 @@ describe('AgentInboxPane sources + tray', () => {
     expect(h.openFileAsTab).not.toHaveBeenCalled()
   })
 
-  it('filters tray folders with a single inbox/list call (no kanban columns)', async () => {
+  it('lists leftover active items with no folder chips and no folder query', async () => {
+    mockDaemon({
+      trayList: [
+        TRAY_ITEM,
+        {
+          ...TRAY_ITEM,
+          id: 'pkg-active',
+          filename: 'pkg-active.md',
+          folder: 'active',
+          title: 'Leftover active',
+        },
+      ],
+    })
     render(<AgentInboxPane agentName="sales" projectPath="/ws" />)
-    await waitFor(() => expect(screen.getByTestId('inbox-folder-active')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('inbox-message-pkg-1')).toBeTruthy())
+    expect(screen.getByTestId('inbox-message-pkg-active')).toBeTruthy()
+    expect(screen.queryByTestId('inbox-folder-filter')).toBeNull()
+    expect(screen.queryByTestId('inbox-folder-active')).toBeNull()
     expect(screen.queryByText('Unassigned')).toBeNull()
     expect(screen.queryByText('In Progress')).toBeNull()
-    fireEvent.click(screen.getByTestId('inbox-folder-active'))
-    await waitFor(() => {
-      const folders = calls('inbox/list').map((c) => (c[1] as { folder?: string }).folder)
-      expect(folders).toContain('active')
-    })
+    expect(calls('inbox/folders')).toEqual([])
+    for (const c of calls('inbox/list')) {
+      expect(c[1]).toEqual({ project: '/ws' })
+      expect(c[1]).not.toHaveProperty('folder')
+    }
   })
 
   it('empty mail catalog keeps tray and points at Settings → Email', async () => {

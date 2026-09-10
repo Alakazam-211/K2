@@ -1065,6 +1065,14 @@ a,
   100% { content: '⠋'; }
 }
 
+.braille-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  line-height: 1;
+  overflow: hidden;
+}
+
 .braille-spinner::after {
   content: '⠋';
   animation: braille-spin 0.8s steps(1) infinite;

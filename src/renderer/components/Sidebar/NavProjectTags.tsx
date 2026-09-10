@@ -9,7 +9,7 @@ import {
 } from '@/lib/nav-project-tags'
 
 const tagBox =
-  'box-border max-w-[6.5rem] truncate px-1 py-0 text-[9px] font-medium leading-3 border border-[var(--color-accent)] text-[var(--color-text-primary)] bg-transparent'
+  'box-border inline-flex h-3.5 max-w-[6.5rem] items-center truncate px-1 py-0 text-[9px] font-medium leading-none border border-[var(--color-accent)] text-[var(--color-text-primary)] bg-transparent'
 
 function TagChip({
   tag,

@@ -95,27 +95,26 @@ function WorkspaceStatusDot({ path }: { path?: string }): React.JSX.Element | nu
 
 // ── Agent status (shows spinner when agent is working) ───────────────────────
 
-/** Shows braille spinner or "done" label — for placement next to shortcut numbers */
-function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element | null {
+/** 14px slot always — glyph only (braille / "done" / empty). Never unmount. */
+function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element {
   const projectStatus = useActiveAgentsStore((s) => s.getProjectStatus(projectId))
+  const working = projectStatus === 'working' || projectStatus === 'permission'
+  const review = projectStatus === 'review'
+  const color = projectStatus === 'permission'
+    ? 'text-[var(--color-status-error-soft)]'
+    : review
+      ? 'text-[var(--color-status-ok-soft)]'
+      : 'text-[var(--color-text-muted)]'
 
-  if (projectStatus === 'working' || projectStatus === 'permission') {
-    return (
-      <span className={`flex-shrink-0 text-[11px] font-mono ${
-        projectStatus === 'permission' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-muted)]'
-      }`}>
-        <span className="braille-spinner" />
-      </span>
-    )
-  }
-
-  if (projectStatus === 'review') {
-    return (
-      <span className="flex-shrink-0 text-[10px] text-[var(--color-status-ok-soft)] font-mono">done</span>
-    )
-  }
-
-  return null
+  return (
+    <span className={`inline-flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center leading-none ${color}`}>
+      {working ? (
+        <span className="braille-spinner text-[11px] font-mono" />
+      ) : review ? (
+        <span className="text-[10px] font-mono">done</span>
+      ) : null}
+    </span>
+  )
 }
 
 // ── Single Workspace Item (worktreeMode === 0) ─────────────────────────────────
@@ -233,17 +232,17 @@ function SingleProjectItem({
           />
         </div>
         <div className="flex flex-col justify-center min-w-0 flex-1">
-          <div className="flex items-center gap-2 w-full">
-            <span className="truncate flex-1">{project.name}</span>
+          <div className="flex items-center gap-2 w-full leading-4">
+            <span className="truncate flex-1 leading-4">{project.name}</span>
             <span className="-mr-1 flex items-center">
               <PresenceWorkspaceAvatars path={project.path} />
             </span>
           </div>
-          <div className="-mt-px flex items-center gap-1">
+          <div className="h-3.5 min-h-3.5 leading-none flex items-center gap-1">
             <NavProjectTags workspaceId={project.id} />
             <AgentSpinner projectId={project.id} />
             {shortcutIndex !== undefined && shortcutIndex < 9 && (
-              <span className="ml-auto -mr-1 text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0 py-0.5 pl-2">
+              <span className="ml-auto -mr-1 text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0 leading-none pl-2">
                 {shortcutIndex + 1}
               </span>
             )}

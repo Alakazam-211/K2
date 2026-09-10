@@ -119,6 +119,7 @@ vi.mock('@/kessel-term/TerminalPane', () => ({
         data-attach={String(props.attachAgentName)}
         data-command={props.command === undefined ? 'NONE' : String(props.command)}
         data-args={props.args ? JSON.stringify(props.args) : 'NONE'}
+        data-sessionid={props.sessionId === undefined ? 'NONE' : String(props.sessionId)}
         data-has-onexit={props.onChildExit ? 'yes' : 'no'}
         data-retain={String(props.retainWhileHidden === true)}
       >
@@ -248,6 +249,8 @@ describe('#683 daemon-owned path — mount → ensure-pinned-chat → attach', (
     // The renderer no longer builds claude args — daemon already spawned.
     expect(pane.getAttribute('data-command')).toBe('NONE')
     expect(pane.getAttribute('data-args')).toBe('NONE')
+    // R6/R18: ensure response sessionId is forwarded (eager marker, not attach-only).
+    expect(pane.getAttribute('data-sessionid')).toBe('sess-1')
     // No breaker wiring on the daemon-owned path.
     expect(pane.getAttribute('data-has-onexit')).toBe('no')
   })

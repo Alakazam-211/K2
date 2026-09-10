@@ -777,6 +777,10 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           // v2/spawn (keyed on attachAgentName) ATTACHES to it rather than
           // spawning fresh. The renderer no longer builds claude args.
           attachAgentName={projectId}
+          // R6/R18: pass ensure's session id as an eager marker. Live
+          // knownSessionId is NOT attach-only (POST still command:null);
+          // daemon R4+R5 remain the product. Defense-in-depth only.
+          sessionId={phase.sessionId}
           seedLabel={displayName}
           lockLabel={true}
           showComposeBar

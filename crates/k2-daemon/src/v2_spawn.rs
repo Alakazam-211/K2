@@ -30,7 +30,9 @@ use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession};
 use crate::awareness_ws::HandlerResult;
 use crate::pending_live;
 use crate::signal_format;
+use crate::spawn::{canonical_spawn_lock, live_program_matches};
 use crate::v2_session_map;
+use k2_core::workspace::resume_chat::{resolve_resume_chat_args_ex, ResumeChatArgs};
 
 /// Cheap UUID-shape probe: 36 chars, hyphens at the canonical
 /// positions (8-4-4-4-12). Used to distinguish a bare `project_id`
@@ -55,9 +57,13 @@ fn scoped_principal_workspace(agent_name: &str, cwd: &str) -> String {
     if is_uuid_shape(agent_name) {
         return agent_name.to_string();
     }
+    project_id_for_cwd(cwd).unwrap_or_default()
+}
+
+fn project_id_for_cwd(cwd: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd).unwrap_or_default()
+    k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd)
 }
 
 /// Handler for `POST /cli/sessions/v2/spawn`.
@@ -220,9 +226,7 @@ fn chown_path_to_uid(path: &std::path::Path, uid: u32) -> std::io::Result<()> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     // SAFETY: `c_path` is a valid NUL-terminated path kept alive across the call;
     // owner uid AND group gid are both set to the per-session id.
-    let rc = unsafe {
-        libc::chown(c_path.as_ptr(), uid as libc::uid_t, uid as libc::gid_t)
-    };
+    let rc = unsafe { libc::chown(c_path.as_ptr(), uid as libc::uid_t, uid as libc::gid_t) };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -336,8 +340,7 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
     let (project_id, tab_cmd, tab_args_json, tab_session_id) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let project_id =
-            k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd)?;
+        let project_id = k2_core::workspace::agent_identity::resolve_project_id(&conn, cwd)?;
         let tab_row = k2_core::db::schema::WorkspaceTabSession::get_by_agent_name(
             &conn,
             &project_id,
@@ -369,9 +372,7 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
         let mut saved_args: Vec<String> = tab_args_json
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_else(|| {
-                vec!["--dangerously-skip-permissions".to_string()]
-            });
+            .unwrap_or_else(|| vec!["--dangerously-skip-permissions".to_string()]);
         if let Some(sid) = tab_session_id.as_deref() {
             match provider_resume_for_command(&saved_cmd) {
                 Some(adapter) => {
@@ -434,12 +435,14 @@ pub(crate) fn autoinject_premint_session_id(
     agent_name: &str,
     cwd: &str,
 ) {
-    let Some(adapter) = command
-        .and_then(k2_core::workspace::provider_resume::provider_resume_for_command)
+    let Some(adapter) =
+        command.and_then(k2_core::workspace::provider_resume::provider_resume_for_command)
     else {
         return;
     };
-    let Some(flag) = adapter.premint_flag() else { return };
+    let Some(flag) = adapter.premint_flag() else {
+        return;
+    };
     if adapter.argv_carries_session_identity(args) {
         return;
     }
@@ -554,25 +557,101 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
 
     let __t_total = std::time::Instant::now();
 
-    // Find-or-spawn: existing live session wins. Client measure-first
-    // (PR1) posts real pane cols/rows; on reuse we honor that fit
-    // immediately so the first grid attach snapshot is already at the
-    // target size (no 80×24 snap → claim-resize → reflow storm).
+    // Canonical chat key = bare project_id. Empty-command attach on that
+    // key is a NEED (R5/R16), not leftover-argv recovery. tab-*/api-*
+    // and `{pid}:hb:{name}` stay on their own lanes (R22).
+    let project_id = project_id_for_cwd(&req.cwd);
+    let is_canonical = project_id.as_deref() == Some(req.agent_name.as_str());
+
+    // R17: per-key single-flight. Canonical keys share this lock with
+    // ensure_pinned_chat / forceRespawn so a second waiter reuses the
+    // resume PTY (never a shell, never a second --session-id).
+    let spawn_lock = canonical_spawn_lock(&req.agent_name);
+    let _spawn_guard = spawn_lock.lock();
+
+    // 0.38.5 — restart-recovery: if the daemon was just restarted (app
+    // update / launchctl kickstart / crash) the in-memory
+    // v2_session_map is empty but `workspace_tab_sessions` still has
+    // the prior spawn's command + args + (claude) session_id. When
+    // the renderer's spawn request lands with empty command (which
+    // v2 schema makes the default for terminal items), substitute
+    // the persisted values so we re-run e.g. `claude --resume <id>`
+    // instead of dropping the user into a bare shell. Renderer-side
+    // command takes precedence on first spawn; only the empty case
+    // consults the table. See `0045_workspace_tab_sessions.sql`.
+    //
+    // R16: `recovered_launch` still returns None for canonical (do not
+    // mass-revive leftover tab-row argv). After that skip, this POST is
+    // a need: resolve the same resume args ensure-pinned-chat uses.
+    let mut command = req.command.clone();
+    // Identity-only args (durable). Exec may use a fire-once superset
+    // via `req.exec_args` (host-session launch-param prompt).
+    let mut args = req.args.clone().unwrap_or_default();
+    let mut canonical_resolved: Option<ResumeChatArgs> = None;
+    if command.is_none() && is_canonical {
+        match resolve_resume_chat_args_ex(&req.cwd, false) {
+            Ok(resolved) => {
+                log_debug!(
+                    "[v2-spawn] canonical empty-command need: resume-spawn \
+                     agent={} provider={} session={} resumed_existing={}",
+                    req.agent_name,
+                    resolved.provider,
+                    resolved.resume_session,
+                    resolved.resumed_existing,
+                );
+                command = Some(resolved.command.clone());
+                args = resolved.args.clone();
+                canonical_resolved = Some(resolved);
+            }
+            Err(e) => {
+                log_debug!(
+                    "[v2-spawn] canonical empty-command resolve failed for \
+                     agent={}: {e} — refusing to mint a shell",
+                    req.agent_name
+                );
+                return HandlerResult {
+                    status: "409 Conflict",
+                    body: serde_json::json!({
+                        "error": "canonical_not_live",
+                        "agent_name": req.agent_name,
+                        "detail": e,
+                    })
+                    .to_string(),
+                };
+            }
+        }
+    } else if command.is_none() {
+        if let Some((saved_cmd, saved_args)) = recovered_launch(&req.agent_name, &req.cwd) {
+            command = Some(saved_cmd);
+            args = saved_args;
+        }
+    }
+
+    // Find-or-spawn: existing live session wins IFF its program matches
+    // the expected harness (R4 / R15). Client measure-first (PR1) posts
+    // real pane cols/rows; on reuse we honor that fit immediately so
+    // the first grid attach snapshot is already at the target size
+    // (no 80×24 snap → claim-resize → reflow storm).
     let __t_lookup = std::time::Instant::now();
     let existing = v2_session_map::lookup_by_agent_name(&req.agent_name);
     let lookup_ms = __t_lookup.elapsed().as_secs_f64() * 1000.0;
 
     // A stale map entry whose child already exited must NOT be reused —
-    // doing so would hand the caller a dead PTY. Evict + reap it (the
-    // reap is belt-and-suspenders: a child that exited on its own is
-    // usually already gone, but a half-dead process group or an
-    // unobserved exit could leave a straggler) and fall through to spawn
-    // a fresh replacement below.
+    // doing so would hand the caller a dead PTY. A live child whose
+    // program does not match the resolved resume/fresh command (login
+    // shell / $SHELL / wrong binary) is the post-update pinned-chat
+    // trap: unregister + kill, then fall through to resume-spawn.
     if let Some(existing) = existing.as_ref() {
-        if !existing.is_child_alive() {
+        let alive = existing.is_child_alive();
+        let matches =
+            alive && live_program_matches(existing.program.as_deref(), command.as_deref());
+        if !matches {
             log_debug!(
-                "[v2-spawn] existing session for agent={} has a dead child; evicting + killing before respawn",
-                req.agent_name
+                "[v2-spawn] evicting session for agent={} alive={} live_program={:?} expected={:?}",
+                req.agent_name,
+                alive,
+                existing.program,
+                command,
             );
             // unregister runs the DB/active-session cleanup chokepoint
             // and itself calls kill(); the explicit kill() here is
@@ -582,7 +661,9 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             existing.kill();
         }
     }
-    let existing = existing.filter(|s| s.is_child_alive());
+    let existing = existing.filter(|s| {
+        s.is_child_alive() && live_program_matches(s.program.as_deref(), command.as_deref())
+    });
 
     if let Some(existing) = existing {
         let (cols, rows) = apply_spawn_fit(&existing, req.cols, req.rows);
@@ -622,32 +703,9 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         };
     }
 
-    // 0.38.5 — restart-recovery: if the daemon was just restarted (app
-    // update / launchctl kickstart / crash) the in-memory
-    // v2_session_map is empty but `workspace_tab_sessions` still has
-    // the prior spawn's command + args + (claude) session_id. When
-    // the renderer's spawn request lands with empty command (which
-    // v2 schema makes the default for terminal items), substitute
-    // the persisted values so we re-run e.g. `claude --resume <id>`
-    // instead of dropping the user into a bare shell. Renderer-side
-    // command takes precedence on first spawn; only the empty case
-    // consults the table. See `0045_workspace_tab_sessions.sql`.
-    let mut command = req.command.clone();
-    // Identity-only args (durable). Exec may use a fire-once superset
-    // via `req.exec_args` (host-session launch-param prompt).
-    let mut args = req.args.clone().unwrap_or_default();
-    if command.is_none() {
-        if let Some((saved_cmd, saved_args)) = recovered_launch(&req.agent_name, &req.cwd) {
-            command = Some(saved_cmd);
-            args = saved_args;
-        }
-    }
-
     // Do not mint a bare shell under an api-* key when the cell is not
     // live. Integrator dead-resume is POST /v1/w/<ws>/host-sessions.
-    if command.is_none()
-        && k2_core::workspace_session_handles::is_api_agent_name(&req.agent_name)
-    {
+    if command.is_none() && k2_core::workspace_session_handles::is_api_agent_name(&req.agent_name) {
         log_debug!(
             "[v2-spawn] refusing empty-command recover for api cell agent={}",
             req.agent_name
@@ -674,10 +732,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         if !cmd.trim().is_empty() {
             let resume = k2_core::workspace::model_splice::args_look_like_dead_resume(cmd, &args);
             k2_core::workspace::model_splice::splice_model_for_workspace_spawn(
-                &req.cwd,
-                cmd,
-                &mut args,
-                resume,
+                &req.cwd, cmd, &mut args, resume,
             );
         }
     }
@@ -725,9 +780,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
                 key.starts_with("tab-")
                     && s.program.is_none()
                     && s.is_child_alive()
-                    && !s
-                        .ever_attached
-                        .load(std::sync::atomic::Ordering::Relaxed)
+                    && !s.ever_attached.load(std::sync::atomic::Ordering::Relaxed)
                     && s.cwd.as_ref() == Some(&req_cwd)
             })
             .count();
@@ -767,8 +820,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     // request omits `sandbox`, `sandbox_echo` stays `None` and the response is
     // byte-identical to pre-seam (default-path regression guard).
     let sandbox_spec = resolve_sandbox(req.sandbox.unwrap_or(false));
-    let sandbox_echo: Option<&'static str> =
-        req.sandbox.map(|_| sandbox_spec.backend().name());
+    let sandbox_echo: Option<&'static str> = req.sandbox.map(|_| sandbox_spec.backend().name());
     let mut cfg = DaemonPtyConfig {
         // Sandbox v2: honor a HOST-DECIDED session id (workspace-scoped door) so
         // the returned/addressable id equals the persistent overlay-layer key;
@@ -782,7 +834,15 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         args: exec_args,
         // Identity-only for session.args / args_json / recovery.
         durable_args: Some(args),
-        env: req.env.unwrap_or_default(),
+        env: {
+            let mut env = req.env.clone().unwrap_or_default();
+            if let Some(resolved_env) = canonical_resolved.as_ref().and_then(|r| r.env.as_ref()) {
+                for (k, v) in resolved_env {
+                    env.insert(k.clone(), v.clone());
+                }
+            }
+            env
+        },
         drain_on_exit: true,
         label: seed_label,
         label_source,
@@ -838,8 +898,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         // a non-microVM (passthrough) session resolves NO key.
         let cred_mode = crate::session_token::CredMode::ApiKey;
         let provider = crate::session_token::Provider::Anthropic;
-        let microvm_backed =
-            matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm);
+        let microvm_backed = matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm);
         let workspace_api_key: Option<String> = if microvm_backed {
             let key = k2_core::workspace::settings::get_workspace_api_key(&req.cwd);
             // NEVER log the key itself — only its presence.
@@ -1045,7 +1104,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
                     r#"{{"error":"v2 spawn failed: {}"}}"#,
                     e.to_string().replace('"', "'")
                 ),
-            }
+            };
         }
     };
     // Seed last-claimer dims at create so a grid attach before the first
@@ -1088,10 +1147,9 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
                 // allocation), leave it daemon-only + log. A bare-PTY cell never
                 // enters this branch → socket stays 0600 daemon-only.
                 if let Some(cell_uid) = per_session_uid {
-                    if let Err(e) = crate::cell_uds::set_cell_socket_owner(
-                        &session_id_for_response,
-                        cell_uid,
-                    ) {
+                    if let Err(e) =
+                        crate::cell_uds::set_cell_socket_owner(&session_id_for_response, cell_uid)
+                    {
                         log_debug!(
                             "[hook-scoped] WARN chown cell sock to per-session uid {cell_uid} failed for session={}: {e}; socket stays daemon-only",
                             session_id_for_response
@@ -1167,9 +1225,7 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
             let mut resumed_session: Option<&str> = None;
             let mut i = 0;
             while i + 1 < args.len() {
-                if (args[i] == "--resume" || args[i] == "--session-id")
-                    && !args[i + 1].is_empty()
-                {
+                if (args[i] == "--resume" || args[i] == "--session-id") && !args[i + 1].is_empty() {
                     resumed_session = Some(args[i + 1].as_str());
                     break;
                 }
@@ -1260,6 +1316,15 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         dpty_spawn_ms,
         pending_drained
     );
+
+    if let Some(resolved) = canonical_resolved.as_ref() {
+        if resolved.pending_session_discovery {
+            k2_core::workspace::provider_resume::defer_adopt_discovered_session(
+                resolved.provider.clone(),
+                req.cwd.clone(),
+            );
+        }
+    }
 
     let mut out = serde_json::json!({
         "sessionId": session_id_for_response.to_string(),
@@ -1451,8 +1516,7 @@ pub fn handle_v2_close(body: &[u8]) -> HandlerResult {
     }
     HandlerResult {
         status: "200 OK",
-        body: serde_json::json!({ "closed": removed, "indexCleared": req.clear_index })
-            .to_string(),
+        body: serde_json::json!({ "closed": removed, "indexCleared": req.clear_index }).to_string(),
     }
 }
 
@@ -1481,11 +1545,7 @@ fn current_dims(session: &DaemonPtySession) -> (u16, u16) {
 /// re-POST without cols; so a body that is exactly VT 80×24 keeps the
 /// live size when it differs. Fresh spawn still opens at 80×24 as the
 /// true last-resort. Explicit non-default body always wins.
-fn apply_spawn_fit(
-    session: &std::sync::Arc<DaemonPtySession>,
-    cols: u16,
-    rows: u16,
-) -> (u16, u16) {
+fn apply_spawn_fit(session: &std::sync::Arc<DaemonPtySession>, cols: u16, rows: u16) -> (u16, u16) {
     use std::sync::atomic::Ordering;
 
     let cols = cols.max(1);
@@ -1652,9 +1712,8 @@ pub fn spawn_child_exit_observer(
                     #[cfg(unix)]
                     if crate::session_token::scoped_hooks_enabled() {
                         crate::session_token::revoke_session(&session_id);
-                        let _ = std::fs::remove_file(
-                            crate::cell_uds::cell_socket_path(&session_id),
-                        );
+                        let _ =
+                            std::fs::remove_file(crate::cell_uds::cell_socket_path(&session_id));
                         log_debug!(
                             "[hook-scoped] revoked scoped token + removed UDS for session={}",
                             session_id
@@ -1692,10 +1751,8 @@ pub fn spawn_child_exit_observer(
                                     // re-assert the kill in case a task was mid-fork
                                     let _ = std::fs::write(format!("{cg}/cgroup.kill"), "1");
                                     if attempt < 19 {
-                                        tokio::time::sleep(
-                                            std::time::Duration::from_millis(100),
-                                        )
-                                        .await;
+                                        tokio::time::sleep(std::time::Duration::from_millis(100))
+                                            .await;
                                     }
                                 }
                             }
@@ -1735,10 +1792,7 @@ pub fn spawn_child_exit_observer(
                     // EVERY non-API caller (no acquire happened) → no-op,
                     // default-OFF parity. Saturating in `sandbox_quota::release`.
                     if let Some(pk) = principal_key.as_ref() {
-                        crate::sandbox_quota::release_in_workspace(
-                            pk,
-                            quota_workspace.as_deref(),
-                        );
+                        crate::sandbox_quota::release_in_workspace(pk, quota_workspace.as_deref());
                         log_debug!(
                             "[v1-sandbox] released concurrent-cell quota slot for principal={} ws={:?} session={}",
                             pk,
@@ -1858,10 +1912,9 @@ mod tests {
         // pre-seam behavior). (async test: child-exit observer uses tokio.)
         let _ = k2_core::db::init_for_tests();
         let agent = uniq_agent_name();
-        let body = format!(
-            r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"]}}"#
-        )
-        .into_bytes();
+        let body =
+            format!(r#"{{"agent_name":"{agent}","cwd":"/tmp","command":"sleep","args":["30"]}}"#)
+                .into_bytes();
         let result = handle_v2_spawn(&body);
         let session = crate::v2_session_map::unregister(&agent);
         if let Some(ref s) = session {
@@ -1886,8 +1939,7 @@ mod tests {
     #[test]
     fn close_noop_returns_closed_false() {
         let agent = uniq_agent_name();
-        let body =
-            format!(r#"{{"agent_name":"{}"}}"#, agent).into_bytes();
+        let body = format!(r#"{{"agent_name":"{}"}}"#, agent).into_bytes();
         let result = handle_v2_close(&body);
         assert_eq!(result.status, "200 OK");
         assert!(result.body.contains(r#""closed":false"#));
@@ -1930,11 +1982,7 @@ mod tests {
     fn recovered_launch_skips_tab_sessions() {
         k2_core::db::init_for_tests();
         assert!(
-            recovered_launch(
-                "tab-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                "/tmp/any",
-            )
-            .is_none(),
+            recovered_launch("tab-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "/tmp/any",).is_none(),
             "must not mass-revive tab-* on restart recovery"
         );
     }
@@ -1943,10 +1991,8 @@ mod tests {
     fn empty_command_api_spawn_is_conflict_not_bare_shell() {
         k2_core::db::init_for_tests();
         let agent = "api-principal-00000000-0000-0000-0000-000000000001";
-        let body = format!(
-            r#"{{"agent_name":"{agent}","cwd":"/tmp/sales-interview"}}"#
-        )
-        .into_bytes();
+        let body =
+            format!(r#"{{"agent_name":"{agent}","cwd":"/tmp/sales-interview"}}"#).into_bytes();
         let result = handle_v2_spawn(&body);
         assert_eq!(result.status, "409 Conflict", "body={}", result.body);
         assert!(
@@ -2059,7 +2105,11 @@ mod tests {
         ] {
             let mut args = args_of(&["--whatever"]);
             autoinject_premint_session_id(cmd, &mut args, "tab-x", "/w");
-            assert_eq!(args, args_of(&["--whatever"]), "cmd={cmd:?} must be untouched");
+            assert_eq!(
+                args,
+                args_of(&["--whatever"]),
+                "cmd={cmd:?} must be untouched"
+            );
         }
     }
 
@@ -2068,12 +2118,7 @@ mod tests {
     #[test]
     fn autoinject_matches_path_qualified_claude() {
         let mut args = Vec::new();
-        autoinject_premint_session_id(
-            Some("/usr/local/bin/claude"),
-            &mut args,
-            "tab-x",
-            "/w",
-        );
+        autoinject_premint_session_id(Some("/usr/local/bin/claude"), &mut args, "tab-x", "/w");
         assert_eq!(args.first().map(String::as_str), Some("--session-id"));
     }
 
@@ -2086,11 +2131,7 @@ mod tests {
             Some(premint)
         );
         assert_eq!(
-            conversation_id_from_args(
-                Some("claude"),
-                &args_of(&["--resume", premint])
-            )
-            .as_deref(),
+            conversation_id_from_args(Some("claude"), &args_of(&["--resume", premint])).as_deref(),
             Some(premint)
         );
         assert_eq!(

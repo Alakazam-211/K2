@@ -23,9 +23,10 @@
 #![cfg(unix)]
 
 use std::path::PathBuf;
-use std::sync::Mutex as StdMutex;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use k2_core::db::init_for_tests;
+use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession};
 use k2_daemon::pinned_chat::ensure_pinned_chat;
 use k2_daemon::session_events::{self, SessionEvent};
 use k2_daemon::v2_session_map;
@@ -79,11 +80,7 @@ fn setup_project(workspace_id: &str, name: &str) -> PathBuf {
     conn.execute(
         "INSERT OR REPLACE INTO projects (id, path, name, agent_mode) \
          VALUES (?1, ?2, ?3, 'custom')",
-        rusqlite::params![
-            workspace_id,
-            project_path.to_string_lossy().as_ref(),
-            name,
-        ],
+        rusqlite::params![workspace_id, project_path.to_string_lossy().as_ref(), name,],
     )
     .unwrap();
     project_path
@@ -304,8 +301,7 @@ async fn ensure_pinned_chat_force_respawn_replaces_and_emits_removed_then_added(
     // Subscribe BEFORE the force-respawn so we capture both events.
     let mut rx = session_events::subscribe();
 
-    let respawned =
-        ensure_pinned_chat(&project_path, true, false).expect("force_respawn ensure");
+    let respawned = ensure_pinned_chat(&project_path, true, false).expect("force_respawn ensure");
     assert!(
         !respawned.reused,
         "force_respawn must spawn fresh, not reuse"
@@ -655,7 +651,10 @@ async fn restart_recovery_pinned_grok_harness_recovers_grok_grammar() {
         live.args
     );
     assert!(
-        !live.args.iter().any(|a| a == "--dangerously-skip-permissions"),
+        !live
+            .args
+            .iter()
+            .any(|a| a == "--dangerously-skip-permissions"),
         "claude-only flag must not leak into a grok recovery: {:?}",
         live.args
     );
@@ -774,10 +773,8 @@ async fn explicit_dropdown_pick_survives_adopt_and_refresh() {
 
     // Simulate what the 5s deferred adopt thread would do (synchronously).
     // Pre-fix this stamped A over B; post-fix it must keep B.
-    let adopted = k2_core::workspace::provider_resume::adopt_discovered_session(
-        "claude",
-        &project_path,
-    );
+    let adopted =
+        k2_core::workspace::provider_resume::adopt_discovered_session("claude", &project_path);
     assert_eq!(
         adopted.as_deref(),
         Some(session_b),
@@ -797,13 +794,9 @@ async fn explicit_dropdown_pick_survives_adopt_and_refresh() {
         refresh.claude_session_id, session_b,
         "refresh must resume B (the saved pick), not newest A"
     );
+    assert!(refresh.resumed_existing, "B is on disk → resume path");
     assert!(
-        refresh.resumed_existing,
-        "B is on disk → resume path"
-    );
-    assert!(
-        refresh.args.iter().any(|a| a == "--resume")
-            && refresh.args.iter().any(|a| a == session_b),
+        refresh.args.iter().any(|a| a == "--resume") && refresh.args.iter().any(|a| a == session_b),
         "refresh argv must carry --resume <B>, got: {:?}",
         refresh.args
     );
@@ -934,7 +927,10 @@ async fn ensure_pinned_chat_grok_default_premints_grok_grammar_and_harness() {
     let out = ensure_pinned_chat(&project_path, false, false)
         .expect("ensure must succeed for a grok-default workspace");
 
-    assert_eq!(out.command, "grok", "must spawn the workspace default agent");
+    assert_eq!(
+        out.command, "grok",
+        "must spawn the workspace default agent"
+    );
     assert_eq!(out.provider, "grok");
     assert!(
         !out.pending_session_discovery,
@@ -951,7 +947,9 @@ async fn ensure_pinned_chat_grok_default_premints_grok_grammar_and_harness() {
         "grok argv = preset args + grok premint grammar, NO claude flags"
     );
     assert!(
-        !out.args.iter().any(|a| a == "--dangerously-skip-permissions"),
+        !out.args
+            .iter()
+            .any(|a| a == "--dangerously-skip-permissions"),
         "--dangerously-skip-permissions is claude-only"
     );
 
@@ -1092,13 +1090,19 @@ async fn set_chat_session_route_persists_optional_provider() {
     // With provider: harness follows the pick.
     let resp = call("grok-session-1", Some("grok"));
     assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
-    assert_eq!(saved_session_id(workspace_id).as_deref(), Some("grok-session-1"));
+    assert_eq!(
+        saved_session_id(workspace_id).as_deref(),
+        Some("grok-session-1")
+    );
     assert_eq!(saved_harness(workspace_id).as_deref(), Some("grok"));
 
     // Without provider: session id updates, harness is KEPT.
     let resp = call("grok-session-2", None);
     assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
-    assert_eq!(saved_session_id(workspace_id).as_deref(), Some("grok-session-2"));
+    assert_eq!(
+        saved_session_id(workspace_id).as_deref(),
+        Some("grok-session-2")
+    );
     assert_eq!(
         saved_harness(workspace_id).as_deref(),
         Some("grok"),
@@ -1143,6 +1147,276 @@ async fn explicit_selection_of_missing_session_errors_no_silent_swap() {
         saved_session_id(workspace_id).as_deref(),
         Some(missing_b),
         "explicit-missing must NOT rewrite the SSOT to a different session"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
+/// Plant a login-shell PTY (`program: None`) under `agent_name`. Used to
+/// reproduce the post-update pinned-chat occupant: empty v2/spawn won
+/// the canonical slot with `$SHELL`.
+fn plant_login_shell(agent_name: &str, cwd: &PathBuf) -> Arc<DaemonPtySession> {
+    let cfg = DaemonPtyConfig {
+        cols: 80,
+        rows: 24,
+        cwd: Some(cwd.clone()),
+        program: None,
+        ..DaemonPtyConfig::default()
+    };
+    let session = DaemonPtySession::spawn(cfg).expect("spawn login-shell PTY");
+    v2_session_map::register(agent_name.to_string(), Arc::clone(&session));
+    session
+}
+
+fn program_basename(program: Option<&str>) -> Option<&str> {
+    program.map(|p| {
+        std::path::Path::new(p)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(p)
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// R9 / R21 — post-update selected Chat must not come back as a shell.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_command_canonical_v2_spawn_does_not_mint_shell() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("empty-canonical");
+    let _shim = install_claude_shim();
+
+    let workspace_id = "pinned-empty-canonical-ws";
+    let project = setup_project(workspace_id, "empty-canonical");
+    let project_path = project.to_string_lossy().into_owned();
+
+    let body = serde_json::json!({
+        "agent_name": workspace_id,
+        "cwd": project_path,
+        // command intentionally absent — the renderer attach shape.
+    })
+    .to_string();
+    let resp = k2_daemon::v2_spawn::handle_v2_spawn(body.as_bytes());
+    assert_eq!(
+        resp.status, "200 OK",
+        "canonical empty-command spawn must resume-spawn, not 409, got: {} / {}",
+        resp.status, resp.body
+    );
+
+    let live = v2_session_map::lookup_by_agent_name(workspace_id)
+        .expect("canonical key must be occupied after empty v2/spawn");
+    assert_eq!(
+        program_basename(live.program.as_deref()),
+        Some("claude"),
+        "live program must be the resolved harness, not a login shell; program={:?} argv={:?}",
+        live.program,
+        live.args
+    );
+    assert!(
+        live.program.is_some(),
+        "program: None is the login shell — must not occupy the canonical key"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn planted_shell_on_canonical_key_is_not_reused_by_ensure() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("planted-shell");
+    let _shim = install_claude_shim();
+
+    let workspace_id = "pinned-planted-shell-ws";
+    let project = setup_project(workspace_id, "planted-shell");
+    let project_path = project.to_string_lossy().into_owned();
+
+    let planted = plant_login_shell(workspace_id, &project);
+    let planted_id = planted.session_id.to_string();
+    assert!(
+        planted.program.is_none(),
+        "fixture must be a login shell (program: None)"
+    );
+    assert!(
+        planted.is_child_alive(),
+        "planted shell child must be alive before ensure"
+    );
+
+    let out = ensure_pinned_chat(&project_path, false, false)
+        .expect("ensure(false) must kill the shell and resume-spawn");
+    assert_ne!(
+        out.session_id, planted_id,
+        "ensure(false) must not reuse the planted shell session id"
+    );
+    assert!(
+        !out.reused,
+        "ensure(false) against a shell occupant must spawn the harness, not reuse"
+    );
+    assert_eq!(out.command, "claude");
+
+    let live = v2_session_map::lookup_by_agent_name(workspace_id)
+        .expect("canonical key must hold the resume PTY");
+    assert_eq!(live.session_id.to_string(), out.session_id);
+    assert_eq!(
+        program_basename(live.program.as_deref()),
+        Some("claude"),
+        "live program must be the harness after mismatch-kill; program={:?}",
+        live.program
+    );
+    assert!(
+        !planted.is_child_alive(),
+        "planted shell child must be gone after mismatch-kill"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_command_v2_spawn_evicts_planted_canonical_shell() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("v2-evict-shell");
+    let _shim = install_claude_shim();
+
+    let workspace_id = "pinned-v2-evict-shell-ws";
+    let project = setup_project(workspace_id, "v2-evict-shell");
+    let project_path = project.to_string_lossy().into_owned();
+
+    let planted = plant_login_shell(workspace_id, &project);
+    let planted_id = planted.session_id.to_string();
+
+    let body = serde_json::json!({
+        "agent_name": workspace_id,
+        "cwd": project_path,
+    })
+    .to_string();
+    let resp = k2_daemon::v2_spawn::handle_v2_spawn(body.as_bytes());
+    assert_eq!(
+        resp.status, "200 OK",
+        "empty canonical spawn must resume-spawn over a planted shell, got: {} / {}",
+        resp.status, resp.body
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&resp.body).expect("spawn response json");
+    let new_id = parsed["sessionId"].as_str().expect("sessionId string");
+    assert_ne!(
+        new_id, planted_id,
+        "v2/spawn must not reuse the planted shell"
+    );
+
+    let live = v2_session_map::lookup_by_agent_name(workspace_id).expect("canonical key occupied");
+    assert_eq!(
+        program_basename(live.program.as_deref()),
+        Some("claude"),
+        "live program must be the harness; program={:?}",
+        live.program
+    );
+    assert!(
+        !planted.is_child_alive(),
+        "planted shell must be killed on program mismatch"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tab_empty_spawn_stays_a_shell_and_does_not_steal_project_id() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _shim = install_claude_shim();
+
+    let workspace_id = "pinned-tab-shell-ws";
+    let project = setup_project(workspace_id, "tab-shell");
+    let project_path = project.to_string_lossy().into_owned();
+
+    let tab_key = "tab-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let body = serde_json::json!({
+        "agent_name": tab_key,
+        "cwd": project_path,
+    })
+    .to_string();
+    let resp = k2_daemon::v2_spawn::handle_v2_spawn(body.as_bytes());
+    assert_eq!(
+        resp.status, "200 OK",
+        "tab-* empty spawn must still mint a shell, got: {} / {}",
+        resp.status, resp.body
+    );
+
+    let tab = v2_session_map::lookup_by_agent_name(tab_key).expect("tab-* key must hold the shell");
+    assert!(
+        tab.program.is_none(),
+        "user extra terminals stay login shells; program={:?}",
+        tab.program
+    );
+    assert!(
+        v2_session_map::lookup_by_agent_name(workspace_id).is_none(),
+        "tab-* empty spawn must not steal the canonical project_id key"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_empty_spawn_and_ensure_one_harness_pty() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("concurrent-r17");
+    let _shim = install_claude_shim();
+
+    let workspace_id = "pinned-concurrent-r17-ws";
+    let project = setup_project(workspace_id, "concurrent-r17");
+    let project_path = project.to_string_lossy().into_owned();
+
+    let body = serde_json::json!({
+        "agent_name": workspace_id,
+        "cwd": project_path,
+    })
+    .to_string();
+
+    let spawn_body = body.clone();
+    let ensure_path = project_path.clone();
+    let spawn_h = tokio::task::spawn_blocking(move || {
+        k2_daemon::v2_spawn::handle_v2_spawn(spawn_body.as_bytes())
+    });
+    let ensure_h =
+        tokio::task::spawn_blocking(move || ensure_pinned_chat(&ensure_path, false, false));
+    let (spawn_res, ensure_res) = tokio::join!(spawn_h, ensure_h);
+    let spawn_res = spawn_res.expect("spawn task");
+    let ensure_res = ensure_res.expect("ensure task");
+
+    assert_eq!(
+        spawn_res.status, "200 OK",
+        "concurrent empty v2/spawn must succeed, got: {} / {}",
+        spawn_res.status, spawn_res.body
+    );
+    let ensure = ensure_res.expect("concurrent ensure must succeed");
+
+    let live = v2_session_map::lookup_by_agent_name(workspace_id).expect("canonical key occupied");
+    assert_eq!(
+        program_basename(live.program.as_deref()),
+        Some("claude"),
+        "final occupant must be the harness, not a shell; program={:?} argv={:?}",
+        live.program,
+        live.args
+    );
+    assert_eq!(
+        live.session_id.to_string(),
+        ensure.session_id,
+        "ensure must settle on the single resume PTY"
+    );
+    let count = v2_session_map::snapshot()
+        .into_iter()
+        .filter(|(k, _)| k == workspace_id)
+        .count();
+    assert_eq!(
+        count, 1,
+        "exactly one canonical entry after concurrent spawn+ensure"
     );
 
     v2_session_map::clear_for_tests();

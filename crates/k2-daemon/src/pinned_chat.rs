@@ -51,7 +51,9 @@
 
 use crate::awareness_ws::HandlerResult;
 use crate::canonical_session::canonical_key_for;
-use crate::spawn::{spawn_agent_session_v2_blocking, SpawnWorkspaceSessionRequest};
+use crate::spawn::{
+    canonical_spawn_lock, spawn_agent_session_v2_blocking_inner, SpawnWorkspaceSessionRequest,
+};
 use k2_core::log_debug;
 use k2_core::workspace::resume_chat::resolve_resume_chat_args_ex;
 
@@ -124,7 +126,9 @@ const DEFAULT_ROWS: u16 = 24;
 /// Resolve cols/rows for an ensure response / spawn body.
 /// Prefer last claimer dims on the live session, else live PTY size,
 /// else VT 80×24. Never hardcode 80×24 when a stored fit exists.
-fn session_fit_or_default(session: &std::sync::Arc<k2_core::terminal::DaemonPtySession>) -> (u16, u16) {
+fn session_fit_or_default(
+    session: &std::sync::Arc<k2_core::terminal::DaemonPtySession>,
+) -> (u16, u16) {
     use k2_core::terminal::Dimensions;
     use std::sync::atomic::Ordering;
     let ac = session.active_cols.load(Ordering::Relaxed);
@@ -185,6 +189,13 @@ pub fn ensure_pinned_chat(
     //    we spawn, or splices `--resume <id>` for a real prior
     //    session. DO NOT duplicate this logic.
     let resolved = resolve_resume_chat_args_ex(project_path, explicit_selection)?;
+
+    // R17: mismatch-kill + resume (and forceRespawn) is single-flight
+    // per canonical key. Held across kill + spawn so a concurrent empty
+    // v2/spawn cannot mint a shell in the gap, and a second waiter
+    // reuses the resume PTY instead of exec'ing a second --session-id.
+    let spawn_lock = canonical_spawn_lock(&canonical_key);
+    let _spawn_guard = spawn_lock.lock();
 
     // 3. force_respawn: tear down the existing live session first so
     //    the new spawn isn't short-circuited by the idempotency check
@@ -252,7 +263,7 @@ pub fn ensure_pinned_chat(
         launch_prompt: None,
     };
     let spawn_outcome =
-        spawn_agent_session_v2_blocking(req).map_err(|e| format!("spawn failed: {e}"))?;
+        spawn_agent_session_v2_blocking_inner(req).map_err(|e| format!("spawn failed: {e}"))?;
     let session_id = spawn_outcome.session_id.to_string();
     // Echo real session geometry (claimer dims or live PTY), not the
     // hardcoded default — clients attach with this as the expected size.

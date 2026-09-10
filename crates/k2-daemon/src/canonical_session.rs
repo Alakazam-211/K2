@@ -67,10 +67,9 @@
 //!   call this helper rather than duplicating the spawn-and-register
 //!   logic. Wake and proactive ensure converge on the same code.
 
-use k2_core::workspace::launch_profile::{resolve_cwd, LaunchProfile};
 use k2_core::log_debug;
+use k2_core::workspace::launch_profile::{resolve_cwd, LaunchProfile};
 
-use crate::session_lookup;
 use crate::spawn::{spawn_agent_session_v2_blocking, SpawnWorkspaceSessionRequest};
 
 /// Build the canonical `v2_session_map` key for a workspace.
@@ -144,25 +143,10 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
     let agent_name = k2_core::workspace::agent_identity::resolve_agent_name(project_path)
         .ok_or_else(|| "no primary agent in workspace".to_string())?;
 
-    // 2. Single-flight: if canonical session is already live, return.
-    //    0.37.5: canonical key is bare project_id (see canonical_key_for
-    //    doc-block). Drops the `:<agent_name>` suffix that previously
-    //    encoded the agent's name into the address.
-    let canonical_key = canonical_key_for(&project_id);
-    if let Some(live) = session_lookup::lookup_any(&canonical_key) {
-        let session_id = live.session_id().to_string();
-        // Keep workspace_sessions.active_terminal_id pointed at the live
-        // canonical PTY so the companion's isMainChat (and a later attach)
-        // resolve to it — parity with the fresh-spawn path below.
-        stamp_active_terminal_id(&project_id, &session_id);
-        return Ok(EnsureOutcome {
-            session_id,
-            agent_name,
-            project_id,
-            reused: true,
-            pending_drained: 0,
-        });
-    }
+    // 2. Reuse is program-aware inside spawn_agent_session_v2_blocking
+    //    (R4/R23): a live matching harness still reused:true; a shell
+    //    or wrong binary is killed then resume-spawned. Boot sweep
+    //    stays a no-op below.
 
     // 3. Resolve the launch profile (agent-degeneralization S2):
     //    AGENT.md `launch:` block → projects.default_agent → global
@@ -276,8 +260,7 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
 
     // 4. Spawn via the canonical-keyed v2 helper.
     let req = launch_request_for(&agent_name, &project_id, project_path, &profile);
-    let outcome = spawn_agent_session_v2_blocking(req)
-        .map_err(|e| format!("spawn failed: {e}"))?;
+    let outcome = spawn_agent_session_v2_blocking(req).map_err(|e| format!("spawn failed: {e}"))?;
 
     // 5. Persist workspace_sessions row. Best-effort — the PTY is
     //    alive regardless. Mirrors what `try_auto_launch` and the
@@ -297,18 +280,19 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
 
     log_debug!(
         "[daemon/canonical] ensured session={} agent={} workspace={} \
-         pending_drained={} (fresh spawn)",
+         pending_drained={} reused={}",
         outcome.session_id,
         agent_name,
         project_id,
         outcome.pending_drained,
+        outcome.reused,
     );
 
     Ok(EnsureOutcome {
         session_id: outcome.session_id.to_string(),
         agent_name,
         project_id,
-        reused: false,
+        reused: outcome.reused,
         pending_drained: outcome.pending_drained,
     })
 }
@@ -383,7 +367,5 @@ fn stamp_active_terminal_id(project_id: &str, terminal_id: &str) {
 /// `POST /cli/projects/activate`). Kept as a named entry so boot and
 /// tests still call a single chokepoint.
 pub fn boot_sweep_ensure_canonical_sessions() {
-    log_debug!(
-        "[daemon/canonical] boot sweep skipped — no fleet spawn until a workspace need"
-    );
+    log_debug!("[daemon/canonical] boot sweep skipped — no fleet spawn until a workspace need");
 }

@@ -9,14 +9,61 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
 use k2_core::log_debug;
 use k2_core::session::SessionId;
 use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession};
+use parking_lot::Mutex;
 
 use crate::pending_live;
 use crate::signal_format;
 use crate::v2_session_map;
+
+/// Per-canonical-key single-flight for mismatch-kill + resume-spawn (R17).
+/// Shared by `ensure_pinned_chat` (including forceRespawn), this helper,
+/// and `v2_spawn::spawn_session` so a second waiter reuses the resume PTY
+/// instead of exec'ing a second `--session-id` or minting a shell.
+static CANONICAL_SPAWN_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+
+pub(crate) fn canonical_spawn_lock(key: &str) -> Arc<Mutex<()>> {
+    let map = CANONICAL_SPAWN_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock();
+    guard
+        .entry(key.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+/// Basename of a spawn program (`/opt/homebrew/bin/claude` → `claude`).
+pub(crate) fn program_basename(program: &str) -> &str {
+    let trimmed = program.trim();
+    std::path::Path::new(trimmed)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(trimmed)
+}
+
+/// Whether `live.program` is acceptable for a spawn whose expected command
+/// is `expected`. `expected = None` means the caller is not a harness spawn
+/// (empty-command tab / remote shell) — any live child reuses.
+///
+/// Canonical resume/fresh always passes `Some(resolved.command)`. `None` /
+/// login-shell / `$SHELL` / `zsh`/`bash`/`sh`/`cmd.exe`/`pwsh` / a different
+/// binary is a mismatch against a harness (R4 / R15).
+pub(crate) fn live_program_matches(live: Option<&str>, expected: Option<&str>) -> bool {
+    let Some(expected) = expected.map(str::trim).filter(|s| !s.is_empty()) else {
+        return true;
+    };
+    let Some(live) = live.map(str::trim).filter(|s| !s.is_empty()) else {
+        // `program: None` is alacritty's login shell — never a harness.
+        return false;
+    };
+    if live == "$SHELL" {
+        return false;
+    }
+    program_basename(live).eq_ignore_ascii_case(program_basename(expected))
+}
 
 /// Resolve a workspace's filesystem path from its project_id.
 /// Used by the v2 spawn helper to seed the session label from the
@@ -130,6 +177,32 @@ pub struct SpawnWorkspaceSessionOutcome {
 pub fn spawn_agent_session_v2_blocking(
     req: SpawnWorkspaceSessionRequest,
 ) -> Result<SpawnWorkspaceSessionOutcome, String> {
+    let canonical_key = canonical_key_for_request(&req);
+    let lock = canonical_spawn_lock(&canonical_key);
+    let _g = lock.lock();
+    spawn_agent_session_v2_blocking_inner(req)
+}
+
+/// Map key this request will occupy. Heartbeat overrides stay on
+/// `{project_id}:hb:{name}`; chat is bare `project_id`.
+pub(crate) fn canonical_key_for_request(req: &SpawnWorkspaceSessionRequest) -> String {
+    match req.canonical_key.as_deref() {
+        Some(k) if !k.is_empty() => k.to_string(),
+        _ => match req.project_id.as_deref() {
+            Some(pid) if !pid.is_empty() => crate::canonical_session::canonical_key_for(pid),
+            _ => req.agent_name.clone(),
+        },
+    }
+}
+
+/// Find-or-spawn under `canonical_key`. Caller MUST hold
+/// [`canonical_spawn_lock`] for that key (R17). Public helper takes
+/// the lock; `ensure_pinned_chat` forceRespawn holds it across kill +
+/// this inner so a concurrent empty v2/spawn cannot mint a shell in
+/// the gap.
+pub(crate) fn spawn_agent_session_v2_blocking_inner(
+    req: SpawnWorkspaceSessionRequest,
+) -> Result<SpawnWorkspaceSessionOutcome, String> {
     if req.agent_name.is_empty() {
         return Err("agent_name required".into());
     }
@@ -156,28 +229,28 @@ pub fn spawn_agent_session_v2_blocking(
     // (`<project_id>:hb:<name>`) without colliding with the chat tab's
     // bare-`<project_id>` slot. Default falls through to the
     // project_id-derived canonical key.
-    let canonical_key = match req.canonical_key.as_deref() {
-        Some(k) if !k.is_empty() => k.to_string(),
-        _ => match req.project_id.as_deref() {
-            Some(pid) if !pid.is_empty() => crate::canonical_session::canonical_key_for(pid),
-            _ => req.agent_name.clone(),
-        },
-    };
+    let canonical_key = canonical_key_for_request(&req);
 
     // Idempotency: if a session is already registered under the
-    // canonical key AND its child PID is alive, return it. The map
-    // is normally kept authoritative by the child-exit observer
+    // canonical key AND its child PID is alive AND its program matches
+    // the requested harness (R4 / R15), return it. A live login shell
+    // (`program: None`) or the wrong binary is NOT reusable — kill it
+    // and fall through to resume-spawn. The map is normally kept
+    // authoritative by the child-exit observer
     // (`v2_spawn::spawn_child_exit_observer`), but the `is_child_alive`
     // double-check closes the small race window between ChildExit
     // and unregister — and gracefully handles the rare case where
     // the observer task panicked or the broadcast channel closed
     // before ChildExit landed.
     if let Some(existing) = v2_session_map::lookup_by_agent_name(&canonical_key) {
-        if existing.is_child_alive() {
+        if existing.is_child_alive()
+            && live_program_matches(existing.program.as_deref(), req.command.as_deref())
+        {
             log_debug!(
-                "[daemon/spawn] v2 reuse session={} canonical_key={}",
+                "[daemon/spawn] v2 reuse session={} canonical_key={} program={:?}",
                 existing.session_id,
                 canonical_key,
+                existing.program,
             );
             return Ok(SpawnWorkspaceSessionOutcome {
                 session_id: existing.session_id,
@@ -187,14 +260,19 @@ pub fn spawn_agent_session_v2_blocking(
                 launch_prompt_attached: false,
             });
         }
-        // Stale entry — child has exited but the unregister hadn't
-        // fired yet (or the observer dropped its Arc). Clean up and
-        // continue to spawn fresh.
+        // Stale (child exited) OR program mismatch (shell / wrong
+        // binary occupying the canonical slot). Unregister + kill
+        // then spawn the requested harness.
         log_debug!(
-            "[daemon/spawn] reaping stale v2 entry under canonical_key={} (child exited)",
+            "[daemon/spawn] evicting v2 entry under canonical_key={} \
+             alive={} live_program={:?} expected={:?}",
             canonical_key,
+            existing.is_child_alive(),
+            existing.program,
+            req.command,
         );
         v2_session_map::unregister(&canonical_key);
+        existing.kill();
     }
 
     // Phase B: seed the session's label with the workspace's
@@ -268,12 +346,16 @@ pub fn spawn_agent_session_v2_blocking(
             );
         }
         // Identity env (K2_CELL / handle / primary / session). No PTY inject.
-        let map_key = req.canonical_key.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
-            req.project_id
-                .clone()
-                .filter(|p| !p.is_empty())
-                .unwrap_or_else(|| req.agent_name.clone())
-        });
+        let map_key = req
+            .canonical_key
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                req.project_id
+                    .clone()
+                    .filter(|p| !p.is_empty())
+                    .unwrap_or_else(|| req.agent_name.clone())
+            });
         if let Some(id) = crate::cell_identity::apply_spawn_identity(
             &mut env,
             workspace_uuid.trim(),
@@ -295,10 +377,8 @@ pub fn spawn_agent_session_v2_blocking(
     // Workspace default model (K2-direct). After identity, before launch-param.
     if let Some(cmd) = req.command.as_deref() {
         if !cmd.trim().is_empty() {
-            let resume = k2_core::workspace::model_splice::args_look_like_dead_resume(
-                cmd,
-                &spawn_args,
-            );
+            let resume =
+                k2_core::workspace::model_splice::args_look_like_dead_resume(cmd, &spawn_args);
             k2_core::workspace::model_splice::splice_model_for_workspace_spawn(
                 &req.cwd,
                 cmd,
@@ -363,8 +443,7 @@ pub fn spawn_agent_session_v2_blocking(
     };
     let session_id = cfg.session_id;
 
-    let session = DaemonPtySession::spawn(cfg)
-        .map_err(|e| format!("v2 spawn failed: {e}"))?;
+    let session = DaemonPtySession::spawn(cfg).map_err(|e| format!("v2 spawn failed: {e}"))?;
     // Seed last-claimer dims at create (attach-size PR2) so a grid
     // pre-snap has the body fit before the first SetActive.
     {
@@ -430,3 +509,32 @@ pub fn spawn_agent_session_v2_blocking(
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_program_matches_basename_and_rejects_shell() {
+        assert!(live_program_matches(Some("claude"), Some("claude")));
+        assert!(live_program_matches(
+            Some("/opt/homebrew/bin/claude"),
+            Some("claude")
+        ));
+        assert!(live_program_matches(
+            Some("claude"),
+            Some("/usr/local/bin/claude")
+        ));
+        assert!(!live_program_matches(None, Some("claude")));
+        assert!(!live_program_matches(Some("$SHELL"), Some("claude")));
+        assert!(!live_program_matches(Some("/bin/zsh"), Some("claude")));
+        assert!(!live_program_matches(Some("zsh"), Some("claude")));
+        assert!(!live_program_matches(Some("bash"), Some("claude")));
+        assert!(!live_program_matches(Some("sh"), Some("claude")));
+        assert!(!live_program_matches(Some("cmd.exe"), Some("claude")));
+        assert!(!live_program_matches(Some("pwsh"), Some("claude")));
+        assert!(!live_program_matches(Some("grok"), Some("claude")));
+        // Empty-command tab / remote shell: no expected harness → reuse any.
+        assert!(live_program_matches(None, None));
+        assert!(live_program_matches(Some("/bin/zsh"), None));
+    }
+}

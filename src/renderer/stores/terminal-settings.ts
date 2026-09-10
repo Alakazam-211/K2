@@ -56,11 +56,9 @@ export type TerminalRenderer = 'alacritty' | 'alacritty-v2' | 'kessel'
  * TerminalPane). Orthogonal to `renderer` (which selects the PTY
  * engine/wire): both painters consume the same daemon snapshots.
  *
- * - `dom` (default): the memoized `<span>` row strip. The proven
- *   path — stays byte-identical regardless of this flag's existence.
- * - `webgl`: experimental WebGL2 instanced painter
- *   (`kessel-term/webgl/`). Falls back to `dom` per-pane on context
- *   loss / missing WebGL2. Design: `.k2/notes/webgl-painter-brief.md`.
+ * - `webgl` (default): WebGL2 instanced painter (`kessel-term/webgl/`).
+ *   Falls back to `dom` per-pane on context loss / missing WebGL2.
+ * - `dom`: the memoized `<span>` row strip. Opt-in fallback.
  *
  * Like `renderer`, the value is read at pane mount — changing it only
  * affects NEW terminal panes.
@@ -157,6 +155,9 @@ export function migrateTerminalSettings(
     if (version < 7 && (ps.charTracking === undefined || !Number.isFinite(ps.charTracking))) {
       ps = { ...ps, charTracking: CHAR_TRACKING_DEFAULT }
     }
+    if (version < 8 && (ps.painter === undefined || ps.painter === 'dom')) {
+      ps = { ...ps, painter: 'webgl' }
+    }
     return ps as Partial<TerminalSettingsState>
   }
   return persisted as Partial<TerminalSettingsState>
@@ -180,9 +181,9 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       // users keep their persisted choice via zustand's persist
       // middleware — only fresh installs land on it by default.
       renderer: 'kessel' as TerminalRenderer,
-      // WebGL painter is opt-in (experimental); `dom` is the proven
-      // default and the permanent fallback path.
-      painter: 'dom' as TerminalPainterKind,
+      // WebGL is the default painter; DOM remains the per-pane fallback
+      // on context loss and an explicit Settings opt-out.
+      painter: 'webgl' as TerminalPainterKind,
       // Light-theme preset; dark styles overwrite via applyStyle.
       // Matches the previous hard-coded WebGL default (c2e634c 1.2).
       textGamma: TEXT_GAMMA_LIGHT,
@@ -232,10 +233,9 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       },
 
       setPainter: (painter: TerminalPainterKind) => {
-        // Same defensive normalization as setRenderer: any unknown
-        // value (hand-edited localStorage, stale future flag) snaps
-        // back to the safe default.
-        set({ painter: painter === 'webgl' ? 'webgl' : 'dom' })
+        // Unknown values snap to the default (webgl). Explicit `dom`
+        // remains a user-selectable fallback.
+        set({ painter: painter === 'dom' ? 'dom' : 'webgl' })
       },
 
       setTextGamma: (v: number) => {
@@ -266,7 +266,7 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
         lineHeightMultiplier: state.lineHeightMultiplier,
         charTracking: state.charTracking,
       }),
-      version: 7,
+      version: 8,
       // 0.37.0 (v1 → v2): force-migrate users who had the persisted
       // renderer set to 'alacritty' (Legacy) onto 'alacritty-v2'.
       // The legacy option is removed from the Settings UI and the
@@ -295,6 +295,8 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
       // next explicit style change.
       // 0.40.47 (v6 → v7): cell line-height multiplier + character
       // tracking (global Terminal knobs for WebGL/DOM spacing parity).
+      // (v7 → v8): WebGL is the default painter. Force-migrate anyone
+      // still on DOM (including the v4 stamp of missing painter → dom).
       migrate: migrateTerminalSettings,
     },
   ),

@@ -26,7 +26,7 @@ export const TERMINAL_MANIFEST: SettingEntry[] = [
   { id: 'terminal.link-click-mode', section: 'terminal', label: 'Link Click Mode', description: 'Click vs Cmd+Click to activate links', keywords: ['link', 'url', 'click'] },
   { id: 'terminal.open-links-in-split', section: 'terminal', label: 'Open Links in Split Pane', description: 'Open file links in a sibling pane when splits are active', keywords: ['link', 'split', 'pane'] },
   { id: 'terminal.renderer', section: 'terminal', label: 'Terminal Renderer', description: 'Kessel (default)', keywords: ['renderer', 'engine', 'alacritty', 'kessel', 'v2', 'session stream', 'legacy'] },
-  { id: 'terminal.painter', section: 'terminal', label: 'Terminal Painter', description: 'DOM (default) or WebGL (experimental)', keywords: ['painter', 'webgl', 'gpu', 'canvas', 'rendering', 'experimental'] },
+  { id: 'terminal.painter', section: 'terminal', label: 'Terminal Painter', description: 'WebGL (default) or DOM (fallback)', keywords: ['painter', 'webgl', 'gpu', 'canvas', 'rendering', 'dom'] },
 ]
 
 export function TerminalSection(): React.JSX.Element {
@@ -268,22 +268,20 @@ export function TerminalSection(): React.JSX.Element {
 
         {/* Terminal Painter.
          *
-         *  How the v2 grid is drawn: the proven DOM row strip
-         *  (default) or the experimental WebGL2 instanced painter.
-         *  The WebGL painter falls back to DOM per-pane on context
-         *  loss / missing WebGL2 support, so flipping this is safe —
-         *  but it is explicitly experimental until it has soaked.
+         *  How the v2 grid is drawn: WebGL2 (default) or the DOM row
+         *  strip. WebGL falls back to DOM per-pane on context loss /
+         *  missing WebGL2. Changing this only affects NEW terminals.
          */}
         <SettingRow settingId="terminal.painter" label={
-          <span title="How terminal cells are drawn. WebGL is experimental (GPU-accelerated); DOM is the proven default. Changing this only affects NEW terminals.">
+          <span title="How terminal cells are drawn. WebGL is the default (GPU). DOM is the fallback. Changing this only affects NEW terminals.">
             Terminal Painter
           </span>
         }>
           <SettingDropdown
             value={painter}
             options={[
-              { value: 'dom', label: 'DOM' },
               { value: 'webgl', label: 'WebGL' },
+              { value: 'dom', label: 'DOM' },
             ]}
             onChange={(v) => setPainter(v as TerminalPainterKind)}
           />

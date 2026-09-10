@@ -67,6 +67,32 @@ describe('migrateTerminalSettings v6 → v7 (line height + tracking)', () => {
   })
 })
 
+describe('migrateTerminalSettings v7 → v8 (WebGL default)', () => {
+  it('moves a persisted DOM painter to WebGL', () => {
+    const out = migrateTerminalSettings(
+      { renderer: 'kessel', painter: 'dom', textGamma: 0.7 },
+      7,
+    )
+    expect(out.painter).toBe('webgl')
+  })
+
+  it('leaves an already-WebGL painter alone', () => {
+    const out = migrateTerminalSettings(
+      { renderer: 'kessel', painter: 'webgl', textGamma: 0.7 },
+      7,
+    )
+    expect(out.painter).toBe('webgl')
+  })
+
+  it('stamps WebGL when painter is missing', () => {
+    const out = migrateTerminalSettings(
+      { renderer: 'kessel' },
+      7,
+    )
+    expect(out.painter).toBe('webgl')
+  })
+})
+
 describe('setTextGamma clamp', () => {
   beforeEach(() => {
     mem.clear()

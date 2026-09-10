@@ -52,6 +52,34 @@ export function hostDisplayAddress(
   return h.secure && h.port === 443 ? h.hostname : `${h.hostname}:${h.port}`
 }
 
+export type SwitcherOption = 'local' | ConnectHost
+
+export function serverSwitcherOptions(
+  showLocal: boolean,
+  hostsSorted: ConnectHost[],
+): SwitcherOption[] {
+  const out: SwitcherOption[] = []
+  if (showLocal) out.push('local')
+  out.push(...hostsSorted)
+  return out
+}
+
+/** Search → first match. Idle open → currently connected host, else 0. */
+export function defaultSwitcherHighlight(
+  options: SwitcherOption[],
+  activeHost: 'local' | ConnectHost,
+  searching: boolean,
+): number {
+  if (options.length === 0) return 0
+  if (searching) return 0
+  if (activeHost === 'local') {
+    const i = options.findIndex((o) => o === 'local')
+    return i >= 0 ? i : 0
+  }
+  const i = options.findIndex((o) => o !== 'local' && o.id === activeHost.id)
+  return i >= 0 ? i : 0
+}
+
 /**
  * The host indicator's color + tooltip, folding the ACTIVE remote's
  * three-state recovery surface (lib/remote-recovery.ts) over the plain
@@ -119,8 +147,10 @@ export default function ServerSwitcher(): React.JSX.Element {
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [highlighted, setHighlighted] = useState(0)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
 
   // Close the dropdown on outside click / Escape.
   useEffect(() => {
@@ -184,6 +214,31 @@ export default function ServerSwitcher(): React.JSX.Element {
     return !q || 'local'.includes(q)
   }, [query])
 
+  const options = useMemo(
+    () => serverSwitcherOptions(showLocal, hostsSorted),
+    [showLocal, hostsSorted],
+  )
+
+  // Search → always highlight the first match. Empty query → the
+  // currently connected host (or the first row).
+  useEffect(() => {
+    if (!open) {
+      setHighlighted(0)
+      return
+    }
+    setHighlighted(
+      defaultSwitcherHighlight(options, activeHost, query.trim().length > 0),
+    )
+  }, [open, query, options, activeHost])
+
+  useEffect(() => {
+    if (!open) return
+    const el = listRef.current?.querySelector('[data-switcher-highlighted="true"]')
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ block: 'nearest' })
+    }
+  }, [open, highlighted])
+
   const pick = useCallback(
     (h: 'local' | ConnectHost) => {
       // Re-picking the ALREADY-ACTIVE remote is the user's manual "reconnect"
@@ -222,6 +277,40 @@ export default function ServerSwitcher(): React.JSX.Element {
     openSettings('connections')
     requestAddServerFocus()
   }, [openSettings, requestAddServerFocus])
+
+  const pickOption = useCallback(
+    (opt: SwitcherOption): void => {
+      if (opt === 'local') pick('local')
+      else pick(opt)
+    },
+    [pick],
+  )
+
+  const onSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>): void => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (options.length === 0) return
+        setHighlighted((i) => (i + 1) % options.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (options.length === 0) return
+        setHighlighted((i) => (i - 1 + options.length) % options.length)
+        return
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
+        const opt = options[highlighted]
+        if (opt) pickOption(opt)
+      }
+    },
+    [options, highlighted, pickOption],
+  )
 
   // Hosted web: lock to the single same-origin host — no multi-host
   // switcher, no "Local", no "Add a server…". (After all hooks.)
@@ -298,21 +387,40 @@ export default function ServerSwitcher(): React.JSX.Element {
               ref={searchRef}
               type="text"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value)
+                setHighlighted(0)
+              }}
+              onKeyDown={onSearchKeyDown}
               onFocus={(e) => e.currentTarget.select()}
               placeholder="Search servers…"
               aria-label="Search servers"
+              aria-activedescendant={
+                options[highlighted]
+                  ? `server-switcher-opt-${optionKey(options[highlighted])}`
+                  : undefined
+              }
               className="w-full h-7 px-2 text-[11px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"
             />
           </div>
 
-          <div className="max-h-[min(320px,60vh)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+          <div
+            ref={listRef}
+            className="max-h-[min(320px,60vh)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+            role="listbox"
+          >
             {showLocal && (
               <SwitcherRow
+                id="server-switcher-opt-local"
                 label="Local"
                 active={activeHost === 'local'}
+                highlighted={options[highlighted] === 'local'}
                 statusDot={activeHost === 'local' ? connectionStatus : null}
                 onClick={() => pick('local')}
+                onHover={() => {
+                  const i = options.findIndex((o) => o === 'local')
+                  if (i >= 0) setHighlighted(i)
+                }}
               />
             )}
 
@@ -322,14 +430,21 @@ export default function ServerSwitcher(): React.JSX.Element {
 
             {hostsSorted.map((h) => {
               const isActive = activeHost !== 'local' && activeHost.id === h.id
+              const isHi = options[highlighted] !== 'local' && options[highlighted]?.id === h.id
               return (
                 <SwitcherRow
                   key={h.id}
+                  id={`server-switcher-opt-${h.id}`}
                   label={h.label}
                   sublabel={hostDisplayAddress(h)}
                   active={isActive}
+                  highlighted={isHi}
                   statusDot={isActive ? connectionStatus : null}
                   onClick={() => pick(h)}
+                  onHover={() => {
+                    const i = options.findIndex((o) => o !== 'local' && o.id === h.id)
+                    if (i >= 0) setHighlighted(i)
+                  }}
                 />
               )
             })}
@@ -356,26 +471,43 @@ export default function ServerSwitcher(): React.JSX.Element {
   )
 }
 
+function optionKey(opt: SwitcherOption): string {
+  return opt === 'local' ? 'local' : opt.id
+}
+
 function SwitcherRow({
+  id,
   label,
   sublabel,
   active,
+  highlighted,
   statusDot,
   onClick,
+  onHover,
 }: {
+  id?: string
   label: string
   sublabel?: string
   active: boolean
+  highlighted?: boolean
   statusDot: ConnectionStatus | null
   onClick: () => void
+  onHover?: () => void
 }): React.JSX.Element {
   return (
     <button
+      id={id}
+      role="option"
+      aria-selected={highlighted === true}
+      data-switcher-highlighted={highlighted ? 'true' : undefined}
       onClick={onClick}
+      onMouseEnter={onHover}
       className={`w-full text-left px-3 py-1.5 flex items-center gap-2 transition-colors ${
-        active
-          ? 'text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]'
-          : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
+        highlighted
+          ? 'text-[var(--color-text-primary)] bg-[var(--color-accent)]/15'
+          : active
+            ? 'text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]'
+            : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
       }`}
     >
       {statusDot !== null ? (

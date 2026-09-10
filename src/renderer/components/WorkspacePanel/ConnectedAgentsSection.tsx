@@ -109,11 +109,14 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
             strokeWidth="1.3"
             strokeLinecap="round"
             strokeLinejoin="round"
+            aria-hidden
           >
-            <circle cx="5" cy="8" r="2" />
-            <circle cx="11" cy="5" r="2" />
-            <circle cx="11" cy="11" r="2" />
-            <path d="M6.7 7.2 L9.3 5.8M6.7 8.8 L9.3 10.2" />
+            <circle cx="8" cy="2.5" r="1" />
+            <path d="M8 3.5v1.5" />
+            <rect x="3" y="5" width="10" height="9" rx="2" />
+            <circle cx="6.25" cy="9" r="1" />
+            <circle cx="9.75" cy="9" r="1" />
+            <path d="M6.5 12h3" />
           </svg>
           Connected Agents
           {count > 0 && (

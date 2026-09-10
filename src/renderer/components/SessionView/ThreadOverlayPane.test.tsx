@@ -450,11 +450,10 @@ describe('Thread overlay list scroll restore', () => {
       return createElement(
         'div',
         null,
-        createElement(
-          VisibilityHarness,
-          { visible },
-          createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c' }),
-        ),
+        createElement(VisibilityHarness, {
+          visible,
+          children: createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c' }),
+        }),
         createElement('button', {
           type: 'button',
           'data-testid': 'flip-visible',
@@ -478,11 +477,10 @@ describe('Thread overlay list scroll restore', () => {
       return createElement(
         'div',
         null,
-        createElement(
-          VisibilityHarness,
-          { visible },
-          createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c' }),
-        ),
+        createElement(VisibilityHarness, {
+          visible,
+          children: createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c' }),
+        }),
         createElement('button', {
           type: 'button',
           'data-testid': 'hide-tab',

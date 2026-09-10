@@ -58,7 +58,7 @@ vi.mock('@/lib/daemon-reconnect', () => ({
 
 const api = vi.hoisted(() => ({
   fetchProjectGroups: vi.fn(async () => [] as unknown[]),
-  fetchProjectGroupShow: vi.fn(async () => ({ members: [] as { workspaceId: string }[] })),
+  fetchProjectGroupShow: vi.fn(async (_id: string) => ({ members: [] as { workspaceId: string }[] })),
   fetchUnreadGroupIds: vi.fn(async () => [] as string[]),
 }))
 vi.mock('@/components/Projects/projects-api', () => ({

@@ -510,6 +510,21 @@ function AppRoot(): React.JSX.Element {
       return !!sel && !sel.isCollapsed && (sel.toString().length > 0)
     }
 
+    // Click-drag highlight: until mouseup there is often no range yet.
+    // The 200ms poll would focus the terminal and collapse the drag.
+    // Double-click already has a range, so it survived. Hold the poll
+    // while the primary button is down.
+    let primaryPointerDown = false
+    const onPointerDownCapture = (e: PointerEvent): void => {
+      if (e.button === 0) primaryPointerDown = true
+    }
+    const onPointerUpCapture = (e: PointerEvent): void => {
+      if (e.button === 0) primaryPointerDown = false
+    }
+    const onBlurClearPointer = (): void => {
+      primaryPointerDown = false
+    }
+
     const handleGlobalClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement
       if (!target) return
@@ -573,6 +588,7 @@ function AppRoot(): React.JSX.Element {
       // Keep ticket/project/file-viewer highlights (activeElement is body
       // while selecting non-focusable DOM text).
       if (hasLiveTextSelection()) return
+      if (primaryPointerDown) return
       // Don't refocus if settings is open
       if (useSettingsStore.getState().settingsOpen) return
       // Don't refocus if any overlay is open (command palette, running agents, assistant)
@@ -594,8 +610,14 @@ function AppRoot(): React.JSX.Element {
     }, 200)
 
     document.addEventListener('click', handleGlobalClick, true) // capture phase
+    document.addEventListener('pointerdown', onPointerDownCapture, true)
+    document.addEventListener('pointerup', onPointerUpCapture, true)
+    window.addEventListener('blur', onBlurClearPointer)
     return () => {
       document.removeEventListener('click', handleGlobalClick, true)
+      document.removeEventListener('pointerdown', onPointerDownCapture, true)
+      document.removeEventListener('pointerup', onPointerUpCapture, true)
+      window.removeEventListener('blur', onBlurClearPointer)
       clearInterval(refocusInterval)
     }
   }, [])

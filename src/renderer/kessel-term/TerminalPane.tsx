@@ -80,7 +80,7 @@ import {
 } from '@/components/Terminal/terminalLinkDetector'
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
-import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
+import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
 import { overlayViewer } from '@/components/SessionView/sessionViewTab'
@@ -5737,31 +5737,22 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       )}
     </div>
       {sessionChrome && showThreadOverlay && (
-        <div
-          className={
-            showSplit
-              ? 'flex-1 min-w-0 min-h-0 overflow-hidden border-l border-[var(--color-border)] flex flex-col'
-              : 'flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col'
+        <ThreadOverlayColumn
+          addr={sessionChrome.overlayAddr}
+          conversationId={sessionChrome.conversationId}
+          active={showThreadOverlay}
+          split={showSplit}
+          composeBar={
+            showComposeBar && shouldShowTerminalComposeBar(phase) ? (
+              <TerminalComposeBar
+                sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
+                workspacePath={cwd}
+                onInjectInput={sendInput}
+                sendDestination="thread"
+              />
+            ) : null
           }
-          data-testid="agent-session-thread"
-        >
-          <div className="flex-1 min-h-0 min-w-0 h-0 flex flex-col overflow-hidden">
-            <ThreadOverlayPane
-              addr={sessionChrome.overlayAddr}
-              conversationId={sessionChrome.conversationId}
-              active={showThreadOverlay}
-            />
-          </div>
-          {showComposeBar &&
-            shouldShowTerminalComposeBar(phase) && (
-            <TerminalComposeBar
-              sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
-              workspacePath={cwd}
-              onInjectInput={sendInput}
-              sendDestination="thread"
-            />
-          )}
-        </div>
+        />
       )}
       {sessionChrome && showChatterOverlay && (
         <div

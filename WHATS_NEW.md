@@ -3,6 +3,18 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.142 — Inbox you can read, and WebGL terminals
+
+The pinned **Inbox** tab is a reader, not a kanban. Left: **K2 Inbox** (packages from `k2 inbox` / `k2 msg`) plus any hosted or linked mail for that workspace. Middle: the list. Right: the body — markdown for K2 Inbox, text or sandboxed HTML for mail. Open a message and **Chat about this** sends a note into that workspace’s pinned Chat with an id the agent can `k2 inbox read` or `k2 mail read`. Stay on Inbox; it is not a mail reply. Inbox / Active / Done are no longer statuses.
+
+Workspace **Published** rows show live status and PID. **Details** (the blue chip on the second line) opens a view-only sheet: launch command or official skin gateway, cwd, port, host. A hostname from `k2 publish subdomain create` in **this** workspace still lists here even if the tunnel map is empty (label, target if known, Details — no fake PID). Create/point/rm now fail if they cannot stamp that workspace. Unowned account hostnames stay in Settings → K2 Connect. The Workspace drawer scrolls when it overflows.
+
+Terminals paint with **WebGL** by default. Anyone still on the DOM painter is moved to WebGL; DOM remains an opt-out in Settings → Terminal, and a pane still falls back if WebGL2 is missing. Reopen a terminal (or reload) so it remounts. Thread, compose, tickets, and the code editor default to **13pt** (terminal was already 13). A size you already saved is unchanged.
+
+Focus Window actually opens (⌘⇧F). Each extra window keeps its own drawers and rail. Project chips on Agents come back after you switch hosts. Right-click menus follow the cursor after Cmd+= / Cmd+−. Agent tiles no longer jump when the working spinner appears.
+
+---
+
 ## 0.40.141 — Local sites in Browser, and k2 db for BYO skins
 
 Opening `http://127.0.0.1` (a local preview, `k2 publish`, a markdown link) no longer replaces the K2 window or crashes it. Those links open in an in-app Browser tab. The Browser tab can still load local sites on this Mac. If you are connected to a remote host, loopback in that pane is this Mac — not the server — and K2 refuses it.

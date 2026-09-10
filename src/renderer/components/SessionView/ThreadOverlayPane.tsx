@@ -49,6 +49,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   const prevHeightRef = useRef<number | null>(null)
   const pinBottomRef = useRef(true)
   const savedScrollTopRef = useRef<number | null>(null)
+  const lastClientHeightRef = useRef(0)
   const itemsLenRef = useRef(items.length)
   itemsLenRef.current = items.length
   const isTabVisibleRef = useRef(isTabVisible)
@@ -59,11 +60,13 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     pinBottomRef.current = true
     prevHeightRef.current = null
     savedScrollTopRef.current = null
+    lastClientHeightRef.current = 0
   }, [addr])
 
   const syncListScrollRef = useRef<(el: HTMLElement) => void>(() => {})
   syncListScrollRef.current = (el: HTMLElement) => {
     if (el.clientHeight === 0) return
+    lastClientHeightRef.current = el.clientHeight
     if (!didInitialScroll.current && itemsLenRef.current > 0) {
       el.scrollTop = el.scrollHeight
       didInitialScroll.current = true
@@ -108,12 +111,14 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   }, [isTabVisible])
 
   useEffect(() => {
-    const el = listRef.current
-    if (!el || typeof ResizeObserver === 'undefined') return
+    const list = listRef.current
+    const pane = list?.parentElement
+    if (!list || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
-      syncListScrollRef.current(el)
+      syncListScrollRef.current(list)
     })
-    ro.observe(el)
+    ro.observe(list)
+    if (pane) ro.observe(pane)
     return () => ro.disconnect()
   }, [])
 
@@ -134,7 +139,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
 
   return (
     <div
-      className="h-full flex flex-col min-h-0 bg-[var(--color-bg)]"
+      className="h-full min-h-0 flex flex-col bg-[var(--color-bg)]"
       data-testid="thread-overlay-pane"
     >
       <div
@@ -144,6 +149,17 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return
+          // Compose grow / split shrink fires scroll before (or instead of)
+          // ResizeObserver. Old scrollTop is no longer the bottom; treating
+          // that as a user scroll unpins and the latest messages stay put.
+          if (lastClientHeightRef.current !== el.clientHeight) {
+            lastClientHeightRef.current = el.clientHeight
+            if (pinBottomRef.current) {
+              el.scrollTop = el.scrollHeight
+              savedScrollTopRef.current = el.scrollTop
+            }
+            return
+          }
           if (el.scrollTop <= 16) requestOlder()
           pinBottomRef.current =
             el.scrollHeight - el.scrollTop - el.clientHeight <= 32

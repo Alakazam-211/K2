@@ -400,6 +400,24 @@ describe('Thread overlay list scroll restore', () => {
     expect(box.scrollTop).toBe(box.scrollHeight)
   })
 
+  it('(f2) compose-grow scroll event before ResizeObserver does not unpin', () => {
+    renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(800)
+
+    // Browser keeps old scrollTop; new clientHeight is no longer at bottom.
+    box.clientHeight = 80
+    box.scrollTop = 600
+    fireEvent.scroll(list)
+    expect(box.scrollTop).toBe(box.scrollHeight)
+
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(box.scrollHeight)
+  })
+
   it('(g) 0-height onScroll does not clear pinBottomRef', () => {
     renderOverlay()
     const list = overlayList()

@@ -5745,7 +5745,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }
           data-testid="agent-session-thread"
         >
-          <div className="flex-1 min-h-0 min-w-0">
+          <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
             <ThreadOverlayPane
               addr={sessionChrome.overlayAddr}
               conversationId={sessionChrome.conversationId}

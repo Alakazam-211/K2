@@ -3,6 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.143 — Highlight and copy in Thread
+
+Click-drag to highlight Thread posts and copy them. Double-click already selected a word; a background poll was focusing the terminal mid-drag and killing the range. Growing the Message box and staying on the latest post after you leave and come back shipped in 0.40.142.
+
 ## 0.40.142 — Inbox you can read, and WebGL terminals
 
 The pinned **Inbox** tab is a reader, not a kanban. Left: **K2 Inbox** (packages from `k2 inbox` / `k2 msg`) plus any hosted or linked mail for that workspace. Middle: the list. Right: the body — markdown for K2 Inbox, text or sandboxed HTML for mail. Open a message and **Chat about this** sends a note into that workspace’s pinned Chat with an id the agent can `k2 inbox read` or `k2 mail read`. Stay on Inbox; it is not a mail reply. Inbox / Active / Done are no longer statuses.

@@ -18,6 +18,7 @@ import {
 } from '@/lib/chat-session-tab'
 import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { useHeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
+import { clientToCssPx } from '@/stores/context-menu'
 import { sessionIdsTargetedByHeartbeats } from '@/lib/heartbeat-delivery'
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -746,14 +747,16 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     // previously opened downward and ran off the page).
     const pad = 8
     const rect = menuDiv.getBoundingClientRect()
-    let left = e.clientX
-    let top = e.clientY
-    if (left + rect.width > window.innerWidth - pad) {
-      left = Math.max(pad, window.innerWidth - rect.width - pad)
+    const width = clientToCssPx(rect.width)
+    const height = clientToCssPx(rect.height)
+    let left = clientToCssPx(e.clientX)
+    let top = clientToCssPx(e.clientY)
+    if (left + width > window.innerWidth - pad) {
+      left = Math.max(pad, window.innerWidth - width - pad)
     }
-    if (top + rect.height > window.innerHeight - pad) {
+    if (top + height > window.innerHeight - pad) {
       // Prefer opening upward from the cursor.
-      top = e.clientY - rect.height
+      top = clientToCssPx(e.clientY) - height
     }
     if (top < pad) top = pad
     if (left < pad) left = pad

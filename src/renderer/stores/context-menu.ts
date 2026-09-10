@@ -11,6 +11,16 @@ export interface ContextMenuItemDef {
   badge?: string
 }
 
+/**
+ * CSS `zoom` on <html> (applyK2SOZoom): clientX/Y and getBoundingClientRect
+ * are post-zoom; position:fixed left/top are pre-zoom. Divide by zoom.
+ * WKWebView may want the inverse — keep `/` to match column-resize tests.
+ */
+export function clientToCssPx(clientPx: number): number {
+  const z = typeof window !== 'undefined' ? window.__k2soZoom ?? 1 : 1
+  return z > 0 ? clientPx / z : clientPx
+}
+
 interface ContextMenuState {
   isOpen: boolean
   x: number
@@ -43,8 +53,8 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
 
       set({
         isOpen: true,
-        x,
-        y,
+        x: clientToCssPx(x),
+        y: clientToCssPx(y),
         items,
         onSelect: resolve,
         focusedIndex: -1

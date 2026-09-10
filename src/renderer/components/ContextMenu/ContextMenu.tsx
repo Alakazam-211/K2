@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { useContextMenuStore } from '../../stores/context-menu'
+import { clientToCssPx, useContextMenuStore } from '../../stores/context-menu'
 
 export default function ContextMenu(): React.JSX.Element | null {
   const isOpen = useContextMenuStore((s) => s.isOpen)
@@ -18,21 +18,24 @@ export default function ContextMenu(): React.JSX.Element | null {
     .map((item, i) => (item.type !== 'separator' && item.enabled !== false ? i : -1))
     .filter((i) => i !== -1)
 
-  // Position adjustment to keep menu within viewport
+  // Position adjustment to keep menu within viewport.
+  // Stored x/y and innerWidth are CSS px; gBCR is post-zoom.
   const adjustedPosition = useCallback(() => {
     if (!menuRef.current) return { left: x, top: y }
     const rect = menuRef.current.getBoundingClientRect()
     const vw = window.innerWidth
     const vh = window.innerHeight
+    const width = clientToCssPx(rect.width)
+    const height = clientToCssPx(rect.height)
 
     let left = x
     let top = y
 
-    if (left + rect.width > vw) {
-      left = vw - rect.width - 4
+    if (left + width > vw) {
+      left = vw - width - 4
     }
-    if (top + rect.height > vh) {
-      top = vh - rect.height - 4
+    if (top + height > vh) {
+      top = vh - height - 4
     }
     if (left < 0) left = 4
     if (top < 0) top = 4

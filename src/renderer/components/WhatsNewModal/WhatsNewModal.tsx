@@ -253,6 +253,9 @@ export default function WhatsNewModal({
           color: var(--color-accent, #4a9eff);
           text-decoration: underline;
         }
+        .whats-new-body hr {
+          display: none;
+        }
         .wn-nav-btn {
           background: transparent;
           border: 1px solid var(--color-border);

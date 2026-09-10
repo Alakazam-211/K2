@@ -13,7 +13,9 @@ Terminals paint with **WebGL** by default. Anyone still on the DOM painter is mo
 
 Focus Window actually opens (⌘⇧F). Each extra window keeps its own drawers and rail. Project chips on Agents come back after you switch hosts. Right-click menus follow the cursor after Cmd+= / Cmd+−. Agent tiles no longer jump when the working spinner appears.
 
----
+After an update, the Chat you had selected comes back as that agent conversation — not a plain terminal. Thread (and split: terminal + thread) stays on the latest message when you return; growing the Message box pushes the list up so the latest post stays in view.
+
+The server switcher highlights the top match as you type; arrows and Enter pick a host. Connected Agents in the workspace drawer uses a robot-head icon.
 
 ## 0.40.141 — Local sites in Browser, and k2 db for BYO skins
 
@@ -21,13 +23,11 @@ Opening `http://127.0.0.1` (a local preview, `k2 publish`, a markdown link) no l
 
 `k2 db migrate` now grants the workspace agent on new schemas and identity sequences, not only `public` tables. SQL comments are not mistaken for FORCE RLS. Migrations that try to `CREATE ROLE` are refused (roles are cluster-wide). `k2 db --test` mints a disposable database that does not count against the cap. SQL helpers `k2.set_principal` / `k2.clear_principal` / `k2.principal_hygiene` SET LOCAL on a checkout so a BYO pool starts empty.
 
----
 
 ## 0.40.140 — Project pane shortcuts follow Message agent
 
 On a project board, ⌘1–⌘9 now follow **When moving between workspaces, auto-select**. If that’s Message agent, the shortcut lands in that pane’s message box — not the terminal. Terminal still focuses the grid when that’s the setting.
 
----
 
 ## 0.40.139 — Skin guests can have an email for password reset
 
@@ -35,7 +35,6 @@ Skin Access guests have an optional email. Username is still required. Forgot-pa
 
 Owner sets email in Skin Access or `k2 skin user add --email` / `k2 skin user email`. Empty email clears it. Guests with a password but no email cannot use forgot until the owner fills the address.
 
----
 
 ## 0.40.138 — Skin guests can reset and change their password
 
@@ -43,7 +42,6 @@ A logged-in skin guest can change their own password. A guest who forgot can set
 
 Owner password in Skin Access is unchanged. Guests with no K2 password reset at their identity provider.
 
----
 
 ## 0.40.137 — Skin guests can CRUD that agent's database tables, as themselves
 
@@ -51,7 +49,6 @@ A logged-in skin guest can list tables and read, insert, update, and delete **ro
 
 `k2 publish run --skin` proxies `GET /cli/db/tables` and `GET|POST /cli/db/rows` on the published origin. Session reads and writes stamp `k2.skin_principal` so dump RLS can filter per guest. Named platform tokens cannot use store. `_k2_store` writes stay off.
 
----
 
 ## 0.40.136 — Skin guests can read that agent's store, as themselves
 
@@ -59,7 +56,6 @@ A logged-in skin guest can list, get, and query **that agent's store** — that 
 
 `k2 publish run --skin` proxies `GET /cli/store/list`, `get`, and `query` on the published origin. Session reads stamp `k2.skin_principal` so dump policies can filter per guest. Named platform tokens cannot use store. Writes stay off.
 
----
 
 ## 0.40.135 — Skin guests can read wiki on the agents you grant
 
@@ -67,7 +63,6 @@ A logged-in skin guest can list and open that agent's wiki — **that workspace 
 
 `k2 publish run --skin` proxies `GET /cli/wiki/index` and `GET /cli/wiki/note` on the published origin. Fleet wiki, seed, serve, and public chat stay off. Chat history and Chatter are not in this cut.
 
----
 
 ## 0.40.134 — Skin guests can use Tickets on the agents you grant
 
@@ -75,7 +70,6 @@ A logged-in skin guest can list, open, comment, answer, and resolve Tickets **on
 
 `k2 publish run --skin` proxies those Ticket routes on the published origin (`/cli/feedback/list`, `show`, `create`, `comment`, `answer`, `resolve`). Waiting-count and assign stay off. Wiki, chat history, and Chatter are not in this cut.
 
----
 
 ## 0.40.133 — Skin guests can use files on the agents you grant
 
@@ -83,7 +77,6 @@ A logged-in skin guest can list, read, write, and watch files **in that agent's 
 
 `k2 publish run --skin` now proxies those file routes on the published origin (`read-dir`, `read-file`, `write-file`, and a per-agent live watch). Login still guards Thread and files; `/` and `/assets/*` stay public.
 
----
 
 ## 0.40.132 — Skin access is per agent, then what they may do there
 
@@ -91,37 +84,31 @@ Skin Access roles grant a guest **specific agents**, and **specific functions on
 
 `k2 publish run --skin <dir>` serves your `login.html` when that file is in the folder (otherwise the bundled sign-in). Guests can tap Thread choice cards and fill secrets. A workspace Agent-tab toggle (off by default) lets that agent run existing `k2 skin` / `k2 skin-token` commands.
 
----
 
 ## 0.40.131 — Skin platform tokens are not per-guest keys
 
 Skin Access mint is a **named platform token** (`k2 skin-token create --name vercel --agent sales`), not a key hung off a guest. Guests still sign in; that session is their access. Login does not hand them a copyable key. Grid and the terminal stay off. Existing static mints become platform tokens on first boot (name from the old username).
 
----
 
 ## 0.40.130 — Skin gateway login page and no stale assets
 
 `k2 publish run --skin <dir>` always serves a sign-in page at `/login` (session expiry no longer 404s). Static files send `Cache-Control: no-store` so a published UI updates without a hard refresh. `/` and `/assets/*` stay public — login only guards Thread; do not put private files in that folder.
 
----
 
 ## 0.40.129 — Host a skin UI with k2 publish
 
 `k2 publish run <name> --skin --port <n>` puts a login + Thread site on a nested URL (`https://<name>.<your-host>.k2.dev`). Guests use the username and password from Skin Access. The pass stays on the server — not in the browser. Grid and the terminal stay off. Your own static files: `--skin <dir>`. `k2 skin` is still the guest list, tokens, and rooms; it does not serve the site. Caddy / `skin.` as a special hostname is not required.
 
----
 
 ## 0.40.128 — Granted workspaces run SQL as that workspace’s Postgres role
 
 A workspace granted onto a shared database — and `k2 store` from that workspace — connect as **that workspace’s** Postgres role, not the owner’s agent and not the migrator. Dump RLS keyed to the role now applies to both the agent (`k2 db dsn` / `k2 store`) and a human who shares that DSN. The owner still connects as `{dbname}_agent`. Migrate, dump, and restore stay the migrator. `k2 db dsn --workspace` fetches that workspace’s LOGIN (owner backend), and restore recreates grant roles so dump policies bind on a fresh box.
 
----
 
 ## 0.40.127 — Agents can publish from a cell
 
 `k2 publish run` works from an agent session (scoped cell token), not only from an owner shell. Status, `ps`, and Connect are unchanged.
 
----
 
 ## 0.40.126 — Skin agent display names
 
@@ -131,13 +118,11 @@ GET `/cli/skin/agents` includes `displayName` (guest-facing label; `handle` stay
 
 The create-DB grant lives on each workspace’s Agent tab (Settings → Workspaces), not inside Settings → Data.
 
----
 
 ## 0.40.125 — Skin files read/write + live events
 
 A customer key can list, read, write, and watch **that agent's folder** when you mint `files:read` / `files:write` — same rooms as Thread. Missing files cap stays Thread-only. Empty rooms stay dark. Grid/PTY still never. Not host-wide `/cli/sessions/events`. Skin Thread posts inject `[from <username>] [thread:<addr>]` into the agent's terminal; `via=compose` stays 403.
 
----
 
 ## 0.40.124 — Skin agent rooms, study, store 403 names the DB
 
@@ -149,7 +134,6 @@ A customer key can list, read, write, and watch **that agent's folder** when you
 
 **Database.** Unscoped `k2 store` / migrate 403s name the resolved DB (`dbId`, `dbName`, `resolvedVia`). A write grant on a newer DB does not unlock put on an older read grant.
 
----
 
 ## 0.40.123 — Skin SPA door, migrate that sticks, Hydra toggle
 
@@ -159,7 +143,6 @@ A customer key can list, read, write, and watch **that agent's folder** when you
 
 **OIDC.** Settings → Skin Access **Hydra** toggle starts a Linux sidecar if `hydra` is on PATH (loopback 4444/4445). Enabling skins does not start it. Mac shows the Linux banner. Login/consent UI and public OIDC on :443 are next.
 
----
 
 ## 0.40.122 — Database passport, Skin Direct + mail on one :443
 
@@ -169,7 +152,6 @@ A customer key can list, read, write, and watch **that agent's folder** when you
 
 **Box :443.** Skin Direct and Email Hosting no longer coin-flip for the box's port 443. One Caddy (the Skin front door) Host-routes Direct to the daemon (Thread path-filter) and the mail hostname to Stalwart on loopback 8443. Nested `skin.<your-sub>.k2.dev` is still Connect. Mail Enable uses HTTP-01 (not tls-alpn on 443) when Skin Direct will own 443. Do not Enable mail tls-alpn and Skin Direct on the same 443 until you apply this cut.
 
----
 
 ## 0.40.121 — Skin Access, quieter Thread/Chatter, Grok one Return
 
@@ -181,7 +163,6 @@ A customer key can list, read, write, and watch **that agent's folder** when you
 
 Agents told `[thread:addr]` should reply with `k2 thread`, not the TUI. Generated `.k2/agent/SKILL.md` is no longer planted (leftovers on disk are left alone).
 
----
 
 ## 0.40.120 — Chatter tab, database sidecar, compose slash, Settings regroup
 
@@ -201,7 +182,6 @@ Postgres is fenced so it cannot starve agents (systemd memory cap + query GUCs).
 
 `k2 hostmail enable` now requires `--hostname mail.acme.dev` (the daemon already 400'd an empty body). `k2 db enable` still POSTs `{}`.
 
----
 
 ## 0.40.119 — LAN federated connections use the saved IP:port
 
@@ -209,7 +189,6 @@ After you Pair a LAN peer, picking an agent under a workspace's **Federated conn
 
 What's New star drawer: K2 logo on the tag, the card stays centered, the drawer sits behind it.
 
----
 
 ## 0.40.118 — Pair as federated peers over LAN (no tunnel)
 
@@ -217,7 +196,6 @@ Two machines on the same network can **Pair as a federated peer** without buying
 
 What's New has a little drawer on the right — if you're enjoying K2, a star on GitHub helps a lot. Hidden in air-gap builds.
 
----
 
 ## 0.40.117 — Terminal hitch; inbox files keep the note
 
@@ -233,19 +211,16 @@ Agents extra columns: the divider between columns now stays under the cursor whi
 
 A paper-note button in the top bar (next to the timer) opens a **K2 cheat sheet** of CLI nouns (`k2 msg`, `k2 thread`, `k2 inbox`, …).
 
----
 
 ## 0.40.116 — Codex yolo; pinned chat uses your LLM launch script
 
 Switching the pinned Chat dropdown now launches that session with the command from **Settings → LLMs**, not a stripped resume line. Codex’s default is `codex --yolo`. If you already customized Codex, that command is left alone.
 
----
 
 ## 0.40.115 — Final air-gapping patch
 
 A last air-gapping patch.
 
----
 
 ## 0.40.114 — Thread tab, agent-to-agent message log
 
@@ -258,7 +233,6 @@ Agent sessions get **Thread | Terminal** tabs (default Terminal; the PTY stays r
 3. `k2 thread ask <workspace> "Ship?" --options "Go,Hold"` — card on Thread; tap Go, or type in chat instead (voids the card).
 4. `k2 msg` another workspace — that still wakes them; a chatter record is stored (not on the Thread tab).
 
----
 
 ## 0.40.113 — Switching servers no longer keeps the last machine's tabs
 
@@ -272,7 +246,6 @@ A background window no longer polls HTML/markdown files every 2 seconds while it
 2. Switch back — Mac workspaces return, including the screenshot tab (the tmp file itself may already be gone; an error pane is fine).
 3. Two windows (Local + remote): blur the remote window; its HTML dashboards stop polling.
 
----
 
 ## 0.40.112 — Linked mail lists without walking the whole mailbox
 
@@ -288,7 +261,6 @@ SEARCH that matches more than 1000 messages fails loud (`narrow --since/--before
 2. `k2 mail messages --from someone` — prints `searched last 30 days…` even if empty.
 3. `k2 mail messages --since 2017-03-01` — usage error asking for `--before`, not one silent month.
 
----
 
 ## 0.40.111 — Don't hide your workspaces behind a stub `k2.db`
 
@@ -301,7 +273,6 @@ Gmail `k2 mail read` no longer reports `daemon_unreachable` when the daemon is u
 1. If workspaces vanished after an update: look in `~/.k2/` — if both `k2.db` and `k2so.db` are real files, restart this build. The sidebar should come back. Do not delete either file.
 2. Linked Gmail: `k2 mail read` of a Sent or Inbox id should return a body, not hang until timeout.
 
----
 
 ## 0.40.110 — Air-gapped LAN-only: Caddy in front
 
@@ -319,7 +290,6 @@ Runbook: `.k2/prds/runbook-airgap-linux-image-v1.md`. Starter Caddyfile: `docs/c
 2. Laptop Add Server: `http://<LAN-IP>:38471` — not `:60710`, not `https://`, not `:443`.
 3. Firewall/IDS: that Caddy port only.
 
----
 
 ## 0.40.109 — Air-gap + LAN listen; server list drops :443
 
@@ -335,7 +305,6 @@ The top-bar server dropdown no longer appends `:443` on hosted names (`rosson.k2
 2. Do **not** leave `K2_AIRGAP=1` on a box that should keep `*.k2.dev` — the Connect lease is 3 minutes. Env-only, then unset and restart, recovers tunnel.json / pairing.
 3. Golden image: bake/scp the daemon (do not `k2 daemon install` on an air-gapped box), set the env on the unit, pre-write `~/.k2/daemon.port`, seed a connect-user. Runbook: `.k2/prds/runbook-airgap-linux-image-v1.md`.
 
----
 
 ## 0.40.108 — Default model, ticket wake, mail drafts, hire API
 
@@ -362,7 +331,6 @@ New workspaces need a `*` workspace grant (or the owner). A draft is still not a
 3. `k2 mail draft --to someone@x --subject "Hello" --body "…"` and open Gmail Drafts.
 4. `POST /v1/w` with `path`, optional `wiki` / `context` / `layers`, then `POST /v1/w/<handle>/host-sessions`.
 
----
 
 ## 0.40.107 — Workspace Resources; pinned-chat icon stays put
 
@@ -377,7 +345,6 @@ The closed pinned-chat session control shows the same provider icon as the dropd
 3. Pin an HTML tab: the tab pins; it should **not** appear as a new Resource. Pins from before this update should already be in the list.
 4. Switch the pinned chat to another agent: after the list closes, the icon next to the title should still match that agent.
 
----
 
 ## 0.40.106 — Idle agents sleep; Settings drag stays connected
 
@@ -398,7 +365,6 @@ If a remote `/cli` call fails while the host still looks connected (`Failed to f
 3. Active bar → Dismiss on the workspace you are looking at, even while it is working.
 4. On a busy remote host, drag-reorder workspaces in Settings without losing the connection. DevTools: one `projects/list`, not N `workspaces/list`.
 
----
 
 ## 0.40.105 — Whoami tells the truth; API tabs stay dead
 
@@ -422,7 +388,6 @@ cannot revive.
 3. Right-click a tab: **Forcefully reap all tabs** is in the menu.
    Chat and Inbox stay.
 
----
 
 ## 0.40.104 — Linux hosts stay up, Message &lt;name&gt;
 
@@ -452,7 +417,6 @@ old layouts, not part of hire/add.
 3. Hire or add a workspace: no `.harvest-0.32.7-done` /
    `.unification-0.37.0-done` in `.k2/`.
 
----
 
 ## 0.40.103 — Your name on Feedback, remotes recover, shared size
 
@@ -494,7 +458,6 @@ terminal settings is no longer labeled Experimental.
    sizes. Stay on Agents while the other person is on that
    workspace — yours should not reclaim columns.
 
----
 
 ## 0.40.102 — Readable Project and Feedback chat, no sliver window
 
@@ -516,7 +479,6 @@ smaller, or only a sliver peeking onto a display, centers a normal
 2. If a previous update left you with a razor-thin window, quit and
    reopen: you should get a centered 1400×900.
 
----
 
 ## 0.40.101 — Project tags in the nav, honest host switch
 
@@ -543,7 +505,6 @@ longer grows to fit the placeholder on launch.
 3. Quit and reopen: same window, or a centered default if the last
    frame was unusable.
 
----
 
 ## 0.40.100 — Sidecars, catalog, and workspace polish
 
@@ -668,7 +629,6 @@ workspace — you add a pack to a stack when you want it.
 5. Settings → Context Catalog: create a pack and edit it with AI.
 6. This What's New page scrolls if the notes run long.
 
----
 
 ## 0.40.99 — Windows reinstall replaces a leftover tunnel client
 
@@ -798,7 +758,6 @@ global shortcut owner.
 3. **macOS:** focus agent compose → **Cmd+Shift+T** still launches a session.
 4. **Scout:** host-session `--final` → wait past grace → resume same `sessionId`.
 
----
 
 ## 0.40.95 — Tickets polish + chat archive + host-session TTL clarity
 
@@ -865,7 +824,6 @@ Long chat lists are easier to manage:
 3. Chats → right-click a Claude chat → **Archive** / **Restore**; spot
    orange dates on old threads.
 
----
 
 ## 0.40.94 — Native Windows app (client + local daemon)
 
@@ -930,7 +888,6 @@ window controls), not the macOS traffic-light layout.
 2. Confirm the app connects (local daemon should come up if needed).
 3. Use Menu + window controls; resize / maximize; hover on the top bar.
 
----
 
 ## 0.40.93 — Host-sessions stage `K2_SESSION_ID` (sandbox parity)
 
@@ -943,7 +900,6 @@ sandbox route so seats can derive paths without decoding a token.
 - Live inject does **not** rewrite process env (same as other env staging).
 - Envelope note updated: `docs/host-session-capability-envelope.md`.
 
----
 
 ## 0.40.92 — Host-session status + open capability resource namespaces
 
@@ -995,7 +951,6 @@ ownership re-register, backoff, and deliberate donts:
 `docs/host-session-kill-resume-recovery.md`  
 (linked from the capability envelope note).
 
----
 
 ## 0.40.91 — Pinned chat pick persists + durable host-session spawn queue
 
@@ -1052,7 +1007,6 @@ never-born race.
 **not** ride `prompt`. Use `capabilities[]` → staged **0600 cap file** +
 `K2_CAPABILITY_TOKEN` env (envelope `docs/host-session-capability-envelope.md`).
 
----
 
 ## 0.40.90 — Host-session first prompt at launch (never-born) + CLI slug parity
 
@@ -1088,7 +1042,6 @@ basename** when the display name differs.
 - Cap GET/SET and other CLI verbs using `/cli/workspace/resolve` gain the same
   addressing.
 
----
 
 ## 0.40.89 — Host-session Claude cold-start settle (never-born)
 
@@ -1103,7 +1056,6 @@ landed before the TUI accepted input, then a repaint wiped it.
 - Root-cause write-up: `.k2/prds/prd-host-session-initial-prompt-loss-v1.md`
   (Primary: turn-start poll + re-inject still open).
 
----
 
 ## 0.40.88 — Compose bar focus no longer stolen by grid heal
 
@@ -1121,7 +1073,6 @@ agent compose bar mid-type.
   compose / inputs / textareas / contenteditable on reattach or tab
   visibility churn.
 
----
 
 ## 0.40.87 — Host-session finalize, kill, cap, done lifecycle, grid-stall (Scout)
 
@@ -1205,7 +1156,6 @@ Remote terminal paint recovery for “ready pane, no frames” episodes:
 - **Daemon breadcrumbs:** `[grid-pause]` enter/exit once per episode;
   `[grid-liveness]` close on missed pongs (half-open tunnels).
 
----
 
 ## 0.40.86 — DevTools, soft-resync compose bar, louder prod breadcrumbs
 
@@ -1232,7 +1182,6 @@ Always-on (dev + release) console warnings for remote paint recovery:
 - `[soft-resync]` — recovery-connected / events-reopen fan-out
 - `[recovery]` — remote recovery kind transitions
 
----
 
 ## 0.40.85 — Remote terminal stuck-ready recovery
 
@@ -1253,7 +1202,6 @@ forced a reattach and “snapped” the pane live.
 
 Wiki: `.k2/wiki/Bug - Remote Terminal Stuck Ready Dead Grid.md` (local).
 
----
 
 ## 0.40.84 — Terminal drop fix + web download + OOTB Gmail OAuth
 
@@ -1293,7 +1241,6 @@ baked Gmail via `.env`; Microsoft is a separate optional path.)
 
 After this cut, the Gmail auth URL uses the real client id (not `REPLACE_ME`).
 
----
 
 ## 0.40.83 — Connect password reset on Linux / hosted hosts
 
@@ -1313,7 +1260,6 @@ While `must_change_password` is set, `GET /cli/users/policy` is allowed so
 `https://<sub>.k2.dev/` can show real password requirements during forced
 rotation (seed-users on cloud Linux). POST policy remains owner-only.
 
----
 
 ## 0.40.82 — Multi-window, soft-resync, daemon singleton, Linux Gmail OAuth bake-in
 
@@ -1349,7 +1295,6 @@ shared-tree chaos).
 0.40.84, so Linux release binaries through 0.40.83 still shipped `REPLACE_ME`.
 See **0.40.84**.
 
----
 
 ## 0.40.81 — K2 API Tokens settings + host-session reaper reshape
 
@@ -1384,7 +1329,6 @@ survives on this model.
 Multi-pane Project dashboards batch `lookup-by-agent` with `Promise.all` so
 live terminals mount and attach together instead of one-by-one.
 
----
 
 ## 0.40.80 — Host-session tab lands on the right workspace
 
@@ -1403,7 +1347,6 @@ PTY cwd was correctly **sales**. Root cause was renderer
 - Daemon: `resolve_workspace_slug` **fails closed** on ambiguous name/basename
   (no silent `LIMIT 1` / first-row guess when duplicate `projects.name` rows).
 
----
 
 ## 0.40.79 — Host-session list + kill API
 
@@ -1438,7 +1381,6 @@ non-oracle rules as message-live. Empty body OK.
 
 Integrator note: [`docs/host-session-capability-envelope.md`](docs/host-session-capability-envelope.md) §5.2.
 
----
 
 ## 0.40.78 — Soft-reconnect recovery clear + host-session workspace slug
 
@@ -1476,7 +1418,6 @@ cold-spawn. S5 documents: `resource` must be `interview:<id>` (else 400
 - `GET /v1/w/<ws>/host-sessions` documented in S5; list is **one row per
   sessionId** so historical agent rows don’t all flip `live:true` on respawn.
 
----
 
 ## 0.40.77 — Public `/v1/jwks` (envelope verify fix)
 
@@ -1492,7 +1433,6 @@ API key. That broke the ES256 contract: Scout must fetch public keys with
 
 Integrator note: [`docs/host-session-capability-envelope.md`](docs/host-session-capability-envelope.md).
 
----
 
 ## 0.40.76 — Host-session capability envelope (testable)
 
@@ -1521,7 +1461,6 @@ Integrator guide: [`docs/host-session-capability-envelope.md`](docs/host-session
 Signing key for the pilot is **static** at `~/.k2/capability-signing.pem`
 (rotation runbook later). Capability **jti** revoke remains app-local.
 
----
 
 ## 0.40.75 — Hosted web: fewer edge health polls
 
@@ -1544,7 +1483,6 @@ Cuts request volume on the Cloudflare Worker proxy lane dramatically
 (order-of-magnitude for always-open viewer tabs) without slowing first
 connect or recovery backoff.
 
----
 
 ## 0.40.74 — Cross-server tray file send (Connect token fix)
 
@@ -1575,7 +1513,6 @@ refused despite registered host + account + trust + tunnel).
 - After upgrade, open the app once (or re-sign-in to peer hosts with Remember)
   so tokens mirror for CLI; then retry tray send from an agent.
 
----
 
 ## 0.40.73 — Hosted web file drop
 
@@ -1604,7 +1541,6 @@ refused despite registered host + account + trust + tunnel).
 - Daemon already supports the upload routes; no special daemon version gate
   beyond a current host with `fs/upload-binary` (all post-remote-files hosts).
 
----
 
 ## 0.40.72 — Remote Gmail link + browser overlays
 
@@ -1631,7 +1567,6 @@ refused despite registered host + account + trust + tunnel).
   capture APIs + UI). Older apps against a new daemon get a clear headless
   error; new apps against an old daemon won't complete the relay.
 
----
 
 ## 0.40.71 — Remote TUI scroll attach + tunnel E2E self-heal
 
@@ -1668,7 +1603,6 @@ attached at the wrong size.
   `active` (nsi / acv / luzz class). After update, verify with
   `curl https://<sub>.k2.dev/boot-status`, not only process liveness.
 
----
 
 ## 0.40.70 — Browser pane reopen + API host-session defaults
 
@@ -1702,7 +1636,6 @@ attached at the wrong size.
 - Client app update is required for the browser-pane fix (daemon-only
   restarts do not clear Tauri webview labels).
 
----
 
 ## 0.40.69 — Composer resize + web paste
 
@@ -1717,7 +1650,6 @@ attached at the wrong size.
 - **Ctrl+V / Cmd+V** paste works in the terminal (Ctrl+V no longer gets
   swallowed as a control character).
 
----
 
 ## 0.40.68 — Connect reconnection flap fix
 
@@ -1731,7 +1663,6 @@ attached at the wrong size.
 - Session event sockets close cleanly before redialing, which stops
   attach/detach thrash against a healthy tunnel.
 
----
 
 ## 0.40.67 — Connect stability + host-scoped Servers
 
@@ -1752,7 +1683,6 @@ attached at the wrong size.
 - Directory listings tolerate unexpected `fs/read-dir` shapes instead of
   failing the Files panel.
 
----
 
 ## 0.40.66 — Endgame Stage A: agent type dual-read + copy terminal id
 
@@ -1776,7 +1706,6 @@ attached at the wrong size.
 - No data rewrite this release. Fresh and upgraded installs keep existing
   `agent_mode` / frontmatter spellings; both spellings just work.
 
----
 
 ## 0.40.65 — Polish + leave the k2so name behind
 
@@ -1819,7 +1748,6 @@ attached at the wrong size.
 
 - Developer changelogs live under `docs/changelog/` (not the repo root).
 
----
 
 ## 0.40.64 — Context management stack: always-on AGENTS.md
 
@@ -1859,7 +1787,6 @@ system toggles, **Browse catalog**). Day-2 management is
 Stacks over ~64 KiB show a soft warning so always-on context stays lean.
 Load skills for depth; keep stack layers short.
 
----
 
 ## 0.40.63 — `k2 msg` tray packages: silent, wake, and files
 
@@ -1904,7 +1831,6 @@ Built-in k2-cli skill strings and wake templates teach
 `--inbox-wake` / `--inbox-silent` with file paths, not the old bare
 `--inbox --title/--body` form.
 
----
 
 ## 0.40.62 — Settings that scale: Connect, LLMs, General
 
@@ -1961,7 +1887,6 @@ Built-in order puts **Grok before Gemini**. CLI Tools Setup matches that
 list and includes **Hermes**. Existing installs get the Grok/Gemini swap
 on the next daemon start (or use **Reset Built-ins**).
 
----
 
 ## 0.40.61 — Linux servers actually update (and stay reachable)
 
@@ -2007,7 +1932,6 @@ sudo systemctl daemon-reload && sudo systemctl restart k2-daemon
 Update both the **thin client** and the **daemon** on the host so the
 new Connections flow and the tunnel self-heal land together.
 
----
 
 ## 0.40.60 — Tickets, and chat text you can actually select
 
@@ -2036,7 +1960,6 @@ message divs as dead space and clearing the highlight almost instantly.
 That reclaim now leaves a live selection alone (and skips full-page
 Tickets / Projects / Wiki overlays).
 
----
 
 ## 0.40.59 — Files tree no longer bounces on busy hosts
 
@@ -2052,7 +1975,6 @@ background instead of re-showing the loading row.
 Update both the **thin client** and the **daemon** on the host (e.g. NSI)
 so the quieter watcher and the calmer UI land together.
 
----
 
 ## 0.40.58 — Files that keep up, and previews that actually work
 
@@ -2094,7 +2016,6 @@ release.
 Folders sort first, icons follow light/dark (Seti-style), and **Reveal in
 Finder** / the OS equivalent is labeled correctly.
 
----
 
 ## 0.40.57 — Live agent terminals stay alive across brief disconnects
 
@@ -2108,7 +2029,6 @@ dismissing a session yourself is unchanged.
 Daemon stderr is quieter too: terminal poll performance histogram lines no
 longer spam the log during normal use.
 
----
 
 ## 0.40.56 — Agent passports no longer die overnight
 
@@ -2134,7 +2054,6 @@ security. They no longer suddenly expire just because the clock advanced.
 If an agent already hit the old expiry, **restart that session once** after
 updating so it mints a fresh passport under the new rules.
 
----
 
 ## 0.40.55 — Clone To: full chat history + your pin comes with you
 
@@ -2179,7 +2098,6 @@ Keychain blobs. Sign in on the other box if you haven’t already.
 Also unchanged: tunnel identity, connect-users, and machine-local K2
 state stay on each host.
 
----
 
 ## 0.40.54 — Tunnel resilience + hosted web (beta)
 

@@ -139,7 +139,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
 
   return (
     <div
-      className="flex-1 min-h-0 overflow-hidden flex flex-col bg-[var(--color-bg)]"
+      className="flex-1 min-h-0 overflow-hidden flex flex-col bg-[var(--color-bg)] selectable-copy chat-thread-selectable"
       data-testid="thread-overlay-pane"
     >
       <div

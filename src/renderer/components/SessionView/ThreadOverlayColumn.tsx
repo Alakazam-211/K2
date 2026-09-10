@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { SelectableRegion } from '@/components/common/SelectableText'
 import { ThreadOverlayPane } from './ThreadOverlayPane'
 
 /**
@@ -53,7 +54,9 @@ export function ThreadOverlayColumn({
         style={{ bottom }}
         data-testid="agent-session-thread-list-slot"
       >
-        <ThreadOverlayPane addr={addr} conversationId={conversationId} active={active} />
+        <SelectableRegion className="h-full min-h-0 flex flex-col overflow-hidden">
+          <ThreadOverlayPane addr={addr} conversationId={conversationId} active={active} />
+        </SelectableRegion>
       </div>
       {hasCompose ? (
         <div

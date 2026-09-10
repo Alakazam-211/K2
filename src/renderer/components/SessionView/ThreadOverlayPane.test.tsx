@@ -58,6 +58,13 @@ describe('Thread overlay pane', () => {
     expect(pane.className.split(/\s+/)).not.toContain('h-full')
   })
 
+  it('thread pane is a selectable region (copy-paste)', () => {
+    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    const pane = screen.getByTestId('thread-overlay-pane')
+    expect(pane.className).toContain('selectable-copy')
+    expect(pane.className).toContain('chat-thread-selectable')
+  })
+
   it('shows Load older when hasMore and click calls loadOlder', () => {
     const loadOlder = vi.fn(async () => {})
     threadHook.hasMore = true

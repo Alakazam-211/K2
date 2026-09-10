@@ -3,7 +3,11 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { onAppHello, onPublishServicesChanged } from '@/stores/session-events'
+import {
+  onAppHello,
+  onPublishServicesChanged,
+  onTunnelSubdomainsChanged,
+} from '@/stores/session-events'
 import {
   PublishedByoDetailsModal,
   PublishedServiceDetailsModal,
@@ -11,19 +15,27 @@ import {
 import {
   PUBLISH_RUN_EXAMPLE,
   byoWorkspaceTargets,
+  isLeftoversRouteMissing,
+  leftoverDetailsTarget,
+  leftoverTargetLabel,
+  leftoversToAttributed,
   isServiceStoppable,
   nestedPublicUrl,
+  parsePublishLeftovers,
   parsePublishList,
   publishedHostLabel,
+  publishLeftoversErrorMessage,
   publishListErrorMessage,
   serviceListenLabel,
   servicePublicUrl,
+  shouldShowPublishEmptyHint,
   sortedServices,
   sortedTargets,
   unattributedCount,
   unattributedHint,
   workspaceTargets,
   type PublishedService,
+  type PublishLeftover,
 } from './urls-ports'
 
 const DETAILS_BTN =
@@ -76,6 +88,9 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   )
   const [busyName, setBusyName] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
+  const [leftovers, setLeftovers] = useState<PublishLeftover[] | undefined>(undefined)
+  const [leftoversError, setLeftoversError] = useState<string | null>(null)
+  const [leftoversMissing, setLeftoversMissing] = useState(false)
   const [detailsName, setDetailsName] = useState<string | null>(null)
   const [detailsByo, setDetailsByo] = useState<string | null>(null)
   const activeHost = useConnectHostStore((s) => s.activeHost)
@@ -125,6 +140,50 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
     }
   }, [projectId, supportsPublish])
 
+  useEffect(() => {
+    if (!projectId) {
+      setLeftovers([])
+      setLeftoversError(null)
+      setLeftoversMissing(false)
+      return
+    }
+    let cancelled = false
+    setLeftovers(undefined)
+    const refresh = async (): Promise<void> => {
+      try {
+        const raw = await daemonCliGet<unknown>('publish/leftovers', { project: projectId })
+        if (!cancelled) {
+          setLeftovers(parsePublishLeftovers(raw))
+          setLeftoversError(null)
+          setLeftoversMissing(false)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          if (isLeftoversRouteMissing(err)) {
+            setLeftoversMissing(true)
+            setLeftovers([])
+            setLeftoversError(null)
+          } else {
+            setLeftovers((prev) => prev ?? [])
+            setLeftoversError(publishLeftoversErrorMessage(err))
+          }
+        }
+      }
+    }
+    void refresh()
+    const offHello = onAppHello(() => {
+      void refresh()
+    })
+    const offSubs = onTunnelSubdomainsChanged(() => {
+      void refresh()
+    })
+    return () => {
+      cancelled = true
+      offHello()
+      offSubs()
+    }
+  }, [projectId])
+
   const act = useCallback(
     async (name: string, action: 'start' | 'stop'): Promise<void> => {
       if (!projectId) return
@@ -146,7 +205,15 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   const publicUrl = status?.public_url ?? null
   const allTargets = subs && typeof subs === 'object' ? subs.targets : {}
   const primary = subs && typeof subs === 'object' ? subs.primary : ''
-  const mine = workspaceTargets(allTargets, projectId)
+  const leftoverList = leftovers ?? []
+  const leftoverAttributed = leftoversToAttributed(leftoverList, projectId)
+  const leftoverUrlByLabel = new Map(leftoverList.map((row) => [row.label, row.url]))
+  // New daemon: leftovers GET is SSOT (0074 ∪ cache). Old daemon 404:
+  // today's tunnel ∩ workspace filter. Tunnel GET fail must not wipe
+  // leftovers GET rows.
+  const mine = leftoversMissing
+    ? workspaceTargets(allTargets, projectId)
+    : leftoverAttributed
   const serviceList = services ?? []
   const byo = byoWorkspaceTargets(mine, serviceList)
   const serviceRows = sortedServices(serviceList)
@@ -156,8 +223,14 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
   const hasAny = serviceRows.length + nestedRows.length > 0
   const rowCount = serviceRows.length + nestedRows.length
   const loadingServices = supportsPublish && services === undefined
-  const loadingSubs = subs === undefined
-  const unavailable = !supportsPublish && subs === null
+  const loadingSubs = leftoversMissing && subs === undefined
+  const loadingLeftovers = leftovers === undefined && !leftoversMissing && !leftoversError
+  const unavailable = !supportsPublish && leftoversMissing && subs === null
+  const showEmptyHint = shouldShowPublishEmptyHint({
+    hasRows: hasAny,
+    listError,
+    leftoversError,
+  })
   const detailsSvc = detailsName
     ? (serviceList.find((s) => s.name === detailsName) ?? null)
     : null
@@ -220,13 +293,24 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
         <div className="px-3 py-2 border-b border-[var(--color-border)]">
           {listError ? (
             <p
-              className={`text-[10px] text-[var(--color-status-error)] ${hasAny ? 'mb-1.5' : ''}`}
+              className={`text-[10px] text-[var(--color-status-error)] ${hasAny || leftoversError ? 'mb-1.5' : ''}`}
               data-published-list-error=""
             >
               {listError}
             </p>
           ) : null}
-          {(loadingSubs || loadingServices) && !hasAny && !listError ? (
+          {leftoversError ? (
+            <p
+              className={`text-[10px] text-[var(--color-status-error)] ${hasAny ? 'mb-1.5' : ''}`}
+              data-published-leftovers-error=""
+            >
+              {leftoversError}
+            </p>
+          ) : null}
+          {(loadingSubs || loadingServices || loadingLeftovers) &&
+          !hasAny &&
+          !listError &&
+          !leftoversError ? (
             <p className="text-[10px] text-[var(--color-text-muted)]">
               Checking Published…
             </p>
@@ -234,7 +318,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
             <p className="text-[10px] text-[var(--color-text-muted)]">
               Not available on this daemon.
             </p>
-          ) : !hasAny && !listError ? (
+          ) : showEmptyHint ? (
             <p className="text-[10px] text-[var(--color-text-muted)]">
               Ask your agent to publish it with{' '}
               <span className="font-mono">{PUBLISH_RUN_EXAMPLE}</span>
@@ -310,7 +394,12 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                 )
               })}
               {nestedRows.map(([label, info]) => {
-                const url = nestedPublicUrl(label, primary, publicUrl)
+                const fromGet = leftoverUrlByLabel.get(label)
+                const url =
+                  typeof fromGet === 'string' && fromGet.trim()
+                    ? fromGet
+                    : nestedPublicUrl(label, primary, publicUrl)
+                const targetCopy = leftoverTargetLabel(info.target)
                 return (
                   <div key={`byo:${label}`} className="min-w-0" data-published-byo={label}>
                     {url ? (
@@ -329,7 +418,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                     )}
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="text-[10px] text-[var(--color-text-muted)] truncate flex-1">
-                        → {info.target}
+                        → {targetCopy}
                       </span>
                       <button
                         type="button"
@@ -366,8 +455,10 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
         <PublishedByoDetailsModal
           leftover={{
             label: detailsLeftover[0],
-            url: nestedPublicUrl(detailsLeftover[0], primary, publicUrl),
-            target: detailsLeftover[1].target,
+            url:
+              leftoverUrlByLabel.get(detailsLeftover[0]) ??
+              nestedPublicUrl(detailsLeftover[0], primary, publicUrl),
+            target: leftoverDetailsTarget(detailsLeftover[1].target),
           }}
           hostLabel={hostLabel}
           onClose={() => setDetailsByo(null)}

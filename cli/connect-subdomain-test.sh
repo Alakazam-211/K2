@@ -84,48 +84,55 @@ if [ -z "$PORT" ] || [ "$PORT" = "0" ]; then
 fi
 export K2_CONNECT_BASE="http://127.0.0.1:${PORT}"
 
-# Daemon env is EXPLICITLY cleared: the 0074 attribution stamps
-# (create/point/rm) and claim/unclaim POST to the local daemon when a
-# connection exists — this test must never mutate a real daemon's
-# attribution table, so it pins the no-daemon state (stamps degrade to
-# the warning path, claim/unclaim fail loud; both asserted below).
-run() { HOME="$TEST_HOME" K2_PORT= K2SO_PORT= K2_HOOK_TOKEN= K2SO_HOOK_TOKEN= "$K2_BIN" publish subdomain "$@" 2>&1; }
+# Daemon env is EXPLICITLY cleared for list/status (still skip the conn
+# gate). create/point/rm/claim/unclaim NEED the daemon (stamp is
+# load-bearing) — run_d uses a fake PORT/TOKEN so CP mapping tests can
+# pass the gate; stamp then fails loud (nothing listens on :9).
+run() { HOME="$TEST_HOME" K2_PORT= K2SO_PORT= K2_HOOK_TOKEN= K2SO_HOOK_TOKEN= K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish subdomain "$@" 2>&1; }
+run_d() { HOME="$TEST_HOME" K2_PORT=9 K2_HOOK_TOKEN=fake K2SO_PORT= K2SO_HOOK_TOKEN= K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish subdomain "$@" 2>&1; }
 set_resp() { printf '%s\n%s' "$1" "$2" > "$RESP_FILE"; }
 req_line() { head -1 "$REQ_FILE"; }
 req_body() { tail -n +3 "$REQ_FILE"; }
 req_auth() { sed -n '2p' "$REQ_FILE"; }
 
+# create without daemon never hits the control plane (conn gate).
+echo "SENTINEL" > "$REQ_FILE"
+out="$(run create staging --target localhost:3000)"; rc=$?
+echo "$out" | grep -qi "Cannot connect to K2" && [ $rc -ne 0 ] \
+    && ok "create without daemon fails loud (conn gate)" \
+    || bad "create no-daemon: $out (rc=$rc)"
+[ "$(req_line)" = "SENTINEL" ] && ok "create without daemon never calls the control plane" \
+    || bad "create no-daemon hit CP: $(req_line)"
+
 # ── create ───────────────────────────────────────────────────────────────
 set_resp 200 '{"label":"staging","host":"staging.rosson.k2.dev","target":"localhost:3000","status":"active","cert_status":"covered","primary":false,"effective":"live"}'
-out="$(run create staging --target localhost:3000)"; rc=$?
+out="$(run_d create staging --target localhost:3000)"; rc=$?
 [ "$(req_line)" = "POST /subdomains" ] && ok "create -> POST /subdomains" || bad "create method/path: $(req_line)"
 echo "$(req_body)" | grep -q '"label": "staging"' && ok "create body has label" || bad "create body label: $(req_body)"
 echo "$(req_body)" | grep -q '"target": "localhost:3000"' && ok "create body has target" || bad "create body target: $(req_body)"
 [ "$(req_auth)" = "AUTH:Bearer tok_test_123" ] && ok "create sends bearer token" || bad "create auth: $(req_auth)"
-echo "$out" | grep -q "staging.rosson.k2.dev" && [ $rc -eq 0 ] && ok "create prints host (rc=0)" || bad "create output: $out (rc=$rc)"
-# 0074 — with NO daemon reachable, the attribution stamp degrades to a
-# warning naming the claim remediation, and the create still exits 0.
-echo "$out" | grep -q "Warning: workspace attribution was not recorded" && \
-echo "$out" | grep -q "k2 publish subdomain claim staging" && [ $rc -eq 0 ] \
-    && ok "create stamp degrades to claim-hint warning (rc still 0)" \
-    || bad "create stamp warning: $out (rc=$rc)"
+echo "$out" | grep -q "staging.rosson.k2.dev" || bad "create output missing host: $out (rc=$rc)"
+# Connect success + stamp fail (fake daemon) → non-zero.
+echo "$out" | grep -qi "workspace attribution was not recorded" && [ $rc -ne 0 ] \
+    && ok "create CP success + stamp fail is non-zero" \
+    || bad "create stamp fail-loud: $out (rc=$rc)"
 
 # create — 403 pro_required -> FRIENDLY upsell (not a raw 403), points at
 # the dashboard. Server may name the gated subdomain in `detail`.
 set_resp 403 '{"error":"pro_required","detail":"staging.rosson.k2.dev"}'
-out="$(run create staging --target localhost:3000)"; rc=$?
+out="$(run_d create staging --target localhost:3000)"; rc=$?
 echo "$out" | grep -qi "needs the Pro plan" && [ $rc -ne 0 ] && ok "403 pro_required -> friendly upsell (rc!=0)" || bad "pro_required upsell: $out (rc=$rc)"
 echo "$out" | grep -q "k2.dev/dashboard" && ok "pro_required upsell names the dashboard" || bad "pro_required missing dashboard hint: $out"
 echo "$out" | grep -q "staging.rosson.k2.dev" && ok "pro_required upsell names the subdomain (from detail)" || bad "pro_required missing subdomain: $out"
 
 # create — 409 label_taken
 set_resp 409 '{"error":"label_taken"}'
-out="$(run create staging --target localhost:3000)"; rc=$?
+out="$(run_d create staging --target localhost:3000)"; rc=$?
 echo "$out" | grep -qi "already taken" && [ $rc -ne 0 ] && ok "409 label_taken mapped" || bad "label_taken map: $out"
 
 # create — 400 bad_label
 set_resp 400 '{"error":"bad_label"}'
-out="$(run create 'BAD LABEL' --target localhost:3000)"; rc=$?
+out="$(run_d create 'BAD LABEL' --target localhost:3000)"; rc=$?
 echo "$out" | grep -qi "Invalid label" && [ $rc -ne 0 ] && ok "400 bad_label mapped" || bad "bad_label map: $out"
 
 # ── list ─────────────────────────────────────────────────────────────────
@@ -148,26 +155,27 @@ echo "$out" | grep -qi "No subdomains" && ok "list empty -> 'No subdomains'" || 
 
 # ── point ────────────────────────────────────────────────────────────────
 set_resp 200 '{"label":"staging","host":"staging.rosson.k2.dev","target":"localhost:8080","status":"active","effective":"live"}'
-out="$(run point staging --target localhost:8080)"; rc=$?
+out="$(run_d point staging --target localhost:8080)"; rc=$?
 [ "$(req_line)" = "PUT /subdomains/staging" ] && ok "point -> PUT /subdomains/{label}" || bad "point method/path: $(req_line)"
 echo "$(req_body)" | grep -q '"target": "localhost:8080"' && ok "point body has target" || bad "point body: $(req_body)"
-echo "$out" | grep -q "localhost:8080" && [ $rc -eq 0 ] && ok "point prints new target" || bad "point output: $out"
+echo "$out" | grep -q "localhost:8080" || bad "point output missing target: $out"
+echo "$out" | grep -qi "workspace attribution was not recorded" && [ $rc -ne 0 ] \
+    && ok "point CP success + stamp fail is non-zero" \
+    || bad "point stamp fail-loud: $out (rc=$rc)"
 
 # point — 404 not_found
 set_resp 404 '{"error":"not_found"}'
-out="$(run point ghost --target localhost:1)"; rc=$?
+out="$(run_d point ghost --target localhost:1)"; rc=$?
 echo "$out" | grep -qi "No such subdomain" && [ $rc -ne 0 ] && ok "404 not_found mapped" || bad "not_found map: $out"
 
 # ── rm ───────────────────────────────────────────────────────────────────
 set_resp 200 '{"removed":"staging"}'
-out="$(run rm staging)"; rc=$?
+out="$(run_d rm staging)"; rc=$?
 [ "$(req_line)" = "DELETE /subdomains/staging" ] && ok "rm -> DELETE /subdomains/{label}" || bad "rm method/path: $(req_line)"
-echo "$out" | grep -q "Removed staging" && [ $rc -eq 0 ] && ok "rm prints removed" || bad "rm output: $out"
-# 0074 — rm's unclaim stamp degrades to the unclaim-hint warning, rc 0.
-echo "$out" | grep -q "Warning: workspace attribution was not removed" && \
-echo "$out" | grep -q "k2 publish subdomain unclaim staging" && [ $rc -eq 0 ] \
-    && ok "rm stamp degrades to unclaim-hint warning (rc still 0)" \
-    || bad "rm stamp warning: $out (rc=$rc)"
+echo "$out" | grep -q "Removed staging" || bad "rm output missing removed: $out"
+echo "$out" | grep -qi "workspace attribution was not removed" && [ $rc -ne 0 ] \
+    && ok "rm CP success + unclaim fail is non-zero" \
+    || bad "rm stamp fail-loud: $out (rc=$rc)"
 
 # ── claim / unclaim (0074, daemon-local — no control plane) ──────────────
 # With no daemon connection these MUST fail loud (their whole job is the
@@ -189,7 +197,7 @@ echo "$out" | grep -qi "Usage: k2 publish subdomain claim" && [ $rc -ne 0 ] \
 
 # rm — 403 primary_undeletable
 set_resp 403 '{"error":"primary_undeletable"}'
-out="$(run rm rosson)"; rc=$?
+out="$(run_d rm rosson)"; rc=$?
 echo "$out" | grep -qi "primary subdomain cannot be removed" && [ $rc -ne 0 ] && ok "403 primary_undeletable mapped" || bad "primary_undeletable map: $out"
 
 # any — 401 / invalid_token
@@ -198,12 +206,12 @@ out="$(run list)"; rc=$?
 echo "$out" | grep -qi "Tunnel token rejected" && [ $rc -ne 0 ] && ok "invalid_token mapped" || bad "invalid_token map: $out"
 
 # ── arg validation (no network) ──────────────────────────────────────────
-out="$(run create staging)"; rc=$?
+out="$(run_d create staging)"; rc=$?
 echo "$out" | grep -qi "Usage: k2 publish subdomain create" && [ $rc -ne 0 ] && ok "create without --target -> usage" || bad "create no-target: $out"
 
 # ── publish status (plan display) ─────────────────────────────────────────
 # `publish status` (not `subdomain`) — uses its own dispatch path.
-runc() { HOME="$TEST_HOME" "$K2_BIN" publish "$@" 2>&1; }
+runc() { HOME="$TEST_HOME" K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish "$@" 2>&1; }
 
 # Pro plan on the connected (tunnel.json: rosson) subdomain.
 set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"pro","primary":true},{"label":"z3thon","host":"z3thon.k2.dev","tier":"free"}]}'

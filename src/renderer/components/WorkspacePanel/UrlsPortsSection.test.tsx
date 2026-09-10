@@ -30,6 +30,7 @@ let publishChanged: ((e: { kind: string; projectId: string }) => void) | null = 
 
 vi.mock('@/stores/session-events', () => ({
   onAppHello: () => () => {},
+  onTunnelSubdomainsChanged: () => () => {},
   onPublishServicesChanged: (cb: (e: { kind: string; projectId: string }) => void) => {
     publishChanged = cb
     return () => {
@@ -48,6 +49,22 @@ vi.mock('@/stores/connect-host', () => ({
 
 import { UrlsPortsSection } from './UrlsPortsSection'
 import { PUBLISH_RUN_EXAMPLE } from './urls-ports'
+
+function mockPublishGets(opts: {
+  list?: unknown
+  leftovers?: unknown
+  listError?: Error
+  leftoversError?: Error
+}): void {
+  daemonCliGet.mockImplementation(async (route: string) => {
+    if (route === 'publish/leftovers') {
+      if (opts.leftoversError) throw opts.leftoversError
+      return opts.leftovers ?? { leftovers: [] }
+    }
+    if (opts.listError) throw opts.listError
+    return opts.list ?? { services: [] }
+  })
+}
 
 function wire(over: Record<string, unknown> & { name: string }): Record<string, unknown> {
   return {
@@ -84,8 +101,29 @@ describe('UrlsPortsSection', () => {
     cleanup()
   })
 
+  it('empty hint only when run and leftovers GET are both empty', async () => {
+    mockPublishGets({ list: { services: [] }, leftovers: { leftovers: [] } })
+    render(<UrlsPortsSection projectId="proj-1" />)
+    await waitFor(() => {
+      expect(screen.getByText(PUBLISH_RUN_EXAMPLE)).toBeTruthy()
+    })
+  })
+
+  it('unattributed tunnel host is not imported into this workspace list', async () => {
+    mockPublishGets({ leftovers: { leftovers: [] } })
+    tunnelState.subs = {
+      primary: 'rosson',
+      targets: { stray: { target: 'localhost:9', projectId: null } },
+    }
+    render(<UrlsPortsSection projectId="proj-1" />)
+    await waitFor(() => {
+      expect(screen.getByText(PUBLISH_RUN_EXAMPLE)).toBeTruthy()
+    })
+    expect(document.querySelector('[data-published-byo="stray"]')).toBeNull()
+  })
+
   it('list GET failure is a loud error, not the empty publish hint (P11)', async () => {
-    daemonCliGet.mockRejectedValue(new Error('daemon down'))
+    mockPublishGets({ listError: new Error('daemon down') })
     render(<UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('daemon down')).toBeTruthy()
@@ -95,16 +133,88 @@ describe('UrlsPortsSection', () => {
     expect(screen.queryByText(/Ask your agent to publish/)).toBeNull()
   })
 
+  it('leftovers GET failure is a loud error, never the run example', async () => {
+    mockPublishGets({ leftoversError: new Error('leftovers down') })
+    render(<UrlsPortsSection projectId="proj-1" />)
+    await waitFor(() => {
+      expect(screen.getByText('leftovers down')).toBeTruthy()
+    })
+    expect(document.querySelector('[data-published-leftovers-error]')).toBeTruthy()
+    expect(screen.queryByText(PUBLISH_RUN_EXAMPLE)).toBeNull()
+  })
+
+  it('0074 leftover with empty cache paints the label, unknown target, no fake PID', async () => {
+    mockPublishGets({
+      leftovers: { leftovers: [{ label: 'portal', target: '', url: null }] },
+    })
+    tunnelState.subs = { primary: '', targets: {} }
+    tunnelState.status = { public_url: null }
+    render(<UrlsPortsSection projectId="docs" />)
+    await waitFor(() => {
+      expect(document.querySelector('[data-published-byo="portal"]')).toBeTruthy()
+    })
+    expect(screen.getByText('portal')).toBeTruthy()
+    expect(screen.getByText('→ (unknown)')).toBeTruthy()
+    expect(screen.queryByText(/PID/)).toBeNull()
+    expect(screen.queryByText('Start')).toBeNull()
+    expect(screen.queryByText('Stop')).toBeNull()
+    expect(screen.queryByText(PUBLISH_RUN_EXAMPLE)).toBeNull()
+  })
+
+  it('matching run name hides the leftover duplicate', async () => {
+    mockPublishGets({
+      list: { services: [wire({ name: 'portal' })] },
+      leftovers: {
+        leftovers: [{ label: 'portal', target: 'localhost:3000', url: 'https://portal.rosson.k2.dev' }],
+      },
+    })
+    render(<UrlsPortsSection projectId="proj-1" />)
+    await waitFor(() => {
+      expect(screen.getByText('portal')).toBeTruthy()
+    })
+    expect(document.querySelector('[data-published-service="portal"]')).toBeTruthy()
+    expect(document.querySelector('[data-published-byo="portal"]')).toBeNull()
+  })
+
+  it('leftovers GET 404 falls back to today tunnel ∩ filter', async () => {
+    mockPublishGets({ leftoversError: new Error('route not found') })
+    tunnelState.subs = {
+      primary: 'rosson',
+      targets: { staging: { target: 'localhost:4000', projectId: 'proj-1' } },
+    }
+    render(<UrlsPortsSection projectId="proj-1" />)
+    await waitFor(() => {
+      expect(screen.getByText('→ localhost:4000')).toBeTruthy()
+    })
+    expect(document.querySelector('[data-published-byo="staging"]')).toBeTruthy()
+    expect(screen.queryByText(PUBLISH_RUN_EXAMPLE)).toBeNull()
+  })
+
+  it('tunnel GET fail does not wipe leftovers GET rows', async () => {
+    mockPublishGets({
+      leftovers: { leftovers: [{ label: 'portal', target: 'localhost:3000', url: null }] },
+    })
+    tunnelState.subs = null
+    render(<UrlsPortsSection projectId="proj-1" />)
+    await waitFor(() => {
+      expect(document.querySelector('[data-published-byo="portal"]')).toBeTruthy()
+    })
+    expect(screen.getByText('→ localhost:3000')).toBeTruthy()
+    expect(screen.queryByText(PUBLISH_RUN_EXAMPLE)).toBeNull()
+  })
+
   it('local-only shows name, listen, Details — no public link', async () => {
-    daemonCliGet.mockResolvedValue({
-      services: [
-        wire({
-          name: 'worker',
-          expose: 'local',
-          url: 'https://should-not-show.k2.dev',
-          port: 8090,
-        }),
-      ],
+    mockPublishGets({
+      list: {
+        services: [
+          wire({
+            name: 'worker',
+            expose: 'local',
+            url: 'https://should-not-show.k2.dev',
+            port: 8090,
+          }),
+        ],
+      },
     })
     render(<UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
@@ -117,8 +227,8 @@ describe('UrlsPortsSection', () => {
   })
 
   it('skin rows badge Skin; Details Launch is the gateway, not (skin)', async () => {
-    daemonCliGet.mockResolvedValue({
-      services: [wire({ name: 'agents', kind: 'skin', cmd: '(skin)', skinRoot: 'ui', pid: 7 })],
+    mockPublishGets({
+      list: { services: [wire({ name: 'agents', kind: 'skin', cmd: '(skin)', skinRoot: 'ui', pid: 7 })] },
     })
     render(<UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
@@ -138,11 +248,13 @@ describe('UrlsPortsSection', () => {
   })
 
   it('BYO leftover Details is on the target row and opens with no fake PID', async () => {
-    daemonCliGet.mockResolvedValue({ services: [] })
-    tunnelState.subs = {
-      primary: 'rosson',
-      targets: { staging: { target: 'localhost:4000', projectId: 'proj-1' } },
-    }
+    mockPublishGets({
+      leftovers: {
+        leftovers: [
+          { label: 'staging', target: 'localhost:4000', url: 'https://staging.rosson.k2.dev' },
+        ],
+      },
+    })
     render(<UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('→ localhost:4000')).toBeTruthy()
@@ -160,9 +272,9 @@ describe('UrlsPortsSection', () => {
   })
 
   it('modal binds by name to the live list and closes when the row is gone (P14)', async () => {
-    daemonCliGet.mockImplementation(async () => ({
-      services: [wire({ name: 'web', pid: 99, status: 'running' })],
-    }))
+    mockPublishGets({
+      list: { services: [wire({ name: 'web', pid: 99, status: 'running' })] },
+    })
     render(<UrlsPortsSection projectId="proj-1" />)
     await waitFor(() => {
       expect(screen.getByText('web')).toBeTruthy()
@@ -171,16 +283,16 @@ describe('UrlsPortsSection', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('99')).toBeTruthy()
 
-    daemonCliGet.mockImplementation(async () => ({
-      services: [wire({ name: 'web', pid: null, status: 'stopped', desired: 'stopped' })],
-    }))
+    mockPublishGets({
+      list: { services: [wire({ name: 'web', pid: null, status: 'stopped', desired: 'stopped' })] },
+    })
     publishChanged?.({ kind: 'publish_services_changed', projectId: 'proj-1' })
     await waitFor(() => {
       expect(within(screen.getByRole('dialog')).getByText('not running')).toBeTruthy()
     })
     expect(within(screen.getByRole('dialog')).queryByText('99')).toBeNull()
 
-    daemonCliGet.mockImplementation(async () => ({ services: [] }))
+    mockPublishGets({ list: { services: [] } })
     publishChanged?.({ kind: 'publish_services_changed', projectId: 'proj-1' })
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull()

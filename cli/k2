@@ -310,11 +310,11 @@ _skip_conn_gate=0
 # `k2 publish` P15 — split the connection gate.
 # Skip only plan/CP verbs that talk to connect.k2.dev + tunnel.json
 # (or print help) and do not need the workspace daemon:
-#   publish (no sub / help), publish status, publish subdomain
-#   {create,list,point,rm} (empty action = list).
+#   publish (no sub / help), publish status, publish subdomain list
+#   (empty action = list).
 # Never skip hosting verbs: run | ps | start | stop | rm | logs.
-# claim/unclaim already POST the local daemon — leave the gate on
-# so they fail loud without PORT/TOKEN.
+# create/point/rm/claim/unclaim POST the local daemon (stamp) — leave
+# the gate on so they fail loud without PORT/TOKEN.
 if [ "${1:-}" = "publish" ]; then
     case "${2:-}" in
         ""|help|--help|-h|status)
@@ -322,7 +322,9 @@ if [ "${1:-}" = "publish" ]; then
             ;;
         subdomain)
             case "${3:-}" in
-                claim|unclaim) ;;
+                # create/point/rm stamp 0074 on the daemon — need PORT/TOKEN.
+                # list (empty action) and help still skip.
+                claim|unclaim|create|point|rm|remove|delete) ;;
                 *) _skip_conn_gate=1 ;;
             esac
             ;;
@@ -8362,6 +8364,20 @@ cli_post() {
         --data-raw "" 2>/dev/null
 }
 
+# UDS twin of cli_post: query-string POST over the cell socket. Omit
+# token= / project= — Bearer + stamp_principal own identity.
+cli_post_uds() {
+    local endpoint="$1"; shift
+    local params=""
+    for param in "$@"; do
+        params="${params}${params:+&}${param}"
+    done
+    curl -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+        --connect-timeout 5 --max-time 30 \
+        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+        --data-raw "" 2>/dev/null
+}
+
 # K2 Connect tunnel — expose this workspace's daemon at
 # https://<user>.k2.dev by running an frpc client that dials the hosted
 # K2 Connect server. Routes:
@@ -9488,36 +9504,50 @@ if tier in ("single", "free"):
 # subdomains, not to manage the subscription.
 
 # 0074 — record (or drop) a nested label's WORKSPACE attribution on the
-# LOCAL daemon: POST /cli/tunnel/subdomains/{claim,unclaim} with the
-# label; cli_post_form carries this shell's $PROJECT (the acting
-# workspace) in the query string, which is exactly the attribution
-# being recorded. Echoes the response body; non-zero when the daemon
-# connection is missing/unreachable.
+# LOCAL daemon: POST /cli/publish/subdomain/{claim,unclaim} with the
+# label (optional target). cli_post carries this shell's $PROJECT.
+# Cell UDS + stamp_principal via cli_send. Echoes the response body;
+# non-zero when the daemon connection is missing/unreachable.
 _subdomain_attrib_post() {
-    local verb="$1" label="$2"
+    local verb="$1" label="$2" target="${3:-}"
     if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then return 1; fi
-    cli_post_form "/cli/tunnel/subdomains/${verb}" "label=$(urlencode "$label")"
+    if [ -n "$target" ]; then
+        cli_send cli_post "/cli/publish/subdomain/${verb}" \
+            "label=$(urlencode "$label")" "target=$(urlencode "$target")"
+    else
+        cli_send cli_post "/cli/publish/subdomain/${verb}" \
+            "label=$(urlencode "$label")"
+    fi
 }
 
-# Best-effort attribution stamp AFTER a successful control-plane
-# create/point/rm. The control-plane mutation already landed — a failed
-# stamp must not fail the command; warn with the manual remediation
-# (`k2 publish subdomain claim/unclaim <label>`) instead. Always
-# returns 0.
+# Load-bearing attribution stamp AFTER a successful control-plane
+# create/point/rm. Stamp fail → non-zero even if the hostname exists
+# on the account. Thin wrapper — does not swallow.
 _stamp_subdomain_attrib() {
-    local verb="$1" label="$2" resp
-    if resp=$(_subdomain_attrib_post "$verb" "$label" 2>/dev/null) && \
-       printf '%s' "$resp" | python3 -c 'import json,sys; sys.exit(0 if (json.loads(sys.stdin.read() or "{}") or {}).get("success") else 1)' 2>/dev/null; then
+    local verb="$1" label="$2" target="${3:-}" resp err
+    if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
+        echo "Error: workspace attribution was not recorded on the daemon (unreachable)." >&2
+        return 1
+    fi
+    resp=$(_subdomain_attrib_post "$verb" "$label" "$target") || resp=""
+    if printf '%s' "$resp" | python3 -c 'import json,sys; sys.exit(0 if (json.loads(sys.stdin.read() or "{}") or {}).get("success") else 1)' 2>/dev/null; then
         return 0
     fi
+    err=$(printf '%s' "$resp" | python3 -c 'import json,sys
+try:
+    d=json.loads(sys.stdin.read() or "{}")
+    print((d.get("error") if isinstance(d, dict) else None) or "no response from the daemon")
+except Exception:
+    print("no response from the daemon")
+' 2>/dev/null) || err="no response from the daemon"
     if [ "$verb" = "claim" ]; then
-        echo "Warning: workspace attribution was not recorded on the daemon (unreachable?)." >&2
+        echo "Error: workspace attribution was not recorded on the daemon: $err" >&2
         echo "  Adopt it later from the owning workspace: k2 publish subdomain claim $label" >&2
     else
-        echo "Warning: workspace attribution was not removed on the daemon (unreachable?)." >&2
+        echo "Error: workspace attribution was not removed on the daemon: $err" >&2
         echo "  Remove it later: k2 publish subdomain unclaim $label" >&2
     fi
-    return 0
+    return 1
 }
 
 # Best-effort realtime nudge AFTER a successful control-plane
@@ -9549,10 +9579,11 @@ cmd_publish_subdomain() {
     local action="${1:-list}"
     shift 2>/dev/null || true
     # 0074 — claim/unclaim adopt/release a label's workspace attribution
-    # on the LOCAL daemon only (no control-plane call, so no bearer-token
-    # gate): claim adopts a pre-existing / remote-created label for the
-    # CURRENT workspace; unclaim drops the attribution. Fail loud — this
-    # verb's whole job is the daemon write.
+    # on the LOCAL daemon only (POST /cli/publish/subdomain/{claim,unclaim},
+    # no control-plane call): claim adopts a pre-existing / remote-created
+    # label for the CURRENT workspace; unclaim drops the attribution.
+    # Self-only (foreign 0074 → 403). Fail loud — this verb's whole job
+    # is the daemon write.
     case "$action" in
         claim|unclaim)
             local label="${1:-}"
@@ -9626,7 +9657,7 @@ print("  effective: %s" % d.get("effective","?"))
             # otherwise): attribute the label to the acting workspace,
             # then nudge the daemon's map refresh so the URL is live in
             # the UIs immediately.
-            _stamp_subdomain_attrib claim "$label"
+            _stamp_subdomain_attrib claim "$label" "$target"
             _nudge_subdomain_refresh
             ;;
         list)
@@ -9774,9 +9805,9 @@ print("  status:    %s" % d.get("status","?"))
 print("  effective: %s" % d.get("effective","?"))
 '
             # 0074 — a repoint through the K2 surface records the acting
-            # workspace (re-attributes if another workspace had it), then
-            # nudges the map refresh so the new target shows immediately.
-            _stamp_subdomain_attrib claim "$label"
+            # workspace (self-only; foreign 0074 403s). Then nudge the
+            # map refresh so the new target shows immediately.
+            _stamp_subdomain_attrib claim "$label" "$target"
             _nudge_subdomain_refresh
             ;;
         rm|remove|delete)

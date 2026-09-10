@@ -4,14 +4,20 @@ import { describe, it, expect } from 'vitest'
 import {
   PUBLISH_RUN_EXAMPLE,
   byoWorkspaceTargets,
+  isLeftoversRouteMissing,
   isLocalOnly,
   isServiceHealthy,
   isServiceStoppable,
+  leftoverDetailsTarget,
+  leftoverTargetLabel,
+  leftoversToAttributed,
   nestedPublicUrl,
   normalizeTargets,
   parsePublishedService,
+  parsePublishLeftovers,
   parsePublishList,
   publishedHostLabel,
+  publishLeftoversErrorMessage,
   publishListErrorMessage,
   serviceKindLabel,
   serviceLaunchLabel,
@@ -19,6 +25,7 @@ import {
   servicePidLabel,
   servicePublicUrl,
   serviceSkinUiLabel,
+  shouldShowPublishEmptyHint,
   sortedServices,
   sortedTargets,
   unattributedCount,
@@ -467,5 +474,101 @@ describe('publishListErrorMessage (P11)', () => {
     expect(publishListErrorMessage(new Error('daemon down'))).toBe('daemon down')
     expect(publishListErrorMessage('nope')).toBe('nope')
     expect(publishListErrorMessage({})).toBe('Failed to load published services')
+  })
+})
+
+describe('parsePublishLeftovers (keeps unknown target)', () => {
+  it('reads leftover rows including a blank target', () => {
+    expect(
+      parsePublishLeftovers({
+        leftovers: [
+          { label: 'portal', target: '', url: null },
+          { label: 'api', target: 'localhost:3000', url: 'https://api.rosson.k2.dev' },
+          { label: '  ' },
+          null,
+        ],
+      }),
+    ).toEqual([
+      { label: 'portal', target: '', url: null },
+      { label: 'api', target: 'localhost:3000', url: 'https://api.rosson.k2.dev' },
+    ])
+  })
+
+  it('does not drop blank target the way normalizeTargets would', () => {
+    const parsed = parsePublishLeftovers({
+      leftovers: [{ label: 'portal', target: '', url: null }],
+    })
+    expect(parsed).toHaveLength(1)
+    expect(normalizeTargets({ portal: { target: '', projectId: 'docs' } })).toEqual({})
+  })
+
+  it('junk / missing leftovers yields empty', () => {
+    expect(parsePublishLeftovers(null)).toEqual([])
+    expect(parsePublishLeftovers({})).toEqual([])
+    expect(parsePublishLeftovers({ leftovers: 'nope' })).toEqual([])
+  })
+})
+
+describe('leftoversToAttributed / leftover target copy', () => {
+  it('keeps blank target as attributed for byoWorkspaceTargets', () => {
+    const attributed = leftoversToAttributed(
+      [{ label: 'portal', target: '', url: null }],
+      'docs',
+    )
+    expect(attributed).toEqual({ portal: { target: '', projectId: 'docs' } })
+    expect(byoWorkspaceTargets(attributed, [])).toEqual(attributed)
+    expect(byoWorkspaceTargets(attributed, [svc({ name: 'portal' })])).toEqual({})
+  })
+
+  it('blank projectId matches nothing', () => {
+    expect(
+      leftoversToAttributed([{ label: 'portal', target: 'localhost:1', url: null }], ''),
+    ).toEqual({})
+  })
+
+  it('unknown target copy is muted (unknown) on the row and unknown in Details', () => {
+    expect(leftoverTargetLabel('')).toBe('(unknown)')
+    expect(leftoverTargetLabel('localhost:3000')).toBe('localhost:3000')
+    expect(leftoverDetailsTarget('')).toBe('unknown')
+    expect(leftoverDetailsTarget('localhost:3000')).toBe('localhost:3000')
+  })
+})
+
+describe('shouldShowPublishEmptyHint / leftovers 404', () => {
+  it('empty hint only when both GETs succeeded empty', () => {
+    expect(
+      shouldShowPublishEmptyHint({ hasRows: false, listError: null, leftoversError: null }),
+    ).toBe(true)
+    expect(
+      shouldShowPublishEmptyHint({ hasRows: true, listError: null, leftoversError: null }),
+    ).toBe(false)
+    expect(
+      shouldShowPublishEmptyHint({
+        hasRows: false,
+        listError: 'daemon down',
+        leftoversError: null,
+      }),
+    ).toBe(false)
+    expect(
+      shouldShowPublishEmptyHint({
+        hasRows: false,
+        listError: null,
+        leftoversError: 'leftovers down',
+      }),
+    ).toBe(false)
+  })
+
+  it('old-daemon leftovers 404 is route not found', () => {
+    expect(isLeftoversRouteMissing(new Error('route not found'))).toBe(true)
+    expect(isLeftoversRouteMissing(new Error('daemon leftovers 404'))).toBe(true)
+    expect(isLeftoversRouteMissing(new Error('Failed to load leftover published URLs'))).toBe(
+      false,
+    )
+  })
+
+  it('leftovers error copy is loud, never the run example', () => {
+    expect(publishLeftoversErrorMessage(new Error('boom'))).toBe('boom')
+    expect(publishLeftoversErrorMessage({})).toBe('Failed to load leftover published URLs')
+    expect(publishLeftoversErrorMessage({})).not.toContain('k2 publish run')
   })
 })

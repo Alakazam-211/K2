@@ -966,6 +966,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0116_sql_databases_status_test",
             include_str!("../../drizzle_sql/0116_sql_databases_status_test.sql"),
         ),
+        // 0117 — last-known nested-subdomain target on 0074 attribution.
+        // Additive ALTER; do not rewrite frozen 0074 SQL.
+        (
+            "0117_subdomain_workspaces_target",
+            include_str!("../../drizzle_sql/0117_subdomain_workspaces_target.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1567,7 +1573,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0116_sql_databases_status_test",
+            last_name, "0117_subdomain_workspaces_target",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2034,6 +2040,46 @@ mod tests {
             )
             .unwrap();
         assert_eq!((n, pid.as_str()), (1, "p2"), "PK upsert must repoint, not duplicate");
+        run_migrations(&conn).unwrap();
+    }
+
+    /// 0117: additive `target` column on `subdomain_workspaces`. Keep
+    /// the 0074 named-column count test above; this asserts the extra
+    /// column landed and existing rows backfill to `''`.
+    #[test]
+    fn migration_0117_adds_subdomain_workspaces_target_column() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let cols: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('subdomain_workspaces') \
+                 WHERE name = 'target'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 1, "subdomain_workspaces must have target after 0117");
+        let applied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM _migrations WHERE name = '0117_subdomain_workspaces_target'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1, "0117 must be registered exactly once");
+        conn.execute(
+            "INSERT INTO subdomain_workspaces (label, project_id) VALUES ('portal', 'docs')",
+            [],
+        )
+        .unwrap();
+        let target: String = conn
+            .query_row(
+                "SELECT target FROM subdomain_workspaces WHERE label = 'portal'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(target, "", "omitted target backfills to empty string");
         run_migrations(&conn).unwrap();
     }
 

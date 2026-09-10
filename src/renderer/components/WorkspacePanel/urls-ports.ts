@@ -294,3 +294,76 @@ export function publishListErrorMessage(err: unknown): string {
   if (typeof err === 'string' && err.trim()) return err.trim()
   return 'Failed to load published services'
 }
+
+/** Leftovers GET failure copy — P11 shape, never the run example. */
+export function publishLeftoversErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) return err.message.trim()
+  if (typeof err === 'string' && err.trim()) return err.trim()
+  return 'Failed to load leftover published URLs'
+}
+
+/** Old daemon: GET /cli/publish/leftovers → 404 `{error:"route not found"}`. */
+export function isLeftoversRouteMissing(err: unknown): boolean {
+  const msg = publishLeftoversErrorMessage(err).toLowerCase()
+  return msg === 'route not found' || msg.includes('leftovers 404') || /\b404\b/.test(msg)
+}
+
+/** One leftover nested URL from GET `/cli/publish/leftovers`. Blank target
+ *  is kept (unknown) — do not reuse `normalizeTargets`. */
+export interface PublishLeftover {
+  label: string
+  target: string
+  url: string | null
+}
+
+/** Parse `{ leftovers: [{ label, target, url }] }`. Nameless junk dropped;
+ *  empty/missing target is kept as `''`. */
+export function parsePublishLeftovers(raw: unknown): PublishLeftover[] {
+  if (!raw || typeof raw !== 'object') return []
+  const list = (raw as { leftovers?: unknown }).leftovers
+  if (!Array.isArray(list)) return []
+  const out: PublishLeftover[] = []
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue
+    const o = item as Record<string, unknown>
+    const label = asString(o.label).trim()
+    if (!label) continue
+    const target = typeof o.target === 'string' ? o.target : ''
+    out.push({ label, target, url: asStringOrNull(o.url) })
+  }
+  return out
+}
+
+/** Leftover GET rows as attributed targets for `byoWorkspaceTargets`.
+ *  Keeps blank target (unknown). */
+export function leftoversToAttributed(
+  leftovers: readonly PublishLeftover[],
+  projectId: string,
+): Record<string, SubdomainTargetInfo> {
+  const out: Record<string, SubdomainTargetInfo> = {}
+  if (!projectId) return out
+  for (const row of leftovers) {
+    out[row.label] = { target: row.target, projectId }
+  }
+  return out
+}
+
+/** Row target copy: muted unknown when blank. */
+export function leftoverTargetLabel(target: string): string {
+  return target.trim() ? target : '(unknown)'
+}
+
+/** Details target field: `unknown` when blank (no fake PID). */
+export function leftoverDetailsTarget(target: string): string {
+  return target.trim() ? target : 'unknown'
+}
+
+/** Empty "ask your agent to `k2 publish run`" only when both GETs
+ *  succeeded empty. Either GET error stays loud. */
+export function shouldShowPublishEmptyHint(opts: {
+  hasRows: boolean
+  listError: string | null
+  leftoversError: string | null
+}): boolean {
+  return !opts.hasRows && !opts.listError && !opts.leftoversError
+}

@@ -729,12 +729,17 @@ async fn handle_one_request(
             | "/cli/wiki/chat/on"
             | "/cli/wiki/chat/off"
             // Published services — daemon-owned process + optional nested
-            // hostname. POST-only mutating; GET list/logs via cli::dispatch.
-            // Not under /cli/tunnel/ (owner-only deny).
+            // hostname. POST-only mutating; GET list/logs/leftovers via
+            // cli::dispatch. Not under /cli/tunnel/ (owner-only deny).
             | "/cli/publish/run"
             | "/cli/publish/start"
             | "/cli/publish/stop"
             | "/cli/publish/rm"
+            // Self-only leftover stamp (create/point/rm). Exact paths —
+            // TCP 405s a prefix-only miss. Leave /cli/tunnel/subdomains/claim
+            // as-is (owner TCP REPLACE).
+            | "/cli/publish/subdomain/claim"
+            | "/cli/publish/subdomain/unclaim"
             // K2 Connect host-awareness GAP — workspace skill / agent /
             // session / relations / heartbeat-flag / onboarding writes.
             // The renderer previously fired these via LOCAL Tauri

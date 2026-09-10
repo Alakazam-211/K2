@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 use serde::{Deserialize, Serialize};
 
 // ── Focus Groups ────────────────────────────────────────────────────────────
@@ -3220,13 +3220,51 @@ impl SchedulerMeta {
 /// normalized lowercase to match `SubdomainMap::from_rows`; no FK on
 /// purpose — a label may predate/outlive the workspace registry, and
 /// readers treat a dangling project_id as unattributed.
+///
+/// 0117 adds last-known `target` (empty = unknown). Overlay the
+/// in-memory tunnel cache when present.
 pub struct SubdomainWorkspace;
+
+/// Outcome of a self-only stamp (new `/cli/publish/subdomain/claim`
+/// arm). Distinct from [`SubdomainWorkspace::claim`] which is still
+/// INSERT OR REPLACE (transfer/`run` steal — do not change this cut).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelfStamp {
+    Written,
+    Foreign { owner: String },
+}
+
+/// Outcome of a self-only unclaim (`/cli/publish/subdomain/unclaim`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelfUnclaim {
+    Removed,
+    Absent,
+    Foreign { owner: String },
+}
 
 impl SubdomainWorkspace {
     /// The full `label → project_id` attribution map.
     pub fn map(conn: &Connection) -> Result<std::collections::HashMap<String, String>> {
         let mut stmt = conn.prepare("SELECT label, project_id FROM subdomain_workspaces")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.collect()
+    }
+
+    /// This workspace's 0074 rows: `(label, stored last-target)`.
+    pub fn list_for_project(
+        conn: &Connection,
+        project_id: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let project_id = project_id.trim();
+        if project_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = conn.prepare(
+            "SELECT label, target FROM subdomain_workspaces WHERE project_id = ?1 ORDER BY label",
+        )?;
+        let rows = stmt.query_map(params![project_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
         rows.collect()
     }
 
@@ -3249,6 +3287,56 @@ impl SubdomainWorkspace {
         Ok(())
     }
 
+    /// Self-only stamp: INSERT if unattributed, UPDATE last-target if
+    /// already this workspace, refuse a foreign 0074 row (no rewrite).
+    /// Optional `target` is persisted when non-empty; omitted/blank
+    /// keeps a stored last-target on re-stamp.
+    pub fn self_stamp(
+        conn: &Connection,
+        label: &str,
+        project_id: &str,
+        target: Option<&str>,
+    ) -> Result<SelfStamp> {
+        let label = label.trim().to_ascii_lowercase();
+        let project_id = project_id.trim();
+        if label.is_empty() || project_id.is_empty() {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "subdomain claim needs a non-empty label and project_id".to_string(),
+            ));
+        }
+        let new_target = target.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("");
+        let existing: Option<(String, String)> = conn
+            .query_row(
+                "SELECT project_id, target FROM subdomain_workspaces WHERE label = ?1",
+                params![label],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        match existing {
+            None => {
+                conn.execute(
+                    "INSERT INTO subdomain_workspaces (label, project_id, target) \
+                     VALUES (?1, ?2, ?3)",
+                    params![label, project_id, new_target],
+                )?;
+                Ok(SelfStamp::Written)
+            }
+            Some((owner, stored)) if owner == project_id => {
+                let persist = if new_target.is_empty() {
+                    stored
+                } else {
+                    new_target.to_string()
+                };
+                conn.execute(
+                    "UPDATE subdomain_workspaces SET target = ?1 WHERE label = ?2",
+                    params![persist, label],
+                )?;
+                Ok(SelfStamp::Written)
+            }
+            Some((owner, _)) => Ok(SelfStamp::Foreign { owner }),
+        }
+    }
+
     /// Remove `label`'s attribution. Returns whether a row was
     /// actually deleted (false = the label wasn't attributed — callers
     /// surface that honestly instead of pretending a delete happened).
@@ -3259,6 +3347,40 @@ impl SubdomainWorkspace {
             params![label],
         )?;
         Ok(n > 0)
+    }
+
+    /// Self-only unclaim: drop this workspace's sticker; foreign 0074
+    /// is refused (no rewrite). Absent is honest `Absent`, not an error.
+    pub fn self_unclaim(
+        conn: &Connection,
+        label: &str,
+        project_id: &str,
+    ) -> Result<SelfUnclaim> {
+        let label = label.trim().to_ascii_lowercase();
+        let project_id = project_id.trim();
+        if label.is_empty() || project_id.is_empty() {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "subdomain unclaim needs a non-empty label and project_id".to_string(),
+            ));
+        }
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT project_id FROM subdomain_workspaces WHERE label = ?1",
+                params![label],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match existing {
+            None => Ok(SelfUnclaim::Absent),
+            Some(owner) if owner == project_id => {
+                conn.execute(
+                    "DELETE FROM subdomain_workspaces WHERE label = ?1",
+                    params![label],
+                )?;
+                Ok(SelfUnclaim::Removed)
+            }
+            Some(owner) => Ok(SelfUnclaim::Foreign { owner }),
+        }
     }
 }
 
@@ -5154,6 +5276,77 @@ mod unit_tests {
         assert!(SubdomainWorkspace::claim(&conn, "  ", "proj-1").is_err());
         assert!(SubdomainWorkspace::claim(&conn, "staging", "  ").is_err());
         assert!(SubdomainWorkspace::map(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn subdomain_workspace_self_stamp_is_self_only_and_keeps_last_target() {
+        let conn = fresh();
+        assert_eq!(
+            SubdomainWorkspace::self_stamp(&conn, " Portal ", "docs", Some("localhost:3000"))
+                .unwrap(),
+            SelfStamp::Written
+        );
+        let docs = SubdomainWorkspace::list_for_project(&conn, "docs").unwrap();
+        assert_eq!(
+            docs,
+            vec![("portal".to_string(), "localhost:3000".to_string())]
+        );
+        assert_eq!(
+            SubdomainWorkspace::self_stamp(&conn, "portal", "docs", None).unwrap(),
+            SelfStamp::Written
+        );
+        assert_eq!(
+            SubdomainWorkspace::list_for_project(&conn, "docs").unwrap()[0].1,
+            "localhost:3000"
+        );
+        assert_eq!(
+            SubdomainWorkspace::self_stamp(&conn, "portal", "sales", Some("localhost:9")).unwrap(),
+            SelfStamp::Foreign {
+                owner: "docs".to_string()
+            }
+        );
+        assert_eq!(
+            SubdomainWorkspace::list_for_project(&conn, "docs").unwrap()[0].1,
+            "localhost:3000"
+        );
+        assert!(SubdomainWorkspace::list_for_project(&conn, "sales")
+            .unwrap()
+            .is_empty());
+        SubdomainWorkspace::claim(&conn, "portal", "sales").unwrap();
+        assert_eq!(
+            SubdomainWorkspace::map(&conn)
+                .unwrap()
+                .get("portal")
+                .map(String::as_str),
+            Some("sales")
+        );
+    }
+
+    #[test]
+    fn subdomain_workspace_self_unclaim_drops_own_row_not_foreign() {
+        let conn = fresh();
+        SubdomainWorkspace::self_stamp(&conn, "portal", "docs", Some("localhost:3000")).unwrap();
+        assert_eq!(
+            SubdomainWorkspace::self_unclaim(&conn, "portal", "sales").unwrap(),
+            SelfUnclaim::Foreign {
+                owner: "docs".to_string()
+            }
+        );
+        assert_eq!(
+            SubdomainWorkspace::list_for_project(&conn, "docs").unwrap().len(),
+            1
+        );
+        assert_eq!(
+            SubdomainWorkspace::self_unclaim(&conn, "portal", "docs").unwrap(),
+            SelfUnclaim::Removed
+        );
+        assert!(SubdomainWorkspace::list_for_project(&conn, "docs")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            SubdomainWorkspace::self_unclaim(&conn, "portal", "docs").unwrap(),
+            SelfUnclaim::Absent
+        );
     }
 }
 

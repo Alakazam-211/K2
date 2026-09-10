@@ -647,11 +647,12 @@ mod unix_impl {
             p if p.starts_with("/cli/dns/") && is_post => {
                 from_cli(crate::dns_routes::dispatch_post(p, body))
             }
-            // Published services: POST run/start/stop/rm. CLI `cli_post_json`
-            // sends a JSON body; cell handle_conn only merges form, so flatten
+            // Published services: POST run/start/stop/rm + subdomain
+            // claim/unclaim. CLI `cli_post_json` / `cli_post` send JSON or
+            // query params; cell handle_conn only merges form, so flatten
             // here then re-stamp so identity wins over body's `project`.
-            // GET list/logs stay on is_agent_verb && !is_post. Self-host:
-            // do not preserve a foreign project= the way inbox compose does.
+            // GET list/logs/leftovers stay on is_agent_verb && !is_post.
+            // Self-host: do not preserve a foreign project=.
             p if p.starts_with("/cli/publish/") && is_post => {
                 let mut params = params.clone();
                 crate::routes::http::merge_json_object_params(&mut params, body);
@@ -991,6 +992,102 @@ mod unix_impl {
             let (gstatus, _, _) = dispatch_cell_verb(
                 "GET",
                 "/cli/publish/run",
+                &params,
+                b"",
+                &p,
+                "sid-1",
+            );
+            assert_eq!(gstatus, "405 Method Not Allowed");
+        }
+
+        #[test]
+        fn cell_dispatch_subdomain_claim_stamps_self_not_foreign() {
+            let _ = k2_core::db::init_for_tests();
+            let docs = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+            let sales = "cccccccc-dddd-eeee-ffff-000000000001";
+            let docs_path = "/tmp/k2-cell-docs-claim";
+            let sales_path = "/tmp/k2-cell-sales-claim";
+            std::fs::create_dir_all(docs_path).expect("docs dir");
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![docs, docs_path, "Documents"],
+                )
+                .expect("insert docs");
+                conn.execute(
+                    "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![sales, sales_path, "Sales"],
+                )
+                .expect("insert sales");
+                k2_core::db::schema::SubdomainWorkspace::self_stamp(
+                    &conn,
+                    "sales-portal",
+                    sales,
+                    Some("localhost:1"),
+                )
+                .expect("sales sticker");
+            }
+            let p = HookPrincipal {
+                workspace_uuid: docs.to_string(),
+                agent_address: "docs-agent".to_string(),
+            };
+            let params: HashMap<String, String> = HashMap::new();
+            let body = serde_json::json!({
+                "label": "docs-portal",
+                "target": "localhost:3000",
+                "project": sales_path,
+            })
+            .to_string();
+            let (status, _, out) = dispatch_cell_verb(
+                "POST",
+                "/cli/publish/subdomain/claim",
+                &params,
+                body.as_bytes(),
+                &p,
+                "sid-1",
+            );
+            assert_eq!(status, "200 OK", "self stamp must succeed; body={out}");
+            assert!(out.contains("docs-portal"), "body={out}");
+
+            let steal = serde_json::json!({
+                "label": "sales-portal",
+                "target": "localhost:9",
+                "project": sales_path,
+            })
+            .to_string();
+            let (sstatus, _, sout) = dispatch_cell_verb(
+                "POST",
+                "/cli/publish/subdomain/claim",
+                &params,
+                steal.as_bytes(),
+                &p,
+                "sid-1",
+            );
+            assert_eq!(sstatus, "403 Forbidden", "must not steal Sales; body={sout}");
+            assert!(sout.contains("k2 publish transfer"), "body={sout}");
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let map = k2_core::db::schema::SubdomainWorkspace::map(&conn).unwrap();
+                assert_eq!(
+                    map.get("sales-portal").map(String::as_str),
+                    Some(sales),
+                    "foreign 0074 must be unchanged"
+                );
+                assert_eq!(
+                    map.get("docs-portal").map(String::as_str),
+                    Some(docs),
+                    "self stamp must land on the cell workspace"
+                );
+                let _ = k2_core::db::schema::SubdomainWorkspace::unclaim(&conn, "sales-portal");
+                let _ = k2_core::db::schema::SubdomainWorkspace::unclaim(&conn, "docs-portal");
+            }
+
+            let (gstatus, _, _) = dispatch_cell_verb(
+                "GET",
+                "/cli/publish/subdomain/claim",
                 &params,
                 b"",
                 &p,

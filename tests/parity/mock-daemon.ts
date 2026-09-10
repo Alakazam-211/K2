@@ -80,7 +80,7 @@ export const DEFAULT_SETTINGS = {
     tabSize: 2,
     wordWrap: false,
     showWhitespace: false,
-    fontSize: 12,
+    fontSize: 13,
     indentGuides: true,
     foldGutter: true,
     autocomplete: true,

@@ -27,7 +27,7 @@ vi.mock('./useOverlayThread', () => ({
 
 vi.mock('@/stores/settings', () => ({
   useSettingsStore: (sel: (s: { editor: { fontSize: number } }) => unknown) =>
-    sel({ editor: { fontSize: 12 } }),
+    sel({ editor: { fontSize: 13 } }),
 }))
 
 describe('Thread overlay pane', () => {

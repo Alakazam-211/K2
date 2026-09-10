@@ -607,7 +607,7 @@ fn default_tab_size() -> u32 {
     2
 }
 fn default_editor_font_size() -> u32 {
-    12
+    13
 }
 fn default_diff_style() -> String {
     "gutter".to_string()
@@ -625,7 +625,7 @@ impl Default for EditorSettings {
             tab_size: 2,
             word_wrap: false,
             show_whitespace: false,
-            font_size: 12,
+            font_size: 13,
             indent_guides: true,
             fold_gutter: true,
             autocomplete: true,
@@ -968,6 +968,7 @@ mod tests {
         let s = load();
         assert_eq!(s.default_agent, "claude");
         assert_eq!(s.terminal.font_size, 13);
+        assert_eq!(s.editor.font_size, 13);
     }
 
     #[test]

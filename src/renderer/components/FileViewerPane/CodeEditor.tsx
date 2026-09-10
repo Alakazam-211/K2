@@ -1260,7 +1260,7 @@ export function CodeEditor({ code, filePath, onSave, onChange, onCursorChange, r
       lineNumbersCompartment.of(es.lineNumbers ? lineNumbers() : []),
       activeLineCompartment.of(es.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
       bracketCompartment.of(es.bracketMatching ? bracketMatching() : []),
-      fontSizeCompartment.of(EditorView.theme({ '&': { fontSize: `${es.fontSize || 12}px` }, '.cm-gutters': { fontSize: `${Math.max((es.fontSize || 12) - 1, 10)}px` } })),
+      fontSizeCompartment.of(EditorView.theme({ '&': { fontSize: `${es.fontSize || 13}px` }, '.cm-gutters': { fontSize: `${Math.max((es.fontSize || 13) - 1, 10)}px` } })),
       fontFamilyCompartment.of(buildFontFamilyExtension(es.fontFamily || 'MesloLGM Nerd Font', es.fontLigatures ?? false)),
       cursorCompartment.of(buildCursorExtension(es.cursorStyle || 'bar', es.cursorBlink ?? true)),
       scrollPastEndCompartment.of(es.scrollPastEnd ? scrollPastEnd() : []),

@@ -24,7 +24,7 @@ export const ChatterOverlayPane = memo(function ChatterOverlayPane({
     enabled: active,
   })
 
-  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   useEffect(() => {
     if (!active) return

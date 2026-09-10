@@ -18,7 +18,7 @@ vi.mock('./useOverlayChatter', () => ({
 
 vi.mock('@/stores/settings', () => ({
   useSettingsStore: (sel: (s: { editor: { fontSize: number } }) => unknown) =>
-    sel({ editor: { fontSize: 12 } }),
+    sel({ editor: { fontSize: 13 } }),
 }))
 
 import { ChatterOverlayPane } from './ChatterOverlayPane'

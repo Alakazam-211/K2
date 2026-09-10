@@ -521,7 +521,7 @@ export function composeTextareaHeight(opts: {
   fontSize: number
   maxHeight?: number
 }): number {
-  const font = opts.fontSize > 0 ? opts.fontSize : 12
+  const font = opts.fontSize > 0 ? opts.fontSize : 13
   const singleLine = Math.round(font * 1.4 + 8)
   const cap = opts.maxHeight ?? COMPOSE_TEXTAREA_MAX_HEIGHT
   if (!opts.value) return singleLine

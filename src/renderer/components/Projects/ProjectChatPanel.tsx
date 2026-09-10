@@ -90,7 +90,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   }, [])
   const readOnly = !canPostProjectChat(connectRole)
   // Match Code Editor → Appearance → Font Size (default 12).
-  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
 
   // null = never fetched (loading state on first expand).
   const [messages, setMessages] = useState<ProjectGroupMessage[] | null>(null)

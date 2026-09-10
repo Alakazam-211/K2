@@ -133,7 +133,7 @@ export function TerminalComposeBar({
   })
   const permitted = composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
   // Match Code Editor → Appearance → Font Size (default 12).
-  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   const agentName = useProjectsStore((s) =>
     composeAgentNameFromProjects(s.projects, workspacePath),
   )

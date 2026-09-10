@@ -29,7 +29,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   })
 
   const visible = items.filter((it) => !isVoidedHitl(it.doc))
-  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   useEffect(() => {
     if (!active) return

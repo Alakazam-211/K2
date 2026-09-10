@@ -312,7 +312,7 @@ let _writeSeq = 0
  * with what was actually persisted — no extra fetchSettings round-trip.
  */
 const DEFAULT_EDITOR: EditorSettingsBackend = {
-  tabSize: 2, wordWrap: false, showWhitespace: false, fontSize: 12,
+  tabSize: 2, wordWrap: false, showWhitespace: false, fontSize: 13,
   indentGuides: true, foldGutter: true, autocomplete: true,
   bracketMatching: true, lineNumbers: true, highlightActiveLine: true,
   stickyScroll: false, minimap: false,

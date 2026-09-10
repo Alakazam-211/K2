@@ -206,7 +206,7 @@ function ThreadTab({
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Match Code Editor → Appearance → Font Size (default 12).
-  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 12
+  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
 
   // Focus the reply box ONCE per ticket id when the thread first becomes
   // ready — not on every live `item` refetch. Re-focus steals the caret

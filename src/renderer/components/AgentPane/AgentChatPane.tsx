@@ -811,7 +811,7 @@ function OverlayTabBody({
 }): React.JSX.Element {
   if (viewTab === 'thread') {
     return (
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <ThreadOverlayPane addr={overlayAddr} conversationId={overlayConv} />
       </div>
     )

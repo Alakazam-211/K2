@@ -49,6 +49,15 @@ describe('Thread overlay pane', () => {
     expect(screen.queryByTestId('thread-compose')).toBeNull()
   })
 
+  it('overlay root is a flex-1 min-h-0 overflow-hidden column (not height 100%)', () => {
+    render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    const pane = screen.getByTestId('thread-overlay-pane')
+    expect(pane.className).toContain('flex-1')
+    expect(pane.className).toContain('min-h-0')
+    expect(pane.className).toContain('overflow-hidden')
+    expect(pane.className.split(/\s+/)).not.toContain('h-full')
+  })
+
   it('shows Load older when hasMore and click calls loadOlder', () => {
     const loadOlder = vi.fn(async () => {})
     threadHook.hasMore = true

@@ -5740,12 +5740,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         <div
           className={
             showSplit
-              ? 'flex-1 min-w-0 min-h-0 border-l border-[var(--color-border)] flex flex-col'
-              : 'flex-1 min-w-0 min-h-0 flex flex-col'
+              ? 'flex-1 min-w-0 min-h-0 overflow-hidden border-l border-[var(--color-border)] flex flex-col'
+              : 'flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col'
           }
           data-testid="agent-session-thread"
         >
-          <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 min-w-0 h-0 flex flex-col overflow-hidden">
             <ThreadOverlayPane
               addr={sessionChrome.overlayAddr}
               conversationId={sessionChrome.conversationId}

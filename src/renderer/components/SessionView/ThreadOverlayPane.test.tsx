@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
-import { describe, expect, it, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
+import { createElement, useState, type ReactNode } from 'react'
+import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import {
   choiceLetter,
   ThreadItemRow,
   ThreadOverlayPane,
 } from './ThreadOverlayPane'
+import { overlayViewer } from './sessionViewTab'
 import type { OverlayThreadItem } from './overlayThread'
 
 const threadHook = vi.hoisted(() => ({
@@ -51,6 +54,8 @@ describe('Thread overlay pane', () => {
     threadHook.hasMore = true
     threadHook.loadOlder = loadOlder
     render(<ThreadOverlayPane addr="sales" conversationId="c" />)
+    const list = overlayList()
+    stubListBox(list, { scrollHeight: 800, clientHeight: 200, scrollTop: 40 })
     fireEvent.click(screen.getByTestId('overlay-load-older'))
     expect(loadOlder).toHaveBeenCalledTimes(1)
   })
@@ -186,5 +191,309 @@ describe('Thread overlay choice chips + secret field', () => {
     expect(screen.queryByText('s3cr3t-bytes')).toBeNull()
     fireEvent.click(screen.getByTestId('thread-secret-dismiss'))
     expect(dismissed).toBe(1)
+  })
+})
+
+type ListBox = {
+  scrollHeight: number
+  clientHeight: number
+  scrollTop: number
+}
+
+function textItem(id: string, seq: number): OverlayThreadItem {
+  return {
+    collection: 'thread',
+    seq,
+    id,
+    doc: {
+      id,
+      kind: 'text',
+      from: 'k2',
+      body: `m${seq}`,
+      created_at: 1,
+    },
+  }
+}
+
+function overlayList(): HTMLElement {
+  const pane = screen.getByTestId('thread-overlay-pane')
+  const list =
+    pane.querySelector('[data-testid="thread-overlay-list"]') ??
+    pane.querySelector('.overflow-y-auto')
+  if (!(list instanceof HTMLElement)) throw new Error('missing thread overlay list')
+  return list
+}
+
+function stubListBox(el: HTMLElement, box: ListBox): void {
+  Object.defineProperty(el, 'scrollHeight', {
+    configurable: true,
+    get: () => box.scrollHeight,
+  })
+  Object.defineProperty(el, 'clientHeight', {
+    configurable: true,
+    get: () => box.clientHeight,
+  })
+  Object.defineProperty(el, 'scrollTop', {
+    configurable: true,
+    get: () => box.scrollTop,
+    set: (v: number) => {
+      box.scrollTop = v
+    },
+  })
+}
+
+class FakeResizeObserver {
+  static instances: FakeResizeObserver[] = []
+  observed: Element[] = []
+  private readonly cb: ResizeObserverCallback
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb
+    FakeResizeObserver.instances.push(this)
+  }
+  observe(el: Element): void {
+    this.observed.push(el)
+  }
+  unobserve(el: Element): void {
+    this.observed = this.observed.filter((o) => o !== el)
+  }
+  disconnect(): void {
+    this.observed = []
+  }
+  fire(): void {
+    this.cb(
+      this.observed.map(
+        (target) =>
+          ({
+            target,
+            contentRect: { width: 0, height: 0 },
+          }) as ResizeObserverEntry,
+      ),
+      this as unknown as ResizeObserver,
+    )
+  }
+}
+
+function observerOf(el: Element): FakeResizeObserver {
+  const found = FakeResizeObserver.instances.find((o) => o.observed.includes(el))
+  if (!found) throw new Error('no ResizeObserver is observing the list')
+  return found
+}
+
+function renderOverlay(visible = true) {
+  return render(
+    createElement(
+      TabVisibilityContext.Provider,
+      { value: visible },
+      createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c' }),
+    ),
+  )
+}
+
+function VisibilityHarness({
+  visible,
+  children,
+}: {
+  visible: boolean
+  children: ReactNode
+}) {
+  return createElement(TabVisibilityContext.Provider, { value: visible }, children)
+}
+
+describe('Thread overlay list scroll restore', () => {
+  beforeEach(() => {
+    FakeResizeObserver.instances = []
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    threadHook.items = [textItem('t1', 1), textItem('t2', 2)]
+    threadHook.hasMore = false
+    threadHook.loadingOlder = false
+    threadHook.loadOlder = async () => {}
+  })
+
+  afterEach(() => {
+    cleanup()
+    threadHook.items = []
+    threadHook.error = null
+    threadHook.hasMore = false
+    threadHook.loadingOlder = false
+    threadHook.loadOlder = async () => {}
+    vi.unstubAllGlobals()
+  })
+
+  it('(a) items + real height pin to bottom', () => {
+    renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(box.scrollHeight)
+  })
+
+  it('(b) 0-height then ResizeObserver to real height pins if pinned', () => {
+    renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 0, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(0)
+
+    box.clientHeight = 200
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(box.scrollHeight)
+  })
+
+  it('(c) user scrolled up stays put on resize and new items', () => {
+    const view = renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(800)
+
+    box.scrollTop = 120
+    fireEvent.scroll(list)
+    expect(box.scrollTop).toBe(120)
+
+    box.clientHeight = 140
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(120)
+
+    threadHook.items = [...threadHook.items, textItem('t3', 3)]
+    view.rerender(
+      createElement(
+        TabVisibilityContext.Provider,
+        { value: true },
+        createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c' }),
+      ),
+    )
+    expect(box.scrollTop).toBe(120)
+  })
+
+  it('(d) scrollTop === 0 at clientHeight === 0 does not call loadOlder', () => {
+    const loadOlder = vi.fn(async () => {})
+    threadHook.hasMore = true
+    threadHook.loadOlder = loadOlder
+    renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 0, scrollTop: 0 }
+    stubListBox(list, box)
+    fireEvent.scroll(list)
+    expect(loadOlder).not.toHaveBeenCalled()
+  })
+
+  it('(e) split and thread-only both overlayViewer.thread', () => {
+    expect(overlayViewer('thread').thread).toBe(true)
+    expect(overlayViewer('split').thread).toBe(true)
+    expect(overlayViewer('terminal').thread).toBe(false)
+    expect(overlayViewer('chatter').thread).toBe(false)
+  })
+
+  it('(f) list clientHeight shrinks while pinned stays at bottom', () => {
+    renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(800)
+
+    box.clientHeight = 80
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(box.scrollHeight)
+  })
+
+  it('(g) 0-height onScroll does not clear pinBottomRef', () => {
+    renderOverlay()
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(800)
+
+    box.clientHeight = 0
+    box.scrollTop = 0
+    fireEvent.scroll(list)
+
+    box.clientHeight = 200
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(box.scrollHeight)
+  })
+
+  it('visibility false→true re-pins when still pinned', () => {
+    function Flip() {
+      const [visible, setVisible] = useState(false)
+      return createElement(
+        'div',
+        null,
+        createElement(
+          VisibilityHarness,
+          { visible },
+          createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c' }),
+        ),
+        createElement('button', {
+          type: 'button',
+          'data-testid': 'flip-visible',
+          onClick: () => setVisible(true),
+        }),
+      )
+    }
+    render(createElement(Flip))
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    expect(box.scrollTop).toBe(0)
+
+    fireEvent.click(screen.getByTestId('flip-visible'))
+    expect(box.scrollTop).toBe(box.scrollHeight)
+  })
+
+  it('visibility false→true does not steal a scrolled-up list', () => {
+    function Flip() {
+      const [visible, setVisible] = useState(true)
+      return createElement(
+        'div',
+        null,
+        createElement(
+          VisibilityHarness,
+          { visible },
+          createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c' }),
+        ),
+        createElement('button', {
+          type: 'button',
+          'data-testid': 'hide-tab',
+          onClick: () => setVisible(false),
+        }),
+        createElement('button', {
+          type: 'button',
+          'data-testid': 'show-tab',
+          onClick: () => setVisible(true),
+        }),
+      )
+    }
+    render(createElement(Flip))
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    act(() => observerOf(list).fire())
+    box.scrollTop = 90
+    fireEvent.scroll(list)
+
+    fireEvent.click(screen.getByTestId('hide-tab'))
+    box.scrollTop = 0
+    box.clientHeight = 0
+    fireEvent.scroll(list)
+    box.clientHeight = 200
+    fireEvent.click(screen.getByTestId('show-tab'))
+    expect(box.scrollTop).toBe(90)
+  })
+
+  it('hidden tab onScroll does not call loadOlder', () => {
+    const loadOlder = vi.fn(async () => {})
+    threadHook.hasMore = true
+    threadHook.loadOlder = loadOlder
+    renderOverlay(false)
+    const list = overlayList()
+    const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    fireEvent.scroll(list)
+    expect(loadOlder).not.toHaveBeenCalled()
   })
 })

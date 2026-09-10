@@ -1,6 +1,8 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react'
 import { ChatMessage } from '@/components/common/ChatMessage'
+import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { formatRelativeTime } from '@/lib/format-relative-time'
+import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import { useSettingsStore } from '@/stores/settings'
 import { useOverlayThread } from './useOverlayThread'
 import {
@@ -30,6 +32,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
 
   const visible = items.filter((it) => !isVoidedHitl(it.doc))
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
+  const isTabVisible = useIsTabVisible()
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   useEffect(() => {
     if (!active) return
@@ -38,39 +41,94 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     return () => clearInterval(id)
   }, [active])
 
+  // Re-pin on show/resize (retainer 0-box, pane-group reveal, compose grow).
+  // Do not latch the initial pin against a 0-height list; hidden/layout
+  // scrollTop===0 is not load-older and does not leave the bottom.
   const listRef = useRef<HTMLDivElement>(null)
   const didInitialScroll = useRef(false)
   const prevHeightRef = useRef<number | null>(null)
   const pinBottomRef = useRef(true)
+  const savedScrollTopRef = useRef<number | null>(null)
+  const itemsLenRef = useRef(items.length)
+  itemsLenRef.current = items.length
+  const isTabVisibleRef = useRef(isTabVisible)
+  isTabVisibleRef.current = isTabVisible
 
   useEffect(() => {
     didInitialScroll.current = false
     pinBottomRef.current = true
+    prevHeightRef.current = null
+    savedScrollTopRef.current = null
   }, [addr])
 
-  useLayoutEffect(() => {
-    const el = listRef.current
-    if (!el) return
-    if (!didInitialScroll.current && items.length > 0) {
+  const syncListScrollRef = useRef<(el: HTMLElement) => void>(() => {})
+  syncListScrollRef.current = (el: HTMLElement) => {
+    if (el.clientHeight === 0) return
+    if (!didInitialScroll.current && itemsLenRef.current > 0) {
       el.scrollTop = el.scrollHeight
       didInitialScroll.current = true
       pinBottomRef.current = true
+      savedScrollTopRef.current = el.scrollTop
       return
     }
     if (prevHeightRef.current != null) {
       el.scrollTop += el.scrollHeight - prevHeightRef.current
       prevHeightRef.current = null
+      savedScrollTopRef.current = el.scrollTop
       return
     }
     if (pinBottomRef.current) {
       el.scrollTop = el.scrollHeight
+      savedScrollTopRef.current = el.scrollTop
+      return
     }
-  }, [items])
+    if (savedScrollTopRef.current != null) {
+      el.scrollTop = savedScrollTopRef.current
+    }
+  }
+
+  useLayoutEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    syncListScrollRef.current(el)
+  }, [items, isTabVisible])
+
+  useEffect(() => {
+    if (!isTabVisible) return
+    const el = listRef.current
+    if (!el) return
+    const run = (): void => {
+      syncListScrollRef.current(el)
+    }
+    run()
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(run)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [isTabVisible])
+
+  useEffect(() => {
+    const el = listRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      syncListScrollRef.current(el)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  function listScrollLive(el: HTMLElement): boolean {
+    if (el.clientHeight === 0) return false
+    if (!isTabVisibleRef.current) return false
+    if (isEffectivelyHidden(el)) return false
+    return true
+  }
 
   function requestOlder(): void {
     if (!hasMore || loadingOlder) return
     const el = listRef.current
-    if (el) prevHeightRef.current = el.scrollHeight
+    if (!el || !listScrollLive(el)) return
+    prevHeightRef.current = el.scrollHeight
     void loadOlder()
   }
 
@@ -81,12 +139,15 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     >
       <div
         ref={listRef}
+        data-testid="thread-overlay-list"
         className="flex-1 min-h-0 overflow-y-auto px-2 py-2"
         onScroll={(e) => {
           const el = e.currentTarget
+          if (!listScrollLive(el)) return
           if (el.scrollTop <= 16) requestOlder()
           pinBottomRef.current =
             el.scrollHeight - el.scrollTop - el.clientHeight <= 32
+          savedScrollTopRef.current = el.scrollTop
         }}
       >
         {hasMore && (

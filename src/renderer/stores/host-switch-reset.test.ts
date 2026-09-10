@@ -119,6 +119,7 @@ import { readWindowChrome, writeWindowChrome } from '@/lib/window-chrome'
 import { useTimerStore } from './timer'
 import { useCustomThemesStore } from './custom-themes'
 import { useProjectsStore } from './projects'
+import { useProjectGroupsStore } from './project-groups'
 
 const SCREENSHOT_PATH =
   '/var/folders/zz/abc/T/NSIRD_screencaptureui_xxx/Screenshot 2026-08-26.png'
@@ -432,6 +433,28 @@ describe('#625 host-switch re-fetches all remaining daemon-backed stores', () =>
     expect(useProjectsStore.getState().projects).toEqual([])
     expect(useProjectsStore.getState().activeProjectId).toBeNull()
     expect(useProjectsStore.getState().activeWorkspaceId).toBeNull()
+
+    useConnectHostStore.getState().selectHost('local')
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it('project-groups.fetchGroups re-fires + nav tags clear on a host change', () => {
+    useProjectGroupsStore.setState({
+      groups: [{ id: 'local-g', name: 'cortana', color: null } as never],
+      tagsByWorkspaceId: { 'local-ws': [{ id: 'local-g', name: 'cortana', color: null }] },
+      selectedGroupId: 'local-g',
+    })
+    const spy = vi
+      .spyOn(useProjectGroupsStore.getState(), 'fetchGroups')
+      .mockResolvedValue(undefined)
+
+    expect(spy).not.toHaveBeenCalled()
+
+    useConnectHostStore.getState().selectHost(makeRemoteHost())
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(useProjectGroupsStore.getState().groups).toBeNull()
+    expect(useProjectGroupsStore.getState().tagsByWorkspaceId).toEqual({})
+    expect(useProjectGroupsStore.getState().selectedGroupId).toBeNull()
 
     useConnectHostStore.getState().selectHost('local')
     expect(spy).toHaveBeenCalledTimes(2)

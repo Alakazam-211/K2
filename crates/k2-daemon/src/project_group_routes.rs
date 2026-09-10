@@ -1532,17 +1532,21 @@ mod tests {
         assert_eq!(dashboards[0]["revision"], 0);
         assert_eq!(shown["members"].as_array().expect("members").len(), 0);
 
-        // list contains the group.
+        // list contains the group, with memberWorkspaceIds (empty until
+        // members are added) so the renderer can skip N `show`s.
         let listed = ok_json(
             dispatch("/cli/project-group/list", &get_params(&[])).expect("list claimed"),
         );
-        assert!(
-            listed["groups"]
-                .as_array()
-                .expect("groups")
-                .iter()
-                .any(|g| g["id"] == gid.as_str()),
-            "created group listed"
+        let listed_row = listed["groups"]
+            .as_array()
+            .expect("groups")
+            .iter()
+            .find(|g| g["id"] == gid.as_str())
+            .expect("created group listed");
+        assert_eq!(
+            listed_row["memberWorkspaceIds"],
+            serde_json::json!([]),
+            "list always carries memberWorkspaceIds, even when empty"
         );
 
         // rename → groups-changed; the new name resolves.
@@ -1726,6 +1730,22 @@ mod tests {
         ));
         assert_eq!(readd["alreadyMember"], true);
         assert!(events_for_group(mark, &gid).is_empty(), "no-op must not emit");
+
+        // list embeds member workspace ids (oldest-joined first).
+        let listed = ok_json(
+            dispatch("/cli/project-group/list", &get_params(&[])).expect("list claimed"),
+        );
+        let listed_row = listed["groups"]
+            .as_array()
+            .expect("groups")
+            .iter()
+            .find(|g| g["id"] == gid.as_str())
+            .expect("group listed");
+        assert_eq!(
+            listed_row["memberWorkspaceIds"],
+            serde_json::json!([w1_id, w2_id]),
+            "list memberWorkspaceIds oldest-joined first"
+        );
 
         // show enriches members with registry name/path + agent name.
         let shown = ok_json(show(&gid));

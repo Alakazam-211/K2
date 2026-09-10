@@ -20,6 +20,8 @@
 //! `{"error":{"code","hint"}}` shape. Codes used here: `name_taken`,
 //! `poc_successor_required`, `not_a_member`, `last_dashboard`.
 
+use std::collections::HashMap;
+
 use rusqlite::params;
 
 /// The layout blob a fresh dashboard starts with (versioned; the
@@ -54,6 +56,11 @@ pub struct ProjectGroup {
     pub color: Option<String>,
     /// Membership size (nav member strip / list badges).
     pub member_count: i64,
+    /// Workspace ids (oldest-joined first). Populated on [`list_groups`]
+    /// so the renderer can paint nav chips without N `show` round-trips.
+    /// Other responses omit it (`None` → field skipped on the wire).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_workspace_ids: Option<Vec<String>>,
 }
 
 /// One `project_group_members` row.
@@ -149,6 +156,7 @@ fn row_to_group(row: &rusqlite::Row) -> rusqlite::Result<ProjectGroup> {
         updated_at: row.get(6)?,
         color: row.get(7)?,
         member_count: row.get(8)?,
+        member_workspace_ids: None,
     })
 }
 
@@ -238,16 +246,39 @@ pub fn create_group(name: &str) -> Result<ProjectGroup, String> {
 }
 
 /// All groups (member counts + poc included), nav order: pinned first,
-/// then sort_order, then name.
+/// then sort_order, then name. Each row carries `member_workspace_ids`
+/// (possibly empty) so nav chips do not need a per-group `show`.
 pub fn list_groups() -> Result<Vec<ProjectGroup>, String> {
     let db = crate::db::shared();
     let conn = db.lock();
     let sql = format!(
         "{GROUP_SELECT} ORDER BY g.pinned DESC, g.sort_order ASC, g.name COLLATE NOCASE ASC"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
-    let rows = stmt.query_map([], row_to_group).map_err(|e| format!("query: {e}"))?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("row: {e}"))
+    let mut groups = {
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
+        let rows = stmt.query_map([], row_to_group).map_err(|e| format!("query: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("row: {e}"))?
+    };
+    let mut members_by_group: HashMap<String, Vec<String>> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT group_id, workspace_id FROM project_group_members \
+                 ORDER BY created_at ASC, rowid ASC",
+            )
+            .map_err(|e| format!("prepare members: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|e| format!("query members: {e}"))?;
+        for row in rows {
+            let (gid, wid) = row.map_err(|e| format!("member row: {e}"))?;
+            members_by_group.entry(gid).or_default().push(wid);
+        }
+    }
+    for g in &mut groups {
+        g.member_workspace_ids = Some(members_by_group.remove(&g.id).unwrap_or_default());
+    }
+    Ok(groups)
 }
 
 /// Fetch one group by FULL id. `None` when it doesn't exist.
@@ -1318,6 +1349,21 @@ mod tests {
         let members = list_members(&g.id).expect("members");
         assert_eq!(members.len(), 2, "re-add must not duplicate the row");
         assert_eq!(get_group_by_id(&g.id).expect("get").member_count, 2);
+        // list_groups embeds member workspace ids (oldest-joined first)
+        // so nav chips skip N show calls. get_group_by_id omits the field.
+        let listed = list_groups().expect("list");
+        let mine = listed.iter().find(|x| x.id == g.id).expect("listed");
+        assert_eq!(
+            mine.member_workspace_ids.as_deref(),
+            Some([w1.clone(), w2.clone()].as_slice()),
+        );
+        assert!(
+            get_group_by_id(&g.id)
+                .expect("get")
+                .member_workspace_ids
+                .is_none(),
+            "non-list payloads omit memberWorkspaceIds"
+        );
 
         // Unknown group fails loudly.
         assert!(add_member("nope", &w1).is_err());

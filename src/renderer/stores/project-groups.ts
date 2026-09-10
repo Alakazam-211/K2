@@ -23,8 +23,9 @@
 // seen; boot/refetch reconciles via a messages?after=&limit=1 probe.
 
 import { create } from 'zustand'
+import { onDaemonConnected } from '@/lib/daemon-reconnect'
 import { activeHostKey, onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
-import { onProjectGroupsChanged } from '@/stores/session-events'
+import { onAppHello, onProjectGroupsChanged } from '@/stores/session-events'
 import { usePageViewStore } from '@/stores/page-view'
 import {
   fetchProjectGroups,
@@ -202,16 +203,24 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== hostKey) return
       set({ groups })
       const membersByGroupId: Record<string, string[]> = {}
-      await Promise.all(
-        groups.map(async (g) => {
-          try {
-            const show = await fetchProjectGroupShow(g.id)
-            membersByGroupId[g.id] = show.members.map((m) => m.workspaceId)
-          } catch {
-            membersByGroupId[g.id] = []
-          }
-        }),
-      )
+      const listCarriesMembers = groups.every((g) => Array.isArray(g.memberWorkspaceIds))
+      if (listCarriesMembers) {
+        for (const g of groups) {
+          membersByGroupId[g.id] = g.memberWorkspaceIds ?? []
+        }
+      } else {
+        await Promise.all(
+          groups.map(async (g) => {
+            try {
+              const show = await fetchProjectGroupShow(g.id)
+              if (!Array.isArray(show.members)) return
+              membersByGroupId[g.id] = show.members.map((m) => m.workspaceId)
+            } catch {
+              // One group's show failure must not wipe others' chips.
+            }
+          }),
+        )
+      }
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== hostKey) return
       set({ tagsByWorkspaceId: buildTagsByWorkspaceId(groups, membersByGroupId) })
       // Drop a selection whose group vanished (delete on another client).
@@ -223,9 +232,9 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       set({ unreadGroupIds: new Set(unread) })
     } catch (err) {
       console.warn('[project-groups] list fetch failed:', err)
-      // Leave `groups` as-is when already loaded; first load surfaces
-      // the empty-ish state rather than spinning forever.
-      if (get().groups === null) set({ groups: [] })
+      // Leave `groups` as-is. First load stays `null` (loading) so
+      // onDaemonConnected / onAppHello can retry; a successful empty
+      // list is the only path that writes `[]`.
     }
   },
   selectGroup: (groupId) => {
@@ -314,11 +323,35 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   clearPaneRequest: () => set({ paneRequest: null }),
 }))
 
+// ── Event wiring ──────────────────────────────────────────────────────────
+
+let eventsInitialized = false
+let refetchTimer: ReturnType<typeof setTimeout> | null = null
+
+/** True when chips never landed, were wiped on a host switch, or a first
+ *  list fetch failed (groups stays `null`). Successful empty lists still
+ *  retry — a cheap GET, and the only way to recover from `[]` that was
+ *  never a real empty roster. */
+function groupsNeedRefetch(): boolean {
+  const s = useProjectGroupsStore.getState()
+  return s.groups === null || Object.keys(s.tagsByWorkspaceId).length === 0
+}
+
+function refetchGroupsIfNeeded(): void {
+  if (!groupsNeedRefetch()) return
+  void useProjectGroupsStore.getState().fetchGroups()
+}
+
 // Host switch: everything here is keyed by the previous host's group ids
-// — reset. The revision bump makes an open Projects page refetch against
-// the new host. `chatCollapsed`/`chatWidth`/`navCollapsed` deliberately
-// survive — they're plain per-client UI preferences, not host data.
+// — reset, then refetch against the new host (projects-store idiom).
+// `initProjectGroupEvents` is module-idempotent, so the App remount after
+// a switch does NOT refetch on its own. `chatCollapsed`/`chatWidth`/
+// `navCollapsed` deliberately survive — they're per-client UI prefs.
 onActiveHostChange(() => {
+  if (refetchTimer !== null) {
+    clearTimeout(refetchTimer)
+    refetchTimer = null
+  }
   useProjectGroupsStore.setState((s) => ({
     groups: null,
     tagsByWorkspaceId: {},
@@ -329,12 +362,15 @@ onActiveHostChange(() => {
     lastFocusedPaneByDashboard: {},
     dashPaneNumbers: {},
   }))
+  void useProjectGroupsStore.getState().fetchGroups()
 })
 
-// ── Event wiring ──────────────────────────────────────────────────────────
-
-let eventsInitialized = false
-let refetchTimer: ReturnType<typeof setTimeout> | null = null
+// Boot/reconnect: the first list GET can race the daemon coming up, and
+// a host switch can land before Hello. Retry only when groups never
+// landed or were wiped — do not fan out another N-show on every hello
+// once chips are painted.
+onDaemonConnected(refetchGroupsIfNeeded)
+onAppHello(refetchGroupsIfNeeded)
 
 /** Bump `revision` immediately (open views refetch on it) and schedule
  *  the list refetch on a trailing 300ms window — each new event resets

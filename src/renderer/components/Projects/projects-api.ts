@@ -26,6 +26,9 @@ export interface ProjectGroup {
   createdAt: number
   updatedAt: number
   memberCount: number
+  /** Present on newer daemons' list payload (possibly empty). When every
+   *  row carries this array, the nav skips N `show`s for chips. */
+  memberWorkspaceIds?: string[]
 }
 
 /** A member row as `show` enriches it (workspace registry name/path +

@@ -34,11 +34,25 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 // reasons through it (the daemon-broadcasts.test.ts idiom).
 const ev = vi.hoisted(() => ({
   handlers: [] as Array<(reason: string) => void>,
+  hello: [] as Array<() => void>,
 }))
 vi.mock('@/stores/session-events', () => ({
   onProjectGroupsChanged: vi.fn((fn: (reason: string) => void) => {
     ev.handlers.push(fn)
     return () => void (ev.handlers = ev.handlers.filter((f) => f !== fn))
+  }),
+  onAppHello: vi.fn((fn: () => void) => {
+    ev.hello.push(fn)
+    return () => void (ev.hello = ev.hello.filter((f) => f !== fn))
+  }),
+}))
+
+const reconnect = vi.hoisted(() => ({
+  connected: [] as Array<() => void>,
+}))
+vi.mock('@/lib/daemon-reconnect', () => ({
+  onDaemonConnected: vi.fn((fn: () => void) => {
+    reconnect.connected.push(fn)
   }),
 }))
 
@@ -76,8 +90,11 @@ describe('project-groups store event wiring', () => {
   beforeEach(async () => {
     initProjectGroupEvents()
     await flush()
-    api.fetchProjectGroups.mockClear()
-    api.fetchUnreadGroupIds.mockClear()
+    api.fetchProjectGroups.mockReset()
+    api.fetchProjectGroups.mockResolvedValue([])
+    api.fetchProjectGroupShow.mockReset()
+    api.fetchProjectGroupShow.mockResolvedValue({ members: [] })
+    api.fetchUnreadGroupIds.mockReset()
     api.fetchUnreadGroupIds.mockResolvedValue([])
     usePageViewStore.setState({ page: 'agents' })
     useProjectGroupsStore.setState({
@@ -303,5 +320,99 @@ describe('project-groups store event wiring', () => {
     useProjectGroupsStore.getState().notePaneFocus('dash-1', 'w1')
     // Same object identity — no churn for subscribers.
     expect(useProjectGroupsStore.getState().lastFocusedPaneByDashboard).toBe(before)
+  })
+
+  // ── Nav chips: list membership + isolated show failure ───────────────
+
+  it('skips show when every list row carries memberWorkspaceIds', async () => {
+    api.fetchProjectGroups.mockResolvedValue([
+      { id: 'g1', name: 'Alpha', color: '#111111', memberWorkspaceIds: ['w1', 'w2'] },
+      { id: 'g2', name: 'Beta', color: null, memberWorkspaceIds: [] },
+    ])
+    await useProjectGroupsStore.getState().fetchGroups()
+    expect(api.fetchProjectGroupShow).not.toHaveBeenCalled()
+    expect(useProjectGroupsStore.getState().tagsByWorkspaceId).toEqual({
+      w1: [{ id: 'g1', name: 'Alpha', color: '#111111' }],
+      w2: [{ id: 'g1', name: 'Alpha', color: '#111111' }],
+    })
+  })
+
+  it('falls back to show when any list row lacks memberWorkspaceIds', async () => {
+    api.fetchProjectGroups.mockResolvedValue([
+      { id: 'g1', name: 'Alpha', color: null, memberWorkspaceIds: ['w1'] },
+      { id: 'g2', name: 'Beta', color: null },
+    ])
+    api.fetchProjectGroupShow.mockImplementation(async (id: string) => {
+      if (id === 'g1') return { members: [{ workspaceId: 'w1' }] }
+      return { members: [{ workspaceId: 'w2' }] }
+    })
+    await useProjectGroupsStore.getState().fetchGroups()
+    expect(api.fetchProjectGroupShow).toHaveBeenCalled()
+    const tags = useProjectGroupsStore.getState().tagsByWorkspaceId
+    expect(tags.w2?.map((t) => t.id)).toEqual(['g2'])
+  })
+
+  it('one group show failure does not zero other groups nav tags', async () => {
+    api.fetchProjectGroups.mockResolvedValue([
+      { id: 'g1', name: 'Alpha', color: null },
+      { id: 'g2', name: 'Beta', color: null },
+    ])
+    api.fetchProjectGroupShow.mockImplementation(async (id: string) => {
+      if (id === 'g1') throw new Error('show failed')
+      return { members: [{ workspaceId: 'w2' }] }
+    })
+    await useProjectGroupsStore.getState().fetchGroups()
+    const tags = useProjectGroupsStore.getState().tagsByWorkspaceId
+    expect(tags.w2).toEqual([{ id: 'g2', name: 'Beta', color: null }])
+    expect(tags.w1).toBeUndefined()
+  })
+
+  it('non-array show.members does not wipe other groups', async () => {
+    api.fetchProjectGroups.mockResolvedValue([
+      { id: 'g1', name: 'Alpha', color: null },
+      { id: 'g2', name: 'Beta', color: null },
+    ])
+    api.fetchProjectGroupShow.mockImplementation(async (id: string) => {
+      if (id === 'g1') return { members: null as unknown as { workspaceId: string }[] }
+      return { members: [{ workspaceId: 'w2' }] }
+    })
+    await useProjectGroupsStore.getState().fetchGroups()
+    expect(useProjectGroupsStore.getState().tagsByWorkspaceId.w2?.[0]?.id).toBe('g2')
+  })
+
+  it('first list failure stays null and hello/connect retry the fetch', async () => {
+    api.fetchProjectGroups.mockRejectedValueOnce(new Error('daemon down'))
+    useProjectGroupsStore.setState({ groups: null, tagsByWorkspaceId: {} })
+    await useProjectGroupsStore.getState().fetchGroups()
+    expect(useProjectGroupsStore.getState().groups).toBeNull()
+
+    api.fetchProjectGroups.mockClear()
+    api.fetchProjectGroups.mockResolvedValue([
+      { id: 'g1', name: 'Alpha', color: null, memberWorkspaceIds: ['w1'] },
+    ])
+    expect(ev.hello).toHaveLength(1)
+    expect(reconnect.connected).toHaveLength(1)
+    ev.hello[0]!()
+    await flush()
+    expect(api.fetchProjectGroups).toHaveBeenCalledTimes(1)
+    expect(useProjectGroupsStore.getState().tagsByWorkspaceId.w1?.[0]?.id).toBe('g1')
+
+    useProjectGroupsStore.setState({ groups: null, tagsByWorkspaceId: {} })
+    api.fetchProjectGroups.mockClear()
+    reconnect.connected[0]!()
+    await flush()
+    expect(api.fetchProjectGroups).toHaveBeenCalledTimes(1)
+  })
+
+  it('hello does not refetch once chips have landed', async () => {
+    useProjectGroupsStore.setState({
+      groups: [{ id: 'g1', name: 'Alpha', color: null } as never],
+      tagsByWorkspaceId: { w1: [{ id: 'g1', name: 'Alpha', color: null }] },
+    })
+    api.fetchProjectGroups.mockClear()
+    ev.hello[0]!()
+    reconnect.connected[0]!()
+    await flush()
+    expect(api.fetchProjectGroups).not.toHaveBeenCalled()
   })
 })

@@ -1,0 +1,168 @@
+# Maintainer: Alakazam Labs <support@k2.dev>
+#
+# K2 whole bundle for Arch / Omarchy (GUI + daemon + CLI + systemd user unit).
+# Build from this git tree:
+#   cd packaging/arch && makepkg -si
+#
+# O9/O27: do not fold this into scripts/release.sh until a real Omarchy
+# `makepkg -si` has smoked. O17: do not debtap the GH deb/rpm/AppImage.
+# O12: this is NOT the air-gap SKU — never `--features airgap`.
+# O25: source build bakes Gmail OAuth via require-mail-oauth-build-env.sh
+# (env or gitignored repo-root .env). No secrets in git. A later k2-bin
+# package may consume the pre-baked GH k2-daemon-linux-x86_64 instead.
+#
+# AUR pkgname is `k2` here; rename to k2-bin at submit if `k2` is taken.
+
+pkgname=k2
+pkgver=0.40.143
+pkgrel=1
+pkgdesc="AI workspace orchestration by Alakazam Labs (GUI + daemon + CLI)"
+arch=('x86_64')
+url="https://k2.dev"
+license=('FSL-1.1-Apache-2.0')
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libayatana-appindicator'
+    'librsvg'
+    'libsecret'
+    'openssl'
+)
+makedepends=(
+    'cargo'
+    'clang'
+    'cmake'
+    'pkgconf'
+    'git'
+    'bun'
+)
+optdepends=(
+    'gnome-keyring: Secret Service provider for K2 Connect tokens'
+)
+install=k2.install
+options=('!lto' '!debug')
+source=(
+    'k2-daemon.service'
+    'k2.desktop'
+    'k2.install'
+)
+sha256sums=(
+    'c11a5f099965cfcf4b151872daa8947f0f778b92179413b024667802a74b4d67'
+    '2c4f8a6482a31e0f40f9b2834e43eafdec731157b63e9609447687c8fe12ad3d'
+    '3e1a30b4ab3213338c652242e9e5da0acecb704e0f08d17c4082044d1ecf51d3'
+)
+
+_tree() {
+    (cd "${startdir}/../.." && pwd)
+}
+
+prepare() {
+    local tree
+    tree="$(_tree)"
+    if [[ ! -f "${tree}/Cargo.toml" || ! -f "${tree}/cli/k2" ]]; then
+        echo "PKGBUILD: expected the K2 git tree two levels above packaging/arch (got ${tree})" >&2
+        echo "  cd packaging/arch && makepkg -si" >&2
+        exit 1
+    fi
+    mkdir -p "${srcdir}/${pkgname}"
+    # Do not copy .env — OAuth comes from the environment / original tree.
+    tar -C "${tree}" \
+        --exclude='./.git' \
+        --exclude='./target' \
+        --exclude='./target-*' \
+        --exclude='./node_modules' \
+        --exclude='./src-tauri/target' \
+        --exclude='./src-tauri/gen' \
+        --exclude='./dist' \
+        --exclude='./out' \
+        --exclude='./.env' \
+        --exclude='./.env.*' \
+        --exclude='./.k2' \
+        --exclude='./.k2so' \
+        -cf - . | tar -C "${srcdir}/${pkgname}" -xf -
+}
+
+build() {
+    cd "${srcdir}/${pkgname}"
+
+    # O25: bake Gmail OAuth or fail loud. Prefer already-exported env;
+    # fall back to the gitignored repo-root .env (never packaged).
+    if [[ -z "${K2_GMAIL_CLIENT_ID:-}" || -z "${K2_GMAIL_CLIENT_SECRET:-}" ]]; then
+        local envfile="${startdir}/../../.env"
+        if [[ -f "${envfile}" ]]; then
+            set -a
+            # shellcheck disable=SC1090
+            source "${envfile}"
+            set +a
+        fi
+    fi
+    # shellcheck source=../../scripts/require-mail-oauth-build-env.sh
+    source scripts/require-mail-oauth-build-env.sh
+    require_mail_oauth_build_env
+
+    export CARGO_HOME="${srcdir}/cargo-home"
+    export CARGO_TARGET_DIR="${srcdir}/cargo-target"
+    export CARGO_INCREMENTAL=0
+
+    bun install --frozen-lockfile
+
+    # --no-bundle: we own install paths (O14). Do not emit deb/rpm/AppImage
+    # as the Omarchy artifact (O17). beforeBuildCommand runs vite + fetch-frpc.
+    bunx tauri build --no-bundle
+
+    # Never `--features airgap` (O12).
+    cargo build --release -p k2-daemon --bin k2-daemon
+    assert_daemon_oauth_not_placeholder "${CARGO_TARGET_DIR}/release/k2-daemon"
+}
+
+package() {
+    local target="${CARGO_TARGET_DIR:-${srcdir}/cargo-target}"
+    local tree="${srcdir}/${pkgname}"
+    local gui=""
+
+    install -Dm755 "${tree}/cli/k2" "${pkgdir}/usr/bin/k2"
+    install -Dm755 "${target}/release/k2-daemon" "${pkgdir}/usr/bin/k2-daemon"
+
+    # O14: PATH k2 is the CLI. GUI is k2-gui even if the crate bin is still `k2`
+    # (Darwin Contents/MacOS/k2 must not move).
+    if [[ -x "${target}/release/k2-gui" ]]; then
+        gui="${target}/release/k2-gui"
+    elif [[ -x "${target}/release/k2" ]]; then
+        gui="${target}/release/k2"
+    else
+        echo "package(): GUI binary missing (expected ${target}/release/k2-gui or k2)" >&2
+        return 1
+    fi
+    install -Dm755 "${gui}" "${pkgdir}/usr/lib/k2/k2-gui"
+    ln -s /usr/lib/k2/k2-gui "${pkgdir}/usr/bin/k2-gui"
+
+    # Sidecar next to the GUI so Tauri sibling lookup can stage ~/.k2/bin/frpc.
+    # Not /usr/bin/frpc (would conflict with a system frpc).
+    local frpc
+    for frpc in \
+        "${tree}/src-tauri/binaries/frpc-x86_64-unknown-linux-gnu" \
+        "${target}/release/frpc"
+    do
+        if [[ -x "${frpc}" ]]; then
+            install -Dm755 "${frpc}" "${pkgdir}/usr/lib/k2/frpc"
+            break
+        fi
+    done
+
+    install -Dm644 "${srcdir}/k2-daemon.service" \
+        "${pkgdir}/usr/lib/systemd/user/k2-daemon.service"
+    install -Dm644 "${srcdir}/k2.desktop" \
+        "${pkgdir}/usr/share/applications/k2.desktop"
+
+    install -Dm644 "${tree}/src-tauri/icons/32x32.png" \
+        "${pkgdir}/usr/share/icons/hicolor/32x32/apps/k2.png"
+    install -Dm644 "${tree}/src-tauri/icons/128x128.png" \
+        "${pkgdir}/usr/share/icons/hicolor/128x128/apps/k2.png"
+    install -Dm644 "${tree}/src-tauri/icons/256x256.png" \
+        "${pkgdir}/usr/share/icons/hicolor/256x256/apps/k2.png"
+    install -Dm644 "${tree}/src-tauri/icons/512x512.png" \
+        "${pkgdir}/usr/share/icons/hicolor/512x512/apps/k2.png"
+
+    install -Dm644 "${tree}/LICENSE.md" \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.md"
+}

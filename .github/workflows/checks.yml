@@ -28,6 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Arch/Omarchy packaging lock (O14–O27 files)
+        run: bash tests/packaging/arch-omarchy-bundle.sh
+
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies

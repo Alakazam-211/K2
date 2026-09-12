@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=K2
+Comment=AI workspace orchestration by Alakazam Labs
+Exec=k2-gui
+Icon=k2
+Terminal=false
+Categories=Development;
+StartupNotify=true
+StartupWMClass=k2-gui
+Keywords=AI;agents;terminal;workspace;

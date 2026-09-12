@@ -1,0 +1,23 @@
+# k2.install — pacman install messages for the Omarchy/Arch whole bundle.
+# The packaged files ARE the install (O22). Do not run `k2 daemon install`.
+# Never wipe ~/.k2 — that directory is user data, not package state.
+
+post_install() {
+    echo "K2: /usr/bin/k2 is the CLI; the GUI is /usr/bin/k2-gui (desktop launcher)."
+    echo "    Enable the systemd USER unit (do not run 'k2 daemon install'):"
+    echo "      systemctl --user daemon-reload"
+    echo "      systemctl --user enable --now k2-daemon"
+    echo "    Headless/linger boxes: loginctl enable-linger \"\$USER\""
+    echo "    Upgrade via pacman/AUR. Do not use 'k2 update' or GitHub daemon swap."
+}
+
+post_upgrade() {
+    echo "K2: reload the user unit after upgrade:"
+    echo "      systemctl --user daemon-reload"
+    echo "      systemctl --user restart k2-daemon"
+}
+
+post_remove() {
+    echo "K2: binaries and the user unit were removed."
+    echo "    User data in ~/.k2 was left in place. Delete it yourself for a full wipe."
+}

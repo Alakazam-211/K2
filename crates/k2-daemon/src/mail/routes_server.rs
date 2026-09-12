@@ -97,18 +97,32 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
         )
         .ok()
     };
-    let (state, version, hostname, port_plan, progress, last_error) = match row {
+    let (sqlite_state, version, hostname, port_plan, progress, sqlite_last_error) = match row {
         Some((status, installed, hostname, plan, progress, last_error)) => {
             (status, installed, hostname, plan, progress, last_error)
         }
         None => ("not-installed".to_string(), None, None, None, None, None),
+    };
+    // Linux (and tests with a systemd seam): SQLite is a cache. `state`
+    // is never `running` unless the unit is active; `ok` is not true
+    // when the unit is inactive/failed (H1/H2).
+    let (state, ok, last_error) = match supervisor::systemd_ground_truth() {
+        Some(unit) => {
+            let rec = supervisor::reconcile_reported_status(
+                &sqlite_state,
+                sqlite_last_error.as_deref(),
+                &unit,
+            );
+            (rec.state, rec.ok, rec.last_error)
+        }
+        None => (sqlite_state, true, sqlite_last_error),
     };
     let enable_progress = progress
         .and_then(|p| serde_json::from_str::<serde_json::Value>(&p).ok())
         .unwrap_or(serde_json::Value::Null);
     CliResponse::ok_json(
         serde_json::json!({
-            "ok": true,
+            "ok": ok,
             "supported": mail_supported(),
             "state": state,
             "version": version,
@@ -232,10 +246,10 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
         Err(e) => return CliResponse::bad_request(format!("invalid hostname: {e}")),
     };
 
-    // Idempotency short-circuit first (a DB read, platform-safe):
-    // already running → nothing to do. Re-apply Skin Caddy so the mail
-    // Host appears if Direct is already on (do not wait for a front-door POST).
-    if supervisor::current_status().as_deref() == Some("running") {
+    // Idempotency short-circuit only when systemd says the unit is
+    // active. A SQLite `running` row with an inactive unit is a stale
+    // cache — alreadyEnabled is illegal then (H3).
+    if supervisor::is_already_enabled() {
         let mut body = serde_json::json!({ "ok": true, "state": "running", "alreadyEnabled": true });
         if let Some(hint) = reapply_skin_door_after_mail_enable(daemon_port) {
             body["hint"] = serde_json::json!(hint);
@@ -764,10 +778,11 @@ mod tests {
         clean_row();
     }
 
-    /// Enable short-circuits idempotently when already running.
+    /// Enable short-circuits idempotently only when systemd says active (H3).
     #[test]
     fn enable_is_idempotent_when_already_running() {
         let _g = crate::mail::mail_server_test_lock();
+        let _unit = supervisor::with_test_unit_state("active");
         clean_row();
         {
             let db = k2_core::db::shared();
@@ -787,6 +802,68 @@ mod tests {
         assert_eq!(v["state"], "running");
         // Caddy apply must not swallow Enable success (ok stays true).
         assert_ne!(v["ok"], false);
+        clean_row();
+    }
+
+    #[test]
+    fn enable_is_not_already_enabled_when_unit_inactive() {
+        let _g = crate::mail::mail_server_test_lock();
+        let _unit = supervisor::with_test_unit_state("inactive");
+        clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, updated_at) \
+                 VALUES (1, 'running', ?1, 'mail.acme.dev', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION],
+            )
+            .expect("seed row");
+        }
+        assert!(
+            !supervisor::is_already_enabled(),
+            "H3: SQLite running + inactive unit is not alreadyEnabled"
+        );
+        // Do not POST enable on Linux here — past the short-circuit the
+        // route would run real preflight. Non-Linux stops at unsupported.
+        if !cfg!(target_os = "linux") {
+            let resp = handle_server_enable(br#"{"hostname":"mail.acme.dev"}"#);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            assert_ne!(v.get("alreadyEnabled"), Some(&serde_json::json!(true)), "{}", resp.body);
+            assert_eq!(resp.status, "409 Conflict");
+            assert_eq!(v["error"]["code"], "unsupported");
+        }
+        clean_row();
+    }
+
+    #[test]
+    fn status_is_not_running_when_unit_inactive() {
+        let _g = crate::mail::mail_server_test_lock();
+        let _unit = supervisor::with_test_unit_state("inactive");
+        clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, last_error, updated_at) \
+                 VALUES (1, 'running', ?1, 'mail.acme.dev', \
+                 'systemd reports the stalwart unit is ''inactive''', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION],
+            )
+            .expect("seed row");
+        }
+        let resp = handle_status(&HashMap::new());
+        assert_eq!(resp.status, "200 OK");
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_ne!(v["state"], "running", "H1: state is not running unless unit active: {v}");
+        assert_eq!(v["ok"], false, "H2: ok is not true when unit is inactive: {v}");
+        assert!(
+            v["lastError"]
+                .as_str()
+                .unwrap_or("")
+                .contains("inactive"),
+            "{v}"
+        );
         clean_row();
     }
 

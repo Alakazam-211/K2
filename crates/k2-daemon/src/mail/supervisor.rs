@@ -356,6 +356,164 @@ pub(crate) fn current_status() -> Option<String> {
     row_field("status")
 }
 
+/// SQLite `mail_server.status` overlaid with systemd `is-active`.
+/// `ok` is false when the unit is inactive/failed (H2). `state` is never
+/// `running` unless the unit is `active` (H1). SQLite is the cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconciledStatus {
+    pub state: String,
+    pub ok: bool,
+    pub last_error: Option<String>,
+}
+
+/// Combine the singleton row with `systemctl is-active stalwart`.
+///
+/// `unit_state` is the trimmed `is-active` stdout (`active` / `inactive` /
+/// `failed` / …). Empty means unknown. Callers that have no Linux unit
+/// (Mac daemon, tests without a seam) skip this and serve SQLite as-is.
+pub fn reconcile_reported_status(
+    sqlite_state: &str,
+    last_error: Option<&str>,
+    unit_state: &str,
+) -> ReconciledStatus {
+    let unit = if unit_state.trim().is_empty() {
+        "unknown"
+    } else {
+        unit_state.trim()
+    };
+    let unit_active = unit == "active";
+    let keep_err = last_error.map(str::to_string);
+    let systemd_err = format!("systemd reports the stalwart unit is '{unit}'");
+
+    // Enable in progress / nothing installed: don't invent a unit.
+    if matches!(sqlite_state, "not-installed" | "installing") {
+        return ReconciledStatus {
+            state: sqlite_state.to_string(),
+            ok: true,
+            last_error: keep_err,
+        };
+    }
+
+    if sqlite_state == "disabled" {
+        return ReconciledStatus {
+            state: "disabled".into(),
+            ok: unit_active,
+            last_error: if unit_active {
+                keep_err
+            } else {
+                Some(systemd_err)
+            },
+        };
+    }
+
+    if sqlite_state == "error" {
+        return ReconciledStatus {
+            state: "error".into(),
+            ok: unit_active,
+            last_error: keep_err.or_else(|| {
+                if unit_active {
+                    None
+                } else {
+                    Some(systemd_err)
+                }
+            }),
+        };
+    }
+
+    if !unit_active {
+        let state = if unit == "failed" { "error" } else { "stopped" };
+        return ReconciledStatus {
+            state: state.into(),
+            ok: false,
+            last_error: Some(systemd_err),
+        };
+    }
+
+    ReconciledStatus {
+        state: sqlite_state.to_string(),
+        ok: true,
+        last_error: keep_err,
+    }
+}
+
+/// True only when the row says running AND systemd says the unit is active.
+/// SQLite `running` with an inactive unit is a stale cache — not alreadyEnabled (H3).
+pub fn is_already_enabled_with(sqlite_status: Option<&str>, unit_state: &str) -> bool {
+    sqlite_status == Some("running") && unit_state.trim() == "active"
+}
+
+/// Live `systemctl is-active stalwart` (Linux). Tests inject via
+/// [`set_test_unit_state`] so they never talk to a real systemd.
+pub fn stalwart_unit_state() -> String {
+    #[cfg(test)]
+    {
+        return test_unit_state();
+    }
+    #[cfg(not(test))]
+    {
+        RealSystemOps.systemctl_query(&["is-active", STALWART_UNIT])
+    }
+}
+
+pub fn is_already_enabled() -> bool {
+    is_already_enabled_with(current_status().as_deref(), &stalwart_unit_state())
+}
+
+/// Overlay SQLite with systemd when we have a unit observation.
+/// `None` = leave the row as-is (non-Linux / tests without a seam).
+pub fn systemd_ground_truth() -> Option<String> {
+    #[cfg(test)]
+    {
+        return test_unit_state_override();
+    }
+    #[cfg(not(test))]
+    {
+        if mail_supported() {
+            Some(stalwart_unit_state())
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_UNIT_STATE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn test_unit_state_override() -> Option<String> {
+    TEST_UNIT_STATE.with(|c| c.borrow().clone())
+}
+
+#[cfg(test)]
+fn test_unit_state() -> String {
+    test_unit_state_override().unwrap_or_default()
+}
+
+/// Test seam: inject `systemctl is-active` so route tests never call systemd.
+#[cfg(test)]
+pub(crate) fn set_test_unit_state(state: Option<&str>) {
+    TEST_UNIT_STATE.with(|c| *c.borrow_mut() = state.map(str::to_string));
+}
+
+/// RAII reset for [`set_test_unit_state`].
+#[cfg(test)]
+pub(crate) struct TestUnitStateGuard;
+
+#[cfg(test)]
+impl Drop for TestUnitStateGuard {
+    fn drop(&mut self) {
+        set_test_unit_state(None);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_unit_state(state: &str) -> TestUnitStateGuard {
+    set_test_unit_state(Some(state));
+    TestUnitStateGuard
+}
+
 fn progress_load() -> serde_json::Value {
     row_field("enable_progress_json")
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -374,6 +532,17 @@ fn mark_step(step: &str) {
     let mut p = progress_load();
     p["steps"][step] = serde_json::json!({ "at": now_secs() });
     p["current"] = serde_json::Value::Null;
+    progress_save(&p);
+}
+
+/// Drop resume marks so a later enable re-runs those steps.
+fn unmark_steps(steps: &[&str]) {
+    let mut p = progress_load();
+    if let Some(obj) = p.get_mut("steps").and_then(|v| v.as_object_mut()) {
+        for step in steps {
+            obj.remove(*step);
+        }
+    }
     progress_save(&p);
 }
 
@@ -499,6 +668,15 @@ pub fn run_enable(
         }
     }
 
+    // Capture BEFORE ensure_installing_row flips the row to `installing`.
+    // Disable (and a stale SQLite `running` while the unit is down) must
+    // still `daemon-reload` + `enable --now` + `restart` — the start/unit
+    // resume marks survive disable otherwise (H4/H5).
+    let previous = current_status();
+    let force_systemd_up = matches!(
+        previous.as_deref(),
+        Some("disabled") | Some("stopped") | Some("running")
+    );
     ensure_installing_row(hostname, port_plan)?;
     let default_domain = default_domain_for(hostname);
 
@@ -597,10 +775,19 @@ pub fn run_enable(
         .map_err(|e| fail("unit", e))?;
         mark_step("unit");
     }
-    if !step_is_done("start") {
+    if !step_is_done("start") || force_systemd_up {
         set_current("start");
-        ops.systemctl(&["enable", "--now", STALWART_UNIT])
-            .map_err(|e| fail("start", e))?;
+        (|| -> Result<(), String> {
+            if force_systemd_up {
+                ops.systemctl(&["daemon-reload"])?;
+            }
+            ops.systemctl(&["enable", "--now", STALWART_UNIT])?;
+            if force_systemd_up {
+                ops.systemctl(&["restart", STALWART_UNIT])?;
+            }
+            Ok(())
+        })()
+        .map_err(|e| fail("start", e))?;
         mark_step("start");
     }
 
@@ -928,6 +1115,9 @@ pub fn disable_with(ops: &dyn SystemOps) -> Result<(), String> {
     let previous = current_status().unwrap_or_else(|| "unknown".into());
     set_status("disabled");
     set_last_error(None);
+    // Keep bootstrap/api-key marks (data stays). Clear start so re-enable
+    // cannot skip `systemctl enable --now` (H4). Domains are not touched (H5).
+    unmark_steps(&["start"]);
     emit_state_change(&previous, "disabled", None);
     Ok(())
 }
@@ -1490,6 +1680,49 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_status_never_running_unless_unit_active() {
+        let running_inactive = reconcile_reported_status("running", None, "inactive");
+        assert_eq!(running_inactive.state, "stopped");
+        assert!(!running_inactive.ok, "H2: ok is not true when unit is inactive");
+        assert!(
+            running_inactive
+                .last_error
+                .as_deref()
+                .unwrap_or("")
+                .contains("inactive"),
+            "{running_inactive:?}"
+        );
+
+        let running_failed = reconcile_reported_status("running", None, "failed");
+        assert_eq!(running_failed.state, "error");
+        assert!(!running_failed.ok);
+
+        let running_active = reconcile_reported_status("running", None, "active");
+        assert_eq!(running_active.state, "running");
+        assert!(running_active.ok);
+
+        let disabled = reconcile_reported_status("disabled", None, "inactive");
+        assert_eq!(disabled.state, "disabled");
+        assert!(!disabled.ok, "disabled + inactive is not ok");
+
+        let installing = reconcile_reported_status("installing", None, "inactive");
+        assert_eq!(installing.state, "installing");
+        assert!(installing.ok);
+    }
+
+    #[test]
+    fn already_enabled_requires_active_unit() {
+        assert!(is_already_enabled_with(Some("running"), "active"));
+        assert!(
+            !is_already_enabled_with(Some("running"), "inactive"),
+            "H3: SQLite running + inactive unit is NOT alreadyEnabled"
+        );
+        assert!(!is_already_enabled_with(Some("running"), ""));
+        assert!(!is_already_enabled_with(Some("disabled"), "active"));
+        assert!(!is_already_enabled_with(None, "active"));
+    }
+
+    #[test]
     fn disable_keeps_data_and_uninstall_purge_removes_everything() {
         let _g = db_guard();
         clean_row();
@@ -1550,6 +1783,71 @@ mod tests {
         let lines = ops.recorded();
         assert!(!lines.iter().any(|l| l.contains("/var/lib/stalwart")), "{lines:?}");
         assert!(!lines.iter().any(|l| l.contains("rm /etc/stalwart")), "{lines:?}");
+        clean_row();
+    }
+
+    #[test]
+    fn enable_after_disable_restarts_unit_and_persists_hostname() {
+        let _g = db_guard();
+        clean_row();
+        let art = fake_artifact();
+        let ops = FakeSystemOps {
+            download_body: FAKE_BINARY.to_vec(),
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi::default();
+        let secrets = FakeSecrets::default();
+        run_enable(&ops, &mut api, &secrets, &art, "mail.lztek.k2.dev", "http-01")
+            .expect("first enable");
+        assert!(step_is_done("start"), "start marked after first enable");
+
+        let ops_dis = FakeSystemOps::default();
+        disable_with(&ops_dis).expect("disable");
+        assert_eq!(current_status().as_deref(), Some("disabled"));
+        assert!(
+            !step_is_done("start"),
+            "disable must clear the start resume mark (H4)"
+        );
+        assert_eq!(row_field("hostname").as_deref(), Some("mail.lztek.k2.dev"));
+
+        let ops2 = FakeSystemOps {
+            download_body: FAKE_BINARY.to_vec(),
+            existing_paths: vec![STALWART_BIN.to_string()],
+            ..FakeSystemOps::default()
+        };
+        let mut api2 = FakeApi::default();
+        run_enable(
+            &ops2,
+            &mut api2,
+            &secrets,
+            &art,
+            "mail.lztek.io",
+            "http-01",
+        )
+        .expect("re-enable after disable");
+        let lines = ops2.recorded();
+        assert!(
+            lines.iter().any(|l| l == "systemctl daemon-reload"),
+            "H4: enable-after-disable must daemon-reload: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("enable --now")),
+            "H4: enable-after-disable must enable --now: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "systemctl restart stalwart"),
+            "H4: enable-after-disable must restart: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("download")),
+            "re-enable must not re-download: {lines:?}"
+        );
+        assert_eq!(
+            row_field("hostname").as_deref(),
+            Some("mail.lztek.io"),
+            "H5: enable --hostname after disable persists the new hostname"
+        );
+        assert_eq!(current_status().as_deref(), Some("running"));
         clean_row();
     }
 

@@ -396,4 +396,20 @@ mod tests {
 
         cleanup("routes-list.example");
     }
+
+    #[test]
+    fn owner_list_includes_pending_domains_check_can_see() {
+        seed_domain("pending-list.example");
+        let resp = handle_domain_list(&HashMap::new());
+        assert_eq!(resp.status, "200 OK");
+        let v = body_json(&resp);
+        let ours = v["domains"]
+            .as_array()
+            .expect("domains array")
+            .iter()
+            .find(|d| d["domain"] == "pending-list.example")
+            .expect("H8: domain list must show domains domain check can see");
+        assert_eq!(ours["status"], "pending");
+        cleanup("pending-list.example");
+    }
 }

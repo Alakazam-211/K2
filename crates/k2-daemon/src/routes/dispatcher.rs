@@ -7227,10 +7227,16 @@ async fn handle_one_request(
             // while folder list (no from filter) still worked.
             // Capture the client filter BEFORE stamp; restore after.
             // Absent client --from → remove stamp pollution so no filter.
+            //
+            // H8: the same stamp writes `project=` which `domain/list`
+            // uses to pick agent (verified-only) vs owner table. Capture
+            // and restore so `k2 hostmail domain list` lists every domain
+            // `domain check` can see.
             let client_from_filter = params
                 .get("from")
                 .cloned()
                 .filter(|s| !s.trim().is_empty());
+            let client_domain_list_project = crate::mail_routes::client_project_param(&params);
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
                 if p == "/cli/mail/messages" || p == "/cli/mail/wait" {
@@ -7243,6 +7249,11 @@ async fn handle_one_request(
                         }
                     }
                 }
+                crate::mail_routes::restore_domain_list_audience(
+                    p,
+                    &mut params,
+                    client_domain_list_project,
+                );
             }
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {

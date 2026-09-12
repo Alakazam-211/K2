@@ -774,6 +774,12 @@ mod tests {
 
     #[test]
     fn check_domain_now_persists_verified_then_regression() {
+        let _g = crate::mail::mail_server_test_lock();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+        }
         let domain = "e2e-dns.example";
         let zone = ZONE_FIXTURE.replace("acme.dev", domain);
         // Clean slate, then seed via the real add path (fake engine).

@@ -484,11 +484,26 @@ mod unix_impl {
         } else {
             None
         };
+        // H8: domain/list treats `project=` as the agent-view switch.
+        // Stamp always writes it for a cell — restore the CLIENT value
+        // (or strip it) so hostmail domain list is the owner table.
+        let domain_list_project = if path == "/cli/mail/domain/list" {
+            Some(crate::mail_routes::client_project_param(&params))
+        } else {
+            None
+        };
         params.insert("cell_session_id".to_string(), this_session_id.clone());
         stamp_principal(&mut params, &principal);
         if let Some(t) = inbox_target {
             params.insert("project".to_string(), t.clone());
             params.insert("project_path".to_string(), t);
+        }
+        if let Some(client_project) = domain_list_project {
+            crate::mail_routes::restore_domain_list_audience(
+                path,
+                &mut params,
+                client_project,
+            );
         }
 
         let path_owned = path.to_string();

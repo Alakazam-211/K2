@@ -542,6 +542,26 @@ pub fn apply_send_mode_spf(rows: &mut [RecordRow], send_mode: &str, relay_includ
     }
 }
 
+/// MX (and the PTR instruction) follow the CURRENT `mail_server.hostname`,
+/// not the hostname frozen into `dns_status_json` at `domain add` (H7).
+pub fn apply_current_hostname_mx(rows: &mut [RecordRow], hostname: Option<&str>) {
+    let Some(host) = hostname.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let mx_expected = format!("10 {host}.");
+    for row in rows.iter_mut() {
+        if row.id == "mx" {
+            row.expected = mx_expected.clone();
+            row.expected_display = mx_expected.clone();
+        } else if row.id == "ptr" {
+            row.name = host.to_string();
+            row.expected = format!(
+                "Set the reverse DNS (PTR) of your server's IP to {host} in your VPS provider's panel (Hetzner/DigitalOcean/…) — it cannot be set at your domain registrar"
+            );
+        }
+    }
+}
+
 /// Render the record table back into a downloadable zone file
 /// (§6.2 header button). Regenerated from the EFFECTIVE rows — not the
 /// raw Stalwart text — so the relay-mode SPF adjustment is what the
@@ -596,16 +616,18 @@ pub fn load_domain(conn: &Connection, domain: &str) -> Option<MailDomain> {
 }
 
 /// All domain rows, oldest first (stable default-domain order).
+/// Prepare/query failures fail loud — a silent empty list hid domains
+/// that `domain check` could still see (H8).
 pub fn load_all_domains(conn: &Connection) -> Vec<MailDomain> {
-    let mut stmt = match conn
-        .prepare(&format!("SELECT {DOMAIN_COLS} FROM mail_domains ORDER BY created_at, domain"))
-    {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {DOMAIN_COLS} FROM mail_domains ORDER BY created_at, domain"
+        ))
+        .unwrap_or_else(|e| panic!("mail_domains list query failed: {e}"));
     stmt.query_map([], |r| map_domain_row(r))
-        .map(|rows| rows.filter_map(Result::ok).collect())
-        .unwrap_or_default()
+        .unwrap_or_else(|e| panic!("mail_domains list rows failed: {e}"))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|e| panic!("mail_domains list row map failed: {e}"))
 }
 
 /// Parse a row's stored `dns_status_json` (empty default when unset —
@@ -632,11 +654,13 @@ pub fn relay_spf_include(conn: &Connection, relay_config_id: Option<&str>) -> Op
 }
 
 /// A domain's EFFECTIVE record table: stored rows + the read-time
-/// send-mode SPF adjustment.
+/// send-mode SPF adjustment + MX from the current mail hostname.
 pub fn effective_rows(conn: &Connection, row: &MailDomain) -> Vec<RecordRow> {
     let mut rows = dns_status_of(row).records;
     let include = relay_spf_include(conn, row.relay_config_id.as_deref());
     apply_send_mode_spf(&mut rows, &row.send_mode, include.as_deref());
+    let hostname = server_info(conn).and_then(|i| i.hostname);
+    apply_current_hostname_mx(&mut rows, hostname.as_deref());
     rows
 }
 
@@ -1232,6 +1256,68 @@ mail.acme.dev.	3600	IN	A	203.0.113.7
         // Nothing else moved.
         let rsa = rows.iter().find(|r| r.id == "dkim:202601r").unwrap();
         assert_eq!(rsa.chunks.len(), 2);
+    }
+
+    #[test]
+    fn expected_mx_follows_current_mail_hostname() {
+        let mut rows = fixture_rows();
+        assert_eq!(
+            rows.iter().find(|r| r.id == "mx").unwrap().expected,
+            "10 mail.acme.dev."
+        );
+        apply_current_hostname_mx(&mut rows, Some("mail.lztek.io"));
+        assert_eq!(
+            rows.iter().find(|r| r.id == "mx").unwrap().expected,
+            "10 mail.lztek.io.",
+            "H7: expected MX is the current mail_server.hostname"
+        );
+        assert_eq!(
+            rows.iter().find(|r| r.id == "ptr").unwrap().name,
+            "mail.lztek.io"
+        );
+        apply_current_hostname_mx(&mut rows, None);
+        assert_eq!(
+            rows.iter().find(|r| r.id == "mx").unwrap().expected,
+            "10 mail.lztek.io.",
+            "missing hostname leaves the current expected MX"
+        );
+    }
+
+    #[test]
+    fn effective_rows_mx_reads_mail_server_hostname() {
+        let _g = crate::mail::mail_server_test_lock();
+        cleanup_domain("acme.dev");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, updated_at) \
+                 VALUES (1, 'running', '0.16.10', 'mail.lztek.io', 100)",
+                [],
+            )
+            .expect("seed hostname");
+        }
+        let engine = FakeEngine::ok();
+        add_domain(&engine, "acme.dev").expect("add");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE mail_server SET hostname = 'mail.lztek.io' WHERE id = 1",
+                [],
+            )
+            .expect("hostname after add");
+            let row = load_domain(&conn, "acme.dev").expect("row");
+            let rows = effective_rows(&conn, &row);
+            assert_eq!(
+                rows.iter().find(|r| r.id == "mx").unwrap().expected,
+                "10 mail.lztek.io.",
+                "H7: show/check/list MX follows current hostname, not add-time zone"
+            );
+            let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+        }
+        cleanup_domain("acme.dev");
     }
 
     // ── Zone-file rendering (download payload) ──

@@ -38,5 +38,14 @@ fi
 if ! "$K2" hostmail --help | grep -q -- '--hostname'; then
     fail "k2 hostmail --help must mention --hostname"
 fi
+if ! "$K2" hostmail --help | grep -q 'Host-wide inbound down'; then
+    fail "k2 hostmail --help must say disable is host-wide inbound down"
+fi
+if ! "$K2" hostmail --help | grep -q 'systemctl is-active stalwart'; then
+    fail "k2 hostmail --help must name systemctl is-active stalwart as Linux ground truth"
+fi
+if ! "$K2" hostmail status --help | grep -q 'systemctl is-active stalwart'; then
+    fail "k2 hostmail status --help must name systemctl is-active stalwart"
+fi
 
 echo "PASS: hostmail enable --hostname"

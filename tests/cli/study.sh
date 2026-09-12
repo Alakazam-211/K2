@@ -179,6 +179,13 @@ assert_contains "k2 msg" "$send_out" "k2 msg"
 assert_contains "k2 thread" "$send_out" "k2 thread"
 assert_contains "k2 mail" "$send_out" "k2 mail"
 
+echo "== k2 study mail =="
+mail_out="$("$K2" study mail)"
+assert_contains "hostmail owner" "$mail_out" "k2 hostmail"
+assert_contains "disable host-wide" "$mail_out" "DISABLE IS HOST-WIDE"
+assert_contains "systemctl is-active" "$mail_out" "systemctl is-active stalwart"
+assert_contains "supervisor writes" "$mail_out" "k2 hostmail enable"
+
 echo "== k2 study nosuch =="
 set +e
 nosuch_out="$("$K2" study nosuch 2>&1)"

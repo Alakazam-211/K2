@@ -312,6 +312,40 @@ pub fn is_mail_owner_surface(path: &str) -> bool {
         || path == "/cli/mail-manage"
 }
 
+/// `GET /cli/mail/domain/list` uses client `project=` to pick the owner
+/// table (no param) vs the agent verified-only view (`k2 mail domains`).
+/// `stamp_principal` always writes `project` for a scoped cell — that
+/// must not flip `k2 hostmail domain list` onto the agent view (H8).
+/// Capture the client keys BEFORE stamp; restore (or strip) after.
+pub fn restore_domain_list_audience(
+    path: &str,
+    params: &mut HashMap<String, String>,
+    client_project: Option<String>,
+) {
+    if path != "/cli/mail/domain/list" {
+        return;
+    }
+    match client_project.filter(|s| !s.trim().is_empty()) {
+        Some(t) => {
+            params.insert("project".to_string(), t.clone());
+            params.insert("project_path".to_string(), t);
+        }
+        None => {
+            params.remove("project");
+            params.remove("project_path");
+        }
+    }
+}
+
+/// Snapshot of client `project` / `project_path` before identity stamp.
+pub fn client_project_param(params: &HashMap<String, String>) -> Option<String> {
+    ["project", "project_path"]
+        .iter()
+        .find_map(|k| params.get(*k))
+        .cloned()
+        .filter(|s| !s.trim().is_empty())
+}
+
 /// M5 hostmail manage paths the workspace toggle can open for a scoped
 /// passport. Exact paths only — never prefix `/cli/mail/server/` or
 /// `/cli/mail/domain/` (uninstall / remove stay M6).
@@ -461,6 +495,41 @@ pub fn handle_mail_manage(body: &[u8]) -> crate::cli_response::CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_domain_list_audience_strips_stamped_project() {
+        let mut params = HashMap::new();
+        params.insert("project".to_string(), "/stamped/ws".to_string());
+        params.insert("project_path".to_string(), "/stamped/ws".to_string());
+        restore_domain_list_audience("/cli/mail/domain/list", &mut params, None);
+        assert!(
+            params.get("project").is_none(),
+            "H8: hostmail domain list must not inherit stamp_principal project="
+        );
+        assert!(params.get("project_path").is_none());
+
+        let mut params = HashMap::new();
+        params.insert("project".to_string(), "/stamped/ws".to_string());
+        restore_domain_list_audience(
+            "/cli/mail/domain/list",
+            &mut params,
+            Some("/client/ws".to_string()),
+        );
+        assert_eq!(params.get("project").map(String::as_str), Some("/client/ws"));
+        assert_eq!(
+            params.get("project_path").map(String::as_str),
+            Some("/client/ws")
+        );
+
+        let mut params = HashMap::new();
+        params.insert("project".to_string(), "/stamped/ws".to_string());
+        restore_domain_list_audience("/cli/mail/status", &mut params, None);
+        assert_eq!(
+            params.get("project").map(String::as_str),
+            Some("/stamped/ws"),
+            "other mail GETs keep the stamp"
+        );
+    }
 
     /// GH #34: hostmail / access / link / config GETs are owner surfaces
     /// even when not in the POST-only mutation classifier (no trailing

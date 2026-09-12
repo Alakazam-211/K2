@@ -460,17 +460,22 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/terminal/compose-history",
         "/cli/terminal/classify",
         // Wave 0: mail owner/admin surfaces stay off the scoped allowlist
-        // (server lifecycle, domains, config, approvals, external link,
-        // access management, doctor probes). Agent mail verbs are admitted
-        // via ALLOW_PREFIXES `/cli/mail/` below.
-        "/cli/mail/server/",
-        "/cli/mail/domain/",
+        // (config, approvals, external link, access, doctor, plus M6
+        // leftovers uninstall/domain-remove). M5 hostmail manage paths
+        // (server enable/disable, domain list/show/add/check) ride
+        // ALLOW_PREFIXES `/cli/mail/` and are extra-gated by
+        // `mail_manage_allowed_for_path`. Do not prefix-open
+        // `/cli/mail/server/` or `/cli/mail/domain/` — exact-DENY the
+        // blast leftovers. Writer `/cli/mail-manage` is not an agent verb.
+        "/cli/mail/server/uninstall",
+        "/cli/mail/domain/remove",
         "/cli/mail/config/",
         "/cli/mail/approvals/",
         "/cli/mail/external/",
         "/cli/mail/link/",
         "/cli/mail/access/",
         "/cli/mail/doctor",
+        "/cli/mail-manage",
         // Workspace data sidecar owner surfaces (enable/disable/doctor).
         "/cli/db/server/",
         "/cli/db/doctor",
@@ -1345,15 +1350,29 @@ mod tests {
 
     #[test]
     fn is_agent_verb_denies_mail_owner_surfaces() {
+        // M5 hostmail manage: DENY shrink so scoped hooks can pass
+        // require_hook; extra gate ORs mail_manage_allowed_for_path.
         for p in [
             "/cli/mail/server/enable",
+            "/cli/mail/server/disable",
+            "/cli/mail/domain/list",
+            "/cli/mail/domain/show",
             "/cli/mail/domain/add",
+            "/cli/mail/domain/check",
+        ] {
+            assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
+        }
+        // M6 stay denied (blast / OAuth / access / doctor / writer).
+        for p in [
+            "/cli/mail/server/uninstall",
+            "/cli/mail/domain/remove",
             "/cli/mail/config/set",
             "/cli/mail/approvals/list",
             "/cli/mail/external/add",
             "/cli/mail/link/oauth/start",
             "/cli/mail/access/grant",
             "/cli/mail/doctor",
+            "/cli/mail-manage",
         ] {
             assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
         }

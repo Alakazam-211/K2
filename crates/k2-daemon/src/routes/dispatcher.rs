@@ -641,6 +641,9 @@ async fn handle_one_request(
             | "/cli/mail/folder/create"
             | "/cli/mail/folder/rename"
             | "/cli/mail/draft"
+            // Per-workspace hosted-mail manage toggle. Dedicated POST
+            // (not workspace/set, not GET /cli/dns-manage). GET → 405.
+            | "/cli/mail-manage"
             // Workspace data sidecar (prd-workspace-data-sidecar-v1).
             // Exact post_allowed paths (not glob). Owner-gated enable/
             // disable/uninstall/doctor in the dedicated arm below.
@@ -4533,13 +4536,13 @@ async fn handle_one_request(
                     .await;
                 return DispatchOutcome::Done;
             }
-            if crate::mail_routes::is_owner_level_mutation(p)
-                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
-            {
-                // #34: stable owner_only (exit 3) for non-owner callers
-                // that passed dual-auth (e.g. connect-user).
+            if let Err(r) = crate::mail_routes::mail_manage_authorized(
+                p,
+                super::http::token_is_owner_or_admin(&query, state.token.as_str()),
+                scoped_principal.as_ref(),
+            ) {
+                // #34: M5 flag-off / M6 / Member → owner_only (exit 3).
                 let _ = stream.read(&mut buf).await;
-                let r = crate::mail_routes::owner_only_response();
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
                     .await;
                 return DispatchOutcome::Done;
@@ -5526,6 +5529,29 @@ async fn handle_one_request(
                     crate::cli_response::CliResponse::not_found()
                 }
             };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // Per-workspace hosted-mail manage toggle. Dedicated arm:
+        // `token_is_owner_or_admin` (Owner|Admin humans) else
+        // mail_dual_auth_failure. GET 405. Not an agent verb. Not
+        // `workspace/set`. Not GET `/cli/dns-manage`.
+        p if p == "/cli/mail-manage" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                let f = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
+                super::http::send_response(&mut *stream, f.status, f.content_type, &f.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || {
+                crate::mail_routes::handle_mail_manage(&body)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // Chunk 2.2 — owner-only writer for `projects.agents_can_manage_skin`.
@@ -7172,6 +7198,15 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let mut params = super::http::parse_params(&path, &query);
+            if let Err(r) = crate::mail_routes::mail_manage_authorized(
+                p,
+                super::http::token_is_owner_or_admin(&query, state.token.as_str()),
+                scoped_principal.as_ref(),
+            ) {
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
             if p == "/cli/mail/address/list"
                 && crate::cli::bool_param(&params, "all")
                 && !super::http::token_is_owner_or_admin(&query, state.token.as_str())

@@ -14693,6 +14693,12 @@ OWNER VERBS — EXIT 3
   status, domain, config, approvals, doctor, external/link admin,
   hostmail. Approving your own mail is futile. Ask your human.
 
+HOSTMAIL TOGGLE
+  Default off. Owner/Admin: Settings → Workspaces → (this
+  workspace) → Allow agents to manage hosted mail on this host.
+  Opens enable/disable + domain list/add/check for that workspace's
+  agent. Uninstall, domain remove, OAuth, and access stay owner.
+
 NOT FILES-TO-AGENTS
   Sending a file to another workspace is `k2 msg --inbox-wake`,
   not `k2 mail`. See `k2 study send`.

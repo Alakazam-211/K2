@@ -609,6 +609,78 @@ async fn publish_run_post_json_is_served_on_cell_socket() {
     .await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mail_manage_toggle_gates_cell_uds_m5() {
+    let _g = lock();
+    let home = set_short_home();
+    let (ws_uuid, ws_path) = mk_workspace(&home, "mail-manage-cell");
+    let (_sid, token, sock) = mint_bind_serve_in_ws("pane-mail", &ws_uuid);
+    settle().await;
+
+    let (off_status, off_body) = uds(
+        &sock,
+        &post_json("/cli/mail/server/disable", &token, "{}"),
+    )
+    .await;
+    assert_eq!(off_status, 403, "flag OFF UDS disable; {off_body}");
+    assert!(
+        off_body.contains("owner_only"),
+        "UDS flag-off must teach owner_only: {off_body}"
+    );
+    assert!(
+        off_body.contains("Allow agents to manage hosted mail on this host"),
+        "UDS flag-off hint names Settings: {off_body}"
+    );
+
+    let (list_off_status, list_off_body) =
+        uds(&sock, &get("/cli/mail/domain/list", Some(&token))).await;
+    assert_eq!(
+        list_off_status, 403,
+        "flag OFF UDS domain list; {list_off_body}"
+    );
+    assert!(
+        list_off_body.contains("owner_only"),
+        "UDS list flag-off owner_only: {list_off_body}"
+    );
+
+    let ws_path_str = ws_path.to_string_lossy().into_owned();
+    k2_core::workspace::settings::set_mail_manage_enabled(&ws_path_str, true)
+        .expect("opt in");
+
+    let (on_status, on_body) = uds(
+        &sock,
+        &post_json("/cli/mail/server/disable", &token, "{}"),
+    )
+    .await;
+    assert!(
+        !on_body.contains("owner_only"),
+        "UDS flag ON disable must not be owner_only: {on_body}"
+    );
+    assert_ne!(on_status, 403, "UDS flag ON disable; {on_body}");
+
+    let (list_on_status, list_on_body) =
+        uds(&sock, &get("/cli/mail/domain/list", Some(&token))).await;
+    assert_eq!(
+        list_on_status, 200,
+        "UDS flag ON domain list; {list_on_body}"
+    );
+    assert!(
+        !list_on_body.contains("owner_only"),
+        "UDS list flag-on: {list_on_body}"
+    );
+
+    let (un_status, un_body) = uds(
+        &sock,
+        &post_json("/cli/mail/server/uninstall", &token, "{}"),
+    )
+    .await;
+    assert_eq!(un_status, 403, "UDS uninstall stays denied; {un_body}");
+    assert!(
+        !un_body.contains("alreadyEnabled"),
+        "UDS must not run uninstall: {un_body}"
+    );
+}
+
 /// Minimal query-string percent-encoding for a filesystem path.
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

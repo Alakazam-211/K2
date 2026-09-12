@@ -1,0 +1,12 @@
+-- Per-workspace agents-may-manage-hosted-mail opt-in.
+--
+-- When 1, that workspace's scoped hook (canonical + sidecars sharing
+-- the workspace UUID) may run hostmail M5 paths (server enable/disable,
+-- domain list/show/add/check). Default 0 (OFF), fail-closed. No global
+-- master (unlike DNS / connections). Owner / Admin humans always may.
+-- Uninstall, domain remove, OAuth, access, doctor, config/set stay
+-- owner-only even when this is ON.
+--
+-- Column lives on k2so.db `projects` (passport like 0115). Existing
+-- rows backfill to 0. Additive ALTER; do not rewrite frozen 0115/0083.
+ALTER TABLE projects ADD COLUMN mail_manage_enabled INTEGER NOT NULL DEFAULT 0;

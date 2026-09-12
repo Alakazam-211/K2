@@ -262,6 +262,9 @@ interface Project {
   // Chunk 2.2 — per-workspace agents-may-manage-Skin-Access (0/1, default 0).
   // No global master. Written via POST /cli/agents-manage-skin (not workspace/set).
   agentsCanManageSkin?: number
+  // Per-workspace agents-may-manage-hosted-mail (0/1, default 0).
+  // No global master. Written via POST /cli/mail-manage (not workspace/set).
+  mailManageEnabled?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

@@ -972,6 +972,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0117_subdomain_workspaces_target",
             include_str!("../../drizzle_sql/0117_subdomain_workspaces_target.sql"),
         ),
+        // 0118 — per-workspace agents-may-manage-hosted-mail passport.
+        // Column on k2so.db `projects`. Default 0. No global master.
+        (
+            "0118_project_mail_manage_enabled",
+            include_str!("../../drizzle_sql/0118_project_mail_manage_enabled.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

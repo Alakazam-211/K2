@@ -156,6 +156,14 @@ pub struct Project {
     /// owner-only even when this is ON.
     #[serde(default)]
     pub agents_can_manage_skin: i64,
+    /// Per-workspace agents-may-manage-hosted-mail opt-in (migration
+    /// 0118). 1 = this workspace's scoped hook may run hostmail M5
+    /// paths (server enable/disable, domain list/show/add/check);
+    /// 0 (default) = deny. No global master. Owner / Admin always may.
+    /// Fail-closed: default 0. Uninstall / domain remove / OAuth /
+    /// access stay owner-only even when this is ON.
+    #[serde(default)]
+    pub mail_manage_enabled: i64,
 }
 
 impl Project {
@@ -171,7 +179,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -215,6 +223,7 @@ impl Project {
                     if t.is_empty() { "off".to_string() } else { t.to_string() }
                 },
                 agents_can_manage_skin: row.get(30).unwrap_or(0),
+                mail_manage_enabled: row.get(31).unwrap_or(0),
             })
         })?;
         rows.collect()
@@ -225,7 +234,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -269,6 +278,7 @@ impl Project {
                         if t.is_empty() { "off".to_string() } else { t.to_string() }
                     },
                     agents_can_manage_skin: row.get(30).unwrap_or(0),
+                    mail_manage_enabled: row.get(31).unwrap_or(0),
                 })
             },
         )
@@ -4437,6 +4447,35 @@ mod unit_tests {
         assert_eq!(written.agents_can_manage_skin, 1);
         assert_eq!(
             serde_json::to_value(&written).unwrap()["agentsCanManageSkin"],
+            1
+        );
+    }
+
+    #[test]
+    fn project_mail_manage_enabled_defaults_off_and_serializes_camel_case() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-mail-manage");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.mail_manage_enabled, 0);
+        let listed = Project::list(&conn).unwrap();
+        let listed_p = listed.iter().find(|x| x.id == id).expect("listed");
+        assert_eq!(listed_p.mail_manage_enabled, 0);
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["mailManageEnabled"], 0);
+        assert!(
+            json.get("mail_manage_enabled").is_none(),
+            "must serialize camelCase, not snake: {json}"
+        );
+
+        conn.execute(
+            "UPDATE projects SET mail_manage_enabled = 1 WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        let written = Project::get(&conn, &id).unwrap();
+        assert_eq!(written.mail_manage_enabled, 1);
+        assert_eq!(
+            serde_json::to_value(&written).unwrap()["mailManageEnabled"],
             1
         );
     }

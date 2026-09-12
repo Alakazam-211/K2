@@ -639,9 +639,23 @@ mod unix_impl {
                 from_cli(crate::inbox_routes::dispatch_post(p, params))
             }
             // Wave 0: agent mail verbs (identity forced from principal above +
-            // with_request_principal). Owner mail surfaces are not agent verbs.
+            // with_request_principal). M5 extra-gated by the same helper as
+            // TCP (flag on this principal's path). M6 stay owner_only.
             p if p.starts_with("/cli/mail/") && is_post => {
+                if let Err(r) =
+                    crate::mail_routes::mail_manage_authorized(p, false, Some(principal))
+                {
+                    return from_cli(r);
+                }
                 from_cli(crate::mail_routes::dispatch_post(p, body))
+            }
+            p if crate::mail_routes::is_mail_manage_surface(p) && !is_post => {
+                if let Err(r) =
+                    crate::mail_routes::mail_manage_authorized(p, false, Some(principal))
+                {
+                    return from_cli(r);
+                }
+                from_cli(crate::cli::dispatch(p, params))
             }
             // DNS K1: agent DNS verbs (principal-bound; toggle-gated in handlers).
             p if p.starts_with("/cli/dns/") && is_post => {

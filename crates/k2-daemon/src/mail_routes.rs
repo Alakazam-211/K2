@@ -308,11 +308,30 @@ pub fn is_mail_owner_surface(path: &str) -> bool {
         || path == "/cli/mail/oauth-config"
         // link/* aliases for external (DENY_PREFIX `/cli/mail/link/`).
         || path.starts_with("/cli/mail/link/")
+        // Toggle writer: agents cannot self-grant.
+        || path == "/cli/mail-manage"
 }
 
-/// Stable teaching response for agent tokens on hostmail / mail-owner
-/// surfaces (GH #34). CLI maps `owner_only` + 403 → exit 3.
-pub fn owner_only_response() -> crate::cli_response::CliResponse {
+/// M5 hostmail manage paths the workspace toggle can open for a scoped
+/// passport. Exact paths only — never prefix `/cli/mail/server/` or
+/// `/cli/mail/domain/` (uninstall / remove stay M6).
+pub fn is_mail_manage_surface(path: &str) -> bool {
+    matches!(
+        path,
+        "/cli/mail/server/enable"
+            | "/cli/mail/server/disable"
+            | "/cli/mail/domain/list"
+            | "/cli/mail/domain/show"
+            | "/cli/mail/domain/add"
+            | "/cli/mail/domain/check"
+    )
+}
+
+const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces)";
+
+const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces). To let this workspace's agent manage hosted mail on this host, Settings → Workspaces → (this workspace) → Allow agents to manage hosted mail on this host.";
+
+fn owner_only_with_hint(hint: &str) -> crate::cli_response::CliResponse {
     crate::cli_response::CliResponse {
         status: "403 Forbidden",
         content_type: "application/json",
@@ -320,10 +339,118 @@ pub fn owner_only_response() -> crate::cli_response::CliResponse {
             "ok": false,
             "error": {
                 "code": "owner_only",
-                "hint": "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces)",
+                "hint": hint,
             },
         })
         .to_string(),
+    }
+}
+
+/// Stable teaching response for agent tokens on hostmail / mail-owner
+/// surfaces (GH #34). CLI maps `owner_only` + 403 → exit 3.
+pub fn owner_only_response() -> crate::cli_response::CliResponse {
+    owner_only_with_hint(OWNER_ONLY_HINT)
+}
+
+/// Teaching response for M5 hostmail manage when a valid scoped hook
+/// hits a workspace whose hosted-mail toggle is OFF.
+pub fn owner_only_manage_response() -> crate::cli_response::CliResponse {
+    owner_only_with_hint(OWNER_ONLY_MANAGE_HINT)
+}
+
+/// M15 extra gate after dual-auth. M5 is allowed iff owner-or-admin
+/// **or** (scoped `HookPrincipal` AND `mail_manage_allowed_for_path` on
+/// that principal's workspace). Flag does not replace Admin. M6 stay
+/// owner-or-admin only. Flag key is principal uuid → path, never client
+/// `project=`. Used by the TCP extra gate **and** the cell UDS mail arm.
+pub fn mail_manage_authorized(
+    path: &str,
+    is_owner_or_admin: bool,
+    principal: Option<&crate::session_token::HookPrincipal>,
+) -> Result<(), crate::cli_response::CliResponse> {
+    let needs_gate = is_owner_level_mutation(path) || is_mail_manage_surface(path);
+    if !needs_gate {
+        return Ok(());
+    }
+    if is_owner_or_admin {
+        return Ok(());
+    }
+    if is_mail_manage_surface(path) {
+        if let Some(p) = principal {
+            let ws_path = crate::workspace_msg::resolve_workspace(&p.workspace_uuid);
+            if ws_path
+                .as_deref()
+                .is_some_and(k2_core::workspace::settings::mail_manage_allowed_for_path)
+            {
+                return Ok(());
+            }
+            return Err(owner_only_manage_response());
+        }
+        return Err(owner_only_response());
+    }
+    Err(owner_only_response())
+}
+
+fn enable_field(v: &serde_json::Value) -> Option<bool> {
+    let raw = v.get("enable")?;
+    if let Some(n) = raw.as_i64() {
+        return match n {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        };
+    }
+    if let Some(s) = raw.as_str() {
+        return match s.trim() {
+            "0" => Some(false),
+            "1" => Some(true),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// `POST /cli/mail-manage` `{project, enable: 0|1}` — owner-or-admin
+/// writer for `projects.mail_manage_enabled`. Not `workspace/set`.
+pub fn handle_mail_manage(body: &[u8]) -> crate::cli_response::CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) if body.iter().all(|b| b.is_ascii_whitespace()) => serde_json::json!({}),
+        Err(e) => {
+            return crate::cli_response::CliResponse::bad_request(format!(
+                "invalid JSON body: {e}"
+            ))
+        }
+    };
+    let project = v
+        .get("project")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let Some(project) = project else {
+        return crate::cli_response::CliResponse::bad_request("missing project");
+    };
+    let Some(enable) = enable_field(&v) else {
+        return crate::cli_response::CliResponse::bad_request("enable must be 0 or 1");
+    };
+    let Some(path) = crate::workspace_msg::resolve_workspace(project) else {
+        return crate::workspace_routes::workspace_not_found_response(project);
+    };
+    match k2_core::workspace::settings::set_mail_manage_enabled(&path, enable) {
+        Ok(()) => {
+            k2_core::agent_hooks::emit(
+                k2_core::agent_hooks::HookEvent::SyncProjects,
+                serde_json::Value::Null,
+            );
+            crate::cli_response::CliResponse::ok_json(
+                serde_json::json!({
+                    "success": true,
+                    "mailManageEnabled": enable,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => crate::cli_response::CliResponse::bad_request(e),
     }
 }
 
@@ -351,6 +478,7 @@ mod tests {
             "/cli/mail/access/grant",
             "/cli/mail/link/oauth/start",
             "/cli/mail/doctor",
+            "/cli/mail-manage",
         ] {
             assert!(
                 is_mail_owner_surface(p),
@@ -384,6 +512,81 @@ mod tests {
             hint.contains("owner") || hint.contains("human"),
             "hint should teach owner/human: {hint}"
         );
+        assert!(
+            !hint.contains("Allow agents to manage hosted mail"),
+            "generic hint must not name the Settings row: {hint}"
+        );
+    }
+
+    #[test]
+    fn is_mail_manage_surface_is_exact_m5() {
+        for p in [
+            "/cli/mail/server/enable",
+            "/cli/mail/server/disable",
+            "/cli/mail/domain/list",
+            "/cli/mail/domain/show",
+            "/cli/mail/domain/add",
+            "/cli/mail/domain/check",
+        ] {
+            assert!(is_mail_manage_surface(p), "M5: {p}");
+        }
+        for p in [
+            "/cli/mail/server/uninstall",
+            "/cli/mail/domain/remove",
+            "/cli/mail/config/set",
+            "/cli/mail/access/grant",
+            "/cli/mail/oauth-config",
+            "/cli/mail/doctor",
+            "/cli/mail/address/create",
+            "/cli/mail/status",
+            "/cli/mail/config",
+            "/cli/mail-manage",
+        ] {
+            assert!(!is_mail_manage_surface(p), "not M5: {p}");
+        }
+    }
+
+    #[test]
+    fn owner_only_manage_response_names_settings_row() {
+        let r = owner_only_manage_response();
+        assert_eq!(r.status, "403 Forbidden");
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "owner_only");
+        let hint = v["error"]["hint"].as_str().unwrap_or("");
+        assert!(hint.contains("ask your human"), "got {hint}");
+        assert!(
+            hint.contains("Allow agents to manage hosted mail on this host"),
+            "flag-off hint must name the Settings row: {hint}"
+        );
+    }
+
+    #[test]
+    fn mail_manage_authorized_admin_and_flag_split() {
+        let p = crate::session_token::HookPrincipal {
+            workspace_uuid: "no-such-ws".to_string(),
+            agent_address: "agent".to_string(),
+        };
+        assert!(mail_manage_authorized("/cli/mail/send", false, Some(&p)).is_ok());
+        assert!(mail_manage_authorized("/cli/mail/server/enable", true, None).is_ok());
+        assert!(mail_manage_authorized("/cli/mail/server/uninstall", true, None).is_ok());
+        let m5 = mail_manage_authorized("/cli/mail/server/disable", false, Some(&p));
+        assert!(m5.is_err(), "unknown principal path must fail closed");
+        let body = m5.err().unwrap().body;
+        assert!(body.contains("owner_only"), "{body}");
+        assert!(
+            body.contains("Allow agents to manage hosted mail"),
+            "M5 flag-off names Settings: {body}"
+        );
+        let m6 = mail_manage_authorized("/cli/mail/server/uninstall", false, Some(&p));
+        assert!(m6.is_err());
+        let body = m6.err().unwrap().body;
+        assert!(body.contains("owner_only"), "{body}");
+        assert!(
+            !body.contains("Allow agents to manage hosted mail"),
+            "M6 must not promise the toggle: {body}"
+        );
+        let member_m5 = mail_manage_authorized("/cli/mail/domain/list", false, None);
+        assert!(member_m5.is_err());
     }
 
     /// GET on every POST-only mutation answers an explicit 405 through

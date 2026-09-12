@@ -937,6 +937,44 @@ pub fn set_agents_can_manage_skin(project_path: &str, enable: bool) -> Result<()
     Ok(())
 }
 
+/// EFFECTIVE agents-may-manage-hosted-mail gate for `project_path`.
+/// Column only: no global master (unlike DNS / connections). Unknown /
+/// unregistered path → `false` (fail-closed).
+///
+/// Owner / Admin never consult this helper — the dispatcher
+/// short-circuits privileged actors first. Toggle key is the hook
+/// principal's workspace UUID resolved to a project path, never a
+/// client `project=` / `K2_PROJECT_PATH`.
+pub fn mail_manage_allowed_for_path(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT mail_manage_enabled FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// Persist `projects.mail_manage_enabled` (0/1). Dedicated writer for
+/// `POST /cli/mail-manage` — this field is **not** on
+/// [`allowed_project_setting_fields`] (`workspace/set` must 400).
+pub fn set_mail_manage_enabled(project_path: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET mail_manage_enabled = ?1 WHERE path = ?2",
+            rusqlite::params![if enable { 1i64 } else { 0i64 }, project_path],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_path}"));
+    }
+    Ok(())
+}
+
 /// EFFECTIVE `db_agent_access` for `project_path`: `off` | `read` | `write`.
 ///
 /// NULL / unknown / unrecognized → `'off'` (fail-closed). Create-only
@@ -1699,6 +1737,48 @@ mod tests {
 
         let missing = unique_path("agents-manage-skin-missing");
         let err = set_agents_can_manage_skin(&missing, true)
+            .expect_err("unknown path write must fail");
+        assert!(err.contains("Project not found"), "got {err:?}");
+    }
+
+    /// Column-only hosted-mail passport. Default OFF; unknown path
+    /// false; not writable via `workspace/set`.
+    #[test]
+    fn mail_manage_enabled_defaults_off_unknown_false_and_round_trips() {
+        let path = unique_path("mail-manage");
+        let _pid = insert_project(&path);
+
+        assert!(
+            !mail_manage_allowed_for_path(&path),
+            "fresh row must default OFF"
+        );
+        assert!(
+            !mail_manage_allowed_for_path("/tmp/never-registered-mail-manage"),
+            "unknown path must fail closed"
+        );
+        assert!(
+            !allowed_project_setting_fields().contains(&"mail_manage_enabled"),
+            "must not be on workspace/set allowlist"
+        );
+
+        set_mail_manage_enabled(&path, true).expect("opt in");
+        assert!(mail_manage_allowed_for_path(&path));
+        set_mail_manage_enabled(&path, false).expect("opt out");
+        assert!(!mail_manage_allowed_for_path(&path));
+
+        let err = update_project_setting(&path, "mail_manage_enabled", "1")
+            .expect_err("workspace/set must reject the column");
+        assert!(
+            err.contains("Unknown setting"),
+            "got {err:?}"
+        );
+        assert!(
+            !mail_manage_allowed_for_path(&path),
+            "rejected workspace/set must not flip the column"
+        );
+
+        let missing = unique_path("mail-manage-missing");
+        let err = set_mail_manage_enabled(&missing, true)
             .expect_err("unknown path write must fail");
         assert!(err.contains("Project not found"), "got {err:?}");
     }

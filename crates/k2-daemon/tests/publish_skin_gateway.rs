@@ -824,11 +824,29 @@ fn ws_upgrade(port: u16, path_and_query: &str, extra_headers: &str) -> Resp {
     );
     stream.write_all(req.as_bytes()).expect("ws write");
     stream.flush().expect("ws flush");
+    // Read until the head + the advertised Content-Length body are in (or
+    // EOF / a 101 with no body). The gateway writes head and body as two
+    // segments, so a single read can legitimately see only the head.
     let mut raw = Vec::new();
     let mut buf = [0u8; 4096];
-    match stream.read(&mut buf) {
-        Ok(n) => raw.extend_from_slice(&buf[..n]),
-        Err(_) => {}
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+        let text = String::from_utf8_lossy(&raw);
+        let Some((head, body)) = text.split_once("\r\n\r\n") else { continue };
+        let clen = head.lines().find_map(|l| {
+            let lower = l.to_ascii_lowercase();
+            lower
+                .strip_prefix("content-length:")
+                .and_then(|v| v.trim().parse::<usize>().ok())
+        });
+        match clen {
+            Some(c) if body.len() < c => continue,
+            _ => break,
+        }
     }
     parse_resp(&raw)
 }

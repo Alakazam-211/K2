@@ -3,6 +3,14 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.144 — Password sign-in moves behind the K2 edge
+
+Your server's tunnel address (`https://<name>.k2.dev`) no longer serves a login page, and no longer accepts a username and password from just anyone on the internet. Those were being scanned. Password sign-in now goes through `https://<name>.app.k2.dev`, which is fronted by Cloudflare and signs each login for your server; the K2 app does this for you when you connect to a `.k2.dev` server, and the hosted web client already lives there. Everything that carries a token — your existing desktop sessions, the CLI, terminals — is unchanged. Self-hosters without the K2 edge can set **Password sign-in over the tunnel** to *Any client* in Settings → K2 Connect → Policies, or turn it off entirely.
+
+If an admin created your account with a temporary password, the K2 app and the web client now walk you through choosing a new one on first sign-in, wherever you signed in from: the server switcher, Settings → Connections, or a sign-in prompt. The old account page on the tunnel address is gone; on this Mac it still answers locally.
+
+Every sign-in attempt is now recorded with time, user, outcome, and where it came from: `k2 users audit`. Sessions last 7 days instead of 30; the app signs you back in from your saved password. Server owners can reset a user's password from the dashboard and force a change on next sign-in.
+
 ## 0.40.143 — Highlight and copy in Thread
 
 Click-drag to highlight Thread posts and copy them. Double-click already selected a word; a background poll was focusing the terminal mid-drag and killing the range. Growing the Message box and staying on the latest post after you leave and come back shipped in 0.40.142.

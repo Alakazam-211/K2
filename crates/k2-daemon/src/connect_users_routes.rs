@@ -109,21 +109,130 @@ pub fn handle_remove(actor_role: connect_users::Role, body: &[u8]) -> CliRespons
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SetPasswordReq {
     username: String,
     password: String,
+    /// PRD connect-login-edge-only R1: when set, the target must rotate at
+    /// next login (their sessions are revoked). Default depends on the
+    /// actor — `true` for a session (dashboard reset hands over a temp
+    /// password), `false` for the owner token (CLI/Settings behaviour
+    /// unchanged).
+    #[serde(default)]
+    must_change_password: Option<bool>,
 }
 
-/// `POST /cli/users/set-password` `{username,password}` →
-/// `{"success":true}`. Revokes the user's live sessions server-side.
-pub fn handle_set_password(body: &[u8]) -> CliResponse {
+/// Who is calling `POST /cli/users/set-password` (R1). Resolved by the
+/// dispatcher from the credential; the handler applies the target rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetPasswordActor {
+    /// The on-box owner daemon token (CLI / local Settings).
+    OwnerToken,
+    /// A live connect-user session — only an Owner-ROLE session reaches
+    /// the handler (the dispatcher 403s Admin/Member/Viewer).
+    Session {
+        username: String,
+        role: connect_users::Role,
+    },
+}
+
+/// `POST /cli/users/set-password` `{username,password[,mustChangePassword]}`
+/// → `{"success":true,"mustChangePassword":<bool>}`. Revokes the target's
+/// live sessions server-side (set_password always does; the flag adds the
+/// forced rotation on top).
+///
+/// Rules (R1):
+/// - target resolved via `can_act_on(actor_role, target_role)` → 403;
+/// - a session may not target ITSELF → 400 (use `/cli/auth/change-password`);
+/// - `mustChangePassword` defaults `true` for a session actor, `false`
+///   for the owner token.
+pub fn handle_set_password_as(actor: &SetPasswordActor, body: &[u8]) -> CliResponse {
     let req: SetPasswordReq = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-    match connect_users::set_password(&req.username, &req.password) {
-        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
-        Err(e) => CliResponse::bad_request(e),
+    let target = match connect_users::normalize_username(&req.username) {
+        Ok(u) => u,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let (actor_role, self_target, default_flag) = match actor {
+        SetPasswordActor::OwnerToken => (connect_users::Role::Owner, false, false),
+        SetPasswordActor::Session { username, role } => (*role, username == &target, true),
+    };
+    if self_target {
+        return CliResponse::bad_request(
+            "use /cli/auth/change-password to change your own password".to_string(),
+        );
+    }
+    let Some(target_role) = connect_users::role_for_user(&target) else {
+        return CliResponse::bad_request(format!("user '{target}' not found"));
+    };
+    if !connect_users::can_act_on(actor_role, target_role) {
+        return CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": format!(
+                    "a {} may not reset the password of a {}",
+                    actor_role.as_wire(),
+                    target_role.as_wire()
+                )
+            })
+            .to_string(),
+        };
+    }
+    if let Err(e) = connect_users::set_password(&target, &req.password) {
+        return CliResponse::bad_request(e);
+    }
+    let must = req.must_change_password.unwrap_or(default_flag);
+    if must {
+        if let Err(e) = connect_users::set_must_change_password(&target, true) {
+            return CliResponse::bad_request(e);
+        }
+        // set_password already revoked; revoke again so the flag and the
+        // revocation are never observed apart (belt + braces, idempotent).
+        connect_users::revoke_user_sessions(&target);
+    }
+    CliResponse::ok_json(
+        serde_json::json!({ "success": true, "mustChangePassword": must }).to_string(),
+    )
+}
+
+/// Owner-token form of [`handle_set_password_as`] (pre-R1 signature kept
+/// for the unit tests + any owner-token caller).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn handle_set_password(body: &[u8]) -> CliResponse {
+    handle_set_password_as(&SetPasswordActor::OwnerToken, body)
+}
+
+/// `GET /cli/users/audit?tail=N` — the last N auth-audit records (L3).
+/// `tail` is clamped to `1..=MAX_TAIL` (default 50); a non-numeric value
+/// is a 400. Gate (owner token OR Owner-role session) lives in the
+/// dispatcher.
+pub fn handle_audit_tail(tail_param: Option<&str>) -> CliResponse {
+    let requested = match tail_param.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(s) => match s.parse::<usize>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                return CliResponse::bad_request(format!(
+                    "tail must be an integer 1..={} (got {s:?})",
+                    k2_core::auth_audit::MAX_TAIL
+                ))
+            }
+        },
+    };
+    let n = k2_core::auth_audit::clamp_tail(requested);
+    match k2_core::auth_audit::tail(n) {
+        Ok(events) => CliResponse::ok_json(
+            serde_json::json!({
+                "events": events,
+                "tail": n,
+                "path": k2_core::auth_audit::path().display().to_string(),
+            })
+            .to_string(),
+        ),
+        Err(e) => CliResponse::internal_error(e),
     }
 }
 
@@ -283,12 +392,43 @@ fn login_failed() -> CliResponse {
 /// when it's a 401, to blunt online brute force (richer rate-limiting is
 /// deferred). `connect_users::verify` already runs constant-ish argon2
 /// work to blunt user-enumeration timing.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn handle_login(body: &[u8]) -> CliResponse {
+    handle_login_audited(body).response
+}
+
+/// [`handle_login`] plus what the audit trail needs: the username AS
+/// SUBMITTED (trimmed/capped by the audit writer) and the outcome token
+/// (`ok` | `bad_creds` | `locked`). The wire response is unchanged —
+/// `locked` and `bad_creds` are the same generic 401 on the wire; only
+/// the audit record tells them apart.
+pub struct LoginReply {
+    pub response: CliResponse,
+    pub user: String,
+    pub outcome: &'static str,
+}
+
+/// The username a (possibly malformed) login body claimed, for the audit
+/// record. Empty when the body is not parseable JSON with a `username`.
+pub fn login_body_username(body: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("username").and_then(|u| u.as_str()).map(str::to_string))
+        .unwrap_or_default()
+}
+
+pub fn handle_login_audited(body: &[u8]) -> LoginReply {
     let req: LoginReq = match serde_json::from_slice(body) {
         // A malformed body is an auth failure, not a 400 — don't help an
         // attacker probe the parser separately from the credential check.
         Ok(r) => r,
-        Err(_) => return login_failed(),
+        Err(_) => {
+            return LoginReply {
+                response: login_failed(),
+                user: login_body_username(body),
+                outcome: "bad_creds",
+            }
+        }
     };
     // Route every credential check through the brute-force lockout gate
     // (3 consecutive fails → 15-minute per-username lockout). The 401 it
@@ -296,8 +436,19 @@ pub fn handle_login(body: &[u8]) -> CliResponse {
     // the account is currently locked — no user/lock enumeration.
     match connect_users::check_and_record(&req.username, &req.password) {
         connect_users::LoginOutcome::Ok => {}
-        connect_users::LoginOutcome::BadCreds | connect_users::LoginOutcome::LockedOut => {
-            return login_failed();
+        connect_users::LoginOutcome::BadCreds => {
+            return LoginReply {
+                response: login_failed(),
+                user: req.username,
+                outcome: "bad_creds",
+            }
+        }
+        connect_users::LoginOutcome::LockedOut => {
+            return LoginReply {
+                response: login_failed(),
+                user: req.username,
+                outcome: "locked",
+            }
         }
     }
     // verify() lowercases internally; issue the session under the
@@ -311,7 +462,7 @@ pub fn handle_login(body: &[u8]) -> CliResponse {
     let expires_at = (chrono::Utc::now()
         + chrono::Duration::days(connect_users::session_ttl_days()))
     .to_rfc3339();
-    CliResponse::ok_json(
+    let response = CliResponse::ok_json(
         serde_json::json!({
             "token": token,
             "username": username,
@@ -321,7 +472,12 @@ pub fn handle_login(body: &[u8]) -> CliResponse {
             "mustChangePassword": connect_users::must_change_password(&username),
         })
         .to_string(),
-    )
+    );
+    LoginReply {
+        response,
+        user: req.username,
+        outcome: "ok",
+    }
 }
 
 /// Render the self-service account HTML page. Self-contained: inline CSS
@@ -648,11 +804,19 @@ pub fn handle_change_password(username: Option<String>, body: &[u8]) -> CliRespo
 /// so a logged-out/expired token can't be probed for existence. (K2 Connect
 /// #4.) The dispatcher additionally clears the `k2_session` cookie
 /// (`Max-Age=0`) on every logout response for the hosted web path.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn handle_logout(token: &str) -> CliResponse {
+    handle_logout_with_user(token).0
+}
+
+/// [`handle_logout`] plus the username whose record was actually removed
+/// (`None` for an unknown/expired token) — for the audit trail only; the
+/// wire response is the same idempotent success either way.
+pub fn handle_logout_with_user(token: &str) -> (CliResponse, Option<String>) {
     // Deleting an unknown/expired token returns None; we still report
     // success so the route is idempotent + non-enumerable.
-    let _ = connect_users::logout_session(token);
-    CliResponse::ok_json(r#"{"success":true}"#.to_string())
+    let user = connect_users::logout_session(token);
+    (CliResponse::ok_json(r#"{"success":true}"#.to_string()), user)
 }
 
 /// `GET /cli/auth/whoami` (authorized — owner OR connect-user) →

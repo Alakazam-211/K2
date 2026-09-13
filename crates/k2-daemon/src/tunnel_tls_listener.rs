@@ -584,13 +584,27 @@ async fn serve_one(
 
     match subdomains::current().route_for_host(&sni) {
         Route::Daemon => {
-            // Existing path: splice to the daemon's own cleartext HTTP
-            // listener; the dispatcher's keep-alive loop owns request framing.
+            // PRD connect-login-edge-only I2: splice to the TUNNEL-INGRESS
+            // listener (dispatch tagged `Ingress::Tunnel`), NOT the
+            // privileged main HTTP listener (`http_port`, `Ingress::Loopback`).
+            // The ingress listener is re-bound on demand if it died; a
+            // failure here drops the connection LOUDLY — never a silent
+            // fallback to `http_port` (that would reopen the public login
+            // surface the PRD closes). `http_port` stays for diagnostics.
+            let ingress_port = crate::tunnel_ingress_listener::ensure_port()
+                .await
+                .map_err(|e| {
+                    format!(
+                        "tunnel-ingress listener unavailable (refusing to splice to \
+                         main HTTP :{http_port}): {e}"
+                    )
+                })?;
+            // The dispatcher's keep-alive loop owns request framing.
             // H2: bound the upstream dial (loopback is ~instant; a wedged
             // backend must not hang this task).
-            let mut upstream = connect_upstream(&("127.0.0.1", http_port))
+            let mut upstream = connect_upstream(&("127.0.0.1", ingress_port))
                 .await
-                .map_err(|e| format!("connect to local HTTP listener :{http_port}: {e}"))?;
+                .map_err(|e| format!("connect to tunnel-ingress listener :{ingress_port}: {e}"))?;
             let res = tokio::io::copy_bidirectional(&mut tls, &mut upstream)
                 .await
                 .map(|_| ())
@@ -749,38 +763,15 @@ mod tests {
     async fn https_listener_routes_a_request_through_the_dispatcher() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-        // 1) Stand up a minimal cleartext HTTP "dispatcher" that answers
-        //    /ping with 200 — standing in for the daemon's real dispatch()
-        //    (we're testing the TLS→splice path, not re-testing dispatch).
-        let http = TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .expect("bind http stub");
-        let http_port = http.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            loop {
-                let (mut s, _) = match http.accept().await {
-                    Ok(v) => v,
-                    Err(_) => return,
-                };
-                tokio::spawn(async move {
-                    let mut buf = [0u8; 1024];
-                    let n = s.read(&mut buf).await.unwrap_or(0);
-                    let req = String::from_utf8_lossy(&buf[..n]);
-                    let body = if req.starts_with("GET /ping") {
-                        "pong"
-                    } else {
-                        "no"
-                    };
-                    let resp = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    let _ = s.write_all(resp.as_bytes()).await;
-                    let _ = s.flush().await;
-                });
-            }
-        });
+        // 1) Install the daemon state the TUNNEL-INGRESS listener dispatches
+        //    with (PRD connect-login-edge-only I2: the TLS splice now lands on
+        //    the real dispatcher tagged `Ingress::Tunnel`, brought up on
+        //    demand by `ensure_port`). `http_port` is the main listener's
+        //    port — deliberately a port NOTHING listens on, so the test
+        //    proves the splice does not go there.
+        let http_port = install_test_ingress_state();
+        // `/account` sits behind the readiness gate (503 until ready).
+        crate::boot_status::set_ready();
 
         // 2) Provision a self-signed cert + build the rustls acceptor. This
         //    test exercises the TLS→splice path, not the broker, so engage
@@ -816,8 +807,17 @@ mod tests {
         //    whole TLS→splice→stub-dispatcher path.
         let body = tls_client_get(&cert_pem, https_port, "rosson.k2.dev", "/ping").await;
         assert!(
-            body.contains("200 OK") && body.contains("pong"),
-            "expected a routed 200 pong over TLS, got:\n{body}"
+            body.contains("200 OK") && body.contains(crate::BANNER),
+            "expected the real dispatcher's /ping banner over TLS via the tunnel-ingress \
+             listener, got:\n{body}"
+        );
+        // I2 proof: the splice landed on the TUNNEL-INGRESS dispatcher, so
+        // the account page is refused (G1) — a splice to the main listener
+        // would have served the HTML.
+        let page = tls_client_get(&cert_pem, https_port, "rosson.k2.dev", "/account").await;
+        assert!(
+            page.contains("404 Not Found") && page.contains("Not Found") && !page.contains("<html"),
+            "tunnel ingress must 404 the account page, got:\n{page}"
         );
     }
 
@@ -888,8 +888,27 @@ mod tests {
         port
     }
 
+    /// PRD connect-login-edge-only I2: `Route::Daemon` splices to the
+    /// tunnel-ingress listener (real dispatcher, `Ingress::Tunnel`), so the
+    /// TLS tests install a throwaway `DaemonState` for it and assert against
+    /// the real `/ping` banner. Returns a "main HTTP port" that NOTHING
+    /// listens on — proof the splice never falls back to it.
+    fn install_test_ingress_state() -> u16 {
+        let (event_tx, _rx) = tokio::sync::broadcast::channel::<crate::events::WireEvent>(
+            crate::events::EVENT_CHANNEL_CAP,
+        );
+        crate::tunnel_ingress_listener::install_state(crate::DaemonState {
+            token: Arc::new("tls-test-owner-token".to_string()),
+            started_at: std::time::Instant::now(),
+            port: 1,
+            event_tx: Arc::new(event_tx),
+            shutdown_tx: None,
+        });
+        1
+    }
+
     /// SNI Host routing (PRD §7): the primary `<sub>.k2.dev` reaches the
-    /// daemon stub; a CONFIGURED nested label reaches its internal endpoint;
+    /// daemon (via the tunnel-ingress listener); a CONFIGURED nested label reaches its internal endpoint;
     /// an UNKNOWN nested label is rejected with a 404 (never the daemon).
     /// Exercises the real `serve_one` path (TLS terminate → SNI lookup →
     /// route) via the production accept loop + the global subdomain cache.
@@ -906,8 +925,9 @@ mod tests {
         // misroute our nested label.
         let _home = crate::test_support::TempHome::new();
 
-        // Two distinct backends so we can prove WHERE a connection landed.
-        let daemon_port = spawn_tagged_stub("DAEMON").await;
+        // Two distinct backends so we can prove WHERE a connection landed:
+        // the real dispatcher (tunnel-ingress) vs a tagged internal stub.
+        let daemon_port = install_test_ingress_state();
         let internal_port = spawn_tagged_stub("INTERNAL").await;
 
         // Seed the global routing map: primary `rosson`, nested
@@ -938,10 +958,10 @@ mod tests {
             });
         }
 
-        // Primary → daemon stub.
-        let primary = tls_client_get(&cert_pem, https_port, "rosson.k2.dev", "/x").await;
+        // Primary → the daemon (real dispatcher via tunnel-ingress).
+        let primary = tls_client_get(&cert_pem, https_port, "rosson.k2.dev", "/ping").await;
         assert!(
-            primary.contains("200 OK") && primary.contains("DAEMON"),
+            primary.contains("200 OK") && primary.contains(crate::BANNER),
             "primary host must reach the daemon, got:\n{primary}"
         );
 
@@ -953,9 +973,9 @@ mod tests {
         );
 
         // Unknown nested → 404 from the listener itself (NOT the daemon).
-        let unknown = tls_client_get(&cert_pem, https_port, "ghost.rosson.k2.dev", "/x").await;
+        let unknown = tls_client_get(&cert_pem, https_port, "ghost.rosson.k2.dev", "/ping").await;
         assert!(
-            unknown.contains("404 Not Found") && !unknown.contains("DAEMON"),
+            unknown.contains("404 Not Found") && !unknown.contains(crate::BANNER),
             "unknown nested label must be rejected 404, not routed to the daemon, got:\n{unknown}"
         );
 
@@ -1131,7 +1151,9 @@ mod tests {
             targets: std::collections::HashMap::new(),
         });
 
-        let backend_port = spawn_tagged_stub("OK").await;
+        // Daemon arm → real dispatcher via the tunnel-ingress listener
+        // (`backend_port` is the never-listening main port).
+        let backend_port = install_test_ingress_state();
 
         let (cert_pem, key_pem) =
             k2_core::tunnel::tls::load_or_provision_cert("rosson").expect("cert");
@@ -1166,7 +1188,7 @@ mod tests {
             .expect("sni");
         let mut tls = connector.connect(sni, tcp).await.expect("client handshake");
 
-        tls.write_all(b"GET /x HTTP/1.1\r\nHost: rosson.k2.dev\r\nConnection: close\r\n\r\n")
+        tls.write_all(b"GET /ping HTTP/1.1\r\nHost: rosson.k2.dev\r\nConnection: close\r\n\r\n")
             .await
             .expect("write");
         tls.flush().await.expect("flush");
@@ -1182,7 +1204,7 @@ mod tests {
             read.err()
         );
         assert!(
-            text.contains("200 OK") && text.contains("OK"),
+            text.contains("200 OK") && text.contains(crate::BANNER),
             "expected the spliced 200 response, got:\n{text}"
         );
 

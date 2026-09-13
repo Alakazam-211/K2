@@ -24,8 +24,21 @@
 macro_rules! log_debug {
     ($($arg:tt)*) => {{
         use std::io::Write;
-        let _ = writeln!(std::io::stderr(), $($arg)*);
+        // PRD connect-login-edge-only L4: every daemon log line carries an
+        // RFC3339 UTC timestamp prefix so audit/forensics can correlate
+        // (nothing parses these lines byte-exactly — see that PRD).
+        let _ = writeln!(
+            std::io::stderr(),
+            "{} {}",
+            $crate::log_timestamp(),
+            format_args!($($arg)*)
+        );
     }};
+}
+
+/// RFC3339 UTC timestamp (millisecond precision, `Z`) for [`log_debug!`].
+pub fn log_timestamp() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 pub mod active;
@@ -55,6 +68,10 @@ pub mod connections;
 // + in-memory login sessions. The auth boundary for the PUBLIC K2 Connect
 // tunnel surface. See module docs.
 pub mod connect_users;
+// PRD connect-login-edge-only: append-only auth audit log
+// (`~/.k2/auth-audit.jsonl`) + Ed25519 edge attestation verify.
+pub mod auth_audit;
+pub mod edge_attest;
 // P3a (sandbox / K2-as-a-server): the first-class, owner-minted, revocable
 // API-key auth tier for the external `/v1/*` surface. Stores SHA-256 key
 // digests + an optional BYO Anthropic cred; resolves a presented key to an

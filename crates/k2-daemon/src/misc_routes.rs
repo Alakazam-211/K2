@@ -442,10 +442,25 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // start/stop are POST-allowlisted in the dispatcher (mutating);
         // status is a cheap GET reporting running? + the predicted
         // public URL (https://<subdomain>.k2.dev).
-        "/cli/tunnel/status" => CliResponse::ok_json(
-            serde_json::to_string(&k2_core::tunnel::tunnel_status())
-                .unwrap_or_else(|_| r#"{"running":false}"#.to_string()),
-        ),
+        "/cli/tunnel/status" => {
+            // PRD connect-login-edge-only S2: surface the tunnel password-
+            // login mode (`loginIngress`: edge|any|off) next to the tunnel
+            // state so `k2 tunnel status` can print it.
+            let mut v = serde_json::to_value(k2_core::tunnel::tunnel_status())
+                .unwrap_or_else(|_| serde_json::json!({ "running": false }));
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert(
+                    "loginIngress".to_string(),
+                    serde_json::Value::String(
+                        k2_core::app_settings::load()
+                            .connect_login_ingress()
+                            .as_wire()
+                            .to_string(),
+                    ),
+                );
+            }
+            CliResponse::ok_json(v.to_string())
+        }
         // GET /cli/tunnel/subdomains — the daemon's cached Pro nested-
         // subdomain routing map (URLs drawer + K2 Connect settings): the
         // primary label plus every nested label's `{target, projectId}` —

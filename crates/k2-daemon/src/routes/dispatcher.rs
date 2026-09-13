@@ -28,6 +28,45 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
+/// Where a connection came from (PRD `prd-connect-login-edge-only-v1.md`
+/// §2 — ingress provenance). Decided by the LISTENER that accepted the
+/// socket, never by anything the client sends:
+///
+/// - `Loopback` — the main listener, peer is 127.0.0.1/::1 (desktop app,
+///   CLI, local agents). Full surface.
+/// - `Lan` — the main listener bound to a LAN address, non-loopback peer
+///   (`K2_LISTEN=lan`). Same surface as loopback today.
+/// - `Tunnel` — the tunnel-ingress listener (`tunnel_ingress_listener.rs`):
+///   bytes that arrived through the public K2 Connect tunnel (E2E splice
+///   or cleartext frpc). The MOST restricted: no HTML account page, and
+///   password login only with a K2 edge attestation (G1–G6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ingress {
+    Loopback,
+    Lan,
+    Tunnel,
+}
+
+impl Ingress {
+    /// Classify a main-listener connection from its peer address (I4).
+    pub fn from_peer(peer: std::net::SocketAddr) -> Self {
+        if peer.ip().is_loopback() {
+            Ingress::Loopback
+        } else {
+            Ingress::Lan
+        }
+    }
+
+    /// The audit-log token (L1 `ingress` field for un-attested requests).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Ingress::Loopback => "loopback",
+            Ingress::Lan => "lan",
+            Ingress::Tunnel => "tunnel",
+        }
+    }
+}
+
 /// #67 — resolve the EFFECTIVE remote-instruct opt-in for the workspace
 /// that owns the live PTY `session_id`.
 ///
@@ -131,10 +170,10 @@ const REQUEST_HEAD_MAX: usize = 16 * 1024;
 /// stream; there is no concept of "another request" on an upgraded
 /// connection. The mid-keep-alive WS upgrade case is forbidden by
 /// HTTP/1.1 anyway.
-pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState) {
+pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress: Ingress) {
     let mut requests_served: u32 = 0;
     loop {
-        let outcome = handle_one_request(&mut stream, &state).await;
+        let outcome = handle_one_request(&mut stream, &state, ingress).await;
         match outcome {
             DispatchOutcome::KeepAlive => {
                 requests_served = requests_served.saturating_add(1);
@@ -163,6 +202,7 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState) {
 async fn handle_one_request(
     stream: &mut TcpStream,
     state: &crate::DaemonState,
+    ingress: Ingress,
 ) -> DispatchOutcome {
     // Peek just the request line + headers so we can route on path
     // without consuming the body. Enough for WS handshakes (which
@@ -1046,6 +1086,127 @@ async fn handle_one_request(
         }
     }
 
+    // ── Tunnel ingress gate (PRD connect-login-edge-only §4.1, G1–G6) ──
+    //
+    // ONE chokepoint, before the route match, consulted ONLY when the
+    // connection arrived through the tunnel-ingress listener. Loopback/LAN
+    // are untouched (G5): the local `/account` page stays the self-host
+    // rotation surface and the CLI/desktop/test paths never see this.
+    //
+    // - G1: `GET /` and `GET /account` → plain 404 + close. No HTML on the
+    //   public tunnel, ever.
+    // - G2: `POST /cli/auth/login` per `connectLoginIngress`:
+    //     edge (default) → the request must carry a valid `X-K2-Edge-Sig`
+    //       (k2_core::edge_attest). Unattested → 404 with NO argon2 work and
+    //       NO lockout mutation; the attestation failure reason is audited
+    //       but the wire response is identical to "no header" (no oracle).
+    //     any → pre-PRD behaviour (self-hosters not behind the K2 edge).
+    //     off → always 404 on the tunnel (tokens + local login still work).
+    // - G3/G4: every other route (change-password/logout/whoami, all
+    //   token-bearing traffic, WS) is unchanged.
+    //
+    // A7: the header is read ONLY here and ONLY for this path. A
+    // client-supplied `X-K2-Edge-Sig` on any other ingress/path is inert.
+    //
+    // `pre_read_body` carries the login body we had to read for the body
+    // hash into the login arm below (the stream is consumed exactly once);
+    // `attested` carries the verified envelope (kid + client ip) for the
+    // audit record (G6).
+    let mut pre_read_body: Option<Vec<u8>> = None;
+    let mut attested: Option<k2_core::edge_attest::Attestation> = None;
+    if ingress == Ingress::Tunnel {
+        if (path == "/" || path == "/account") && !is_post {
+            let _ = stream.read(&mut buf).await;
+            super::http::send_plain_404_close(&mut *stream).await;
+            return DispatchOutcome::Done;
+        }
+        if path == "/cli/auth/login" && is_post {
+            use k2_core::app_settings::ConnectLoginIngress as Mode;
+            let mode = k2_core::app_settings::load().connect_login_ingress();
+            match mode {
+                Mode::Any => { /* G2 `any`: old behaviour; audited as ingress=tunnel */ }
+                Mode::Off => {
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let user = crate::connect_users_routes::login_body_username(&body);
+                    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                        "login",
+                        &user,
+                        "blocked_ingress",
+                        ingress.as_str(),
+                        "-",
+                        if web_client_header { "web" } else { "api" },
+                    ));
+                    super::http::send_response(
+                        &mut *stream,
+                        "404 Not Found",
+                        "application/json",
+                        r#"{"error":"not_found"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+                Mode::Edge => {
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let header = super::http::extract_header(
+                        &headers_blob,
+                        k2_core::edge_attest::HEADER_NAME,
+                    );
+                    // A4: the label this daemon is configured for. A load
+                    // error or empty label means nothing can be attested.
+                    let expected_sub = k2_core::tunnel::config::load()
+                        .map(|c| c.subdomain.trim().to_ascii_lowercase())
+                        .unwrap_or_default();
+                    // Audit-only hint so a signature minted for ANOTHER
+                    // customer's host is logged as `wrong_sub` (from the
+                    // proxied Host's apex label), never affects the verdict.
+                    let host_hint = super::http::extract_host(&headers_blob)
+                        .and_then(|h| h.split(':').next())
+                        .and_then(|h| h.split('.').next())
+                        .map(str::to_string);
+                    match k2_core::edge_attest::verify_with_host_hint(
+                        header,
+                        "POST",
+                        &path,
+                        &body,
+                        &expected_sub,
+                        host_hint.as_deref(),
+                        k2_core::edge_attest::now_unix(),
+                    ) {
+                        Ok(att) => {
+                            attested = Some(att);
+                            pre_read_body = Some(body);
+                        }
+                        Err(e) => {
+                            let user = crate::connect_users_routes::login_body_username(&body);
+                            let outcome = match e {
+                                k2_core::edge_attest::AttestError::Missing => {
+                                    "blocked_ingress".to_string()
+                                }
+                                other => format!("bad_attest:{}", other.reason()),
+                            };
+                            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                                "login",
+                                &user,
+                                outcome,
+                                ingress.as_str(),
+                                "-",
+                                if web_client_header { "web" } else { "api" },
+                            ));
+                            super::http::send_response(
+                                &mut *stream,
+                                "404 Not Found",
+                                "application/json",
+                                r#"{"error":"not_found"}"#,
+                            )
+                            .await;
+                            return DispatchOutcome::Done;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     match path.as_str() {
         "/ping" => {
             let _ = stream.read(&mut buf).await;
@@ -1154,6 +1315,15 @@ async fn handle_one_request(
                 },
                 "listen": {
                     "lan": k2_core::listen::lan_bound(),
+                },
+                // PRD connect-login-edge-only I6: advertise the tunnel
+                // password-login mode (edge|any|off) so clients can teach
+                // ("sign in through the web address") instead of probing.
+                // Unauthenticated + harmless: it names a policy, not a secret.
+                "connectLogin": {
+                    "ingress": k2_core::app_settings::load()
+                        .connect_login_ingress()
+                        .as_wire(),
                 },
             })
             .to_string();
@@ -2504,11 +2674,14 @@ async fn handle_one_request(
             // always 403'd with "invalid or missing token" while local
             // macOS (real owner token) worked. Match set-role's gate.
             // Admin still barred (password reset stays Owner-level).
-            let actor_role = super::http::actor_role(&query, state.token.as_str());
-            if !actor_role
-                .map(k2_core::connect_users::can_change_roles)
-                .unwrap_or(false)
-            {
+            //
+            // PRD connect-login-edge-only R1: the actor is resolved HERE
+            // (owner token vs Owner-role session + its username) so the
+            // handler can apply `can_act_on`, refuse a self-target (400 —
+            // use change-password), default `mustChangePassword` by actor
+            // kind, and revoke the target's sessions when the flag is set.
+            let actor = super::http::set_password_actor(&query, state.token.as_str());
+            let Some(actor) = actor else {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -2518,14 +2691,42 @@ async fn handle_one_request(
                 )
                 .await;
                 return DispatchOutcome::Done;
-            }
+            };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let target_for_audit =
+                crate::connect_users_routes::login_body_username(&body_bytes);
+            let actor_for_audit = match &actor {
+                crate::connect_users_routes::SetPasswordActor::OwnerToken => {
+                    "owner-token".to_string()
+                }
+                crate::connect_users_routes::SetPasswordActor::Session { username, .. } => {
+                    format!("user:{username}")
+                }
+            };
             // argon2 re-hash — spawn_blocking.
             let r = tokio::task::spawn_blocking(move || {
-                crate::connect_users_routes::handle_set_password(&body_bytes)
+                crate::connect_users_routes::handle_set_password_as(&actor, &body_bytes)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            let outcome = if r.status.starts_with("200") {
+                "ok".to_string()
+            } else {
+                format!("rejected:{}", r.status.split_whitespace().next().unwrap_or("?"))
+            };
+            k2_core::log_debug!(
+                "[daemon/auth] set-password target={target_for_audit} actor={actor_for_audit} \
+                 outcome={outcome} ingress={}",
+                ingress.as_str()
+            );
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "set-password",
+                &target_for_audit,
+                outcome,
+                ingress.as_str(),
+                "-",
+                if web_client_header { "web" } else { "api" },
+            ));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         "/cli/users/set-disabled" => {
@@ -2601,6 +2802,40 @@ async fn handle_one_request(
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
             }
         }
+        // GET /cli/users/audit?tail=N — the last N auth-audit records (PRD
+        // connect-login-edge-only L3). OWNERSHIP tier: owner token OR an
+        // Owner-ROLE session (`owner_role_identity`); Admin/Member 403.
+        // GET-only: the path is NOT in `post_allowed`, so the top-level
+        // method guard 405s a POST before this arm; the explicit check
+        // below is the belt to that brace.
+        "/cli/users/audit" => {
+            let _ = stream.read(&mut buf).await;
+            if is_post {
+                super::http::send_response(
+                    &mut *stream,
+                    "405 Method Not Allowed",
+                    "application/json",
+                    r#"{"error":"method not allowed for this route"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            let r = crate::connect_users_routes::handle_audit_tail(
+                params.get("tail").map(String::as_str),
+            );
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // GET /cli/users — list accounts (redacted views; no hashes).
         // K2SO #629: read-side of user management → owner token OR a
         // managing (Admin|Owner) session via `require_manage`. A Member or
@@ -2630,7 +2865,12 @@ async fn handle_one_request(
         // NEVER the owner daemon token.
         "/cli/auth/login" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
-            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // The tunnel gate above may already have consumed the body (it
+            // needed the bytes for the attestation hash) — read exactly once.
+            let body_bytes = match pre_read_body.take() {
+                Some(b) => b,
+                None => super::http::read_post_body(&mut *stream, &mut buf).await,
+            };
             // Peek the optional body `web: true` flag before the body is
             // moved into spawn_blocking (header already captured above).
             let web_from_body = serde_json::from_slice::<serde_json::Value>(&body_bytes)
@@ -2640,11 +2880,33 @@ async fn handle_one_request(
             let web_mode = web_client_header || web_from_body;
             // argon2 verify is slow + happens regardless of outcome
             // (anti-enumeration) — spawn_blocking off the accept loop.
-            let r = tokio::task::spawn_blocking(move || {
-                crate::connect_users_routes::handle_login(&body_bytes)
+            let reply = tokio::task::spawn_blocking(move || {
+                crate::connect_users_routes::handle_login_audited(&body_bytes)
             })
             .await
-            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            .unwrap_or_else(|e| crate::connect_users_routes::LoginReply {
+                response: crate::cli_response::CliResponse::internal_error(format!(
+                    "worker join: {e}"
+                )),
+                user: String::new(),
+                outcome: "error",
+            });
+            // PRD connect-login-edge-only L1/G6: every attempt is audited.
+            // Attested (edge) logins carry the edge-asserted client IP and
+            // the signing kid; everything else is tagged by listener.
+            let (audit_ingress, audit_ip) = match &attested {
+                Some(att) => (format!("edge:{}", att.kid), att.ip.clone()),
+                None => (ingress.as_str().to_string(), "-".to_string()),
+            };
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "login",
+                &reply.user,
+                reply.outcome,
+                audit_ingress,
+                audit_ip,
+                if web_mode { "web" } else { "api" },
+            ));
+            let r = reply.response;
             // Fixed failure delay: slow brute-force without a full rate
             // limiter (deferred). Only on the 401 path so successful
             // logins stay snappy. The argon2 work already adds ~tens of
@@ -2961,11 +3223,31 @@ async fn handle_one_request(
             } else {
                 k2_core::connect_users::validate_session(&tok)
             };
+            let audit_user = username.clone().unwrap_or_default();
             let r = tokio::task::spawn_blocking(move || {
                 crate::connect_users_routes::handle_change_password(username, &body_bytes)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            // PRD connect-login-edge-only L1: audited like login. The 401
+            // covers both wrong-current and locked (same wire response).
+            let outcome = if r.status.starts_with("200") {
+                "ok"
+            } else if r.status.starts_with("401") {
+                "bad_current"
+            } else if r.status.starts_with("400") {
+                "rejected"
+            } else {
+                "error"
+            };
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "change-password",
+                &audit_user,
+                outcome,
+                ingress.as_str(),
+                "-",
+                if web_client_header { "web" } else { "api" },
+            ));
             // Fixed delay on the 401 path mirrors /cli/auth/login so the
             // self-service form can't be used as a faster brute-force
             // oracle than login itself.
@@ -2988,11 +3270,29 @@ async fn handle_one_request(
             // Drain the (ignored) body so a half-read socket isn't left.
             let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
             let tok = super::http::extract_token(&query).unwrap_or("").to_string();
-            let r = tokio::task::spawn_blocking(move || {
-                crate::connect_users_routes::handle_logout(&tok)
+            let (r, logged_out_user) = tokio::task::spawn_blocking(move || {
+                crate::connect_users_routes::handle_logout_with_user(&tok)
             })
             .await
-            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            .unwrap_or_else(|e| {
+                (
+                    crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")),
+                    None,
+                )
+            });
+            // PRD connect-login-edge-only L1: only a logout that actually
+            // removed a session is audited (an unknown token is the
+            // idempotent no-op — nothing to attribute).
+            if let Some(user) = logged_out_user.as_deref() {
+                k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                    "logout",
+                    user,
+                    "ok",
+                    ingress.as_str(),
+                    "-",
+                    if web_client_header { "web" } else { "api" },
+                ));
+            }
             let clear = super::http::session_cookie_clear_value(request_secure);
             super::http::send_response_with_cookie(
                 &mut *stream,

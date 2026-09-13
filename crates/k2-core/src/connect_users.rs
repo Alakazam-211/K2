@@ -37,9 +37,10 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 /// Default session lifetime. A connect-user's session token is valid
-/// for 30 days from issue; after that they re-login. In-memory store
-/// means a daemon restart also ends the session early.
-const SESSION_TTL_DAYS: i64 = 30;
+/// for 7 days from issue (PRD connect-login-edge-only T1; was 30); after
+/// that they re-login — the desktop client silently revives from its
+/// keychain. Persisted records survive a daemon restart.
+const SESSION_TTL_DAYS: i64 = 7;
 
 /// Brute-force lockout policy: this many consecutive failed password
 /// attempts for one username triggers a lockout.
@@ -1056,6 +1057,17 @@ pub fn clear_lockout(username: &str) {
     });
 }
 
+/// The current consecutive-failure count for `username` (0 when there is
+/// no lockout entry). Read-only. Lets the login gate tests prove that a
+/// blocked tunnel attempt never touched the counter.
+pub fn lockout_failed_count(username: &str) -> u32 {
+    let key = normalize_username(username).unwrap_or_else(|_| username.trim().to_ascii_lowercase());
+    match load_sessions() {
+        Ok(store) => store.locks.get(&key).map(|e| e.failed_count).unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
 /// Whether `username` is currently locked out. Read-only; used by callers
 /// that want to surface a hint without attempting a verify.
 pub fn is_locked(username: &str) -> bool {
@@ -1086,7 +1098,7 @@ fn new_token() -> String {
 }
 
 /// Issue a new session token for an authenticated `username`. Default
-/// 30-day expiry. The caller is responsible for having already verified
+/// [`SESSION_TTL_DAYS`] expiry. The caller is responsible for having already verified
 /// credentials. The token is returned to the caller (the ONLY place the
 /// raw token exists); only `SHA-256(token)` plus the user's CURRENT
 /// `token_epoch` is persisted to `connect-sessions.json` (0600).
@@ -2306,6 +2318,26 @@ mod tests {
             assert_ne!(ids[0], ids[1], "ids are per-session, not per-user");
             assert_eq!(revoke_user_sessions("sid_user"), 2);
             assert_eq!(revoke_user_sessions("sid_user"), 0, "idempotent");
+        });
+    }
+
+    /// PRD connect-login-edge-only T1: sessions live 7 days (was 30). The
+    /// persisted `expires_at` must be exactly `created_at + 7d`, and the
+    /// canonical TTL the route layer reads must agree.
+    #[test]
+    fn create_session_expires_in_seven_days() {
+        with_temp_home(|| {
+            assert_eq!(session_ttl_days(), 7, "SESSION_TTL_DAYS must be 7");
+            add_user("ttl_user", "password").expect("add");
+            let _t = create_session("ttl_user");
+            let store = load_sessions().expect("load sessions");
+            assert_eq!(store.sessions.len(), 1);
+            let rec = &store.sessions[0];
+            assert_eq!(
+                rec.expires_at - rec.created_at,
+                Duration::days(7),
+                "expires_at must be created_at + 7 days"
+            );
         });
     }
 

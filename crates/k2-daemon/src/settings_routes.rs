@@ -46,6 +46,10 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // access (PRD §6.7). Owner/admin only: a Member must not flip the
     // browser door on/off for the whole daemon.
     "webClientEnabled",
+    // PRD connect-login-edge-only S1 — who may password-login over the
+    // public tunnel (edge|any|off). Owner/admin only: a Member must not
+    // reopen the public login surface.
+    "connectLoginIngress",
 ];
 
 /// Handler for `GET /cli/settings/get`.

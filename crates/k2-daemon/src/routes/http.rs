@@ -150,6 +150,35 @@ pub(crate) fn extract_host(headers_blob: &str) -> Option<&str> {
     None
 }
 
+/// The trimmed value of the first header named `name` (case-insensitive),
+/// or `None` when absent/empty. Generic sibling of [`extract_host`].
+pub(crate) fn extract_header<'a>(headers_blob: &'a str, name: &str) -> Option<&'a str> {
+    for line in headers_blob.lines() {
+        let Some(colon) = line.find(':') else { continue };
+        let (hname, rest) = line.split_at(colon);
+        if hname.eq_ignore_ascii_case(name) {
+            let value = rest[1..].trim();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+/// PRD connect-login-edge-only G1: the bare `404 Not Found` a tunnel
+/// scanner gets for `GET /` and `GET /account` — `text/plain`, body
+/// `Not Found`, `Connection: close`. No CORS, no HTML, nothing to learn.
+pub(crate) async fn send_plain_404_close(stream: &mut TcpStream) {
+    let body = "Not Found";
+    let resp = format!(
+        "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(resp.as_bytes()).await;
+}
+
 /// True when `Cookie:` contains `k2_session=<non-empty>`.
 fn has_session_cookie(headers_blob: &str) -> bool {
     extract_session_cookie(headers_blob).is_some()
@@ -624,6 +653,30 @@ pub(crate) fn actor_role(
         return Some(k2_core::connect_users::Role::Owner);
     }
     k2_core::connect_users::role_for_session(tok)
+}
+
+/// PRD connect-login-edge-only R1 — resolve WHO is calling
+/// `POST /cli/users/set-password`: the owner token, or an Owner-ROLE
+/// connect-user session (with its username, so the handler can refuse a
+/// self-target). Admin/Member/Viewer sessions and unknown tokens → `None`
+/// (the dispatcher 403s). Password reset stays Owner-level.
+pub(crate) fn set_password_actor(
+    query: &str,
+    owner_token: &str,
+) -> Option<crate::connect_users_routes::SetPasswordActor> {
+    let tok = extract_token(query)?;
+    if tok.is_empty() {
+        return None;
+    }
+    if ct_eq_token(tok, owner_token) {
+        return Some(crate::connect_users_routes::SetPasswordActor::OwnerToken);
+    }
+    let username = k2_core::connect_users::validate_session(tok)?;
+    let role = k2_core::connect_users::role_for_user(&username)?;
+    if !k2_core::connect_users::can_change_roles(role) {
+        return None;
+    }
+    Some(crate::connect_users_routes::SetPasswordActor::Session { username, role })
 }
 
 /// K2 Cloud S1 — the RESTRICTED-SESSION chokepoint for

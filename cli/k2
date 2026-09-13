@@ -8545,6 +8545,12 @@ except Exception as e:
 print("K2 Connect tunnel")
 running = "yes" if d.get("running") else "no"
 print(f"  Running:    {running}")
+# PRD connect-login-edge-only S2: who may password-login over the tunnel
+# (edge = only via the K2 edge, any = pre-PRD, off = never). Pre-PRD
+# daemons omit the field -> print nothing.
+if d.get("loginIngress"):
+    li = d["loginIngress"]
+    print(f"  Login ingress: {li}")
 # Tri-state truth (PRD tunnel-disable-unpair §4): never hide WHY the
 # tunnel is down. Pre-PRD daemons omit the fields -> show nothing extra.
 if not d.get("running"):
@@ -9857,10 +9863,17 @@ USAGE
                                 Create an account; prompts for password
                                 (hidden) + confirm. Default role is member;
                                 --role always calls set-role after add.
+  k2 users audit [--tail N] [--json]
+                                Last N auth-audit records (login /
+                                change-password / logout / set-password:
+                                outcome, ingress, ip, client). Owner only.
+                                Default 50, max 1000. ~/.k2/auth-audit.jsonl
 
 FLAGS
   --role <r>                    owner | admin | member | viewer
   --password-stdin              Read password from stdin (automation; no echo)
+  --tail <N>                    audit: how many records (1..1000, default 50)
+  --json                        audit: raw JSON from the daemon
   --help, -h                    This help
 
 SECURITY
@@ -10077,6 +10090,80 @@ if not (isinstance(d, dict) and d.get("success")):
 print("Role set to %s for %s." % (os.environ.get("ROLE", "?"), os.environ.get("USERNAME", "?")))
 '
             fi
+            ;;
+        audit)
+            # PRD connect-login-edge-only L3 — GET /cli/users/audit?tail=N
+            # (owner token or Owner-role session; the daemon 405s POST).
+            shift || true
+            local tail_n="" as_json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --tail)
+                        tail_n="${2:-}"; shift 2 || { echo "Error: --tail needs a value" >&2; return 2; } ;;
+                    --tail=*)
+                        tail_n="${1#--tail=}"; shift ;;
+                    --json)
+                        as_json=1; shift ;;
+                    --help|-h)
+                        _users_usage; return 0 ;;
+                    *)
+                        echo "Error: unexpected argument '$1'" >&2
+                        echo "Usage: k2 users audit [--tail N] [--json]" >&2
+                        return 2
+                        ;;
+                esac
+            done
+            if [ -n "$tail_n" ] && ! printf '%s' "$tail_n" | grep -Eq '^[0-9]+$'; then
+                echo "Error: --tail must be an integer 1..1000 (got '$tail_n')" >&2
+                return 2
+            fi
+            local raw
+            if [ -n "$tail_n" ]; then
+                raw=$(cli_send cli_request "/cli/users/audit" "tail=${tail_n}") || raw=""
+            else
+                raw=$(cli_send cli_request "/cli/users/audit") || raw=""
+            fi
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$raw"; return 0; fi
+            printf '%s' "$raw" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    sys.stderr.write("Error: daemon returned an unparseable response: %r\n" % (raw[:200],))
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.stderr.write("Error: unexpected response from /cli/users/audit\n"); sys.exit(1)
+err = d.get("error")
+if err is not None:
+    hint = err.get("hint") if isinstance(err, dict) else err
+    sys.stderr.write("Error: %s\n" % hint)
+    sys.exit(1)
+events = d.get("events") or []
+if not events:
+    print("No auth-audit records yet (%s)." % (d.get("path") or "~/.k2/auth-audit.jsonl"))
+    sys.exit(0)
+rows = []
+for e in events:
+    if not isinstance(e, dict):
+        continue
+    rows.append((
+        str(e.get("ts") or "-"),
+        str(e.get("event") or "-"),
+        str(e.get("outcome") or "-"),
+        str(e.get("user") or "-"),
+        str(e.get("ingress") or "-"),
+        str(e.get("ip") or "-"),
+        str(e.get("client") or "-"),
+    ))
+hdr = ("TS", "EVENT", "OUTCOME", "USER", "INGRESS", "IP", "CLIENT")
+widths = [max(len(r[i]) for r in rows + [hdr]) for i in range(len(hdr))]
+def line(r):
+    return "  ".join(r[i].ljust(widths[i]) for i in range(len(hdr))).rstrip()
+print(line(hdr))
+for r in rows:
+    print(line(r))
+'
             ;;
         *)
             echo "Unknown 'k2 users' subcommand: $sub" >&2
@@ -13581,10 +13668,13 @@ cmd_schema() {
     },
     {
       "name": "users",
-      "usage": "k2 users [list|add] ...",
-      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin, then optional --role set-role.",
+      "usage": "k2 users [list|add|audit] ...",
+      "description": "Local daemon connect-user accounts (GET/POST /cli/users*). list is default; add creates with interactive password or --password-stdin, then optional --role set-role; audit prints the last N auth-audit records (GET /cli/users/audit?tail=N, owner only).",
       "args": [],
-      "flags": []
+      "flags": [
+        {"name": "--tail", "arg": "N", "description": "audit: how many records (1..1000, default 50)."},
+        {"name": "--json", "arg": null, "description": "audit: raw JSON {events,tail,path}."}
+      ]
     },
     {
       "name": "users add",
@@ -14764,6 +14854,21 @@ OWNERSHIP
 K2 BOX VS CONNECT ACCOUNT
   Logging into Connect does not make Connect-user names `k2 msg`
   targets. The daemon on this box is still K2. See `k2 study people`.
+
+PASSWORD SIGN-IN OVER THE TUNNEL
+  On the public tunnel (`<sub>.k2.dev`) the daemon serves no login
+  page and answers `POST /cli/auth/login` only when the request was
+  signed by a K2 edge (`<sub>.app.k2.dev` or the k2.dev dashboard).
+  Scanners get 404. Tokens, sessions and local/LAN login are unchanged.
+  Setting `connectLoginIngress` (Settings → K2 Connect → Policies;
+  `k2 tunnel status` shows it):
+    edge   default — only via the K2 edge
+    any    self-hosters NOT behind the K2 edge (your own relay/proxy):
+           restores plain password login over the tunnel; the daemon
+           lockout still applies
+    off    never over the tunnel
+  Every attempt is audited: `k2 users audit` (~/.k2/auth-audit.jsonl).
+  Sessions last 7 days; the desktop app re-signs in silently.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
 EOF

@@ -161,6 +161,7 @@ pub mod terminal_routes;
 pub mod themes_routes;
 pub mod triage;
 pub mod tunnel_tls_listener;
+pub mod tunnel_ingress_listener;
 pub mod update_routes;
 pub mod v2_session_map;
 pub mod v2_spawn;
@@ -242,6 +243,11 @@ pub mod test_harness {
         pub port: u16,
         /// Bound socket address (loopback or `0.0.0.0`).
         pub local_addr: std::net::SocketAddr,
+        /// PRD connect-login-edge-only: a per-harness TUNNEL-INGRESS
+        /// listener (`tunnel_ingress_listener::spawn`) running the same
+        /// dispatcher tagged `Ingress::Tunnel`. Connect here to exercise
+        /// the tunnel gate exactly as the E2E splice / frpc would.
+        pub tunnel_port: u16,
     }
 
     /// Bind an ephemeral `127.0.0.1:0` listener, mark boot-status
@@ -296,13 +302,21 @@ pub mod test_harness {
             shutdown_tx: None,
         };
 
+        // Per-harness tunnel-ingress listener with THIS state (never the
+        // process-wide record — each test has its own owner token).
+        let tunnel_port = crate::tunnel_ingress_listener::spawn(state.clone())
+            .await
+            .expect("spawn tunnel-ingress listener");
+
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
-                    Ok((stream, _peer)) => {
+                    Ok((stream, peer)) => {
                         let st = state.clone();
+                        // I4: same peer classification as `main.rs`.
+                        let ingress = crate::routes::dispatcher::Ingress::from_peer(peer);
                         tokio::spawn(async move {
-                            crate::routes::dispatcher::dispatch(stream, st).await;
+                            crate::routes::dispatcher::dispatch(stream, st, ingress).await;
                         });
                     }
                     Err(_) => break,
@@ -314,6 +328,7 @@ pub mod test_harness {
             owner_token,
             port,
             local_addr,
+            tunnel_port,
         }
     }
 }

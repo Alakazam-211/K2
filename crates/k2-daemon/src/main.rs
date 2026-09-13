@@ -162,6 +162,9 @@ mod terminal_routes;
 mod themes_routes;
 mod triage;
 mod tunnel_tls_listener;
+// PRD connect-login-edge-only §2 — the loopback tunnel-ingress listener
+// (dispatch tagged `Ingress::Tunnel`); E2E splice + cleartext frpc land here.
+mod tunnel_ingress_listener;
 mod update_routes;
 mod v2_session_map;
 mod v2_spawn;
@@ -899,12 +902,17 @@ async fn async_main() {
                 tokio::select! {
                     res = listener.accept() => {
                         match res {
-                            Ok((stream, _addr)) => {
+                            Ok((stream, addr)) => {
                                 let st = state.clone();
                                 let mut shutdown = shutdown_tx.subscribe();
+                                // PRD connect-login-edge-only I4: the MAIN
+                                // listener classifies by peer — loopback vs
+                                // LAN. Tunnel bytes never arrive here (they
+                                // land on `tunnel_ingress_listener`).
+                                let ingress = routes::dispatcher::Ingress::from_peer(addr);
                                 tokio::spawn(async move {
                                     tokio::select! {
-                                        _ = routes::dispatcher::dispatch(stream, st) => {}
+                                        _ = routes::dispatcher::dispatch(stream, st, ingress) => {}
                                         _ = shutdown.recv() => {}
                                     }
                                 });
@@ -1241,6 +1249,21 @@ async fn async_main() {
     // down. First register the on-demand bring-up hook so a tunnel started
     // AFTER boot (e.g. once the user picks a subdomain) can stand the HTTPS
     // listener up on connect rather than erroring on a never-published port.
+    // PRD connect-login-edge-only I1/I3: install the state the tunnel-
+    // ingress listener dispatches with and register its ensure-hook BEFORE
+    // the TLS listener / tunnel autostart can demand it. Bring it up
+    // eagerly too (fault-isolated: a bind failure is logged; the TLS
+    // splice and the connector re-try on demand and fail loud, never
+    // falling back to the main listener).
+    tunnel_ingress_listener::install_state(state.clone());
+    tunnel_ingress_listener::register_ensure_hook();
+    match tunnel_ingress_listener::ensure_port().await {
+        Ok(p) => log_debug!("[daemon/tunnel-ingress] tunnel-ingress listener active on port {p}"),
+        Err(e) => log_debug!(
+            "[daemon/tunnel-ingress] listener did not start (tunnel traffic will be refused \
+             until it can bind): {e}"
+        ),
+    }
     tunnel_tls_listener::register_ensure_hook();
     if k2_core::airgap::enabled() {
         log_debug!(

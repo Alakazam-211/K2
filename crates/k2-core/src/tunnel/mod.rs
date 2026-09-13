@@ -48,6 +48,7 @@ pub mod cert_broker;
 pub mod config;
 pub mod connector;
 pub mod failover;
+pub mod ingress;
 pub mod lease;
 pub mod render;
 pub mod subdomains;

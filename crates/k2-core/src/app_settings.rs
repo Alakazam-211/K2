@@ -138,6 +138,49 @@ pub struct TimerSettings {
     pub custom_themes: Vec<serde_json::Value>,
 }
 
+/// PRD connect-login-edge-only S1 — default: password login over the tunnel
+/// only via a K2 edge attestation.
+fn default_connect_login_ingress() -> String {
+    ConnectLoginIngress::Edge.as_wire().to_string()
+}
+
+/// Parsed form of `connect_login_ingress` (S1). Unknown strings read as
+/// `Edge` — the MOST restrictive mode — so a corrupt/hand-edited settings
+/// file can never silently reopen the public login surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectLoginIngress {
+    Edge,
+    Any,
+    Off,
+}
+
+impl ConnectLoginIngress {
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "edge" => Some(Self::Edge),
+            "any" => Some(Self::Any),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Edge => "edge",
+            Self::Any => "any",
+            Self::Off => "off",
+        }
+    }
+}
+
+impl AppSettings {
+    /// The effective tunnel password-login mode (fail-closed to `Edge`).
+    pub fn connect_login_ingress(&self) -> ConnectLoginIngress {
+        ConnectLoginIngress::from_wire(&self.connect_login_ingress)
+            .unwrap_or(ConnectLoginIngress::Edge)
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -344,6 +387,16 @@ pub struct AppSettings {
     /// Wire name `webClientEnabled` (serde camelCase).
     #[serde(default = "default_true")]
     pub web_client_enabled: bool,
+    /// PRD connect-login-edge-only S1 — who may password-login over the
+    /// PUBLIC tunnel ingress: `"edge"` (default: only requests carrying a
+    /// valid K2 edge attestation), `"any"` (pre-PRD behaviour; for
+    /// self-hosters not behind the K2 edge), `"off"` (never over the
+    /// tunnel; local/LAN login + tokens still work). Owner-only
+    /// (`REMOTE_ACCESS_KEYS`). Unknown values fail closed to `edge` at
+    /// read time ([`AppSettings::connect_login_ingress`]) and are
+    /// rejected by [`update`]. Wire name `connectLoginIngress`.
+    #[serde(default = "default_connect_login_ingress")]
+    pub connect_login_ingress: String,
     /// GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
     /// Gates whether the `talk` CLI tool's `/cli/terminal/classify`
     /// detection step is allowed to run the bundled 1.5B model.
@@ -684,6 +737,7 @@ impl Default for AppSettings {
             listen_lan: false,
             remote_sessions_enabled: false,
             web_client_enabled: true,
+            connect_login_ingress: default_connect_login_ingress(),
             use_llm_hitl_detection: false,
             completion_sound_enabled: true,
             push_gateway_url: None,
@@ -885,6 +939,14 @@ pub fn update(partial: serde_json::Value) -> Result<AppSettings, String> {
     deep_merge(&mut current_val, &partial);
     let merged: AppSettings = serde_json::from_value(current_val)
         .map_err(|e| format!("deserialize merged settings: {e}"))?;
+    // S1: reject an unknown mode LOUDLY rather than persist a string the
+    // reader would silently fail-closed on.
+    if ConnectLoginIngress::from_wire(&merged.connect_login_ingress).is_none() {
+        return Err(format!(
+            "connectLoginIngress must be one of edge|any|off (got {:?})",
+            merged.connect_login_ingress
+        ));
+    }
 
     let creds_changed = current.companion.password_hash != merged.companion.password_hash
         || current.companion.username != merged.companion.username;
@@ -1145,6 +1207,41 @@ mod tests {
         let after = reset().expect("reset");
         assert!(after.web_client_enabled);
         assert!(load().web_client_enabled);
+    }
+
+    /// PRD connect-login-edge-only S1 — `connectLoginIngress` defaults to
+    /// `edge`, round-trips `any`/`off` through save→load and `update()`,
+    /// rejects an unknown mode loudly, and reads a corrupt on-disk value
+    /// as `Edge` (fail closed).
+    #[test]
+    fn connect_login_ingress_defaults_edge_and_validates() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        assert_eq!(load().connect_login_ingress, "edge");
+        assert_eq!(load().connect_login_ingress(), ConnectLoginIngress::Edge);
+        assert_eq!(AppSettings::default().connect_login_ingress(), ConnectLoginIngress::Edge);
+
+        let merged = update(serde_json::json!({ "connectLoginIngress": "any" })).expect("any");
+        assert_eq!(merged.connect_login_ingress(), ConnectLoginIngress::Any);
+        assert_eq!(load().connect_login_ingress(), ConnectLoginIngress::Any);
+
+        let merged = update(serde_json::json!({ "connectLoginIngress": "off" })).expect("off");
+        assert_eq!(merged.connect_login_ingress(), ConnectLoginIngress::Off);
+
+        let err = update(serde_json::json!({ "connectLoginIngress": "wide-open" }))
+            .expect_err("unknown mode must be rejected");
+        assert!(err.contains("edge|any|off"), "{err}");
+        assert_eq!(load().connect_login_ingress(), ConnectLoginIngress::Off, "rejected write must not persist");
+
+        // A corrupt on-disk value (bypassing update) reads as Edge.
+        let mut s = load();
+        s.connect_login_ingress = "garbage".to_string();
+        save(&s).expect("save raw");
+        assert_eq!(load().connect_login_ingress(), ConnectLoginIngress::Edge);
+
+        let after = reset().expect("reset");
+        assert_eq!(after.connect_login_ingress(), ConnectLoginIngress::Edge);
     }
 
     /// F4 — the global completion-sound toggle must default ON, persist

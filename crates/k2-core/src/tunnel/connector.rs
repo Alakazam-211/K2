@@ -431,10 +431,15 @@ pub fn start(
     // localPort (Bug B / #55). NEVER invent a free port or re-read a
     // stale file over a live OnceLock — `ensure_https_port` prefers the
     // daemon-registered hook (process-local bound port).
+    // PRD connect-login-edge-only I3: with E2E OFF, cleartext tunnel bytes
+    // must still land on the daemon's TUNNEL-INGRESS listener (dispatch
+    // tagged `Ingress::Tunnel`), never the privileged main loopback
+    // listener. Resolved through the daemon-registered seam; loud `Err`
+    // on bind failure (no silent fallback to the main port).
     let resolved_local_port = if e2e {
         super::tls::ensure_https_port(default_local_port)?
     } else {
-        default_local_port
+        super::ingress::ensure_tunnel_ingress_port(default_local_port)?
     };
     let mut to_save = cfg.clone();
     to_save.local_port = None;
@@ -1897,6 +1902,47 @@ mod tests {
                 Some(p) => std::env::set_var("K2_E2E", p),
                 None => std::env::remove_var("K2_E2E"),
             }
+        });
+    }
+
+    /// PRD connect-login-edge-only I3: with E2E OFF the connector resolves
+    /// frpc's `localPort` to the daemon-registered TUNNEL-INGRESS port, not
+    /// the cleartext main `default_local_port`; a failing hook is loud.
+    #[test]
+    fn e2e_off_start_resolves_tunnel_ingress_port_via_hook() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed config");
+            super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| Ok(46123)));
+            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect("start with e2e off");
+            assert!(st.running);
+            let toml = std::fs::read_to_string(frpc_config_path())
+                .expect("frpc.toml must have been rendered");
+            assert!(
+                toml.contains("localPort = 46123"),
+                "E2E-off start must target the tunnel-ingress port, not the main port\n{toml}"
+            );
+            assert!(
+                !toml.contains("localPort = 57839"),
+                "main loopback port must never be the tunnel target\n{toml}"
+            );
+            assert!(toml.contains("type = \"http\""), "{toml}");
+            let _ = stop();
+
+            // A failing hook must abort the start (no fallback to :57839).
+            super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| {
+                Err("tunnel-ingress bind failed".to_string())
+            }));
+            let err = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+                .expect_err("start must fail when the ingress listener cannot bind");
+            assert!(err.contains("tunnel-ingress bind failed"), "{err}");
+            super::super::ingress::clear_ensure_tunnel_ingress();
         });
     }
 

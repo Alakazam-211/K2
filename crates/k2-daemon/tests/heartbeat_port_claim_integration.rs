@@ -44,23 +44,44 @@ fn daemon_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_k2-daemon"))
 }
 
+/// Kill + reap the daemon child on every exit path (a panic between
+/// spawn and the explicit kill must not leak a real `k2-daemon`).
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn daemon_writes_heartbeat_port_eagerly_on_startup() {
     let home = isolated_home("eager");
     let k2so_dir = home.join(".k2");
+    // Spawn guard (2026-09-12): this boots the REAL daemon binary under a
+    // temp HOME. It needs no agent, so `K2_TEST_AGENT_SHIM_DIR` points at
+    // an EMPTY dir — any spawn attempt inside the child fails loudly
+    // instead of resolving the real `~/.local/bin/claude` (which opened a
+    // browser OAuth login under a fresh HOME). `Command` inherits env.
+    let shim_dir = home.join("agent-shim-empty");
+    std::fs::create_dir_all(&shim_dir).unwrap();
 
     // Spawn the daemon as a child process with $HOME redirected
     // so its writes land in our scratch dir, not the real
     // ~/.k2so.
-    let mut child = Command::new(daemon_binary())
-        .env("HOME", &home)
-        // Set K2SO_WATCHDOG_DISABLED so the harness watchdog
-        // doesn't add log noise to this specific test.
-        .env("K2SO_WATCHDOG_DISABLED", "1")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn daemon");
+    let child = KillOnDrop(
+        Command::new(daemon_binary())
+            .env("HOME", &home)
+            .env("K2_TEST_AGENT_SHIM_DIR", &shim_dir)
+            // Set K2SO_WATCHDOG_DISABLED so the harness watchdog
+            // doesn't add log noise to this specific test.
+            .env("K2SO_WATCHDOG_DISABLED", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn daemon"),
+    );
 
     // Poll for up to 5 seconds waiting for heartbeat.port to
     // appear. Success should be much faster than that; the
@@ -90,8 +111,7 @@ async fn daemon_writes_heartbeat_port_eagerly_on_startup() {
 
     // Kill the daemon before asserting so a failed run doesn't
     // leak a process.
-    let _ = child.kill();
-    let _ = child.wait();
+    drop(child);
 
     assert!(saw_hb_port, "daemon did not write heartbeat.port");
     assert!(saw_hb_token, "daemon did not write heartbeat.token");

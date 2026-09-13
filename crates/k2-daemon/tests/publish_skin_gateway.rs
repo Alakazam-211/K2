@@ -155,22 +155,65 @@ fn futures_block<F: std::future::Future>(fut: F) -> F::Output {
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
 }
 
+/// Temp `HOME` + agent shim + helper-orphan hygiene for the duration of
+/// `f`. Everything below runs on the way out INCLUDING on panic (Drop
+/// guard): env restore, `publish_runtime::kill_all_live_children()` (the
+/// `k2-daemon --skin-gateway` helpers are `setsid` session leaders — two
+/// outlived the 2026-09-12 run and were killed by hand), and dir removal.
+///
+/// Spawn guard (2026-09-12): a skin Thread post may wake the pinned Chat,
+/// which spawns the workspace's `claude`; `K2_TEST_AGENT_SHIM_DIR` makes
+/// the daemon resolve it ONLY to `<tmp>/shim/claude` (`exec cat`) instead
+/// of the real `~/.local/bin/claude` that opened a browser OAuth login.
+/// `K2_PUBLISH_HELPER_EXIT_WITH_PARENT=1` is inherited by every helper
+/// so a SIGKILLed / timed-out test binary cannot leave one behind either.
 fn with_temp_home<F: FnOnce()>(f: F) {
-    let prev = std::env::var_os("HOME");
+    struct Restore {
+        prev: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        tmp: std::path::PathBuf,
+    }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            k2_daemon::publish_runtime::kill_all_live_children();
+            for (name, val) in self.prev.drain(..) {
+                match val {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.tmp);
+        }
+    }
+    const NAMES: [&str; 4] = [
+        "HOME",
+        "K2_TEST_AGENT_SHIM_DIR",
+        "K2_PUBLISH_HELPER_EXIT_WITH_PARENT",
+        "K2_PUBLISH_PROBE_MS",
+    ];
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let tmp = std::env::temp_dir().join(format!("k2-psg-{}-{}", std::process::id(), nanos));
     std::fs::create_dir_all(&tmp).expect("temp HOME");
+    let shim_dir = tmp.join("shim");
+    std::fs::create_dir_all(&shim_dir).expect("create shim dir");
+    let shim = shim_dir.join("claude");
+    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("write claude shim");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod claude shim");
+    }
+    let _restore = Restore {
+        prev: NAMES.iter().map(|n| (*n, std::env::var_os(n))).collect(),
+        tmp: tmp.clone(),
+    };
     std::env::set_var("HOME", &tmp);
+    std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shim_dir);
+    std::env::set_var("K2_PUBLISH_HELPER_EXIT_WITH_PARENT", "1");
     std::env::set_var("K2_PUBLISH_PROBE_MS", "8000");
     f();
-    match prev {
-        Some(p) => std::env::set_var("HOME", p),
-        None => std::env::remove_var("HOME"),
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 fn free_port() -> u16 {

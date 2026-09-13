@@ -40,8 +40,46 @@ struct Args {
     root: Option<PathBuf>,
 }
 
+/// Test-harness opt-in: when this env is `1` the helper exits as soon as
+/// the process that spawned it is gone. Production never sets it — helpers
+/// are `setsid` session leaders MEANT to survive a daemon restart
+/// (`publish_runtime::boot_desired_running` reattaches by pid + port). Set
+/// by the integration harnesses so a killed / timed-out test binary can
+/// not leave `k2-daemon --skin-gateway` orphans (2026-09-12: two survived
+/// a `cargo test` run and were killed by hand).
+pub const EXIT_WITH_PARENT_ENV: &str = "K2_PUBLISH_HELPER_EXIT_WITH_PARENT";
+
+/// Poll `getppid()`; the daemon that spawned us dying reparents this
+/// helper (to 1 / a subreaper), which is the exit signal. Unix only.
+fn exit_with_parent_if_requested() {
+    let requested = std::env::var(EXIT_WITH_PARENT_ENV)
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false);
+    if !requested {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: getppid has no preconditions and cannot fail.
+        let parent = unsafe { libc::getppid() };
+        std::thread::Builder::new()
+            .name("skin-gateway-parent-watch".into())
+            .spawn(move || loop {
+                std::thread::sleep(Duration::from_millis(250));
+                // SAFETY: as above.
+                let now = unsafe { libc::getppid() };
+                if now != parent {
+                    eprintln!("skin-gateway: parent {parent} gone (now {now}); exiting");
+                    std::process::exit(0);
+                }
+            })
+            .expect("spawn parent-watch thread");
+    }
+}
+
 /// Entry from `k2-daemon --skin-gateway …`. Does **not** boot the daemon.
 pub fn run_from_args(args: &[String]) -> i32 {
+    exit_with_parent_if_requested();
     match parse_args(args) {
         Ok(a) => {
             let rt = match tokio::runtime::Builder::new_multi_thread()

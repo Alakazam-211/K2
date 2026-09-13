@@ -86,13 +86,42 @@ fn write_wakeup(project: &Path, hb_name: &str, body: &str) -> String {
 
 struct TestCommandGuard {
     prior: Option<String>,
+    prior_shim: Option<String>,
+    shim_dir: std::path::PathBuf,
 }
 
 impl TestCommandGuard {
+    /// Also mints `<shim_dir>/<cmd>` (an `exec cat` script) and points
+    /// `K2_TEST_AGENT_SHIM_DIR` at it — spawn guard (2026-09-12): the
+    /// daemon resolves spawn basenames ONLY inside that dir, so even if a
+    /// future wake path ignored the command override it could never exec
+    /// the real `claude`.
     fn set(cmd: &str) -> Self {
         let prior = std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND").ok();
+        let prior_shim = std::env::var("K2_TEST_AGENT_SHIM_DIR").ok();
+        let shim_dir = std::env::temp_dir().join(format!(
+            "k2-hb-uws-shim-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&shim_dir).unwrap();
+        let shim = shim_dir.join(cmd);
+        std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         std::env::set_var("K2SO_WAKE_HEADLESS_TEST_COMMAND", cmd);
-        Self { prior }
+        std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shim_dir);
+        Self {
+            prior,
+            prior_shim,
+            shim_dir,
+        }
     }
 }
 
@@ -102,6 +131,11 @@ impl Drop for TestCommandGuard {
             Some(v) => std::env::set_var("K2SO_WAKE_HEADLESS_TEST_COMMAND", v),
             None => std::env::remove_var("K2SO_WAKE_HEADLESS_TEST_COMMAND"),
         }
+        match &self.prior_shim {
+            Some(v) => std::env::set_var("K2_TEST_AGENT_SHIM_DIR", v),
+            None => std::env::remove_var("K2_TEST_AGENT_SHIM_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&self.shim_dir);
     }
 }
 

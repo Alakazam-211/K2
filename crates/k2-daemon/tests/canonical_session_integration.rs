@@ -267,8 +267,36 @@ impl Drop for HomeGuard {
     }
 }
 
-/// Shim an agent binary (execs `cat`) onto PATH.
-fn install_agent_shim(binary: &str) -> PathBuf {
+/// RAII handle for [`install_agent_shim`]: restores `PATH` and
+/// `K2_TEST_AGENT_SHIM_DIR` on drop so the shim list never leaks into a
+/// later test in this binary (the `launch: command: cat` tests spawn a
+/// bare `cat`, which the guard would refuse against a `grok`-only list).
+struct ShimGuard {
+    prev_path: Option<std::ffi::OsString>,
+    prev_shim: Option<std::ffi::OsString>,
+    #[allow(dead_code)]
+    dir: PathBuf,
+}
+
+impl Drop for ShimGuard {
+    fn drop(&mut self) {
+        match self.prev_path.take() {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        match self.prev_shim.take() {
+            Some(v) => std::env::set_var("K2_TEST_AGENT_SHIM_DIR", v),
+            None => std::env::remove_var("K2_TEST_AGENT_SHIM_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Shim an agent binary (execs `cat`) onto PATH. Hold the returned guard
+/// for the test's duration.
+fn install_agent_shim(binary: &str) -> ShimGuard {
+    let prev_path = std::env::var_os("PATH");
+    let prev_shim_os = std::env::var_os("K2_TEST_AGENT_SHIM_DIR");
     let shim_dir = std::env::temp_dir().join(format!(
         "k2so-canonical-shim-{}-{}-{}",
         binary,
@@ -285,7 +313,21 @@ fn install_agent_shim(binary: &str) -> PathBuf {
     std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
     let prev = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
-    shim_dir
+    // Spawn guard (2026-09-12): the daemon resolves agent basenames ONLY
+    // inside `K2_TEST_AGENT_SHIM_DIR` — the login-shell PATH used to beat
+    // the PATH prepend above and exec the REAL `~/.local/bin/claude`.
+    let prev_shim = std::env::var("K2_TEST_AGENT_SHIM_DIR").unwrap_or_default();
+    let shim_list = if prev_shim.is_empty() {
+        shim_dir.display().to_string()
+    } else {
+        format!("{}:{}", shim_dir.display(), prev_shim)
+    };
+    std::env::set_var("K2_TEST_AGENT_SHIM_DIR", shim_list);
+    ShimGuard {
+        prev_path,
+        prev_shim: prev_shim_os,
+        dir: shim_dir,
+    }
 }
 
 /// A workspace whose launch profile resolves to CLAUDE (no `launch:`

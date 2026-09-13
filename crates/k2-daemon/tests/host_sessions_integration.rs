@@ -96,12 +96,13 @@ impl HostEnv {
     /// an ABSOLUTE path, so the daemon's login-PATH enrichment can never
     /// shadow it with a real `claude` install.
     fn set(api_on: bool) -> Self {
-        let names: [&'static str; 5] = [
+        let names: [&'static str; 6] = [
             "K2_API",
             "K2_SANDBOX_API",
             "HOME",
             "K2_HOST_SESSION_READY_TIMEOUT_SECS",
             "K2_HOST_SESSION_ADOPTION_DELAY_MS",
+            "K2_TEST_AGENT_SHIM_DIR",
         ];
         let prev: Vec<_> = names.iter().map(|n| (*n, std::env::var_os(n))).collect();
 
@@ -139,6 +140,10 @@ impl HostEnv {
             std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
                 .expect("chmod shim");
         }
+        // Spawn guard (2026-09-12): the daemon resolves agent basenames
+        // ONLY inside this dir (`shim_named` mints siblings here too) and
+        // refuses anything else under the temp HOME above.
+        std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shim_dir);
 
         Self { prev, tmp_home, shim_dir }
     }
@@ -214,6 +219,21 @@ fn write_codex_session_fixture(home: &std::path::Path, provider_sid: &str, cwd: 
         format!("{meta}\n"),
     )
     .expect("write codex rollout fixture");
+}
+
+/// Spawn guard (2026-09-12): a test that mints its OWN shim outside
+/// `HostEnv.shim_dir` must register that dir here, FIRST in the list, or
+/// the daemon resolves the basename to the plain `exec cat` shim in
+/// `HostEnv.shim_dir` (the guard never honours an absolute path outside
+/// the registered dirs). `HostEnv`'s Drop restores the original env.
+fn register_shim_dir_first(dir: &std::path::Path) {
+    let prev = std::env::var("K2_TEST_AGENT_SHIM_DIR").unwrap_or_default();
+    let list = if prev.is_empty() {
+        dir.display().to_string()
+    } else {
+        format!("{}:{}", dir.display(), prev)
+    };
+    std::env::set_var("K2_TEST_AGENT_SHIM_DIR", list);
 }
 
 /// Wire `ws_name`'s DEFAULT AGENT to the shim through the REAL seam: an
@@ -537,6 +557,7 @@ async fn preset_env_reaches_spawned_child_environment() {
     let dump_dir = std::env::temp_dir()
         .join(format!("k2-host-sess-envshim-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dump_dir).expect("create env shim dir");
+    register_shim_dir_first(&dump_dir);
     let dump_shim = dump_dir.join("claude");
     std::fs::write(
         &dump_shim,
@@ -635,6 +656,7 @@ async fn provider_mapped_principal_key_reaches_child_environment() {
     let dump_dir = std::env::temp_dir()
         .join(format!("k2-host-sess-provshim-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dump_dir).expect("create provider shim dir");
+    register_shim_dir_first(&dump_dir);
     let dump_shim = dump_dir.join("claude");
     std::fs::write(
         &dump_shim,

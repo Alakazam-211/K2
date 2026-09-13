@@ -27,6 +27,10 @@ pub mod path_env;
 // inherited launchd PATH) so agent CLIs in ~/.local/bin, homebrew,
 // nvm shims, etc. resolve by bare name instead of ENOENT.
 pub mod login_path;
+// Test-time agent spawn guard: `K2_TEST_AGENT_SHIM_DIR` shim-only
+// resolution + temp-HOME belt so `cargo test` can never exec the real
+// `claude` (which opened a browser OAuth login under a temp HOME).
+pub mod agent_spawn_guard;
 // Windows CreateProcess PATHEXT / .cmd wrap (npm `claude.cmd`).
 pub mod win_cmd;
 // UTF-8 locale defaulting for spawned children (launchd/systemd give

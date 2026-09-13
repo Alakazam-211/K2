@@ -92,7 +92,8 @@ struct RespondEnv {
 
 impl RespondEnv {
     fn set() -> Self {
-        let names: [&'static str; 3] = ["K2_API", "K2_SANDBOX_API", "HOME"];
+        let names: [&'static str; 4] =
+            ["K2_API", "K2_SANDBOX_API", "HOME", "K2_TEST_AGENT_SHIM_DIR"];
         let prev: Vec<_> = names.iter().map(|n| (*n, std::env::var_os(n))).collect();
         std::env::set_var("K2_API", "1");
         std::env::remove_var("K2_SANDBOX_API");
@@ -120,6 +121,10 @@ impl RespondEnv {
             std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
                 .expect("chmod shim");
         }
+        // Spawn guard (2026-09-12): the daemon resolves agent basenames
+        // ONLY inside this dir and refuses anything else under the temp
+        // HOME above.
+        std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shim_dir);
 
         Self { prev, tmp_home, shim_dir }
     }

@@ -43,19 +43,41 @@ fn daemon_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_k2-daemon"))
 }
 
+/// Kill + reap the daemon child on every exit path (a panic between
+/// spawn and the explicit kill must not leak a real `k2-daemon`).
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Spawn the daemon under the given HOME, wait for it to publish
 /// `daemon.port`, return the published port, then kill the child.
+///
+/// Spawn guard (2026-09-12): this boots the REAL daemon binary under a
+/// temp HOME. It needs no agent, so `K2_TEST_AGENT_SHIM_DIR` points at an
+/// EMPTY dir — any spawn attempt inside the child fails loudly instead of
+/// resolving the real `~/.local/bin/claude` (which opened a browser OAuth
+/// login under a fresh HOME). `Command` inherits env, so the child sees it.
 fn boot_once_and_read_port(home: &PathBuf) -> u16 {
     let k2so_dir = home.join(".k2");
     let daemon_port = k2so_dir.join("daemon.port");
+    let shim_dir = home.join("agent-shim-empty");
+    std::fs::create_dir_all(&shim_dir).unwrap();
 
-    let mut child = Command::new(daemon_binary())
-        .env("HOME", home)
-        .env("K2SO_WATCHDOG_DISABLED", "1")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn daemon");
+    let child = KillOnDrop(
+        Command::new(daemon_binary())
+            .env("HOME", home)
+            .env("K2_TEST_AGENT_SHIM_DIR", &shim_dir)
+            .env("K2SO_WATCHDOG_DISABLED", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn daemon"),
+    );
 
     // Poll for the port file to appear and stabilize.
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -73,8 +95,7 @@ fn boot_once_and_read_port(home: &PathBuf) -> u16 {
     }
 
     // Tear down before asserting so a failed run can't leak a process.
-    let _ = child.kill();
-    let _ = child.wait();
+    drop(child);
 
     last_port.expect("daemon never published a parseable daemon.port")
 }

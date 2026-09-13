@@ -656,7 +656,34 @@ impl DaemonPtySession {
         let path_for_resolve = login_path::env_path_entry(&child_env)
             .map(|(_, v)| v)
             .unwrap_or("");
-        let shell = cfg.program.as_ref().map(|prog| {
+
+        // Test guard — the ONE choke point every agent spawn crosses
+        // (`spawn_agent_session_v2_blocking` → here: heartbeat wake,
+        // pinned chat, host/remote sessions, skin Thread wakes). With
+        // `K2_TEST_AGENT_SHIM_DIR` set the program's basename resolves
+        // ONLY inside those dirs (never the login-shell PATH that let the
+        // real `~/.local/bin/claude` beat a test's shim and open a browser
+        // OAuth login under a temp HOME — 2026-09-12). Under a temp HOME
+        // without a shim dir, a real agent path is refused outright.
+        // Production (no env, real HOME) gets `cfg.program` back verbatim.
+        let guarded_program: Option<String> = match cfg.program.as_deref() {
+            Some(prog) => {
+                let guard = crate::terminal::agent_spawn_guard::GuardEnv::from_process();
+                match crate::terminal::agent_spawn_guard::resolve_program(
+                    prog,
+                    path_for_resolve,
+                    &guard,
+                ) {
+                    Ok(p) => Some(p),
+                    Err(msg) => {
+                        log_debug!("{} session={}", msg, cfg.session_id);
+                        return Err(io::Error::new(io::ErrorKind::PermissionDenied, msg));
+                    }
+                }
+            }
+            None => None,
+        };
+        let shell = guarded_program.as_deref().map(|prog| {
             let (program, args) =
                 crate::terminal::win_cmd::resolve_spawn(prog, &spawn_args, path_for_resolve);
             ShellSpec { program, args }

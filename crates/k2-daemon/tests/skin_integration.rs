@@ -193,21 +193,61 @@ fn futures_block<F: std::future::Future>(fut: F) -> F::Output {
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
 }
 
+/// Temp `HOME` + agent shim for the duration of `f`. Restores env and
+/// removes the dir on the way out — INCLUDING on panic (Drop guard), so a
+/// failing assertion cannot leave `HOME` pointed at a deleted tempdir for
+/// the next test in this binary.
+///
+/// Spawn guard (2026-09-12): a skin Thread post may wake the pinned Chat,
+/// which spawns the workspace's `claude`. Before the guard that resolved
+/// through the login-shell PATH to the REAL `~/.local/bin/claude`, which
+/// under this fresh HOME ran first-start onboarding and opened a browser
+/// OAuth login. `K2_TEST_AGENT_SHIM_DIR` makes the daemon resolve `claude`
+/// ONLY to `<tmp>/shim/claude` (an `exec cat` script) and refuse anything
+/// else while HOME is under the temp dir.
 fn with_temp_home<F: FnOnce()>(f: F) {
-    let prev = std::env::var_os("HOME");
+    struct Restore {
+        prev_home: Option<std::ffi::OsString>,
+        prev_shim: Option<std::ffi::OsString>,
+        tmp: std::path::PathBuf,
+    }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match self.prev_home.take() {
+                Some(p) => std::env::set_var("HOME", p),
+                None => std::env::remove_var("HOME"),
+            }
+            match self.prev_shim.take() {
+                Some(p) => std::env::set_var("K2_TEST_AGENT_SHIM_DIR", p),
+                None => std::env::remove_var("K2_TEST_AGENT_SHIM_DIR"),
+            }
+            let _ = std::fs::remove_dir_all(&self.tmp);
+        }
+    }
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let tmp = std::env::temp_dir().join(format!("k2-skin-it-{}-{}", std::process::id(), nanos));
     std::fs::create_dir_all(&tmp).expect("create temp HOME");
-    std::env::set_var("HOME", &tmp);
-    f();
-    match prev {
-        Some(p) => std::env::set_var("HOME", p),
-        None => std::env::remove_var("HOME"),
+    let shim_dir = tmp.join("shim");
+    std::fs::create_dir_all(&shim_dir).expect("create shim dir");
+    let shim = shim_dir.join("claude");
+    std::fs::write(&shim, "#!/bin/sh\nexec cat\n").expect("write claude shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod claude shim");
     }
-    let _ = std::fs::remove_dir_all(&tmp);
+    let _restore = Restore {
+        prev_home: std::env::var_os("HOME"),
+        prev_shim: std::env::var_os("K2_TEST_AGENT_SHIM_DIR"),
+        tmp: tmp.clone(),
+    };
+    std::env::set_var("HOME", &tmp);
+    std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shim_dir);
+    f();
 }
 
 fn json(body: &str) -> serde_json::Value {

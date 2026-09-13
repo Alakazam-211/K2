@@ -59,7 +59,22 @@ fn install_claude_shim() -> PathBuf {
 
     let prev = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
+    register_shim_dir(&shim_dir);
     shim_dir
+}
+
+/// Spawn guard (2026-09-12): the daemon resolves agent basenames ONLY
+/// inside `K2_TEST_AGENT_SHIM_DIR` — the login-shell PATH used to beat the
+/// PATH prepend above and exec the REAL `~/.local/bin/claude`, which under
+/// this test's temp HOME opened a browser OAuth login. Newest dir first.
+fn register_shim_dir(shim_dir: &std::path::Path) {
+    let prev_shim = std::env::var("K2_TEST_AGENT_SHIM_DIR").unwrap_or_default();
+    let shim_list = if prev_shim.is_empty() {
+        shim_dir.display().to_string()
+    } else {
+        format!("{}:{}", shim_dir.display(), prev_shim)
+    };
+    std::env::set_var("K2_TEST_AGENT_SHIM_DIR", shim_list);
 }
 
 fn setup_project(workspace_id: &str, name: &str) -> PathBuf {
@@ -891,6 +906,7 @@ fn install_agent_shim(binary: &str) -> PathBuf {
     std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
     let prev = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
+    register_shim_dir(&shim_dir);
     shim_dir
 }
 

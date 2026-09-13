@@ -1320,6 +1320,25 @@ mod win_job {
     }
 }
 
+/// Kill every published child THIS process spawned (skin-gateway helpers,
+/// `--cmd` services) and forget them — no DB writes, no events. Test
+/// harness teardown: the helpers are `setsid` session leaders, so a test
+/// binary that exits (or panics past its `stop`) would otherwise leave
+/// `k2-daemon --skin-gateway` orphans listening forever (two from the
+/// 2026-09-12 run were killed by hand). Production never calls this —
+/// helpers are meant to outlive a daemon restart (`boot_desired_running`
+/// reattaches by pid + port).
+#[allow(dead_code)] // lib-only caller (integration harness teardown); the bin target never calls it
+pub fn kill_all_live_children() {
+    let entries: Vec<Arc<LiveChild>> = {
+        let mut map = live().lock().unwrap_or_else(|e| e.into_inner());
+        map.drain().map(|(_, v)| v).collect()
+    };
+    for entry in entries {
+        kill_tree(&entry);
+    }
+}
+
 #[cfg(test)]
 #[allow(dead_code)]
 pub fn kill_all_for_tests() {
@@ -1332,6 +1351,7 @@ pub fn kill_all_for_tests() {
     for (pid, name) in keys {
         let _ = stop(&pid, &name);
     }
+    kill_all_live_children();
 }
 
 #[cfg(test)]

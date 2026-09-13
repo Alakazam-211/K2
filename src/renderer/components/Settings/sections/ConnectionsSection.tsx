@@ -32,10 +32,11 @@ import {
   rememberPassword,
   forgetPassword,
   forgetToken,
-  loginToHost,
   type ConnectHost,
   type ConnectionStatus,
 } from '@/stores/connect-host'
+import { verifyHostCredentials } from '@/lib/add-server-login'
+import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { parseServerUrl, isValidUsername } from '@/lib/connect-validate'
 import { IconLock } from '@/components/icons/IconLock'
 import { FederationOverview } from './FederationOverview'
@@ -161,6 +162,16 @@ export function ConnectionsSection(): React.JSX.Element {
   const [draft, setDraft] = useState<DraftHost | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // W4: the add/edit form's credentials were accepted but the daemon
+  // requires a new password first. The shared PasswordRotationStep replaces
+  // the form fields until it completes (then the save finishes) or is
+  // cancelled (a NEW host's provisional tile is removed).
+  const [rotation, setRotation] = useState<{
+    host: ConnectHost
+    tempPassword: string
+    remember: boolean
+    isNew: boolean
+  } | null>(null)
   const [serverQuery, setServerQuery] = useState('')
   // Bumped after a successful "Pair as federated peer" so FederationOverview
   // reloads peers without a full Settings remount.
@@ -279,14 +290,23 @@ export function ConnectionsSection(): React.JSX.Element {
     if (passwordEntered) {
       setBusy(true)
       setError(null)
-      addHost(host)
-      const result = await loginToHost(host, passwordEntered)
+      // Same loginToHost (same edge login URL rule) as the switcher and
+      // RemoteSignIn; adds the host first, removes a NEW host on failure.
+      const outcome = await verifyHostCredentials(host, passwordEntered, isNew)
       setBusy(false)
-      if (!result.ok) {
-        if (isNew) {
-          removeHost(id)
-        }
-        setError(result.reason)
+      if (outcome.kind === 'error') {
+        setError(outcome.reason)
+        return
+      }
+      if (outcome.kind === 'rotate') {
+        // Not signed in yet: hand over to the rotation step (inline). The
+        // save completes from its onDone with the NEW password.
+        setRotation({
+          host: outcome.host,
+          tempPassword: passwordEntered,
+          remember: draft.remember,
+          isNew,
+        })
         return
       }
       // Keychain side: remember the password when asked; else forget it.
@@ -307,6 +327,36 @@ export function ConnectionsSection(): React.JSX.Element {
 
     setDraft(null)
     setError(null)
+  }
+
+  // Rotation step completed: the fresh (unrestricted) session is already
+  // committed by loginToHost. Finish what save() would have done — keychain
+  // side with the NEW password — and close the form.
+  const finishRotation = async (newPassword: string): Promise<void> => {
+    if (!rotation) return
+    if (rotation.remember) {
+      await rememberPassword(rotation.host.id, newPassword)
+    } else {
+      await forgetPassword(rotation.host.id)
+      await forgetToken(rotation.host.id)
+    }
+    setRotation(null)
+    setDraft(null)
+    setError(null)
+  }
+
+  const cancelRotation = (): void => {
+    if (!rotation) return
+    // A restricted session is useless: for a NEW host drop the provisional
+    // tile (so a half-added server never sticks); for an edit, drop the
+    // restricted token so the tile reads signed-out. The draft stays for
+    // another try.
+    if (rotation.isNew) {
+      removeHost(rotation.host.id)
+    } else {
+      useConnectHostStore.getState().clearHostToken(rotation.host.id)
+    }
+    setRotation(null)
   }
 
   const inputCls =
@@ -339,6 +389,21 @@ export function ConnectionsSection(): React.JSX.Element {
           <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
             {draft.id ? 'Edit server' : 'Add server'}
           </div>
+          {rotation ? (
+            <>
+              <div className="text-[10px] text-[var(--color-text-muted)] font-mono">
+                {rotation.host.username}@{hostToUrl(rotation.host).replace(/^https?:\/\//, '')}
+              </div>
+              <PasswordRotationStep
+                host={rotation.host}
+                initialCurrentPassword={rotation.tempPassword}
+                variant="inline"
+                onDone={({ newPassword }) => finishRotation(newPassword)}
+                onCancel={cancelRotation}
+              />
+            </>
+          ) : (
+          <>
           <input ref={labelRef} className={inputCls} placeholder="Label (e.g. My Mac Mini)" value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
           <input
             className={inputCls}
@@ -393,6 +458,8 @@ export function ConnectionsSection(): React.JSX.Element {
               Cancel
             </button>
           </div>
+          </>
+          )}
         </div>
       ) : (
         <button onClick={beginAdd} className="mb-3 px-3 py-1.5 text-[11px] text-[var(--color-accent)] border border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/10 no-drag cursor-pointer">

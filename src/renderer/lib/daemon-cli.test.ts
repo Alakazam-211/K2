@@ -553,3 +553,52 @@ describe('recovery gate — fail-fast while the active remote is recovering', ()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('W2 — data-plane 403 password_change_required routes to the rotation step', () => {
+  beforeEach(() => {
+    mem.clear()
+    fakeKeychain.clear()
+    __resetConnectHostStoreForTests()
+    __resetRemoteSessionForTests()
+    getDaemonWsMock.mockReset()
+    invalidateDaemonWsMock.mockReset()
+  })
+
+  it('active remote: rotation requested with the CURRENT token, no revival probe, no replay; the 403 still surfaces', async () => {
+    const host = makeRemoteHost()
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().selectHost(host)
+    getDaemonWsMock.mockImplementation(async () => {
+      const active = useConnectHostStore.getState().activeHost
+      if (active === 'local') return LOCAL_CREDS
+      return { port: active.port, token: active.token, host: active.hostname, secure: active.secure }
+    })
+    const fetchMock = vi.fn(async (_url: string) =>
+      fakeRes({ status: 403, body: JSON.stringify({ error: 'password_change_required' }) }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(daemonCliGet('projects/list')).rejects.toThrow(/password_change_required/)
+
+    const s = useConnectHostStore.getState()
+    expect(s.signInRotate).toBe(true)
+    expect(s.pendingSignIn?.id).toBe('r1')
+    expect(s.pendingSignIn?.token).toBe('remote-tok') // kept — the step needs it
+    expect((s.activeHost as ConnectHost).token).toBe('remote-tok')
+    expect(s.recovery.kind).toBe('signin-required')
+    // One data call; no whoami, no login, no replay.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toContain('projects/list')
+  })
+
+  it('local: never a rotation prompt', async () => {
+    getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => fakeRes({ status: 403, body: JSON.stringify({ error: 'password_change_required' }) })),
+    )
+    await expect(daemonCliGet('projects/list')).rejects.toThrow(/password_change_required/)
+    expect(useConnectHostStore.getState().signInRotate).toBe(false)
+    expect(useConnectHostStore.getState().pendingSignIn).toBeNull()
+  })
+})

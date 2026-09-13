@@ -34,6 +34,7 @@ import { Toggle } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
 import { AgentsCanCreateConnectionsRow } from '../shared/AgentsCanCreateConnectionsRow'
+import { ConnectLoginIngressRow } from '../shared/ConnectLoginIngressRow'
 import { TunnelUrlsPanel } from './TunnelUrlsPanel'
 import {
   signIn as accountSignIn,
@@ -116,6 +117,7 @@ export const K2_CONNECT_MANIFEST: SettingEntry[] = [
   { id: 'k2-connect.federation', section: 'k2-connect', label: 'Enable federation', description: 'Allow cross-server agent communication on this server', keywords: ['federation', 'cross-server', 'peers', 'agents', 'connect', 'mesh', 'cortana'] },
   { id: 'k2-connect.allow-remote-instruct', section: 'k2-connect', label: 'Let remote users message agents', description: 'Delivery consent for remote messages: K2 Connect users via the composer, and paired federation servers', keywords: ['remote', 'instruct', 'message', 'agents', 'composer', 'consent', 'federation', 'inbound', 'connect users', 'allow'] },
   { id: 'k2-connect.public-api', section: 'k2-connect', label: 'Enable public API (/v1)', description: 'Serve the external /v1 API from this daemon — takes effect immediately, no restart', keywords: ['api', 'v1', 'public api', 'rest', 'http', 'external', 'surface', 'K2_API', 'api keys', 'host sessions'] },
+  { id: 'k2-connect.login-ingress', section: 'k2-connect', label: 'Password sign-in over the tunnel', description: 'Only via K2 edge (recommended), any client, or off — where the daemon answers password login on tunnel ingress', keywords: ['login', 'sign in', 'password', 'tunnel', 'edge', 'ingress', 'scanner', 'brute force', 'connect users', 'app.k2.dev'] },
 ]
 
 interface TunnelStatus {
@@ -1248,6 +1250,7 @@ export function K2ConnectSection({
                 </div>
                 <DnsManageEnabledRow />
                 <AgentsCanCreateConnectionsRow />
+                <ConnectLoginIngressRow />
               </div>
             ) : (
               <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">

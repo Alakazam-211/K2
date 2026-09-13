@@ -38,6 +38,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import { isWebClient } from '@/lib/is-web'
+import { LOGIN_404_K2DEV_MESSAGE, k2DevApexLabel, loginUrlFor } from '@/lib/login-url'
 import { emitSoftResync, shouldEmitSoftResync } from '@/lib/soft-resync'
 import {
   CONNECT_HOSTS_STORAGE_KEY,
@@ -282,6 +283,14 @@ export interface ConnectHostState {
    *  "Sign in" for management)? `requestSignIn` sets true; `signInForManagement`
    *  sets false. */
   signInActivate: boolean
+  /**
+   * PRD connect-login-edge-only W1/W2/W4: when true, the sign-in overlay
+   * opens DIRECTLY on the "Set a new password" step for `pendingSignIn`
+   * (the host carries its restricted session token). Set by
+   * `requestPasswordRotation`; every other sign-in entry resets it so a
+   * normal password prompt never inherits the rotation step.
+   */
+  signInRotate: boolean
   /** Switch the active daemon. Pass 'local' for This Mac, or a saved
    *  ConnectHost. Sets `connectionStatus:'connecting'` then flips
    *  `activeHost` synchronously. The renderer routes daemon-data through
@@ -322,6 +331,14 @@ export interface ConnectHostState {
    *  management WITHOUT switching the active daemon (stays on the current
    *  view). On success the overlay just closes. */
   signInForManagement: (host: ConnectHost) => void
+  /**
+   * Open the sign-in overlay on the forced-rotation step for `host`
+   * (W1/W2/W4). `host.token` must be the RESTRICTED session the daemon
+   * minted (`mustChangePassword: true`) — the step reads the policy and
+   * posts change-password with it, then re-logs-in with the new password
+   * and only THEN activates the host. Idempotent for the same host.
+   */
+  requestPasswordRotation: (host: ConnectHost, opts?: { activate?: boolean }) => void
   /**
    * connect-users (#617) session expiry: a `/cli/*` call to a remote host
    * returned 401, so its cached session token is stale. Drop the
@@ -576,8 +593,10 @@ export async function forgetPassword(hostId: string): Promise<void> {
 // ── Login (connect-users #617) ───────────────────────────────────────────
 
 /** Build `<scheme>://<host>[:<port>]` for a host, matching daemon-ws.ts:
- *  secure+443 omits the port; everything else carries it. */
-function hostBaseUrl(host: Pick<ConnectHost, 'hostname' | 'port' | 'secure'>): string {
+ *  secure+443 omits the port; everything else carries it. Exported for the
+ *  session-authed helpers that must stay on the host's OWN origin (policy
+ *  read, change-password — lib/password-rotation.ts). */
+export function hostBaseUrl(host: Pick<ConnectHost, 'hostname' | 'port' | 'secure'>): string {
   const scheme = host.secure ? 'https' : 'http'
   const authority = host.secure && host.port === 443 ? host.hostname : `${host.hostname}:${host.port}`
   return `${scheme}://${authority}`
@@ -586,17 +605,29 @@ function hostBaseUrl(host: Pick<ConnectHost, 'hostname' | 'port' | 'secure'>): s
 /** Result of {@link loginToHost}. On success the session token is also
  *  committed into the store (setHostToken) so daemon-ws.ts uses it.
  *
+ *  `mustChangePassword` (PRD connect-login-edge-only W1/W4): the daemon
+ *  minted a RESTRICTED session for a site-created user who still holds the
+ *  temporary password. The token works only for whoami / users-policy /
+ *  change-password / logout; every other route 403s
+ *  `password_change_required`. Callers MUST NOT treat the host as signed in
+ *  until the rotation step (components/PasswordRotationStep) completes and
+ *  re-logs-in with the new password.
+ *
  *  Failure `kind` lets programmatic callers (runtime session revival,
  *  lib/remote-session.ts) branch without matching user-facing copy:
  *    - 'auth'        → the daemon REJECTED the credentials (401) — retrying
  *                      with the same password can never succeed.
+ *    - 'not-found'   → the login endpoint answered 404. On a hosted
+ *                      `.k2.dev` host this is the edge-only gate (D3): the
+ *                      request did not reach the daemon through a signing
+ *                      edge. Terminal for this attempt — never a transient.
  *    - 'unreachable' → connection-level failure after every retry — the
  *                      credentials were never evaluated.
  *    - 'server'      → the endpoint answered but isn't a usable login
- *                      (non-2xx, malformed body, missing username). */
+ *                      (other non-2xx, malformed body, missing username). */
 export type LoginResult =
-  | { ok: true; token: string }
-  | { ok: false; kind: 'auth' | 'unreachable' | 'server'; reason: string }
+  | { ok: true; token: string; mustChangePassword: boolean }
+  | { ok: false; kind: 'auth' | 'not-found' | 'unreachable' | 'server'; reason: string }
 
 /** Daemon `POST /cli/auth/login` success body. */
 interface LoginResponse {
@@ -605,6 +636,9 @@ interface LoginResponse {
   // ISO-8601 string from the daemon (e.g. "2026-07-20T20:38:56+00:00"),
   // NOT an epoch number — parse with Date.parse() if you ever do date math.
   expiresAt: string
+  // Always-present boolean on current daemons; optional here so an older
+  // daemon's body (no field) reads as "no rotation required".
+  mustChangePassword?: boolean
 }
 
 /**
@@ -633,7 +667,15 @@ export async function loginToHost(
   if (!username) {
     return { ok: false, kind: 'server', reason: 'This server has no username configured.' }
   }
-  const url = `${hostBaseUrl(host)}/cli/auth/login`
+  // D1/D2/D4: the ONE place the login URL is built. A hosted apex
+  // `https://<label>.k2.dev` host signs in through its first-party edge
+  // (`https://<label>.app.k2.dev`), which attests the request for the
+  // daemon's edge-only gate; every other host (LAN, self-host, custom
+  // domain, nested label, plain http) keeps its own origin. Nothing else —
+  // token use, WS, whoami, revive probes, policy/change-password — moves.
+  const base = hostBaseUrl(host)
+  const url = loginUrlFor(base)
+  const viaEdge = k2DevApexLabel(base) !== null
   // Issue #5: every *.k2.dev host shares ONE relay IP, so the webview pools a
   // single connection per origin. After relay churn (a remote update / E2E
   // cert re-provision) that pooled socket can go stale — cached GETs limp
@@ -676,9 +718,27 @@ export async function loginToHost(
   if (resp.status === 401) {
     return { ok: false, kind: 'auth', reason: 'Invalid username or password.' }
   }
+  if (resp.status === 404) {
+    // D3: on a hosted `.k2.dev` host a 404 is the daemon's edge-only gate
+    // (or an edge that is not signing yet) — never a transient. Elsewhere
+    // it just isn't a K2 login endpoint. Either way: terminal for this
+    // attempt (remote-session must not backoff-loop on it).
+    return {
+      ok: false,
+      kind: 'not-found',
+      reason: viaEdge
+        ? LOGIN_404_K2DEV_MESSAGE
+        : `Server returned 404. It may not be a K2 server.`,
+    }
+  }
   if (!resp.ok) {
     return { ok: false, kind: 'server', reason: `Server returned ${resp.status}. It may not be a K2 server.` }
   }
+  // Note: when the desktop client logs in through the edge Worker the
+  // response may carry a `Set-Cookie: k2_session=…` for the edge origin.
+  // The desktop never reads it — the JSON `token` below is the credential
+  // it uses — and nothing here inspects response headers, so that cookie is
+  // inert on desktop and exactly what the hosted web build wants.
   let body: LoginResponse
   try {
     body = (await resp.json()) as LoginResponse
@@ -688,6 +748,7 @@ export async function loginToHost(
   if (typeof body.token !== 'string' || body.token.length === 0) {
     return { ok: false, kind: 'server', reason: 'Server did not return a session token.' }
   }
+  const mustChangePassword = body.mustChangePassword === true
   // Commit the session token into the store + stamp lastConnectedAt so
   // daemon-ws.ts (which reads activeHost.token) picks it up, and cache it
   // to the keychain for a silent next connect.
@@ -698,7 +759,7 @@ export async function loginToHost(
     store.addHost({ ...existing, token: body.token, lastConnectedAt: Date.now() })
   }
   await rememberToken(host.id, body.token, host.hostname)
-  return { ok: true, token: body.token }
+  return { ok: true, token: body.token, mustChangePassword }
 }
 
 export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
@@ -708,6 +769,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   recovery: { kind: 'connected' },
   pendingSignIn: null,
   signInActivate: true,
+  signInRotate: false,
   serverVersion: null,
   serverProtocol: null,
 
@@ -730,6 +792,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     set({
       connectionStatus: 'connecting',
       pendingSignIn: null,
+      signInRotate: false,
       activeHost: hostOrLocal,
       serverVersion: null,
       serverProtocol: null,
@@ -747,7 +810,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   requestSignIn: (host) => {
     // Switcher / auto-sign-in path: on success, SWITCH the active daemon to
     // this host (the default).
-    set({ pendingSignIn: host, signInActivate: true })
+    set({ pendingSignIn: host, signInActivate: true, signInRotate: false })
   },
 
   signInForManagement: (host) => {
@@ -755,7 +818,18 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     // its owner-gated tile controls (Restart / Check-for-updates / federation
     // toggle) work — but DON'T switch the active daemon. The overlay closes on
     // success (no switch), so the user stays on the local K2 Connect view.
-    set({ pendingSignIn: host, signInActivate: false })
+    set({ pendingSignIn: host, signInActivate: false, signInRotate: false })
+  },
+
+  requestPasswordRotation: (host, opts) => {
+    const { pendingSignIn, signInRotate } = get()
+    // Idempotent: a burst of `password_change_required` 403s from many
+    // panes must not re-render the overlay per response.
+    if (signInRotate && pendingSignIn && pendingSignIn.id === host.id) return
+    // `activate` mirrors requestSignIn vs signInForManagement: a switch /
+    // active-host rotation switches on completion; a background tile's
+    // revival just caches the fresh session and closes.
+    set({ pendingSignIn: host, signInActivate: opts?.activate ?? true, signInRotate: true })
   },
 
   expireSession: (hostId) => {
@@ -783,6 +857,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
     set({
       hosts: cleared,
       pendingSignIn: clearedActive,
+      signInRotate: false,
       connectionStatus: 'connecting',
       activeHost: clearedActive,
       // #638: session expired → drop the cached capability info until the
@@ -805,7 +880,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
   },
 
   cancelSignIn: () => {
-    set({ pendingSignIn: null })
+    set({ pendingSignIn: null, signInRotate: false })
   },
 
   pickHost: (hostOrLocal) => {
@@ -830,9 +905,18 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
           const result = await loginToHost(hostOrLocal, pw)
           if (result.ok) {
             // loginToHost committed the session token; re-read the host so
-            // selectHost carries it, then switch silently.
+            // selectHost carries it.
             const refreshed = get().hosts.find((h) => h.id === hostOrLocal.id)
-            get().selectHost(refreshed ?? { ...hostOrLocal, token: result.token })
+            const withToken = refreshed ?? { ...hostOrLocal, token: result.token }
+            if (result.mustChangePassword) {
+              // W4: the remembered password is a TEMPORARY one — the session
+              // is restricted. Not signed in yet: open the rotation step
+              // (RemoteSignIn resolves the remembered password for the
+              // current-password field) instead of switching.
+              get().requestPasswordRotation(withToken)
+              return
+            }
+            get().selectHost(withToken)
             return
           }
         }
@@ -991,7 +1075,7 @@ export const useConnectHostStore = create<ConnectHostState>((set, get) => ({
 export function __resetConnectHostStoreForTests(): void {
   const storage = getStorage()
   if (storage) clearConnectHostsStorage(storage)
-  useConnectHostStore.setState({ activeHost: 'local', hosts: [], connectionStatus: 'connecting', recovery: { kind: 'connected' }, pendingSignIn: null, serverVersion: null, serverProtocol: null })
+  useConnectHostStore.setState({ activeHost: 'local', hosts: [], connectionStatus: 'connecting', recovery: { kind: 'connected' }, pendingSignIn: null, signInActivate: true, signInRotate: false, serverVersion: null, serverProtocol: null })
 }
 
 /** The localStorage key, re-exported for tests / callers. */

@@ -58,7 +58,12 @@ import {
   gridDialBackoffRemainingMs,
   openQueuedGridWebSocket,
 } from '@/lib/grid-dial-queue'
-import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
+import {
+  isPasswordChangeRequired,
+  isPossibleAuthFailure,
+  requirePasswordRotation,
+  reviveRemoteSession,
+} from '@/lib/remote-session'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useStyleStore } from '@/stores/style'
@@ -1548,6 +1553,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
                   continue
                 }
               }
+            } else if (isPasswordChangeRequired(spawnRes.status, body)) {
+              // W2: restricted temporary-password session — route to the
+              // rotation step; the spawn error below still surfaces.
+              const active = useConnectHostStore.getState().activeHost
+              if (active !== 'local') requirePasswordRotation(active.id)
             }
             // 4xx — genuine request error, surface immediately. Bad
             // body, missing field, etc. Won't get better by waiting.

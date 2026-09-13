@@ -23,7 +23,12 @@ import {
   redactRemoteUrl,
 } from '@/lib/remote-path-log'
 import { CLI_CONNECTED_RETRY_DELAYS_MS, isConnectionLevelError, withRemoteRetry } from '@/lib/remote-retry'
-import { isPossibleAuthFailure, reviveRemoteSession } from '@/lib/remote-session'
+import {
+  isPasswordChangeRequired,
+  isPossibleAuthFailure,
+  requirePasswordRotation,
+  reviveRemoteSession,
+} from '@/lib/remote-session'
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
 
 /** A response plus its (already-consumed) body text. The body is read
@@ -196,6 +201,12 @@ async function cliFetch(
             result = await attempt()
           }
         }
+      } else if (isPasswordChangeRequired(result.res.status, result.text)) {
+        // W2: a restricted (temporary-password) session — the token is
+        // valid, so revival would only say 'still-valid'. Route the user to
+        // the rotation step; the original 403 still surfaces to the caller.
+        const active = useConnectHostStore.getState().activeHost
+        if (active !== 'local') requirePasswordRotation(active.id)
       }
       throwIfHostSwitched(startedKey)
       return result

@@ -55,6 +55,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import {
   isPossibleAuthFailure,
+  requirePasswordRotation,
   reviveRemoteSession,
   reviveBackoffMs,
   REVIVE_BACKOFF_MS,
@@ -180,9 +181,14 @@ describe('reviveRemoteSession — dead session + remembered password', () => {
     // No sign-in raised — the revival was silent.
     expect(s.pendingSignIn).toBeNull()
 
-    // The login body carried the credentials in the BODY (never the URL).
+    // The login body carried the credentials in the BODY (never the URL), and
+    // D2: the silent revive uses the SAME edge login URL rule as loginToHost —
+    // a hosted apex host signs in through `<label>.app.k2.dev`; the whoami
+    // probe stayed on the host's own origin.
     const loginCall = fetchMock.mock.calls.find(([u]) => (u as string).includes('/cli/auth/login'))!
-    expect(loginCall[0]).toBe('https://rpm.k2.dev/cli/auth/login')
+    expect(loginCall[0]).toBe('https://rpm.app.k2.dev/cli/auth/login')
+    const whoamiCall = fetchMock.mock.calls.find(([u]) => (u as string).includes('/cli/auth/whoami'))!
+    expect(whoamiCall[0]).toBe('https://rpm.k2.dev/cli/auth/whoami?token=stale-tok')
     const init = loginCall[1] as RequestInit
     expect(JSON.parse(init.body as string)).toEqual({ username: 'rosson', password: 'hunter2' })
   })
@@ -406,5 +412,92 @@ describe('reviveRemoteSession — single-flight + backoff', () => {
       throw new Error(`unexpected fetch: ${url}`)
     }))
     await expect(reviveRemoteSession('rpm')).resolves.toBe('still-valid')
+  })
+})
+
+describe('reviveRemoteSession — D3 404 is terminal, W4 temp password rotates (PRD connect-login-edge-only)', () => {
+  it('login 404 → signin-required (token dropped, RemoteSignIn raised); NOT a transient to backoff-loop on', async () => {
+    const host = makeHost()
+    seedActive(host)
+    seedPassword('rpm', 'hunter2')
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/cli/auth/whoami')) return fakeRes(403, { error: 'Invalid or missing auth token' })
+      if (url.includes('/cli/auth/login')) return fakeRes(404, { error: 'not_found' })
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(reviveRemoteSession('rpm')).resolves.toBe('signin-required')
+    const s = useConnectHostStore.getState()
+    expect((s.activeHost as ConnectHost).token).toBe('')
+    expect(s.pendingSignIn?.id).toBe('rpm')
+    expect(s.recovery.kind).toBe('signin-required')
+    // Exactly one login attempt — no retry loop on the 404.
+    expect(fetchMock.mock.calls.filter(([u]) => (u as string).includes('/cli/auth/login'))).toHaveLength(1)
+    // The remembered password is kept (the user may still need it on the
+    // sign-in form).
+    expect(fakeKeychain.get(`${K2_CONNECT_PASSWORD_KEYCHAIN_SERVICE}:rpm`)).toBe('hunter2')
+  })
+
+  it('login mustChangePassword → signin-required on the ROTATION step; restricted token kept; not "revived"', async () => {
+    const host = makeHost()
+    seedActive(host)
+    seedPassword('rpm', 'temp-1')
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/cli/auth/whoami')) return fakeRes(403, { error: 'Invalid or missing auth token' })
+      if (url.includes('/cli/auth/login')) {
+        return fakeRes(200, { token: 'restricted', username: 'rosson', expiresAt: 'x', mustChangePassword: true })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(reviveRemoteSession('rpm')).resolves.toBe('signin-required')
+    const s = useConnectHostStore.getState()
+    expect(s.signInRotate).toBe(true)
+    expect(s.pendingSignIn?.id).toBe('rpm')
+    expect(s.pendingSignIn?.token).toBe('restricted')
+    expect(s.signInActivate).toBe(true) // active host → completes with a switch
+    expect(s.hosts.find((h) => h.id === 'rpm')?.token).toBe('restricted')
+  })
+
+  it('background (non-active) host with a temp password rotates WITHOUT activating', async () => {
+    const host = makeHost()
+    useConnectHostStore.getState().addHost(host) // saved, but 'local' stays active
+    seedPassword('rpm', 'temp-1')
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/cli/auth/whoami')) return fakeRes(403, { error: 'Invalid or missing auth token' })
+      if (url.includes('/cli/auth/login')) {
+        return fakeRes(200, { token: 'restricted', username: 'rosson', expiresAt: 'x', mustChangePassword: true })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(reviveRemoteSession('rpm')).resolves.toBe('signin-required')
+    const s = useConnectHostStore.getState()
+    expect(s.activeHost).toBe('local')
+    expect(s.signInRotate).toBe(true)
+    expect(s.signInActivate).toBe(false)
+  })
+})
+
+describe('requirePasswordRotation (W2 route-back)', () => {
+  it('active host → rotation step with the CURRENT token kept + recovery parked on signin-required', () => {
+    const host = makeHost({ token: 'restricted' })
+    seedActive(host)
+    requirePasswordRotation('rpm')
+    const s = useConnectHostStore.getState()
+    expect(s.signInRotate).toBe(true)
+    expect(s.pendingSignIn?.token).toBe('restricted')
+    expect((s.activeHost as ConnectHost).token).toBe('restricted') // NOT dropped
+    expect(s.recovery.kind).toBe('signin-required')
+  })
+
+  it('no-op for local or a non-active host id', () => {
+    const host = makeHost({ token: 'restricted' })
+    useConnectHostStore.getState().addHost(host)
+    requirePasswordRotation('rpm')
+    expect(useConnectHostStore.getState().signInRotate).toBe(false)
+    expect(useConnectHostStore.getState().pendingSignIn).toBeNull()
   })
 })

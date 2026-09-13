@@ -1,6 +1,12 @@
 import { create } from 'zustand'
 import { getDefaultKeybindings } from '@shared/hotkeys'
-import type { EditorSettingsBackend, StyleSettingsBackend } from '@shared/types'
+import type { ConnectLoginIngress, EditorSettingsBackend, StyleSettingsBackend } from '@shared/types'
+
+/** S1: coerce the daemon echo to a known mode; absent/unknown → 'edge'
+ *  (the daemon default). Exported for the Settings row + tests. */
+export function normalizeConnectLoginIngress(raw: unknown): ConnectLoginIngress {
+  return raw === 'any' || raw === 'off' ? raw : 'edge'
+}
 // Style System — live selection is per-client view state in style.ts
 // (localStorage SSOT). settings.ts only keeps a convenience mirror of
 // the selection for the settings store shape; it must NEVER POST style
@@ -129,6 +135,12 @@ interface SettingsState {
   // may manage connections regardless.
   agentsCanCreateConnections: boolean
 
+  // PRD connect-login-edge-only S1 — password sign-in over the tunnel:
+  // 'edge' (default, K2-edge-attested only) | 'any' | 'off'. Owner/admin
+  // gated via REMOTE_ACCESS_KEYS server-side; the daemon enforces the gate
+  // per request on tunnel ingress.
+  connectLoginIngress: ConnectLoginIngress
+
   // Cross-server federation master switch (K2 Connect → Enable federation).
   // Persisted per-server; the daemon's /cli/federation/* gate honors it via
   // federation::set_enabled(). DEFAULTS OFF (dark by default).
@@ -216,6 +228,7 @@ interface SettingsState {
   setAllowRemoteInstruct: (enabled: boolean) => void
   setDnsManageEnabled: (enabled: boolean) => void
   setAgentsCanCreateConnections: (enabled: boolean) => void
+  setConnectLoginIngress: (mode: ConnectLoginIngress) => void
   setFederationEnabled: (enabled: boolean) => void
   setApiEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
@@ -362,6 +375,7 @@ async function persistAndApply(
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       dnsManageEnabled: result.dnsManageEnabled ?? false,
       agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
+      connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
       federationEnabled: result.federationEnabled ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -405,6 +419,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   allowRemoteInstruct: false,
   dnsManageEnabled: false,
   agentsCanCreateConnections: false,
+  connectLoginIngress: 'edge',
   federationEnabled: false,
   apiEnabled: false,
   useLlmHitlDetection: false,
@@ -608,6 +623,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setConnectLoginIngress: async (mode: ConnectLoginIngress) => {
+    const prev = get().connectLoginIngress
+    set({ connectLoginIngress: mode }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `connectLoginIngress` and
+      // applies it per request on tunnel ingress (no restart). Owner/admin
+      // gated via REMOTE_ACCESS_KEYS server-side. persistAndApply is
+      // host-aware, so changing it while connected to a remote server writes
+      // to THAT server's daemon.
+      await persistAndApply(set, { connectLoginIngress: mode })
+    } catch (err) {
+      console.error('[settings] Failed to persist connect-login-ingress:', err)
+      set({ connectLoginIngress: prev })
+    }
+  },
+
   setFederationEnabled: async (enabled: boolean) => {
     const prev = get().federationEnabled
     set({ federationEnabled: enabled }) // optimistic
@@ -723,6 +754,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       dnsManageEnabled: result.dnsManageEnabled ?? false,
       agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
+      connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
       federationEnabled: result.federationEnabled ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
@@ -786,6 +818,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
       dnsManageEnabled: result.dnsManageEnabled ?? false,
       agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
+      connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
       federationEnabled: result.federationEnabled ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,

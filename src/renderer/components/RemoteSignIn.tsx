@@ -16,6 +16,14 @@
 //
 // If the password is already remembered, we auto-login on mount without
 // prompting.
+//
+// Forced rotation (PRD connect-login-edge-only W1–W4): when the login
+// answers `mustChangePassword: true` the host is NOT signed in yet — the
+// form is replaced by the shared PasswordRotationStep (temp password
+// prefilled), which changes the password and re-logs-in; only then do we
+// commit + switch. The store's `signInRotate` flag opens the overlay
+// DIRECTLY on that step (pickHost's remembered-temp-password auto-login,
+// and the W2 data-plane `password_change_required` route-back).
 
 import React, { useEffect, useRef, useState } from 'react'
 import {
@@ -29,6 +37,16 @@ import {
 import { IconLock } from '@/components/icons/IconLock'
 import { isWebClient } from '@/lib/is-web'
 import GateChrome from './TopBar/GateChrome'
+import { PasswordRotationStep } from './PasswordRotationStep'
+
+/** The pending rotation: the host carrying its RESTRICTED session token,
+ *  the temporary password we know (may be empty on the W2 route-back), and
+ *  the remember intent to apply to the NEW password once set. */
+interface RotationState {
+  host: ConnectHost
+  tempPassword: string
+  rememberPw: boolean
+}
 
 export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element {
   const selectHost = useConnectHostStore((s) => s.selectHost)
@@ -37,6 +55,8 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
   // false ⇒ tile "Sign in" for management: cache the token but DON'T switch the
   // active daemon (the overlay just closes, staying on the current view).
   const activate = useConnectHostStore((s) => s.signInActivate)
+  // true ⇒ open straight on the rotation step with `host.token` (restricted).
+  const openOnRotate = useConnectHostStore((s) => s.signInRotate)
 
   // Hosted web / first-time same-origin hosts often have no saved username
   // (boot seeds hostname only). Always allow editing; pre-fill when known.
@@ -46,6 +66,11 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
   const [remember, setRemember] = useState(host.remember)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rotation, setRotation] = useState<RotationState | null>(() =>
+    openOnRotate && host.token
+      ? { host, tempPassword: '', rememberPw: host.remember }
+      : null,
+  )
   const usernameRef = useRef<HTMLInputElement | null>(null)
   const passwordRef = useRef<HTMLInputElement | null>(null)
   const web = isWebClient()
@@ -57,32 +82,22 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     ? host.hostname
     : `${host.hostname}:${host.port}`
 
-  // Shared login path used by both the auto-login effect and the submit
-  // handler. On success commits + switches; on failure surfaces the
-  // reason and (for auto-login) leaves the form for manual entry.
-  const doLogin = async (
+  // The commit half of a sign-in: loginToHost already committed the session
+  // token + lastConnectedAt into the store; persist remember intent + the
+  // keychain side, then switch (or just close for the management path).
+  // Shared by the password form and the rotation step (which arrives here
+  // with the NEW password).
+  const finalize = async (
+    uname: string,
+    token: string,
     pw: string,
     rememberPw: boolean,
-    user = username,
-  ): Promise<boolean> => {
-    const uname = user.trim()
-    if (!uname) {
-      setError('Enter your username.')
-      return false
-    }
-    const hostWithUser: ConnectHost = { ...host, username: uname }
-    const result = await loginToHost(hostWithUser, pw)
-    if (!result.ok) {
-      setError(result.reason)
-      return false
-    }
-    // loginToHost committed the session token + lastConnectedAt into the
-    // store. Persist remember intent + the keychain side.
+  ): Promise<void> => {
     const refreshed = useConnectHostStore.getState().hosts.find((h) => h.id === host.id)
     const updated: ConnectHost = {
-      ...(refreshed ?? hostWithUser),
+      ...(refreshed ?? { ...host, username: uname }),
       username: uname,
-      token: result.token,
+      token,
       remember: rememberPw,
       lastConnectedAt: Date.now(),
     }
@@ -100,27 +115,72 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     } else {
       cancelSignIn()
     }
-    return true
+  }
+
+  // Shared login path used by both the auto-login effect and the submit
+  // handler. 'done' → committed + switched/closed; 'rotate' → the daemon
+  // wants a new password first (rotation step now showing, NOT signed in);
+  // 'failed' → reason surfaced, form left for manual entry.
+  const doLogin = async (
+    pw: string,
+    rememberPw: boolean,
+    user = username,
+  ): Promise<'done' | 'rotate' | 'failed'> => {
+    const uname = user.trim()
+    if (!uname) {
+      setError('Enter your username.')
+      return 'failed'
+    }
+    const hostWithUser: ConnectHost = { ...host, username: uname }
+    const result = await loginToHost(hostWithUser, pw)
+    if (!result.ok) {
+      setError(result.reason)
+      return 'failed'
+    }
+    if (result.mustChangePassword) {
+      setError(null)
+      setRotation({
+        host: { ...hostWithUser, token: result.token },
+        tempPassword: pw,
+        rememberPw,
+      })
+      return 'rotate'
+    }
+    await finalize(uname, result.token, pw, rememberPw)
+    return 'done'
   }
 
   // Auto-login if the password was remembered AND we have a username;
   // otherwise focus username (if empty) or password for manual entry.
   // (connect-users #617: "If the password was remembered, auto-login
   // without prompting.")
+  //
+  // Opened on the rotation step (signInRotate): no auto-login — the session
+  // already exists. Just resolve the remembered password (if any) to prefill
+  // the temporary-password field.
   useEffect(() => {
     let cancelled = false
     void (async () => {
+      if (openOnRotate && host.token) {
+        if (host.remember && host.username?.trim()) {
+          const pw = await resolvePassword(host.id)
+          if (cancelled || !pw) return
+          setRotation((r) => (r && !r.tempPassword ? { ...r, tempPassword: pw } : r))
+        }
+        return
+      }
       if (host.remember && host.username?.trim()) {
         const pw = await resolvePassword(host.id)
         if (cancelled) return
         if (pw) {
           setBusy(true)
-          const ok = await doLogin(pw, true, host.username)
+          const outcome = await doLogin(pw, true, host.username)
           if (cancelled) return
-          if (ok) return // switched away — overlay will unmount
-          // Remembered password was rejected/expired → fall through to
-          // manual entry.
+          if (outcome === 'done') return // switched away — overlay will unmount
+          // 'rotate': the step is showing. 'failed': remembered password was
+          // rejected/expired → fall through to manual entry.
           setBusy(false)
+          if (outcome === 'rotate') return
         }
       }
       if (!username.trim()) {
@@ -147,12 +207,47 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     }
     setBusy(true)
     setError(null)
-    const ok = await doLogin(password, remember)
-    if (!ok) setBusy(false)
+    const outcome = await doLogin(password, remember)
+    if (outcome !== 'done') setBusy(false)
   }
 
   const inputCls =
     'w-full px-2.5 py-1.5 text-[13px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]'
+
+  if (rotation) {
+    return (
+      <div className="fixed inset-0 z-[10000] flex flex-col bg-[var(--color-bg)] text-[var(--color-text-primary)]">
+        <GateChrome />
+        <div className="flex-1 min-h-0 flex items-center justify-center">
+          <div className="w-[360px] max-w-[90vw] flex flex-col gap-3.5 p-7 border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+            <div className="flex items-center gap-1 text-[12px] text-[var(--color-text-muted)] font-mono">
+              {host.secure && <IconLock className="w-3 h-3 flex-shrink-0" />}
+              {rotation.host.username ? `${rotation.host.username}@` : ''}
+              {address}
+            </div>
+            <PasswordRotationStep
+              host={rotation.host}
+              initialCurrentPassword={rotation.tempPassword}
+              variant="overlay"
+              onDone={({ token, newPassword }) =>
+                finalize(rotation.host.username ?? username, token, newPassword, rotation.rememberPw)
+              }
+              onCancel={() => {
+                // Back out: a restricted session is useless — drop the step
+                // and (re-auth path) return to the password form, or close.
+                if (openOnRotate) {
+                  cancelSignIn()
+                } else {
+                  setRotation(null)
+                  setPassword('')
+                }
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="fixed inset-0 z-[10000] flex flex-col bg-[var(--color-bg)] text-[var(--color-text-primary)]">

@@ -40,6 +40,28 @@ import { invalidateDaemonWs } from '@/kessel/daemon-ws'
 import { deriveRecovery, authSignalFromRevive, type RemoteRecoveryState } from '@/lib/remote-recovery'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { jittered } from '@/lib/backoff'
+import { isPasswordChangeRequired } from '@/lib/password-rotation'
+
+export { isPasswordChangeRequired }
+
+/**
+ * W2 (PRD connect-login-edge-only): a data-plane `403
+ * {"error":"password_change_required"}` means the ACTIVE host's session is
+ * the restricted one the daemon mints for a temporary password — valid, but
+ * useless until the user rotates. Route back to the "Set a new password"
+ * step (RemoteSignIn opens on it with the current token) and park the
+ * recovery surface on 'signin-required' so the rest of the data plane
+ * fails fast (recoveryGateAllows) instead of storming 403s. The token is
+ * NOT dropped — the rotation step needs it. No-op for 'local' or a host
+ * that is not the active remote (a stale response after a switch).
+ */
+export function requirePasswordRotation(hostId: string): void {
+  const store = useConnectHostStore.getState()
+  const active = store.activeHost
+  if (active === 'local' || active.id !== hostId) return
+  store.requestPasswordRotation(active, { activate: true })
+  store.setRecovery({ kind: 'signin-required' })
+}
 
 /**
  * Classify an HTTP response as a POSSIBLE stale-session rejection — distinct
@@ -252,12 +274,30 @@ async function doRevive(hostId: string): Promise<ReviveOutcome> {
   // cache on success). The password never leaves this scope.
   const result = await loginToHost(host, password)
   if (result.ok) {
+    if (result.mustChangePassword) {
+      // W4: the remembered password is a TEMPORARY one — the daemon minted a
+      // restricted session, so the host is NOT usable yet. Keep the token
+      // (the rotation step needs it) and open the "Set a new password" step;
+      // a background tile's revival rotates without switching hosts.
+      // Re-read: loginToHost just committed the restricted token, and the
+      // snapshot taken at the top of this function predates it.
+      const now = useConnectHostStore.getState()
+      const refreshed = now.hosts.find((h) => h.id === hostId)
+      const active = now.activeHost
+      now.requestPasswordRotation(refreshed ?? { ...host, token: result.token }, {
+        activate: active !== 'local' && active.id === hostId,
+      })
+      return 'signin-required'
+    }
     invalidateDaemonWs()
     return 'revived'
   }
-  if (result.kind === 'auth') {
-    // The remembered password itself is rejected — only the user can fix
-    // this. Expire so RemoteSignIn surfaces instead of retrying forever.
+  if (result.kind === 'auth' || result.kind === 'not-found') {
+    // 'auth': the remembered password itself is rejected — only the user
+    // can fix this. 'not-found' (D3): the login endpoint 404'd — on a
+    // hosted host that is the edge-only gate, and no amount of backoff
+    // changes it. Both are terminal for this attempt: expire so
+    // RemoteSignIn surfaces (with the reason) instead of retrying forever.
     expireAndClear(hostId)
     return 'signin-required'
   }

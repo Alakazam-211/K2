@@ -66,6 +66,9 @@ export interface TimerSettingsBackend {
 }
 
 /** Matches Rust `AppSettings` (camelCase via serde rename) */
+/** Wire values of `app_settings.connect_login_ingress` (S1). */
+export type ConnectLoginIngress = 'edge' | 'any' | 'off'
+
 export interface AppSettingsResponse {
   terminal: TerminalSettingsBackend
   keybindings: Record<string, string>
@@ -120,6 +123,15 @@ export interface AppSettingsResponse {
   // DEFAULTS OFF (deny-by-default). Optional: older snapshots omit it →
   // readers treat absent as false. Owner always may manage connections.
   agentsCanCreateConnections?: boolean
+  // PRD connect-login-edge-only S1 — where password sign-in
+  // (`POST /cli/auth/login`) is answered on TUNNEL ingress:
+  //   'edge' (default) — only requests attested by a K2 first-party edge
+  //   'any'            — any client (pre-0.40.144 behaviour; self-hosters
+  //                      not behind the K2 edge)
+  //   'off'            — never on the tunnel (local/LAN + tokens still work)
+  // Owner/Admin-only to write (REMOTE_ACCESS_KEYS). Optional: older
+  // snapshots omit it → readers treat absent as 'edge'.
+  connectLoginIngress?: ConnectLoginIngress
   // Federation (0.40.14+) — whether cross-server messaging is enabled on
   // this host. Optional: older snapshots omit it → readers treat absent
   // as false (the store reads it with `?? false`).

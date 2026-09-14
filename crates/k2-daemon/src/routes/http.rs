@@ -179,6 +179,18 @@ pub(crate) async fn send_plain_404_close(stream: &mut TcpStream) {
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 
+/// PRD connect-login-edge-only §4.1 G1: `302 Found` to the hosted web
+/// client, no body, not cacheable, then close. `location` MUST be built
+/// from daemon config (see `dispatcher::tunnel_root_redirect_location`),
+/// never from request data.
+pub(crate) async fn send_redirect_close(stream: &mut TcpStream, location: &str) {
+    let resp = format!(
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\
+         Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+    );
+    let _ = stream.write_all(resp.as_bytes()).await;
+}
+
 /// True when `Cookie:` contains `k2_session=<non-empty>`.
 fn has_session_cookie(headers_blob: &str) -> bool {
     extract_session_cookie(headers_blob).is_some()

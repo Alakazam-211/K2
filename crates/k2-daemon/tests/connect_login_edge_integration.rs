@@ -212,8 +212,57 @@ fn attested_login(
 // G1 — no HTML on the tunnel; loopback unchanged.
 // ─────────────────────────────────────────────────────────────────────
 
+fn assert_web_client_redirect(r: &Resp, what: &str) {
+    assert_eq!(r.status, 302, "{what} must 302; headers={} body={}", r.headers, r.body);
+    assert!(
+        r.headers.starts_with("HTTP/1.1 302 Found"),
+        "{what} status line: {}",
+        r.headers
+    );
+    assert_eq!(
+        r.header("Location").as_deref(),
+        Some("https://rosson.app.k2.dev/"),
+        "{what} Location comes from the configured tunnel subdomain"
+    );
+    assert_eq!(r.header("Content-Length").as_deref(), Some("0"), "{what}");
+    assert_eq!(r.header("Cache-Control").as_deref(), Some("no-store"), "{what}");
+    assert_eq!(r.header("Connection").as_deref(), Some("close"), "{what}");
+    assert_eq!(r.body, "", "{what} has no body");
+}
+
+fn assert_plain_404(r: &Resp, what: &str) {
+    assert_eq!(r.status, 404, "{what} must 404; headers={} body={}", r.headers, r.body);
+    assert_eq!(r.body, "Not Found", "{what}");
+    assert_eq!(r.header("Content-Type").as_deref(), Some("text/plain"), "{what}");
+    assert_eq!(r.header("Connection").as_deref(), Some("close"), "{what}");
+    assert!(r.header("Location").is_none(), "{what} must not redirect");
+}
+
+fn assert_account_html(r: &Resp, what: &str) {
+    assert_eq!(r.status, 200, "{what} must serve the page; body={}", r.body);
+    assert_eq!(
+        r.header("Content-Type").as_deref(),
+        Some("text/html; charset=utf-8"),
+        "{what}"
+    );
+    assert!(
+        r.body.contains("<html") || r.body.contains("<!DOCTYPE"),
+        "{what} is HTML"
+    );
+}
+
+/// Seed the tunnel label directly (for the empty / invalid label cases).
+fn set_tunnel_subdomain(sub: &str) {
+    k2_core::tunnel::config::save(&k2_core::tunnel::config::TunnelConfig {
+        token: "tok".to_string(),
+        subdomain: sub.to_string(),
+        ..Default::default()
+    })
+    .expect("save tunnel config");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tunnel_root_and_account_404_plain_while_loopback_serves_html() {
+async fn tunnel_root_and_account_redirect_to_web_client_while_loopback_serves_html() {
     let _g = lock();
     with_temp_home(|| {
         let _s = seed("g1user", "password123", Role::Member);
@@ -221,18 +270,134 @@ async fn tunnel_root_and_account_404_plain_while_loopback_serves_html() {
 
         for path in ["/", "/account"] {
             let r = http(d.tunnel_port, "GET", path, None, &[]);
-            assert_eq!(r.status, 404, "tunnel GET {path} must 404; body={}", r.body);
-            assert_eq!(r.body, "Not Found");
-            assert_eq!(r.header("Content-Type").as_deref(), Some("text/plain"));
-            assert_eq!(r.header("Connection").as_deref(), Some("close"));
-            assert!(!r.body.contains("<html"), "no HTML on tunnel");
+            assert_web_client_redirect(&r, &format!("tunnel GET {path}"));
+            let r = http(d.tunnel_port, "HEAD", path, None, &[]);
+            assert_web_client_redirect(&r, &format!("tunnel HEAD {path}"));
 
+            // No open redirect: a spoofed Host never shapes Location.
+            let r = http(d.tunnel_port, "GET", path, None, &["Host: evil.example"]);
+            assert_web_client_redirect(&r, &format!("tunnel GET {path} Host: evil.example"));
+            let r = http(d.tunnel_port, "HEAD", path, None, &["Host: evil.app.k2.dev"]);
+            assert_web_client_redirect(&r, &format!("tunnel HEAD {path} Host: evil.app.k2.dev"));
+            let r = http(
+                d.tunnel_port,
+                "GET",
+                &format!("{path}?next=https://evil.example/"),
+                None,
+                &["X-Forwarded-Host: evil.example"],
+            );
+            assert_web_client_redirect(&r, &format!("tunnel GET {path}?next=… X-Forwarded-Host"));
+
+            // G5: loopback unchanged.
             let r = http(d.port, "GET", path, None, &[]);
-            assert_eq!(r.status, 200, "loopback GET {path} must still serve the page");
-            assert!(r.body.contains("<html") || r.body.contains("<!DOCTYPE"), "loopback page is HTML");
+            assert_account_html(&r, &format!("loopback GET {path}"));
         }
-        // Nothing audited for page hits.
-        assert!(audit_events().is_empty(), "page hits are not audit events");
+
+        // Other paths on the tunnel are untouched: byte-identical to loopback.
+        let t = http(d.tunnel_port, "GET", "/some/other/path", None, &[]);
+        let l = http(d.port, "GET", "/some/other/path", None, &[]);
+        assert_ne!(t.status, 302, "other paths never redirect");
+        assert!(t.header("Location").is_none(), "other paths carry no Location");
+        assert_eq!((t.status, &t.body), (l.status, &l.body), "tunnel /some/other/path == loopback");
+
+        // Methods other than GET/HEAD on those paths: same as before the
+        // redirect (and as loopback) — POST / is 405, OPTIONS / is 204.
+        for path in ["/", "/account"] {
+            let t = http(d.tunnel_port, "POST", path, Some("{}"), &[]);
+            let l = http(d.port, "POST", path, Some("{}"), &[]);
+            assert_eq!(t.status, 405, "tunnel POST {path}; body={}", t.body);
+            assert_eq!((t.status, &t.body), (l.status, &l.body), "tunnel POST {path} == loopback");
+            let t = http(d.tunnel_port, "OPTIONS", path, None, &[]);
+            let l = http(d.port, "OPTIONS", path, None, &[]);
+            assert_eq!(t.status, 204, "tunnel OPTIONS {path}");
+            assert_eq!((t.status, &t.body), (l.status, &l.body), "tunnel OPTIONS {path} == loopback");
+            assert!(t.header("Location").is_none());
+        }
+
+        // Login gate unchanged: unattested tunnel login is still a bare 404.
+        let r = http(
+            d.tunnel_port,
+            "POST",
+            LOGIN,
+            Some(r#"{"username":"g1user","password":"password123"}"#),
+            &[],
+        );
+        assert_eq!(r.status, 404, "unattested tunnel login; body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("login 404 is JSON");
+        assert_eq!(v["error"], "not_found");
+        assert!(r.header("Location").is_none(), "login is never redirected");
+
+        // Page hits are not audit events (the login above is).
+        assert!(
+            audit_events().iter().all(|e| e["event"] == "login"),
+            "page hits are not audit events: {:?}",
+            audit_events()
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tunnel_root_without_usable_subdomain_stays_plain_404() {
+    let _g = lock();
+    with_temp_home(|| {
+        let _s = seed("g1bad", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        for sub in ["", "   ", "app", "www", "evil.example", "bad_label"] {
+            set_tunnel_subdomain(sub);
+            for path in ["/", "/account"] {
+                let r = http(d.tunnel_port, "GET", path, None, &["Host: evil.example"]);
+                assert_plain_404(&r, &format!("tunnel GET {path} with subdomain {sub:?}"));
+                // HEAD keeps its pre-redirect answer (the 405 allowlist).
+                let r = http(d.tunnel_port, "HEAD", path, None, &[]);
+                assert_eq!(r.status, 405, "tunnel HEAD {path} with subdomain {sub:?}");
+                assert!(r.header("Location").is_none());
+            }
+        }
+
+        // Config missing (empty default label) or malformed (load error) → 404.
+        let home = std::env::var("HOME").expect("HOME");
+        let cfg = k2_core::tunnel::config::config_path();
+        assert!(cfg.starts_with(&home), "tunnel config must live under the temp HOME: {cfg:?}");
+        std::fs::remove_file(&cfg).expect("remove tunnel config");
+        let r = http(d.tunnel_port, "GET", "/", None, &[]);
+        assert_plain_404(&r, "tunnel GET / with no tunnel config");
+        std::fs::write(&cfg, "{ not json").expect("write malformed tunnel config");
+        assert!(k2_core::tunnel::config::load().is_err(), "malformed config must fail to load");
+        let r = http(d.tunnel_port, "GET", "/account", None, &[]);
+        assert_plain_404(&r, "tunnel GET /account with malformed tunnel config");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tunnel_root_mode_any_serves_page_and_off_is_plain_404() {
+    let _g = lock();
+    with_temp_home(|| {
+        let _s = seed("g1mode", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        set_ingress_mode("any");
+        for path in ["/", "/account"] {
+            let r = http(d.tunnel_port, "GET", path, None, &[]);
+            assert_account_html(&r, &format!("mode=any tunnel GET {path}"));
+            assert!(r.header("Location").is_none());
+            let t = http(d.tunnel_port, "HEAD", path, None, &[]);
+            let l = http(d.port, "HEAD", path, None, &[]);
+            assert_eq!(t.status, 405, "mode=any tunnel HEAD {path} behaves like loopback");
+            assert_eq!((t.status, &t.body), (l.status, &l.body));
+        }
+
+        set_ingress_mode("off");
+        for path in ["/", "/account"] {
+            let r = http(d.tunnel_port, "GET", path, None, &[]);
+            assert_plain_404(&r, &format!("mode=off tunnel GET {path}"));
+            let r = http(d.tunnel_port, "HEAD", path, None, &[]);
+            assert_eq!(r.status, 405, "mode=off tunnel HEAD {path} unchanged");
+            assert!(r.header("Location").is_none());
+            // Loopback still serves the page regardless of the tunnel mode.
+            let r = http(d.port, "GET", path, None, &[]);
+            assert_account_html(&r, &format!("mode=off loopback GET {path}"));
+        }
     });
 }
 
@@ -557,13 +722,14 @@ async fn tunnel_options_preflight_on_login_matches_loopback_and_is_not_audited()
             "CORS headers present on the tunnel preflight: {}",
             via_tunnel.headers
         );
-        // OPTIONS / and HEAD / are answered as before (not the G1 page 404).
+        // OPTIONS / is answered as before (not the G1 redirect). HEAD / on
+        // the tunnel follows GET in edge mode (G1 302); loopback stays 405.
         let o = http(d.tunnel_port, "OPTIONS", "/", None, &[]);
         assert_eq!(o.status, 204);
         let h_t = http(d.tunnel_port, "HEAD", "/", None, &[]);
         let h_l = http(d.port, "HEAD", "/", None, &[]);
-        assert_eq!(h_t.status, h_l.status, "HEAD / unchanged by the gate");
-        assert_eq!(h_t.status, 405);
+        assert_web_client_redirect(&h_t, "tunnel HEAD / (edge)");
+        assert_eq!(h_l.status, 405, "loopback HEAD / unchanged");
         assert!(audit_events().is_empty(), "preflight / HEAD are not audit events");
     });
 }

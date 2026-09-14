@@ -147,6 +147,52 @@ const KEEP_ALIVE_MAX_REQUESTS: u32 = 10_000;
 /// in POST bodies, which `read_post_body` streams without this cap.
 const REQUEST_HEAD_MAX: usize = 16 * 1024;
 
+/// PRD connect-login-edge-only §4.1 G1: `https://<sub>.app.k2.dev/` for a
+/// tunnel label, or `None` when the label is unusable. The label must be
+/// `^[a-z0-9-]+$` after trim + lowercase and must not be `app` / `www`.
+pub(crate) fn app_web_root_location(subdomain: &str) -> Option<String> {
+    let sub = subdomain.trim().to_ascii_lowercase();
+    if sub.is_empty()
+        || sub == "app"
+        || sub == "www"
+        || !sub.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        return None;
+    }
+    Some(format!("https://{sub}.app.k2.dev/"))
+}
+
+/// G1 redirect target from THIS daemon's configured tunnel subdomain.
+/// Deliberately takes no request input: the Host header and every other
+/// request field are attacker-controlled and never shape `Location`.
+fn tunnel_root_redirect_location() -> Option<String> {
+    let cfg = k2_core::tunnel::config::load().ok()?;
+    app_web_root_location(&cfg.subdomain)
+}
+
+#[cfg(test)]
+mod app_web_root_location_tests {
+    use super::app_web_root_location;
+
+    #[test]
+    fn app_web_root_location_accepts_labels_and_rejects_everything_else() {
+        assert_eq!(
+            app_web_root_location("rosson").as_deref(),
+            Some("https://rosson.app.k2.dev/")
+        );
+        assert_eq!(
+            app_web_root_location("  Z3-Thon9 \n").as_deref(),
+            Some("https://z3-thon9.app.k2.dev/")
+        );
+        for bad in [
+            "", "   ", "app", "APP", "www", "evil.example", "a/b", "a b", "rosson.k2.dev",
+            "a_b", "a:1", "a@b", "ä",
+        ] {
+            assert_eq!(app_web_root_location(bad), None, "label {bad:?} must be refused");
+        }
+    }
+}
+
 /// Serve one TCP connection, looping over requests on the same socket
 /// (HTTP/1.1 keep-alive).
 ///
@@ -333,6 +379,25 @@ async fn handle_one_request(
         let _ = stream.read(&mut buf).await;
         super::http::send_cors_preflight(&mut *stream).await;
         return DispatchOutcome::Done;
+    }
+
+    // G1 (HEAD half, PRD connect-login-edge-only §4.1): on the tunnel,
+    // `HEAD /` and `HEAD /account` get the same 302 as GET in `edge` mode.
+    // Must run before the method allowlist below, which 405s HEAD
+    // everywhere. `any` / `off` / an unusable subdomain fall through to
+    // that 405 exactly as before.
+    if ingress == Ingress::Tunnel && method == "HEAD" {
+        let head_path = path_and_query.split_once('?').map(|(p, _)| p).unwrap_or(path_and_query);
+        if head_path == "/" || head_path == "/account" {
+            use k2_core::app_settings::ConnectLoginIngress as Mode;
+            if k2_core::app_settings::load().connect_login_ingress() == Mode::Edge {
+                if let Some(location) = tunnel_root_redirect_location() {
+                    let _ = stream.read(&mut buf).await;
+                    super::http::send_redirect_close(&mut *stream, &location).await;
+                    return DispatchOutcome::Done;
+                }
+            }
+        }
     }
 
     // Most routes are GET. Specific POST-accepting routes are
@@ -1093,8 +1158,13 @@ async fn handle_one_request(
     // are untouched (G5): the local `/account` page stays the self-host
     // rotation surface and the CLI/desktop/test paths never see this.
     //
-    // - G1: `GET /` and `GET /account` → plain 404 + close. No HTML on the
-    //   public tunnel, ever.
+    // - G1: `GET /` and `GET /account` (HEAD is handled above the 405
+    //   guard) per `connectLoginIngress`:
+    //     edge (default) → `302` to `https://<sub>.app.k2.dev/`, `<sub>` =
+    //       the CONFIGURED tunnel label (never the Host header — no open
+    //       redirect). Unusable label / config load error → plain 404.
+    //     any → fall through to the normal account-page arm (self-hosters).
+    //     off → plain 404 + close.
     // - G2: `POST /cli/auth/login` per `connectLoginIngress`:
     //     edge (default) → the request must carry a valid `X-K2-Edge-Sig`
     //       (k2_core::edge_attest). Unattested → 404 with NO argon2 work and
@@ -1115,10 +1185,29 @@ async fn handle_one_request(
     let mut pre_read_body: Option<Vec<u8>> = None;
     let mut attested: Option<k2_core::edge_attest::Attestation> = None;
     if ingress == Ingress::Tunnel {
+        // Only GET reaches here for these paths: OPTIONS was answered and
+        // HEAD/other methods were 405'd (or redirected) above, and POST to
+        // `/` or `/account` is not allowlisted.
         if (path == "/" || path == "/account") && !is_post {
-            let _ = stream.read(&mut buf).await;
-            super::http::send_plain_404_close(&mut *stream).await;
-            return DispatchOutcome::Done;
+            use k2_core::app_settings::ConnectLoginIngress as Mode;
+            match k2_core::app_settings::load().connect_login_ingress() {
+                Mode::Any => { /* fall through to the account-page arm */ }
+                Mode::Edge => {
+                    let _ = stream.read(&mut buf).await;
+                    match tunnel_root_redirect_location() {
+                        Some(location) => {
+                            super::http::send_redirect_close(&mut *stream, &location).await
+                        }
+                        None => super::http::send_plain_404_close(&mut *stream).await,
+                    }
+                    return DispatchOutcome::Done;
+                }
+                Mode::Off => {
+                    let _ = stream.read(&mut buf).await;
+                    super::http::send_plain_404_close(&mut *stream).await;
+                    return DispatchOutcome::Done;
+                }
+            }
         }
         if path == "/cli/auth/login" && is_post {
             use k2_core::app_settings::ConnectLoginIngress as Mode;

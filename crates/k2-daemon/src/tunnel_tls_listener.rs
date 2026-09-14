@@ -812,12 +812,21 @@ mod tests {
              listener, got:\n{body}"
         );
         // I2 proof: the splice landed on the TUNNEL-INGRESS dispatcher, so
-        // the account page is refused (G1) — a splice to the main listener
-        // would have served the HTML.
+        // the account page is not served (G1): with a configured tunnel
+        // label it is a 302 to the hosted web client — a splice to the main
+        // listener would have served the HTML.
+        k2_core::tunnel::config::save(&k2_core::tunnel::config::TunnelConfig {
+            token: "tok".to_string(),
+            subdomain: "rosson".to_string(),
+            ..Default::default()
+        })
+        .expect("seed tunnel config");
         let page = tls_client_get(&cert_pem, https_port, "rosson.k2.dev", "/account").await;
         assert!(
-            page.contains("404 Not Found") && page.contains("Not Found") && !page.contains("<html"),
-            "tunnel ingress must 404 the account page, got:\n{page}"
+            page.starts_with("HTTP/1.1 302 Found\r\n")
+                && page.contains("\r\nLocation: https://rosson.app.k2.dev/\r\n")
+                && !page.contains("<html"),
+            "tunnel ingress must 302 the account page to the web client, got:\n{page}"
         );
     }
 

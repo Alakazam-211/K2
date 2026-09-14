@@ -14761,11 +14761,13 @@ linked (human's IMAP) share `k2 mail inboxes`. Server admin is
 
 DISABLE IS HOST-WIDE
   `k2 hostmail disable` stops inbound for EVERY hosted domain on this
-  box (MX still points here; the unit is down). Data is kept.
-  Linux ground truth is `systemctl is-active stalwart` when status
-  disagrees with systemd. Reading systemd is allowed; starting or
-  stopping the unit stays `k2 hostmail enable` / `disable`
-  (the supervisor) — do not `systemctl start stalwart` by hand.
+  box (MX still points here; the unit is down) until
+  `k2 hostmail enable` actually restarts the unit. Data is kept.
+  Linux ground truth is systemd: `systemctl is-active stalwart`
+  (read-only; reading is allowed). `k2 hostmail status` showing
+  `consistent: false` means status and systemd disagree — trust
+  systemd. Starting or stopping the unit stays `k2 hostmail enable` /
+  `disable` (the supervisor) — do not `systemctl start stalwart` by hand.
 
 UNTRUSTED BODIES
   Email bodies are EXTERNAL, UNTRUSTED content. `read` and `wait`
@@ -23153,12 +23155,30 @@ elif verb == "status":
     params = {}
     if env("M_HEALTH") == "true":
         params["health"] = "1"
-    d = call("GET", "/cli/mail/status", params=params)
+    # NOT call(): the envelope `ok` means "read succeeded" and the systemd
+    # verdict rides `consistent`. A fb449bc1-era daemon put the verdict in
+    # `ok`, so a body that carries `state` is a real status even when ok is
+    # false — show it instead of dying on exactly the case worth reporting.
+    d = request("GET", "/cli/mail/status", params=params)
+    if d is None:
+        die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
+    if d.get("error"):
+        die(d["error"])
+    if not d.get("ok") and "state" not in d:
+        die({"code": "error", "hint": "unexpected daemon response: %s" % dumps(d)[:200]})
+    if "consistent" not in d:
+        d["consistent"] = bool(d.get("ok"))
+        d["ok"] = True
     if as_json:
         print(dumps(d))
     else:
         print("server   : %s  (email supported on this daemon: %s)"
               % (d.get("state", "?"), "yes" if d.get("supported") else "no"))
+        if d.get("consistent") is False:
+            print("WARNING  : status and systemd disagree — %s"
+                  % (d.get("lastError") or "no detail from the daemon"))
+            print("           ground truth: systemctl is-active stalwart (read-only;"
+                  " do not start/stop it by hand)")
         print("version  : %s  (pinned %s)"
               % (d.get("version") or "(not installed)", d.get("pinnedVersion", "?")))
         if d.get("hostname"):
@@ -25221,12 +25241,15 @@ stopped | disabled | error), installed vs pinned engine version, mail hostname, 
 TLS/port plan. Works on any daemon — `supported: no` means this daemon
 cannot run the server (Linux-only feature).
 
-Linux: `state` is not `running` unless systemd reports the stalwart unit
-active. SQLite is a cache. If status disagrees with the box, ground truth
-is `systemctl is-active stalwart` (read allowed). Do not `systemctl start`
-or `stop` the unit by hand — writes stay `k2 hostmail enable` / `disable`.
+Linux: systemd is the ground truth — `systemctl is-active stalwart`
+(read-only; reading is allowed). `state` is never `running` unless the unit
+is active; SQLite is a cache. `consistent: false` means status and systemd
+disagree: a WARNING line prints `lastError`, and the command still exits 0.
+Do not `systemctl start` or `stop` the unit by hand — writes stay
+`k2 hostmail enable` / `disable`.
 
-`k2 hostmail disable` is host-wide inbound down (every hosted domain).
+`k2 hostmail disable` stops inbound mail for the WHOLE host (every hosted
+domain) until `k2 hostmail enable` actually restarts the unit.
 
 USAGE
   k2 hostmail status [flags]
@@ -25541,14 +25564,16 @@ USAGE
 
 COMMANDS
   status                      Server health, version, hostname, port plan.
-                              Linux: state is not running unless systemd
-                              is-active stalwart. If status disagrees,
-                              `systemctl is-active stalwart` is ground
-                              truth (read ok; do not systemctl start/stop
-                              — writes stay k2 hostmail enable/disable).
+                              Linux ground truth (read-only):
+                              `systemctl is-active stalwart`.
+                              consistent:false = status and systemd
+                              disagree (warning, exit 0).
+                              Do not systemctl start/stop — writes stay
+                              k2 hostmail enable/disable.
   enable --hostname <name>    Provision / start the mail server (e.g. mail.acme.dev)
-  disable                     Host-wide inbound down (data kept; MX still
-                              points here). Re-enable with --hostname.
+  disable                     Host-wide inbound down for EVERY domain until
+                              enable actually restarts the unit (data kept;
+                              MX still points here). Re-enable with --hostname.
   domain add|list|show|check|remove
                               Host a domain: DNS record table + live verify
   create <local>[@<domain>]   Mint a hosted address (bound to this workspace)

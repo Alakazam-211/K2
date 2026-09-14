@@ -104,16 +104,16 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
         None => ("not-installed".to_string(), None, None, None, None, None),
     };
     // Linux (and tests with a systemd seam): SQLite is a cache. `state`
-    // is never `running` unless the unit is active; `ok` is not true
-    // when the unit is inactive/failed (H1/H2).
-    let (state, ok, last_error) = match supervisor::systemd_ground_truth() {
+    // is never `running` unless the unit is active (H1); `consistent` is
+    // false when the row and systemd disagree (H2).
+    let (state, consistent, last_error) = match supervisor::systemd_ground_truth() {
         Some(unit) => {
             let rec = supervisor::reconcile_reported_status(
                 &sqlite_state,
                 sqlite_last_error.as_deref(),
                 &unit,
             );
-            (rec.state, rec.ok, rec.last_error)
+            (rec.state, rec.consistent, rec.last_error)
         }
         None => (sqlite_state, true, sqlite_last_error),
     };
@@ -122,7 +122,11 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
         .unwrap_or(serde_json::Value::Null);
     CliResponse::ok_json(
         serde_json::json!({
-            "ok": ok,
+            // Envelope: the status READ succeeded. Never the systemd verdict
+            // — `k2`'s generic caller treats ok=false as a malformed reply.
+            "ok": true,
+            // Does the SQLite row agree with `systemctl is-active stalwart`?
+            "consistent": consistent,
             "supported": mail_supported(),
             "state": state,
             "version": version,
@@ -855,16 +859,83 @@ mod tests {
         let resp = handle_status(&HashMap::new());
         assert_eq!(resp.status, "200 OK");
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
-        assert_ne!(v["state"], "running", "H1: state is not running unless unit active: {v}");
-        assert_eq!(v["ok"], false, "H2: ok is not true when unit is inactive: {v}");
-        assert!(
-            v["lastError"]
-                .as_str()
-                .unwrap_or("")
-                .contains("inactive"),
+        assert_eq!(v["state"], "stopped", "H1: state is not running unless unit active: {v}");
+        assert_eq!(v["ok"], true, "envelope ok: the status read succeeded: {v}");
+        assert_eq!(v["consistent"], false, "H2: running row + inactive unit disagree: {v}");
+        assert_eq!(
+            v["lastError"],
+            "systemd reports the stalwart unit is 'inactive'",
             "{v}"
         );
         clean_row();
+    }
+
+    /// Envelope `ok` is always true on a successful read; the systemd
+    /// verdict rides `consistent` (fb449bc1 regression: the CLI died on ok=false).
+    #[test]
+    fn status_envelope_ok_is_true_and_verdict_rides_consistent() {
+        let _g = crate::mail::mail_server_test_lock();
+        let seed = |status: &str| {
+            clean_row();
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, updated_at) \
+                 VALUES (1, ?1, ?2, 'mail.acme.dev', 100)",
+                rusqlite::params![status, STALWART_PINNED_VERSION],
+            )
+            .expect("seed row");
+        };
+        let read = || -> serde_json::Value {
+            let resp = handle_status(&HashMap::new());
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            serde_json::from_str(&resp.body).expect("json")
+        };
+
+        {
+            let _unit = supervisor::with_test_unit_state("inactive");
+            seed("disabled");
+            let v = read();
+            assert_eq!(v["ok"], true, "{v}");
+            assert_eq!(v["consistent"], true, "disabled + inactive agrees: {v}");
+            assert_eq!(v["state"], "disabled", "{v}");
+            assert_eq!(v["lastError"], serde_json::Value::Null, "{v}");
+        }
+        {
+            let _unit = supervisor::with_test_unit_state("active");
+            seed("disabled");
+            let v = read();
+            assert_eq!(v["ok"], true, "{v}");
+            assert_eq!(v["consistent"], false, "disabled + active disagrees: {v}");
+            assert_eq!(
+                v["lastError"],
+                "systemd reports the stalwart unit is 'active' while hostmail is disabled",
+                "{v}"
+            );
+
+            seed("running");
+            let v = read();
+            assert_eq!(v["ok"], true, "{v}");
+            assert_eq!(v["consistent"], true, "{v}");
+            assert_eq!(v["state"], "running", "{v}");
+        }
+        {
+            let _unit = supervisor::with_test_unit_state("failed");
+            seed("running");
+            let v = read();
+            assert_eq!(v["ok"], true, "{v}");
+            assert_eq!(v["consistent"], false, "{v}");
+            assert_eq!(v["state"], "error", "{v}");
+        }
+        clean_row();
+        {
+            // No row at all → not-installed, consistent.
+            let _unit = supervisor::with_test_unit_state("inactive");
+            let v = read();
+            assert_eq!(v["ok"], true, "{v}");
+            assert_eq!(v["consistent"], true, "{v}");
+            assert_eq!(v["state"], "not-installed", "{v}");
+        }
     }
 
     #[test]

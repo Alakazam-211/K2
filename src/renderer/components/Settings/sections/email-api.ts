@@ -19,7 +19,11 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 
 /** GET /cli/mail/status — the capability-gating seam (pre-mortem #15). */
 export interface MailStatus {
+  /** Envelope: the status read succeeded. NOT the systemd verdict. */
   ok: boolean
+  /** Linux: does the SQLite row agree with `systemctl is-active stalwart`?
+   *  `false` = disagreement; `lastError` says how. */
+  consistent: boolean
   /** From the DAEMON (Linux = true) — NEVER navigator.platform. */
   supported: boolean
   /** `not-installed` | `installing` | `running` | `degraded` | `stopped` | `disabled` | `error` | … */
@@ -643,6 +647,7 @@ export async function clearOauthClient(provider: OauthClientProvider): Promise<v
 // address / approvals panels carry their own populated examples.
 export const SAMPLE_STATUS: MailStatus = {
   ok: true,
+  consistent: true,
   supported: false,
   state: 'not-installed',
   version: null,

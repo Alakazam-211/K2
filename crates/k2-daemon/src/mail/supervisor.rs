@@ -357,20 +357,32 @@ pub(crate) fn current_status() -> Option<String> {
 }
 
 /// SQLite `mail_server.status` overlaid with systemd `is-active`.
-/// `ok` is false when the unit is inactive/failed (H2). `state` is never
-/// `running` unless the unit is `active` (H1). SQLite is the cache.
+///
+/// `state` is never `running` unless the unit is `active` (H1). SQLite is
+/// the cache. `consistent` answers ONE question: does the SQLite row agree
+/// with systemd? It is NOT the HTTP envelope `ok` (the status read itself
+/// succeeded either way) — fb449bc1 put this verdict in `ok` and the CLI's
+/// generic caller aborted exactly when there was a disagreement to show.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReconciledStatus {
     pub state: String,
-    pub ok: bool,
+    pub consistent: bool,
     pub last_error: Option<String>,
 }
 
 /// Combine the singleton row with `systemctl is-active stalwart`.
 ///
 /// `unit_state` is the trimmed `is-active` stdout (`active` / `inactive` /
-/// `failed` / …). Empty means unknown. Callers that have no Linux unit
-/// (Mac daemon, tests without a seam) skip this and serve SQLite as-is.
+/// `failed` / …). Empty means unknown (treated as not active). Callers that
+/// have no Linux unit (Mac daemon, tests without a seam) skip this and serve
+/// SQLite as-is.
+///
+/// | row                        | unit active                  | unit not active                    |
+/// |----------------------------|------------------------------|------------------------------------|
+/// | `not-installed`/`installing` | consistent, row as-is      | consistent, row as-is              |
+/// | `disabled`                 | INCONSISTENT (running while disabled) | consistent                |
+/// | `error` / `stopped`        | INCONSISTENT (unit is up)    | consistent                         |
+/// | `running`/`degraded`/other | consistent                   | INCONSISTENT → `stopped`/`error`   |
 pub fn reconcile_reported_status(
     sqlite_state: &str,
     last_error: Option<&str>,
@@ -389,49 +401,65 @@ pub fn reconcile_reported_status(
     if matches!(sqlite_state, "not-installed" | "installing") {
         return ReconciledStatus {
             state: sqlite_state.to_string(),
-            ok: true,
+            consistent: true,
             last_error: keep_err,
         };
     }
 
+    // `disable` ran `systemctl disable --now`: a down unit is agreement.
+    // A running unit means inbound mail is still being accepted while K2
+    // believes hostmail is off.
     if sqlite_state == "disabled" {
+        if unit_active {
+            return ReconciledStatus {
+                state: "disabled".into(),
+                consistent: false,
+                last_error: Some(
+                    "systemd reports the stalwart unit is 'active' while hostmail is disabled"
+                        .to_string(),
+                ),
+            };
+        }
         return ReconciledStatus {
             state: "disabled".into(),
-            ok: unit_active,
-            last_error: if unit_active {
-                keep_err
-            } else {
-                Some(systemd_err)
-            },
+            consistent: true,
+            last_error: keep_err,
         };
     }
 
-    if sqlite_state == "error" {
+    // The row already says the server is not serving. A down unit agrees
+    // (keep the recorded cause, else name systemd); an active unit means
+    // the row is stale.
+    if matches!(sqlite_state, "error" | "stopped") {
+        if unit_active {
+            return ReconciledStatus {
+                state: sqlite_state.to_string(),
+                consistent: false,
+                last_error: Some(format!(
+                    "systemd reports the stalwart unit is 'active' while hostmail status is '{sqlite_state}'"
+                )),
+            };
+        }
         return ReconciledStatus {
-            state: "error".into(),
-            ok: unit_active,
-            last_error: keep_err.or_else(|| {
-                if unit_active {
-                    None
-                } else {
-                    Some(systemd_err)
-                }
-            }),
+            state: sqlite_state.to_string(),
+            consistent: true,
+            last_error: keep_err.or(Some(systemd_err)),
         };
     }
 
+    // The row claims (some level of) serving: systemd must agree (H1/H2).
     if !unit_active {
         let state = if unit == "failed" { "error" } else { "stopped" };
         return ReconciledStatus {
             state: state.into(),
-            ok: false,
+            consistent: false,
             last_error: Some(systemd_err),
         };
     }
 
     ReconciledStatus {
         state: sqlite_state.to_string(),
-        ok: true,
+        consistent: true,
         last_error: keep_err,
     }
 }
@@ -1683,31 +1711,133 @@ mod tests {
     fn reconcile_status_never_running_unless_unit_active() {
         let running_inactive = reconcile_reported_status("running", None, "inactive");
         assert_eq!(running_inactive.state, "stopped");
-        assert!(!running_inactive.ok, "H2: ok is not true when unit is inactive");
-        assert!(
-            running_inactive
-                .last_error
-                .as_deref()
-                .unwrap_or("")
-                .contains("inactive"),
-            "{running_inactive:?}"
+        assert!(!running_inactive.consistent, "H2: running row + inactive unit disagree");
+        assert_eq!(
+            running_inactive.last_error.as_deref(),
+            Some("systemd reports the stalwart unit is 'inactive'")
         );
 
         let running_failed = reconcile_reported_status("running", None, "failed");
         assert_eq!(running_failed.state, "error");
-        assert!(!running_failed.ok);
+        assert!(!running_failed.consistent);
+        assert_eq!(
+            running_failed.last_error.as_deref(),
+            Some("systemd reports the stalwart unit is 'failed'")
+        );
+
+        // Unknown (empty is-active output) is not active.
+        let running_unknown = reconcile_reported_status("running", Some("old"), "  ");
+        assert_eq!(running_unknown.state, "stopped");
+        assert!(!running_unknown.consistent);
+        assert_eq!(
+            running_unknown.last_error.as_deref(),
+            Some("systemd reports the stalwart unit is 'unknown'")
+        );
+
+        let degraded_inactive = reconcile_reported_status("degraded", Some("ping"), "inactive");
+        assert_eq!(degraded_inactive.state, "stopped");
+        assert!(!degraded_inactive.consistent);
 
         let running_active = reconcile_reported_status("running", None, "active");
-        assert_eq!(running_active.state, "running");
-        assert!(running_active.ok);
+        assert_eq!(
+            running_active,
+            ReconciledStatus { state: "running".into(), consistent: true, last_error: None }
+        );
 
-        let disabled = reconcile_reported_status("disabled", None, "inactive");
-        assert_eq!(disabled.state, "disabled");
-        assert!(!disabled.ok, "disabled + inactive is not ok");
+        let degraded_active =
+            reconcile_reported_status("degraded", Some("connection refused"), "active");
+        assert_eq!(
+            degraded_active,
+            ReconciledStatus {
+                state: "degraded".into(),
+                consistent: true,
+                last_error: Some("connection refused".into()),
+            }
+        );
+    }
 
-        let installing = reconcile_reported_status("installing", None, "inactive");
-        assert_eq!(installing.state, "installing");
-        assert!(installing.ok);
+    #[test]
+    fn reconcile_status_disabled_agrees_with_a_down_unit() {
+        let disabled_inactive = reconcile_reported_status("disabled", None, "inactive");
+        assert_eq!(
+            disabled_inactive,
+            ReconciledStatus { state: "disabled".into(), consistent: true, last_error: None },
+            "disabled + inactive is agreement, not an error"
+        );
+
+        // A recorded (non-systemd) cause is passed through untouched.
+        let disabled_kept = reconcile_reported_status("disabled", Some("owner note"), "failed");
+        assert_eq!(disabled_kept.state, "disabled");
+        assert!(disabled_kept.consistent);
+        assert_eq!(disabled_kept.last_error.as_deref(), Some("owner note"));
+
+        let disabled_active = reconcile_reported_status("disabled", None, "active");
+        assert_eq!(disabled_active.state, "disabled");
+        assert!(!disabled_active.consistent, "unit running while disabled disagrees");
+        assert_eq!(
+            disabled_active.last_error.as_deref(),
+            Some("systemd reports the stalwart unit is 'active' while hostmail is disabled")
+        );
+    }
+
+    #[test]
+    fn reconcile_status_error_and_stopped_rows() {
+        let error_failed = reconcile_reported_status("error", Some("bootstrap failed"), "failed");
+        assert_eq!(
+            error_failed,
+            ReconciledStatus {
+                state: "error".into(),
+                consistent: true,
+                last_error: Some("bootstrap failed".into()),
+            }
+        );
+        let error_inactive = reconcile_reported_status("error", None, "inactive");
+        assert_eq!(error_inactive.state, "error");
+        assert!(error_inactive.consistent);
+        assert_eq!(
+            error_inactive.last_error.as_deref(),
+            Some("systemd reports the stalwart unit is 'inactive'")
+        );
+        let error_active = reconcile_reported_status("error", Some("bootstrap failed"), "active");
+        assert_eq!(error_active.state, "error");
+        assert!(!error_active.consistent);
+        assert_eq!(
+            error_active.last_error.as_deref(),
+            Some("systemd reports the stalwart unit is 'active' while hostmail status is 'error'")
+        );
+
+        let stopped_inactive = reconcile_reported_status("stopped", None, "inactive");
+        assert_eq!(stopped_inactive.state, "stopped");
+        assert!(stopped_inactive.consistent);
+        assert_eq!(
+            stopped_inactive.last_error.as_deref(),
+            Some("systemd reports the stalwart unit is 'inactive'")
+        );
+        let stopped_active = reconcile_reported_status("stopped", None, "active");
+        assert_eq!(stopped_active.state, "stopped");
+        assert!(!stopped_active.consistent);
+        assert_eq!(
+            stopped_active.last_error.as_deref(),
+            Some("systemd reports the stalwart unit is 'active' while hostmail status is 'stopped'")
+        );
+    }
+
+    #[test]
+    fn reconcile_status_install_states_do_not_invent_a_unit() {
+        for row in ["installing", "not-installed"] {
+            for unit in ["inactive", "active", "failed", ""] {
+                let r = reconcile_reported_status(row, Some("step 3"), unit);
+                assert_eq!(
+                    r,
+                    ReconciledStatus {
+                        state: row.into(),
+                        consistent: true,
+                        last_error: Some("step 3".into()),
+                    },
+                    "row={row} unit={unit:?}"
+                );
+            }
+        }
     }
 
     #[test]

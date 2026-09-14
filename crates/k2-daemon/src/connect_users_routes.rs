@@ -198,13 +198,6 @@ pub fn handle_set_password_as(actor: &SetPasswordActor, body: &[u8]) -> CliRespo
     )
 }
 
-/// Owner-token form of [`handle_set_password_as`] (pre-R1 signature kept
-/// for the unit tests + any owner-token caller).
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn handle_set_password(body: &[u8]) -> CliResponse {
-    handle_set_password_as(&SetPasswordActor::OwnerToken, body)
-}
-
 /// `GET /cli/users/audit?tail=N` — the last N auth-audit records (L3).
 /// `tail` is clamped to `1..=MAX_TAIL` (default 50); a non-numeric value
 /// is a 400. Gate (owner token OR Owner-role session) lives in the

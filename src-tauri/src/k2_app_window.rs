@@ -5,6 +5,17 @@
 //! (or any other origin) blanks the chrome. Child Browser panes are a
 //! different builder (`browser_webviews.rs`) and keep their http(s) scheme
 //! gate — this module is parent windows only.
+//!
+//! wry (macOS WKWebView + Linux WebKitGTK) runs the `on_navigation`
+//! predicate for **every** frame, subframes included, with no main-frame
+//! flag. The renderer draws HTML file tabs, dashboard htmlDoc panes and
+//! Inbox HTML mail inside `<iframe srcDoc>` → a subframe navigation to
+//! `about:srcdoc`. So the predicate also allows `about:` (always) and
+//! `blob:` whose inner URL is an allowed app origin (C24 of
+//! `prd-tauri-loopback-navigation-crash-v1`, per
+//! `prd-html-tab-srcdoc-navigation-guard-v1`). Neither leaves the app;
+//! the loopback-IP / off-origin vetoes are unchanged, including for an
+//! `<iframe src="http://127.0.0.1:…">` inside a user document.
 
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -38,15 +49,54 @@ fn is_tauri_prod_origin(url: &Url) -> bool {
     }
 }
 
-/// Parent-window `on_navigation` predicate (C1 / C16).
+/// Parent-window `on_navigation` predicate (C1 / C16 / C24).
 ///
-/// Allow: spawn-time `app_url` origin, prod `http://tauri.localhost` +
-/// `tauri://localhost`, and (in dev) the exact configured `devUrl` origin
-/// including path/query on that origin.
+/// Allow: `about:` (always — `about:srcdoc` is every `<iframe srcDoc>`
+/// subframe, `about:blank` cannot reach loopback or an off-origin host),
+/// spawn-time `app_url` origin, prod `http://tauri.localhost` +
+/// `tauri://localhost`, (in dev) the exact configured `devUrl` origin
+/// including path/query on that origin, and `blob:` whose inner URL
+/// (`Url::parse(url.path())`) is `http`/`https`/`tauri` on one of those
+/// same allowed origins (`blob:tauri://localhost/…` mac/Linux prod,
+/// `blob:http://tauri.localhost/…` Windows prod, `blob:http://localhost:5173/…`
+/// dev only).
 ///
-/// Never allow `http://127.0.0.1` (even on the Vite port). Never allow
-/// `http://localhost` except that exact `devUrl` origin (or spawn `app_url`).
+/// Never allow `http://127.0.0.1` (even on the Vite port), including as a
+/// blob inner URL. Never allow `http://localhost` except that exact `devUrl`
+/// origin (or spawn `app_url`). `data:`, `blob:null/…`, `blob:about:blank`
+/// and every other scheme/origin stay vetoed.
 pub fn allow_k2_app_navigation(
+    url: &Url,
+    app_url: Option<&Url>,
+    dev_url: Option<&Url>,
+    is_dev: bool,
+) -> bool {
+    // G1: `about:` never leaves the app (no host, nothing to reach).
+    if url.scheme() == "about" {
+        return true;
+    }
+    if is_loopback_ip_host(url) {
+        return false;
+    }
+    if url.scheme() == "blob" {
+        // G2/G15: explicit, non-recursive, scheme-gated inner check. The
+        // outer `blob:` URL has no host, so the veto above never fires for
+        // it — the inner loopback check below is the veto for blobs.
+        let Ok(inner) = Url::parse(url.path()) else {
+            return false;
+        };
+        if !matches!(inner.scheme(), "http" | "https" | "tauri") {
+            return false;
+        }
+        return allow_app_origin(&inner, app_url, dev_url, is_dev);
+    }
+    allow_app_origin(url, app_url, dev_url, is_dev)
+}
+
+/// Origin allow-list shared by the top-level and blob-inner checks: not a
+/// loopback IP, and (prod tauri origin | spawn `app_url` same-origin with a
+/// non-loopback app | dev exact `devUrl` same-origin).
+fn allow_app_origin(
     url: &Url,
     app_url: Option<&Url>,
     dev_url: Option<&Url>,
@@ -73,9 +123,13 @@ pub fn allow_k2_app_navigation(
     false
 }
 
+/// A page the watchdog may reload to. `about:` / `blob:` / `data:` are
+/// never reloadable app pages (G6 / G16(a)): only `http`, `https`, `tauri`.
 fn url_is_usable_app_page(url: &Url) -> bool {
     let s = url.as_str();
-    !s.is_empty() && s != "about:blank"
+    !s.is_empty()
+        && s != "about:blank"
+        && matches!(url.scheme(), "http" | "https" | "tauri")
 }
 
 /// Watchdog `app_url` capture (C20): reject loopback hosts unless the URL
@@ -294,6 +348,183 @@ mod tests {
             is_tauri_prod_origin(&prod_stale),
             "prod must not keep localhost:5173 as app_url, got {prod_stale}"
         );
+    }
+
+    // ── PRD html-tab-srcdoc-navigation-guard G7 / G21 ─────────────────────
+
+    fn dev_args() -> (Url, Url) {
+        (u("http://localhost:5173"), u("http://localhost:5173"))
+    }
+
+    /// G21(a): `about:srcdoc` (every `<iframe srcDoc>` subframe) is allowed
+    /// with prod args and with dev args.
+    #[test]
+    fn allow_k2_app_navigation_allows_about_srcdoc_prod_and_dev() {
+        let (app, dev) = dev_args();
+        assert!(
+            allow_k2_app_navigation(&u("about:srcdoc"), None, None, false),
+            "about:srcdoc must be allowed in prod"
+        );
+        assert!(
+            allow_k2_app_navigation(&u("about:srcdoc"), Some(&app), Some(&dev), true),
+            "about:srcdoc must be allowed in dev"
+        );
+    }
+
+    /// G21(b): `about:blank` allowed, both.
+    #[test]
+    fn allow_k2_app_navigation_allows_about_blank_prod_and_dev() {
+        let (app, dev) = dev_args();
+        assert!(
+            allow_k2_app_navigation(&u("about:blank"), None, None, false),
+            "about:blank must be allowed in prod"
+        );
+        assert!(
+            allow_k2_app_navigation(&u("about:blank"), Some(&app), Some(&dev), true),
+            "about:blank must be allowed in dev"
+        );
+    }
+
+    /// G21(c): app-origin blobs — mac/Linux prod `blob:tauri://localhost/x`,
+    /// Windows prod `blob:http://tauri.localhost/x`, dev
+    /// `blob:http://localhost:5173/x` (allowed in dev, vetoed in prod —
+    /// stale-dev sibling of `..._prod_does_not_treat_localhost_5173_as_app`).
+    #[test]
+    fn allow_k2_app_navigation_allows_app_origin_blobs() {
+        let (app, dev) = dev_args();
+        let prod_app = u("http://tauri.localhost/");
+        assert!(
+            allow_k2_app_navigation(&u("blob:tauri://localhost/x"), None, None, false),
+            "blob:tauri://localhost (macOS/Linux prod) must be allowed"
+        );
+        assert!(
+            allow_k2_app_navigation(
+                &u("blob:tauri://localhost/x"),
+                Some(&prod_app),
+                Some(&dev),
+                false
+            ),
+            "blob:tauri://localhost must be allowed with the spawn-time prod app_url"
+        );
+        assert!(
+            allow_k2_app_navigation(&u("blob:http://tauri.localhost/x"), None, None, false),
+            "blob:http://tauri.localhost (Windows prod) must be allowed"
+        );
+        assert!(
+            allow_k2_app_navigation(
+                &u("blob:http://localhost:5173/x"),
+                Some(&app),
+                Some(&dev),
+                true
+            ),
+            "blob:http://localhost:5173 must be allowed in dev"
+        );
+        assert!(
+            !allow_k2_app_navigation(
+                &u("blob:http://localhost:5173/x"),
+                Some(&prod_app),
+                Some(&dev),
+                false
+            ),
+            "blob:http://localhost:5173 must be vetoed in prod (stale devUrl)"
+        );
+    }
+
+    /// G21(d): loopback-IP blob inners are vetoed both ways — the outer
+    /// `blob:` URL has no host, so only the inner check can veto them.
+    #[test]
+    fn allow_k2_app_navigation_vetoes_loopback_ip_blobs() {
+        let (app, dev) = dev_args();
+        assert!(
+            !allow_k2_app_navigation(&u("blob:http://127.0.0.1:8788/x"), None, None, false),
+            "blob:http://127.0.0.1 must be vetoed in prod"
+        );
+        assert!(
+            !allow_k2_app_navigation(
+                &u("blob:http://127.0.0.1:8788/x"),
+                Some(&app),
+                Some(&dev),
+                true
+            ),
+            "blob:http://127.0.0.1 must be vetoed in dev"
+        );
+        assert!(
+            !allow_k2_app_navigation(&u("blob:http://[::1]:8788/x"), None, None, false),
+            "blob:http://[::1] must be vetoed in prod"
+        );
+        assert!(
+            !allow_k2_app_navigation(
+                &u("blob:http://[::1]:8788/x"),
+                Some(&app),
+                Some(&dev),
+                true
+            ),
+            "blob:http://[::1] must be vetoed in dev"
+        );
+        assert!(
+            !allow_k2_app_navigation(&u("blob:http://example.com/x"), None, None, false),
+            "off-origin blob inner must be vetoed"
+        );
+    }
+
+    /// G21(e): `data:` is not on the allow list (G3), both.
+    #[test]
+    fn allow_k2_app_navigation_vetoes_data_urls() {
+        let (app, dev) = dev_args();
+        assert!(
+            !allow_k2_app_navigation(&u("data:text/html,x"), None, None, false),
+            "data: must be vetoed in prod"
+        );
+        assert!(
+            !allow_k2_app_navigation(&u("data:text/html,x"), Some(&app), Some(&dev), true),
+            "data: must be vetoed in dev"
+        );
+    }
+
+    /// G21(e′): opaque / non-http blob inners are vetoed (G15: explicit,
+    /// non-recursive inner check).
+    #[test]
+    fn allow_k2_app_navigation_vetoes_opaque_and_nested_blobs() {
+        let (app, dev) = dev_args();
+        for raw in ["blob:null/x", "blob:about:blank", "blob:blob:tauri://localhost/x"] {
+            assert!(
+                !allow_k2_app_navigation(&u(raw), None, None, false),
+                "{raw} must be vetoed in prod"
+            );
+            assert!(
+                !allow_k2_app_navigation(&u(raw), Some(&app), Some(&dev), true),
+                "{raw} must be vetoed in dev"
+            );
+        }
+    }
+
+    /// G21(g) / G16(a): the watchdog never stores `about:` or `blob:` as the
+    /// recovery target.
+    #[test]
+    fn watchdog_capture_never_stores_about_or_blob() {
+        let dev = u("http://localhost:5173");
+        for raw in [
+            "about:srcdoc",
+            "blob:tauri://localhost/x",
+            "blob:http://127.0.0.1:8788/x",
+        ] {
+            let current = u(raw);
+            let prod = watchdog_capture_app_url(Some(&current), None, false)
+                .expect("prod fallback must exist");
+            assert_ne!(prod, current, "prod watchdog must not capture {raw}");
+            assert!(
+                is_tauri_prod_origin(&prod),
+                "prod watchdog must fall back to the tauri origin for {raw}, got {prod}"
+            );
+
+            let devc = watchdog_capture_app_url(Some(&current), Some(&dev), true)
+                .expect("dev fallback must exist");
+            assert_ne!(devc, current, "dev watchdog must not capture {raw}");
+            assert!(
+                same_origin(&devc, &dev),
+                "dev watchdog must fall back to devUrl for {raw}, got {devc}"
+            );
+        }
     }
 
     #[test]

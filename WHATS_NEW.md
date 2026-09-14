@@ -7,9 +7,13 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 Your server's tunnel address (`https://<name>.k2.dev`) no longer serves a login page, and no longer accepts a username and password from just anyone on the internet. Those were being scanned. Password sign-in now goes through `https://<name>.app.k2.dev`, which is fronted by Cloudflare and signs each login for your server; the K2 app does this for you when you connect to a `.k2.dev` server, and the hosted web client already lives there. Everything that carries a token — your existing desktop sessions, the CLI, terminals — is unchanged. Self-hosters without the K2 edge can set **Password sign-in over the tunnel** to *Any client* in Settings → K2 Connect → Policies, or turn it off entirely.
 
-If an admin created your account with a temporary password, the K2 app and the web client now walk you through choosing a new one on first sign-in, wherever you signed in from: the server switcher, Settings → Connections, or a sign-in prompt. The old account page on the tunnel address is gone; on this Mac it still answers locally.
+If an admin created your account with a temporary password, the K2 app and the web client now walk you through choosing a new one on first sign-in, wherever you signed in from: the server switcher, Settings → Connections, or a sign-in prompt. Opening the tunnel address in a browser now sends you to your server's `app.k2.dev` address instead of an account page; on the server itself the local account page still answers.
 
 Every sign-in attempt is now recorded with time, user, outcome, and where it came from: `k2 users audit`. Sessions last 7 days instead of 30; the app signs you back in from your saved password. Server owners can reset a user's password from the dashboard and force a change on next sign-in.
+
+**Hosted mail.** `k2 hostmail status` now asks systemd whether the mail server is actually running instead of trusting what K2 last recorded, and tells you plainly when the two disagree. Re-enabling after a disable really restarts the server, and a new mail hostname sticks. Owners and admins can let a specific workspace's agent turn hosted mail on and off and manage domains for that workspace; minting addresses, sign-in setup, and removal stay owner-only.
+
+HTML file tabs, dashboard HTML panes, and HTML mail in the Inbox no longer render blank.
 
 ## 0.40.143 — Highlight and copy in Thread
 

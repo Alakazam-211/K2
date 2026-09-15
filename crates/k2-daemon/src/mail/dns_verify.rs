@@ -12,7 +12,8 @@
 //!   ALL whitespace (UIs fold long values), other TXT normalizes
 //!   whitespace runs + case.
 //! - MX comparison tolerates trailing dots and case on the exchange,
-//!   and treats a different preference as still-Valid (mail routes).
+//!   and requires the preference to match when expected includes one
+//!   (C25 — name-only 0+20 vs expected 10 is not Valid).
 //!
 //! **Domain state machine:** MX + SPF + ≥1 DKIM Valid → **Verified**
 //! (DMARC nags, never blocks). A resolver ERROR (timeout etc.) marks
@@ -184,6 +185,15 @@ pub fn host_eq(a: &str, b: &str) -> bool {
 /// Parse an MX expected value (`"10 mail.acme.dev."`) into
 /// (preference, exchange). A bare exchange with no preference parses
 /// too (defensive).
+pub fn dmarc_p_none(s: &str) -> bool {
+    let n = s
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    n.contains("p=none")
+}
+
 fn parse_mx_expected(expected: &str) -> (Option<u16>, String) {
     let mut parts = expected.split_whitespace();
     match (parts.next(), parts.next()) {
@@ -226,7 +236,7 @@ fn set_state(row: &mut RecordRow, status: &str, live: Option<Vec<String>>, now: 
 }
 
 fn check_mx(resolver: &dyn DnsResolver, domain: &str, row: &mut RecordRow, now: i64) -> Result<bool, ()> {
-    let (_, expected_host) = parse_mx_expected(&row.expected);
+    let (expected_pref, expected_host) = parse_mx_expected(&row.expected);
     match resolver.mx(domain) {
         Ok(hosts) if hosts.is_empty() => {
             set_state(row, ST_MISSING, None, now);
@@ -237,10 +247,12 @@ fn check_mx(resolver: &dyn DnsResolver, domain: &str, row: &mut RecordRow, now: 
                 .iter()
                 .map(|h| format!("{} {}", h.preference, h.exchange.trim_end_matches('.')))
                 .collect();
-            // The exchange is what routes mail — a different preference
-            // still delivers, so it stays Valid (pre-mortem #4: MX
-            // comparison tolerates trailing dots; case-insensitive).
-            if hosts.iter().any(|h| host_eq(&h.exchange, &expected_host)) {
+            // C25: Valid iff name AND priority match expected.
+            let hit = hosts.iter().any(|h| {
+                host_eq(&h.exchange, &expected_host)
+                    && expected_pref.map(|p| h.preference == p).unwrap_or(true)
+            });
+            if hit {
                 set_state(row, ST_VALID, Some(live), now);
                 Ok(true)
             } else {
@@ -281,6 +293,14 @@ fn check_txt(
             };
             let matches = |live: &str| match kind {
                 TxtKind::Dkim => norm_dkim(live) == norm_dkim(&row.expected),
+                TxtKind::Dmarc => {
+                    // C23: live p=none must not be WRONG vs a Stalwart
+                    // zone that said p=reject — expected is rewritten
+                    // to p=none at read time; also treat p=none as Valid
+                    // even if rua differs.
+                    dmarc_p_none(live) && dmarc_p_none(&row.expected)
+                        || norm_txt(live) == norm_txt(&row.expected)
+                }
                 _ => norm_txt(live) == norm_txt(&row.expected),
             };
             if let Some(hit) = candidates.iter().find(|c| matches(c)) {
@@ -705,7 +725,7 @@ mod tests {
     fn tolerant_matching_mx_preference_and_txt_whitespace() {
         let mut rows = fixture_rows();
         let mut resolver = all_valid_resolver("acme.dev");
-        // Preference drifted (20 vs 10) — exchange right → still Valid.
+        // C25: preference drifted (20 vs expected 10) is NOT Valid.
         resolver.mx.insert(
             "acme.dev".to_string(),
             vec![MxHost { preference: 20, exchange: "mail.acme.dev".to_string() }],
@@ -715,7 +735,9 @@ mod tests {
             .txt
             .insert("acme.dev".to_string(), vec![vec!["V=spf1   MX  -all".to_string()]]);
         let s = verify_rows(&resolver, "acme.dev", &mut rows, 1000);
-        assert!(s.mx_valid, "exchange match wins over preference drift");
+        assert!(!s.mx_valid, "C25: preference 20 vs expected 10 is not Valid");
+        let mx = rows.iter().find(|r| r.id == "mx").unwrap();
+        assert_eq!(mx.status, ST_WRONG);
         assert!(s.spf_valid, "whitespace/case-normalized TXT compare");
     }
 

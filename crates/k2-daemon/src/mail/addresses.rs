@@ -246,7 +246,7 @@ fn map_address_row(r: &rusqlite::Row) -> rusqlite::Result<MailAddress> {
 
 /// Load one row by (already normalized) address — ANY status: retired
 /// rows still reserve their address string for the retention window.
-fn load_address(conn: &Connection, address: &str) -> Option<MailAddress> {
+pub(crate) fn load_address(conn: &Connection, address: &str) -> Option<MailAddress> {
     conn.query_row(
         &format!("SELECT {ADDRESS_COLS} FROM mail_addresses WHERE address = ?1"),
         rusqlite::params![address],
@@ -370,9 +370,17 @@ fn collision_error(
 
 /// One minted/existing address as the create-response JSON (`k2 mail
 /// create` prints `created bot@acme.dev (cap 2/5 used)` from this).
-fn mint_json(row: &MailAddress, existing: bool, used: u32, cap: u32) -> serde_json::Value {
+fn mint_json(
+    row: &MailAddress,
+    existing: bool,
+    used: u32,
+    cap: u32,
+    hostname: &str,
+    password: Option<&str>,
+) -> serde_json::Value {
     let (local, domain) = row.address.split_once('@').unwrap_or((row.address.as_str(), ""));
-    serde_json::json!({
+    let host = hostname;
+    let mut v = serde_json::json!({
         "ok": true,
         "id": row.id,
         "address": row.address,
@@ -381,7 +389,15 @@ fn mint_json(row: &MailAddress, existing: bool, used: u32, cap: u32) -> serde_js
         "existing": existing,
         "createdAt": row.created_at,
         "cap": { "used": used, "cap": cap },
-    })
+        "username": row.address,
+        "imap": { "host": host, "port": 993, "tls": true },
+        "submission": { "host": host, "port": 465, "tls": true },
+        "jmap": { "host": host, "port": 443, "tls": true },
+    });
+    if let Some(pw) = password {
+        v["password"] = serde_json::Value::String(pw.to_string());
+    }
+    v
 }
 
 // ── Operations ──────────────────────────────────────────────────────────
@@ -427,6 +443,13 @@ pub fn mint_address(
     // Everything the DB decides, under one lock scope (released before
     // any engine/network call).
     let configured_default = k2_core::app_settings::load().mail_default_domain;
+    let hostname = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        super::domains::server_info(&conn)
+            .and_then(|i| i.hostname)
+            .unwrap_or_default()
+    };
     let (domain_row, address, used) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -440,7 +463,7 @@ pub fn mint_address(
             if let Some(existing) = load_by_client_id(&conn, project_id, cid) {
                 if existing.status == "active" {
                     let used = count_active(&conn, project_id);
-                    return Ok(mint_json(&existing, true, used, cap));
+                    return Ok(mint_json(&existing, true, used, cap, &hostname, None));
                 }
                 conn.execute(
                     "UPDATE mail_addresses SET client_id = NULL WHERE id = ?1",
@@ -535,7 +558,7 @@ pub fn mint_address(
         created_at,
         retired_at: None,
     };
-    Ok(mint_json(&row, false, used + 1, cap))
+    Ok(mint_json(&row, false, used + 1, cap, &hostname, Some(&password)))
 }
 
 /// Retire an address (§7.2): Stalwart account DISABLED (never
@@ -985,6 +1008,11 @@ pub(crate) mod tests {
         assert_eq!(v["cap"]["used"], 1);
         assert_eq!(v["cap"]["cap"], 5);
         assert!(v["createdAt"].as_i64().unwrap() > 0);
+        assert!(v["password"].as_str().unwrap().len() >= 32, "once password");
+        assert_eq!(v["username"], format!("scout@{domain}"));
+        assert_eq!(v["imap"]["port"], 993);
+        assert_eq!(v["submission"]["port"], 465);
+        assert_eq!(v["jmap"]["port"], 443);
 
         // Engine got local + STALWART domain id (never the K2 row id).
         assert_eq!(
@@ -1118,6 +1146,10 @@ pub(crate) mod tests {
         assert_eq!(v2["existing"], true);
         assert_eq!(v2["address"], v1["address"]);
         assert_eq!(v2["id"], v1["id"]);
+        assert!(
+            v2.get("password").is_none() || v2["password"].is_null(),
+            "C26: existing --id must not re-print the password: {v2}"
+        );
         assert_eq!(engine.created.lock().unwrap().len(), 1, "no second account");
 
         // A DIFFERENT workspace may reuse the same client id (the

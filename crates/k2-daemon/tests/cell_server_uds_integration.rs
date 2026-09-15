@@ -679,6 +679,24 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
         !un_body.contains("alreadyEnabled"),
         "UDS must not run uninstall: {un_body}"
     );
+
+    let (doc_status, doc_body) = uds(&sock, &get("/cli/mail/doctor", Some(&token))).await;
+    assert_ne!(doc_status, 403, "UDS flag ON doctor GET; {doc_body}");
+    assert!(
+        !doc_body.contains("owner_only"),
+        "C5b UDS doctor: {doc_body}"
+    );
+
+    let (ap_status, ap_body) =
+        uds(&sock, &get("/cli/mail/approvals/list", Some(&token))).await;
+    assert_ne!(ap_status, 403, "UDS flag ON approvals/list; {ap_body}");
+    assert!(
+        !ap_body.contains("owner_only"),
+        "C5b UDS approvals/list: {ap_body}"
+    );
+
+    let (imp_status, imp_body) = uds(&sock, &get("/cli/mail/import", Some(&token))).await;
+    assert_eq!(imp_status, 405, "UDS GET import 405; {imp_body}");
 }
 
 /// Minimal query-string percent-encoding for a filesystem path.

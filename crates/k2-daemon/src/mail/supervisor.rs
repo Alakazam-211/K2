@@ -283,6 +283,13 @@ pub trait BootstrapApi: Send {
     /// Mint the loopback-allowlisted ApiKey on the service account;
     /// returns the SECRET (shown once by Stalwart).
     fn mint_api_key(&mut self, account_id: &str) -> Result<String, String>;
+    /// C20: rotate the provisioned Stalwart admin password (vault + API).
+    fn rotate_admin_secret(
+        &mut self,
+        username: &str,
+        current: &str,
+        new_secret: &str,
+    ) -> Result<(), String>;
 }
 
 // ── mail_server row helpers ─────────────────────────────────────────────
@@ -484,7 +491,48 @@ pub fn stalwart_unit_state() -> String {
 }
 
 pub fn is_already_enabled() -> bool {
-    is_already_enabled_with(current_status().as_deref(), &stalwart_unit_state())
+    let unit = stalwart_unit_state();
+    if is_already_enabled_with(current_status().as_deref(), &unit) {
+        return true;
+    }
+    // C19: unit active + initialized store is a healthy no-op even when
+    // sqlite is not `running` (do not re-bootstrap / wipe config).
+    unit.trim() == "active" && is_store_initialized()
+}
+
+/// True when config.json or the RocksDB data dir already exists.
+pub fn is_store_initialized() -> bool {
+    #[cfg(test)]
+    {
+        if let Some(v) = TEST_STORE_READY.with(|c| *c.borrow()) {
+            return v;
+        }
+    }
+    std::path::Path::new(STALWART_CONFIG).is_file()
+        || std::path::Path::new(&format!("{STALWART_DATA_DIR}/data")).exists()
+}
+
+/// C29: stamp a fresh lastNoopAt so later enables aren't frozen unix `at`s.
+pub fn stamp_enable_noop() {
+    let mut p = progress_load();
+    p["lastNoopAt"] = serde_json::json!(now_secs());
+    p["current"] = serde_json::json!("alreadyEnabled");
+    progress_save(&p);
+}
+
+/// C24: cert state on `status` without `--health`. ACME is the mail
+/// hostname only — optional names are not in the issuance request.
+pub fn tls_cert_status(hostname: Option<&str>) -> serde_json::Value {
+    let host = hostname.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("");
+    let issued = std::path::Path::new("/var/lib/stalwart/certs").exists()
+        || std::path::Path::new("/etc/stalwart/certs").exists();
+    serde_json::json!({
+        "host": if host.is_empty() { serde_json::Value::Null } else { serde_json::json!(host) },
+        "names": if host.is_empty() { Vec::<String>::new() } else { vec![host.to_string()] },
+        "state": if issued { "issued" } else { "missing" },
+        "selfSigned": false,
+        "expiresAt": serde_json::Value::Null,
+    })
 }
 
 /// Overlay SQLite with systemd when we have a unit observation.
@@ -507,6 +555,12 @@ pub fn systemd_ground_truth() -> Option<String> {
 #[cfg(test)]
 thread_local! {
     static TEST_UNIT_STATE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static TEST_STORE_READY: std::cell::RefCell<Option<bool>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_store_ready(ready: Option<bool>) {
+    TEST_STORE_READY.with(|c| *c.borrow_mut() = ready);
 }
 
 #[cfg(test)]
@@ -713,6 +767,12 @@ pub fn run_enable(
         set_status("error");
         set_last_error(Some(&msg));
         emit_state_change("installing", "error", Some(&msg));
+        // C20: after `unit` is written, any failure rewrites the unit
+        // without STALWART_RECOVERY_ADMIN.
+        if step_is_done("unit") || ops.path_exists(STALWART_UNIT_PATH) {
+            let _ = ops.write_file(STALWART_UNIT_PATH, systemd_unit(None).as_bytes(), 0o600);
+            let _ = ops.systemctl(&["daemon-reload"]);
+        }
         msg
     };
 
@@ -773,11 +833,12 @@ pub fn run_enable(
     }
     if !step_is_done("config") {
         set_current("config");
-        // Bootstrap mode REQUIRES the config file ABSENT (Stalwart
-        // itself writes the flat DataStore JSON during Bootstrap/set,
-        // ✔ live-verified). A stale file from a broken install would
-        // boot a half-configured server instead — clear it.
-        if ops.path_exists(STALWART_CONFIG) {
+        // C19: never delete an existing config.json (that was the noir
+        // wipe). Bootstrap requires the file ABSENT only on a true
+        // first install — skip the rm when a store already exists.
+        let store_ready = ops.path_exists(STALWART_CONFIG)
+            || ops.path_exists(&format!("{STALWART_DATA_DIR}/data"));
+        if !store_ready && ops.path_exists(STALWART_CONFIG) {
             ops.remove_path(STALWART_CONFIG)
                 .map_err(|e| fail("config", e))?;
         }
@@ -821,6 +882,13 @@ pub fn run_enable(
 
     // ── Guided setup over the bootstrap listener ────────────────────
     if !step_is_done("bootstrap") {
+        let store_ready = ops.path_exists(STALWART_CONFIG)
+            || ops.path_exists(&format!("{STALWART_DATA_DIR}/data"));
+        if store_ready {
+            // C19: initialized store — never re-bootstrap (Stalwart
+            // would move the data directory).
+            mark_step("bootstrap");
+        } else {
         set_current("bootstrap");
         let sref = progress_extra("recoveryAdminRef").ok_or_else(|| {
             fail("bootstrap", "recovery admin ref missing from progress state".to_string())
@@ -850,6 +918,7 @@ pub fn run_enable(
         set_row_field("admin_secret_ref", &sref);
         progress_extra_set("adminUsername", &creds.username);
         mark_step("bootstrap");
+        }
     }
 
     // Leave bootstrap mode: the DataStore config file now exists, so a
@@ -929,6 +998,18 @@ pub fn run_enable(
         (|| -> Result<(), String> {
             ops.write_file(STALWART_UNIT_PATH, systemd_unit(None).as_bytes(), 0o600)?;
             ops.systemctl(&["daemon-reload"])?;
+            // C20: rotate the provisioned Stalwart admin password (vault + API),
+            // not only delete the recovery env.
+            let username = progress_extra("adminUsername")
+                .unwrap_or_else(|| format!("admin@{default_domain}"));
+            if let Some(sref) = row_field("admin_secret_ref") {
+                if let Some(current) = secrets.resolve(&sref)? {
+                    let new_pw = generate_secret()?;
+                    api.rotate_admin_secret(&username, &current, &new_pw)?;
+                    let new_ref = secrets.store("admin", &new_pw)?;
+                    set_row_field("admin_secret_ref", &new_ref);
+                }
+            }
             if let Some(sref) = progress_extra("recoveryAdminRef") {
                 let _ = secrets.delete(&sref);
             }
@@ -1352,6 +1433,14 @@ mod tests {
             self.check(&format!("mint_api_key {account_id}"))?;
             Ok("API_minted-key-secret".into())
         }
+        fn rotate_admin_secret(
+            &mut self,
+            username: &str,
+            _current: &str,
+            new_secret: &str,
+        ) -> Result<(), String> {
+            self.check(&format!("rotate_admin_secret {username} {}", new_secret.len()))
+        }
     }
 
     #[derive(Default)]
@@ -1467,19 +1556,23 @@ mod tests {
                 "configure_listeners tls-alpn",
                 "create_service_account acme.dev",
                 "mint_api_key acct-k2",
+                "rotate_admin_secret admin@acme.dev 64",
             ]
         );
-        // Secrets: recovery admin + provisioned admin + api key, all
-        // vaulted; recovery deleted by recovery-off.
+        // Secrets: recovery admin + provisioned admin + api key + rotated
+        // admin; recovery deleted by recovery-off.
         {
             let stored = secrets.stored.lock().unwrap();
-            assert_eq!(stored.len(), 3);
+            assert_eq!(stored.len(), 4);
             assert_eq!(stored[0].0, "recovery-admin");
             assert_eq!(stored[0].1.len(), 64, "generated recovery password");
             assert_eq!(stored[1].0, "admin");
             assert_eq!(stored[1].1, "provisioned-admin-secret");
             assert_eq!(stored[2].0, "api-key");
             assert_eq!(stored[2].1, "API_minted-key-secret");
+            assert_eq!(stored[3].0, "admin");
+            assert_eq!(stored[3].1.len(), 64, "rotated admin password");
+            assert_ne!(stored[3].1, stored[1].1, "C20 recovery-off rotates the admin secret");
             assert_eq!(
                 *secrets.deleted.lock().unwrap(),
                 vec!["mailsec_recovery-admin_test".to_string()],
@@ -1561,6 +1654,7 @@ mod tests {
                 "authenticate http://127.0.0.1:8080 admin@acme.dev",
                 "create_service_account acme.dev",
                 "mint_api_key acct-k2",
+                "rotate_admin_secret admin@acme.dev 64",
             ]
         );
         assert_eq!(current_status().as_deref(), Some("running"));
@@ -1663,12 +1757,16 @@ mod tests {
         let mut api = FakeApi::default();
         let secrets = FakeSecrets::default();
         let art = fake_artifact();
-        run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "http-01")
-            .expect("enable succeeds");
+        let _ = run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "http-01");
         assert!(
-            ops.recorded().contains(&format!("rm {STALWART_CONFIG}")),
-            "a stale config file must be removed (bootstrap requires it ABSENT): {:?}",
+            !ops.recorded().iter().any(|l| l.contains(&format!("rm {STALWART_CONFIG}"))),
+            "C19: never wipe an existing config.json: {:?}",
             ops.recorded()
+        );
+        assert!(
+            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            "C19: never re-bootstrap an initialized store: {:?}",
+            api.calls
         );
         clean_row();
     }
@@ -1850,6 +1948,52 @@ mod tests {
         assert!(!is_already_enabled_with(Some("running"), ""));
         assert!(!is_already_enabled_with(Some("disabled"), "active"));
         assert!(!is_already_enabled_with(None, "active"));
+    }
+
+    #[test]
+    fn already_enabled_healthy_store_is_noop_when_unit_active() {
+        let _g = db_guard();
+        clean_row();
+        set_test_store_ready(Some(true));
+        let _unit = with_test_unit_state("active");
+        assert!(
+            is_already_enabled(),
+            "C19: unit active + store ready is alreadyEnabled even if sqlite is empty"
+        );
+        set_test_store_ready(None);
+        clean_row();
+    }
+
+    #[test]
+    fn fail_after_unit_strips_recovery_admin() {
+        let _g = db_guard();
+        clean_row();
+        let ops = FakeSystemOps {
+            download_body: FAKE_BINARY.to_vec(),
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi {
+            fail_on: Some("complete_bootstrap"),
+            ..FakeApi::default()
+        };
+        let secrets = FakeSecrets::default();
+        let art = fake_artifact();
+        let err = run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
+            .expect_err("injected bootstrap failure");
+        assert!(err.starts_with("bootstrap:"), "{err}");
+        let unit = ops
+            .written
+            .lock()
+            .unwrap()
+            .get(STALWART_UNIT_PATH)
+            .cloned()
+            .expect("unit written");
+        let text = String::from_utf8_lossy(&unit);
+        assert!(
+            !text.contains("STALWART_RECOVERY_ADMIN"),
+            "C20: failed enable after unit must strip recovery admin: {text}"
+        );
+        clean_row();
     }
 
     #[test]

@@ -746,6 +746,7 @@ async fn handle_one_request(
             | "/cli/mail/folder/create"
             | "/cli/mail/folder/rename"
             | "/cli/mail/draft"
+            | "/cli/mail/import"
             // Per-workspace hosted-mail manage toggle. Dedicated POST
             // (not workspace/set, not GET /cli/dns-manage). GET → 405.
             | "/cli/mail-manage"
@@ -7393,31 +7394,10 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
-        // K2 Mail S5 — the owner read: the Approvals queue. Owner verbs
-        // hard-fail for agent/workspace tokens SERVER-SIDE (PRD §11.1.3
-        // — kills the self-approval temptation): token_ok +
-        // token_is_owner_or_admin, then the normal GET dispatch chain
-        // (SQLite-only — no engine dial, so no spawn_blocking needed).
-        p if p == "/cli/mail/approvals/list" => {
-            let _ = stream.read(&mut buf).await;
-            if !super::http::token_ok(&query, state.token.as_str()) {
-                // #34: scoped agent on owner GET → owner_only, not invalid token.
-                let r = mail_dual_auth_failure(p, &query, bearer_token.as_deref());
-                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
-                return DispatchOutcome::Done;
-            }
-            if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
-                let r = crate::mail_routes::owner_only_response();
-                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
-                    .await;
-                return DispatchOutcome::Done;
-            }
-            let params = super::http::parse_params(&path, &query);
-            let resp = crate::cli::dispatch(p, &params);
-            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
-                .await;
-        }
-        // DNS K1 — EVERY dns GET runs in spawn_blocking (blocking
+        // C21: GET /cli/mail/approvals/list is a mail_manage surface.
+        // Do not keep a special owner-only-only arm — it rides the
+        // general `/cli/mail/` GET extra-gate below (TCP + UDS).
+        // DNS K1 — EVERY dns GET runs in spawn_blocking (blocking)
         // reqwest to the web DNS API + SQLite toggle reads). Dual auth
         // like mail: token_ok OR scoped require_hook. POSTs never reach
         // here (the is_post dns arm above matches first).

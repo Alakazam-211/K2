@@ -115,6 +115,43 @@ fn login(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, Strin
         .map_err(|(e, _client)| imap_err("login", e))
 }
 
+/// C22 imapsync: FETCH RFC822 from INBOX on a remote IMAP host.
+/// TLS verification always on (implicit TLS). Password never logged.
+pub fn fetch_all_rfc822(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let client = ClientBuilder::new(host, port)
+        .mode(ConnectionMode::Tls)
+        .tls_kind(TlsKind::Rust)
+        .connect()
+        .map_err(|e| imap_err("connect", e))?;
+    let mut session = client
+        .login(user, password)
+        .map_err(|(e, _)| imap_err("login", e))?;
+    session
+        .select("INBOX")
+        .map_err(|e| imap_err("select INBOX", e))?;
+    let uids = session
+        .uid_search("ALL")
+        .map_err(|e| imap_err("search", e))?;
+    let mut out = Vec::new();
+    for uid in uids {
+        let fetches = session
+            .uid_fetch(uid.to_string(), "RFC822")
+            .map_err(|e| imap_err("fetch", e))?;
+        for f in fetches.iter() {
+            if let Some(body) = f.body() {
+                out.push((format!("uid-{uid}"), body.to_vec()));
+            }
+        }
+    }
+    let _ = session.logout();
+    Ok(out)
+}
+
 /// The OAuth (Gmail XOAUTH2) login branch. Mint/refresh a fresh access
 /// token via the O1 engine, persist the (possibly refreshed) expiry back
 /// to the row, then authenticate with SASL XOAUTH2. Only Gmail rides the

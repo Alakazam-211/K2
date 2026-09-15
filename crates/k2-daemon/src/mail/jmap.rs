@@ -429,6 +429,30 @@ impl StalwartClient {
         parse_set_created_id("x:Account/set", &resp)
     }
 
+    /// Find an account id by name (`x:Account/query` `{name}`).
+    pub fn account_query_id(&self, name: &str) -> Result<Option<String>, String> {
+        let resp = self.registry_call(
+            "x:Account/query",
+            serde_json::json!({ "filter": { "name": name } }),
+        )?;
+        Ok(parse_query_ids(&resp).into_iter().next())
+    }
+
+    /// Rotate an account's Password credential.
+    pub fn account_set_password(&self, account_id: &str, new_secret: &str) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Account/set",
+            serde_json::json!({
+                "update": {
+                    account_id: {
+                        "credentials": { "0": { "@type": "Password", "secret": new_secret } }
+                    }
+                }
+            }),
+        )?;
+        expect_set_clean("x:Account/set", &resp)
+    }
+
     /// ✔ LIVE-VERIFIED: mint the service account's ApiKey — request
     /// `accountId` addresses the TARGET account (the key lives in its
     /// credential list); `allowedIps` pins the loopback (pre-mortem
@@ -1056,6 +1080,66 @@ impl StalwartClient {
     /// message via its `blobId`) through the session document's
     /// `downloadUrl` template (RFC 8620 §2 — discovered, never
     /// hardcoded, and REBASED onto our loopback base like `apiUrl`).
+    /// RFC 8620 blob upload — POST `uploadUrl`, returns `blobId`.
+    pub fn blob_upload(&self, account_id: &str, bytes: &[u8]) -> Result<String, String> {
+        let session = self.get_json(SESSION_PATH)?;
+        let template = parse_session_upload_url(&self.base_url, &session)?;
+        let url = template.replace("{accountId}", &encode_uri_component(account_id));
+        let client = reqwest::blocking::Client::builder()
+            .timeout(BLOB_TIMEOUT)
+            .build()
+            .map_err(|e| format!("blob http client: {e}"))?;
+        let resp = self
+            .apply_auth(client.post(&url))
+            .header("Content-Type", "application/octet-stream")
+            .body(bytes.to_vec())
+            .send()
+            .map_err(|e| format!("POST blob: {e}"))?;
+        let status = resp.status();
+        let text = resp.text().unwrap_or_default();
+        if !status.is_success() {
+            let excerpt: String = text.chars().take(200).collect();
+            return Err(format!("POST blob: HTTP {status}: {excerpt}"));
+        }
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("POST blob: invalid JSON: {e}"))?;
+        v.get("blobId")
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| "POST blob: no blobId in reply".to_string())
+    }
+
+    /// RFC 8621 `Email/import` of a previously uploaded blob into Inbox.
+    pub fn email_import(
+        &self,
+        account_id: &str,
+        blob_id: &str,
+        mailbox_id: &str,
+    ) -> Result<(), String> {
+        let args = self.mail_call(
+            account_id,
+            "Email/import",
+            serde_json::json!({
+                "emails": {
+                    "k2imp": {
+                        "blobId": blob_id,
+                        "mailboxIds": { mailbox_id: true },
+                    }
+                }
+            }),
+        )?;
+        if args
+            .get("notCreated")
+            .and_then(|v| v.as_object())
+            .is_some_and(|m| !m.is_empty())
+        {
+            let detail = serde_json::to_string(&args["notCreated"]).unwrap_or_default();
+            let excerpt: String = detail.chars().take(200).collect();
+            return Err(format!("Email/import: notCreated: {excerpt}"));
+        }
+        Ok(())
+    }
+
     pub fn blob_download(
         &self,
         account_id: &str,
@@ -1173,6 +1257,29 @@ pub fn parse_session_download_url(
     } else {
         return Err(format!(
             "JMAP session 'downloadUrl' is neither absolute nor root-relative: '{url}'"
+        ));
+    };
+    Ok(format!("{}{}", base_url.trim_end_matches('/'), path))
+}
+
+/// Same rebase rule as [`parse_session_download_url`] for `uploadUrl`.
+pub fn parse_session_upload_url(
+    base_url: &str,
+    session: &serde_json::Value,
+) -> Result<String, String> {
+    let url = session
+        .get("uploadUrl")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "JMAP session document has no usable 'uploadUrl'".to_string())?;
+    let path = if let Some(p) = url_path_of(url) {
+        p
+    } else if url.starts_with('/') {
+        url
+    } else {
+        return Err(format!(
+            "JMAP session 'uploadUrl' is neither absolute nor root-relative: '{url}'"
         ));
     };
     Ok(format!("{}{}", base_url.trim_end_matches('/'), path))
@@ -2134,6 +2241,20 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
 
     fn mint_api_key(&mut self, account_id: &str) -> Result<String, String> {
         self.client()?.api_key_create(account_id)
+    }
+
+    fn rotate_admin_secret(
+        &mut self,
+        username: &str,
+        current: &str,
+        new_secret: &str,
+    ) -> Result<(), String> {
+        let _ = current;
+        let client = self.client()?;
+        let account_id = client
+            .account_query_id(username)?
+            .ok_or_else(|| format!("admin account '{username}' not found"))?;
+        client.account_set_password(&account_id, new_secret)
     }
 }
 

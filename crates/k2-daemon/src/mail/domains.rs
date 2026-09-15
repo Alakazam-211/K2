@@ -562,6 +562,72 @@ pub fn apply_current_hostname_mx(rows: &mut [RecordRow], hostname: Option<&str>)
     }
 }
 
+/// C9/C25: advanced CNAME/SRV/TLSA/A that embed the old mail hostname
+/// follow the current `mail_server.hostname`.
+pub fn apply_current_hostname_advanced(rows: &mut [RecordRow], hostname: Option<&str>) {
+    let Some(host) = hostname.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    for row in rows.iter_mut() {
+        if row.id == "mx" || row.id == "ptr" || row.id == "spf" || row.id == "dmarc" {
+            continue;
+        }
+        if row.rtype == "TXT" && row.id.starts_with("dkim") {
+            continue;
+        }
+        row.name = rewrite_embedded_mail_host(&row.name, host);
+        row.expected = rewrite_embedded_mail_host(&row.expected, host);
+        row.expected_display = rewrite_embedded_mail_host(&row.expected_display, host);
+    }
+}
+
+fn rewrite_embedded_mail_host(s: &str, current: &str) -> String {
+    let current_lc = current.trim_end_matches('.').to_ascii_lowercase();
+    let lower = s.to_ascii_lowercase();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        if let Some(rel) = lower[i..].find("mail.") {
+            let start = i + rel;
+            let rest = &s[start..];
+            let end_rel = rest
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-')
+                .unwrap_or(rest.len());
+            let token = &rest[..end_rel];
+            let token_trim = token.trim_end_matches('.');
+            if token_trim.len() > 5
+                && !token_trim.eq_ignore_ascii_case(&current_lc)
+            {
+                out.push_str(&s[i..start]);
+                out.push_str(current);
+                if token.ends_with('.') {
+                    out.push('.');
+                }
+                i = start + end_rel;
+                continue;
+            }
+        }
+        out.push_str(&s[i..]);
+        break;
+    }
+    out
+}
+
+/// C23: expected DMARC is always `p=none` (copy = doctor = CLI).
+pub fn apply_dmarc_p_none(rows: &mut [RecordRow], domain: &str) {
+    let expected = format!("v=DMARC1; p=none; rua=mailto:postmaster@{domain}");
+    for row in rows.iter_mut() {
+        if row.id == "dmarc" {
+            if !crate::mail::dns_verify::dmarc_p_none(&row.expected) {
+                row.expected = expected.clone();
+                row.expected_display = format!("\"{expected}\"");
+                row.chunks = vec![expected];
+            }
+            return;
+        }
+    }
+}
+
 /// Render the record table back into a downloadable zone file
 /// (§6.2 header button). Regenerated from the EFFECTIVE rows — not the
 /// raw Stalwart text — so the relay-mode SPF adjustment is what the
@@ -661,6 +727,8 @@ pub fn effective_rows(conn: &Connection, row: &MailDomain) -> Vec<RecordRow> {
     apply_send_mode_spf(&mut rows, &row.send_mode, include.as_deref());
     let hostname = server_info(conn).and_then(|i| i.hostname);
     apply_current_hostname_mx(&mut rows, hostname.as_deref());
+    apply_current_hostname_advanced(&mut rows, hostname.as_deref());
+    apply_dmarc_p_none(&mut rows, &row.domain);
     rows
 }
 
@@ -1031,14 +1099,21 @@ pub fn resolve_default_domain(configured: &str, verified: &[String]) -> Option<S
 /// — resolved from the GLOBAL `mail_default_domain` setting, empty =
 /// first-verified.
 pub fn list_agent_json() -> serde_json::Value {
-    let verified: Vec<String> = {
+    let (verified, pending): (Vec<String>, Vec<String>) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        load_all_domains(&conn)
-            .into_iter()
+        let all = load_all_domains(&conn);
+        let verified = all
+            .iter()
             .filter(|d| d.status == "verified")
+            .map(|d| d.domain.clone())
+            .collect();
+        let pending = all
+            .into_iter()
+            .filter(|d| d.status != "verified")
             .map(|d| d.domain)
-            .collect()
+            .collect();
+        (verified, pending)
     };
     let configured = k2_core::app_settings::load().mail_default_domain;
     let default = resolve_default_domain(&configured, &verified);
@@ -1051,7 +1126,7 @@ pub fn list_agent_json() -> serde_json::Value {
             })
         })
         .collect();
-    serde_json::json!({ "ok": true, "domains": domains, "defaultDomain": default })
+    serde_json::json!({ "ok": true, "domains": domains, "pending": pending, "defaultDomain": default })
 }
 
 /// `domain/show`: the full record table for one domain.
@@ -1219,6 +1294,38 @@ mail.acme.dev.	3600	IN	A	203.0.113.7
         // no fabricated exchange.
         let rows = build_rows("acme.dev", &parse_zone_file(zone), None);
         assert!(rows.iter().all(|r| r.id != "mx"));
+    }
+
+    #[test]
+    fn current_hostname_rewrites_advanced_and_dmarc_p_none() {
+        let mut rows = build_rows(
+            "acme.dev",
+            &parse_zone_file(
+                "autoconfig.acme.dev. IN CNAME mail.oldhost.k2.dev.\n\
+                 _jmap._tcp.acme.dev. IN SRV 0 1 443 mail.oldhost.k2.dev.\n\
+                 _dmarc.acme.dev. IN TXT \"v=DMARC1; p=reject; rua=mailto:postmaster@acme.dev\"\n",
+            ),
+            Some("mail.oldhost.k2.dev"),
+        );
+        apply_current_hostname_advanced(&mut rows, Some("mail.lztek.io"));
+        apply_dmarc_p_none(&mut rows, "acme.dev");
+        let cname = rows.iter().find(|r| r.name.starts_with("autoconfig")).unwrap();
+        assert!(
+            cname.expected.contains("mail.lztek.io"),
+            "C25 advanced CNAME follows current hostname: {}",
+            cname.expected
+        );
+        let dmarc = rows.iter().find(|r| r.id == "dmarc").unwrap();
+        assert!(
+            dmarc.expected.contains("p=none"),
+            "C23 expected DMARC is p=none: {}",
+            dmarc.expected
+        );
+        assert!(
+            !dmarc.expected.contains("p=reject"),
+            "C23 must not keep p=reject: {}",
+            dmarc.expected
+        );
     }
 
     // ── SPF split-config (§8.3) ──

@@ -469,12 +469,9 @@ pub fn is_agent_verb(path: &str) -> bool {
         // blast leftovers. Writer `/cli/mail-manage` is not an agent verb.
         "/cli/mail/server/uninstall",
         "/cli/mail/domain/remove",
-        "/cli/mail/config/",
-        "/cli/mail/approvals/",
         "/cli/mail/external/",
         "/cli/mail/link/",
-        "/cli/mail/access/",
-        "/cli/mail/doctor",
+        "/cli/mail/oauth-config",
         "/cli/mail-manage",
         // Workspace data sidecar owner surfaces (enable/disable/doctor).
         "/cli/db/server/",
@@ -1352,6 +1349,7 @@ mod tests {
     fn is_agent_verb_denies_mail_owner_surfaces() {
         // M5 hostmail manage: DENY shrink so scoped hooks can pass
         // require_hook; extra gate ORs mail_manage_allowed_for_path.
+        // C5b (C21) also opens access/doctor/approvals/config-set/import.
         for p in [
             "/cli/mail/server/enable",
             "/cli/mail/server/disable",
@@ -1359,19 +1357,27 @@ mod tests {
             "/cli/mail/domain/show",
             "/cli/mail/domain/add",
             "/cli/mail/domain/check",
+            "/cli/mail/access/grant",
+            "/cli/mail/access/revoke",
+            "/cli/mail/access/set-primary",
+            "/cli/mail/access/set-level",
+            "/cli/mail/access/set-manage",
+            "/cli/mail/doctor",
+            "/cli/mail/approvals/list",
+            "/cli/mail/approvals/approve",
+            "/cli/mail/approvals/deny",
+            "/cli/mail/config/set",
+            "/cli/mail/import",
         ] {
             assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
         }
-        // M6 stay denied (blast / OAuth / access / doctor / writer).
+        // Leftover M6 stay denied (uninstall / remove / OAuth / link / writer).
         for p in [
             "/cli/mail/server/uninstall",
             "/cli/mail/domain/remove",
-            "/cli/mail/config/set",
-            "/cli/mail/approvals/list",
             "/cli/mail/external/add",
             "/cli/mail/link/oauth/start",
-            "/cli/mail/access/grant",
-            "/cli/mail/doctor",
+            "/cli/mail/oauth-config",
             "/cli/mail-manage",
         ] {
             assert!(!is_agent_verb(p), "scoped token must NOT reach {p}");
@@ -1397,20 +1403,19 @@ mod tests {
         );
         assert!(is_agent_verb("/cli/mail/messages"));
         assert!(is_agent_verb("/cli/mail/send"));
-        // …but ALL access management verbs are denied (prefix denylist).
+        // C5b: access management is an extra-gated mail_manage verb,
+        // not a DENY. Unknown nested paths ride `/cli/mail/` and the
+        // extra gate still fail-closes leftover M6.
         for p in [
             "/cli/mail/access/grant",
             "/cli/mail/access/revoke",
             "/cli/mail/access/set-primary",
             "/cli/mail/access/set-level",
             "/cli/mail/access/set-manage",
-            // Prefix denial covers nested / unknown sub-paths too.
-            "/cli/mail/access/",
-            "/cli/mail/access/anything-future",
         ] {
             assert!(
-                !is_agent_verb(p),
-                "scoped token must NOT reach {p} (no self-grant)"
+                is_agent_verb(p),
+                "C5b access is an extra-gated agent verb: {p}"
             );
         }
     }

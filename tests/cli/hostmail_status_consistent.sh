@@ -109,12 +109,12 @@ run_status() {
 
 LAST_ERR="systemd reports the stalwart unit is 'inactive'"
 
-echo "== consistent:false → state + warning + lastError, exit 0 =="
+echo "== consistent:false → state + warning + lastError, exit ≠ 0 =="
 cat >"$WORKDIR/status.json" <<JSON
 {"ok":true,"consistent":false,"supported":true,"state":"stopped","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":"tls-alpn","enableProgress":null,"lastError":"$LAST_ERR","health":null}
 JSON
 run_status
-assert_exit "inconsistent status exit" 0 "$rc"
+assert_exit "inconsistent status exit" 1 "$rc"
 assert_contains "inconsistent state" "$out" "server   : stopped"
 assert_contains "inconsistent warning" "$out" "WARNING"
 assert_contains "inconsistent warning names disagreement" "$out" "status and systemd disagree"
@@ -129,9 +129,9 @@ else
     pass=$((pass + 1))
 fi
 
-echo "== consistent:false --json → fields passed through, exit 0 =="
+echo "== consistent:false --json → fields passed through, exit ≠ 0 =="
 run_status --json
-assert_exit "inconsistent json exit" 0 "$rc"
+assert_exit "inconsistent json exit" 1 "$rc"
 set +e
 parsed="$(printf '%s' "$out" | python3 -c '
 import json, sys
@@ -146,21 +146,29 @@ assert_contains "json consistent" "$parsed" "consistent=False"
 assert_contains "json state" "$parsed" "state=stopped"
 assert_contains "json lastError" "$parsed" "lastError=$LAST_ERR"
 
-echo "== consistent:true → no warning, exit 0 =="
+echo "== consistent:true state=disabled → no warning, exit ≠ 0 =="
 cat >"$WORKDIR/status.json" <<'JSON'
 {"ok":true,"consistent":true,"supported":true,"state":"disabled","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":"tls-alpn","enableProgress":null,"lastError":null,"health":null}
 JSON
 run_status
-assert_exit "consistent status exit" 0 "$rc"
+assert_exit "consistent disabled exit" 1 "$rc"
 assert_contains "consistent state" "$out" "server   : disabled"
 assert_absent "consistent no warning" "$out" "WARNING"
+
+echo "== running + consistent → exit 0 =="
+cat >"$WORKDIR/status.json" <<'JSON'
+{"ok":true,"consistent":true,"supported":true,"state":"running","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":"tls-alpn","enableProgress":null,"lastError":null,"health":null}
+JSON
+run_status
+assert_exit "running status exit" 0 "$rc"
+assert_contains "running state" "$out" "server   : running"
 
 echo "== fb449bc1-shaped daemon (ok:false carries the verdict) → still printed =="
 cat >"$WORKDIR/status.json" <<JSON
 {"ok":false,"supported":true,"state":"stopped","version":"0.16.10","pinnedVersion":"0.16.10","hostname":"mail.lztek.io","portPlan":null,"enableProgress":null,"lastError":"$LAST_ERR","health":null}
 JSON
 run_status
-assert_exit "legacy ok:false status exit" 0 "$rc"
+assert_exit "legacy ok:false status exit" 1 "$rc"
 assert_contains "legacy state" "$out" "server   : stopped"
 assert_contains "legacy warning" "$out" "status and systemd disagree"
 
@@ -190,8 +198,7 @@ fi
 assert_contains "stateless body is unexpected" "$out" "unexpected daemon response"
 
 echo "== help + study explain consistent / systemd / disable =="
-# `k2 hostmail <anything> --help` prints the group help (asserted below), and
-# `k2 mail status` has moved, so the per-verb page is read from its heredoc.
+# C18: `k2 hostmail status --help` is leaf help. Group help is `k2 hostmail --help`.
 help_out="$(sed -n '/^cmd_help_mail_status() {$/,/^}$/p' "$K2_CLI")"
 [ -n "$help_out" ] || { echo "FAIL: cmd_help_mail_status() not found in $K2_CLI" >&2; exit 1; }
 assert_contains "status help consistent" "$help_out" "consistent: false"

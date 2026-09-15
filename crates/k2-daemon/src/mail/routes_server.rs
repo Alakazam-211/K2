@@ -135,6 +135,7 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
             "portPlan": port_plan,
             "enableProgress": enable_progress,
             "lastError": last_error,
+            "cert": supervisor::tls_cert_status(hostname.as_deref()),
             "health": health,
         })
         .to_string(),
@@ -254,7 +255,27 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
     // active. A SQLite `running` row with an inactive unit is a stale
     // cache — alreadyEnabled is illegal then (H3).
     if supervisor::is_already_enabled() {
-        let mut body = serde_json::json!({ "ok": true, "state": "running", "alreadyEnabled": true });
+        supervisor::stamp_enable_noop();
+        let mut body = serde_json::json!({
+            "ok": true,
+            "state": "running",
+            "alreadyEnabled": true,
+            "hint": "already enabled (no-op)",
+        });
+        if let Some(p) = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT enable_progress_json FROM mail_server WHERE id = 1",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        } {
+            body["enableProgress"] = p;
+        }
         if let Some(hint) = reapply_skin_door_after_mail_enable(daemon_port) {
             body["hint"] = serde_json::json!(hint);
         }
@@ -546,6 +567,28 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
         }
     };
 
+    // C27: mail_manage may set sendMode (domain) and agentSend (workspace
+    // they admin). Global defaults / relay stay owner-or-admin.
+    if let Some(p) = crate::caller_workspace::request_principal() {
+        if b.defaults.is_some() || b.relay.is_some() || b.delete_relay_config.is_some() {
+            return err_json(
+                "403 Forbidden",
+                "owner_only",
+                "global defaults and relay config stay owner-or-admin — mail-manage may set sendMode (domain) and agentSend (workspace)".to_string(),
+            );
+        }
+        if let Some(ref path) = workspace_path {
+            let allowed = crate::workspace_msg::resolve_workspace(&p.workspace_uuid);
+            if allowed.as_deref() != Some(path.as_str()) {
+                return err_json(
+                    "403 Forbidden",
+                    "owner_only",
+                    "mail-manage may set agentSend only for the workspace they admin".to_string(),
+                );
+            }
+        }
+    }
+
     // D3: nothing mail-shaped executes off-Linux.
     if !mail_supported() {
         return unsupported();
@@ -804,6 +847,11 @@ mod tests {
         assert_eq!(v["ok"], true);
         assert_eq!(v["alreadyEnabled"], true);
         assert_eq!(v["state"], "running");
+        assert!(
+            v["enableProgress"]["lastNoopAt"].as_i64().unwrap_or(0) > 0,
+            "C29 alreadyEnabled stamps lastNoopAt: {}",
+            v
+        );
         // Caddy apply must not swallow Enable success (ok stays true).
         assert_ne!(v["ok"], false);
         clean_row();
@@ -867,6 +915,7 @@ mod tests {
             "systemd reports the stalwart unit is 'inactive'",
             "{v}"
         );
+        assert!(v.get("cert").is_some(), "C24 status shows cert without --health: {v}");
         clean_row();
     }
 

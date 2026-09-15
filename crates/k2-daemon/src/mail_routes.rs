@@ -189,7 +189,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/delete"
         | "/cli/mail/folder/create"
         | "/cli/mail/folder/rename"
-        | "/cli/mail/draft" => CliResponse::method_not_allowed(),
+        | "/cli/mail/draft"
+        | "/cli/mail/import" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -254,6 +255,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/folder/create" => routes_messages::handle_folder_create(body),
         "/cli/mail/folder/rename" => routes_messages::handle_folder_rename(body),
         "/cli/mail/draft" => routes_external::handle_draft(body),
+        "/cli/mail/import" => crate::mail::import::handle_import(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -310,6 +312,7 @@ pub fn is_mail_owner_surface(path: &str) -> bool {
         || path.starts_with("/cli/mail/link/")
         // Toggle writer: agents cannot self-grant.
         || path == "/cli/mail-manage"
+        || path == "/cli/mail/import"
 }
 
 /// `GET /cli/mail/domain/list` uses client `project=` to pick the owner
@@ -348,7 +351,9 @@ pub fn client_project_param(params: &HashMap<String, String>) -> Option<String> 
 
 /// M5 hostmail manage paths the workspace toggle can open for a scoped
 /// passport. Exact paths only — never prefix `/cli/mail/server/` or
-/// `/cli/mail/domain/` (uninstall / remove stay M6).
+/// `/cli/mail/domain/` (uninstall / remove stay M6). C5b (C21/C31)
+/// adds access/doctor/approvals/config-set/import; leftover M6 stays
+/// owner.
 pub fn is_mail_manage_surface(path: &str) -> bool {
     matches!(
         path,
@@ -358,12 +363,43 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/domain/show"
             | "/cli/mail/domain/add"
             | "/cli/mail/domain/check"
+            | "/cli/mail/access/grant"
+            | "/cli/mail/access/revoke"
+            | "/cli/mail/access/set-primary"
+            | "/cli/mail/access/set-level"
+            | "/cli/mail/access/set-manage"
+            | "/cli/mail/doctor"
+            | "/cli/mail/approvals/list"
+            | "/cli/mail/approvals/approve"
+            | "/cli/mail/approvals/deny"
+            | "/cli/mail/config/set"
+            | "/cli/mail/import"
     )
 }
 
 const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces)";
 
 const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces). To let this workspace's agent manage hosted mail on this host, Settings → Workspaces → (this workspace) → Allow agents to manage hosted mail on this host.";
+
+/// C33: flag-on leftover M6 names the missing verb, not the Settings toggle.
+fn leftover_m6_hint(path: &str) -> String {
+    let verb = if path == "/cli/mail/server/uninstall" {
+        "k2 hostmail uninstall"
+    } else if path == "/cli/mail/domain/remove" {
+        "k2 hostmail domain remove"
+    } else if path.starts_with("/cli/mail/oauth-config") {
+        "k2 mail oauth-config"
+    } else if path.starts_with("/cli/mail/link/") {
+        "k2 mail link"
+    } else if path.starts_with("/cli/mail/external/") {
+        "k2 mail link"
+    } else if path == "/cli/mail-manage" {
+        "POST /cli/mail-manage"
+    } else {
+        path
+    };
+    format!("requires owner/admin — '{verb}' stays owner-only. Ask your human.")
+}
 
 fn owner_only_with_hint(hint: &str) -> crate::cli_response::CliResponse {
     crate::cli_response::CliResponse {
@@ -422,7 +458,7 @@ pub fn mail_manage_authorized(
         }
         return Err(owner_only_response());
     }
-    Err(owner_only_response())
+    Err(owner_only_with_hint(&leftover_m6_hint(path)))
 }
 
 fn enable_field(v: &serde_json::Value) -> Option<bool> {
@@ -596,20 +632,30 @@ mod tests {
             "/cli/mail/domain/show",
             "/cli/mail/domain/add",
             "/cli/mail/domain/check",
+            "/cli/mail/access/grant",
+            "/cli/mail/access/revoke",
+            "/cli/mail/access/set-primary",
+            "/cli/mail/access/set-level",
+            "/cli/mail/access/set-manage",
+            "/cli/mail/doctor",
+            "/cli/mail/approvals/list",
+            "/cli/mail/approvals/approve",
+            "/cli/mail/approvals/deny",
+            "/cli/mail/config/set",
+            "/cli/mail/import",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }
         for p in [
             "/cli/mail/server/uninstall",
             "/cli/mail/domain/remove",
-            "/cli/mail/config/set",
-            "/cli/mail/access/grant",
             "/cli/mail/oauth-config",
-            "/cli/mail/doctor",
             "/cli/mail/address/create",
             "/cli/mail/status",
             "/cli/mail/config",
             "/cli/mail-manage",
+            "/cli/mail/link/oauth/start",
+            "/cli/mail/external/add",
         ] {
             assert!(!is_mail_manage_surface(p), "not M5: {p}");
         }
@@ -654,6 +700,10 @@ mod tests {
             !body.contains("Allow agents to manage hosted mail"),
             "M6 must not promise the toggle: {body}"
         );
+        assert!(
+            body.contains("uninstall") || body.contains("hostmail uninstall"),
+            "C33 leftover M6 names the verb: {body}"
+        );
         let member_m5 = mail_manage_authorized("/cli/mail/domain/list", false, None);
         assert!(member_m5.is_err());
     }
@@ -696,6 +746,7 @@ mod tests {
             "/cli/mail/folder/create",
             "/cli/mail/folder/rename",
             "/cli/mail/draft",
+            "/cli/mail/import",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");

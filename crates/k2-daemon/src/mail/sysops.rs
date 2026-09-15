@@ -218,6 +218,8 @@ pub(crate) mod fake {
         pub existing_paths: Vec<String>,
         /// Canned `systemctl_query` answers keyed by joined args.
         pub query_answers: HashMap<String, String>,
+        /// Last bytes written per path (C20 recovery-admin strip).
+        pub written: Mutex<HashMap<String, Vec<u8>>>,
     }
 
     impl Default for FakeSystemOps {
@@ -228,6 +230,7 @@ pub(crate) mod fake {
                 download_error: None,
                 existing_paths: Vec::new(),
                 query_answers: HashMap::new(),
+                written: Mutex::new(HashMap::new()),
             }
         }
     }
@@ -251,6 +254,10 @@ pub(crate) mod fake {
         }
         fn write_file(&self, path: &str, contents: &[u8], mode: u32) -> Result<(), String> {
             self.record(format!("write {path} ({} bytes, mode {mode:o})", contents.len()));
+            self.written
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(path.to_string(), contents.to_vec());
             Ok(())
         }
         fn create_dir_all(&self, path: &str) -> Result<(), String> {
@@ -263,6 +270,11 @@ pub(crate) mod fake {
         }
         fn path_exists(&self, path: &str) -> bool {
             self.existing_paths.iter().any(|p| p == path)
+                || self
+                    .written
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .contains_key(path)
         }
         fn extract_tar_gz_member(
             &self,

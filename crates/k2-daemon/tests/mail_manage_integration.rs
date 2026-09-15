@@ -467,16 +467,39 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
         for (method, path, body) in [
             ("GET", "/cli/mail/oauth-config", None),
             ("POST", "/cli/mail/oauth-config/set", Some("{}")),
-            ("POST", "/cli/mail/access/grant", Some("{}")),
-            ("POST", "/cli/mail/access/set-manage", Some("{}")),
             ("POST", "/cli/mail/link/oauth/start", Some("{}")),
             ("POST", "/cli/mail/external/add", Some("{}")),
-            ("POST", "/cli/mail/doctor", Some("{}")),
-            ("POST", "/cli/mail/config/set", Some("{}")),
         ] {
             let r = http(port, method, &format!("{path}?token={hook_a}"), body);
-            assert_owner_only(&r, &format!("flag ON must not open {path}"));
+            assert_owner_only(&r, &format!("flag ON leftover M6 must not open {path}"));
+            assert!(
+                !r.body.contains("Allow agents to manage hosted mail on this host"),
+                "C33 leftover M6 names the verb, not Settings: {} {}",
+                path,
+                r.body
+            );
         }
+
+        for (method, path, body) in [
+            ("POST", "/cli/mail/access/grant", Some("{}")),
+            ("POST", "/cli/mail/access/set-manage", Some("{}")),
+            ("POST", "/cli/mail/doctor", Some("{}")),
+            ("GET", "/cli/mail/doctor", None),
+            ("GET", "/cli/mail/approvals/list", None),
+            ("POST", "/cli/mail/approvals/approve", Some("{}")),
+            ("POST", "/cli/mail/config/set", Some("{}")),
+            ("POST", "/cli/mail/import", Some("{}")),
+        ] {
+            let r = http(port, method, &format!("{path}?token={hook_a}"), body);
+            assert_not_owner_only(&r, &format!("C5b flag ON opens {path}"));
+        }
+
+        let import_get = http(port, "GET", &format!("/cli/mail/import?token={hook_a}"), None);
+        assert_eq!(
+            import_get.status, 405,
+            "GET import 405; {}",
+            import_get.body
+        );
 
         let create = http(
             port,

@@ -61,11 +61,13 @@ fn wire_json(frame: &OverlayFrame) -> String {
 
 /// Whether this overlay subscriber may see `frame`.
 ///
-/// Skin WS is Thread-only: host-wide chatterlog frames (`conversation_id:
-/// None`) are dropped. Owner/Connect subscribers keep the unfiltered bus.
+/// Skin WS is Thread-only: host-wide chatterlog (`conversation_id: None`)
+/// AND per-conversation `chatter` (agent-to-agent `k2 msg`, same cid as
+/// the pinned Chat) are dropped. HTTP `/cli/chatter` is already 403 for
+/// skins. Owner/Connect subscribers keep the unfiltered bus.
 pub fn skin_may_see_frame(frame: &OverlayFrame, conversation: &str, skin: bool) -> bool {
     match &frame.conversation_id {
-        Some(cid) => cid == conversation,
+        Some(cid) => cid == conversation && (!skin || frame.collection == "thread"),
         None => !skin, // chatterlog is host-wide — never a skin room
     }
 }
@@ -287,6 +289,13 @@ mod tests {
             doc: None,
             conversation_id: Some("other".into()),
         };
+        let chatter_same = OverlayFrame {
+            collection: "chatter".into(),
+            seq: 4,
+            id: "ch1".into(),
+            doc: None,
+            conversation_id: Some(conv.into()),
+        };
         assert!(skin_may_see_frame(&thread, conv, true));
         assert!(
             !skin_may_see_frame(&chatterlog, conv, true),
@@ -294,8 +303,16 @@ mod tests {
         );
         assert!(!skin_may_see_frame(&other, conv, true));
         assert!(
+            !skin_may_see_frame(&chatter_same, conv, true),
+            "skin WS must not see agent-to-agent chatter on the pinned conversation"
+        );
+        assert!(
             skin_may_see_frame(&chatterlog, conv, false),
             "owner overlay still receives chatterlog"
+        );
+        assert!(
+            skin_may_see_frame(&chatter_same, conv, false),
+            "owner overlay still receives per-conversation chatter"
         );
     }
 }

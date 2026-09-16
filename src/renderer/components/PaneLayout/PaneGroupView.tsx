@@ -10,7 +10,7 @@ import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import { PaneTabBar } from './PaneTabBar'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
-import { isAgentPtyTerminalItem, conversationIdFromTerminal } from '@/lib/chat-session-tab'
+import { isAgentPtyTerminalItem, conversationIdFromTerminal, isHarnessTabLabel } from '@/lib/chat-session-tab'
 import {
   AgentSessionChrome,
   useSidecarOverlayAddr,
@@ -76,7 +76,10 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
   })
   const isMeaningfulTitle =
     !!tabTitle && !/^Terminal \d+$/.test(tabTitle) && tabTitle !== 'Untitled'
-  const seedAndLock = isMeaningfulTitle || seedLockedTitle
+  // T13 — never seed+lock a harness basename (grok / ✳ grok / Claude Code)
+  // onto the daemon; that would pin the strip to the PTY name.
+  const seedAndLock =
+    (isMeaningfulTitle || seedLockedTitle) && !isHarnessTabLabel(tabTitle ?? '')
 
   const activateItem = useTabsStore((s) => s.activateItemInPaneGroup)
   const closeItem = useTabsStore((s) => s.closeItemInPaneGroup)

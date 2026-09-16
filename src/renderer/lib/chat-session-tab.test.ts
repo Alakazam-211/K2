@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import {
+  __resetNamedChatTitleCachesForTests,
+  adoptRestoredTab,
+  adoptTabTitle,
   applyUnlockedTabLabel,
   chatRenamePayloadForTab,
   chatDisplayName,
@@ -11,8 +14,11 @@ import {
   findTabById,
   findTabByPaneGroupId,
   isAgentPtyTerminalItem,
+  isHarnessTabLabel,
   persistChatRenameIfSessionTab,
   pickConversationId,
+  rememberChatCustomName,
+  rememberTabTitleSnapshot,
   restampListedChatTabs,
   restampSessionTabs,
   restampTitle,
@@ -303,6 +309,80 @@ describe('findTabByPaneGroupId / restampSessionTabs', () => {
       setTabTitle,
     )
     expect(setTabTitle).toHaveBeenCalledWith('extra', 'Code Review', { locked: true })
+  })
+})
+
+describe('isHarnessTabLabel (T5/T12)', () => {
+  it('treats OSC-prefixed harness names as harness labels', () => {
+    expect(isHarnessTabLabel('grok')).toBe(true)
+    expect(isHarnessTabLabel('Grok')).toBe(true)
+    expect(isHarnessTabLabel('✳ grok')).toBe(true)
+    expect(isHarnessTabLabel('claude')).toBe(true)
+    expect(isHarnessTabLabel('Claude Code')).toBe(true)
+    expect(isHarnessTabLabel('✳ Claude Code')).toBe(true)
+    expect(isHarnessTabLabel('Hi Test')).toBe(false)
+    expect(isHarnessTabLabel('Terminal 1')).toBe(false)
+  })
+})
+
+describe('adoptTabTitle (T1/T2/T14)', () => {
+  it('Hi Test + restamp grok locked true stays Hi Test', () => {
+    const adopted = adoptTabTitle(
+      { title: 'Hi Test', locked: true, conversationId: SID },
+      { title: 'grok', locked: true, conversationId: SID },
+    )
+    expect(adopted.title).toBe('Hi Test')
+    expect(adopted.locked).toBe(true)
+  })
+
+  it('omitted incoming locked keeps live lock', () => {
+    const adopted = adoptTabTitle(
+      { title: 'Hi Test', locked: true, conversationId: SID },
+      { title: 'grok', conversationId: SID },
+    )
+    expect(adopted.title).toBe('Hi Test')
+    expect(adopted.locked).toBe(true)
+  })
+
+  it('keeping a named title with conversationId forces locked true', () => {
+    const adopted = adoptTabTitle(
+      { title: 'Hi Test', locked: false, conversationId: SID },
+      { title: 'grok' },
+    )
+    expect(adopted.title).toBe('Hi Test')
+    expect(adopted.locked).toBe(true)
+  })
+
+  it('never returns locked undefined', () => {
+    const adopted = adoptTabTitle({ title: 'grok' }, { title: 'grok' })
+    expect(adopted.locked).toBe(false)
+    expect(adopted.locked).not.toBeUndefined()
+  })
+})
+
+describe('adoptRestoredTab (T10/T11)', () => {
+  beforeEach(() => {
+    __resetNamedChatTitleCachesForTests()
+  })
+
+  it('restamps grok from the custom-name map before paint', () => {
+    rememberChatCustomName(SID, 'Hi Test')
+    const built = terminalTab({ id: 'sess', title: 'grok', data: { conversationId: SID, commandHint: 'grok' } })
+    const adopted = adoptRestoredTab(built)
+    expect(adopted.title).toBe('Hi Test')
+    expect(adopted.locked).toBe(true)
+  })
+
+  it('restamps grok from a tab_titles snapshot when conversationId is null', () => {
+    rememberTabTitleSnapshot('extra-1', 'Hi Test', true)
+    const built = terminalTab({
+      id: 'extra-1',
+      title: 'grok',
+      data: { commandHint: 'grok', conversationId: undefined, args: undefined },
+    })
+    const adopted = adoptRestoredTab(built)
+    expect(adopted.title).toBe('Hi Test')
+    expect(adopted.locked).toBe(true)
   })
 })
 

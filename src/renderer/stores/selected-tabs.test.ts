@@ -78,8 +78,9 @@ vi.mock('./session-events', () => ({
   subscribeToWorkspaceTabEvents: vi.fn(() => () => undefined),
 }))
 
-import { useTabsStore, __tryReorderTabsInPlaceForTests, type SerializedLayout, type Tab } from './tabs'
+import { useTabsStore, __tryReorderTabsInPlaceForTests, type SerializedLayout, type Tab, type TerminalItemData } from './tabs'
 import { useSelectedTabsStore, getSelectedTab } from './selected-tabs'
+import { __resetNamedChatTitleCachesForTests } from '@/lib/chat-session-tab'
 
 const PROJECT = 'projA'
 const WORKSPACE = 'wsA'
@@ -108,6 +109,7 @@ function tabByPg(pgId: string): Tab | undefined {
 }
 
 function resetStores(): void {
+  __resetNamedChatTitleCachesForTests()
   useTabsStore.setState({
     tabs: [],
     activeTabId: null,
@@ -352,6 +354,80 @@ describe('Phase 3 — adoption never moves this client selection', () => {
     expect(useTabsStore.getState().tabs.map((t) => t.id)).toEqual(['live-b', 'live-a'])
     // ...but selection STAYS on A (live-a) — the peer's B did NOT hijack it.
     expect(useTabsStore.getState().activeTabId).toBe('live-a')
+  })
+
+  it('incoming grok with locked omitted keeps live Hi Test + lock (T16b)', () => {
+    const conv = '01920000-aaaa-7000-8000-000000000001'
+    const tabA: Tab = {
+      id: 'live-a',
+      title: 'Hi Test',
+      locked: true,
+      mosaicTree: 'pg-a',
+      paneGroups: new Map([['pg-a', {
+        id: 'pg-a',
+        items: [{
+          id: 'item-a',
+          type: 'terminal',
+          data: {
+            terminalId: 'pg-a',
+            cwd: CWD,
+            commandHint: 'grok',
+            conversationId: conv,
+          } as TerminalItemData,
+        }],
+        activeItemIndex: 0,
+      }]]),
+    }
+    const tabB: Tab = {
+      id: 'live-b',
+      title: 'B',
+      mosaicTree: 'pg-b',
+      paneGroups: new Map([['pg-b', { id: 'pg-b', items: [], activeItemIndex: 0 }]]),
+    }
+    useTabsStore.setState({
+      tabs: [tabA, tabB],
+      activeTabId: 'live-a',
+      extraGroups: [],
+      splitCount: 1,
+      activeGroupIndex: 0,
+      activeWorkspaceKey: KEY,
+      activeProjectId: PROJECT,
+      activeWorkspaceId: WORKSPACE,
+      workspaceLayouts: {},
+    })
+    cli.posts = []
+
+    const remoteLayout: SerializedLayout = {
+      version: 2,
+      tabs: [
+        {
+          id: 'ser-b',
+          title: 'B',
+          mosaicTree: 'pg-b',
+          paneGroups: { 'pg-b': { id: 'pg-b', items: [], activeItemIndex: 0 } },
+        },
+        {
+          id: 'ser-a',
+          title: 'grok',
+          mosaicTree: 'pg-a',
+          paneGroups: {
+            'pg-a': {
+              id: 'pg-a',
+              items: [{ id: 'item-a', type: 'terminal', paneGroupId: 'pg-a', commandHint: 'grok' }],
+              activeItemIndex: 0,
+            },
+          },
+        },
+      ],
+    }
+    const ok = __tryReorderTabsInPlaceForTests(KEY, remoteLayout)
+    expect(ok).toBe(true)
+
+    const live = useTabsStore.getState().tabs.find((t) => t.id === 'live-a')
+    expect(live?.title).toBe('Hi Test')
+    expect(live?.locked).toBe(true)
+    expect(live?.locked).not.toBeUndefined()
+    expect(cli.posts.some((p) => p.route === 'workspace/set-tab-title')).toBe(false)
   })
 
   it('two clients hold DIFFERENT selections simultaneously (no shared selection)', () => {

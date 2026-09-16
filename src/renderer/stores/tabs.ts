@@ -6,10 +6,14 @@ import { agentDisplayName } from '@/lib/workspace-agent'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { asArray } from '@/lib/as-array'
 import {
+  adoptRestoredTab,
+  adoptTabTitle,
   collectStoreTabs,
+  conversationIdFromTab,
   conversationIdFromTerminal,
-  isHarnessTabLabel,
   pickConversationId,
+  rememberLiveNamedChatTitles,
+  rememberTabTitleSnapshot,
   restampSessionTabsFromChatList,
 } from '@/lib/chat-session-tab'
 import { terminalKill } from '@/lib/terminal-daemon'
@@ -1397,7 +1401,7 @@ function serializeTab(tab: Tab): SerializedTab {
           // carry the prior hint forward. Never written back into
           // `command` on restore.
           commandHint: d.command ?? d.commandHint,
-          conversationId: d.conversationId,
+          ...(d.conversationId?.trim() ? { conversationId: d.conversationId.trim() } : {}),
         }
         return v2
       } else if (item.type === 'agent') {
@@ -1450,9 +1454,8 @@ function serializeTab(tab: Tab): SerializedTab {
     paneGroups: paneGroupsObj,
     ...(tab.isSystemAgent ? { isSystemAgent: true } : {}),
     ...(tab.isPinnedFile ? { isPinnedFile: true } : {}),
-    // Tab-rename stickiness — persist a USER rename's lock so the tab stays
-    // locked across relaunch (PTY/session titles still can't clobber it).
-    ...(tab.locked ? { locked: true } : {}),
+    // T15 — emit locked: false when unlocked so overlay can tell omit vs false.
+    locked: tab.locked === true,
   }
 }
 
@@ -1476,8 +1479,55 @@ function restoredV2TerminalData(
       t.attachAgentName.startsWith('api-'),
     sandbox: t.sandbox,
     commandHint: t.commandHint,
-    conversationId: t.conversationId,
+    ...(t.conversationId?.trim() ? { conversationId: t.conversationId.trim() } : {}),
   }
+}
+
+/** T15 — never wipe a known conversationId to null when rebuilding a tab. */
+function preserveConversationIds(built: Tab, live: Tab | undefined): Tab {
+  if (!live) return built
+  let changed = false
+  const newPaneGroups = new Map<string, PaneGroup>()
+  for (const [pgId, pg] of built.paneGroups) {
+    const livePg = live.paneGroups.get(pgId)
+    if (!livePg) {
+      newPaneGroups.set(pgId, pg)
+      continue
+    }
+    const liveCid = (() => {
+      for (const item of livePg.items) {
+        if (item.type !== 'terminal') continue
+        const id = conversationIdFromTerminal(item.data as TerminalItemData)?.trim()
+        if (id) return id
+      }
+      return undefined
+    })()
+    if (!liveCid) {
+      newPaneGroups.set(pgId, pg)
+      continue
+    }
+    let pgChanged = false
+    const newItems = pg.items.map((item) => {
+      if (item.type !== 'terminal') return item
+      const d = item.data as TerminalItemData
+      if (d.conversationId?.trim()) return item
+      pgChanged = true
+      changed = true
+      return { ...item, data: { ...d, conversationId: liveCid } }
+    })
+    newPaneGroups.set(pgId, pgChanged ? { ...pg, items: newItems } : pg)
+  }
+  return changed ? { ...built, paneGroups: newPaneGroups } : built
+}
+
+function restampBuiltTabs(tabs: Tab[], liveById: Map<string, Tab>): Tab[] {
+  return tabs.map((tab) => {
+    const live = liveById.get(tab.id)
+    const withCid = preserveConversationIds(tab, live)
+    const adopted = adoptRestoredTab(withCid, live)
+    if (withCid.title === adopted.title && withCid.locked === adopted.locked) return withCid
+    return { ...withCid, title: adopted.title, locked: adopted.locked }
+  })
 }
 
 /** Serialize a WorkspaceTabSnapshot (background workspace with live tabs).
@@ -3160,18 +3210,25 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     if (!locked && target?.locked) {
       return
     }
-    // Named chat: restamp/LabelInitial often send title=grok with
-    // locked:true and wipe "Hi Test". Never replace a real name with
-    // a harness basename, even on a locked restamp.
-    if (target && isHarnessTabLabel(title) && !isHarnessTabLabel(target.title ?? '')) {
-      return
-    }
+    if (!target) return
+    const adopted = adoptTabTitle(
+      {
+        title: target.title,
+        locked: target.locked,
+        conversationId: conversationIdFromTab(target),
+      },
+      {
+        title,
+        locked: opts?.locked,
+        conversationId: conversationIdFromTab(target),
+      },
+    )
+    if (target.title === adopted.title && (target.locked === true) === adopted.locked) return
     set((state) => {
       const result = mapTabAcrossGroups(state, tabId, (tab) => ({
         ...tab,
-        title,
-        // Only a user rename flips the lock on; auto paths leave it as-is.
-        ...(locked ? { locked: true } : {}),
+        title: adopted.title,
+        locked: adopted.locked,
       }))
       return { tabs: result.tabs, extraGroups: result.extraGroups }
     })
@@ -3187,7 +3244,12 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     if (serverSupports('daemon-broadcasts')) {
       const projectId = get().activeWorkspaceKey?.split(':')[0]
       if (projectId) {
-        daemonCliPost('workspace/set-tab-title', { projectId, tabId, title, locked }).catch((err) => {
+        daemonCliPost('workspace/set-tab-title', {
+          projectId,
+          tabId,
+          title: adopted.title,
+          locked: adopted.locked,
+        }).catch((err) => {
           console.error('[tabs] set-tab-title persist failed:', err)
         })
       }
@@ -3282,21 +3344,24 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // unlocked-written by PTY label_initial, OSC, or a snapshot that
     // omitted `locked`. Remote USER renames still apply (`locked: true`).
     if (target.locked && locked !== true) return
-    if (isHarnessTabLabel(title) && !isHarnessTabLabel(target.title ?? '')) {
-      return
-    }
-    // Mirror the daemon's `locked` flag onto the local tab so the auto-sync
-    // skip in `setTabTitle` knows a remote/restored rename is sticky. When
-    // the daemon doesn't report `locked` (undefined), preserve whatever's
-    // already on the tab rather than clearing it.
-    const nextLocked = typeof locked === 'boolean' ? locked : target.locked
-    // Nothing to change — same title AND same lock state.
-    if (target.title === title && target.locked === nextLocked) return
+    const adopted = adoptTabTitle(
+      {
+        title: target.title,
+        locked: target.locked,
+        conversationId: conversationIdFromTab(target),
+      },
+      {
+        title,
+        locked,
+        conversationId: conversationIdFromTab(target),
+      },
+    )
+    if (target.title === adopted.title && (target.locked === true) === adopted.locked) return
     set((state) => {
       const result = mapTabAcrossGroups(state, tabId, (tab) => ({
         ...tab,
-        title,
-        ...(typeof nextLocked === 'boolean' ? { locked: nextLocked } : {}),
+        title: adopted.title,
+        locked: adopted.locked,
       }))
       return { tabs: result.tabs, extraGroups: result.extraGroups }
     })
@@ -3304,11 +3369,21 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
   renameTabByTitle: (oldTitle: string, newTitle: string) => {
     set((state) => {
-      const updateTab = (tab: any) =>
-        tab.title === oldTitle ? { ...tab, title: newTitle } : tab
+      const updateTab = (tab: Tab) => {
+        if (tab.title !== oldTitle) return tab
+        const adopted = adoptTabTitle(
+          {
+            title: tab.title,
+            locked: tab.locked,
+            conversationId: conversationIdFromTab(tab),
+          },
+          { title: newTitle, conversationId: conversationIdFromTab(tab) },
+        )
+        return { ...tab, title: adopted.title, locked: adopted.locked }
+      }
       return {
         tabs: state.tabs.map(updateTab),
-        extraGroups: state.extraGroups.map((group: any) => ({
+        extraGroups: state.extraGroups.map((group) => ({
           ...group,
           tabs: group.tabs.map(updateTab),
         })),
@@ -3747,6 +3822,12 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
   restoreLayout: (layout: SerializedLayout, cwd: string) => {
     try {
+    // T10/T11 — snapshot live names before rebuild (and before any
+    // caller clearAllTabs). Restamp of the built array is sync.
+    rememberLiveNamedChatTitles(collectStoreTabs(get()))
+    const liveById = new Map<string, Tab>()
+    for (const t of collectStoreTabs(get())) liveById.set(t.id, t)
+
     // 0.38.0 — v1→v2 migration. Walks all paneGroup items and drops
     // daemon-owned fields from terminal items. Daemon-owned data is
     // refilled by `reconcileWithDaemon` after restoration. The on-disk
@@ -3989,10 +4070,20 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       }
     }
 
+    // T11 — restamp the built array BEFORE set(). Never await chat/list here.
+    const restampedTabs = restampBuiltTabs(restoredTabs, liveById)
+    const restampedExtraGroups = restoredExtraGroups.map((g) => ({
+      ...g,
+      tabs: restampBuiltTabs(g.tabs, liveById),
+    }))
+    const restampedActiveTabId = restampedTabs.some((t) => t.id === restoredActiveTabId)
+      ? restoredActiveTabId
+      : (restampedTabs[0]?.id ?? null)
+
     set({
-      tabs: restoredTabs,
-      activeTabId: restoredActiveTabId,
-      extraGroups: restoredExtraGroups,
+      tabs: restampedTabs,
+      activeTabId: restampedActiveTabId,
+      extraGroups: restampedExtraGroups,
       splitCount: layout.splitCount ?? 1,
       activeGroupIndex: layout.activeGroupIndex ?? 0,
     })
@@ -4364,6 +4455,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   },
 
   clearAllTabs: () => {
+    rememberLiveNamedChatTitles(collectStoreTabs(get()))
     // 0.38.0 commit 5 — view-clear only. Previously this looped every
     // terminal item and called `closeTerminalForRenderer` (which routes
     // v2 sessions to `closeV2Session`, unregistering them from the
@@ -5925,6 +6017,7 @@ async function applyTabTitlesSnapshot(projectId: string): Promise<void> {
     const store = useTabsStore.getState()
     for (const t of titles) {
       if (t && typeof t.tabId === 'string' && typeof t.title === 'string') {
+        rememberTabTitleSnapshot(t.tabId, t.title, t.locked)
         // Carry the daemon's `locked` flag so a sticky user-rename stays
         // locked here (auto PTY/session titles won't overwrite it).
         store.applyDaemonTabTitle(t.tabId, t.title, typeof t.locked === 'boolean' ? t.locked : undefined)
@@ -6049,17 +6142,24 @@ function tryReorderTabsInPlace(key: string, layout: SerializedLayout): boolean {
     const live = bySignature.get(sig)
     if (!live || consumed.has(live)) return false
     consumed.add(live)
-    // A title-only change ships as the same tab SET (signatures match),
-    // so this fast path used to reuse the stale live Tab and silently
-    // drop a peer's rename until a full rebuild. Adopt the incoming
-    // title + locked while preserving identity/paneGroups (no remount).
-    if (
-      st.title !== live.title ||
-      (st.locked ?? false) !== (live.locked ?? false)
-    ) {
-      reordered.push({ ...live, title: st.title, locked: st.locked })
-    } else {
+    // T1/T3 — adopt is local (do not call setTabTitle; that POSTs).
+    // Omitted st.locked keeps live.locked. Never write locked: undefined.
+    const adopted = adoptTabTitle(
+      {
+        title: live.title,
+        locked: live.locked,
+        conversationId: conversationIdFromTab(live),
+      },
+      {
+        title: st.title,
+        locked: st.locked,
+        conversationId: conversationIdFromTab(live),
+      },
+    )
+    if (adopted.title === live.title && live.locked === adopted.locked) {
       reordered.push(live)
+    } else {
+      reordered.push({ ...live, title: adopted.title, locked: adopted.locked })
     }
   }
   if (reordered.length !== liveTabs.length) return false

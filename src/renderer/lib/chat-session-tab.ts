@@ -211,24 +211,190 @@ export function findTabById<T extends { id: string }>(
   return undefined
 }
 
+/** Same leading OSC/idle glyph class as AlacrittyTerminalView title strip (~541). */
+const OSC_IDLE_GLYPH_PREFIX = /^[\u2800-\u28FF*✱✲✳✴✵✶✷✸✹⚹⁎∗※·•●◦‣⏺]\s*/
+
+export function stripOscIdleGlyphs(label: string): string {
+  return label.replace(OSC_IDLE_GLYPH_PREFIX, '').trim()
+}
+
 /** PTY/OSC harness names that must not replace a named chat. */
 export function isHarnessTabLabel(label: string): boolean {
-  const n = label.trim().toLowerCase()
+  const n = stripOscIdleGlyphs(label).toLowerCase()
   if (!n) return false
   if (n === 'claude code' || n === 'cursor agent') return true
   const base = n.split(/[\s/\\]/)[0] ?? n
   return base in COMMAND_TO_PROVIDER
 }
 
-function tabHasConversationId(tab: Pick<Tab, 'paneGroups'> | undefined): boolean {
-  if (!tab?.paneGroups) return false
+export function conversationIdFromTab(
+  tab: Pick<Tab, 'paneGroups'> | undefined,
+): string | undefined {
+  if (!tab?.paneGroups) return undefined
   for (const pg of tab.paneGroups.values()) {
     for (const item of pg.items) {
       if (item.type !== 'terminal') continue
-      if (conversationIdFromTerminal(item.data as TerminalItemData)?.trim()) return true
+      const id = conversationIdFromTerminal(item.data as TerminalItemData)?.trim()
+      if (id) return id
     }
   }
-  return false
+  return undefined
+}
+
+function tabHasConversationId(tab: Pick<Tab, 'paneGroups'> | undefined): boolean {
+  return Boolean(conversationIdFromTab(tab))
+}
+
+function terminalLookupKeys(tab: Pick<Tab, 'paneGroups'> | undefined): string[] {
+  if (!tab?.paneGroups) return []
+  const keys: string[] = []
+  for (const pg of tab.paneGroups.values()) {
+    for (const item of pg.items) {
+      if (item.type !== 'terminal') continue
+      const d = item.data as TerminalItemData
+      const cid = conversationIdFromTerminal(d)?.trim()
+      if (cid) keys.push(cid)
+      const hint = d.commandHint?.trim()
+      if (hint && isUuidShape(hint)) keys.push(hint)
+      const sid = d.sessionId?.trim()
+      if (sid && isUuidShape(sid)) keys.push(sid)
+    }
+  }
+  return keys
+}
+
+export interface TabTitleAdoptState {
+  title?: string
+  locked?: boolean
+  conversationId?: string | null
+}
+
+/**
+ * Single chokepoint for title writes onto an existing tab (T1).
+ * Harness incoming never replaces a real live name (T2). Omitted
+ * `locked` keeps live.locked (T3). Keeping a named title with a
+ * conversationId forces lock true (T14). Result `locked` is always
+ * boolean — never undefined.
+ */
+export function adoptTabTitle(
+  live: TabTitleAdoptState,
+  incoming: TabTitleAdoptState,
+): { title: string; locked: boolean } {
+  const liveTitle = (live.title ?? '').trim()
+  const incomingTitle = (incoming.title ?? '').trim()
+  const hasConversation = Boolean(
+    (live.conversationId ?? incoming.conversationId)?.trim(),
+  )
+  const keepLiveName =
+    incomingTitle.length > 0 &&
+    isHarnessTabLabel(incomingTitle) &&
+    liveTitle.length > 0 &&
+    !isHarnessTabLabel(liveTitle)
+
+  const title = keepLiveName ? liveTitle : (incomingTitle || liveTitle)
+
+  let locked: boolean
+  if (typeof incoming.locked === 'boolean') {
+    locked = incoming.locked
+  } else {
+    locked = live.locked === true
+  }
+  if (keepLiveName && hasConversation) locked = true
+
+  return { title, locked: locked === true }
+}
+
+const customNameByKey = new Map<string, string>()
+const tabTitleById = new Map<string, { title: string; locked?: boolean }>()
+
+export function rememberChatCustomName(sessionId: string, name: string): void {
+  const id = sessionId.trim()
+  const n = name.trim()
+  if (!id || !n || isHarnessTabLabel(n)) return
+  customNameByKey.set(id, n)
+}
+
+export function rememberChatCustomNames(map: Record<string, string> | null | undefined): void {
+  if (!map) return
+  for (const [key, name] of Object.entries(map)) {
+    rememberChatCustomName(key, name)
+    const colon = key.lastIndexOf(':')
+    if (colon > 0) rememberChatCustomName(key.slice(colon + 1), name)
+  }
+}
+
+export function rememberTabTitleSnapshot(tabId: string, title: string, locked?: boolean): void {
+  const id = tabId.trim()
+  const n = title.trim()
+  if (!id || !n || isHarnessTabLabel(n)) return
+  tabTitleById.set(id, { title: n, ...(typeof locked === 'boolean' ? { locked } : {}) })
+}
+
+export function lookupNamedChatTitle(...keys: Array<string | null | undefined>): string | undefined {
+  for (const key of keys) {
+    const k = key?.trim()
+    if (!k) continue
+    const custom = customNameByKey.get(k)
+    if (custom) return custom
+    const snap = tabTitleById.get(k)
+    if (snap?.title) return snap.title
+  }
+  return undefined
+}
+
+export function lookupTabTitleSnapshot(tabId: string | undefined): { title: string; locked?: boolean } | undefined {
+  const id = tabId?.trim()
+  if (!id) return undefined
+  return tabTitleById.get(id)
+}
+
+export function rememberLiveNamedChatTitles(
+  tabs: Iterable<Pick<Tab, 'id' | 'title' | 'locked' | 'paneGroups'>>,
+): void {
+  for (const tab of tabs) {
+    const title = tab.title?.trim()
+    if (!title || isHarnessTabLabel(title)) continue
+    rememberTabTitleSnapshot(tab.id, title, tab.locked)
+    const cid = conversationIdFromTab(tab)
+    if (cid) rememberChatCustomName(cid, title)
+  }
+}
+
+/** Sync restamp input for restoreLayout (T4/T10/T11). Never awaits. */
+export function adoptRestoredTab(
+  built: Pick<Tab, 'id' | 'title' | 'locked' | 'paneGroups'>,
+  live?: Pick<Tab, 'id' | 'title' | 'locked' | 'paneGroups'>,
+): { title: string; locked: boolean } {
+  const conversationId = conversationIdFromTab(built) ?? conversationIdFromTab(live)
+  const mapped = lookupNamedChatTitle(
+    conversationId,
+    built.id,
+    live?.id,
+    ...terminalLookupKeys(built),
+    ...terminalLookupKeys(live),
+  )
+  const snap = lookupTabTitleSnapshot(built.id) ?? lookupTabTitleSnapshot(live?.id)
+  const incomingTitle = mapped ?? built.title
+  const incomingLocked = mapped
+    ? (typeof snap?.locked === 'boolean' ? snap.locked : true)
+    : (typeof built.locked === 'boolean' ? built.locked : snap?.locked)
+  return adoptTabTitle(
+    {
+      title: live?.title ?? built.title,
+      locked: live?.locked ?? built.locked,
+      conversationId,
+    },
+    {
+      title: incomingTitle,
+      locked: incomingLocked,
+      conversationId,
+    },
+  )
+}
+
+export function __resetNamedChatTitleCachesForTests(): void {
+  customNameByKey.clear()
+  tabTitleById.clear()
 }
 
 /** label_initial / label_changed / OSC: never unlocked-write a locked tab.
@@ -272,6 +438,7 @@ export function restampListedChatTabs(
 ): void {
   for (const s of sessions) {
     if (!s.sessionId) continue
+    if (s.customName?.trim()) rememberChatCustomName(s.sessionId, s.customName)
     restampSessionTabs(
       tabs,
       s.sessionId,
@@ -318,6 +485,7 @@ export async function persistChatRenameIfSessionTab(
     session_id: hit.sessionId,
     custom_name: name,
   })
+  rememberChatCustomName(hit.sessionId, name)
   return true
 }
 

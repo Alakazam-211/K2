@@ -14,6 +14,7 @@ import {
   collectStoreTabs,
   chatDisplayName,
   findChatSessionInTab,
+  rememberChatCustomNames,
   restampListedChatTabs,
   restampSessionTabs,
 } from '@/lib/chat-session-tab'
@@ -429,6 +430,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     try {
       const names = await daemonCliGet<Record<string, string>>('chat/custom-names')
       setCustomNames(names)
+      rememberChatCustomNames(names)
     } catch {
       // ignore
     }

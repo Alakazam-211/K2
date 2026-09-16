@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, type AgentItemData, type TerminalItemData, type BrowserItemData } from './tabs'
+import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, type AgentItemData, type TerminalItemData, type BrowserItemData, type SerializedLayout } from './tabs'
+import {
+  __resetNamedChatTitleCachesForTests,
+  rememberChatCustomName,
+  rememberTabTitleSnapshot,
+} from '@/lib/chat-session-tab'
 
 // ensurePinnedAgentTabForMode resolves the agent name via Tauri
 // `invoke`. Stub it so the async resolution completes deterministically
@@ -37,6 +42,7 @@ async function flushPinnedTabResolution(): Promise<void> {
  */
 
 function reset(): void {
+  __resetNamedChatTitleCachesForTests()
   useTabsStore.setState({
     tabs: [],
     activeTabId: null,
@@ -972,5 +978,104 @@ describe('named chat tab title (N1–N6)', () => {
     useTabsStore.getState().applyDaemonTabTitle(tab.id, 'Renamed elsewhere', true)
     expect(useTabsStore.getState().tabs[0].title).toBe('Renamed elsewhere')
     expect(useTabsStore.getState().tabs[0].locked).toBe(true)
+  })
+
+  it('Hi Test + restamp grok locked true stays Hi Test (T16a)', () => {
+    useTabsStore.getState().addTabToGroup(0, '/tmp/proj', {
+      title: 'Hi Test',
+      command: 'grok',
+      locked: true,
+      conversationId: CONV,
+    })
+    const tab = useTabsStore.getState().tabs[0]
+    useTabsStore.getState().setTabTitle(tab.id, 'grok', { locked: true })
+    useTabsStore.getState().applyDaemonTabTitle(tab.id, 'grok', true)
+    expect(useTabsStore.getState().tabs[0].title).toBe('Hi Test')
+    expect(useTabsStore.getState().tabs[0].locked).toBe(true)
+  })
+
+  it('restoreLayout restamps grok + conversationId from the custom-name map (T16d)', () => {
+    rememberChatCustomName(CONV, 'Hi Test')
+    const layout: SerializedLayout = {
+      version: 2,
+      tabs: [{
+        id: 'extra-1',
+        title: 'grok',
+        mosaicTree: 'pg-1',
+        paneGroups: {
+          'pg-1': {
+            id: 'pg-1',
+            items: [{
+              id: 'item-1',
+              type: 'terminal',
+              paneGroupId: 'pg-1',
+              commandHint: 'grok',
+              conversationId: CONV,
+            }],
+            activeItemIndex: 0,
+          },
+        },
+      }],
+    }
+    useTabsStore.getState().restoreLayout(layout, '/tmp/proj')
+    const tab = useTabsStore.getState().tabs[0]
+    expect(tab.title).toBe('Hi Test')
+    expect(tab.title).not.toBe('grok')
+    expect(tab.locked).toBe(true)
+    expect(tab.locked).not.toBeUndefined()
+  })
+
+  it('restoreLayout restamps grok extras from a tab_titles snapshot when conversationId is null (T10)', () => {
+    rememberTabTitleSnapshot('extra-1', 'Hi Test', true)
+    const layout: SerializedLayout = {
+      version: 2,
+      tabs: [{
+        id: 'extra-1',
+        title: 'grok',
+        mosaicTree: 'pg-1',
+        paneGroups: {
+          'pg-1': {
+            id: 'pg-1',
+            items: [{
+              id: 'item-1',
+              type: 'terminal',
+              paneGroupId: 'pg-1',
+              commandHint: 'grok',
+            }],
+            activeItemIndex: 0,
+          },
+        },
+      }],
+    }
+    useTabsStore.getState().restoreLayout(layout, '/tmp/proj')
+    const tab = useTabsStore.getState().tabs[0]
+    expect(tab.title).toBe('Hi Test')
+    expect(tab.locked).toBe(true)
+  })
+
+  it('serializeTab emits locked: false when unlocked and never wipes conversationId to null (T15)', () => {
+    useTabsStore.getState().addTabToGroup(0, '/tmp/proj', {
+      title: 'Hi Test',
+      command: 'grok',
+      conversationId: CONV,
+    })
+    const layout = useTabsStore.getState().serializeCurrentLayout()
+    expect(layout.tabs[0].locked).toBe(true)
+    const unlocked = useTabsStore.getState().serializeCurrentLayout()
+    // commandHint is display-only — not the tab title.
+    expect(unlocked.tabs[0].title).toBe('Hi Test')
+    const item = Object.values(layout.tabs[0].paneGroups)[0].items[0] as {
+      conversationId?: string | null
+      commandHint?: string
+    }
+    expect(item.conversationId).toBe(CONV)
+    expect(JSON.stringify(layout).includes('"conversationId":null')).toBe(false)
+    expect(item.commandHint).not.toBe('Hi Test')
+
+    useTabsStore.getState().addTabToGroup(0, '/tmp/proj', { title: 'Plain' })
+    const plain = useTabsStore.getState().serializeCurrentLayout()
+    const plainTab = plain.tabs.find((t) => t.title === 'Plain')
+    expect(plainTab?.locked).toBe(false)
+    expect(plainTab?.locked).not.toBeUndefined()
   })
 })

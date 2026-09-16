@@ -958,6 +958,9 @@ describe('named chat tab title (N1–N6)', () => {
     useTabsStore.getState().applyDaemonTabTitle(tab.id, 'Claude Code', false)
     expect(useTabsStore.getState().tabs[0].title).toBe('Code Review')
     expect(useTabsStore.getState().tabs[0].locked).toBe(true)
+    // chat/list restamp with title=grok and locked:true
+    useTabsStore.getState().setTabTitle(tab.id, 'grok', { locked: true })
+    expect(useTabsStore.getState().tabs[0].title).toBe('Code Review')
   })
 
   it('a locked remote user rename still applies', () => {

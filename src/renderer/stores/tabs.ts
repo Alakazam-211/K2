@@ -3160,6 +3160,12 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     if (!locked && target?.locked) {
       return
     }
+    // Named chat: restamp/LabelInitial often send title=grok with
+    // locked:true and wipe "Hi Test". Never replace a real name with
+    // a harness basename, even on a locked restamp.
+    if (target && isHarnessTabLabel(title) && !isHarnessTabLabel(target.title ?? '')) {
+      return
+    }
     set((state) => {
       const result = mapTabAcrossGroups(state, tabId, (tab) => ({
         ...tab,
@@ -3276,15 +3282,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // unlocked-written by PTY label_initial, OSC, or a snapshot that
     // omitted `locked`. Remote USER renames still apply (`locked: true`).
     if (target.locked && locked !== true) return
-    if (isHarnessTabLabel(title)) {
-      let named = false
-      for (const pg of target.paneGroups.values()) {
-        for (const item of pg.items) {
-          if (item.type !== 'terminal') continue
-          if (conversationIdFromTerminal(item.data as TerminalItemData)?.trim()) named = true
-        }
-      }
-      if (named) return
+    if (isHarnessTabLabel(title) && !isHarnessTabLabel(target.title ?? '')) {
+      return
     }
     // Mirror the daemon's `locked` flag onto the local tab so the auto-sync
     // skip in `setTabTitle` knows a remote/restored rename is sticky. When

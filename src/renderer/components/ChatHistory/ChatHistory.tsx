@@ -466,17 +466,21 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           const tabsStore = useTabsStore.getState()
           const tabs = collectStoreTabs(tabsStore)
           for (const s of Array.isArray(rows) ? rows : []) {
+            const key = `${s.provider || 'claude'}:${s.sessionId}`
             restampSessionTabs(
               tabs,
               s.sessionId,
-              chatDisplayName({ customName: s.customName, title: s.title }),
+              chatDisplayName({
+                customName: s.customName ?? customNames[key],
+                title: s.title,
+              }),
               tabsStore.setTabTitle,
             )
           }
         })
         .catch(() => { /* list refetch already logged in fetchSessions */ })
     })
-  }, [fetchSessions, fetchCustomNames, projectPath])
+  }, [fetchSessions, fetchCustomNames, projectPath, customNames])
 
   // Poll every 30 seconds for new sessions
   useEffect(() => {

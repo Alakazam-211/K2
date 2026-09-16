@@ -256,6 +256,10 @@ export function restampSessionTabs(
   for (const tab of tabs) {
     const hit = findChatSessionInTab(tab, ids)
     if (hit && hit.sessionId === sessionId) {
+      // chat/list often has title=grok and empty customName; that restamp
+      // was locking the harness name over "Hi Test". Never replace a
+      // real name with a harness basename.
+      if (isHarnessTabLabel(title) && !isHarnessTabLabel(tab.title ?? '')) continue
       setTabTitle(tab.id, restampTitle(tab.title ?? '', title), { locked: true })
     }
   }

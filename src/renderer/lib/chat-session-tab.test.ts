@@ -264,6 +264,14 @@ describe('findTabByPaneGroupId / restampSessionTabs', () => {
     expect(findTabById([tab], undefined)).toBeUndefined()
   })
 
+  it('does not restamp a named tab to grok/claude from chat/list title', () => {
+    const setTabTitle = vi.fn()
+    const session = terminalTab({ id: 'sess', title: 'Hi Test' })
+    restampSessionTabs([session], SID, 'grok', setTabTitle)
+    restampSessionTabs([session], SID, 'claude', setTabTitle)
+    expect(setTabTitle).not.toHaveBeenCalled()
+  })
+
   it('restamps matching session tabs via setTabTitle locked', () => {
     const setTabTitle = vi.fn()
     const session = terminalTab({ id: 'sess' })

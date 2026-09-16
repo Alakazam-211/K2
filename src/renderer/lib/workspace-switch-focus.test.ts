@@ -19,6 +19,7 @@ vi.mock('@/stores/page-view', () => ({
 import {
   applyWorkspaceSwitchFocus,
   findVisibleComposeTextarea,
+  focusThreadComposeSlotTextarea,
   tryFocusPreferredInputInDashboardPane,
   __resetWorkspaceSwitchFocusForTests,
 } from './workspace-switch-focus'
@@ -141,6 +142,59 @@ describe('applyWorkspaceSwitchFocus', () => {
     expect(document.activeElement).not.toBe(hiddenTa)
   })
 
+  it('composer pref prefers the thread-column bar over an earlier PTY bar', () => {
+    workspaceSwitchFocus = 'composer'
+    document.body.innerHTML = ''
+
+    const ptyBar = document.createElement('div')
+    ptyBar.setAttribute('data-compose-bar', '')
+    const ptyTa = document.createElement('textarea')
+    ptyTa.setAttribute('data-test', 'pty')
+    ptyBar.appendChild(ptyTa)
+    document.body.appendChild(ptyBar)
+
+    const slot = document.createElement('div')
+    slot.setAttribute('data-testid', 'agent-session-thread-compose-slot')
+    const threadBar = document.createElement('div')
+    threadBar.setAttribute('data-compose-bar', '')
+    const threadTa = document.createElement('textarea')
+    threadTa.setAttribute('data-test', 'thread')
+    threadBar.appendChild(threadTa)
+    slot.appendChild(threadBar)
+    document.body.appendChild(slot)
+
+    expect(findVisibleComposeTextarea()).toBe(threadTa)
+
+    applyWorkspaceSwitchFocus()
+    expect(document.activeElement).toBe(threadTa)
+    expect(document.activeElement).not.toBe(ptyTa)
+  })
+
+  it('falls through to the PTY bar when the thread slot is hidden', () => {
+    workspaceSwitchFocus = 'composer'
+    document.body.innerHTML = ''
+
+    const ptyBar = document.createElement('div')
+    ptyBar.setAttribute('data-compose-bar', '')
+    const ptyTa = document.createElement('textarea')
+    ptyTa.setAttribute('data-test', 'pty')
+    ptyBar.appendChild(ptyTa)
+    document.body.appendChild(ptyBar)
+
+    const slot = document.createElement('div')
+    slot.setAttribute('data-testid', 'agent-session-thread-compose-slot')
+    slot.style.display = 'none'
+    const threadBar = document.createElement('div')
+    threadBar.setAttribute('data-compose-bar', '')
+    const threadTa = document.createElement('textarea')
+    threadTa.setAttribute('data-test', 'thread')
+    threadBar.appendChild(threadTa)
+    slot.appendChild(threadBar)
+    document.body.appendChild(slot)
+
+    expect(findVisibleComposeTextarea()).toBe(ptyTa)
+  })
+
   it('is a no-op when Settings is open', () => {
     const { textarea, terminal } = mountPair({ compose: true })
     workspaceSwitchFocus = 'composer'
@@ -168,9 +222,10 @@ describe('applyWorkspaceSwitchFocus', () => {
 
 function mountDashPane(
   workspaceId: string,
-  opts: { compose?: boolean; otherPane?: boolean } = {},
+  opts: { compose?: boolean; threadCompose?: boolean; otherPane?: boolean } = {},
 ): {
   compose: HTMLTextAreaElement | null
+  threadCompose: HTMLTextAreaElement | null
   terminal: HTMLDivElement
   kessel: HTMLTextAreaElement
 } {
@@ -191,6 +246,18 @@ function mountDashPane(
     bar.appendChild(compose)
     pane.appendChild(bar)
   }
+  let threadCompose: HTMLTextAreaElement | null = null
+  if (opts.threadCompose) {
+    const slot = document.createElement('div')
+    slot.setAttribute('data-testid', 'agent-session-thread-compose-slot')
+    const bar = document.createElement('div')
+    bar.setAttribute('data-compose-bar', '')
+    threadCompose = document.createElement('textarea')
+    threadCompose.setAttribute('data-test', 'thread')
+    bar.appendChild(threadCompose)
+    slot.appendChild(bar)
+    pane.appendChild(slot)
+  }
   document.body.appendChild(pane)
 
   if (opts.otherPane) {
@@ -205,7 +272,7 @@ function mountDashPane(
     document.body.appendChild(other)
   }
 
-  return { compose, terminal, kessel }
+  return { compose, threadCompose, terminal, kessel }
 }
 
 describe('tryFocusPreferredInputInDashboardPane', () => {
@@ -254,6 +321,21 @@ describe('tryFocusPreferredInputInDashboardPane', () => {
     expect(document.activeElement).toBe(kessel)
   })
 
+  it('⌘N composer pref prefers the thread-slot bar over the PTY bar', () => {
+    const { compose, threadCompose, kessel } = mountDashPane('ws-a', {
+      compose: true,
+      threadCompose: true,
+    })
+    workspaceSwitchFocus = 'composer'
+    kessel.focus()
+
+    const ok = tryFocusPreferredInputInDashboardPane('ws-a')
+    expect(ok).toBe(true)
+    expect(document.activeElement).toBe(threadCompose)
+    expect(document.activeElement).not.toBe(compose)
+    expect(document.activeElement).not.toBe(kessel)
+  })
+
   it('unknown pane id is a no-op', () => {
     const { compose } = mountDashPane('ws-a', { compose: true })
     workspaceSwitchFocus = 'composer'
@@ -262,5 +344,46 @@ describe('tryFocusPreferredInputInDashboardPane', () => {
     const ok = tryFocusPreferredInputInDashboardPane('missing')
     expect(ok).toBe(false)
     expect(document.activeElement).not.toBe(compose)
+  })
+})
+
+describe('focusThreadComposeSlotTextarea', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('slot padding click focuses the textarea inside', () => {
+    const slot = document.createElement('div')
+    slot.setAttribute('data-testid', 'agent-session-thread-compose-slot')
+    const bar = document.createElement('div')
+    bar.setAttribute('data-compose-bar', '')
+    const ta = document.createElement('textarea')
+    bar.appendChild(ta)
+    slot.appendChild(bar)
+    document.body.appendChild(slot)
+
+    const ok = focusThreadComposeSlotTextarea(slot, slot)
+    expect(ok).toBe(true)
+    expect(document.activeElement).toBe(ta)
+  })
+
+  it('does not steal from a button inside the slot', () => {
+    const slot = document.createElement('div')
+    slot.setAttribute('data-testid', 'agent-session-thread-compose-slot')
+    const bar = document.createElement('div')
+    bar.setAttribute('data-compose-bar', '')
+    const ta = document.createElement('textarea')
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    bar.appendChild(btn)
+    bar.appendChild(ta)
+    slot.appendChild(bar)
+    document.body.appendChild(slot)
+    btn.focus()
+
+    const ok = focusThreadComposeSlotTextarea(slot, btn)
+    expect(ok).toBe(false)
+    expect(document.activeElement).toBe(btn)
+    expect(document.activeElement).not.toBe(ta)
   })
 })

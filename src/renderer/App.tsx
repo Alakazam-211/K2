@@ -535,6 +535,8 @@ function AppRoot(): React.JSX.Element {
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button') return
       if (target.isContentEditable) return
       if (target.closest('input, textarea, select, button, [contenteditable="true"], [role="textbox"]')) return
+      // Thread compose-slot padding is not a textarea; slot mousedown focuses it.
+      if (target.closest('[data-testid="agent-session-thread-compose-slot"]')) return
       // Don't steal from elements with tabindex (custom interactive components)
       if (target.tabIndex >= 0 && target.dataset.terminalContainer === undefined) return
       // Opt-in selectable surfaces (Tickets / Project chat / list cards).

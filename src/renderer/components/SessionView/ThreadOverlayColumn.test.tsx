@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, act } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
 import { ThreadOverlayColumn } from './ThreadOverlayColumn'
 
 const threadHook = vi.hoisted(() => ({
@@ -80,5 +80,25 @@ describe('ThreadOverlayColumn', () => {
 
     Element.prototype.getBoundingClientRect = orig
     vi.unstubAllGlobals()
+  })
+
+  it('clicking empty compose-slot padding focuses the textarea', () => {
+    render(
+      <ThreadOverlayColumn
+        addr="sales"
+        conversationId="c"
+        active
+        composeBar={
+          <div data-compose-bar="">
+            <textarea data-testid="thread-compose-ta" />
+          </div>
+        }
+      />,
+    )
+    const slot = screen.getByTestId('agent-session-thread-compose-slot')
+    const ta = screen.getByTestId('thread-compose-ta')
+    expect(document.activeElement).not.toBe(ta)
+    fireEvent.mouseDown(slot)
+    expect(document.activeElement).toBe(ta)
   })
 })

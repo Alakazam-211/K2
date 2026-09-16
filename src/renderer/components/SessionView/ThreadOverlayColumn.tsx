@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { SelectableRegion } from '@/components/common/SelectableText'
+import { focusThreadComposeSlotTextarea } from '@/lib/workspace-switch-focus'
 import { ThreadOverlayPane } from './ThreadOverlayPane'
 
 /**
@@ -63,6 +64,9 @@ export function ThreadOverlayColumn({
           ref={composeRef}
           className="absolute left-0 right-0 bottom-0"
           data-testid="agent-session-thread-compose-slot"
+          onMouseDown={(e) => {
+            focusThreadComposeSlotTextarea(e.currentTarget, e.target)
+          }}
         >
           {composeBar}
         </div>

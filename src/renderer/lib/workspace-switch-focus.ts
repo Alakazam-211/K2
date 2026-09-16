@@ -34,14 +34,52 @@ export function isEffectivelyHidden(el: Element | null): boolean {
   return false
 }
 
-export function findVisibleComposeTextarea(): HTMLTextAreaElement | null {
-  const nodes = document.querySelectorAll('[data-compose-bar] textarea')
+const THREAD_COMPOSE_TEXTAREA =
+  '[data-testid="agent-session-thread-compose-slot"] [data-compose-bar] textarea'
+const COMPOSE_TEXTAREA = '[data-compose-bar] textarea'
+
+function firstVisibleTextarea(
+  root: ParentNode,
+  selector: string,
+): HTMLTextAreaElement | null {
+  const nodes = root.querySelectorAll(selector)
   for (const el of nodes) {
     if (!(el instanceof HTMLTextAreaElement)) continue
     if (isEffectivelyHidden(el)) continue
     return el
   }
   return null
+}
+
+/** Visible Message-the-agent box. Split mounts PTY compose first, then
+ *  Thread — prefer the Thread-column bar when that slot is on screen. */
+export function findVisibleComposeTextarea(
+  root: ParentNode = document,
+): HTMLTextAreaElement | null {
+  return (
+    firstVisibleTextarea(root, THREAD_COMPOSE_TEXTAREA) ??
+    firstVisibleTextarea(root, COMPOSE_TEXTAREA)
+  )
+}
+
+/** Click on Thread compose-slot padding (not the textarea) should still
+ *  put the caret in the bar — App.tsx capture-click otherwise refocuses
+ *  the terminal. Interactive children keep their own focus. */
+export function focusThreadComposeSlotTextarea(
+  slot: EventTarget | null,
+  clickTarget: EventTarget | null,
+): boolean {
+  if (!(slot instanceof HTMLElement)) return false
+  if (
+    clickTarget instanceof Element &&
+    clickTarget.closest('textarea, input, button, select, [contenteditable="true"]')
+  ) {
+    return false
+  }
+  const textarea = findVisibleComposeTextarea(slot)
+  if (!textarea) return false
+  textarea.focus()
+  return true
 }
 
 function focusVisibleTerminal(): boolean {
@@ -85,14 +123,10 @@ export function tryFocusPreferredInputInDashboardPane(workspaceId: string): bool
   if (!pane || isEffectivelyHidden(pane)) return false
 
   if (preferredWorkspaceSwitchFocus() === 'composer') {
-    const nodes = pane.querySelectorAll('[data-compose-bar] textarea')
-    for (const el of nodes) {
-      if (!(el instanceof HTMLTextAreaElement)) continue
-      if (isEffectivelyHidden(el)) continue
-      el.focus()
-      return true
-    }
-    return false
+    const textarea = findVisibleComposeTextarea(pane)
+    if (!textarea) return false
+    textarea.focus()
+    return true
   }
 
   const terminals = pane.querySelectorAll('[data-terminal-container]')

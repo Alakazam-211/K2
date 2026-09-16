@@ -3,6 +3,26 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.145 — Login history, 5/5 password delay, tabs that resume
+
+Password guessing is capped at **five tries per IP per five minutes** — a delay, not an account lock (there is still no forgot-password on Connect). The Worker already does this on `https://<name>.app.k2.dev`. This build puts the same cap on the **daemon** login POST (dashboard, LAN, a raw IP) and on **skin** guest login. Sitting at the machine (loopback) is not capped. Unsigned tunnel login is still 404 from 0.40.144.
+
+Settings → Logs → **Access Audit** shows this host’s sign-in log (`k2 users audit`): who got in, from which IP, when. Owner-only.
+
+After an update, **extra LLM tabs** in the strip come back as that agent (`claude --resume`), not a login shell. Pinned Chat already did. Named chats keep the name you saved on the tab (not “grok” / “claude”).
+
+New workspaces skip “Do you trust this folder?” for Claude, Codex, Grok, and Gemini — K2 writes the same grants those tools already use, and re-asserts them on spawn and after a daemon restart. Never your home directory. Cursor may still ask.
+
+Adding a folder that is already a workspace says **workspace already exists \<name\>** instead of a generic fail.
+
+**Hosted mail.** Mail-manage agents get the rest of `k2 hostmail` (grant, doctor, approvals, import, IMAP once-password, leaf `--help`). `k2 hostmail status` matches systemd. This is the cut for lztek / it-email / Mara once this daemon is on the box.
+
+Thread, Chatter, Project, and Feedback use **Meslo**. Long words wrap. Shift+Enter is a real line break. In split view, Message-the-agent under Thread gets the caret and is the default when that setting is on. Selecting Thread text should not shrink the terminal by a pixel.
+
+Companion **3.1.1** is enough; no 3.1.2. Skin guests no longer see Chatter frames on the overlay socket.
+
+Not in this build: dark-tunnel (the API hostname still 302s `/` to `app.k2.dev`), local workspace duplicate.
+
 ## 0.40.144 — Password sign-in moves behind the K2 edge
 
 Your server's tunnel address (`https://<name>.k2.dev`) no longer serves a login page, and no longer accepts a username and password from just anyone on the internet. Those were being scanned. Password sign-in now goes through `https://<name>.app.k2.dev`, which is fronted by Cloudflare and signs each login for your server; the K2 app does this for you when you connect to a `.k2.dev` server, and the hosted web client already lives there. Everything that carries a token — your existing desktop sessions, the CLI, terminals — is unchanged. Self-hosters without the K2 edge can set **Password sign-in over the tunnel** to *Any client* in Settings → K2 Connect → Policies, or turn it off entirely.

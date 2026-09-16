@@ -11,7 +11,6 @@ import {
   type PointerEvent,
   type ReactNode,
 } from 'react'
-import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import Markdown from '@/components/Markdown/Markdown'
 import {
@@ -19,9 +18,14 @@ import {
   clearStuckBodyUserSelect,
 } from './SelectableText'
 
-/** GFM + hard breaks so Shift+Enter in Message-the-agent is a line
- *  break in Thread / Project / Feedback (GFM otherwise eats a single \n). */
-const CHAT_REMARK = [remarkGfm, remarkBreaks]
+const CHAT_REMARK = [remarkGfm]
+
+/** GFM treats a single \n as a space. Chat Shift+Enter is a hard break
+ *  (`  \\n`). No extra remark plugin — Vite on tauri-dev failed to
+ *  resolve `remark-breaks` even after bun install. */
+export function chatHardBreaks(text: string): string {
+  return text.replace(/\n/g, '  \n')
+}
 
 function onBodyPointerDown(e: PointerEvent | MouseEvent): void {
   if ('button' in e && e.button !== 0) return
@@ -54,7 +58,7 @@ export const ChatMessageBody = memo(function ChatMessageBody({
       onPointerDown={onBodyPointerDown}
       onMouseDown={onBodyPointerDown}
     >
-      <Markdown remarkPlugins={CHAT_REMARK}>{text}</Markdown>
+      <Markdown remarkPlugins={CHAT_REMARK}>{chatHardBreaks(text)}</Markdown>
     </div>
   )
 })

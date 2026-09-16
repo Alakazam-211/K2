@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { ChatMessageBody } from './ChatMessage'
+import { ChatMessageBody, chatHardBreaks } from './ChatMessage'
 
 describe('ChatMessageBody', () => {
   it('renders markdown lists, emphasis, and code', () => {
@@ -22,6 +22,7 @@ describe('ChatMessageBody', () => {
   })
 
   it('Shift+Enter single newlines render as line breaks', () => {
+    expect(chatHardBreaks('line1\nline2')).toBe('line1  \nline2')
     const { container } = render(<ChatMessageBody text={'line1\nline2'} />)
     expect(container.querySelector('br')).not.toBeNull()
     expect(container.textContent).toContain('line1')

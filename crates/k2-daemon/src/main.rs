@@ -1161,6 +1161,15 @@ async fn async_main() {
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");
 
+    // P19: re-assert CLI folder trust after ready (never blocks the gate;
+    // worktree cwds not in projects.path are covered by spawn P16).
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(|| {
+            k2_core::cli_folder_trust::trust_all_registered_projects();
+        })
+        .await;
+    });
+
     // Session-archive daily sweep (session_archive.rs): protects agent
     // transcripts from provider reaping (~30d) by copying aged sessions
     // into `.k2/session-archive/`. First pass ~2 min after boot (off the

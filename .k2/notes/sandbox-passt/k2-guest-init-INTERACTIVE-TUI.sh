@@ -17,7 +17,8 @@ mount -t tmpfs tmpfs "$HOME" 2>/dev/null; mkdir -p "$HOME/.claude" "$HOME/persis
 n=0; while [ $n -lt 100 ]; do mount -t virtiofs k2home "$HOME/persist" 2>/dev/null && break; n=$((n+1)); sleep 0.05; done
 rsync -rltD --no-owner --no-group "$HOME/persist/" "$HOME/.claude/" 2>/dev/null
 KEY_TAIL=$(printf '%s' "${ANTHROPIC_API_KEY:-}" | tail -c 20)
-SEED=$(printf '{"hasCompletedOnboarding":true,"theme":"dark","lastOnboardingVersion":"2.1.195","numStartups":25,"hasSeenTasksHint":true,"autoUpdates":false,"customApiKeyResponses":{"approved":["%s"],"rejected":[]},"projects":{}}' "$KEY_TAIL")
+_k2_tf_esc=$(printf '%s' "$WS" | sed 's/\\/\\\\/g; s/"/\\"/g')
+SEED=$(printf '{"hasCompletedOnboarding":true,"theme":"dark","lastOnboardingVersion":"2.1.195","numStartups":25,"hasSeenTasksHint":true,"autoUpdates":false,"customApiKeyResponses":{"approved":["%s"],"rejected":[]},"projects":{"%s":{"hasTrustDialogAccepted":true}}}' "$KEY_TAIL" "$_k2_tf_esc")
 printf '%s' "$SEED" > "$HOME/.claude.json"
 printf %s "$SEED" > "$HOME/.claude/.claude.json"
 if [ -n "${K2_SANDBOX_SETTINGS_JSON:-}" ]; then printf '%s' "$K2_SANDBOX_SETTINGS_JSON" > "$HOME/.claude/settings.json"; else printf '{"theme":"dark","skipDangerousModePermissionPrompt":true}' > "$HOME/.claude/settings.json"; fi
@@ -26,6 +27,10 @@ mount -t virtiofs -o ro k2ws "$WS" 2>/dev/null
 mkdir -p /run/cc-tmp; mount -t tmpfs tmpfs /run/cc-tmp 2>/dev/null
 export CLAUDE_CONFIG_DIR="$HOME/.claude" CLAUDE_CODE_TMPDIR=/run/cc-tmp IS_SANDBOX=1
 cd "$WS" 2>/dev/null || cd "$HOME"
+mkdir -p "$HOME/.codex" "$HOME/.grok" "$HOME/.gemini"
+printf '[projects."%s"]\ntrust_level = "trusted"\n' "$_k2_tf_esc" > "$HOME/.codex/config.toml"
+printf '[folders."%s"]\ntrusted = true\ndecided_at = %s\n' "$_k2_tf_esc" "$(date +%s)" > "$HOME/.grok/trusted_folders.toml"
+printf '{"%s":"TRUST_FOLDER"}\n' "$_k2_tf_esc" > "$HOME/.gemini/trustedFolders.json"
 k2 respond "sandbox ready in $(pwd) — launching ${1:-claude}"
 SID="${K2_SESSION_ID:-$(cat /proc/sys/kernel/random/uuid)}"
 # [K2 API] preamble — EXACT wording coordinated with the host-sessions door.

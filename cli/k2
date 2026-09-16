@@ -11903,6 +11903,11 @@ cmd_workspace_create() {
     cli_print_or_fail "$resp"
 }
 
+# P13: re-assert Claude/Codex/Grok/Gemini folder trust for every registered workspace.
+cmd_trust_folders() {
+    cli_request "/cli/trust-folders"
+}
+
 cmd_workspace_preview() {
     local target_path="${1:-}"
     if [ -z "$target_path" ]; then
@@ -27859,6 +27864,9 @@ EOF
             feedback) shift 2; cmd_review_feedback "$@" ;;
             *)        echo "Unknown review subcommand: ${2:-}" >&2; cmd_help; exit 1 ;;
         esac
+        ;;
+    trust-folders)
+        shift; cmd_trust_folders "$@"
         ;;
     workspace)
         # 0.40.24 (B4): --help/-h anywhere in a workspace subcommand prints

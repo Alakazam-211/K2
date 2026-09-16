@@ -1101,6 +1101,11 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
         per_session_uid = Some(cell_uid);
     }
 
+    k2_core::cli_folder_trust::maybe_trust_harness_spawn(
+        cfg.program.as_deref(),
+        cfg.cwd.as_deref(),
+        cfg.env.get("HOME").map(String::as_str),
+    );
     let __t_spawn = std::time::Instant::now();
     let session = match DaemonPtySession::spawn(cfg) {
         Ok(s) => s,

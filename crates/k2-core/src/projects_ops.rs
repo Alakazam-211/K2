@@ -360,7 +360,7 @@ pub fn projects_create(
     let tab_order = next_tab_order(&conn);
     let color = color.unwrap_or("#3b82f6").to_string();
 
-    with_transaction(&conn, || {
+    let project = with_transaction(&conn, || {
         Project::create(&conn, &project_id, name, path, &color, tab_order, 1, None, None)
             .map_err(|e| e.to_string())?;
         stamp_default_agent(&conn, &project_id)?;
@@ -377,7 +377,9 @@ pub fn projects_create(
         )
         .map_err(|e| e.to_string())?;
         Project::get(&conn, &project_id).map_err(|e| e.to_string())
-    })
+    })?;
+    crate::cli_folder_trust::trust_cli_folder(path);
+    Ok(project)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -684,6 +686,7 @@ pub fn projects_add_from_path_ex(
             seed_agents_md,
             fanout,
         );
+        crate::cli_folder_trust::trust_cli_folder(path);
     }
     Ok(result)
 }
@@ -768,6 +771,7 @@ pub fn projects_add_without_git_ex(
         seed_agents_md,
         fanout,
     );
+    crate::cli_folder_trust::trust_cli_folder(path);
     Ok(project)
 }
 
@@ -858,6 +862,7 @@ pub fn projects_init_git_and_open_ex(
         seed_agents_md,
         fanout,
     );
+    crate::cli_folder_trust::trust_cli_folder(path);
     Ok(project)
 }
 

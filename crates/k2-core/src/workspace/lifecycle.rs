@@ -96,8 +96,8 @@ pub fn register_workspace_ex(
     let project_id = uuid::Uuid::new_v4().to_string();
     let workspace_id = uuid::Uuid::new_v4().to_string();
 
-    let branch = run_git(&["rev-parse", "--abbrev-ref", "HEAD"], path)
-        .unwrap_or_else(|| "main".to_string());
+    let branch =
+        run_git(&["rev-parse", "--abbrev-ref", "HEAD"], path).unwrap_or_else(|| "main".to_string());
 
     let tab_order: i64 = conn
         .query_row(
@@ -150,6 +150,7 @@ pub fn register_workspace_ex(
                 seed_agents_md,
                 fanout,
             );
+            crate::cli_folder_trust::trust_cli_folder(path);
             Ok(serde_json::json!({
                 "success": true,
                 "projectId": project_id,

@@ -438,6 +438,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/workspace/set" => CliResponse::method_not_allowed(),
         "/cli/workspace/set-handle" => CliResponse::method_not_allowed(),
 
+        // P13: ops one-shot wrapping P1 for every projects.path row.
+        "/cli/trust-folders" => {
+            let n = k2_core::cli_folder_trust::trust_all_registered_projects();
+            CliResponse::ok_json(serde_json::json!({ "ok": true, "granted": n }).to_string())
+        }
+
         _ => return None,
     };
     Some(resp)

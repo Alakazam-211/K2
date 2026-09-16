@@ -57,6 +57,8 @@ pub mod chat_user_archive;
 // bundle). Powers both the high-bar push (P2) and the README fallback
 // (P3). HTTP/Tauri-free; see module docs + PRD k2-connect-clone-to.md.
 pub mod cli_stage;
+/// Pre-trust Claude/Codex/Grok/Gemini folders on workspace add + harness spawn.
+pub mod cli_folder_trust;
 pub mod clone;
 pub mod companion;
 // Phase 2.5e: workspace-to-workspace connections registry (relocated

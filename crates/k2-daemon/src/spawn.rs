@@ -443,6 +443,11 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
     };
     let session_id = cfg.session_id;
 
+    k2_core::cli_folder_trust::maybe_trust_harness_spawn(
+        cfg.program.as_deref(),
+        cfg.cwd.as_deref(),
+        cfg.env.get("HOME").map(String::as_str),
+    );
     let session = DaemonPtySession::spawn(cfg).map_err(|e| format!("v2 spawn failed: {e}"))?;
     // Seed last-claimer dims at create (attach-size PR2) so a grid
     // pre-snap has the body fit before the first SetActive.

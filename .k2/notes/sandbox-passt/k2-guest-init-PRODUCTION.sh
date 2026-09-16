@@ -23,6 +23,13 @@ mount -t virtiofs -o ro k2ws "$WS" 2>/dev/null
 mkdir -p /run/cc-tmp; mount -t tmpfs tmpfs /run/cc-tmp 2>/dev/null
 export CLAUDE_CONFIG_DIR="$HOME/.claude" CLAUDE_CODE_TMPDIR=/run/cc-tmp IS_SANDBOX=1
 cd "$WS" 2>/dev/null || cd "$HOME"
+# P21: seed in-cell tmpfs folder-trust. Host persist is `.claude/`, not `.claude.json`.
+_k2_tf_esc=$(printf '%s' "$(pwd)" | sed 's/\\/\\\\/g; s/"/\\"/g')
+printf '{"hasCompletedOnboarding":true,"theme":"dark","projects":{"%s":{"hasTrustDialogAccepted":true}}}\n' "$_k2_tf_esc" > "$HOME/.claude.json"
+mkdir -p "$HOME/.codex" "$HOME/.grok" "$HOME/.gemini"
+printf '[projects."%s"]\ntrust_level = "trusted"\n' "$_k2_tf_esc" > "$HOME/.codex/config.toml"
+printf '[folders."%s"]\ntrusted = true\ndecided_at = %s\n' "$_k2_tf_esc" "$(date +%s)" > "$HOME/.grok/trusted_folders.toml"
+printf '{"%s":"TRUST_FOLDER"}\n' "$_k2_tf_esc" > "$HOME/.gemini/trustedFolders.json"
 k2 respond "sandbox ready in $(pwd) — launching ${1:-claude}"
 SID="${K2_SESSION_ID:-$(cat /proc/sys/kernel/random/uuid)}"
 # [K2 API] preamble — EXACT wording coordinated with the host-sessions door.

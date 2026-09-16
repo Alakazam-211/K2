@@ -632,10 +632,11 @@ a,
   padding-left: 4px;
 }
 
-/* Compact markdown for Project / Feedback chat — same tokens, tighter
-   rhythm and UI type so threads scan. Code stays mono. */
+/* Compact markdown for Thread / Chatter / Project / Feedback — same
+   tokens, tighter rhythm. Type matches the rest of K2 (`--font-ui` =
+   MesloLGM Nerd Font). Code fences stay Meslo via .code-highlighted. */
 .chat-markdown {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  font-family: var(--font-ui);
   line-height: 1.5;
   color: var(--color-text-primary);
 }

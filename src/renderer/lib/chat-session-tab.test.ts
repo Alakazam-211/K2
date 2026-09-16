@@ -309,11 +309,23 @@ describe('applyUnlockedTabLabel (label_initial / OSC)', () => {
     expect(tab.title).toBe('Code Review')
   })
 
-  it('writes through when the tab is unlocked', () => {
+  it('writes through when the tab is unlocked and not a named chat', () => {
     const setTabTitle = vi.fn()
-    const tab = terminalTab({ id: 'sess', title: 'Terminal 1' })
+    const tab = terminalTab({
+      id: 'sess',
+      title: 'Terminal 1',
+      data: { command: undefined, args: undefined, conversationId: undefined },
+    })
+    applyUnlockedTabLabel(tab, 'vim README.md', setTabTitle)
+    expect(setTabTitle).toHaveBeenCalledWith('sess', 'vim README.md')
+  })
+
+  it('does not stamp grok/claude onto a named chat even if unlocked', () => {
+    const setTabTitle = vi.fn()
+    const tab = terminalTab({ id: 'sess', title: 'Hi Test' })
+    applyUnlockedTabLabel(tab, 'grok', setTabTitle)
     applyUnlockedTabLabel(tab, 'claude', setTabTitle)
-    expect(setTabTitle).toHaveBeenCalledWith('sess', 'claude')
+    expect(setTabTitle).not.toHaveBeenCalled()
   })
 })
 

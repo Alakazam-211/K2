@@ -211,15 +211,38 @@ export function findTabById<T extends { id: string }>(
   return undefined
 }
 
-/** label_initial / label_changed / OSC: never unlocked-write a locked tab. */
+/** PTY/OSC harness names that must not replace a named chat. */
+export function isHarnessTabLabel(label: string): boolean {
+  const n = label.trim().toLowerCase()
+  if (!n) return false
+  if (n === 'claude code' || n === 'cursor agent') return true
+  const base = n.split(/[\s/\\]/)[0] ?? n
+  return base in COMMAND_TO_PROVIDER
+}
+
+function tabHasConversationId(tab: Pick<Tab, 'paneGroups'> | undefined): boolean {
+  if (!tab?.paneGroups) return false
+  for (const pg of tab.paneGroups.values()) {
+    for (const item of pg.items) {
+      if (item.type !== 'terminal') continue
+      if (conversationIdFromTerminal(item.data as TerminalItemData)?.trim()) return true
+    }
+  }
+  return false
+}
+
+/** label_initial / label_changed / OSC: never unlocked-write a locked tab.
+ *  Also never stamp a harness basename onto a named-chat tab (Grok OSC
+ *  "grok" was still winning the first paint on Cortana). */
 export function applyUnlockedTabLabel(
-  tab: Pick<Tab, 'id' | 'locked'> | undefined,
+  tab: (Pick<Tab, 'id' | 'locked'> & Partial<Pick<Tab, 'paneGroups'>>) | undefined,
   label: string,
   setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => void,
 ): void {
   const next = label.trim()
   if (!tab || !next) return
   if (tab.locked) return
+  if (isHarnessTabLabel(next) && tabHasConversationId(tab)) return
   setTabTitle(tab.id, next)
 }
 

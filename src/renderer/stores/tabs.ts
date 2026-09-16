@@ -7,6 +7,8 @@ import { isBuiltinAgentType } from '@/lib/agent-type'
 import { asArray } from '@/lib/as-array'
 import {
   collectStoreTabs,
+  conversationIdFromTerminal,
+  isHarnessTabLabel,
   pickConversationId,
   restampSessionTabsFromChatList,
 } from '@/lib/chat-session-tab'
@@ -3274,6 +3276,16 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // unlocked-written by PTY label_initial, OSC, or a snapshot that
     // omitted `locked`. Remote USER renames still apply (`locked: true`).
     if (target.locked && locked !== true) return
+    if (isHarnessTabLabel(title)) {
+      let named = false
+      for (const pg of target.paneGroups.values()) {
+        for (const item of pg.items) {
+          if (item.type !== 'terminal') continue
+          if (conversationIdFromTerminal(item.data as TerminalItemData)?.trim()) named = true
+        }
+      }
+      if (named) return
+    }
     // Mirror the daemon's `locked` flag onto the local tab so the auto-sync
     // skip in `setTabTitle` knows a remote/restored rename is sticky. When
     // the daemon doesn't report `locked` (undefined), preserve whatever's

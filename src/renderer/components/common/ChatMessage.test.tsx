@@ -21,6 +21,13 @@ describe('ChatMessageBody', () => {
     expect(document.querySelector('pre')).not.toBeNull()
   })
 
+  it('Shift+Enter single newlines render as line breaks', () => {
+    const { container } = render(<ChatMessageBody text={'line1\nline2'} />)
+    expect(container.querySelector('br')).not.toBeNull()
+    expect(container.textContent).toContain('line1')
+    expect(container.textContent).toContain('line2')
+  })
+
   it('chat bodies use chat-markdown (wraps long tokens in CSS)', () => {
     const { container } = render(
       <ChatMessageBody text={'https://example.com/' + 'a'.repeat(80)} />,

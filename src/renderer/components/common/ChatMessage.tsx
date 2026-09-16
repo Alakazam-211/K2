@@ -11,6 +11,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from 'react'
+import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import Markdown from '@/components/Markdown/Markdown'
 import {
@@ -18,7 +19,9 @@ import {
   clearStuckBodyUserSelect,
 } from './SelectableText'
 
-const REMARK_GFM = [remarkGfm]
+/** GFM + hard breaks so Shift+Enter in Message-the-agent is a line
+ *  break in Thread / Project / Feedback (GFM otherwise eats a single \n). */
+const CHAT_REMARK = [remarkGfm, remarkBreaks]
 
 function onBodyPointerDown(e: PointerEvent | MouseEvent): void {
   if ('button' in e && e.button !== 0) return
@@ -51,7 +54,7 @@ export const ChatMessageBody = memo(function ChatMessageBody({
       onPointerDown={onBodyPointerDown}
       onMouseDown={onBodyPointerDown}
     >
-      <Markdown remarkPlugins={REMARK_GFM}>{text}</Markdown>
+      <Markdown remarkPlugins={CHAT_REMARK}>{text}</Markdown>
     </div>
   )
 })

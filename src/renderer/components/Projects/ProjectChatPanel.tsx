@@ -328,7 +328,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         <SelectableRegion className="flex-1 min-h-0 flex flex-col">
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto min-h-0 px-3 py-2"
+          className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 px-3 py-2"
           data-project-chat={show.id}
         >
           {loadError ? (

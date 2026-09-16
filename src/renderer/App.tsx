@@ -234,6 +234,7 @@ function applyK2SOZoom(): void {
   // Zoom suffix shared: `… — 125%`.
   const z = window.__k2soZoom ?? 1
   document.documentElement.style.setProperty('--k2-app-zoom', String(z))
+  document.documentElement.classList.toggle('k2-app-zoomed', z !== 1)
   if (z === 1) {
     document.documentElement.style.zoom = ''
   } else {

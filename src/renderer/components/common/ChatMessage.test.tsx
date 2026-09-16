@@ -20,4 +20,13 @@ describe('ChatMessageBody', () => {
     expect(screen.getByText('const x = 1')).not.toBeNull()
     expect(document.querySelector('pre')).not.toBeNull()
   })
+
+  it('chat bodies use chat-markdown (wraps long tokens in CSS)', () => {
+    const { container } = render(
+      <ChatMessageBody text={'https://example.com/' + 'a'.repeat(80)} />,
+    )
+    const body = container.querySelector('.chat-markdown')
+    expect(body).not.toBeNull()
+    expect(body?.className).toContain('markdown-content')
+  })
 })

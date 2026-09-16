@@ -48,17 +48,22 @@ html {
   --k2-app-zoom: 1;
 }
 [data-k2-exclude-app-zoom] {
-  zoom: calc(1 / var(--k2-app-zoom, 1));
-  width: calc(100% * var(--k2-app-zoom, 1));
-  height: calc(100% * var(--k2-app-zoom, 1));
-  max-width: none;
-  max-height: none;
   min-width: 0;
   min-height: 0;
   box-sizing: border-box;
   /* Don't let inverse-zoom layout spill into siblings (compose bar). */
   flex: 1 1 auto;
   overflow: hidden;
+}
+/* Inverse zoom only when chrome is actually zoomed. `zoom: 1` still
+   puts the grid on the CSS-zoom path and 1px sibling overflow looks
+   blurry (terminal+thread split). */
+html.k2-app-zoomed [data-k2-exclude-app-zoom] {
+  zoom: calc(1 / var(--k2-app-zoom, 1));
+  width: calc(100% * var(--k2-app-zoom, 1));
+  height: calc(100% * var(--k2-app-zoom, 1));
+  max-width: none;
+  max-height: none;
 }
 
 /* Compose / chat fields under app zoom: shrink in flex, never grow a
@@ -639,6 +644,10 @@ a,
   font-family: var(--font-ui);
   line-height: 1.5;
   color: var(--color-text-primary);
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-markdown h1,
@@ -679,6 +688,10 @@ a,
 .chat-markdown pre {
   padding: 8px;
   margin: 0 0 6px 0;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-markdown pre code {

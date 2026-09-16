@@ -4711,10 +4711,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // PTY resize itself stays debounced.
       const liveRect = entries[0]?.contentRect
       if (liveRect && liveRect.width > 0 && liveRect.height > 0) {
+        const width = Math.round(liveRect.width)
+        const height = Math.round(liveRect.height)
         setContainerSize((prev) =>
-          prev.width === liveRect.width && prev.height === liveRect.height
+          prev.width === width && prev.height === height
             ? prev
-            : { width: liveRect.width, height: liveRect.height },
+            : { width, height },
         )
       }
       if (timer) clearTimeout(timer)
@@ -4724,7 +4726,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         if (!rect || rect.width === 0 || rect.height === 0) return
         // Same math as measurePaneFit (spawn body) — keep in lockstep.
         const fit = measurePaneFit(
-          { width: rect.width, height: rect.height },
+          { width: Math.round(rect.width), height: Math.round(rect.height) },
           cellMetrics.width,
           cellMetrics.height,
         )

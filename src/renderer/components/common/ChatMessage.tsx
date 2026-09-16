@@ -73,7 +73,7 @@ export const ChatMessage = memo(function ChatMessage({
 }): JSX.Element {
   return (
     <div
-      className={`flex flex-col gap-1 px-2.5 py-2 ${
+      className={`flex flex-col gap-1 min-w-0 w-full px-2.5 py-2 ${
         isOwner ? 'bg-white/[0.03]' : 'bg-[var(--color-bg-inset)]'
       }`}
     >

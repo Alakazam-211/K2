@@ -69,7 +69,7 @@ export const ChatterOverlayPane = memo(function ChatterOverlayPane({
     >
       <div
         ref={listRef}
-        className="flex-1 min-h-0 overflow-y-auto px-2 py-2"
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2"
         onScroll={(e) => {
           if (e.currentTarget.scrollTop <= 16) requestOlder()
         }}

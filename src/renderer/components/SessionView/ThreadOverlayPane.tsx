@@ -145,7 +145,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
       <div
         ref={listRef}
         data-testid="thread-overlay-list"
-        className="flex-1 min-h-0 overflow-y-auto px-2 py-2"
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2"
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return

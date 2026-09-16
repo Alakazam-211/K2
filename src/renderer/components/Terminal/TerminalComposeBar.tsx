@@ -868,22 +868,6 @@ export function TerminalComposeBar({
           document.body,
         )}
       <div className="relative min-w-0 flex-1">
-      {draft.length === 0 && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 truncate text-[var(--color-text-muted)]"
-          style={{
-            fontFamily:
-              "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
-            fontSize: editorFontSize,
-            lineHeight: 1.4,
-            padding: '4px 6px',
-            boxSizing: 'border-box',
-          }}
-        >
-          {messagePlaceholder}
-        </div>
-      )}
       <textarea
         ref={textareaRef}
         value={draft}
@@ -954,7 +938,7 @@ export function TerminalComposeBar({
         onDrop={handleDrop}
         rows={1}
         spellCheck={false}
-        placeholder=""
+        placeholder={messagePlaceholder}
         title="Enter to send, Shift+Enter for newline. Drop files for paths."
         className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         style={{
@@ -974,6 +958,7 @@ export function TerminalComposeBar({
           overflowX: 'hidden',
           overflowWrap: 'anywhere',
           wordBreak: 'break-word',
+          caretColor: 'var(--color-text-primary)',
         }}
       />
       </div>

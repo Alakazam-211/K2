@@ -92,6 +92,19 @@ describe('findChatSessionInTab', () => {
     expect(findChatSessionInTab(tab, ids)).toEqual({ sessionId: SID, provider: 'claude' })
   })
 
+  it('matches restored conversationId when command and args are empty', () => {
+    const tab = terminalTab({
+      data: {
+        command: undefined,
+        args: undefined,
+        sessionId: undefined,
+        conversationId: SID,
+      },
+    })
+    expect(findChatSessionInTab(tab, ids)).toEqual({ sessionId: SID, provider: null })
+    expect(findChatSessionInTab(tab)).toEqual({ sessionId: SID, provider: null })
+  })
+
   it('ignores TerminalItemData.sessionId (Kessel PTY id)', () => {
     const tab = terminalTab({
       data: { args: ['--help'], sessionId: SID, command: 'claude' },

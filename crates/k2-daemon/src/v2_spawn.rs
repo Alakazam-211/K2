@@ -313,7 +313,11 @@ pub fn can_sandbox() -> bool {
 /// - **API host-sessions** (`api-*`) never recover here (0.40.105).
 /// - **Canonical chat** (`agent_name == project_id`) stays dead until a
 ///   need — empty-command leftover argv must not revive it.
-/// - **Extra GUI tabs** (`tab-*`) are not mass-revived on restart.
+/// - **Extra GUI tabs** (`tab-*`) recover on visit when the tab-session
+///   row is a known harness + provider session id. Missing / shell /
+///   empty / unknown command / no session id still mint a shell so
+///   Cmd+T stays a login shell. Visit is the need; do not mass-revive
+///   leftover `tab-*` at boot.
 /// - Other leftover tab-rows (non-canonical, non-tab, non-api keys)
 ///   still replay saved command + splice the session id via the
 ///   ProviderResume adapter when one exists.
@@ -322,16 +326,14 @@ pub fn can_sandbox() -> bool {
 /// (spawn falls through to a bare shell, as before).
 pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, Vec<String>)> {
     use k2_core::workspace::provider_resume::provider_resume_for_command;
+    use k2_core::workspace_session_handles::{
+        is_api_agent_name, is_harness_command, is_tab_agent_name,
+    };
 
     // API host-sessions are dead-resumed only via POST /v1 host-sessions
     // (capped). GUI restart-recovery must not relaunch every leftover
     // from_api row after a reboot (Scout interview tabs, 2026-08-21).
-    if k2_core::workspace_session_handles::is_api_agent_name(agent_name) {
-        return None;
-    }
-    // Extra GUI tabs stay dead across reboot until a need — do not
-    // mass-revive leftover `tab-*` empty-command argv.
-    if k2_core::workspace_session_handles::is_tab_agent_name(agent_name) {
+    if is_api_agent_name(agent_name) {
         return None;
     }
 
@@ -365,9 +367,23 @@ pub(crate) fn recovered_launch(agent_name: &str, cwd: &str) -> Option<(String, V
         return None;
     }
 
-    // Tab-row path for leftover non-canonical, non-tab, non-api keys
-    // (e.g. a named sidecar that isn't `tab-*`). Replay the saved
-    // command, splice the session id in the command's own grammar.
+    // Extra `tab-*` visit: only splice resume when the row is a known
+    // harness with a provider session id. Cmd+T (no row / shell /
+    // unknown / empty session id) still falls through to a login shell.
+    if is_tab_agent_name(agent_name) {
+        let sid = tab_session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if sid.is_none() || !is_harness_command(tab_cmd.as_deref()) {
+            return None;
+        }
+    }
+
+    // Tab-row path for leftover non-canonical, non-api keys (named
+    // sidecars, and `tab-*` that passed the harness+session-id gate).
+    // Replay the saved command, splice the session id in the command's
+    // own grammar.
     if let Some(saved_cmd) = tab_cmd {
         let mut saved_args: Vec<String> = tab_args_json
             .as_deref()
@@ -558,8 +574,10 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     let __t_total = std::time::Instant::now();
 
     // Canonical chat key = bare project_id. Empty-command attach on that
-    // key is a NEED (R5/R16), not leftover-argv recovery. tab-*/api-*
-    // and `{pid}:hb:{name}` stay on their own lanes (R22).
+    // key is a NEED (R5/R16), not leftover-argv recovery. `tab-*` visits
+    // recover via `recovered_launch` only when the tab-session row is a
+    // harness + provider session id; api-* and `{pid}:hb:{name}` stay
+    // on their own lanes (R22).
     let project_id = project_id_for_cwd(&req.cwd);
     let is_canonical = project_id.as_deref() == Some(req.agent_name.as_str());
 
@@ -1983,7 +2001,107 @@ mod tests {
         k2_core::db::init_for_tests();
         assert!(
             recovered_launch("tab-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "/tmp/any",).is_none(),
-            "must not mass-revive tab-* on restart recovery"
+            "tab-* without a workspace_tab_sessions row must stay a shell"
+        );
+    }
+
+    fn seed_project_and_tab_row(
+        pid: &str,
+        cwd: &str,
+        agent_name: &str,
+        command: Option<&str>,
+        session_id: Option<&str>,
+        args: &[&str],
+    ) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+            rusqlite::params![pid, cwd, "tab-resume"],
+        )
+        .expect("seed project");
+        let pane_group_id = agent_name
+            .strip_prefix("tab-")
+            .unwrap_or(agent_name)
+            .to_string();
+        k2_core::db::schema::WorkspaceTabSession::upsert(
+            &conn,
+            &k2_core::db::schema::WorkspaceTabSession {
+                project_id: pid.to_string(),
+                pane_group_id,
+                agent_name: agent_name.to_string(),
+                session_id: session_id.map(str::to_string),
+                command: command.map(str::to_string),
+                args_json: Some(serde_json::to_string(&args).expect("args json")),
+                cwd: Some(cwd.to_string()),
+                last_seen_at: 0,
+                pinned_cols: None,
+                pinned_rows: None,
+                pinned_set_by: None,
+            },
+        )
+        .expect("seed workspace_tab_sessions row");
+    }
+
+    #[test]
+    fn recovered_launch_tab_harness_with_session_id_splices_resume() {
+        k2_core::db::init_for_tests();
+        let pid = "tab-resume-harness-ws";
+        let cwd = "/tmp/tab-resume-harness-ws";
+        let agent = "tab-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let sid = "01920000-aaaa-7000-8000-000000000001";
+        seed_project_and_tab_row(
+            pid,
+            cwd,
+            agent,
+            Some("claude"),
+            Some(sid),
+            &["--dangerously-skip-permissions"],
+        );
+        let (cmd, args) = recovered_launch(agent, cwd)
+            .expect("tab-* harness + session id must recover, not mint a shell");
+        assert_eq!(cmd, "claude", "recovered command must be the harness");
+        assert!(
+            args.windows(2).any(|w| w[0] == "--resume" && w[1] == sid),
+            "recovered argv must splice --resume {sid}, got: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--session-id"),
+            "resume splice must not leave a premint --session-id, got: {args:?}"
+        );
+    }
+
+    #[test]
+    fn recovered_launch_tab_shell_or_missing_session_stays_none() {
+        k2_core::db::init_for_tests();
+        let pid = "tab-resume-shell-ws";
+        let cwd = "/tmp/tab-resume-shell-ws";
+        let agent = "tab-bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+        seed_project_and_tab_row(pid, cwd, agent, Some("/bin/zsh"), Some("sid-1"), &[]);
+        assert!(
+            recovered_launch(agent, cwd).is_none(),
+            "tab-* shell command must stay a shell even with a session id"
+        );
+
+        let agent_no_sid = "tab-cccccccc-dddd-eeee-ffff-000000000000";
+        seed_project_and_tab_row(
+            pid,
+            cwd,
+            agent_no_sid,
+            Some("claude"),
+            None,
+            &["--dangerously-skip-permissions"],
+        );
+        assert!(
+            recovered_launch(agent_no_sid, cwd).is_none(),
+            "tab-* harness without a provider session id must stay a shell"
+        );
+
+        let agent_unknown = "tab-dddddddd-eeee-ffff-0000-111111111111";
+        seed_project_and_tab_row(pid, cwd, agent_unknown, Some("make"), Some("sid-2"), &[]);
+        assert!(
+            recovered_launch(agent_unknown, cwd).is_none(),
+            "tab-* unknown command must stay a shell even with a session id"
         );
     }
 

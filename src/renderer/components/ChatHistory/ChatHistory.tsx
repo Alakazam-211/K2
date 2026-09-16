@@ -3,7 +3,7 @@ import { onChatHistoryChanged } from '@/stores/session-events'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
-import { useTabsStore, openApiHostSessionTab, type TerminalItemData } from '@/stores/tabs'
+import { useTabsStore, openApiHostSessionTab } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { usePresetsStore } from '@/stores/presets'
 import { resolveAgentCommand } from '@/lib/agent-resolve'
@@ -13,6 +13,7 @@ import { resolveChatHistoryHost } from './resolveHost'
 import {
   collectStoreTabs,
   chatDisplayName,
+  findChatSessionInTab,
   findTabByPaneGroupId,
   restampSessionTabs,
 } from '@/lib/chat-session-tab'
@@ -867,36 +868,28 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         ? `${displayTitle} (from ${session.originBranch})`
         : displayTitle
 
-      // Re-surface dedup: if a tab is already running this exact
-      // session (same command + sessionId in args), focus it instead
-      // of opening a duplicate. Cross-worktree forks are exempt —
-      // --fork-session creates a *new* conversation branch, so the
-      // user genuinely wants a fresh tab even if the origin session
-      // is open elsewhere.
+      // Re-surface dedup: if a tab is already this conversation
+      // (`conversationId` first, then resume argv), focus it instead
+      // of opening a duplicate. Post-restore extras have conversationId
+      // and empty command/args — matching on argv alone duplicated.
+      // Cross-worktree forks are exempt: --fork-session is a new branch.
       if (!isCrossWorktree) {
+        const ids = new Set([session.sessionId])
         const groups: Array<{ tabs: typeof tabsStore.tabs, idx: number }> = [
           { tabs: tabsStore.tabs, idx: 0 },
           ...tabsStore.extraGroups.map((g, i) => ({ tabs: g.tabs, idx: i + 1 })),
         ]
         for (const { tabs, idx } of groups) {
           for (const tab of tabs) {
-            if (tab.isSystemAgent) continue
-            for (const [, pg] of tab.paneGroups) {
-              for (const item of pg.items) {
-                if (item.type !== 'terminal') continue
-                const td = item.data as TerminalItemData
-                if (td.command !== config.command) continue
-                if (!td.args?.includes(session.sessionId)) continue
-                if (td.heartbeatName || td.fromApi || td.attachAgentName?.startsWith('api-')) continue
-                tabsStore.setTabTitle(tab.id, title, { locked: true })
-                if (idx === 0) {
-                  tabsStore.setActiveTab(tab.id)
-                } else {
-                  tabsStore.setActiveTabInGroup(idx, tab.id)
-                }
-                return
-              }
+            const hit = findChatSessionInTab(tab, ids)
+            if (!hit) continue
+            tabsStore.setTabTitle(tab.id, title, { locked: true })
+            if (idx === 0) {
+              tabsStore.setActiveTab(tab.id)
+            } else {
+              tabsStore.setActiveTabInGroup(idx, tab.id)
             }
+            return
           }
         }
       }

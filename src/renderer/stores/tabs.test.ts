@@ -668,6 +668,80 @@ describe('D9 sandbox tab marker', () => {
   })
 })
 
+describe('v2 layout conversationId persist (extra LLM tab restore)', () => {
+  beforeEach(reset)
+
+  const CONV = '01920000-aaaa-7000-8000-0000000000ab'
+  const PG = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+
+  function extraLlmTab(): void {
+    useTabsStore.setState({
+      tabs: [{
+        id: 'extra-llm',
+        title: 'Reviewer',
+        mosaicTree: PG,
+        paneGroups: new Map([[PG, {
+          id: PG,
+          items: [{
+            id: 'item-1',
+            type: 'terminal',
+            data: {
+              terminalId: PG,
+              cwd: '/tmp/proj',
+              renderer: 'kessel',
+              command: 'claude',
+              args: ['--resume', CONV],
+              commandHint: 'claude',
+              conversationId: CONV,
+              sessionId: 'pty-not-the-chat-key',
+            } as TerminalItemData,
+          }],
+          activeItemIndex: 0,
+        }]]),
+      }],
+      activeTabId: 'extra-llm',
+      splitCount: 1,
+      extraGroups: [],
+      activeGroupIndex: 0,
+    })
+  }
+
+  it('serializeTab persists conversationId and commandHint, not command/args', () => {
+    extraLlmTab()
+    const layout = useTabsStore.getState().serializeCurrentLayout()
+    const item = Object.values(layout.tabs[0].paneGroups)[0].items[0] as {
+      type: string
+      paneGroupId?: string
+      conversationId?: string
+      commandHint?: string
+      command?: string
+      args?: string[]
+    }
+    expect(item.type).toBe('terminal')
+    expect(item.paneGroupId).toBe(PG)
+    expect(item.conversationId).toBe(CONV)
+    expect(item.commandHint).toBe('claude')
+    expect(item.command).toBeUndefined()
+    expect(item.args).toBeUndefined()
+  })
+
+  it('restoreLayout stamps conversationId and never copies commandHint into command', () => {
+    extraLlmTab()
+    const layout = useTabsStore.getState().serializeCurrentLayout()
+    reset()
+    useTabsStore.getState().restoreLayout(layout, '/tmp/proj')
+
+    const tab = useTabsStore.getState().tabs[0]
+    expect(tab.paneGroups.has(PG)).toBe(true)
+    const data = Array.from(tab.paneGroups.values())[0].items[0].data as TerminalItemData
+    expect(data.conversationId).toBe(CONV)
+    expect(data.commandHint).toBe('claude')
+    expect(data.command).toBeUndefined()
+    expect(data.args).toBeUndefined()
+    expect(data.sessionId).toBeUndefined()
+  })
+})
+
 /**
  * Browser-pane arc (0.40.x) — 'browser' pane items.
  *

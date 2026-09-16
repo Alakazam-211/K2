@@ -848,6 +848,10 @@ export interface SerializedTerminalItemV2 {
    *  re-login). NEVER restored into `command` itself: `command` in the
    *  spawn body would re-launch the agent on a cold restore. */
   commandHint?: string
+  /** Provider conversation uuid (premint / --resume). Persisted so Chats
+   *  can bind to the restored tab before argv is refilled. Never the
+   *  Kessel PTY id; never restored into `command`. */
+  conversationId?: string
 }
 
 /** Legacy v1 terminal shape — read-only, never emitted by 0.38.0+.
@@ -1374,8 +1378,10 @@ function serializeTab(tab: Tab): SerializedTab {
           // runtime-only and is re-derived from the spawn response.
           sandbox: d.sandbox,
           // Icon continuity across restores — live command wins, else
-          // carry the prior hint forward.
+          // carry the prior hint forward. Never written back into
+          // `command` on restore.
           commandHint: d.command ?? d.commandHint,
+          conversationId: d.conversationId,
         }
         return v2
       } else if (item.type === 'agent') {
@@ -1431,6 +1437,30 @@ function serializeTab(tab: Tab): SerializedTab {
     // Tab-rename stickiness — persist a USER rename's lock so the tab stays
     // locked across relaunch (PTY/session titles still can't clobber it).
     ...(tab.locked ? { locked: true } : {}),
+  }
+}
+
+/** v2 restore: paneGroupId is SSOT. Daemon owns command/args/sessionId.
+ *  `commandHint` is display-only — never copied into `command`. */
+function restoredV2TerminalData(
+  t: SerializedTerminalItemV2,
+  paneGroupId: string,
+  cwd: string,
+): TerminalItemData {
+  return {
+    terminalId: paneGroupId,
+    cwd,
+    renderer: currentRenderer(),
+    heartbeatName: t.heartbeatName,
+    projectPath: t.projectPath,
+    surfacedAgentName: t.surfacedAgentName,
+    attachAgentName: t.attachAgentName,
+    fromApi:
+      typeof t.attachAgentName === 'string' &&
+      t.attachAgentName.startsWith('api-'),
+    sandbox: t.sandbox,
+    commandHint: t.commandHint,
+    conversationId: t.conversationId,
   }
 }
 
@@ -3727,27 +3757,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
             return {
               id: crypto.randomUUID(),
               type: 'terminal' as const,
-              data: {
-                terminalId: newPgId,
-                cwd,
-                renderer: currentRenderer(),
-                // Heartbeat metadata stays in the v2 schema — daemon's
-                // list endpoint doesn't expose these, and
-                // closeTerminalForRenderer depends on them to keep
-                // the PTY alive on tab close (close-as-minimize).
-                heartbeatName: t.heartbeatName,
-                projectPath: t.projectPath,
-                surfacedAgentName: t.surfacedAgentName,
-                attachAgentName: t.attachAgentName,
-                fromApi:
-                  typeof t.attachAgentName === 'string' &&
-                  t.attachAgentName.startsWith('api-'),
-                // D9 — restore the sandbox request intent (default-OFF
-                // for legacy layouts where the field is absent).
-                sandbox: t.sandbox,
-                // Icon continuity (0.40.38): display-only.
-                commandHint: t.commandHint,
-              },
+              data: restoredV2TerminalData(t, newPgId, cwd),
             }
           } else if (si.type === 'agent') {
             const restoredSection = si.section ?? 'inbox'
@@ -3885,23 +3895,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                   return {
                     id: crypto.randomUUID(),
                     type: 'terminal' as const,
-                    data: {
-                      terminalId: newPgId,
-                      cwd,
-                      renderer: currentRenderer(),
-                      heartbeatName: t.heartbeatName,
-                      projectPath: t.projectPath,
-                      surfacedAgentName: t.surfacedAgentName,
-                      attachAgentName: t.attachAgentName,
-                      fromApi:
-                        typeof t.attachAgentName === 'string' &&
-                        t.attachAgentName.startsWith('api-'),
-                      // D9 — restore the sandbox request intent
-                      // (default-OFF for legacy layouts).
-                      sandbox: t.sandbox,
-                      // Icon continuity (0.40.38): display-only.
-                      commandHint: t.commandHint,
-                    },
+                    data: restoredV2TerminalData(t, newPgId, cwd),
                   }
                 } else if (si.type === 'agent') {
                   return {

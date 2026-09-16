@@ -1377,6 +1377,82 @@ async fn tab_empty_spawn_stays_a_shell_and_does_not_steal_project_id() {
     v2_session_map::clear_for_tests();
 }
 
+/// Plant a harness + provider session id on a `tab-*` row, then empty-command
+/// spawn: the live program must be the harness with `--resume`, not `$SHELL`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tab_empty_spawn_with_harness_row_resumes_not_shell() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _shim = install_claude_shim();
+
+    let workspace_id = "pinned-tab-resume-ws";
+    let project = setup_project(workspace_id, "tab-resume");
+    let project_path = project.to_string_lossy().into_owned();
+
+    let tab_key = "tab-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let pane_group_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let conversation_id = "01920000-aaaa-7000-8000-0000000000ab";
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceTabSession::upsert(
+            &conn,
+            &k2_core::db::schema::WorkspaceTabSession {
+                project_id: workspace_id.to_string(),
+                pane_group_id: pane_group_id.to_string(),
+                agent_name: tab_key.to_string(),
+                session_id: Some(conversation_id.to_string()),
+                command: Some("claude".to_string()),
+                args_json: Some(
+                    serde_json::to_string(&["--dangerously-skip-permissions"]).expect("args json"),
+                ),
+                cwd: Some(project_path.clone()),
+                last_seen_at: 0,
+                pinned_cols: None,
+                pinned_rows: None,
+                pinned_set_by: None,
+            },
+        )
+        .expect("plant tab-* harness resume row");
+    }
+
+    let body = serde_json::json!({
+        "agent_name": tab_key,
+        "cwd": project_path,
+    })
+    .to_string();
+    let resp = k2_daemon::v2_spawn::handle_v2_spawn(body.as_bytes());
+    assert_eq!(
+        resp.status, "200 OK",
+        "tab-* empty spawn with a harness row must resume, got: {} / {}",
+        resp.status, resp.body
+    );
+
+    let tab = v2_session_map::lookup_by_agent_name(tab_key)
+        .expect("tab-* key must hold the resumed harness");
+    assert_eq!(
+        program_basename(tab.program.as_deref()),
+        Some("claude"),
+        "live program must be the harness, not $SHELL; program={:?} argv={:?}",
+        tab.program,
+        tab.args
+    );
+    assert!(
+        tab.args
+            .windows(2)
+            .any(|w| w[0] == "--resume" && w[1] == conversation_id),
+        "live argv must splice --resume {conversation_id}, got: {:?}",
+        tab.args
+    );
+    assert!(
+        v2_session_map::lookup_by_agent_name(workspace_id).is_none(),
+        "tab-* resume spawn must not steal the canonical project_id key"
+    );
+
+    v2_session_map::clear_for_tests();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_empty_spawn_and_ensure_one_harness_pty() {
     let _g = lock();

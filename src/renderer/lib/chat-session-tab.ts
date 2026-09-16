@@ -228,7 +228,7 @@ export function isHarnessTabLabel(label: string): boolean {
 }
 
 export function conversationIdFromTab(
-  tab: Pick<Tab, 'paneGroups'> | undefined,
+  tab: { paneGroups?: Tab['paneGroups'] } | undefined,
 ): string | undefined {
   if (!tab?.paneGroups) return undefined
   for (const pg of tab.paneGroups.values()) {
@@ -241,7 +241,9 @@ export function conversationIdFromTab(
   return undefined
 }
 
-function tabHasConversationId(tab: Pick<Tab, 'paneGroups'> | undefined): boolean {
+function tabHasConversationId(
+  tab: { paneGroups?: Tab['paneGroups'] } | undefined,
+): boolean {
   return Boolean(conversationIdFromTab(tab))
 }
 

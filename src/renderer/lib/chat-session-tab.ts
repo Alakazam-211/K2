@@ -200,6 +200,29 @@ export function collectStoreTabs<T>(store: {
   return [...store.tabs, ...store.extraGroups.flatMap((g) => g.tabs)]
 }
 
+export function findTabById<T extends { id: string }>(
+  tabs: Iterable<T>,
+  tabId: string | undefined,
+): T | undefined {
+  if (!tabId) return undefined
+  for (const tab of tabs) {
+    if (tab.id === tabId) return tab
+  }
+  return undefined
+}
+
+/** label_initial / label_changed / OSC: never unlocked-write a locked tab. */
+export function applyUnlockedTabLabel(
+  tab: Pick<Tab, 'id' | 'locked'> | undefined,
+  label: string,
+  setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => void,
+): void {
+  const next = label.trim()
+  if (!tab || !next) return
+  if (tab.locked) return
+  setTabTitle(tab.id, next)
+}
+
 export function restampSessionTabs(
   tabs: Array<Pick<Tab, 'id' | 'title' | 'isSystemAgent' | 'paneGroups'>>,
   sessionId: string,
@@ -212,6 +235,41 @@ export function restampSessionTabs(
     if (hit && hit.sessionId === sessionId) {
       setTabTitle(tab.id, restampTitle(tab.title ?? '', title), { locked: true })
     }
+  }
+}
+
+export function restampListedChatTabs(
+  tabs: Array<Pick<Tab, 'id' | 'title' | 'isSystemAgent' | 'paneGroups'>>,
+  sessions: Array<{ sessionId: string; customName?: string | null; title?: string }>,
+  setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => void,
+): void {
+  for (const s of sessions) {
+    if (!s.sessionId) continue
+    restampSessionTabs(
+      tabs,
+      s.sessionId,
+      chatDisplayName({ customName: s.customName, title: s.title ?? '' }),
+      setTabTitle,
+    )
+  }
+}
+
+/** Restore path: once conversationId is on the layout, restamp extras from custom_name. */
+export async function restampSessionTabsFromChatList(
+  projectPath: string,
+  tabs: Array<Pick<Tab, 'id' | 'title' | 'isSystemAgent' | 'paneGroups'>>,
+  setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => void,
+): Promise<void> {
+  if (!projectPath) return
+  try {
+    const rows = await daemonCliGet<Array<{
+      sessionId: string
+      customName?: string | null
+      title?: string
+    }>>('chat/list', { project_path: projectPath })
+    restampListedChatTabs(tabs, Array.isArray(rows) ? rows : [], setTabTitle)
+  } catch {
+    /* layout titles stay */
   }
 }
 

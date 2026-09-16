@@ -503,3 +503,20 @@ describe('measure-first spawn body cols/rows', () => {
     }
   })
 })
+
+describe('named chat spawn seed+lock', () => {
+  it('POSTs display name as label and label_locked, not a harness basename', async () => {
+    const { spawnCalls, spawnBodies } = installFetchSpy()
+    render(pane(true, {
+      command: 'claude',
+      args: ['--resume', '01920000-aaaa-7000-8000-000000000001'],
+      seedLabel: 'Code Review',
+      lockLabel: true,
+    }))
+    await waitFor(() => expect(spawnCalls()).toBe(1))
+    const body = spawnBodies()[0]
+    expect(body.label).toBe('Code Review')
+    expect(body.label_locked).toBe(true)
+    expect(body.label).not.toBe('claude')
+  })
+})

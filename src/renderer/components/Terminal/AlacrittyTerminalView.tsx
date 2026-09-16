@@ -18,6 +18,7 @@ import { detectWorkingSignal } from '@/lib/agent-signals'
 import { detectLinks, type DetectedLink } from './terminalLinkDetector'
 import { TerminalComposeBar } from './TerminalComposeBar'
 import { useTabsStore } from '@/stores/tabs'
+import { applyUnlockedTabLabel, collectStoreTabs, findTabById } from '@/lib/chat-session-tab'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { useToastStore } from '@/stores/toast'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -539,7 +540,12 @@ export function AlacrittyTerminalView({
 
         const newTitle = raw.replace(/^[\u2800-\u28FF*✱✲✳✴✵✶✷✸✹⚹⁎∗※·•●◦‣⏺]\s*/g, '').trim()
         if (newTitle && tabId) {
-          useTabsStore.getState().setTabTitle(tabId, newTitle)
+          const st = useTabsStore.getState()
+          applyUnlockedTabLabel(
+            findTabById(collectStoreTabs(st), tabId),
+            newTitle,
+            st.setTabTitle,
+          )
         }
       })
 

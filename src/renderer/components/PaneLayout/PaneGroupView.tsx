@@ -56,8 +56,27 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
     }
     return tab?.title
   })
+  const seedLockedTitle = useTabsStore((s) => {
+    let tab = s.tabs.find((t) => t.id === tabId)
+    if (!tab) {
+      for (const g of s.extraGroups) {
+        tab = g.tabs.find((t) => t.id === tabId)
+        if (tab) break
+      }
+    }
+    if (!tab) return false
+    if (tab.locked) return true
+    for (const pg of tab.paneGroups.values()) {
+      for (const item of pg.items) {
+        if (item.type !== 'terminal') continue
+        if (conversationIdFromTerminal(item.data as TerminalItemData)?.trim()) return true
+      }
+    }
+    return false
+  })
   const isMeaningfulTitle =
     !!tabTitle && !/^Terminal \d+$/.test(tabTitle) && tabTitle !== 'Untitled'
+  const seedAndLock = isMeaningfulTitle || seedLockedTitle
 
   const activateItem = useTabsStore((s) => s.activateItemInPaneGroup)
   const closeItem = useTabsStore((s) => s.closeItemInPaneGroup)
@@ -248,8 +267,8 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                     // when the tab has a meaningful title. Stops
                     // claude --resume's "Claude Code" title from
                     // smudging chat-history-restored tabs.
-                    seedLabel={isMeaningfulTitle ? tabTitle : undefined}
-                    lockLabel={isMeaningfulTitle ? true : undefined}
+                    seedLabel={seedAndLock ? tabTitle : undefined}
+                    lockLabel={seedAndLock ? true : undefined}
                     // D9 — thread the sandbox request intent so the
                     // pane asks for a sandbox backend at spawn time.
                     // Nothing sets `td.sandbox` today (default-OFF).
@@ -263,7 +282,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                     attachAgentName={(td as { attachAgentName?: string }).attachAgentName}
                     terminalId={td.terminalId}
                     conversationId={conversationIdFromTerminal(td)}
-                    fallbackTitle={isMeaningfulTitle ? tabTitle ?? '' : ''}
+                    fallbackTitle={seedAndLock ? tabTitle ?? '' : ''}
                   >
                     {pane}
                   </SidecarAgentChrome>

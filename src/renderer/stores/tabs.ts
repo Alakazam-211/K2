@@ -5,7 +5,11 @@ import { jittered } from '@/lib/backoff'
 import { agentDisplayName } from '@/lib/workspace-agent'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { asArray } from '@/lib/as-array'
-import { pickConversationId } from '@/lib/chat-session-tab'
+import {
+  collectStoreTabs,
+  pickConversationId,
+  restampSessionTabsFromChatList,
+} from '@/lib/chat-session-tab'
 import { terminalKill } from '@/lib/terminal-daemon'
 import type { MosaicNode, MosaicDirection } from 'react-mosaic-component'
 import { RESUMABLE_CLI_TOOLS } from '@shared/constants'
@@ -991,12 +995,22 @@ export interface Tab {
   locked?: boolean
 }
 
+/** Options for addTab / addTabToGroup. `conversationId` is the provider
+ *  chat uuid (Chats resume), stamped at create — never the Kessel PTY id. */
+export interface AddTerminalTabOptions {
+  title?: string
+  command?: string
+  args?: string[]
+  locked?: boolean
+  conversationId?: string
+}
+
 interface TabsState {
   tabs: Tab[]
   activeTabId: string | null
 
   // Existing actions (signatures preserved)
-  addTab: (cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }) => string
+  addTab: (cwd: string, options?: AddTerminalTabOptions) => string
   removeTab: (tabId: string, opts?: { forceReap?: boolean }) => void
   setActiveTab: (tabId: string) => void
   splitPane: (
@@ -1122,7 +1136,7 @@ interface TabsState {
   splitTerminalArea: (cwd: string) => void    // add a column (max 3)
   unsplitTerminalArea: () => void              // remove rightmost column
   setActiveGroup: (index: number) => void
-  addTabToGroup: (groupIndex: number, cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }) => string
+  addTabToGroup: (groupIndex: number, cwd: string, options?: AddTerminalTabOptions) => string
   removeTabFromGroup: (groupIndex: number, tabId: string, opts?: { forceReap?: boolean }) => void
   /** Kill every non-system tab in the strip, including API host-sessions
    *  (does not minimize). Drops the durable index so reboot cannot revive. */
@@ -1692,9 +1706,10 @@ function currentRenderer(): TerminalRenderer {
 function makeTerminalPaneGroup(
   paneGroupId: string,
   cwd: string,
-  options?: { command?: string; args?: string[] }
+  options?: { command?: string; args?: string[]; conversationId?: string }
 ): PaneGroup {
   const itemId = crypto.randomUUID()
+  const conversationId = options?.conversationId?.trim()
   return {
     id: paneGroupId,
     items: [
@@ -1708,6 +1723,7 @@ function makeTerminalPaneGroup(
           args: options?.args,
           renderer: currentRenderer(),
           spawnedAt: performance.now(),
+          ...(conversationId ? { conversationId } : {}),
         },
       },
     ],
@@ -1865,7 +1881,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     set({ activeTabId: tabId, navIndex: newIndex })
   },
 
-  addTab: (cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }) => {
+  addTab: (cwd: string, options?: AddTerminalTabOptions) => {
     // Route to the active group
     const activeGroup = get().activeGroupIndex
     if (activeGroup > 0) {
@@ -1881,13 +1897,16 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // Use provided title, or derive from command name, or fallback to "Terminal N"
     const title = options?.title
       ?? (options?.command ? options.command.split('/').pop()?.split(' ')[0] ?? `Terminal ${tabCounter}` : `Terminal ${tabCounter}`)
+    // conversationId is a named chat — lock the display name so PTY/harness
+    // labels cannot unlocked-write the strip (same as restampSessionTabs).
+    const lockTitle = Boolean(options?.locked || options?.conversationId?.trim())
 
     const tab: Tab = {
       id: tabId,
       title,
       mosaicTree: paneGroupId,
       paneGroups: new Map([[paneGroupId, paneGroup]]),
-      ...(options?.locked ? { locked: true } : {}),
+      ...(lockTitle ? { locked: true } : {}),
     }
 
     set((state) => ({
@@ -3251,6 +3270,10 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     })()
     const target = allTabs.find((t) => t.id === tabId)
     if (!target || target.isSystemAgent) return
+    // A local lock (Chats custom_name / user rename) must not be
+    // unlocked-written by PTY label_initial, OSC, or a snapshot that
+    // omitted `locked`. Remote USER renames still apply (`locked: true`).
+    if (target.locked && locked !== true) return
     // Mirror the daemon's `locked` flag onto the local tab so the auto-sync
     // skip in `setTabTitle` knows a remote/restored rename is sticky. When
     // the daemon doesn't report `locked` (undefined), preserve whatever's
@@ -3504,20 +3527,21 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     set({ activeGroupIndex: index })
   },
 
-  addTabToGroup: (groupIndex: number, cwd: string, options?: { title?: string; command?: string; args?: string[]; locked?: boolean }): string => {
+  addTabToGroup: (groupIndex: number, cwd: string, options?: AddTerminalTabOptions): string => {
     tabCounter++
     const tabId = crypto.randomUUID()
     const pgId = crypto.randomUUID()
     const pg = makeTerminalPaneGroup(pgId, cwd, options)
     const title = options?.title
       ?? (options?.command ? options.command.split('/').pop()?.split(' ')[0] ?? `Terminal ${tabCounter}` : `Terminal ${tabCounter}`)
+    const lockTitle = Boolean(options?.locked || options?.conversationId?.trim())
 
     const tab: Tab = {
       id: tabId,
       title,
       mosaicTree: pgId,
       paneGroups: new Map([[pgId, pg]]),
-      ...(options?.locked ? { locked: true } : {}),
+      ...(lockTitle ? { locked: true } : {}),
     }
 
     if (groupIndex === 0) {
@@ -4026,6 +4050,10 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     // `resolveRestoredSelection` to source this client's selection) and so
     // later group-0 selection writes (`setActiveTabInGroup`) have the key.
     set({ activeProjectId: projectId, activeWorkspaceId: workspaceId })
+    const restampNamedChats = () => {
+      const st = get()
+      void restampSessionTabsFromChatList(cwd, collectStoreTabs(st), st.setTabTitle)
+    }
     const savedLayout = get().workspaceLayouts[key]
     // Kill any existing PTYs in the active view before restoring
     get().clearAllTabs()
@@ -4175,6 +4203,10 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         }
       }
 
+      // N5 — conversationId may have just been hydrated from the daemon
+      // row; restamp extras from custom_name once.
+      restampNamedChats()
+
       // 0.38.0 Commit 4 — now that the renderer's state is in sync
       // with the daemon's current snapshot, open the push subscription
       // so any subsequent session_added / session_removed surfaces
@@ -4223,6 +4255,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         console.warn(`[tabs] migrated workspace_layouts to v2 for ${key}`)
         get().saveLayoutForWorkspace(projectId, workspaceId)
       }
+      restampNamedChats()
       void reconcileWithDaemon()
     } else {
       // Set key early so race-condition guards work
@@ -4256,6 +4289,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
                 console.warn(`[tabs] migrated workspace_layouts to v2 for ${key}`)
                 get().saveLayoutForWorkspace(projectId, workspaceId)
               }
+              restampNamedChats()
               void reconcileWithDaemon()
               return
             }

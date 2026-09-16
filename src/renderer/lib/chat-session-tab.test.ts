@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import {
+  applyUnlockedTabLabel,
   chatRenamePayloadForTab,
   chatDisplayName,
   conversationIdFromArgs,
@@ -7,10 +8,12 @@ import {
   copyableAddressForWorkspaceHandle,
   daemonRowForTab,
   findChatSessionInTab,
+  findTabById,
   findTabByPaneGroupId,
   isAgentPtyTerminalItem,
   persistChatRenameIfSessionTab,
   pickConversationId,
+  restampListedChatTabs,
   restampSessionTabs,
   restampTitle,
   tabLooksLikeChatSession,
@@ -254,6 +257,13 @@ describe('findTabByPaneGroupId / restampSessionTabs', () => {
     expect(findTabByPaneGroupId([tab], 'missing')).toBeUndefined()
   })
 
+  it('findTabById matches the tab id', () => {
+    const tab = terminalTab({ id: 'real-tab' })
+    expect(findTabById([tab], 'real-tab')?.id).toBe('real-tab')
+    expect(findTabById([tab], 'missing')).toBeUndefined()
+    expect(findTabById([tab], undefined)).toBeUndefined()
+  })
+
   it('restamps matching session tabs via setTabTitle locked', () => {
     const setTabTitle = vi.fn()
     const session = terminalTab({ id: 'sess' })
@@ -270,6 +280,40 @@ describe('findTabByPaneGroupId / restampSessionTabs', () => {
     expect(setTabTitle).toHaveBeenCalledWith('sess', 'Code Review (from feature/x)', { locked: true })
     expect(restampTitle('Claude (from main)', 'Named')).toBe('Named (from main)')
     expect(restampTitle('Claude', 'Named')).toBe('Named')
+  })
+
+  it('restampListedChatTabs uses custom_name once conversationId is on the tab', () => {
+    const setTabTitle = vi.fn()
+    const restored = terminalTab({
+      id: 'extra',
+      title: 'claude',
+      data: { command: undefined, args: undefined, conversationId: SID },
+    })
+    restampListedChatTabs(
+      [restored, fileTab()],
+      [{ sessionId: SID, customName: 'Code Review', title: 'Transcript' }],
+      setTabTitle,
+    )
+    expect(setTabTitle).toHaveBeenCalledWith('extra', 'Code Review', { locked: true })
+  })
+})
+
+describe('applyUnlockedTabLabel (label_initial / OSC)', () => {
+  it('does not overwrite or unlock a locked named-chat tab', () => {
+    const setTabTitle = vi.fn()
+    const tab = { ...terminalTab({ id: 'sess', title: 'Code Review' }), locked: true }
+    applyUnlockedTabLabel(tab, 'claude', setTabTitle)
+    applyUnlockedTabLabel(tab, 'Claude Code', setTabTitle)
+    expect(setTabTitle).not.toHaveBeenCalled()
+    expect(tab.locked).toBe(true)
+    expect(tab.title).toBe('Code Review')
+  })
+
+  it('writes through when the tab is unlocked', () => {
+    const setTabTitle = vi.fn()
+    const tab = terminalTab({ id: 'sess', title: 'Terminal 1' })
+    applyUnlockedTabLabel(tab, 'claude', setTabTitle)
+    expect(setTabTitle).toHaveBeenCalledWith('sess', 'claude')
   })
 })
 

@@ -69,6 +69,7 @@ import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useStyleStore } from '@/stores/style'
 import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
+import { applyUnlockedTabLabel, collectStoreTabs, findTabById } from '@/lib/chat-session-tab'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import {
   useWindowModeStore,
@@ -2162,13 +2163,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             // mobile companion) can read via
             // `useSessionLabel(sessionId)`. Also write through to
             // `Tab.title` for backwards-compat with components
-            // that read tab.title directly.
+            // that read tab.title directly — but never unlocked-write
+            // a locked named-chat tab with the harness basename.
             const newLabel = parsed.payload.label ?? ''
             useSessionLabelsStore
               .getState()
               .setSessionLabel(sessionId, newLabel)
             if (newLabel && tabId) {
-              useTabsStore.getState().setTabTitle(tabId, newLabel)
+              const st = useTabsStore.getState()
+              applyUnlockedTabLabel(
+                findTabById(collectStoreTabs(st), tabId),
+                newLabel,
+                st.setTabTitle,
+              )
             }
             break
           }

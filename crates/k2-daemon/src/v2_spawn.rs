@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use k2_core::log_debug;
 use k2_core::session::SessionId;
 use k2_core::terminal::sandbox::WorkspaceMountSpec;
-use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession};
+use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession, LabelSource};
 
 use crate::awareness_ws::HandlerResult;
 use crate::pending_live;
@@ -684,6 +684,18 @@ pub fn spawn_session(req: SpawnRequest) -> HandlerResult {
     });
 
     if let Some(existing) = existing {
+        // N3 — spawn seed+lock from the caller's display name on reuse.
+        // A locked session keeps its label (don't unlocked-write a harness
+        // basename). An unlocked PTY label ("claude") is replaced when the
+        // caller sends label_locked with a non-empty seed.
+        if req.label_locked.unwrap_or(false) {
+            let seed = req.label.as_deref().unwrap_or("").trim();
+            if !seed.is_empty() {
+                if !matches!(existing.label_source(), LabelSource::Locked) {
+                    existing.set_label(seed.to_string(), true);
+                }
+            }
+        }
         let (cols, rows) = apply_spawn_fit(&existing, req.cols, req.rows);
         let session_id_str = existing.session_id.to_string();
         let total_ms = __t_total.elapsed().as_secs_f64() * 1000.0;

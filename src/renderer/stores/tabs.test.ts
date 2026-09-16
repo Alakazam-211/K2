@@ -901,3 +901,73 @@ describe('addTab / addTabToGroup locked option', () => {
     expect(useTabsStore.getState().tabs[0].locked).toBeUndefined()
   })
 })
+
+describe('named chat tab title (N1–N6)', () => {
+  beforeEach(reset)
+
+  const CONV = '01920000-aaaa-7000-8000-000000000001'
+
+  function firstTerminalData(): TerminalItemData {
+    const tab = useTabsStore.getState().tabs[0]
+    return Array.from(tab.paneGroups.values())[0].items[0].data as TerminalItemData
+  }
+
+  it('open named chat: first tab.title is custom name, conversationId stamped, locked', () => {
+    useTabsStore.getState().addTabToGroup(0, '/tmp/proj', {
+      title: 'Code Review',
+      command: 'claude',
+      args: ['--resume', CONV],
+      locked: true,
+      conversationId: CONV,
+    })
+    const tab = useTabsStore.getState().tabs[0]
+    expect(tab.title).toBe('Code Review')
+    expect(tab.locked).toBe(true)
+    expect(firstTerminalData().conversationId).toBe(CONV)
+    expect(firstTerminalData().sessionId).toBeUndefined()
+  })
+
+  it('conversationId at create locks the display name even without locked: true', () => {
+    useTabsStore.getState().addTabToGroup(0, '/tmp/proj', {
+      title: 'Code Review',
+      command: 'claude',
+      conversationId: CONV,
+    })
+    const tab = useTabsStore.getState().tabs[0]
+    expect(tab.title).toBe('Code Review')
+    expect(tab.locked).toBe(true)
+  })
+
+  it('fake label_initial "claude" does not unlock or overwrite the custom name', () => {
+    useTabsStore.getState().addTabToGroup(0, '/tmp/proj', {
+      title: 'Code Review',
+      command: 'claude',
+      args: ['--resume', CONV],
+      locked: true,
+      conversationId: CONV,
+    })
+    const tab = useTabsStore.getState().tabs[0]
+    // TerminalPane label_initial / OSC path: unlocked setTabTitle
+    useTabsStore.getState().setTabTitle(tab.id, 'claude')
+    expect(useTabsStore.getState().tabs[0].title).toBe('Code Review')
+    expect(useTabsStore.getState().tabs[0].locked).toBe(true)
+    // applyDaemonTabTitle snapshot / broadcast without locked: true
+    useTabsStore.getState().applyDaemonTabTitle(tab.id, 'claude')
+    expect(useTabsStore.getState().tabs[0].title).toBe('Code Review')
+    expect(useTabsStore.getState().tabs[0].locked).toBe(true)
+    useTabsStore.getState().applyDaemonTabTitle(tab.id, 'Claude Code', false)
+    expect(useTabsStore.getState().tabs[0].title).toBe('Code Review')
+    expect(useTabsStore.getState().tabs[0].locked).toBe(true)
+  })
+
+  it('a locked remote user rename still applies', () => {
+    useTabsStore.getState().addTabToGroup(0, '/tmp/proj', {
+      title: 'Code Review',
+      conversationId: CONV,
+    })
+    const tab = useTabsStore.getState().tabs[0]
+    useTabsStore.getState().applyDaemonTabTitle(tab.id, 'Renamed elsewhere', true)
+    expect(useTabsStore.getState().tabs[0].title).toBe('Renamed elsewhere')
+    expect(useTabsStore.getState().tabs[0].locked).toBe(true)
+  })
+})

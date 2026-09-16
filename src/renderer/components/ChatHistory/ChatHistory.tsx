@@ -14,7 +14,7 @@ import {
   collectStoreTabs,
   chatDisplayName,
   findChatSessionInTab,
-  findTabByPaneGroupId,
+  restampListedChatTabs,
   restampSessionTabs,
 } from '@/lib/chat-session-tab'
 import { IconAutonomous } from '@/components/icons/IconAutonomous'
@@ -355,6 +355,16 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     try {
       const result = await daemonCliGet<ChatSession[]>('chat/list', { project_path: projectPath })
       setSessions(result)
+      // N5 — first hydrate (not the 30s poll): restamp extras from custom_name
+      // once conversationId is already on the restored layout.
+      if (showLoading && Array.isArray(result)) {
+        const tabsStore = useTabsStore.getState()
+        restampListedChatTabs(
+          collectStoreTabs(tabsStore),
+          result,
+          tabsStore.setTabTitle,
+        )
+      }
     } catch (e) {
       console.error('[chat-history]', e)
       setError(String(e))
@@ -897,15 +907,20 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       // If split into columns, open in the rightmost group
       const targetGroup = tabsStore.splitCount > 1 ? tabsStore.splitCount - 1 : 0
 
-      const pgId = tabsStore.addTabToGroup(targetGroup, projectPath, {
+      tabsStore.addTabToGroup(targetGroup, projectPath, {
         title,
         command: config.command,
         args,
         locked: true,
+        conversationId: session.sessionId,
       })
       const st = useTabsStore.getState()
-      const created = findTabByPaneGroupId(collectStoreTabs(st), pgId)
-      if (created) st.setTabTitle(created.id, title, { locked: true })
+      restampSessionTabs(
+        collectStoreTabs(st),
+        session.sessionId,
+        displayTitle,
+        st.setTabTitle,
+      )
     },
     [projectPath, customNames, activeWorkspace, showToast]
   )

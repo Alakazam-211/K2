@@ -262,6 +262,29 @@ describe('serverSupports — remote, viewer-role gating (min 0.40.27, presence S
   })
 })
 
+describe('serverSupports — remote, users-audit gating (min 0.40.144)', () => {
+  it('maps to 0.40.144', () => {
+    expect(featureMinVersion('users-audit')).toBe('0.40.144')
+    expect(FEATURES['users-audit']).toBe('0.40.144')
+  })
+  it('false below min (older remote shows the update copy — no 404 hammer)', () => {
+    setActiveRemote('0.40.143')
+    expect(serverSupports('users-audit')).toBe(false)
+  })
+  it('true at exactly min', () => {
+    setActiveRemote('0.40.144')
+    expect(serverSupports('users-audit')).toBe(true)
+  })
+  it('true above min', () => {
+    setActiveRemote('0.40.145')
+    expect(serverSupports('users-audit')).toBe(true)
+  })
+  it('always true for the local daemon (byte-paired with this app)', () => {
+    useConnectHostStore.setState({ activeHost: 'local', serverVersion: null })
+    expect(serverSupports('users-audit')).toBe(true)
+  })
+})
+
 describe('serverSupports — remote, publish-services gating (min 0.40.106)', () => {
   it('maps to 0.40.106', () => {
     expect(featureMinVersion('publish-services')).toBe('0.40.106')

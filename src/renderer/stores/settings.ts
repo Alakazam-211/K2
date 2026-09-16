@@ -56,6 +56,8 @@ export type SettingsSection =
   | 'heartbeats'
   | 'companion'
   | 'wake-scheduler'
+  /** Settings → Logs → Access Audit (GET /cli/users/audit). */
+  | 'access-audit'
   | 'permissions'
   | 'dictation-lab'
   | 'connections'

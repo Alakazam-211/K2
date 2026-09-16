@@ -111,6 +111,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   timer: 'Timer',
   heartbeats: 'Heartbeats',
   'wake-scheduler': 'Heartbeats',
+  'access-audit': 'Access Audit',
   permissions: 'Accessibility',
   'dictation-lab': 'Dictation Lab (dev)',
   companion: 'K2 Companion',

@@ -96,6 +96,10 @@ export const FEATURES = {
    *  hide the buttons; attributed nested URLs still render. Local is
    *  always true via serverSupports. */
   'publish-services': '0.40.106',
+  /** GET /cli/users/audit — owner-only Connect login history (0.40.144 L3).
+   *  Gates Settings → Logs → Access Audit so a pre-144 remote shows the
+   *  update copy instead of hammering 404s. Local is always true. */
+  'users-audit': '0.40.144',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

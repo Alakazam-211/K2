@@ -16,6 +16,7 @@ import { EditorsSection, EDITORS_MANIFEST } from './sections/EditorsSection'
 import { AgentsSection, AGENTS_MANIFEST } from './sections/AgentsSection'
 import { KeybindingsSection, KEYBINDINGS_MANIFEST } from './sections/KeybindingsSection'
 import { TimerSection, TIMER_MANIFEST } from './sections/TimerSection'
+import { AccessAuditSection, ACCESS_AUDIT_MANIFEST } from './sections/AccessAuditSection'
 import { CompanionSection, COMPANION_MANIFEST } from './sections/CompanionSection'
 import { CONNECTIONS_MANIFEST } from './sections/ConnectionsSection'
 import { K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
@@ -102,6 +103,7 @@ function settingsNav(): NavBlock[] {
       items: [
         { id: 'wake-scheduler', label: 'Heartbeats' },
         { id: 'timer', label: 'Timer' },
+        { id: 'access-audit', label: 'Access Audit' },
       ],
     },
     {
@@ -148,6 +150,7 @@ export default function Settings(): React.JSX.Element {
       ...AGENTS_MANIFEST,
       ...KEYBINDINGS_MANIFEST,
       ...TIMER_MANIFEST,
+      ...ACCESS_AUDIT_MANIFEST,
       ...COMPANION_MANIFEST,
       ...CONNECTIONS_MANIFEST,
       ...K2_CONNECT_MANIFEST,
@@ -395,6 +398,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'timer' && (
           <SectionErrorBoundary>
             <TimerSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'access-audit' && (
+          <SectionErrorBoundary>
+            <AccessAuditSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'companion' && (

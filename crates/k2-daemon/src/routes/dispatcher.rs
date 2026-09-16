@@ -170,6 +170,69 @@ fn tunnel_root_redirect_location() -> Option<String> {
     app_web_root_location(&cfg.subdomain)
 }
 
+/// T2 — Connect login IP key: attested `att.ip` when present and not `-`,
+/// else the socket peer, else `-` (one shared junk bucket, still capped).
+fn login_throttle_ip(
+    attested: Option<&k2_core::edge_attest::Attestation>,
+    stream: &tokio::net::TcpStream,
+) -> String {
+    if let Some(att) = attested {
+        let ip = att.ip.trim();
+        if !ip.is_empty() && ip != "-" {
+            return ip.to_string();
+        }
+    }
+    stream
+        .peer_addr()
+        .ok()
+        .map(|a| a.ip().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Skin login IP: `CF-Connecting-IP`, else left-most `X-Forwarded-For`,
+/// else the socket peer. `None` skips the cap — loopback peer with no
+/// forwarded header (typical frpc: do not lock all guests on 127.0.0.1;
+/// do not pretend we capped them). Loopback + a real forwarded client IP
+/// is capped on that client IP.
+fn skin_login_throttle_ip(
+    headers_blob: &str,
+    stream: &tokio::net::TcpStream,
+) -> Option<String> {
+    if let Some(ip) = forwarded_client_ip(headers_blob) {
+        return Some(ip);
+    }
+    let peer = stream.peer_addr().ok()?.ip();
+    if peer.is_loopback() {
+        return None;
+    }
+    Some(peer.to_string())
+}
+
+/// Prefer Cloudflare's connecting IP; otherwise the left-most XFF hop.
+fn forwarded_client_ip(headers_blob: &str) -> Option<String> {
+    if let Some(v) = super::http::extract_header(headers_blob, "CF-Connecting-IP") {
+        if let Some(ip) = first_hop_ip(v) {
+            return Some(ip);
+        }
+    }
+    if let Some(v) = super::http::extract_header(headers_blob, "X-Forwarded-For") {
+        if let Some(ip) = first_hop_ip(v) {
+            return Some(ip);
+        }
+    }
+    None
+}
+
+fn first_hop_ip(value: &str) -> Option<String> {
+    let ip = value.split(',').next().unwrap_or(value).trim();
+    if ip.is_empty() {
+        None
+    } else {
+        Some(ip.to_string())
+    }
+}
+
 #[cfg(test)]
 mod app_web_root_location_tests {
     use super::app_web_root_location;
@@ -2968,6 +3031,32 @@ async fn handle_one_request(
                 .and_then(|v| v.get("web").and_then(|w| w.as_bool()))
                 .unwrap_or(false);
             let web_mode = web_client_header || web_from_body;
+            // T1 — per-IP cap AFTER the 144 unsigned-tunnel 404, BEFORE
+            // argon2. Loopback is skipped (T3). LAN + dash-attested are
+            // capped. Unsigned tunnel never reaches this arm (404, not 429).
+            if ingress != Ingress::Loopback {
+                let throttle_ip = login_throttle_ip(attested.as_ref(), stream);
+                if crate::login_throttle::check_and_record(
+                    &throttle_ip,
+                    k2_core::edge_attest::now_unix(),
+                ) == crate::login_throttle::Verdict::Limited
+                {
+                    let audit_ingress = match &attested {
+                        Some(att) => format!("edge:{}", att.kid),
+                        None => ingress.as_str().to_string(),
+                    };
+                    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                        "login",
+                        &crate::connect_users_routes::login_body_username(&body_bytes),
+                        "rate_limited",
+                        audit_ingress,
+                        throttle_ip,
+                        if web_mode { "web" } else { "api" },
+                    ));
+                    super::http::send_login_rate_limited(&mut *stream).await;
+                    return DispatchOutcome::Done;
+                }
+            }
             // argon2 verify is slow + happens regardless of outcome
             // (anti-enumeration) — spawn_blocking off the accept loop.
             let reply = tokio::task::spawn_blocking(move || {
@@ -2997,10 +3086,10 @@ async fn handle_one_request(
                 if web_mode { "web" } else { "api" },
             ));
             let r = reply.response;
-            // Fixed failure delay: slow brute-force without a full rate
-            // limiter (deferred). Only on the 401 path so successful
-            // logins stay snappy. The argon2 work already adds ~tens of
-            // ms; this stacks a deterministic floor on top.
+            // Fixed failure delay on the 401 path so successful logins
+            // stay snappy. The per-IP cap (T1, above) is the limiter;
+            // this stacks a deterministic floor on remaining 401s. The
+            // argon2 work already adds ~tens of ms.
             if r.status.starts_with("401") {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
@@ -3054,6 +3143,20 @@ async fn handle_one_request(
                 })
                 .unwrap_or_default();
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Same 5/300s delay as Connect, BEFORE dummy argon2 /
+            // `check_and_record_login`. Skin keys are `"skin:" + ip` so a
+            // Connect spray does not 429 skin guests. 429 does not bump
+            // `login_lockouts` and does not sleep 500ms.
+            if let Some(throttle_ip) = skin_login_throttle_ip(&headers_blob, stream) {
+                if crate::login_throttle::check_and_record(
+                    &crate::login_throttle::skin_ip_key(&throttle_ip),
+                    k2_core::edge_attest::now_unix(),
+                ) == crate::login_throttle::Verdict::Limited
+                {
+                    super::http::send_login_rate_limited(&mut *stream).await;
+                    return DispatchOutcome::Done;
+                }
+            }
             let r = tokio::task::spawn_blocking(move || {
                 crate::skin_routes::handle_login(&body_bytes, &content_type)
             })

@@ -29,7 +29,7 @@ use k2_core::session::SessionId;
 use k2_daemon::overlay_ws::{self, OverlayFrame};
 use k2_daemon::session_token::{CredMode, HookPrincipal, Provider};
 use k2_daemon::test_harness;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -3664,5 +3664,119 @@ async fn skin_guest_email_create_login_forgot_matrix() {
         );
         assert_eq!(cleared.status, 200, "{}", cleared.body);
         assert!(json(&cleared.body)["email"].is_null(), "{}", cleared.body);
+    });
+}
+
+fn assert_skin_rate_limited(r: &Resp, what: &str) {
+    assert_eq!(r.status, 429, "{what} must 429; headers={} body={}", r.headers, r.body);
+    assert_eq!(r.body, r#"{"error":"rate_limited"}"#, "{what}");
+    assert_eq!(
+        r.headers
+            .lines()
+            .find_map(|l| {
+                let (n, v) = l.split_once(':')?;
+                if n.trim().eq_ignore_ascii_case("Retry-After") {
+                    Some(v.trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .as_deref(),
+        Some("300"),
+        "{what} Retry-After"
+    );
+}
+
+fn skin_lockout_failed_count(username: &str) -> i64 {
+    let path = k2_core::paths::k2_home().join("skin.db");
+    if !path.is_file() {
+        return 0;
+    }
+    let conn = rusqlite::Connection::open(&path).expect("open skin.db");
+    conn.query_row(
+        "SELECT failed_count FROM login_lockouts WHERE username = ?1",
+        params![username],
+        |r| r.get(0),
+    )
+    .optional()
+    .expect("query login_lockouts")
+    .unwrap_or(0)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Per-IP skin login delay (5 / 300s). Separate bucket from Connect.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_sixth_login_with_forwarded_ip_is_429() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let ip = "1.2.3.4";
+        for i in 1..=5 {
+            let user = format!("skthrot{i}");
+            let r = http_host_ex(
+                port,
+                "POST",
+                "/cli/skin/login",
+                Some(&format!(r#"{{"username":"{user}","password":"WRONG"}}"#)),
+                "127.0.0.1",
+                &format!("X-Forwarded-For: {ip}"),
+            );
+            assert_eq!(r.status, 401, "attempt {i}; body={}", r.body);
+            assert_eq!(
+                r.body.trim(),
+                r#"{"error":"invalid username or password"}"#,
+                "generic 401 body unchanged; attempt {i}: {}",
+                r.body
+            );
+            assert_eq!(
+                skin_lockout_failed_count(&user),
+                1,
+                "attempt {i} counted as a username fail"
+            );
+        }
+        let r = http_host_ex(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"skthrot6","password":"WRONG"}"#),
+            "127.0.0.1",
+            &format!("X-Forwarded-For: {ip}"),
+        );
+        assert_skin_rate_limited(&r, "6th skin login with X-Forwarded-For 1.2.3.4");
+        assert_eq!(
+            skin_lockout_failed_count("skthrot6"),
+            0,
+            "6th must not bump skin login_lockouts"
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_loopback_sixth_login_without_forwarded_header_is_not_429() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let body = r#"{"username":"skloop","password":"WRONG"}"#;
+        for i in 1..=6 {
+            let r = http(port, "POST", "/cli/skin/login", Some(body));
+            assert_ne!(
+                r.status, 429,
+                "loopback skin attempt {i} must not 429; body={}",
+                r.body
+            );
+            assert_eq!(r.status, 401, "loopback skin attempt {i}; body={}", r.body);
+            assert_eq!(
+                r.body.trim(),
+                r#"{"error":"invalid username or password"}"#,
+                "generic 401 body unchanged; attempt {i}: {}",
+                r.body
+            );
+        }
     });
 }

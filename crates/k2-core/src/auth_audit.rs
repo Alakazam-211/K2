@@ -4,7 +4,7 @@
 //!
 //! ```json
 //! {"ts":"<RFC3339>","event":"login","user":"<as submitted, trimmed, ≤64>",
-//!  "outcome":"ok|bad_creds|locked|blocked_ingress|bad_attest:<reason>",
+//!  "outcome":"ok|bad_creds|locked|blocked_ingress|bad_attest:<reason>|rate_limited",
 //!  "ingress":"loopback|lan|tunnel|edge:<kid>","ip":"<ip or ->","client":"web|api"}
 //! ```
 //!

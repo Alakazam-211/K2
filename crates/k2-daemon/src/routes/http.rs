@@ -942,6 +942,24 @@ pub(crate) async fn send_response_with_cookie_and_location(
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 
+/// T1 — 429 for an IP over 5 login POSTs / 300s. JSON body, `Retry-After: 300`,
+/// no 500ms 401 delay. CORS matches [`send_response`] so a web client can
+/// read the error.
+pub(crate) async fn send_login_rate_limited(stream: &mut TcpStream) {
+    let body = r#"{"error":"rate_limited"}"#;
+    let resp = format!(
+        "HTTP/1.1 429 Too Many Requests\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Retry-After: {}\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Expose-Headers: *\r\n\r\n{body}",
+        body.len(),
+        crate::login_throttle::WINDOW_SECS,
+    );
+    let _ = stream.write_all(resp.as_bytes()).await;
+}
+
 /// Respond to a CORS preflight (OPTIONS) with permissive headers so
 /// the WebView accepts the subsequent GET/POST. 204 No Content is
 /// the conventional preflight response status.

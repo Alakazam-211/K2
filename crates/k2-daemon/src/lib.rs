@@ -43,6 +43,7 @@ pub mod clone_routes;
 pub mod companion_host;
 pub mod companion_routes;
 pub mod connect_users_routes;
+pub mod login_throttle;
 pub mod db_routes;
 pub mod events;
 pub mod federation_drain;

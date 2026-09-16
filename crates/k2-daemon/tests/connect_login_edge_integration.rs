@@ -1066,3 +1066,145 @@ async fn web_login_cookie_max_age_is_seven_days() {
         );
     });
 }
+
+fn assert_rate_limited(r: &Resp, what: &str) {
+    assert_eq!(r.status, 429, "{what} must 429; headers={} body={}", r.headers, r.body);
+    assert_eq!(r.body, r#"{"error":"rate_limited"}"#, "{what}");
+    assert_eq!(r.header("Retry-After").as_deref(), Some("300"), "{what}");
+    assert_eq!(
+        r.header("Content-Type").as_deref(),
+        Some("application/json"),
+        "{what}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// T1–T10 — per-IP login throttle (5 / 300s), after 144, before argon2.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tunnel_sixth_attested_login_from_one_ip_is_429_argon2_skipped() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let signer = seed("throt0", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let ip = "198.51.100.10";
+
+        for i in 1..=5 {
+            let user = format!("throt{i}");
+            connect_users::add_user(&user, "password123").expect("add_user");
+            let body = format!(r#"{{"username":"{user}","password":"WRONG"}}"#);
+            let r = attested_login(&d, &signer, &body, now(), &random_nonce(), ip, SUB, &[]);
+            assert_eq!(r.status, 401, "attempt {i} still verifies; body={}", r.body);
+            assert_eq!(
+                connect_users::lockout_failed_count(&user),
+                1,
+                "attempt {i} counted as a username fail"
+            );
+        }
+
+        connect_users::add_user("throt6", "password123").expect("add_user");
+        let body = r#"{"username":"throt6","password":"WRONG"}"#;
+        let r = attested_login(&d, &signer, body, now(), &random_nonce(), ip, SUB, &[]);
+        assert_rate_limited(&r, "6th attested login from one IP");
+        assert_eq!(
+            connect_users::lockout_failed_count("throt6"),
+            0,
+            "6th must not run argon2 / username lockout"
+        );
+        let last = audit_events_for("login").pop().expect("rate_limited audit");
+        assert_eq!(last["outcome"], "rate_limited", "{last}");
+        assert_eq!(last["ip"], ip, "{last}");
+        assert_eq!(last["user"], "throt6", "{last}");
+        assert!(
+            last["ingress"].as_str().expect("ingress").starts_with("edge:"),
+            "{last}"
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loopback_sixth_login_is_not_429() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let _s = seed("loopt", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let body = r#"{"username":"loopt","password":"WRONG"}"#;
+        for i in 1..=6 {
+            let r = http(d.port, "POST", LOGIN, Some(body), &[]);
+            assert_ne!(r.status, 429, "loopback attempt {i} must not 429; body={}", r.body);
+            assert_eq!(r.status, 401, "loopback attempt {i}; body={}", r.body);
+        }
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsigned_tunnel_login_stays_404_not_429() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let _s = seed("scan", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let body = r#"{"username":"scan","password":"WRONG"}"#;
+        for i in 1..=6 {
+            let r = http(d.tunnel_port, "POST", LOGIN, Some(body), &[]);
+            assert_eq!(r.status, 404, "unsigned tunnel attempt {i} must 404; body={}", r.body);
+            assert_ne!(r.status, 429, "unsigned tunnel must not 429 (no oracle)");
+            assert_eq!(r.body, r#"{"error":"not_found"}"#, "attempt {i}");
+        }
+        assert_eq!(
+            connect_users::lockout_failed_count("scan"),
+            0,
+            "unsigned tunnel must not touch username lockout"
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_ip_spray_does_not_429_skin_login() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let signer = seed("sprayc", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let ip = "198.51.100.11";
+        for i in 1..=5 {
+            let body = r#"{"username":"sprayc","password":"WRONG"}"#;
+            let r = attested_login(&d, &signer, body, now(), &random_nonce(), ip, SUB, &[]);
+            assert_eq!(r.status, 401, "connect attempt {i}; body={}", r.body);
+        }
+        let sixth = attested_login(
+            &d,
+            &signer,
+            r#"{"username":"sprayc","password":"WRONG"}"#,
+            now(),
+            &random_nonce(),
+            ip,
+            SUB,
+            &[],
+        );
+        assert_rate_limited(&sixth, "6th Connect from one IP");
+
+        let skin = http(
+            d.port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"guest","password":"WRONG"}"#),
+            &[&format!("X-Forwarded-For: {ip}")],
+        );
+        assert_ne!(
+            skin.status, 429,
+            "Connect spray must not 429 skin guests; body={}",
+            skin.body
+        );
+        assert_eq!(skin.status, 401, "skin still verifies; body={}", skin.body);
+        assert_eq!(
+            skin.body.trim(),
+            r#"{"error":"invalid username or password"}"#,
+            "generic 401 body unchanged; got {}",
+            skin.body
+        );
+    });
+}

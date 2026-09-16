@@ -62,6 +62,7 @@ mod clone_routes;
 mod companion_host;
 mod companion_routes;
 mod connect_users_routes;
+mod login_throttle;
 mod db_routes;
 mod events;
 mod federation_drain;

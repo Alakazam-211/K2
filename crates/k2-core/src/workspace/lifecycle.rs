@@ -31,6 +31,31 @@ fn run_git(args: &[&str], cwd: &str) -> Option<String> {
         })
 }
 
+/// Canonical refuse-duplicate copy (prd-workspace-already-exists-copy-v1 C2).
+/// `{name}` is [`crate::workspace::display::agent_display_name`] — display
+/// if set, else folder / `projects.name`. Never the raw path.
+pub fn workspace_already_exists_error(path: &str) -> String {
+    format!(
+        "workspace already exists {}",
+        crate::workspace::display::agent_display_name(path)
+    )
+}
+
+/// Hire/idempotent match: old register copy OR C2 (prd C3).
+pub fn is_already_registered(err: &str) -> bool {
+    err.contains("already registered") || err.contains("workspace already exists")
+}
+
+/// UNIQUE `projects.path` races map onto C2 instead of a constraint dump.
+pub fn map_projects_path_unique(path: &str, err: impl std::fmt::Display) -> String {
+    let s = err.to_string();
+    if s.contains("UNIQUE constraint failed") && s.contains("projects.path") {
+        workspace_already_exists_error(path)
+    } else {
+        s
+    }
+}
+
 /// Register an existing folder as a K2SO workspace — inserts rows in
 /// `projects` + `workspaces` under a transaction. Errors if the path
 /// is already registered.
@@ -60,7 +85,7 @@ pub fn register_workspace_ex(
         )
         .unwrap_or(false);
     if exists {
-        return Err(format!("Workspace already registered: {}", path));
+        return Err(workspace_already_exists_error(path));
     }
 
     let name = Path::new(path)
@@ -95,7 +120,14 @@ pub fn register_workspace_ex(
              VALUES (?1, ?2, ?3, '#3b82f6', ?4, 0, NULL, NULL, 'custom', 1, ?5)",
             rusqlite::params![project_id, name, path, tab_order, handle],
         )
-        .map_err(|e| format!("Failed to create project: {}", e))?;
+        .map_err(|e| {
+            let mapped = map_projects_path_unique(path, &e);
+            if is_already_registered(&mapped) {
+                mapped
+            } else {
+                format!("Failed to create project: {}", e)
+            }
+        })?;
 
         conn.execute(
             "INSERT INTO workspaces (id, project_id, section_id, type, branch, name, tab_order, worktree_path) \
@@ -323,6 +355,70 @@ mod tests {
             !dir.join(".k2/wiki").exists(),
             "opt-out must not create .k2/wiki"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn count_projects(path: &str) -> i64 {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT COUNT(*) FROM projects WHERE path = ?1",
+            rusqlite::params![path],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn count_workspaces(path: &str) -> i64 {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT COUNT(*) FROM workspaces w JOIN projects p ON w.project_id = p.id WHERE p.path = ?1",
+            rusqlite::params![path],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn is_already_registered_matches_old_copy_and_c2() {
+        assert!(is_already_registered(
+            "Workspace already registered: /tmp/x"
+        ));
+        assert!(is_already_registered("workspace already exists Cortana"));
+        assert!(!is_already_registered("Directory not found: /tmp/x"));
+        assert!(!is_already_registered("Failed to add workspace"));
+        assert!(!is_already_registered("Directory already exists: /tmp/x"));
+    }
+
+    #[test]
+    fn register_twice_is_c2_copy_one_row() {
+        crate::db::init_for_tests();
+        let dir = unique_dir("already-exists");
+        let path = dir.to_string_lossy().into_owned();
+        register_workspace_ex(&path, false, false, false).expect("first register");
+        crate::workspace::display::set_agent_display_name(&path, "Cortana")
+            .expect("pin display name");
+        let err = register_workspace_ex(&path, false, false, false).unwrap_err();
+        assert_eq!(err, "workspace already exists Cortana");
+        assert!(!err.contains("Failed to add workspace"));
+        assert!(!err.contains(&path), "C2 must not use the raw path: {err}");
+        assert_eq!(count_projects(&path), 1, "still one projects row");
+        assert_eq!(count_workspaces(&path), 1, "still one workspaces row");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_twice_is_c2_copy_one_row() {
+        crate::db::init_for_tests();
+        let dir = unique_dir("open-twice");
+        let path = dir.to_string_lossy().into_owned();
+        open_workspace_ex(&path, false, false, false).expect("first open");
+        crate::workspace::display::set_agent_display_name(&path, "Cortana")
+            .expect("pin display name");
+        let err = open_workspace_ex(&path, false, false, false).unwrap_err();
+        assert_eq!(err, "workspace already exists Cortana");
+        assert_eq!(count_projects(&path), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

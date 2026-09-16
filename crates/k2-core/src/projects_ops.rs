@@ -614,7 +614,7 @@ pub fn projects_add_from_path_ex(
     let path_with_sep = format!("{}/", path.trim_end_matches('/'));
     for ep in &existing_projects {
         if path == ep.path {
-            return Err(format!("This folder is already added as workspace '{}'.", ep.name));
+            return Err(crate::workspace::lifecycle::workspace_already_exists_error(path));
         }
         let ep_with_sep = format!("{}/", ep.path.trim_end_matches('/'));
         if path_with_sep.starts_with(&ep_with_sep) || ep_with_sep.starts_with(&path_with_sep) {
@@ -652,7 +652,7 @@ pub fn projects_add_from_path_ex(
         Project::create(
             &conn, &project_id, &name, path, "#3b82f6", tab_order, 0, None, None,
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::workspace::lifecycle::map_projects_path_unique(path, e))?;
         stamp_default_agent(&conn, &project_id)?;
         Workspace::create(
             &conn,
@@ -732,6 +732,10 @@ pub fn projects_add_without_git_ex(
 
     let db = db::shared();
     let conn = db.lock();
+    let existing_projects = Project::list(&conn).unwrap_or_default();
+    if existing_projects.iter().any(|ep| ep.path == path) {
+        return Err(crate::workspace::lifecycle::workspace_already_exists_error(path));
+    }
     let project_id = Uuid::new_v4().to_string();
     let workspace_id = Uuid::new_v4().to_string();
     let tab_order = next_tab_order(&conn);
@@ -740,7 +744,7 @@ pub fn projects_add_without_git_ex(
         Project::create(
             &conn, &project_id, &name, path, "#3b82f6", tab_order, 0, None, None,
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crate::workspace::lifecycle::map_projects_path_unique(path, e))?;
         stamp_default_agent(&conn, &project_id)?;
         Workspace::create(
             &conn,
@@ -1422,6 +1426,64 @@ mod tests {
             !dir.join("AGENTS.md").exists(),
             "seed_agents_md=false must not plant cwd AGENTS.md"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn count_projects_at(path: &str) -> i64 {
+        let db = db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT COUNT(*) FROM projects WHERE path = ?1",
+            rusqlite::params![path],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn projects_add_from_path_twice_is_c2_copy_one_row() {
+        db::init_for_tests();
+        let dir = git_scratch("add-twice");
+        let path = dir.to_string_lossy().into_owned();
+        match projects_add_from_path_ex(&path, false, false, false) {
+            Ok(AddFromPathResult::Project(_)) => {}
+            Ok(AddFromPathResult::NeedsGitInit { .. }) => {
+                panic!("git-init scratch must not return NeedsGitInit")
+            }
+            Err(e) => panic!("first add must succeed: {e}"),
+        }
+        crate::workspace::display::set_agent_display_name(&path, "Cortana")
+            .expect("pin display name");
+        let err = match projects_add_from_path_ex(&path, false, false, false) {
+            Err(e) => e,
+            Ok(_) => panic!("second add must refuse"),
+        };
+        assert_eq!(err, "workspace already exists Cortana");
+        assert!(!err.contains("Failed to add workspace"));
+        assert!(!err.contains("This folder is already added"));
+        assert!(!err.contains(&path), "C2 must not use the raw path: {err}");
+        assert_eq!(count_projects_at(&path), 1, "still one projects row");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn projects_add_without_git_twice_is_c2_copy_one_row() {
+        db::init_for_tests();
+        let dir = std::env::temp_dir().join(format!(
+            "k2-proj-nogit-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.to_string_lossy().into_owned();
+        projects_add_without_git_ex(&path, false, false, false).expect("first add");
+        crate::workspace::display::set_agent_display_name(&path, "Cortana")
+            .expect("pin display name");
+        let err = projects_add_without_git_ex(&path, false, false, false).unwrap_err();
+        assert_eq!(err, "workspace already exists Cortana");
+        assert!(!err.contains("UNIQUE constraint"));
+        assert!(!err.contains("Failed to add workspace"));
+        assert_eq!(count_projects_at(&path), 1, "still one projects row");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

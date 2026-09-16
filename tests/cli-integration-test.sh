@@ -121,7 +121,7 @@ else
     if echo "$REG_OUTPUT" | grep -q "success\|projectId"; then
         echo -e "${GREEN}Test workspace registered successfully${NC}"
         PROJECT_REGISTERED=true
-    elif echo "$REG_OUTPUT" | grep -q "already registered"; then
+    elif echo "$REG_OUTPUT" | grep -Eq "already registered|workspace already exists"; then
         PROJECT_REGISTERED=true
     else
         echo -e "${YELLOW}NOTE: Could not register test workspace in K2SO's DB.${NC}"

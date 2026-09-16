@@ -490,6 +490,29 @@ describe('projects store — Plan B host-aware migration', () => {
     expect(emitMock).toHaveBeenCalledWith('sync:projects')
   })
 
+  it('addProject toasts daemon err.message and rethrows (workspace already exists)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    daemonCliPost.mockRejectedValueOnce(new Error('workspace already exists Cortana'))
+
+    await expect(useProjectsStore.getState().addProject('/tmp/cortana')).rejects.toThrow(
+      'workspace already exists Cortana'
+    )
+
+    expect(addToast).toHaveBeenCalledWith('workspace already exists Cortana', 'error')
+    expect(addToast).not.toHaveBeenCalledWith('Failed to add workspace', 'error')
+    errSpy.mockRestore()
+  })
+
+  it('addProject falls back to generic toast when the error has no message, then rethrows', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    daemonCliPost.mockRejectedValueOnce(new Error(''))
+
+    await expect(useProjectsStore.getState().addProject('/tmp/x')).rejects.toThrow()
+
+    expect(addToast).toHaveBeenCalledWith('Failed to add workspace', 'error')
+    errSpy.mockRestore()
+  })
+
   it('touchInteraction POSTs projects/touch-interaction and does NOT emit sync', async () => {
     daemonCliPost.mockResolvedValueOnce({ success: true })
 

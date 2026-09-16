@@ -11852,6 +11852,31 @@ except Exception as ex:
 " 2>/dev/null
 }
 
+# Unwrap daemon {"error": ...} (string or {hint,code}) to stderr and exit 1.
+# Success bodies print as-is. curl is not --fail, so HTTP 400 still returns
+# JSON with curl exit 0 (prd-workspace-already-exists-copy-v1 C6).
+cli_print_or_fail() {
+    local resp="$1"
+    local err
+    err=$(printf '%s' "$resp" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+e = d.get("error")
+if not e:
+    sys.exit(0)
+if isinstance(e, dict):
+    print(e.get("hint") or e.get("code") or "daemon refused")
+else:
+    print(e)' 2>/dev/null)
+    if [ -n "$err" ]; then
+        echo "Error: $err" >&2
+        exit 1
+    fi
+    printf '%s\n' "$resp"
+}
+
 cmd_workspace_create() {
     local target_path="" no_wiki=false no_agents_md=false fanout=false
     while [ $# -gt 0 ]; do
@@ -11873,7 +11898,9 @@ cmd_workspace_create() {
     [ "$no_wiki" = true ] && extra+=("no_wiki=1")
     [ "$no_agents_md" = true ] && extra+=("no_agents_md=1")
     [ "$fanout" = true ] && extra+=("fanout=1")
-    cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")" "${extra[@]}"
+    local resp
+    resp=$(cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")" "${extra[@]}")
+    cli_print_or_fail "$resp"
 }
 
 cmd_workspace_preview() {
@@ -11987,24 +12014,7 @@ except Exception:
     # error JSON with exit 0 — notably the Projects V1 §4.5 PoC guard
     # ({"error":{"code":"poc_of_projects","hint":"X is the Point of
     # Contact for: A, B. Reassign the PoC first."}}).
-    local err_hint
-    err_hint=$(printf '%s' "$resp" | python3 -c 'import json,sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-e = d.get("error")
-if not e:
-    sys.exit(0)
-if isinstance(e, dict):
-    print(e.get("hint") or e.get("code") or "daemon refused the removal")
-else:
-    print(e)' 2>/dev/null)
-    if [ -n "$err_hint" ]; then
-        echo "Error: $err_hint" >&2
-        exit 1
-    fi
-    printf '%s\n' "$resp"
+    cli_print_or_fail "$resp"
 }
 
 cmd_workspace_open() {
@@ -12030,7 +12040,9 @@ cmd_workspace_open() {
     [ "$no_wiki" = true ] && extra+=("no_wiki=1")
     [ "$no_agents_md" = true ] && extra+=("no_agents_md=1")
     [ "$fanout" = true ] && extra+=("fanout=1")
-    cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")" "${extra[@]}"
+    local resp
+    resp=$(cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")" "${extra[@]}")
+    cli_print_or_fail "$resp"
 }
 
 # 0.39.0f Phase 2.1b: cmd_mode orphan removed. `k2 mode` is

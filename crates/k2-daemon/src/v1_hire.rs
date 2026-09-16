@@ -415,8 +415,8 @@ pub(crate) fn handle_v1_hire(principal: &V1Principal, body: &[u8]) -> CliRespons
         match result {
             Ok(_) => changed = true,
             Err(e) => {
-                if e.contains("already registered") {
-                    // Converge.
+                if k2_core::workspace::lifecycle::is_already_registered(&e) {
+                    // Converge (old "already registered" copy OR C2).
                 } else {
                     return usage(e);
                 }
@@ -1162,6 +1162,19 @@ mod tests {
         );
         assert_eq!(v2["id"], v1["id"]);
         let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn hire_matcher_accepts_old_copy_and_c2() {
+        assert!(k2_core::workspace::lifecycle::is_already_registered(
+            "Workspace already registered: /tmp/x"
+        ));
+        assert!(k2_core::workspace::lifecycle::is_already_registered(
+            "workspace already exists Cortana"
+        ));
+        assert!(!k2_core::workspace::lifecycle::is_already_registered(
+            "Failed to add workspace"
+        ));
     }
 
     #[test]

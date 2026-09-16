@@ -584,7 +584,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // addProject is called. No follow-up modal needed.
     } catch (err) {
       console.error('[projects] addProject failed:', err)
-      useToastStore.getState().addToast('Failed to add workspace', 'error')
+      const message =
+        err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+      useToastStore
+        .getState()
+        .addToast(message.trim() || 'Failed to add workspace', 'error')
+      throw err
     }
   },
 

@@ -22634,7 +22634,7 @@ _mail_py() {
     M_HOSTNAME="${M_HOSTNAME:-}" \
     M_MAILDIR="${M_MAILDIR:-}" M_IMAPSYNC_HOST="${M_IMAPSYNC_HOST:-}" \
     M_IMAPSYNC_USER="${M_IMAPSYNC_USER:-}" M_IMAPSYNC_PASS="${M_IMAPSYNC_PASS:-}" \
-    M_IMAPSYNC_PORT="${M_IMAPSYNC_PORT:-}" \
+    M_IMAPSYNC_PORT="${M_IMAPSYNC_PORT:-}" M_SKIP_INBOX="${M_SKIP_INBOX:-false}" \
     python3 - <<'PYEOF'
 import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
@@ -23747,6 +23747,8 @@ elif verb == "import":
     body = {"address": env("M_ADDRESS")}
     if env("M_MAILDIR"):
         body["maildir"] = env("M_MAILDIR")
+    if env("M_SKIP_INBOX") == "true":
+        body["skipInbox"] = True
     if env("M_IMAPSYNC_HOST"):
         imapsync = {"host": env("M_IMAPSYNC_HOST")}
         if env("M_IMAPSYNC_USER"):
@@ -23756,7 +23758,9 @@ elif verb == "import":
         if env("M_IMAPSYNC_PORT"):
             imapsync["port"] = int(env("M_IMAPSYNC_PORT"))
         body["imapsync"] = imapsync
-    d = call("POST", "/cli/mail/import", body=body)
+    # Large Maildirs (1G+) outlive the 30s default; daemon keeps importing.
+    # Import-only wait: 7200s (2h). Leave the global 30s POST helper alone.
+    d = call("POST", "/cli/mail/import", body=body, timeout=7200)
     if as_json:
         print(dumps(d))
     else:
@@ -25067,7 +25071,7 @@ cmd_hostmail_cert_renew() {
 
 cmd_hostmail_import() {
     if _wants_help "$@"; then cmd_help_hostmail_import; exit 0; fi
-    local address="" maildir="" imap_host="" imap_user="" imap_pass="" imap_port="" as_json=false
+    local address="" maildir="" imap_host="" imap_user="" imap_pass="" imap_port="" as_json=false skip_inbox=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --address)
@@ -25091,9 +25095,10 @@ cmd_hostmail_import() {
             --port)
                 [ $# -ge 2 ] || { _mail_err "usage" "--port requires a port number"; exit 2; }
                 imap_port="$2"; shift 2 ;;
+            --skip-inbox) skip_inbox=true; shift ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail import --address <a@domain> (--maildir <path> | --imapsync from=<host> --user <u> --pass-stdin) [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail import --address <a@domain> (--maildir <path> | --imapsync from=<host> --user <u> --pass-stdin) [--skip-inbox] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$address" ]; then address="$1"; else
@@ -25111,7 +25116,7 @@ cmd_hostmail_import() {
     local M_VERB="import" M_JSON="$as_json" M_ADDRESS="$address" \
           M_MAILDIR="$maildir" M_IMAPSYNC_HOST="$imap_host" \
           M_IMAPSYNC_USER="$imap_user" M_IMAPSYNC_PASS="$imap_pass" \
-          M_IMAPSYNC_PORT="$imap_port"
+          M_IMAPSYNC_PORT="$imap_port" M_SKIP_INBOX="$skip_inbox"
     _mail_py
 }
 
@@ -25945,15 +25950,21 @@ EOF
 cmd_help_hostmail_import() {
     cat <<'EOF'
 Import mail into a hosted address this workspace can manage. Maildir
-(new/ + cur/) and/or IMAP (--imapsync). Does not rsync into SST.
+(INBOX new/ + cur/, plus Maildir++ .Sent/.Archive/…) and/or IMAP
+(--imapsync). Does not rsync into SST.
+
+Large Maildirs need a long wait: this command waits up to 2 hours
+(7200s). The global CLI 30s cap does not apply here — 30s was the
+lztek wall (daemon kept importing after the client gave up).
 
 USAGE
-  k2 hostmail import --address <a@domain> --maildir <path> [--json]
+  k2 hostmail import --address <a@domain> --maildir <path> [--skip-inbox] [--json]
   k2 hostmail import --address <a@domain> --imapsync from=<host> --user <u> --pass-stdin [--json]
 
 FLAGS
   --address <a>          Hosted address to import into
-  --maildir <path>       Local Maildir (new/ and cur/)
+  --maildir <path>       Local Maildir (INBOX new/cur plus Maildir++ folders)
+  --skip-inbox           Skip top-level INBOX (cur/ + new/); import folders only
   --imapsync from=<host> Remote IMAP host
   --user <u>             Remote IMAP username
   --pass-stdin           Remote IMAP password on stdin (never argv)

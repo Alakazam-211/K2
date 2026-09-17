@@ -21,3 +21,6 @@ opt-level = 3
 strip = true
 lto = true
 codegen-units = 1
+
+[patch.crates-io]
+wry = { path = "third_party/wry" }

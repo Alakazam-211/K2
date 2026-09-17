@@ -36,3 +36,15 @@ The Files drawer uses the **Seti** icon font for file-type glyphs
 
 When redistributing K2 builds that include the Seti font, ship the MIT
 notice (this section and/or `THIRD_PARTY_NOTICES.txt`).
+
+## Third-party: wry (Apache-2.0 OR MIT)
+
+K2 vendors a patched copy of **wry** 0.54.4 under `third_party/wry` so a
+nil `NSURL` on IPC / navigation / `window.open` cannot abort the macOS app.
+
+| | |
+|--|--|
+| **What** | `third_party/wry` (crates.io wry 0.54.4 + nil-URL no-abort patch) |
+| **Upstream** | [wry](https://github.com/tauri-apps/wry) |
+| **License** | **Apache-2.0 OR MIT** (Copyright (c) 2020-2023 Ngo Iok Ui & Tauri Programme within The Commons Conservancy) — full text in `third_party/wry/LICENSE-MIT`, `third_party/wry/LICENSE-APACHE`, and `third_party/wry/LICENSE.spdx` |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crate does **not** relicense the product. |

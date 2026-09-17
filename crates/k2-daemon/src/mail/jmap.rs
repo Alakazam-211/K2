@@ -321,6 +321,66 @@ impl StalwartClient {
         parse_bootstrap_updated(&resp)
     }
 
+    /// Normal-mode SMTP banner hostname. Bootstrap writes
+    /// `serverHostname` on `x:Bootstrap/set` once; after that the live
+    /// object is the `x:SystemSettings` singleton's `defaultHostname`
+    /// (SMTP greetings / MTA reports). Registry set — not re-bootstrap,
+    /// not a unit wipe.
+    pub fn set_server_hostname(&self, hostname: &str) -> Result<(), String> {
+        let host = hostname.trim();
+        if host.is_empty() {
+            return Err("set_server_hostname: empty hostname".to_string());
+        }
+        let resp = self.registry_call(
+            "x:SystemSettings/set",
+            serde_json::json!({
+                "update": {
+                    SYSTEM_SETTINGS_SINGLETON_ID: { "defaultHostname": host }
+                }
+            }),
+        )?;
+        parse_set_updated(
+            "x:SystemSettings/set",
+            SYSTEM_SETTINGS_SINGLETON_ID,
+            &resp,
+        )
+    }
+
+    /// Retry ACME for the **mail hostname only** (C8/C24 — no extra
+    /// SAN names in the request). Stalwart has no dedicated "renew now"
+    /// method; the documented on-demand path is `x:Task/set` create of
+    /// an `AcmeRenewal` task bound to the hostname's Domain. Does not
+    /// SIGTERM, wipe, or re-bootstrap.
+    pub fn renew_acme_for_mail_hostname(&self, hostname: &str) -> Result<String, String> {
+        let host = hostname.trim();
+        if host.is_empty() {
+            return Err("renew_acme_for_mail_hostname: empty hostname".to_string());
+        }
+        let domain_id = match self.domain_query_id(host)? {
+            Some(id) => id,
+            None => {
+                let parent = super::supervisor::default_domain_for(host);
+                self.domain_query_id(&parent)?.ok_or_else(|| {
+                    format!(
+                        "no Stalwart domain for mail hostname '{host}' — cannot retry ACME"
+                    )
+                })?
+            }
+        };
+        let due = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let args = serde_json::json!({
+            "create": {
+                CREATE_TAG: {
+                    "@type": "AcmeRenewal",
+                    "domainId": domain_id,
+                    "status": { "@type": "Pending", "due": due },
+                }
+            }
+        });
+        let resp = self.registry_call("x:Task/set", args)?;
+        parse_set_created_id("x:Task/set", &resp)
+    }
+
     /// ✔ LIVE-VERIFIED: list the registry's network listeners
     /// (id + name are all the port plan needs).
     pub fn listeners_get(&self) -> Result<Vec<ListenerInfo>, String> {
@@ -1291,6 +1351,10 @@ pub fn parse_session_upload_url(
 /// is literally the string `"singleton"`.
 const BOOTSTRAP_SINGLETON_ID: &str = "singleton";
 
+/// `x:SystemSettings` singleton — live `defaultHostname` (SMTP banner)
+/// after bootstrap. Same literal id as Bootstrap / MtaOutboundStrategy.
+const SYSTEM_SETTINGS_SINGLETON_ID: &str = "singleton";
+
 /// ✔ LIVE-VERIFIED: the MtaOutboundStrategy singleton uses the same
 /// literal id.
 const OUTBOUND_STRATEGY_SINGLETON_ID: &str = "singleton";
@@ -2219,6 +2283,10 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
             .bootstrap_complete(hostname, default_domain, request_tls_certificate)
     }
 
+    fn set_server_hostname(&mut self, hostname: &str) -> Result<(), String> {
+        self.client()?.set_server_hostname(hostname)
+    }
+
     fn configure_listeners(&mut self, port_plan: &str) -> Result<(), String> {
         let client = self.client()?;
         let listeners = client.listeners_get()?;
@@ -2714,6 +2782,141 @@ mod tests {
         server.join().expect("server thread");
         assert!(err.contains("401"), "{err}");
         assert!(!err.contains("bad-key"), "credential must never appear in errors: {err}");
+    }
+
+    /// Hostname retarget: `x:SystemSettings/set` singleton
+    /// `defaultHostname` — not Bootstrap/set, not a wipe.
+    #[test]
+    fn set_server_hostname_patches_system_settings_not_bootstrap() {
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:SystemSettings/set", {
+                "accountId": "b",
+                "updated": { "singleton": null },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![NORMAL_SESSION_FIXTURE.to_string(), set_reply]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        client
+            .set_server_hostname("mail.lztek.io")
+            .expect("set hostname");
+        let _sess = rx.recv().expect("session");
+        let req = rx.recv().expect("set");
+        assert!(req.starts_with("POST /jmap/"), "{req}");
+        let v = body_json(&req);
+        assert_eq!(v["methodCalls"][0][0], "x:SystemSettings/set");
+        assert_ne!(v["methodCalls"][0][0], "x:Bootstrap/set");
+        let args = &v["methodCalls"][0][1];
+        assert_eq!(args["update"]["singleton"]["defaultHostname"], "mail.lztek.io");
+        assert!(
+            args["update"]["singleton"].get("serverHostname").is_none(),
+            "normal-mode field is defaultHostname, not Bootstrap serverHostname: {args}"
+        );
+        let err = client
+            .set_server_hostname("  ")
+            .expect_err("empty hostname must fail loud");
+        assert!(err.contains("empty hostname"), "{err}");
+    }
+
+    /// Cert renew: `x:Task/set` create AcmeRenewal for the mail
+    /// hostname's domain — no extra SAN names, no enable/bootstrap.
+    #[test]
+    fn renew_acme_records_task_create_without_enable() {
+        let query_reply = serde_json::json!({
+            "methodResponses": [["x:Domain/query", {
+                "accountId": "b",
+                "ids": ["dom-mail"],
+            }, "0"]],
+        })
+        .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:Task/set", {
+                "accountId": "b",
+                "created": { "k2": { "id": "task-acme-1" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            query_reply,
+            set_reply,
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let id = client
+            .renew_acme_for_mail_hostname("mail.acme.dev")
+            .expect("renew");
+        assert_eq!(id, "task-acme-1");
+        let _sess = rx.recv().expect("session");
+        let q = body_json(&rx.recv().expect("query"));
+        assert_eq!(q["methodCalls"][0][0], "x:Domain/query");
+        assert_eq!(q["methodCalls"][0][1]["filter"]["name"], "mail.acme.dev");
+        let t = body_json(&rx.recv().expect("task"));
+        assert_eq!(t["methodCalls"][0][0], "x:Task/set");
+        let create = &t["methodCalls"][0][1]["create"]["k2"];
+        assert_eq!(create["@type"], "AcmeRenewal");
+        assert_eq!(create["domainId"], "dom-mail");
+        assert!(
+            create.get("subjectAlternativeNames").is_none(),
+            "C8/C24: optional names must not ride the renew request: {create}"
+        );
+        assert!(
+            create.get("names").is_none(),
+            "C8/C24: no extra names field: {create}"
+        );
+        assert_ne!(t["methodCalls"][0][0], "x:Bootstrap/set");
+    }
+
+    #[test]
+    fn renew_acme_falls_back_to_default_domain_then_fails_loud() {
+        let miss = serde_json::json!({
+            "methodResponses": [["x:Domain/query", {
+                "accountId": "b",
+                "ids": [],
+            }, "0"]],
+        })
+        .to_string();
+        let hit = serde_json::json!({
+            "methodResponses": [["x:Domain/query", {
+                "accountId": "b",
+                "ids": ["dom-parent"],
+            }, "0"]],
+        })
+        .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:Task/set", {
+                "created": { "k2": { "id": "task-2" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            miss.clone(),
+            hit,
+            set_reply,
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        client
+            .renew_acme_for_mail_hostname("mail.acme.dev")
+            .expect("parent domain");
+        let _sess = rx.recv().expect("session");
+        let q1 = body_json(&rx.recv().expect("query host"));
+        assert_eq!(q1["methodCalls"][0][1]["filter"]["name"], "mail.acme.dev");
+        let q2 = body_json(&rx.recv().expect("query parent"));
+        assert_eq!(q2["methodCalls"][0][1]["filter"]["name"], "acme.dev");
+        let t = body_json(&rx.recv().expect("task"));
+        assert_eq!(t["methodCalls"][0][1]["create"]["k2"]["domainId"], "dom-parent");
+
+        let (port2, _rx2) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            miss.clone(),
+            miss,
+        ]);
+        let client2 = StalwartClient::new(format!("http://127.0.0.1:{port2}"), "k2-test-key");
+        let err = client2
+            .renew_acme_for_mail_hostname("mail.missing.test")
+            .expect_err("no domain must fail loud");
+        assert!(err.contains("mail.missing.test"), "{err}");
+        assert!(err.contains("cannot retry ACME"), "{err}");
     }
 }
 

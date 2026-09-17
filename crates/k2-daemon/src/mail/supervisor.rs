@@ -271,6 +271,11 @@ pub trait BootstrapApi: Send {
         default_domain: &str,
         request_tls_certificate: bool,
     ) -> Result<AdminCredentials, String>;
+    /// L2: after disable→enable with a **new** hostname (store already
+    /// initialized — not the healthy alreadyEnabled no-op), patch
+    /// Stalwart `x:SystemSettings` `defaultHostname` so the SMTP banner
+    /// follows. Not re-bootstrap, not SIGTERM wipe.
+    fn set_server_hostname(&mut self, hostname: &str) -> Result<(), String>;
     /// Apply the §5.3 port plan (NORMAL mode): destroy the
     /// IMAP/POP3/ManageSieve listeners (§10), retarget the :8080 http
     /// listener to the loopback mgmt bind, bind HTTPS per plan, add
@@ -1017,11 +1022,13 @@ pub fn run_enable(
         }
     }
 
-    // Capture BEFORE ensure_installing_row flips the row to `installing`.
-    // Disable (and a stale SQLite `running` while the unit is down) must
-    // still `daemon-reload` + `enable --now` + `restart` — the start/unit
-    // resume marks survive disable otherwise (H4/H5).
+    // Capture BEFORE ensure_installing_row flips the row to `installing`
+    // (and overwrites hostname). Disable (and a stale SQLite `running`
+    // while the unit is down) must still `daemon-reload` + `enable --now`
+    // + `restart` — the start/unit resume marks survive disable otherwise
+    // (H4/H5). Previous hostname is the L2 retarget signal.
     let previous = current_status();
+    let previous_hostname = row_field("hostname");
     let force_systemd_up = matches!(
         previous.as_deref(),
         Some("disabled") | Some("stopped") | Some("running")
@@ -1203,25 +1210,47 @@ pub fn run_enable(
     // secret. The default :8080 http listener answers until the final
     // restart applies the port plan; a post-final-restart RESUME finds
     // it on :8180 instead — try both.
+    let store_ready = ops.path_exists(STALWART_CONFIG)
+        || ops.path_exists(&format!("{STALWART_DATA_DIR}/data"));
+    // L2: disable then enable with a **new** name — not the healthy
+    // alreadyEnabled no-op (that never reaches run_enable).
+    let hostname_retarget = store_ready
+        && previous_hostname
+            .as_deref()
+            .is_some_and(|old| old != hostname);
     let api_steps_remain =
         !(step_is_done("server-config") && step_is_done("service-account") && step_is_done("api-key"));
-    if api_steps_remain {
+    if api_steps_remain || hostname_retarget {
+        let auth_step = if api_steps_remain {
+            "server-config"
+        } else {
+            "hostname"
+        };
         let username = progress_extra("adminUsername")
             .unwrap_or_else(|| format!("admin@{default_domain}"));
         let sref = row_field("admin_secret_ref").ok_or_else(|| {
-            fail("server-config", "admin secret ref missing — re-run enable".to_string())
+            fail(
+                auth_step,
+                "admin secret ref missing — re-run enable".to_string(),
+            )
         })?;
         let admin_pw = secrets
             .resolve(&sref)
-            .map_err(|e| fail("server-config", e))?
+            .map_err(|e| fail(auth_step, e))?
             .ok_or_else(|| {
                 fail(
-                    "server-config",
+                    auth_step,
                     format!("secret ref {sref} missing from the mail secret store"),
                 )
             })?;
         authenticate_either(ops, api, &username, &admin_pw)
-            .map_err(|e| fail("server-config", e))?;
+            .map_err(|e| fail(auth_step, e))?;
+    }
+
+    if hostname_retarget {
+        set_current("hostname");
+        api.set_server_hostname(hostname)
+            .map_err(|e| fail("hostname", e))?;
     }
 
     if !step_is_done("server-config") {
@@ -1688,6 +1717,9 @@ mod tests {
                 username: format!("admin@{default_domain}"),
                 secret: "provisioned-admin-secret".into(),
             })
+        }
+        fn set_server_hostname(&mut self, hostname: &str) -> Result<(), String> {
+            self.check(&format!("set_server_hostname {hostname}"))
         }
         fn configure_listeners(&mut self, plan: &str) -> Result<(), String> {
             self.check(&format!("configure_listeners {plan}"))
@@ -2228,6 +2260,109 @@ mod tests {
             "C19: unit active + store ready is alreadyEnabled even if sqlite is empty"
         );
         set_test_store_ready(None);
+        clean_row();
+    }
+
+    fn progress_all_steps_except_start(admin_username: &str) -> String {
+        let mut steps = serde_json::Map::new();
+        for s in ENABLE_STEPS {
+            if *s != "start" {
+                steps.insert((*s).to_string(), serde_json::json!({ "at": 1 }));
+            }
+        }
+        serde_json::json!({
+            "steps": steps,
+            "adminUsername": admin_username,
+        })
+        .to_string()
+    }
+
+    /// L2: disable then enable with a **new** hostname patches
+    /// SystemSettings via the registry — does not re-bootstrap.
+    #[test]
+    fn hostname_retarget_sets_registry_hostname_without_rebootstrap() {
+        let _g = db_guard();
+        clean_row();
+        let secrets = FakeSecrets::default();
+        secrets.store("admin", "admin-secret").expect("vault admin");
+        let progress = progress_all_steps_except_start("admin@old.dev");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, installed_version, \
+                 hostname, admin_secret_ref, enable_progress_json, updated_at) \
+                 VALUES (1, 'disabled', ?1, ?1, 'mail.old.dev', 'mailsec_admin_test', ?2, 100)",
+                rusqlite::params![STALWART_PINNED_VERSION, progress],
+            )
+            .expect("seed disabled row");
+        }
+        let ops = FakeSystemOps {
+            download_body: FAKE_BINARY.to_vec(),
+            existing_paths: vec![
+                STALWART_BIN.to_string(),
+                STALWART_CONFIG.to_string(),
+            ],
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi::default();
+        let art = fake_artifact();
+        run_enable(&ops, &mut api, &secrets, &art, "mail.new.dev", "tls-alpn")
+            .expect("retarget enable");
+        assert!(
+            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            "L2 must not re-bootstrap: {:?}",
+            api.calls
+        );
+        assert!(
+            api.calls.iter().any(|c| c == "set_server_hostname mail.new.dev"),
+            "L2 must patch server hostname via registry: {:?}",
+            api.calls
+        );
+        assert_eq!(row_field("hostname").as_deref(), Some("mail.new.dev"));
+        clean_row();
+    }
+
+    #[test]
+    fn hostname_unchanged_after_disable_does_not_retarget() {
+        let _g = db_guard();
+        clean_row();
+        let secrets = FakeSecrets::default();
+        secrets.store("admin", "admin-secret").expect("vault admin");
+        let progress = progress_all_steps_except_start("admin@acme.dev");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, installed_version, \
+                 hostname, admin_secret_ref, enable_progress_json, updated_at) \
+                 VALUES (1, 'disabled', ?1, ?1, 'mail.acme.dev', 'mailsec_admin_test', ?2, 100)",
+                rusqlite::params![STALWART_PINNED_VERSION, progress],
+            )
+            .expect("seed disabled row");
+        }
+        let ops = FakeSystemOps {
+            download_body: FAKE_BINARY.to_vec(),
+            existing_paths: vec![
+                STALWART_BIN.to_string(),
+                STALWART_CONFIG.to_string(),
+            ],
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi::default();
+        let art = fake_artifact();
+        run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
+            .expect("re-enable same hostname");
+        assert!(
+            !api.calls.iter().any(|c| c.starts_with("set_server_hostname")),
+            "same hostname is not a retarget: {:?}",
+            api.calls
+        );
+        assert!(
+            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            "must not re-bootstrap: {:?}",
+            api.calls
+        );
         clean_row();
     }
 

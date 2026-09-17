@@ -13381,7 +13381,7 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|domain|create|delete|doctor|config|approvals> ... (server admin)",
+      "usage": "k2 hostmail <status|enable|disable|domain|create|delete|doctor|config|approvals|import|cert> ... (server admin)",
       "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
@@ -13395,6 +13395,13 @@ cmd_schema() {
         {"name": "--hostname", "arg": "name", "description": "Mail hostname (e.g. mail.acme.dev). Required."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
+    },
+    {
+      "name": "hostmail cert renew",
+      "usage": "k2 hostmail cert renew [--json]",
+      "description": "Retry ACME for the mail hostname only. POST /cli/mail/cert/renew. Does not SIGTERM, wipe, or re-enable. disable is not a retry.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "dns access",
@@ -23745,6 +23752,13 @@ elif verb == "server_disable":
     d = call("POST", "/cli/mail/server/disable", body={})
     print(dumps(d) if as_json else (d.get("hint") or "mail server disabled."))
 
+elif verb == "cert_renew":
+    d = call("POST", "/cli/mail/cert/renew", body={})
+    if as_json:
+        print(dumps(d))
+    else:
+        print(d.get("hint") or "ACME renewal queued for %s" % (d.get("hostname") or "mail hostname"))
+
 else:
     die({"code": "usage", "hint": "unknown mail verb '%s'" % verb})
 PYEOF
@@ -24952,9 +24966,10 @@ cmd_hostmail() {
         config)  cmd_mail_config "$@" ;;
         approvals) cmd_mail_approvals "$@" ;;
         import)  cmd_hostmail_import "$@" ;;
+        cert)    cmd_hostmail_cert "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|domain|create|delete|doctor|config|approvals|import>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|domain|create|delete|doctor|config|approvals|import|cert>"
             exit 2 ;;
     esac
 }
@@ -24986,6 +25001,31 @@ cmd_hostmail_disable() {
         esac
     done
     local M_VERB="server_disable" M_JSON="$as_json"
+    _mail_py
+}
+
+cmd_hostmail_cert() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_cert; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        renew) cmd_hostmail_cert_renew "$@" ;;
+        --help|-h) cmd_help_hostmail_cert; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown cert command '$sub' — usage: k2 hostmail cert renew"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_cert_renew() {
+    if _wants_help "$@"; then cmd_help_hostmail_cert_renew; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail cert renew [--json]"; exit 2 ;;
+        esac
+    done
+    local M_VERB="cert_renew" M_JSON="$as_json"
     _mail_py
 }
 
@@ -25768,6 +25808,8 @@ COMMANDS
   approvals [list|approve|deny]
                               The pending-outbound queue (deny needs --note)
   import --address <a>        Import Maildir and/or IMAP into a hosted address
+  cert renew                  Retry ACME for the mail hostname (enable is
+                              not the retry path; disable is not a retry)
 
 Run 'k2 hostmail <command> --help' for details.
 EOF
@@ -25793,10 +25835,36 @@ cmd_help_hostmail_disable() {
     cat <<'EOF'
 Host-wide inbound down for EVERY hosted domain until
 `k2 hostmail enable` actually restarts the unit. Data is kept.
-MX still points here.
+MX still points here. disable is not an ACME retry — use
+`k2 hostmail cert renew` to re-request TLS for the mail hostname.
 
 USAGE
   k2 hostmail disable [--json]
+EOF
+}
+
+cmd_help_hostmail_cert() {
+    cat <<'EOF'
+TLS certificate for the mail hostname. Renew retries ACME without
+re-enable, SIGTERM, or wiping the store. enable is not the retry
+path; disable is not a retry.
+
+USAGE
+  k2 hostmail cert renew [--json]
+EOF
+}
+
+cmd_help_hostmail_cert_renew() {
+    cat <<'EOF'
+Retry ACME for the mail hostname only (no extra names). Does not
+SIGTERM, wipe /etc/stalwart, or re-bootstrap. Second enable on a
+healthy install is a no-op — this is the retry path.
+
+USAGE
+  k2 hostmail cert renew [--json]
+
+FLAGS
+  --json                 JSON output
 EOF
 }
 

@@ -44,6 +44,15 @@ fi
 if ! "$K2" hostmail --help | grep -q 'systemctl is-active stalwart'; then
     fail "k2 hostmail --help must name systemctl is-active stalwart as Linux ground truth"
 fi
+if ! "$K2" hostmail --help | grep -q 'cert renew'; then
+    fail "k2 hostmail --help must list cert renew"
+fi
+if ! "$K2" hostmail cert renew --help | grep -q 'ACME'; then
+    fail "k2 hostmail cert renew --help must describe ACME retry"
+fi
+if ! "$K2" hostmail disable --help | grep -q 'not an ACME retry'; then
+    fail "k2 hostmail disable --help must say disable is not an ACME retry"
+fi
 if ! "$K2" hostmail status --help | grep -q 'systemctl is-active stalwart'; then
     fail "k2 hostmail status --help must name systemctl is-active stalwart"
 fi

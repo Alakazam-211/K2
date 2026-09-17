@@ -383,6 +383,51 @@ pub fn handle_server_disable(_body: &[u8]) -> CliResponse {
     )
 }
 
+/// POST `/cli/mail/cert/renew` — L7: retry ACME for the mail hostname
+/// only. Not enable, not disable, not SIGTERM, not a store wipe.
+pub fn handle_cert_renew(_body: &[u8]) -> CliResponse {
+    let hostname = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT hostname FROM mail_server WHERE id = 1", [], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .ok()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    };
+    let Some(hostname) = hostname else {
+        return err_json(
+            "409 Conflict",
+            "not_ready",
+            "the mail server is not installed — enable it before cert renew".to_string(),
+        );
+    };
+    let client = match crate::mail::domains::engine_from_db() {
+        Ok((c, _)) => c,
+        Err(e) => {
+            return err_json(
+                "409 Conflict",
+                "not_ready",
+                format!("cannot retry ACME while the mail server is down: {e}"),
+            )
+        }
+    };
+    match client.renew_acme_for_mail_hostname(&hostname) {
+        Ok(task_id) => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "hostname": hostname,
+                "taskId": task_id,
+                "hint": format!("ACME renewal queued for {hostname}"),
+            })
+            .to_string(),
+        ),
+        Err(e) => err_json("502 Bad Gateway", "engine", e),
+    }
+}
+
 /// POST `/cli/mail/server/uninstall` — S1: disable + remove binary/
 /// unit (+ optional data purge). Owner-or-admin. DOUBLE-CONFIRM at the
 /// ROUTE level (PRD §4.1): a purge is honored ONLY when the body
@@ -866,6 +911,56 @@ mod tests {
         );
         // Caddy apply must not swallow Enable success (ok stays true).
         assert_ne!(v["ok"], false);
+        clean_row();
+    }
+
+    /// L2: a healthy alreadyEnabled install is NOT the hostname
+    /// retarget path — even when the POST names a different host.
+    #[test]
+    fn enable_already_enabled_does_not_retarget_hostname() {
+        let _g = crate::mail::mail_server_test_lock();
+        let _unit = supervisor::with_test_unit_state("active");
+        clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, updated_at) \
+                 VALUES (1, 'running', ?1, 'mail.old.dev', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION],
+            )
+            .expect("seed row");
+        }
+        let resp = handle_server_enable(br#"{"hostname":"mail.new.dev"}"#);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["alreadyEnabled"], true, "{}", resp.body);
+        let still: String = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row("SELECT hostname FROM mail_server WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .expect("hostname")
+        };
+        assert_eq!(still, "mail.old.dev", "alreadyEnabled must not rewrite sqlite hostname");
+        clean_row();
+    }
+
+    #[test]
+    fn cert_renew_is_not_ready_without_a_mail_hostname() {
+        let _g = crate::mail::mail_server_test_lock();
+        clean_row();
+        let resp = handle_cert_renew(b"{}");
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "not_ready");
+        assert!(
+            !resp.body.contains("alreadyEnabled"),
+            "renew must not go through enable: {}",
+            resp.body
+        );
         clean_row();
     }
 

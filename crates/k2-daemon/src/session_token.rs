@@ -1368,6 +1368,7 @@ mod tests {
             "/cli/mail/approvals/deny",
             "/cli/mail/config/set",
             "/cli/mail/import",
+            "/cli/mail/cert/renew",
         ] {
             assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
         }

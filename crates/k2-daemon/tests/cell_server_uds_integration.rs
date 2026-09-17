@@ -697,6 +697,9 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
 
     let (imp_status, imp_body) = uds(&sock, &get("/cli/mail/import", Some(&token))).await;
     assert_eq!(imp_status, 405, "UDS GET import 405; {imp_body}");
+
+    let (cr_status, cr_body) = uds(&sock, &get("/cli/mail/cert/renew", Some(&token))).await;
+    assert_eq!(cr_status, 405, "UDS GET cert/renew 405; {cr_body}");
 }
 
 /// Minimal query-string percent-encoding for a filesystem path.

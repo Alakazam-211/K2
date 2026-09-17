@@ -279,6 +279,13 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             Some("{}"),
         );
         assert_owner_only(&disable_off, "default OFF agent disable");
+        let renew_off = http(
+            port,
+            "POST",
+            &format!("/cli/mail/cert/renew?token={hook_a}"),
+            Some("{}"),
+        );
+        assert_owner_only(&renew_off, "default OFF agent cert renew");
         assert!(
             disable_off
                 .body
@@ -473,7 +480,8 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             let r = http(port, method, &format!("{path}?token={hook_a}"), body);
             assert_owner_only(&r, &format!("flag ON leftover M6 must not open {path}"));
             assert!(
-                !r.body.contains("Allow agents to manage hosted mail on this host"),
+                !r.body
+                    .contains("Allow agents to manage hosted mail on this host"),
                 "C33 leftover M6 names the verb, not Settings: {} {}",
                 path,
                 r.body
@@ -489,16 +497,33 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/approvals/approve", Some("{}")),
             ("POST", "/cli/mail/config/set", Some("{}")),
             ("POST", "/cli/mail/import", Some("{}")),
+            ("POST", "/cli/mail/cert/renew", Some("{}")),
         ] {
             let r = http(port, method, &format!("{path}?token={hook_a}"), body);
             assert_not_owner_only(&r, &format!("C5b flag ON opens {path}"));
         }
 
-        let import_get = http(port, "GET", &format!("/cli/mail/import?token={hook_a}"), None);
+        let import_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/import?token={hook_a}"),
+            None,
+        );
         assert_eq!(
             import_get.status, 405,
             "GET import 405; {}",
             import_get.body
+        );
+        let renew_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/cert/renew?token={hook_a}"),
+            None,
+        );
+        assert_eq!(
+            renew_get.status, 405,
+            "GET cert/renew 405; {}",
+            renew_get.body
         );
 
         let create = http(

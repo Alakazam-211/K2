@@ -190,7 +190,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/folder/create"
         | "/cli/mail/folder/rename"
         | "/cli/mail/draft"
-        | "/cli/mail/import" => CliResponse::method_not_allowed(),
+        | "/cli/mail/import"
+        | "/cli/mail/cert/renew" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -256,6 +257,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/folder/rename" => routes_messages::handle_folder_rename(body),
         "/cli/mail/draft" => routes_external::handle_draft(body),
         "/cli/mail/import" => crate::mail::import::handle_import(body),
+        "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -313,6 +315,7 @@ pub fn is_mail_owner_surface(path: &str) -> bool {
         // Toggle writer: agents cannot self-grant.
         || path == "/cli/mail-manage"
         || path == "/cli/mail/import"
+        || path == "/cli/mail/cert/renew"
 }
 
 /// `GET /cli/mail/domain/list` uses client `project=` to pick the owner
@@ -374,6 +377,7 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/approvals/deny"
             | "/cli/mail/config/set"
             | "/cli/mail/import"
+            | "/cli/mail/cert/renew"
     )
 }
 
@@ -487,9 +491,7 @@ pub fn handle_mail_manage(body: &[u8]) -> crate::cli_response::CliResponse {
         Ok(v) => v,
         Err(_) if body.iter().all(|b| b.is_ascii_whitespace()) => serde_json::json!({}),
         Err(e) => {
-            return crate::cli_response::CliResponse::bad_request(format!(
-                "invalid JSON body: {e}"
-            ))
+            return crate::cli_response::CliResponse::bad_request(format!("invalid JSON body: {e}"))
         }
     };
     let project = v
@@ -551,7 +553,10 @@ mod tests {
             &mut params,
             Some("/client/ws".to_string()),
         );
-        assert_eq!(params.get("project").map(String::as_str), Some("/client/ws"));
+        assert_eq!(
+            params.get("project").map(String::as_str),
+            Some("/client/ws")
+        );
         assert_eq!(
             params.get("project_path").map(String::as_str),
             Some("/client/ws")
@@ -585,10 +590,7 @@ mod tests {
             "/cli/mail/doctor",
             "/cli/mail-manage",
         ] {
-            assert!(
-                is_mail_owner_surface(p),
-                "expected owner surface: {p}"
-            );
+            assert!(is_mail_owner_surface(p), "expected owner surface: {p}");
         }
         // Agent mail verbs stay open (not owner surface).
         for p in [
@@ -598,10 +600,7 @@ mod tests {
             "/cli/mail/status",
             "/cli/mail/read",
         ] {
-            assert!(
-                !is_mail_owner_surface(p),
-                "must NOT be owner surface: {p}"
-            );
+            assert!(!is_mail_owner_surface(p), "must NOT be owner surface: {p}");
         }
     }
 
@@ -643,6 +642,7 @@ mod tests {
             "/cli/mail/approvals/deny",
             "/cli/mail/config/set",
             "/cli/mail/import",
+            "/cli/mail/cert/renew",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }
@@ -747,18 +747,38 @@ mod tests {
             "/cli/mail/folder/rename",
             "/cli/mail/draft",
             "/cli/mail/import",
+            "/cli/mail/cert/renew",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
             assert!(resp.body.contains("POST required"), "body={}", resp.body);
         }
-        assert_eq!(dispatch_post("/cli/mail/unknown", b"{}").status, "404 Not Found");
         assert_eq!(
-            dispatch("/cli/mail/unknown", &params).expect("prefix claimed").status,
+            dispatch_post("/cli/mail/unknown", b"{}").status,
             "404 Not Found"
         );
-        assert!(dispatch("/cli/feedback/list", &params).is_none(), "not our prefix");
-        assert!(dispatch("/cli/mailbox", &params).is_none(), "no bare-prefix match");
+        let renew = dispatch_post("/cli/mail/cert/renew", b"{}");
+        assert_ne!(renew.status, "404 Not Found", "cert/renew must be wired");
+        assert_ne!(renew.status, "501 Not Implemented", "{}", renew.body);
+        assert!(
+            !renew.body.contains("alreadyEnabled"),
+            "renew is not enable: {}",
+            renew.body
+        );
+        assert_eq!(
+            dispatch("/cli/mail/unknown", &params)
+                .expect("prefix claimed")
+                .status,
+            "404 Not Found"
+        );
+        assert!(
+            dispatch("/cli/feedback/list", &params).is_none(),
+            "not our prefix"
+        );
+        assert!(
+            dispatch("/cli/mailbox", &params).is_none(),
+            "no bare-prefix match"
+        );
     }
 
     /// Every route in the partition map answers its REAL contract —
@@ -861,7 +881,11 @@ mod tests {
             "/cli/mail/approvals/deny",
         ] {
             let resp = dispatch_post(route, b"{}");
-            assert_eq!(resp.status, "400 Bad Request", "route={route}: {}", resp.body);
+            assert_eq!(
+                resp.status, "400 Bad Request",
+                "route={route}: {}",
+                resp.body
+            );
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
             assert_eq!(v["error"]["code"], "usage", "route={route}");
         }
@@ -912,7 +936,11 @@ mod tests {
             "/cli/mail/draft",
         ] {
             let resp = dispatch_post(route, b"{}");
-            assert_eq!(resp.status, "400 Bad Request", "route={route}: {}", resp.body);
+            assert_eq!(
+                resp.status, "400 Bad Request",
+                "route={route}: {}",
+                resp.body
+            );
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
             assert_eq!(v["error"]["code"], "usage", "route={route}");
         }

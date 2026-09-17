@@ -810,6 +810,7 @@ async fn handle_one_request(
             | "/cli/mail/folder/rename"
             | "/cli/mail/draft"
             | "/cli/mail/import"
+            | "/cli/mail/quota"
             | "/cli/mail/cert/renew"
             | "/cli/mail/server/rotate-admin"
             // Per-workspace hosted-mail manage toggle. Dedicated POST

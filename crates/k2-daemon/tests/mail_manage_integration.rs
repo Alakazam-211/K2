@@ -504,6 +504,8 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/approvals/approve", Some("{}")),
             ("POST", "/cli/mail/config/set", Some("{}")),
             ("POST", "/cli/mail/import", Some("{}")),
+            ("POST", "/cli/mail/quota", Some("{}")),
+            ("GET", "/cli/mail/quota", None),
             ("POST", "/cli/mail/cert/renew", Some("{}")),
             ("POST", "/cli/mail/server/rotate-admin", Some("{}")),
         ] {
@@ -521,6 +523,22 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             import_get.status, 405,
             "GET import 405; {}",
             import_get.body
+        );
+        let quota_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/quota?token={hook_a}"),
+            None,
+        );
+        assert_ne!(
+            quota_get.status, 405,
+            "GET /cli/mail/quota is the engine read, not POST-only; {}",
+            quota_get.body
+        );
+        assert_eq!(
+            quota_get.status, 400,
+            "GET quota without address is usage; {}",
+            quota_get.body
         );
         let renew_get = http(
             port,

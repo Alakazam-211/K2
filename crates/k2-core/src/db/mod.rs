@@ -978,6 +978,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0118_project_mail_manage_enabled",
             include_str!("../../drizzle_sql/0118_project_mail_manage_enabled.sql"),
         ),
+        // 0119 — per-workspace mailbox quota defaults for new mints.
+        // NULL = inherit AppSettings (1 GB / 10k). 0 = unlimited.
+        // Existing addresses are not retrofitted (POST /cli/mail/quota).
+        (
+            "0119_mail_quota",
+            include_str!("../../drizzle_sql/0119_mail_quota.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {

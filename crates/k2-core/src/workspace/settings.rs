@@ -101,6 +101,12 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // `AppSettings.mail_address_cap` default (5). Effective
         // resolver: `mail_address_cap_for_path`.
         "mail_address_cap",
+        // Per-workspace mailbox quota defaults for new mints.
+        // Non-negative integer, 0 = unlimited (write-validated below);
+        // NULL = inherit the global AppSettings defaults (1 GB / 10k).
+        // Existing addresses are not retrofitted.
+        "mail_quota_bytes",
+        "mail_quota_messages",
         // Workspace data sidecar (prd-workspace-data-sidecar-v1 D21) —
         // create-only agent passport (`k2 db create`). Values:
         // 'off' | 'read' | 'write' (write-validated below); NULL =
@@ -273,6 +279,18 @@ pub fn update_project_setting(
         return Err(format!(
             "mail_address_cap must be a non-negative integer (0 = unlimited), got {value:?}"
         ));
+    }
+    // Mailbox quota: non-negative i64 (0 = unlimited). Negative /
+    // non-integer refused loudly so mint never reads garbage.
+    if field == "mail_quota_bytes" || field == "mail_quota_messages" {
+        match value.parse::<i64>() {
+            Ok(n) if n >= 0 => {}
+            _ => {
+                return Err(format!(
+                    "{field} must be a non-negative integer (0 = unlimited), got {value:?}"
+                ));
+            }
+        }
     }
     if field == "db_agent_access" && !DB_AGENT_ACCESS_MODES.contains(&value) {
         return Err(format!(
@@ -753,11 +771,12 @@ pub fn agents_can_create_connections_for_path(project_path: &str) -> bool {
 
 // ── K2 Mail (prd-email-server-v1 §12) — gating-setting resolvers ────────
 //
-// Global default in `AppSettings` (`mail_agent_send` / `mail_address_cap`),
-// per-workspace override columns on `projects` (migration 0072, NULL =
-// inherit). These two resolvers are the ONLY read path later slices may
-// use for gating decisions — never read the raw column or the raw
-// AppSettings field at a call site.
+// Global default in `AppSettings` (`mail_agent_send` / `mail_address_cap` /
+// `mail_quota_bytes` / `mail_quota_messages`), per-workspace override
+// columns on `projects` (migrations 0075 / 0119, NULL = inherit). These
+// resolvers are the ONLY read path later slices may use for gating
+// decisions — never read the raw column or the raw AppSettings field
+// at a call site.
 
 /// The EFFECTIVE agent-send gating mode for `project_path` (D4):
 /// `off` | `approval` | `on`.
@@ -896,6 +915,40 @@ pub fn mail_address_cap_for_path(project_path: &str) -> u32 {
     match per_workspace {
         Some(v) if v >= 0 => v as u32,
         _ => crate::app_settings::load().mail_address_cap,
+    }
+}
+
+fn mail_quota_i64_for_path(project_path: &str, column: &str) -> Option<i64> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        &format!("SELECT {column} FROM projects WHERE path = ?1"),
+        rusqlite::params![project_path],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// EFFECTIVE mailbox disk quota in bytes for new mints on
+/// `project_path`. 0 = unlimited. Per-workspace override wins when
+/// present and non-negative; otherwise the global
+/// `AppSettings.mail_quota_bytes` default (1 GB). A negative stored
+/// value falls back to the global default (never to unlimited).
+pub fn mail_quota_bytes_for_path(project_path: &str) -> u64 {
+    match mail_quota_i64_for_path(project_path, "mail_quota_bytes") {
+        Some(v) if v >= 0 => v as u64,
+        _ => crate::app_settings::load().mail_quota_bytes,
+    }
+}
+
+/// EFFECTIVE mailbox message cap for new mints on `project_path`.
+/// 0 = unlimited. Same inherit/fallback rules as
+/// [`mail_quota_bytes_for_path`] (global default 10_000).
+pub fn mail_quota_messages_for_path(project_path: &str) -> u64 {
+    match mail_quota_i64_for_path(project_path, "mail_quota_messages") {
+        Some(v) if v >= 0 => v as u64,
+        _ => crate::app_settings::load().mail_quota_messages,
     }
 }
 
@@ -1697,6 +1750,13 @@ mod tests {
                 .expect_err("bad cap must be rejected");
             assert!(err.contains("mail_address_cap"), "'{bad}' → {err:?}");
         }
+        for field in ["mail_quota_bytes", "mail_quota_messages"] {
+            for bad in ["-1", "five", "1.5", ""] {
+                let err = update_project_setting(&path, field, bad)
+                    .expect_err("bad quota must be rejected");
+                assert!(err.contains(field), "'{bad}' → {err:?}");
+            }
+        }
     }
 
     /// Chunk 2.2 — column-only Skin Access passport. Default OFF;
@@ -1974,6 +2034,66 @@ mod tests {
             .expect("corrupt cap directly");
         }
         assert_eq!(mail_address_cap_for_path(&path), 9, "negative → global default");
+    }
+
+    /// Mailbox quota: default 1 GB / 10k, per-workspace override wins,
+    /// 0 = unlimited, negative stored value falls back to global.
+    #[test]
+    fn mail_quota_default_and_override() {
+        let _g = HOME_TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        let path = unique_path("mail-quota");
+        let _pid = insert_project(&path);
+
+        assert_eq!(mail_quota_bytes_for_path(&path), 1_073_741_824);
+        assert_eq!(mail_quota_messages_for_path(&path), 10_000);
+        assert_eq!(
+            mail_quota_bytes_for_path("/tmp/never-registered-quota"),
+            1_073_741_824
+        );
+        assert_eq!(
+            mail_quota_messages_for_path("/tmp/never-registered-quota"),
+            10_000
+        );
+
+        crate::app_settings::update(serde_json::json!({
+            "mailQuotaBytes": 2_147_483_648u64,
+            "mailQuotaMessages": 20_000u64,
+        }))
+        .expect("set global quota");
+        assert_eq!(mail_quota_bytes_for_path(&path), 2_147_483_648);
+        assert_eq!(mail_quota_messages_for_path(&path), 20_000);
+
+        update_project_setting(&path, "mail_quota_bytes", "3221225472").expect("override bytes");
+        update_project_setting(&path, "mail_quota_messages", "40000").expect("override msgs");
+        assert_eq!(mail_quota_bytes_for_path(&path), 3_221_225_472);
+        assert_eq!(mail_quota_messages_for_path(&path), 40_000);
+
+        update_project_setting(&path, "mail_quota_bytes", "0").expect("unlimited bytes");
+        update_project_setting(&path, "mail_quota_messages", "0").expect("unlimited msgs");
+        assert_eq!(mail_quota_bytes_for_path(&path), 0, "0 = unlimited");
+        assert_eq!(mail_quota_messages_for_path(&path), 0, "0 = unlimited");
+
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET mail_quota_bytes = -3, mail_quota_messages = -9 WHERE path = ?1",
+                rusqlite::params![path],
+            )
+            .expect("corrupt quota directly");
+        }
+        assert_eq!(
+            mail_quota_bytes_for_path(&path),
+            2_147_483_648,
+            "negative → global default"
+        );
+        assert_eq!(
+            mail_quota_messages_for_path(&path),
+            20_000,
+            "negative → global default"
+        );
     }
 
     // ── B3a per-workspace Anthropic API key (BYO key) ──────────────

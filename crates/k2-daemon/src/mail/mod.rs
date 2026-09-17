@@ -115,6 +115,7 @@ pub mod messages;
 pub mod oauth;
 pub mod oauth_config;
 pub mod preflight;
+pub mod quota;
 pub mod routes_access;
 pub mod routes_addresses;
 pub mod routes_domains;

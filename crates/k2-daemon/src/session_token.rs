@@ -1368,6 +1368,7 @@ mod tests {
             "/cli/mail/approvals/deny",
             "/cli/mail/config/set",
             "/cli/mail/import",
+            "/cli/mail/quota",
             "/cli/mail/cert/renew",
             "/cli/mail/server/rotate-admin",
         ] {

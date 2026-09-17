@@ -3730,6 +3730,20 @@ mod unit_tests {
             )
             .expect("projects override read");
         assert!(send.is_none() && cap.is_none(), "overrides backfill to NULL");
+
+        // 0119: per-workspace mailbox quota defaults backfill to NULL
+        // (inherit global 1 GB / 10k). 0 = unlimited is a later write.
+        let (q_bytes, q_msgs): (Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT mail_quota_bytes, mail_quota_messages FROM projects WHERE id = ?1",
+                params![pid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("projects quota override read");
+        assert!(
+            q_bytes.is_none() && q_msgs.is_none(),
+            "quota overrides backfill to NULL"
+        );
     }
 
     /// 0108 (workspace data sidecar): tables exist, singleton CHECK,

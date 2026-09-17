@@ -13381,8 +13381,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|domain|create|delete|doctor|config|approvals|import|cert> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|rotate-admin|domain|create|delete|doctor|config|approvals|import|quota|cert> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -13409,6 +13409,25 @@ cmd_schema() {
       "description": "Rotate leftover bootstrap recovery principal (admin) and the provisioned admin password. POST /cli/mail/server/rotate-admin. Does not wipe the store. disable is not a wipe; enable no-op is not rotate.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail quota get",
+      "usage": "k2 hostmail quota get <addr> [--json]",
+      "description": "Read live Stalwart mailbox quotas (maxDiskQuota / maxEmails) for a hosted address. GET /cli/mail/quota?address=. mail_manage. 0 = unlimited. Default for new mints is 1GB/10k; existing boxes need quota set (mint constants do not retrofit).",
+      "args": [{"name": "addr", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail quota set",
+      "usage": "k2 hostmail quota set <addr> --bytes N|--gb N [--messages N] [--json]",
+      "description": "Patch a hosted mailbox's Stalwart Account quotas. POST /cli/mail/quota {address, bytes|gb, messages}. mail_manage. 0 = unlimited. Give --bytes or --gb (not both). Existing boxes need this — mint constants do not retrofit.",
+      "args": [{"name": "addr", "required": true}],
+      "flags": [
+        {"name": "--bytes", "arg": "N", "description": "maxDiskQuota in bytes (0 = unlimited)."},
+        {"name": "--gb", "arg": "N", "description": "maxDiskQuota in GiB (× 2^30). Not with --bytes."},
+        {"name": "--messages", "arg": "N", "description": "maxEmails (0 = unlimited)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
     },
     {
       "name": "dns access",
@@ -23387,16 +23406,54 @@ elif verb == "config_get":
     d = call("GET", "/cli/mail/config")
     print(dumps(d))
 
+elif verb == "quota_get":
+    d = call("GET", "/cli/mail/quota", params={"address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        q = d.get("quotas") or {}
+        print("%s  disk=%s  messages=%s" % (
+            d.get("address") or env("M_ADDRESS") or "?",
+            q.get("maxDiskQuota") if q.get("maxDiskQuota") is not None else "?",
+            q.get("maxEmails") if q.get("maxEmails") is not None else "?"))
+
+elif verb == "quota_set":
+    body = {"address": env("M_ADDRESS")}
+    if env("M_QUOTA_BYTES") != "":
+        body["bytes"] = int(env("M_QUOTA_BYTES"))
+    if env("M_QUOTA_GB") != "":
+        body["gb"] = int(env("M_QUOTA_GB"))
+    if env("M_QUOTA_MESSAGES") != "":
+        body["messages"] = int(env("M_QUOTA_MESSAGES"))
+    d = call("POST", "/cli/mail/quota", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        q = d.get("quotas") or {}
+        print("quota set for %s  disk=%s  messages=%s" % (
+            d.get("address") or env("M_ADDRESS") or "?",
+            q.get("maxDiskQuota") if q.get("maxDiskQuota") is not None else "?",
+            q.get("maxEmails") if q.get("maxEmails") is not None else "?"))
+
 elif verb == "config_set":
     body = {}
     for envk, key in (("M_SEND_MODE", "sendMode"), ("M_DOMAIN", "domain"),
                       ("M_RELAY_HOST", "relayHost"), ("M_RELAY_PORT", "relayPort"),
                       ("M_RELAY_USER", "relayUser"), ("M_RELAY_PASS", "relayPass"),
                       ("M_AGENT_SEND", "agentSend"), ("M_ADDRESS_CAP", "addressCap"),
+                      ("M_QUOTA_BYTES", "quotaBytes"), ("M_QUOTA_MESSAGES", "quotaMessages"),
                       ("M_WORKSPACE", "workspace")):
         v = env(envk)
         if v != "":
-            body[key] = int(v) if key in ("relayPort", "addressCap") else v
+            body[key] = int(v) if key in ("relayPort", "addressCap", "quotaBytes", "quotaMessages") else v
+    if env("M_QUOTA_GB") != "":
+        body["quotaBytes"] = int(env("M_QUOTA_GB")) * (1 << 30)
+    quota_keys = ("quotaBytes", "quotaMessages")
+    if any(k in body for k in quota_keys) and "workspace" not in body:
+        defaults = body.setdefault("defaults", {})
+        for k in quota_keys:
+            if k in body:
+                defaults[k] = body.pop(k)
     d = call("POST", "/cli/mail/config/set", body=body)
     if as_json:
         print(dumps(d))
@@ -24359,7 +24416,7 @@ cmd_mail_doctor() {
 cmd_mail_config() {
     if _wants_help "$@"; then cmd_help_mail_config; exit 0; fi
     local send_mode="" domain="" relay_host="" relay_port="" relay_user="" relay_pass=""
-    local agent_send="" address_cap="" workspace="" as_json=false any_set=false
+    local agent_send="" address_cap="" quota_bytes="" quota_gb="" quota_messages="" workspace="" as_json=false any_set=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --send-mode)
@@ -24390,6 +24447,15 @@ cmd_mail_config() {
             --address-cap)
                 [ $# -ge 2 ] || { _mail_err "usage" "--address-cap requires a number (0 = unlimited)"; exit 2; }
                 address_cap="$2"; any_set=true; shift 2 ;;
+            --quota-bytes)
+                [ $# -ge 2 ] || { _mail_err "usage" "--quota-bytes requires a number (0 = unlimited)"; exit 2; }
+                quota_bytes="$2"; any_set=true; shift 2 ;;
+            --quota-gb)
+                [ $# -ge 2 ] || { _mail_err "usage" "--quota-gb requires a number (0 = unlimited)"; exit 2; }
+                quota_gb="$2"; any_set=true; shift 2 ;;
+            --quota-messages)
+                [ $# -ge 2 ] || { _mail_err "usage" "--quota-messages requires a number (0 = unlimited)"; exit 2; }
+                quota_messages="$2"; any_set=true; shift 2 ;;
             --workspace)
                 [ $# -ge 2 ] || { _mail_err "usage" "--workspace requires a workspace (name | path | UUID)"; exit 2; }
                 workspace="$2"; any_set=true; shift 2 ;;
@@ -24423,12 +24489,29 @@ cmd_mail_config() {
         _mail_err "usage" "--address-cap must be a non-negative number (0 = unlimited)"
         exit 2
     fi
+    if [ -n "$quota_bytes" ] && [ -n "$quota_gb" ]; then
+        _mail_err "usage" "give either --quota-bytes or --quota-gb, not both"
+        exit 2
+    fi
+    if [ -n "$quota_bytes" ] && ! _mail_is_uint "$quota_bytes"; then
+        _mail_err "usage" "--quota-bytes must be a non-negative number (0 = unlimited)"
+        exit 2
+    fi
+    if [ -n "$quota_gb" ] && ! _mail_is_uint "$quota_gb"; then
+        _mail_err "usage" "--quota-gb must be a non-negative number (0 = unlimited)"
+        exit 2
+    fi
+    if [ -n "$quota_messages" ] && ! _mail_is_uint "$quota_messages"; then
+        _mail_err "usage" "--quota-messages must be a non-negative number (0 = unlimited)"
+        exit 2
+    fi
     local verb="config_get"
     $any_set && verb="config_set"
     local M_VERB="$verb" M_JSON="$as_json" M_SEND_MODE="$send_mode" M_DOMAIN="$domain" \
           M_RELAY_HOST="$relay_host" M_RELAY_PORT="$relay_port" M_RELAY_USER="$relay_user" \
           M_RELAY_PASS="$relay_pass" M_AGENT_SEND="$agent_send" \
-          M_ADDRESS_CAP="$address_cap" M_WORKSPACE="$workspace"
+          M_ADDRESS_CAP="$address_cap" M_QUOTA_BYTES="$quota_bytes" M_QUOTA_GB="$quota_gb" \
+          M_QUOTA_MESSAGES="$quota_messages" M_WORKSPACE="$workspace"
     _mail_py
 }
 
@@ -24993,10 +25076,11 @@ cmd_hostmail() {
         config)  cmd_mail_config "$@" ;;
         approvals) cmd_mail_approvals "$@" ;;
         import)  cmd_hostmail_import "$@" ;;
+        quota)   cmd_hostmail_quota "$@" ;;
         cert)    cmd_hostmail_cert "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|domain|create|delete|doctor|config|approvals|import|cert>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|domain|create|delete|doctor|config|approvals|import|quota|cert>"
             exit 2 ;;
     esac
 }
@@ -25117,6 +25201,99 @@ cmd_hostmail_import() {
           M_MAILDIR="$maildir" M_IMAPSYNC_HOST="$imap_host" \
           M_IMAPSYNC_USER="$imap_user" M_IMAPSYNC_PASS="$imap_pass" \
           M_IMAPSYNC_PORT="$imap_port" M_SKIP_INBOX="$skip_inbox"
+    _mail_py
+}
+
+cmd_hostmail_quota() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_quota; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        get) cmd_hostmail_quota_get "$@" ;;
+        set) cmd_hostmail_quota_set "$@" ;;
+        --help|-h) cmd_help_hostmail_quota; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown quota command '$sub' — usage: k2 hostmail quota <get|set>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_quota_get() {
+    if _wants_help "$@"; then cmd_help_hostmail_quota_get; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail quota get <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail quota get <addr>"; exit 2; }
+    local M_VERB="quota_get" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_quota_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_quota_set; exit 0; fi
+    local address="" bytes="" gb="" messages="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --bytes)
+                [ $# -ge 2 ] || { _mail_err "usage" "--bytes requires a number (0 = unlimited)"; exit 2; }
+                bytes="$2"; shift 2 ;;
+            --gb)
+                [ $# -ge 2 ] || { _mail_err "usage" "--gb requires a number (0 = unlimited)"; exit 2; }
+                gb="$2"; shift 2 ;;
+            --messages)
+                [ $# -ge 2 ] || { _mail_err "usage" "--messages requires a number (0 = unlimited)"; exit 2; }
+                messages="$2"; shift 2 ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail quota set <addr> --bytes N|--gb N [--messages N]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail quota set <addr> --bytes N|--gb N [--messages N]"; exit 2; }
+    if [ -n "$bytes" ] && [ -n "$gb" ]; then
+        _mail_err "usage" "give either --bytes or --gb, not both"
+        exit 2
+    fi
+    if [ -z "$bytes" ] && [ -z "$gb" ] && [ -z "$messages" ]; then
+        _mail_err "usage" "give --bytes N or --gb N and/or --messages N (0 = unlimited)"
+        exit 2
+    fi
+    if [ -n "$bytes" ] && ! _mail_is_uint "$bytes"; then
+        _mail_err "usage" "--bytes must be a non-negative number (0 = unlimited)"
+        exit 2
+    fi
+    if [ -n "$gb" ] && ! _mail_is_uint "$gb"; then
+        _mail_err "usage" "--gb must be a non-negative number (0 = unlimited)"
+        exit 2
+    fi
+    if [ -n "$messages" ] && ! _mail_is_uint "$messages"; then
+        _mail_err "usage" "--messages must be a non-negative number (0 = unlimited)"
+        exit 2
+    fi
+    local M_VERB="quota_set" M_JSON="$as_json" M_ADDRESS="$address" \
+          M_QUOTA_BYTES="$bytes" M_QUOTA_GB="$gb" M_QUOTA_MESSAGES="$messages"
     _mail_py
 }
 
@@ -25568,8 +25745,11 @@ EOF
 cmd_help_mail_config() {
     cat <<'EOF'
 Read or change mail configuration. Global defaults stay owner. mail_manage
-agents may set --address-cap / --agent-send with --workspace. With no
-setting flags it prints the current config; with flags it applies them.
+agents may set --address-cap / --agent-send / --quota-bytes / --quota-gb /
+--quota-messages with --workspace. With no setting flags it prints the
+current config; with flags it applies them. 0 = unlimited. Default mailbox
+quota is 1 GB / 10k messages. Existing boxes need `k2 hostmail quota set`
+(mint constants do not retrofit).
 
 USAGE
   k2 hostmail config                                   Read the effective config
@@ -25577,6 +25757,7 @@ USAGE
                  [--relay-host <h> --relay-port <p> --relay-user <u>
                   --relay-pass-stdin]
                  [--agent-send off|approval|on] [--address-cap <n>]
+                 [--quota-bytes N|--quota-gb N] [--quota-messages N]
                  [--workspace <ws>]
 
 FLAGS
@@ -25590,8 +25771,15 @@ FLAGS
                          (pair with --workspace for a per-workspace override)
   --address-cap <n>      Addresses per workspace (0 = unlimited; default 5).
                          Pair with --workspace; the global default is owner.
-  --workspace <ws>       Scope --agent-send/--address-cap to one workspace
-                         (required for mail_manage agents)
+  --quota-bytes <n>      Mailbox disk quota for NEW mints (0 = unlimited;
+                         default 1 GB). Pair with --workspace. Existing
+                         boxes need `k2 hostmail quota set` — mint constants
+                         do not retrofit.
+  --quota-gb <n>         Same as --quota-bytes, in GiB (× 2^30). Not both.
+  --quota-messages <n>   Mailbox message cap for NEW mints (0 = unlimited;
+                         default 10_000). Pair with --workspace.
+  --workspace <ws>       Scope --agent-send/--address-cap/--quota-* to one
+                         workspace (required for mail_manage agents)
   --json                 JSON output
 EOF
 }
@@ -25857,6 +26045,9 @@ COMMANDS
   approvals [list|approve|deny]
                               The pending-outbound queue (deny needs --note)
   import --address <a>        Import Maildir and/or IMAP into a hosted address
+  quota get|set <addr>        Per-address mailbox disk/message cap (mail_manage).
+                              Existing boxes need quota set — mint constants
+                              do not retrofit. 0 = unlimited; default 1GB/10k.
   cert renew                  Retry ACME for the mail hostname (enable is
                               not the retry path; disable is not a retry)
 
@@ -25970,6 +26161,41 @@ FLAGS
   --pass-stdin           Remote IMAP password on stdin (never argv)
   --port <n>             Remote IMAP port (default 993)
   --json                 JSON output
+EOF
+}
+
+cmd_help_hostmail_quota() {
+    cat <<'EOF'
+Per-address mailbox disk and message caps. mail_manage agents (or
+owner/admin) may raise existing hosted boxes. 0 = unlimited. Default
+for NEW mints is 1 GB / 10k messages; mint constants do not retrofit
+existing addresses — use `quota set`.
+
+USAGE
+  k2 hostmail quota get <addr> [--json]
+  k2 hostmail quota set <addr> --bytes N|--gb N [--messages N] [--json]
+EOF
+}
+
+cmd_help_hostmail_quota_get() {
+    cat <<'EOF'
+Read the live Stalwart quota object for a hosted address (engine truth).
+mail_manage; 0 = unlimited; default 1GB/10k on new mints.
+
+USAGE
+  k2 hostmail quota get <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_quota_set() {
+    cat <<'EOF'
+Patch a hosted mailbox's Stalwart Account quotas (maxDiskQuota /
+maxEmails). mail_manage. 0 = unlimited. Existing boxes need this —
+mint constants do not retrofit. Give --bytes or --gb (not both) and/or
+--messages.
+
+USAGE
+  k2 hostmail quota set <addr> --bytes N|--gb N [--messages N] [--json]
 EOF
 }
 

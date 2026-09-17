@@ -58,6 +58,8 @@
 //! | POST /cli/mail/folder/create      | mail/routes_messages.rs |
 //! | POST /cli/mail/folder/rename      | mail/routes_messages.rs |
 //! | GET  /cli/mail/folder/list        | mail/routes_messages.rs |
+//! | GET  /cli/mail/quota              | mail/quota.rs          |
+//! | POST /cli/mail/quota              | mail/quota.rs          |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -150,6 +152,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // approvals/list). Reports {source, clientId, secretSet} per
         // provider — NEVER the secret value.
         "/cli/mail/oauth-config" => routes_oauth_config::handle_oauth_config_get(params),
+        "/cli/mail/quota" => crate::mail::quota::handle_quota_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -260,6 +263,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/folder/rename" => routes_messages::handle_folder_rename(body),
         "/cli/mail/draft" => routes_external::handle_draft(body),
         "/cli/mail/import" => crate::mail::import::handle_import(body),
+        "/cli/mail/quota" => crate::mail::quota::handle_quota_set(body),
         "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
         _ => CliResponse::not_found(),
     }
@@ -381,6 +385,7 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/approvals/deny"
             | "/cli/mail/config/set"
             | "/cli/mail/import"
+            | "/cli/mail/quota"
             | "/cli/mail/cert/renew"
             | "/cli/mail/server/rotate-admin"
     )
@@ -647,6 +652,7 @@ mod tests {
             "/cli/mail/approvals/deny",
             "/cli/mail/config/set",
             "/cli/mail/import",
+            "/cli/mail/quota",
             "/cli/mail/cert/renew",
             "/cli/mail/server/rotate-admin",
         ] {
@@ -760,6 +766,16 @@ mod tests {
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
             assert!(resp.body.contains("POST required"), "body={}", resp.body);
         }
+        let quota_get = dispatch("/cli/mail/quota", &params).expect("quota GET claimed");
+        assert_ne!(
+            quota_get.status, "405 Method Not Allowed",
+            "GET /cli/mail/quota is the engine read, not POST-only: {}",
+            quota_get.body
+        );
+        assert_eq!(quota_get.status, "400 Bad Request", "{}", quota_get.body);
+        let quota_post = dispatch_post("/cli/mail/quota", b"{}");
+        assert_ne!(quota_post.status, "404 Not Found", "quota POST must be wired");
+        assert_eq!(quota_post.status, "400 Bad Request", "{}", quota_post.body);
         assert_eq!(
             dispatch_post("/cli/mail/unknown", b"{}").status,
             "404 Not Found"

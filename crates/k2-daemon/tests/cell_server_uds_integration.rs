@@ -698,6 +698,25 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
     let (imp_status, imp_body) = uds(&sock, &get("/cli/mail/import", Some(&token))).await;
     assert_eq!(imp_status, 405, "UDS GET import 405; {imp_body}");
 
+    let (q_status, q_body) = uds(&sock, &get("/cli/mail/quota", Some(&token))).await;
+    assert_ne!(q_status, 405, "UDS GET quota is the engine read; {q_body}");
+    assert_ne!(q_status, 403, "UDS flag ON quota GET; {q_body}");
+    assert!(
+        !q_body.contains("owner_only"),
+        "C5b UDS quota GET: {q_body}"
+    );
+
+    let (qs_status, qs_body) = uds(
+        &sock,
+        &post_json("/cli/mail/quota", &token, "{}"),
+    )
+    .await;
+    assert_ne!(qs_status, 403, "UDS flag ON quota POST; {qs_body}");
+    assert!(
+        !qs_body.contains("owner_only"),
+        "C5b UDS quota POST: {qs_body}"
+    );
+
     let (cr_status, cr_body) = uds(&sock, &get("/cli/mail/cert/renew", Some(&token))).await;
     assert_eq!(cr_status, 405, "UDS GET cert/renew 405; {cr_body}");
 

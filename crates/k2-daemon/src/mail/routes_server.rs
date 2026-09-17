@@ -580,6 +580,8 @@ struct ConfigSetBody {
     workspace: Option<String>,
     agent_send: Option<String>,
     address_cap: Option<i64>,
+    quota_bytes: Option<i64>,
+    quota_messages: Option<i64>,
     defaults: Option<ConfigDefaultsBody>,
 }
 
@@ -588,13 +590,15 @@ struct ConfigSetBody {
 struct ConfigDefaultsBody {
     agent_send: Option<String>,
     address_cap: Option<i64>,
+    quota_bytes: Option<i64>,
+    quota_messages: Option<i64>,
 }
 
 const CONFIG_SET_SURFACE: &str =
     "nothing to set. The surface: {domain + sendMode [+ relayConfigId]} · {relay: \
      {id?, host, port, username, password|secretRef, tlsKind?, spfInclude?}} · \
-     {deleteRelayConfig} · {workspace + agentSend|addressCap} · {defaults: \
-     {agentSend?, addressCap?}}";
+     {deleteRelayConfig} · {workspace + agentSend|addressCap|quotaBytes|quotaMessages} · \
+     {defaults: {agentSend?, addressCap?, quotaBytes?, quotaMessages?}}";
 
 /// POST `/cli/mail/config/set` — S6 (owner-or-admin, dispatcher-
 /// enforced). Validation first (the Mac example page exercises real
@@ -626,12 +630,17 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
         );
     }
     let wants_workspace = b.workspace.is_some();
-    if (b.agent_send.is_some() || b.address_cap.is_some()) && !wants_workspace {
+    if (b.agent_send.is_some()
+        || b.address_cap.is_some()
+        || b.quota_bytes.is_some()
+        || b.quota_messages.is_some())
+        && !wants_workspace
+    {
         return err_json(
             "400 Bad Request",
             "usage",
-            "'agentSend'/'addressCap' need 'workspace' — or wrap them in 'defaults' \
-             for the global default"
+            "'agentSend'/'addressCap'/'quotaBytes'/'quotaMessages' need 'workspace' — \
+             or wrap them in 'defaults' for the global default"
                 .to_string(),
         );
     }
@@ -669,7 +678,7 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
             return err_json(
                 "403 Forbidden",
                 "owner_only",
-                "global defaults and relay config stay owner-or-admin — mail-manage may set sendMode (domain) and agentSend (workspace)".to_string(),
+                "global defaults and relay config stay owner-or-admin — mail-manage may set sendMode (domain) and agentSend/addressCap/quota (workspace)".to_string(),
             );
         }
         if let Some(ref path) = workspace_path {
@@ -678,7 +687,7 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
                 return err_json(
                     "403 Forbidden",
                     "owner_only",
-                    "mail-manage may set agentSend only for the workspace they admin".to_string(),
+                    "mail-manage may set agentSend/addressCap/quota only for the workspace they admin".to_string(),
                 );
             }
         }
@@ -736,7 +745,13 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
     }
     // 4. Per-workspace gating.
     if let Some(path) = workspace_path.as_deref() {
-        match config::set_workspace_gating(path, b.agent_send.as_deref(), b.address_cap) {
+        match config::set_workspace_gating(
+            path,
+            b.agent_send.as_deref(),
+            b.address_cap,
+            b.quota_bytes,
+            b.quota_messages,
+        ) {
             Ok(v) => {
                 applied.insert("workspace".to_string(), v);
             }
@@ -745,7 +760,12 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
     }
     // 5. Global defaults.
     if let Some(d) = &b.defaults {
-        match config::set_global_defaults(d.agent_send.as_deref(), d.address_cap) {
+        match config::set_global_defaults(
+            d.agent_send.as_deref(),
+            d.address_cap,
+            d.quota_bytes,
+            d.quota_messages,
+        ) {
             Ok(v) => {
                 applied.insert("defaults".to_string(), v["defaults"].clone());
             }
@@ -1271,6 +1291,7 @@ mod tests {
             (br#"{"sendMode":"direct"}"# as &[u8], "'sendMode' needs 'domain'"),
             (br#"{"domain":"acme.dev"}"#, "no 'sendMode'"),
             (br#"{"agentSend":"on"}"#, "'workspace'"),
+            (br#"{"quotaBytes":0}"#, "'workspace'"),
         ] {
             let resp = handle_config_set(body);
             assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);

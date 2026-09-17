@@ -85,6 +85,18 @@ fn default_mail_address_cap() -> u32 {
     5
 }
 
+/// Fallback mailbox disk quota for new mints when the workspace has no
+/// override (1 GB). 0 = unlimited. Existing addresses are not retrofitted.
+fn default_mail_quota_bytes() -> u64 {
+    1_073_741_824
+}
+
+/// Fallback mailbox message cap for new mints when the workspace has no
+/// override (10_000). 0 = unlimited.
+fn default_mail_quota_messages() -> u64 {
+    10_000
+}
+
 /// P1.C — default Active-Bar tenure window: 24 hours.
 fn default_active_window_hours() -> u32 {
     24
@@ -456,6 +468,18 @@ pub struct AppSettings {
     /// `workspace::settings::mail_address_cap_for_path`.
     #[serde(default = "default_mail_address_cap")]
     pub mail_address_cap: u32,
+    /// GLOBAL default mailbox disk quota in bytes for new mints
+    /// (1 GB). Per-workspace `projects.mail_quota_bytes` overrides it;
+    /// effective resolver: `workspace::settings::mail_quota_bytes_for_path`.
+    /// 0 = unlimited (passed through to Stalwart `maxDiskQuota`).
+    #[serde(default = "default_mail_quota_bytes")]
+    pub mail_quota_bytes: u64,
+    /// GLOBAL default mailbox message cap for new mints (10_000).
+    /// Per-workspace `projects.mail_quota_messages` overrides it;
+    /// effective resolver: `workspace::settings::mail_quota_messages_for_path`.
+    /// 0 = unlimited (passed through to Stalwart `maxEmails`).
+    #[serde(default = "default_mail_quota_messages")]
+    pub mail_quota_messages: u64,
     /// K2 Mail S2 (prd-email-server-v1 §11.1.2) — the GLOBAL default
     /// mail domain agents mint on when they don't name one. Stored in
     /// NORMALIZED form (lowercase punycode A-label; the write path
@@ -744,6 +768,8 @@ impl Default for AppSettings {
             push_gateway_token: None,
             mail_agent_send: default_mail_agent_send(),
             mail_address_cap: default_mail_address_cap(),
+            mail_quota_bytes: default_mail_quota_bytes(),
+            mail_quota_messages: default_mail_quota_messages(),
             mail_default_domain: String::new(),
             mail_oauth_gmail_client_id: String::new(),
             mail_oauth_microsoft_client_id: String::new(),

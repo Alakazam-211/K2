@@ -199,8 +199,10 @@ pub fn config_json() -> serde_json::Value {
         // overrides ride the wire).
         let mut overrides: Vec<serde_json::Value> = Vec::new();
         if let Ok(mut stmt) = conn.prepare(
-            "SELECT path, mail_agent_send, mail_address_cap FROM projects \
+            "SELECT path, mail_agent_send, mail_address_cap, mail_quota_bytes, \
+             mail_quota_messages FROM projects \
              WHERE mail_agent_send IS NOT NULL OR mail_address_cap IS NOT NULL \
+             OR mail_quota_bytes IS NOT NULL OR mail_quota_messages IS NOT NULL \
              ORDER BY path",
         ) {
             let rows = stmt.query_map([], |r| {
@@ -208,14 +210,18 @@ pub fn config_json() -> serde_json::Value {
                     r.get::<_, String>(0)?,
                     r.get::<_, Option<String>>(1)?,
                     r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
                 ))
             });
             if let Ok(rows) = rows {
-                for (path, send, cap) in rows.flatten() {
+                for (path, send, cap, q_bytes, q_msgs) in rows.flatten() {
                     overrides.push(serde_json::json!({
                         "project": path,
                         "agentSend": send,
                         "addressCap": cap,
+                        "quotaBytes": q_bytes,
+                        "quotaMessages": q_msgs,
                     }));
                 }
             }
@@ -259,6 +265,10 @@ pub fn config_json() -> serde_json::Value {
             "modes": SEND_GATE_MODES,
         },
         "addressCap": { "default": settings.mail_address_cap },
+        "quota": {
+            "bytes": { "default": settings.mail_quota_bytes },
+            "messages": { "default": settings.mail_quota_messages },
+        },
         "workspaceOverrides": overrides,
         "limits": {
             "sendsPerHourPerAddress": super::send::RATE_LIMIT_HOURLY,
@@ -750,7 +760,8 @@ pub fn set_send_mode(
 
 // ── Gating settings (D4/D6) ─────────────────────────────────────────────
 
-/// Per-workspace `mail_agent_send` / `mail_address_cap` overrides.
+/// Per-workspace `mail_agent_send` / `mail_address_cap` /
+/// `mail_quota_bytes` / `mail_quota_messages` overrides.
 /// `workspace_path` is ALREADY resolved by the route layer (identity
 /// from the token/registry, never trusted raw). Values are validated
 /// by `k2_core::workspace::settings::update_project_setting` (a bad
@@ -759,11 +770,18 @@ pub fn set_workspace_gating(
     workspace_path: &str,
     agent_send: Option<&str>,
     address_cap: Option<i64>,
+    quota_bytes: Option<i64>,
+    quota_messages: Option<i64>,
 ) -> Result<serde_json::Value, CfgError> {
-    if agent_send.is_none() && address_cap.is_none() {
+    if agent_send.is_none()
+        && address_cap.is_none()
+        && quota_bytes.is_none()
+        && quota_messages.is_none()
+    {
         return Err(CfgError::Usage(
             "nothing to set for the workspace — give 'agentSend' (off|approval|on) \
-             and/or 'addressCap' (0 = unlimited)"
+             and/or 'addressCap' (0 = unlimited) and/or 'quotaBytes'/'quotaMessages' \
+             (0 = unlimited)"
                 .to_string(),
         ));
     }
@@ -788,25 +806,61 @@ pub fn set_workspace_gating(
         )
         .map_err(CfgError::Usage)?;
     }
+    if let Some(bytes) = quota_bytes {
+        if bytes < 0 {
+            return Err(CfgError::Usage(format!(
+                "quotaBytes must be a non-negative integer (0 = unlimited), got {bytes}"
+            )));
+        }
+        k2_core::workspace::settings::update_project_setting(
+            workspace_path,
+            "mail_quota_bytes",
+            &bytes.to_string(),
+        )
+        .map_err(CfgError::Usage)?;
+    }
+    if let Some(msgs) = quota_messages {
+        if msgs < 0 {
+            return Err(CfgError::Usage(format!(
+                "quotaMessages must be a non-negative integer (0 = unlimited), got {msgs}"
+            )));
+        }
+        k2_core::workspace::settings::update_project_setting(
+            workspace_path,
+            "mail_quota_messages",
+            &msgs.to_string(),
+        )
+        .map_err(CfgError::Usage)?;
+    }
     Ok(serde_json::json!({
         "project": workspace_path,
         "agentSend": agent_send,
         "addressCap": address_cap,
+        "quotaBytes": quota_bytes,
+        "quotaMessages": quota_messages,
     }))
 }
 
 /// The GLOBAL defaults (`AppSettings.mail_agent_send` /
-/// `mail_address_cap`) — validated HERE (AppSettings stores plain
-/// typed fields; a bad value must never be persisted for the
-/// fail-closed readers to trip over).
+/// `mail_address_cap` / `mail_quota_bytes` / `mail_quota_messages`) —
+/// validated HERE (AppSettings stores plain typed fields; a bad value
+/// must never be persisted for the fail-closed readers to trip over).
+/// Owner-only (`defaults` in config/set).
 pub fn set_global_defaults(
     agent_send: Option<&str>,
     address_cap: Option<i64>,
+    quota_bytes: Option<i64>,
+    quota_messages: Option<i64>,
 ) -> Result<serde_json::Value, CfgError> {
-    if agent_send.is_none() && address_cap.is_none() {
+    if agent_send.is_none()
+        && address_cap.is_none()
+        && quota_bytes.is_none()
+        && quota_messages.is_none()
+    {
         return Err(CfgError::Usage(
             "nothing to set in defaults — give 'agentSend' (off|approval|on) and/or \
-             'addressCap' (0 = unlimited)"
+             'addressCap' (0 = unlimited) and/or 'quotaBytes'/'quotaMessages' \
+             (0 = unlimited)"
                 .to_string(),
         ));
     }
@@ -827,10 +881,34 @@ pub fn set_global_defaults(
         }
         partial.insert("mailAddressCap".to_string(), serde_json::json!(cap));
     }
+    if let Some(bytes) = quota_bytes {
+        if bytes < 0 {
+            return Err(CfgError::Usage(format!(
+                "quotaBytes must be a non-negative integer (0 = unlimited), got {bytes}"
+            )));
+        }
+        partial.insert("mailQuotaBytes".to_string(), serde_json::json!(bytes as u64));
+    }
+    if let Some(msgs) = quota_messages {
+        if msgs < 0 {
+            return Err(CfgError::Usage(format!(
+                "quotaMessages must be a non-negative integer (0 = unlimited), got {msgs}"
+            )));
+        }
+        partial.insert(
+            "mailQuotaMessages".to_string(),
+            serde_json::json!(msgs as u64),
+        );
+    }
     k2_core::app_settings::update(serde_json::Value::Object(partial))
         .map_err(CfgError::Engine)?;
     Ok(serde_json::json!({
-        "defaults": { "agentSend": agent_send, "addressCap": address_cap },
+        "defaults": {
+            "agentSend": agent_send,
+            "addressCap": address_cap,
+            "quotaBytes": quota_bytes,
+            "quotaMessages": quota_messages,
+        },
     }))
 }
 
@@ -1296,28 +1374,33 @@ pub(crate) mod tests {
     fn workspace_and_global_gating_validate_and_persist() {
         // Workspace: unknown path surfaces the core error; nothing-to-
         // set teaches.
-        let err = set_workspace_gating("/no/such/workspace", Some("approval"), None)
+        let err = set_workspace_gating("/no/such/workspace", Some("approval"), None, None, None)
             .expect_err("refuse");
         assert!(matches!(err, CfgError::Usage(_)), "{err:?}");
-        let err = set_workspace_gating("/any", None, None).expect_err("refuse");
+        let err = set_workspace_gating("/any", None, None, None, None).expect_err("refuse");
         assert!(matches!(&err, CfgError::Usage(h) if h.contains("agentSend")), "{err:?}");
 
         // Globals: bad values refuse loudly (validated BEFORE any
         // write, so no temp home needed for the refusals) …
-        let err = set_global_defaults(Some("always"), None).expect_err("refuse");
+        let err = set_global_defaults(Some("always"), None, None, None).expect_err("refuse");
         assert!(matches!(&err, CfgError::Usage(h) if h.contains("'off', 'approval', or 'on'")), "{err:?}");
-        let err = set_global_defaults(None, Some(-3)).expect_err("refuse");
+        let err = set_global_defaults(None, Some(-3), None, None).expect_err("refuse");
         assert!(matches!(err, CfgError::Usage(_)), "{err:?}");
+        let err = set_global_defaults(None, None, Some(-1), None).expect_err("refuse");
+        assert!(matches!(&err, CfgError::Usage(h) if h.contains("quotaBytes")), "{err:?}");
 
         // … good values persist and round-trip through AppSettings —
         // inside a sandboxed $HOME (never the dev box's live
         // settings.json).
         crate::test_support::with_temp_home(|| {
-            let v = set_global_defaults(Some("approval"), Some(9)).expect("set");
+            let v = set_global_defaults(Some("approval"), Some(9), Some(0), Some(0)).expect("set");
             assert_eq!(v["defaults"]["agentSend"], "approval");
+            assert_eq!(v["defaults"]["quotaBytes"], 0);
             let after = k2_core::app_settings::load();
             assert_eq!(after.mail_agent_send, "approval");
             assert_eq!(after.mail_address_cap, 9);
+            assert_eq!(after.mail_quota_bytes, 0, "0 = unlimited");
+            assert_eq!(after.mail_quota_messages, 0);
         });
     }
 

@@ -191,6 +191,8 @@ pub trait AddressEngine {
         local_part: &str,
         stalwart_domain_id: &str,
         password: &str,
+        quota_bytes: u64,
+        max_messages: u64,
     ) -> Result<String, String>;
     fn disable_account(&self, stalwart_account_id: &str) -> Result<(), String>;
     fn destroy_account(&self, stalwart_account_id: &str) -> Result<(), String>;
@@ -202,13 +204,15 @@ impl AddressEngine for StalwartClient {
         local_part: &str,
         stalwart_domain_id: &str,
         password: &str,
+        quota_bytes: u64,
+        max_messages: u64,
     ) -> Result<String, String> {
         self.account_create(
             local_part,
             stalwart_domain_id,
             password,
-            QUOTA_BYTES,
-            QUOTA_MAX_MESSAGES,
+            quota_bytes,
+            max_messages,
         )
     }
     fn disable_account(&self, stalwart_account_id: &str) -> Result<(), String> {
@@ -220,6 +224,30 @@ impl AddressEngine for StalwartClient {
 }
 
 // ── DB access ───────────────────────────────────────────────────────────
+
+fn project_path_for_id(project_id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT path FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// Workspace effective quota for a mint. Unknown project → the
+/// product fallback ([`QUOTA_BYTES`] / [`QUOTA_MAX_MESSAGES`]). A
+/// registered workspace inherits AppSettings when its columns are NULL.
+fn mint_quotas_for_project(project_id: &str) -> (u64, u64) {
+    match project_path_for_id(project_id) {
+        Some(path) => (
+            k2_core::workspace::settings::mail_quota_bytes_for_path(&path),
+            k2_core::workspace::settings::mail_quota_messages_for_path(&path),
+        ),
+        None => (QUOTA_BYTES, QUOTA_MAX_MESSAGES),
+    }
+}
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
@@ -450,7 +478,10 @@ fn mint_json(
 /// failure (module header). `raw_local` may be `name` or
 /// `name@domain`; an explicit `raw_domain` must agree with any
 /// `@domain` spelling. `cap` comes from the route layer's
-/// `mail_address_cap_for_path` (0 = unlimited).
+/// `mail_address_cap_for_path` (0 = unlimited). Mailbox quotas at
+/// Stalwart create come from the workspace effective resolver
+/// (`mail_quota_bytes_for_path` / `mail_quota_messages_for_path`);
+/// missing project row inherits the 1 GB / 10k fallback.
 pub fn mint_address(
     engine: &dyn AddressEngine,
     secrets_store: &dyn SecretStore,
@@ -560,8 +591,15 @@ pub fn mint_address(
     // vault, then the row — compensating backwards on failure.
     let row_id = uuid::Uuid::new_v4().to_string();
     let password = secrets::generate_secret().map_err(AddrError::Engine)?;
+    let (quota_bytes, quota_messages) = mint_quotas_for_project(project_id);
     let account_id = engine
-        .create_account(&local, stalwart_domain_id, &password)
+        .create_account(
+            &local,
+            stalwart_domain_id,
+            &password,
+            quota_bytes,
+            quota_messages,
+        )
         .map_err(AddrError::Engine)?;
     let secret_ref = match secrets_store.store(&format!("account-{row_id}"), &password) {
         Ok(r) => r,
@@ -791,6 +829,7 @@ pub(crate) mod tests {
     /// failure honestly, with no cfg hooks in production code.
     pub(crate) struct FakeAddrEngine {
         pub created: Mutex<Vec<(String, String)>>, // (local, domain_id)
+        pub created_quotas: Mutex<Vec<(u64, u64)>>, // (bytes, messages)
         pub disabled: Mutex<Vec<String>>,
         pub destroyed: Mutex<Vec<String>>,
         pub fail_create: bool,
@@ -803,6 +842,7 @@ pub(crate) mod tests {
         pub(crate) fn ok() -> Self {
             Self {
                 created: Mutex::new(Vec::new()),
+                created_quotas: Mutex::new(Vec::new()),
                 disabled: Mutex::new(Vec::new()),
                 destroyed: Mutex::new(Vec::new()),
                 fail_create: false,
@@ -819,6 +859,8 @@ pub(crate) mod tests {
             local_part: &str,
             stalwart_domain_id: &str,
             password: &str,
+            quota_bytes: u64,
+            max_messages: u64,
         ) -> Result<String, String> {
             assert_eq!(password.len(), 64, "32 random bytes as hex");
             if self.fail_create {
@@ -831,6 +873,10 @@ pub(crate) mod tests {
                 .lock()
                 .unwrap()
                 .push((local_part.to_string(), stalwart_domain_id.to_string()));
+            self.created_quotas
+                .lock()
+                .unwrap()
+                .push((quota_bytes, max_messages));
             let mut n = self.next_id.lock().unwrap();
             *n += 1;
             Ok(format!("acc-{n}"))
@@ -1152,11 +1198,88 @@ pub(crate) mod tests {
             engine.created.lock().unwrap().as_slice(),
             [("precut".to_string(), "stw-pending".to_string())]
         );
+        assert_eq!(
+            engine.created_quotas.lock().unwrap().as_slice(),
+            [(QUOTA_BYTES, QUOTA_MAX_MESSAGES)],
+            "pending mint still uses fallback 1GB/10k without a workspace override"
+        );
         let row = address_row(&format!("precut@{domain}")).expect("row persisted");
         assert_eq!(row.status, "active");
         assert_eq!(row.domain_id, domain_id);
         assert_eq!(row.owner_project_id, project);
         cleanup_domain(&domain);
+    }
+
+    #[test]
+    fn mint_uses_workspace_quota_override() {
+        let domain = unique("quota-mint") + ".example";
+        cleanup_domain(&domain);
+        seed_domain(&domain, "verified", Some("stw-q"));
+        let engine = FakeAddrEngine::ok();
+        let vault = FakeVault::default();
+        let path = format!("/tmp/mail-quota-mint-{}", uuid::Uuid::new_v4());
+        let project = {
+            let id = uuid::Uuid::new_v4().to_string();
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, mail_quota_bytes, mail_quota_messages) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![id, "quota-mint", path, 3_221_225_472i64, 40_000i64],
+            )
+            .expect("insert project with quota override");
+            id
+        };
+
+        mint_address(&engine, &vault, &project, 5, "bigbox", Some(&domain), None)
+            .expect("mint with workspace quota");
+        assert_eq!(
+            engine.created_quotas.lock().unwrap().as_slice(),
+            [(3_221_225_472, 40_000)],
+            "mint must pass workspace override into Account/set, not the 1GB/10k fallback"
+        );
+        cleanup_domain(&domain);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM projects WHERE path = ?1", rusqlite::params![path]);
+        }
+    }
+
+    #[test]
+    fn mint_zero_quota_is_unlimited() {
+        let domain = unique("quota-zero") + ".example";
+        cleanup_domain(&domain);
+        seed_domain(&domain, "verified", Some("stw-z"));
+        let engine = FakeAddrEngine::ok();
+        let vault = FakeVault::default();
+        let path = format!("/tmp/mail-quota-zero-{}", uuid::Uuid::new_v4());
+        let project = {
+            let id = uuid::Uuid::new_v4().to_string();
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, mail_quota_bytes, mail_quota_messages) \
+                 VALUES (?1, ?2, ?3, 0, 0)",
+                rusqlite::params![id, "quota-zero", path],
+            )
+            .expect("insert unlimited quota project");
+            id
+        };
+
+        mint_address(&engine, &vault, &project, 5, "openbox", Some(&domain), None)
+            .expect("mint with 0 = unlimited");
+        assert_eq!(
+            engine.created_quotas.lock().unwrap().as_slice(),
+            [(0, 0)],
+            "0 must pass through to Stalwart as unlimited"
+        );
+        cleanup_domain(&domain);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM projects WHERE path = ?1", rusqlite::params![path]);
+        }
     }
 
     #[test]

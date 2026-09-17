@@ -711,6 +711,51 @@ impl StalwartClient {
         parse_set_updated("x:Account/set", stalwart_account_id, &resp)
     }
 
+    /// Patch an existing account's mailbox quotas (`x:Account/set`
+    /// update). `None` leaves that field unchanged. 0 = unlimited
+    /// (passed through to Stalwart `maxDiskQuota` / `maxEmails`).
+    pub fn account_set_quotas(
+        &self,
+        stalwart_account_id: &str,
+        max_disk_quota: Option<u64>,
+        max_emails: Option<u64>,
+    ) -> Result<(), String> {
+        if max_disk_quota.is_none() && max_emails.is_none() {
+            return Err("account quota update needs maxDiskQuota and/or maxEmails".to_string());
+        }
+        let mut quotas = serde_json::Map::new();
+        if let Some(bytes) = max_disk_quota {
+            quotas.insert("maxDiskQuota".to_string(), serde_json::json!(bytes));
+        }
+        if let Some(msgs) = max_emails {
+            quotas.insert("maxEmails".to_string(), serde_json::json!(msgs));
+        }
+        let resp = self.registry_call(
+            "x:Account/set",
+            serde_json::json!({
+                "update": { stalwart_account_id: { "quotas": quotas } }
+            }),
+        )?;
+        parse_set_updated("x:Account/set", stalwart_account_id, &resp)
+    }
+
+    /// Read an account's current `quotas` object from Stalwart
+    /// (`x:Account/get` properties `quotas`). Engine truth — not a K2
+    /// cache — so operators can see the live cap after a set.
+    pub fn account_get_quotas(
+        &self,
+        stalwart_account_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        let resp = self.registry_call(
+            "x:Account/get",
+            serde_json::json!({
+                "ids": [stalwart_account_id],
+                "properties": ["quotas"],
+            }),
+        )?;
+        parse_account_get_quotas(stalwart_account_id, &resp)
+    }
+
     /// S3 — destroy an account. COMPENSATING ACTION ONLY (mint
     /// rollback: Stalwart create succeeded but the K2 row write failed
     /// — no orphans). The retire path uses [`Self::account_disable`];
@@ -1650,6 +1695,22 @@ fn parse_domain_get_zonefile(
         .filter(|s| !s.is_empty())
         .map(String::from)
         .ok_or_else(|| format!("x:Domain/get: domain '{id}' has no dnsZoneFile"))
+}
+
+/// Pure `x:Account/get` reply parser: our id's `quotas` object.
+fn parse_account_get_quotas(id: &str, args: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)));
+    let Some(entry) = entry else {
+        return Err(format!("x:Account/get: account '{id}' not in the reply list"));
+    };
+    match entry.get("quotas") {
+        Some(q) if q.is_object() => Ok(q.clone()),
+        Some(q) if q.is_null() => Ok(serde_json::json!({})),
+        _ => Err(format!("x:Account/get: account '{id}' has no quotas object")),
+    }
 }
 
 /// Pure `x:Account/get` reply parser: our id's `name`.
@@ -3347,6 +3408,62 @@ mod s3_account_tests {
         assert_eq!(create["credentials"]["0"]["secret"], "s3cret-pw");
         assert_eq!(create["quotas"]["maxDiskQuota"], 1_073_741_824u64, "§12: 1 GB quota");
         assert_eq!(create["quotas"]["maxEmails"], 10_000, "§12: 10k message cap");
+    }
+
+    #[test]
+    fn account_set_quotas_records_account_set_update() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:Account/set", { "updated": { "e": null } }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.account_set_quotas("e", Some(3_221_225_472), Some(40_000))
+            .expect("quota update");
+
+        let _sess = rx.recv().expect("session");
+        let req = rx.recv().expect("Account/set");
+        assert!(req.starts_with("POST /jmap/"), "{req}");
+        let body = body_json(&req);
+        assert_eq!(body["methodCalls"][0][0], "x:Account/set");
+        let patch = &body["methodCalls"][0][1]["update"]["e"]["quotas"];
+        assert_eq!(patch["maxDiskQuota"], 3_221_225_472u64);
+        assert_eq!(patch["maxEmails"], 40_000);
+    }
+
+    #[test]
+    fn account_set_quotas_zero_is_unlimited() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:Account/set", { "updated": { "e": null } }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.account_set_quotas("e", Some(0), None).expect("0 = unlimited");
+        let _sess = rx.recv().expect("session");
+        let req = rx.recv().expect("Account/set");
+        let body = body_json(&req);
+        let patch = &body["methodCalls"][0][1]["update"]["e"]["quotas"];
+        assert_eq!(patch["maxDiskQuota"], 0);
+        assert!(patch.get("maxEmails").is_none(), "unset field omitted: {patch}");
+    }
+
+    #[test]
+    fn account_get_quotas_parses_the_list_entry() {
+        let args = serde_json::json!({
+            "list": [{ "id": "e", "quotas": { "maxDiskQuota": 1073741824u64, "maxEmails": 10000 } }],
+            "notFound": [],
+        });
+        let q = parse_account_get_quotas("e", &args).expect("quotas");
+        assert_eq!(q["maxDiskQuota"], 1_073_741_824u64);
+        assert_eq!(q["maxEmails"], 10_000);
+        assert!(parse_account_get_quotas("zz", &args).is_err());
     }
 
     /// Retire = rename (the live-verified v0.16 disable mechanism):

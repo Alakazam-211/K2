@@ -13,10 +13,9 @@ bash -n "$K2" || fail "bash -n cli/k2"
 
 # The python helper only sees env vars listed on the _mail_py prefix.
 # quota set/config --quota-gb were parsed in bash then discarded.
-block="$(awk '/^_mail_py\(\)/{p=1} p{print} /^python3 - <<'\''PYEOF'\''/{if(p){exit}}' "$K2")"
-printf '%s' "$block" | grep -q 'M_QUOTA_BYTES=' || fail "_mail_py must export M_QUOTA_BYTES"
-printf '%s' "$block" | grep -q 'M_QUOTA_GB=' || fail "_mail_py must export M_QUOTA_GB"
-printf '%s' "$block" | grep -q 'M_QUOTA_MESSAGES=' || fail "_mail_py must export M_QUOTA_MESSAGES"
+grep -q 'M_QUOTA_BYTES="${M_QUOTA_BYTES:-}"' "$K2" || fail "_mail_py must export M_QUOTA_BYTES"
+grep -q 'M_QUOTA_GB="${M_QUOTA_GB:-}"' "$K2" || fail "_mail_py must export M_QUOTA_GB"
+grep -q 'M_QUOTA_MESSAGES="${M_QUOTA_MESSAGES:-}"' "$K2" || fail "_mail_py must export M_QUOTA_MESSAGES"
 
 help="$("$K2" hostmail quota set --help)"
 printf '%s' "$help" | grep -q -- '--gb' || fail "quota set --help must mention --gb"

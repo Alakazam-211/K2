@@ -108,6 +108,10 @@ rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] 
 # the provider installed at boot (main.rs:223) so a single provider resolves.
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs"] }
 rustls-pemfile = "2"
+# Hostmail L1: parse the captured TLS leaf (issuer/CN + NotAfter) so status
+# can tell rcgen self-signed from ACME-issued without a certs dir. Same
+# crate k2-core already pins — no new dependency.
+x509-parser = { version = "0.18", default-features = false }
 # Lock-free hot-swap of the live rustls ServerConfig: the cert auto-renewal
 # loop (PRD §6) swaps a freshly-issued chain in WITHOUT dropping the TLS
 # listener. Already in the tree via k2-core's cert_broker, so no new crate.

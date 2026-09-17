@@ -390,7 +390,7 @@ fn mint_json(
         "createdAt": row.created_at,
         "cap": { "used": used, "cap": cap },
         "username": row.address,
-        "imap": { "host": host, "port": 993, "tls": true },
+        "imap": { "host": host, "port": 443, "tls": true, "alpn": true },
         "submission": { "host": host, "port": 465, "tls": true },
         "jmap": { "host": host, "port": 443, "tls": true },
     });
@@ -1010,7 +1010,9 @@ pub(crate) mod tests {
         assert!(v["createdAt"].as_i64().unwrap() > 0);
         assert!(v["password"].as_str().unwrap().len() >= 32, "once password");
         assert_eq!(v["username"], format!("scout@{domain}"));
-        assert_eq!(v["imap"]["port"], 993);
+        assert_eq!(v["imap"]["port"], 443);
+        assert_eq!(v["imap"]["alpn"], true);
+        assert_eq!(v["imap"]["tls"], true);
         assert_eq!(v["submission"]["port"], 465);
         assert_eq!(v["jmap"]["port"], 443);
 

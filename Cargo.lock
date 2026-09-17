@@ -3470,6 +3470,7 @@ dependencies = [
  "tokio-tungstenite",
  "uuid",
  "vte",
+ "x509-parser",
 ]
 
 [[package]]

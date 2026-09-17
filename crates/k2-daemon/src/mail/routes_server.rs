@@ -58,13 +58,14 @@ fn unsupported() -> CliResponse {
 ///   "portPlan": <port_plan|null>,
 ///   "enableProgress": <enable_progress_json|null>,  // S1 machine steps
 ///   "lastError": <last_error|null>,
-///   "health": <live verdict — only with ?health=1 on Linux> }
+///   "health": <live verdict — only present with ?health=1 on Linux> }
 /// ```
 ///
 /// `state` comes from the `mail_server` singleton row; NO row =
 /// `"not-installed"` (the 0072 contract). `?health=1` additionally
 /// runs the live systemd+API health check (persisting transitions +
-/// raising the standard event) before reading. The renderer gates the
+/// raising the standard event) before reading. Without `?health=1`
+/// the `health` key is omitted (never `"health": null`). The renderer gates the
 /// whole Settings→Email page on `supported` — from the DAEMON's
 /// report, never `navigator.platform` (a Mac app driving a remote
 /// Linux daemon must see the real page).
@@ -120,26 +121,29 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
     let enable_progress = progress
         .and_then(|p| serde_json::from_str::<serde_json::Value>(&p).ok())
         .unwrap_or(serde_json::Value::Null);
-    CliResponse::ok_json(
-        serde_json::json!({
-            // Envelope: the status READ succeeded. Never the systemd verdict
-            // — `k2`'s generic caller treats ok=false as a malformed reply.
-            "ok": true,
-            // Does the SQLite row agree with `systemctl is-active stalwart`?
-            "consistent": consistent,
-            "supported": mail_supported(),
-            "state": state,
-            "version": version,
-            "pinnedVersion": STALWART_PINNED_VERSION,
-            "hostname": hostname,
-            "portPlan": port_plan,
-            "enableProgress": enable_progress,
-            "lastError": last_error,
-            "cert": supervisor::tls_cert_status(hostname.as_deref()),
-            "health": health,
-        })
-        .to_string(),
-    )
+    let mut body = serde_json::json!({
+        // Envelope: the status READ succeeded. Never the systemd verdict
+        // — `k2`'s generic caller treats ok=false as a malformed reply.
+        "ok": true,
+        // Does the SQLite row agree with `systemctl is-active stalwart`?
+        "consistent": consistent,
+        "supported": mail_supported(),
+        "state": state,
+        "version": version,
+        "pinnedVersion": STALWART_PINNED_VERSION,
+        "hostname": hostname,
+        "portPlan": port_plan,
+        "enableProgress": enable_progress,
+        "lastError": last_error,
+        "cert": supervisor::tls_cert_status(hostname.as_deref()),
+    });
+    // L14: omit `health` unless `?health=1` actually ran the probe.
+    // Never emit `"health": null` — clients treat a missing key as
+    // "not probed", not a failed probe.
+    if let Some(health) = health {
+        body["health"] = health;
+    }
+    CliResponse::ok_json(body.to_string())
 }
 
 /// GET `/cli/mail/preflight` — S1 (PRD §5.1): the read-only checklist,
@@ -457,6 +461,10 @@ fn doc_error_response(err: DocError) -> CliResponse {
     match err {
         DocError::Usage(h) => err_json("400 Bad Request", "usage", h),
         DocError::NotFound(h) => err_json("404 Not Found", "not_found", h),
+        // no_run is 409 (not 404): the domain is hosted; the missing
+        // resource is a persisted run. 404 stays not_found for unknown
+        // domains. Hint names POST /cli/mail/doctor.
+        DocError::NoRun(h) => err_json("409 Conflict", "no_run", h),
         DocError::NotReady(h) => err_json("503 Service Unavailable", "not_ready", h),
         DocError::Engine(h) => err_json("502 Bad Gateway", "engine", h),
     }
@@ -663,10 +671,11 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
     )
 }
 
-/// GET `/cli/mail/doctor[?domain=<d>]` — S6: the LATEST persisted run
-/// (`run: null` when none). Read-only — the Settings card and the
-/// direct-mode UI never trigger probes; `POST /cli/mail/doctor` runs
-/// them.
+/// GET `/cli/mail/doctor[?domain=<d>]` — S6: the LATEST persisted run.
+/// Bare GET (no domain): `run: null` when this box has never POSTed.
+/// `?domain=` on a hosted domain with no per-domain row is `no_run`
+/// (409), not `ok:true` + `run:null`. Read-only — GET is not a run;
+/// `POST /cli/mail/doctor` runs probes.
 pub fn handle_doctor(params: &HashMap<String, String>) -> CliResponse {
     let domain = crate::cli::str_param(params, "domain");
     let domain = if domain.is_empty() { None } else { Some(domain.as_str()) };
@@ -735,7 +744,10 @@ mod tests {
         assert!(v["portPlan"].is_null());
         assert!(v["enableProgress"].is_null());
         assert!(v["lastError"].is_null());
-        assert!(v["health"].is_null());
+        assert!(
+            v.get("health").is_none(),
+            "health omitted unless ?health=1, got {v}"
+        );
 
         {
             let db = k2_core::db::shared();
@@ -1165,6 +1177,40 @@ mod tests {
         params.insert("domain".to_string(), "ghost-doctor.example".to_string());
         let resp = handle_doctor(&params);
         assert_eq!(resp.status, "404 Not Found");
+
+        // Hosted domain, no per-domain run → no_run 409 (not ok:true + run:null).
+        let hosted = format!("norun-route-{}.example", uuid::Uuid::new_v4().simple());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_domains (id, domain, status, created_at) VALUES (?1, ?2, 'verified', 100)",
+                rusqlite::params![format!("dom-{hosted}"), hosted],
+            )
+            .expect("seed hosted domain");
+        }
+        let mut params = HashMap::new();
+        params.insert("domain".to_string(), hosted.clone());
+        let resp = handle_doctor(&params);
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["ok"], false, "{v}");
+        assert_eq!(v["error"]["code"].as_str().expect("code"), "no_run", "{v}");
+        assert!(
+            v["error"]["hint"]
+                .as_str()
+                .expect("hint")
+                .contains("POST /cli/mail/doctor"),
+            "{v}"
+        );
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute(
+                "DELETE FROM mail_domains WHERE domain = ?1",
+                rusqlite::params![hosted],
+            );
+        }
 
         // POST: bad JSON → 400; on a Mac a valid body stops at the D3
         // gate (network-silent example page).

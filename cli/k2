@@ -14634,8 +14634,11 @@ EXIT 3 — STOP LOOPING
 
   Codes you will see on stderr (often JSON {"error":{"code","hint"}}):
 
-  owner_only     owner/admin verb (mail status, db enable, skin mint,
-                 users add, hostmail, …). Ask your human.
+  owner_only     owner/admin verb (db enable, skin mint, users add,
+                 leftover M6: uninstall, domain remove, oauth,
+                 mail-manage toggle). Ask your human.
+                 mail_manage agents may call status, doctor,
+                 approvals, grant, config (workspace), import.
   gated          a workspace/server toggle is off (connections create,
                  DNS manage, db create passport, mail send=off, …).
   forbidden      policy said no (including some peer/federation cases).
@@ -14829,9 +14832,13 @@ AGENT SURFACE
   k2 mail send / reply / outbox
   k2 mail draft    linked Gmail Drafts (always on for draft)
 
-OWNER VERBS — EXIT 3
-  status, domain, config, approvals, doctor, external/link admin,
-  hostmail. Approving your own mail is futile. Ask your human.
+OWNER VERBS — EXIT 3 (leftover M6)
+  uninstall, domain remove, oauth/link admin, mail-manage toggle.
+  Approving your own mail is futile. Ask your human.
+
+MAIL_MANAGE AGENTS
+  With the workspace toggle on: status, doctor, approvals, grant,
+  config (--workspace, including addressCap), import.
 
 HOSTMAIL TOGGLE
   Default off. Owner/Admin: Settings → Workspaces → (this
@@ -22961,8 +22968,9 @@ if verb == "create":
                 ep = d.get(key) or {}
                 host = ep.get("host") or "?"
                 port = ep.get("port") or default_port
-                print("%s : %s:%s" % (label, host, port))
-            _ep("imap    ", "imap", 993)
+                extra = "  alpn" if ep.get("alpn") else ""
+                print("%s : %s:%s%s" % (label, host, port, extra))
+            _ep("imap    ", "imap", 443)
             _ep("submit  ", "submission", 465)
             _ep("jmap    ", "jmap", 443)
 
@@ -25453,23 +25461,30 @@ EOF
 
 cmd_help_mail_doctor() {
     cat <<'EOF'
-Deliverability doctor (OWNER — agents get exit 3): network probes (outbound
-port 25, rDNS/PTR, FCrDNS), DNS/auth checks (MX, SPF, DKIM, DMARC),
-blocklists, TLS, an open-relay self-test, and a direct-send readiness grade.
-Direct send mode stays locked until the doctor passes.
+Deliverability doctor. The engine is live. GET returns the latest persisted
+run (no probes). POST /cli/mail/doctor runs the probes (outbound port 25,
+rDNS/PTR, FCrDNS, MX/SPF/DKIM/DMARC, blocklists, TLS, open-relay self-test,
+direct-send grade). mail_manage agents may call it. Passing <domain> on GET
+is not a run — it reads that domain's last POST.
 
 USAGE
   k2 hostmail doctor [<domain>] [--json]
 
-NOTE
-  The doctor engine ships in a later slice — until then this surfaces the
-  daemon's structured "not built yet" error (exit 1).
+NOTES
+  Bare GET (no domain) prints run: null if this box has never POSTed.
+  GET with a hosted domain and no per-domain run is no_run — POST
+  /cli/mail/doctor with that domain to run probes.
+  Direct send mode stays locked until a non-failing server-level grade.
+
+FLAGS
+  --json                 JSON output
 EOF
 }
 
 cmd_help_mail_config() {
     cat <<'EOF'
-Read or change mail configuration (OWNER — agents get exit 3). With no
+Read or change mail configuration. Global defaults stay owner. mail_manage
+agents may set --address-cap / --agent-send with --workspace. With no
 setting flags it prints the current config; with flags it applies them.
 
 USAGE
@@ -25489,8 +25504,10 @@ FLAGS
   --relay-pass-stdin     Read the relay password from stdin (never argv)
   --agent-send <m>       Agent send gating: off (default) | approval | on
                          (pair with --workspace for a per-workspace override)
-  --address-cap <n>      Addresses per agent (0 = unlimited; default 5)
+  --address-cap <n>      Addresses per workspace (0 = unlimited; default 5).
+                         Pair with --workspace; the global default is owner.
   --workspace <ws>       Scope --agent-send/--address-cap to one workspace
+                         (required for mail_manage agents)
   --json                 JSON output
 EOF
 }
@@ -25644,7 +25661,8 @@ EOF
 cmd_help_mail_access() {
     cat <<'EOF'
 Manage WHO can use an inbox — one access layer over BOTH hosted and
-linked inboxes (PRIMARY/owner surface; agents get exit 3). Levels order
+linked inboxes. mail_manage agents may grant. Grant returns not_found
+if the inbox does not exist (not owner_only). Levels order
 read < draft < send. 'send' works on BOTH sources: HOSTED sends through
 the K2 server under your send-gating governance; LINKED sends FROM the
 user's own account over SMTP when level send AND Sending=on.

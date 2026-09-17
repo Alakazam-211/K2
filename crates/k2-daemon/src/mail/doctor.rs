@@ -982,6 +982,9 @@ impl DoctorEnv for RealDoctorEnv {
 pub enum DocError {
     Usage(String),
     NotFound(String),
+    /// Hosted domain, but no persisted per-domain run. Distinct from
+    /// [`NotFound`] (unknown domain) so GET `?domain=` is not `ok:true, run:null`.
+    NoRun(String),
     NotReady(String),
     Engine(String),
 }
@@ -1078,11 +1081,13 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
 }
 
 /// The most recent stored run for `domain` (`None` = server-level).
-/// `Ok(None)` = no run on file. Reads ONLY — the Settings card and the
-/// GET route never trigger probes.
+/// Server-level with no row: `Ok(None)` (`run: null` on GET). Hosted
+/// domain with no per-domain row: [`DocError::NoRun`] — GET is not a
+/// run. Reads ONLY — the Settings card and the GET route never trigger
+/// probes.
 pub fn latest_run_json(raw_domain: Option<&str>) -> Result<Option<serde_json::Value>, DocError> {
-    let domain_id: Option<String> = match raw_domain {
-        None => None,
+    let (domain_id, domain_name): (Option<String>, Option<String>) = match raw_domain {
+        None => (None, None),
         Some(raw) => {
             let domain =
                 k2_core::mail_domain::normalize_mail_domain(raw).map_err(DocError::Usage)?;
@@ -1093,7 +1098,7 @@ pub fn latest_run_json(raw_domain: Option<&str>) -> Result<Option<serde_json::Va
                     "domain '{domain}' is not hosted here"
                 )));
             };
-            Some(row.id)
+            (Some(row.id), Some(domain))
         }
     };
     let row: Option<(String, String, String, i64)> = {
@@ -1116,14 +1121,22 @@ pub fn latest_run_json(raw_domain: Option<&str>) -> Result<Option<serde_json::Va
                 .ok(),
         }
     };
-    Ok(row.map(|(id, results, grade, ran_at)| {
-        let mut v: serde_json::Value =
-            serde_json::from_str(&results).unwrap_or_else(|_| serde_json::json!({}));
-        v["id"] = serde_json::json!(id);
-        v["grade"] = serde_json::json!(grade);
-        v["ranAt"] = serde_json::json!(ran_at);
-        v
-    }))
+    match row {
+        Some((id, results, grade, ran_at)) => {
+            let mut v: serde_json::Value =
+                serde_json::from_str(&results).unwrap_or_else(|_| serde_json::json!({}));
+            v["id"] = serde_json::json!(id);
+            v["grade"] = serde_json::json!(grade);
+            v["ranAt"] = serde_json::json!(ran_at);
+            Ok(Some(v))
+        }
+        None => match domain_name {
+            Some(domain) => Err(DocError::NoRun(format!(
+                "no doctor run on file for '{domain}' — POST /cli/mail/doctor with that domain to run probes"
+            ))),
+            None => Ok(None),
+        },
+    }
 }
 
 /// The gate `config::set_send_mode` consults before allowing
@@ -1132,7 +1145,10 @@ pub fn latest_run_json(raw_domain: Option<&str>) -> Result<Option<serde_json::Va
 /// provider realities, and the relay escape hatch.
 pub fn direct_send_gate() -> Result<serde_json::Value, String> {
     let run = latest_run_json(None).map_err(|e| match e {
-        DocError::Usage(h) | DocError::NotFound(h) | DocError::NotReady(h)
+        DocError::Usage(h)
+        | DocError::NotFound(h)
+        | DocError::NoRun(h)
+        | DocError::NotReady(h)
         | DocError::Engine(h) => h,
     })?;
     let Some(run) = run else {
@@ -1724,6 +1740,44 @@ mod tests {
         assert!(matches!(latest_run_json(Some("ghost-doc.example")), Err(DocError::NotFound(_))));
         assert!(matches!(latest_run_json(Some("not a domain!")), Err(DocError::Usage(_))));
         clear_runs();
+    }
+
+    /// L3: a hosted domain with no per-domain run is NoRun, not ok+null.
+    #[test]
+    fn latest_run_hosted_domain_without_run_is_no_run() {
+        let _g = crate::mail::mail_server_test_lock();
+        let domain = format!("norun-{}.example", uuid::Uuid::new_v4().simple());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_domains (id, domain, status, created_at) VALUES (?1, ?2, 'verified', 100)",
+                rusqlite::params![format!("dom-{domain}"), domain],
+            )
+            .expect("seed hosted domain");
+        }
+        match latest_run_json(Some(&domain)) {
+            Err(DocError::NoRun(hint)) => {
+                assert!(hint.contains(&domain), "{hint}");
+                assert!(
+                    hint.contains("POST /cli/mail/doctor"),
+                    "hint must name the POST: {hint}"
+                );
+            }
+            other => panic!("expected NoRun, got {other:?}"),
+        }
+        assert!(
+            matches!(latest_run_json(Some("ghost-doc.example")), Err(DocError::NotFound(_))),
+            "unknown domain stays NotFound"
+        );
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute(
+                "DELETE FROM mail_domains WHERE domain = ?1",
+                rusqlite::params![domain],
+            );
+        }
     }
 
     #[test]

@@ -1369,6 +1369,7 @@ mod tests {
             "/cli/mail/config/set",
             "/cli/mail/import",
             "/cli/mail/cert/renew",
+            "/cli/mail/server/rotate-admin",
         ] {
             assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
         }

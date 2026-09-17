@@ -811,6 +811,7 @@ async fn handle_one_request(
             | "/cli/mail/draft"
             | "/cli/mail/import"
             | "/cli/mail/cert/renew"
+            | "/cli/mail/server/rotate-admin"
             // Per-workspace hosted-mail manage toggle. Dedicated POST
             // (not workspace/set, not GET /cli/dns-manage). GET → 405.
             | "/cli/mail-manage"

@@ -12,6 +12,7 @@
 //! | GET  /cli/mail/preflight (REAL,S1)| mail/routes_server.rs   |
 //! | POST /cli/mail/server/enable      | mail/routes_server.rs   |
 //! | POST /cli/mail/server/disable     | mail/routes_server.rs   |
+//! | POST /cli/mail/server/rotate-admin| mail/routes_server.rs   |
 //! | POST /cli/mail/server/uninstall   | mail/routes_server.rs   |
 //! | GET  /cli/mail/config             | mail/routes_server.rs   |
 //! | POST /cli/mail/config/set         | mail/routes_server.rs   |
@@ -154,6 +155,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // (feedback_post_only_route_guards house rule.)
         "/cli/mail/server/enable"
         | "/cli/mail/server/disable"
+        | "/cli/mail/server/rotate-admin"
         | "/cli/mail/server/uninstall"
         | "/cli/mail/config/set"
         | "/cli/mail/domain/add"
@@ -213,6 +215,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
     match path {
         "/cli/mail/server/enable" => routes_server::handle_server_enable_at(body, daemon_port),
         "/cli/mail/server/disable" => routes_server::handle_server_disable(body),
+        "/cli/mail/server/rotate-admin" => routes_server::handle_server_rotate_admin(body),
         "/cli/mail/server/uninstall" => routes_server::handle_server_uninstall(body),
         "/cli/mail/config/set" => routes_server::handle_config_set(body),
         "/cli/mail/doctor" => routes_server::handle_doctor_run(body),
@@ -316,6 +319,7 @@ pub fn is_mail_owner_surface(path: &str) -> bool {
         || path == "/cli/mail-manage"
         || path == "/cli/mail/import"
         || path == "/cli/mail/cert/renew"
+        || path == "/cli/mail/server/rotate-admin"
 }
 
 /// `GET /cli/mail/domain/list` uses client `project=` to pick the owner
@@ -378,6 +382,7 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/config/set"
             | "/cli/mail/import"
             | "/cli/mail/cert/renew"
+            | "/cli/mail/server/rotate-admin"
     )
 }
 
@@ -643,6 +648,7 @@ mod tests {
             "/cli/mail/config/set",
             "/cli/mail/import",
             "/cli/mail/cert/renew",
+            "/cli/mail/server/rotate-admin",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }
@@ -748,6 +754,7 @@ mod tests {
             "/cli/mail/draft",
             "/cli/mail/import",
             "/cli/mail/cert/renew",
+            "/cli/mail/server/rotate-admin",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
@@ -764,6 +771,17 @@ mod tests {
             !renew.body.contains("alreadyEnabled"),
             "renew is not enable: {}",
             renew.body
+        );
+        let rotate = dispatch_post("/cli/mail/server/rotate-admin", b"{}");
+        assert_ne!(
+            rotate.status, "404 Not Found",
+            "rotate-admin must be wired"
+        );
+        assert_ne!(rotate.status, "501 Not Implemented", "{}", rotate.body);
+        assert!(
+            !rotate.body.contains("alreadyEnabled"),
+            "rotate-admin is not enable no-op: {}",
+            rotate.body
         );
         assert_eq!(
             dispatch("/cli/mail/unknown", &params)
@@ -970,6 +988,20 @@ mod tests {
             assert_eq!(resp.status, "409 Conflict", "route={route}: {}", resp.body);
             assert!(resp.body.contains("not_installed"), "{}", resp.body);
         }
+        let rotate = dispatch_post("/cli/mail/server/rotate-admin", b"{}");
+        assert_eq!(rotate.status, "409 Conflict", "{}", rotate.body);
+        assert!(
+            rotate.body.contains("not_ready")
+                || rotate.body.contains("unsupported")
+                || rotate.body.contains("not installed"),
+            "{}",
+            rotate.body
+        );
+        assert!(
+            !rotate.body.contains("alreadyEnabled"),
+            "rotate-admin is not enable: {}",
+            rotate.body
+        );
     }
 
     /// The owner-or-admin classification the dispatcher arm relies on.
@@ -978,6 +1010,7 @@ mod tests {
         for owner_path in [
             "/cli/mail/server/enable",
             "/cli/mail/server/disable",
+            "/cli/mail/server/rotate-admin",
             "/cli/mail/server/uninstall",
             "/cli/mail/config/set",
             "/cli/mail/domain/add",

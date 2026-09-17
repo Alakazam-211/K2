@@ -286,6 +286,13 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             Some("{}"),
         );
         assert_owner_only(&renew_off, "default OFF agent cert renew");
+        let rotate_off = http(
+            port,
+            "POST",
+            &format!("/cli/mail/server/rotate-admin?token={hook_a}"),
+            Some("{}"),
+        );
+        assert_owner_only(&rotate_off, "default OFF agent rotate-admin");
         assert!(
             disable_off
                 .body
@@ -498,6 +505,7 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/config/set", Some("{}")),
             ("POST", "/cli/mail/import", Some("{}")),
             ("POST", "/cli/mail/cert/renew", Some("{}")),
+            ("POST", "/cli/mail/server/rotate-admin", Some("{}")),
         ] {
             let r = http(port, method, &format!("{path}?token={hook_a}"), body);
             assert_not_owner_only(&r, &format!("C5b flag ON opens {path}"));
@@ -524,6 +532,17 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             renew_get.status, 405,
             "GET cert/renew 405; {}",
             renew_get.body
+        );
+        let rotate_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/server/rotate-admin?token={hook_a}"),
+            None,
+        );
+        assert_eq!(
+            rotate_get.status, 405,
+            "GET rotate-admin 405; {}",
+            rotate_get.body
         );
 
         let create = http(

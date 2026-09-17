@@ -172,6 +172,8 @@ echo "== k2 study errors =="
 errors_out="$("$K2" study errors)"
 assert_contains "exit 3" "$errors_out" "EXIT 3"
 assert_contains "owner_only" "$errors_out" "owner_only"
+assert_contains "stuck bootstrap" "$errors_out" "already initialized"
+assert_contains "stuck bootstrap disable" "$errors_out" "k2 hostmail disable"
 
 echo "== k2 study send =="
 send_out="$("$K2" study send)"

@@ -388,6 +388,33 @@ impl StalwartClient {
         parse_listeners(&resp)
     }
 
+    /// Bind bootstrap/recovery HTTP to loopback `:8080` (never `*:8080`
+    /// / `[::]:8080`). Does not touch the public HTTPS listener
+    /// (`/login` on :443 is a follow-up — do not close here).
+    pub fn listeners_bind_setup_loopback(
+        &self,
+        listeners: &[ListenerInfo],
+    ) -> Result<(), String> {
+        let mut update = serde_json::Map::new();
+        for l in listeners {
+            if l.name == "http" || l.name == "http-recovery" {
+                update.insert(
+                    l.id.clone(),
+                    serde_json::json!({ "bind": { STALWART_SETUP_BIND: true } }),
+                );
+            }
+        }
+        if update.is_empty() {
+            return Err(
+                "no http listener to bind on 127.0.0.1:8080 — refusing a world :8080 leftover"
+                    .to_string(),
+            );
+        }
+        let args = serde_json::json!({ "update": update });
+        let resp = self.registry_call("x:NetworkListener/set", args)?;
+        expect_set_clean("x:NetworkListener/set", &resp)
+    }
+
     /// ✔ LIVE-VERIFIED: apply the §5.3 port plan in ONE
     /// `x:NetworkListener/set`:
     /// - destroy the default `imaps`/`pop3s`/`sieve` listeners (§10);
@@ -400,7 +427,8 @@ impl StalwartClient {
     ///   `127.0.0.1:8443` for http-01 / dns-01 — never `[::]:443` then);
     /// - create the missing STARTTLS `submission` listener on :587.
     /// NOTE (✔ live-verified): the set succeeds but sockets only move
-    /// on the supervisor's final RESTART.
+    /// on the supervisor's final RESTART. Public `/login` on :443 is
+    /// a follow-up (do not close here).
     pub fn listeners_apply(
         &self,
         port_plan: &str,
@@ -496,6 +524,16 @@ impl StalwartClient {
             serde_json::json!({ "filter": { "name": name } }),
         )?;
         Ok(parse_query_ids(&resp).into_iter().next())
+    }
+
+    /// Rotate an account's Password credential by username. Fails
+    /// loud if the account is missing (leftover recovery principal
+    /// `admin` must exist to invalidate).
+    pub fn rotate_account_secret(&self, username: &str, new_secret: &str) -> Result<(), String> {
+        let account_id = self.account_query_id(username)?.ok_or_else(|| {
+            format!("admin account '{username}' not found")
+        })?;
+        self.account_set_password(&account_id, new_secret)
     }
 
     /// Rotate an account's Password credential.
@@ -1362,6 +1400,10 @@ const OUTBOUND_STRATEGY_SINGLETON_ID: &str = "singleton";
 /// The loopback bind for the permanent plain-HTTP mgmt listener (the
 /// supervisor's `STALWART_MGMT_URL` counterpart).
 const STALWART_MGMT_BIND: &str = "127.0.0.1:8180";
+
+/// Bootstrap/recovery HTTP bind while we still need :8080.
+/// Never `*:8080` / `[::]:8080`.
+const STALWART_SETUP_BIND: &str = super::supervisor::STALWART_SETUP_BIND;
 
 /// The JMAP `using` capabilities for registry (`x:*`) calls.
 /// ✔ LIVE-VERIFIED v0.16.10: `urn:stalwart:jmap`.
@@ -2287,6 +2329,12 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
         self.client()?.set_server_hostname(hostname)
     }
 
+    fn bind_setup_http_loopback(&mut self) -> Result<(), String> {
+        let client = self.client()?;
+        let listeners = client.listeners_get()?;
+        client.listeners_bind_setup_loopback(&listeners)
+    }
+
     fn configure_listeners(&mut self, port_plan: &str) -> Result<(), String> {
         let client = self.client()?;
         let listeners = client.listeners_get()?;
@@ -2318,11 +2366,7 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
         new_secret: &str,
     ) -> Result<(), String> {
         let _ = current;
-        let client = self.client()?;
-        let account_id = client
-            .account_query_id(username)?
-            .ok_or_else(|| format!("admin account '{username}' not found"))?;
-        client.account_set_password(&account_id, new_secret)
+        self.client()?.rotate_account_secret(username, new_secret)
     }
 }
 
@@ -2695,6 +2739,65 @@ mod tests {
         assert_eq!(sub["bind"]["[::]:587"], true);
         assert_eq!(sub["protocol"], "smtp");
         assert_eq!(sub["tlsImplicit"], false, "STARTTLS on 587");
+        assert!(
+            !destroy.contains(&"L-https"),
+            "public /login on 443 is a follow-up — do not close https here: {destroy:?}"
+        );
+    }
+
+    /// L12: bootstrap HTTP bind is 127.0.0.1:8080, never *:8080.
+    #[test]
+    fn bind_setup_http_loopback_is_127_not_world() {
+        let get_reply = serde_json::json!({
+            "methodResponses": [["x:NetworkListener/get", {
+                "accountId": "b",
+                "list": [
+                    { "id": "L-http", "name": "http", "bind": { "[::]:8080": true } },
+                    { "id": "L-https", "name": "https", "bind": { "[::]:443": true } },
+                ],
+                "notFound": [],
+            }, "0"]],
+        })
+        .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:NetworkListener/set", {
+                "updated": { "L-http": null },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            get_reply,
+            set_reply,
+        ]);
+        use crate::mail::supervisor::BootstrapApi;
+        let mut api = StalwartBootstrap::new();
+        api.authenticate(&format!("http://127.0.0.1:{port}"), "admin@k2livebox.test", "pw")
+            .expect("authenticate");
+        api.bind_setup_http_loopback().expect("bind loopback 8080");
+
+        let _sess = rx.recv().expect("req1");
+        let _get = rx.recv().expect("req2");
+        let set = rx.recv().expect("req3");
+        let v = body_json(&set);
+        assert_eq!(v["methodCalls"][0][0], "x:NetworkListener/set");
+        let args = &v["methodCalls"][0][1];
+        assert_eq!(
+            args["update"]["L-http"]["bind"]["127.0.0.1:8080"], true,
+            "bootstrap HTTP must bind loopback 8080: {args}"
+        );
+        assert!(
+            args["update"]["L-http"]["bind"].get("[::]:8080").is_none(),
+            "must not keep world [::]:8080: {args}"
+        );
+        assert!(
+            args["update"]["L-http"]["bind"].get("0.0.0.0:8080").is_none(),
+            "must not keep world 0.0.0.0:8080: {args}"
+        );
+        assert!(
+            args["update"].get("L-https").is_none(),
+            "do not close public /login on 443: {args}"
+        );
     }
 
     /// Service-account + ApiKey round-trip: domain id resolved by

@@ -383,6 +383,48 @@ pub fn handle_server_disable(_body: &[u8]) -> CliResponse {
     )
 }
 
+/// POST `/cli/mail/server/rotate-admin` — L12: rotate leftover bootstrap
+/// principal `admin` and the provisioned admin password. For boxes
+/// already past enable (noir ticket 4bdbb533). Does not wipe the store,
+/// SIGTERM, or re-enable. enable no-op is not rotate; disable is not
+/// a wipe.
+pub fn handle_server_rotate_admin(_body: &[u8]) -> CliResponse {
+    if !mail_supported() {
+        return unsupported();
+    }
+    match supervisor::rotate_leftover_admins_live() {
+        Ok(report) => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "recoveryPrincipal": report.recovery_principal,
+                "provisionedAdmin": report.provisioned_admin,
+                "hint": "rotated leftover recovery principal and provisioned admin password — store kept",
+            })
+            .to_string(),
+        ),
+        Err(e) => {
+            let code = if e.contains("not installed")
+                || e.contains("not Linux")
+                || e.contains("start it")
+                || e.contains("secret ref missing")
+                || e.contains("before rotate-admin")
+                || e.contains("no api_url")
+                || e.contains("no API key")
+            {
+                "not_ready"
+            } else {
+                "engine"
+            };
+            let status = if code == "not_ready" {
+                "409 Conflict"
+            } else {
+                "502 Bad Gateway"
+            };
+            err_json(status, code, e)
+        }
+    }
+}
+
 /// POST `/cli/mail/cert/renew` — L7: retry ACME for the mail hostname
 /// only. Not enable, not disable, not SIGTERM, not a store wipe.
 pub fn handle_cert_renew(_body: &[u8]) -> CliResponse {
@@ -959,6 +1001,28 @@ mod tests {
         assert!(
             !resp.body.contains("alreadyEnabled"),
             "renew must not go through enable: {}",
+            resp.body
+        );
+        clean_row();
+    }
+
+    #[test]
+    fn rotate_admin_is_not_ready_without_install_and_is_not_enable() {
+        let _g = crate::mail::mail_server_test_lock();
+        clean_row();
+        let resp = handle_server_rotate_admin(b"{}");
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(v["ok"], false);
+        let code = v["error"]["code"].as_str().unwrap_or("");
+        assert!(
+            code == "not_ready" || code == "unsupported",
+            "expected not_ready or unsupported, got {code}: {}",
+            resp.body
+        );
+        assert!(
+            !resp.body.contains("alreadyEnabled"),
+            "rotate-admin is not enable no-op: {}",
             resp.body
         );
         clean_row();

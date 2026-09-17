@@ -20,9 +20,10 @@
 //! ReadWritePaths drop-in line; the first live run failed exactly
 //! there) — and returns the PROVISIONED admin (`admin@<domain>` + a
 //! fresh random secret) in the reply. After a restart the server runs
-//! in normal mode; the recovery env credential REMAINS VALID in normal
-//! mode (verified), so the machine's `recovery-off` step strips it
-//! from the unit before the final restart.
+//! in normal mode; the recovery env credential AND the bootstrap
+//! principal `admin` remain valid in normal mode (verified) until
+//! `recovery-off` strips the env, rotates `admin`, and rotates the
+//! provisioned `admin@domain` secret before the final restart.
 //!
 //! The enable flow is an idempotent, RESUMABLE state machine: each
 //! step records completion in `mail_server.enable_progress_json`
@@ -136,10 +137,16 @@ pub const STALWART_DROPIN_PATH: &str = "/etc/systemd/system/stalwart.service.d/k
 /// Stalwart's bootstrap-mode listener (plain HTTP `http-recovery` on
 /// :8080 — ✔ live-verified). After Bootstrap/set + restart the
 /// DEFAULT registry listeners still include a world-bound plain-HTTP
-/// `http` listener on :8080, so this URL stays the mgmt dial until
-/// the port-plan step retargets that listener to [`STALWART_MGMT_URL`]
-/// and the final restart applies it.
+/// `http` listener on :8080; `bind_setup_http_loopback` retargets that
+/// bind to [`STALWART_SETUP_BIND`] so the remaining bootstrap window
+/// is loopback-only. The port-plan step then retargets to
+/// [`STALWART_MGMT_URL`] and the final restart applies it.
+/// Public `/login` on :443 is a follow-up (do not close here).
 pub const STALWART_SETUP_URL: &str = "http://127.0.0.1:8080";
+
+/// Loopback bind for the bootstrap/recovery HTTP listener when we
+/// still need :8080. Never `*:8080` / `[::]:8080`.
+pub const STALWART_SETUP_BIND: &str = "127.0.0.1:8080";
 
 /// The PERMANENT management endpoint the daemon talks to: the default
 /// `http` listener retargeted to 127.0.0.1 only.
@@ -178,9 +185,10 @@ pub fn mail_supported() -> bool {
 /// `recovery_admin_password`: present during install (deterministic
 /// bootstrap credential, ✔ live-verified `STALWART_RECOVERY_ADMIN`
 /// env form); the `recovery-off` step rewrites the unit WITHOUT it
-/// once the provisioned admin + ApiKey are vaulted (the env credential
-/// stays valid even in normal mode — verified — so leaving it would be
-/// a standing backdoor). The unit is written 0600 for exactly this
+/// once the provisioned admin + ApiKey are vaulted, and rotates the
+/// bootstrap principal `admin` (the env credential AND that principal
+/// stay valid even in normal mode — verified — so leaving either would
+/// be a standing backdoor). The unit is written 0600 for exactly this
 /// reason. Hardening lives in the drop-in so the split mirrors PRD §10
 /// verbatim and a future unit rewrite can't silently drop it.
 pub fn systemd_unit(recovery_admin_password: Option<&str>) -> String {
@@ -276,6 +284,12 @@ pub trait BootstrapApi: Send {
     /// Stalwart `x:SystemSettings` `defaultHostname` so the SMTP banner
     /// follows. Not re-bootstrap, not SIGTERM wipe.
     fn set_server_hostname(&mut self, hostname: &str) -> Result<(), String>;
+    /// Bind the bootstrap/recovery HTTP listener to
+    /// [`STALWART_SETUP_BIND`] (`127.0.0.1:8080`), never `*:8080`.
+    /// Called while we still need :8080 during bootstrap; sockets
+    /// move on the next restart. Does not close public `/login` on
+    /// :443 (follow-up).
+    fn bind_setup_http_loopback(&mut self) -> Result<(), String>;
     /// Apply the §5.3 port plan (NORMAL mode): destroy the
     /// IMAP/POP3/ManageSieve listeners (§10), retarget the :8080 http
     /// listener to the loopback mgmt bind, bind HTTPS per plan, add
@@ -288,7 +302,9 @@ pub trait BootstrapApi: Send {
     /// Mint the loopback-allowlisted ApiKey on the service account;
     /// returns the SECRET (shown once by Stalwart).
     fn mint_api_key(&mut self, account_id: &str) -> Result<String, String>;
-    /// C20: rotate the provisioned Stalwart admin password (vault + API).
+    /// C20/L12: rotate a Stalwart admin-class password (vault + API).
+    /// `username` is `admin` (bootstrap recovery principal) or
+    /// `admin@domain` (provisioned).
     fn rotate_admin_secret(
         &mut self,
         username: &str,
@@ -958,11 +974,13 @@ pub fn end_enable() {
 /// stale config file (Stalwart itself writes it during bootstrap);
 /// `bootstrap` replaces the journal-scrape `admin-password` step
 /// (deterministic recovery credential + `x:Bootstrap/set`);
-/// `restart-normal` leaves bootstrap mode; `rotate-admin` is GONE
-/// (Bootstrap/set provisions a fresh random admin secret itself);
-/// `setup-listener-off` became part of `server-config` (the :8080
-/// listener IS the retargeted mgmt listener); `recovery-off` strips
-/// the recovery env credential before the final restart.
+/// `restart-normal` leaves bootstrap mode; the enable-step named
+/// `rotate-admin` is GONE (Bootstrap/set provisions a fresh random
+/// admin secret itself) — leftover recovery rotation is `recovery-off`
+/// plus the `k2 hostmail rotate-admin` verb; `server-config` binds
+/// bootstrap HTTP to loopback :8080 then retargets the mgmt listener
+/// to :8180; `recovery-off` strips the recovery env credential and
+/// rotates principal `admin` before the final restart.
 #[allow(dead_code)] // S7 Settings→Email consumes the ordering.
 pub const ENABLE_STEPS: &[&str] = &[
     "preflight",
@@ -1255,8 +1273,24 @@ pub fn run_enable(
 
     if !step_is_done("server-config") {
         set_current("server-config");
-        api.configure_listeners(port_plan)
-            .map_err(|e| fail("server-config", e))?;
+        (|| -> Result<(), String> {
+            // L12: bind recovery HTTP to 127.0.0.1:8080 (never *:8080)
+            // while we still need 8080, then restart so the loopback
+            // bind is live before the port-plan retargets to :8180.
+            api.bind_setup_http_loopback()?;
+            ops.systemctl(&["restart", STALWART_UNIT])?;
+            let username = progress_extra("adminUsername")
+                .unwrap_or_else(|| format!("admin@{default_domain}"));
+            let sref = row_field("admin_secret_ref").ok_or_else(|| {
+                "admin secret ref missing — re-run enable".to_string()
+            })?;
+            let admin_pw = secrets.resolve(&sref)?.ok_or_else(|| {
+                format!("secret ref {sref} missing from the mail secret store")
+            })?;
+            authenticate_either(ops, api, &username, &admin_pw)?;
+            api.configure_listeners(port_plan)
+        })()
+        .map_err(|e| fail("server-config", e))?;
         mark_step("server-config");
     }
 
@@ -1286,29 +1320,15 @@ pub fn run_enable(
     }
 
     // Strip the recovery credential from the unit BEFORE the final
-    // restart: ✔ live-verified the env credential still authenticates
-    // in NORMAL mode, so leaving it would be a standing backdoor
-    // (pre-mortem #13 class).
+    // restart: ✔ live-verified the env credential AND bootstrap
+    // principal `admin` still authenticate in NORMAL mode, so leaving
+    // either would be a standing backdoor (pre-mortem #13 class).
     if !step_is_done("recovery-off") {
         set_current("recovery-off");
         (|| -> Result<(), String> {
             ops.write_file(STALWART_UNIT_PATH, systemd_unit(None).as_bytes(), 0o600)?;
             ops.systemctl(&["daemon-reload"])?;
-            // C20: rotate the provisioned Stalwart admin password (vault + API),
-            // not only delete the recovery env.
-            let username = progress_extra("adminUsername")
-                .unwrap_or_else(|| format!("admin@{default_domain}"));
-            if let Some(sref) = row_field("admin_secret_ref") {
-                if let Some(current) = secrets.resolve(&sref)? {
-                    let new_pw = generate_secret()?;
-                    api.rotate_admin_secret(&username, &current, &new_pw)?;
-                    let new_ref = secrets.store("admin", &new_pw)?;
-                    set_row_field("admin_secret_ref", &new_ref);
-                }
-            }
-            if let Some(sref) = progress_extra("recoveryAdminRef") {
-                let _ = secrets.delete(&sref);
-            }
+            rotate_leftover_admins(api, secrets, &default_domain)?;
             Ok(())
         })()
         .map_err(|e| fail("recovery-off", e))?;
@@ -1366,6 +1386,81 @@ fn authenticate_with_retry(
         }
     }
     Err(format!("management API not reachable at {base_url}: {last_err}"))
+}
+
+/// Result of rotating leftover recovery + provisioned admin secrets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RotateAdminReport {
+    pub recovery_principal: String,
+    pub provisioned_admin: String,
+}
+
+/// L12: invalidate the bootstrap recovery principal `admin` and rotate
+/// the provisioned `admin@domain` password. Does not wipe the store,
+/// SIGTERM, or rewrite the unit. Used by `recovery-off` and
+/// `k2 hostmail rotate-admin`.
+pub fn rotate_leftover_admins(
+    api: &mut dyn BootstrapApi,
+    secrets: &dyn SecretStore,
+    default_domain: &str,
+) -> Result<RotateAdminReport, String> {
+    // Bootstrap principal (not admin@domain). Fail loud if Stalwart
+    // has no such account — leftover boxes still have it.
+    let recovery_current = progress_extra("recoveryAdminRef")
+        .and_then(|sref| secrets.resolve(&sref).ok().flatten())
+        .unwrap_or_default();
+    let recovery_new = generate_secret()?;
+    api.rotate_admin_secret("admin", &recovery_current, &recovery_new)?;
+    if let Some(sref) = progress_extra("recoveryAdminRef") {
+        let _ = secrets.delete(&sref);
+    }
+
+    let username = progress_extra("adminUsername")
+        .unwrap_or_else(|| format!("admin@{default_domain}"));
+    let sref = row_field("admin_secret_ref").ok_or_else(|| {
+        "admin secret ref missing — cannot rotate the provisioned admin".to_string()
+    })?;
+    let current = secrets.resolve(&sref)?.ok_or_else(|| {
+        format!("secret ref {sref} missing from the mail secret store")
+    })?;
+    let new_pw = generate_secret()?;
+    api.rotate_admin_secret(&username, &current, &new_pw)?;
+    let new_ref = secrets.store("admin", &new_pw)?;
+    set_row_field("admin_secret_ref", &new_ref);
+    Ok(RotateAdminReport {
+        recovery_principal: "admin".to_string(),
+        provisioned_admin: username,
+    })
+}
+
+/// Live entry for POST `/cli/mail/server/rotate-admin`: talk to the
+/// running server over the loopback ApiKey (same as doctor/domains).
+/// Does not wipe the store. Fails loud if principal `admin` is missing.
+pub fn rotate_leftover_admins_live() -> Result<RotateAdminReport, String> {
+    if !mail_supported() {
+        return Err(
+            "the email server only works on Linux deployments; this daemon is not Linux"
+                .to_string(),
+        );
+    }
+    let (client, hostname) = super::domains::engine_from_db()?;
+    let default_domain = default_domain_for(hostname.as_deref().unwrap_or(""));
+    let secrets = FileSecretStore::default();
+    let recovery_new = generate_secret()?;
+    client.rotate_account_secret("admin", &recovery_new)?;
+    if let Some(sref) = progress_extra("recoveryAdminRef") {
+        let _ = secrets.delete(&sref);
+    }
+    let username = progress_extra("adminUsername")
+        .unwrap_or_else(|| format!("admin@{default_domain}"));
+    let new_pw = generate_secret()?;
+    client.rotate_account_secret(&username, &new_pw)?;
+    let new_ref = secrets.store("admin", &new_pw)?;
+    set_row_field("admin_secret_ref", &new_ref);
+    Ok(RotateAdminReport {
+        recovery_principal: "admin".to_string(),
+        provisioned_admin: username,
+    })
 }
 
 /// Authenticate against the pre-plan (:8080) listener, falling back to
@@ -1721,6 +1816,9 @@ mod tests {
         fn set_server_hostname(&mut self, hostname: &str) -> Result<(), String> {
             self.check(&format!("set_server_hostname {hostname}"))
         }
+        fn bind_setup_http_loopback(&mut self) -> Result<(), String> {
+            self.check("bind_setup_http_loopback")
+        }
         fn configure_listeners(&mut self, plan: &str) -> Result<(), String> {
             self.check(&format!("configure_listeners {plan}"))
         }
@@ -1835,6 +1933,7 @@ mod tests {
                 "systemctl daemon-reload".to_string(),
                 "systemctl enable --now stalwart".to_string(),
                 "systemctl restart stalwart".to_string(),
+                "systemctl restart stalwart".to_string(),
                 format!(
                     "write /etc/systemd/system/stalwart.service ({} bytes, mode 600)",
                     systemd_unit(None).len()
@@ -1852,9 +1951,12 @@ mod tests {
                 "authenticate http://127.0.0.1:8080 admin",
                 "complete_bootstrap mail.acme.dev acme.dev tls=true",
                 "authenticate http://127.0.0.1:8080 admin@acme.dev",
+                "bind_setup_http_loopback",
+                "authenticate http://127.0.0.1:8080 admin@acme.dev",
                 "configure_listeners tls-alpn",
                 "create_service_account acme.dev",
                 "mint_api_key acct-k2",
+                "rotate_admin_secret admin 64",
                 "rotate_admin_secret admin@acme.dev 64",
             ]
         );
@@ -1889,6 +1991,55 @@ mod tests {
         for step in ENABLE_STEPS {
             assert!(step_is_done(step), "step {step} not marked done");
         }
+        clean_row();
+    }
+
+    /// L12: recovery-off / rotate-admin must rotate bootstrap principal
+    /// `admin`, not only `admin@domain`.
+    #[test]
+    fn rotate_leftover_admins_records_bootstrap_principal_admin() {
+        let _g = db_guard();
+        clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, \
+                 admin_secret_ref, updated_at) \
+                 VALUES (1, 'running', ?1, 'mail.acme.dev', 'mailsec_admin_test', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION],
+            )
+            .expect("seed row");
+        }
+        let secrets = FakeSecrets::default();
+        secrets
+            .store("admin", "old-provisioned")
+            .expect("vault admin");
+        progress_extra_set("adminUsername", "admin@acme.dev");
+        let mut api = FakeApi::default();
+        let report = rotate_leftover_admins(&mut api, &secrets, "acme.dev").expect("rotate");
+        assert_eq!(report.recovery_principal, "admin");
+        assert_eq!(report.provisioned_admin, "admin@acme.dev");
+        assert_eq!(
+            api.calls,
+            vec![
+                "rotate_admin_secret admin 64",
+                "rotate_admin_secret admin@acme.dev 64",
+            ],
+            "must rotate leftover principal admin, not only admin@domain"
+        );
+        let mut fail_api = FakeApi {
+            fail_on: Some("rotate_admin_secret"),
+            ..FakeApi::default()
+        };
+        let err = rotate_leftover_admins(&mut fail_api, &secrets, "acme.dev")
+            .expect_err("rotate of admin must fail loud");
+        assert!(err.contains("injected"), "{err}");
+        assert!(
+            fail_api.calls.iter().any(|c| c.starts_with("rotate_admin_secret admin ")),
+            "failure is on principal admin: {:?}",
+            fail_api.calls
+        );
         clean_row();
     }
 
@@ -1953,6 +2104,7 @@ mod tests {
                 "authenticate http://127.0.0.1:8080 admin@acme.dev",
                 "create_service_account acme.dev",
                 "mint_api_key acct-k2",
+                "rotate_admin_secret admin 64",
                 "rotate_admin_secret admin@acme.dev 64",
             ]
         );

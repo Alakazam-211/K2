@@ -1445,7 +1445,13 @@ cmd_terminal_spawn() {
     [ -n "$cwd" ] && params="${params}&cwd=$(urlencode "$cwd")"
     [ -n "$wait" ] && params="${params}&wait=1"
     [ -n "$sandbox" ] && params="${params}&sandbox=${sandbox}"
-    cli_request "/cli/terminal/spawn" "$params"
+    local resp
+    resp=$(cli_request "/cli/terminal/spawn" "$params") || true
+    if [ -z "$resp" ]; then
+        echo "Error: terminal spawn returned no body" >&2
+        exit 1
+    fi
+    cli_print_or_fail "$resp"
     echo "Terminal spawned: ${title:-$command}"
 }
 
@@ -5564,9 +5570,11 @@ print("Skin user removed." if d.get("success") else "No matching skin user.")'
                     done
                     [[ -z "$username" ]] && { echo "Usage: k2 skin user rooms <username> --agent sales [--apply-tokens]" >&2; exit 1; }
                     local agents_nl="" a
-                    for a in "${agents[@]}"; do
-                        agents_nl="${agents_nl}${a}"$'\n'
-                    done
+                    if [ ${#agents[@]} -gt 0 ]; then
+                        for a in "${agents[@]}"; do
+                            agents_nl="${agents_nl}${a}"$'\n'
+                        done
+                    fi
                     local body raw
                     body=$(K2_SKIN_USER="$username" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_APPLY="$apply_tokens" python3 -c '
 import json,os
@@ -5640,9 +5648,11 @@ print("Skin user %s unassigned." % d.get("username",""))'
                         exit 2
                     fi
                     local agents_nl="" a
-                    for a in "${agents[@]}"; do
-                        agents_nl="${agents_nl}${a}"$'\n'
-                    done
+                    if [ ${#agents[@]} -gt 0 ]; then
+                        for a in "${agents[@]}"; do
+                            agents_nl="${agents_nl}${a}"$'\n'
+                        done
+                    fi
                     local body raw
                     body=$(K2_SKIN_NAME="$name" K2_SKIN_AGENTS="$agents_nl" python3 -c '
 import json,os
@@ -5744,9 +5754,11 @@ for a in access:
                         exit 2
                     fi
                     local agents_nl="" a
-                    for a in "${agents[@]}"; do
-                        agents_nl="${agents_nl}${a}"$'\n'
-                    done
+                    if [ ${#agents[@]} -gt 0 ]; then
+                        for a in "${agents[@]}"; do
+                            agents_nl="${agents_nl}${a}"$'\n'
+                        done
+                    fi
                     local body raw
                     body=$(K2_SKIN_NAME="$name" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_CLEAR="$clear" python3 -c '
 import json,os
@@ -6051,9 +6063,11 @@ for t in tokens:
                 agents=()
             fi
             local agents_nl="" a
-            for a in "${agents[@]}"; do
-                agents_nl="${agents_nl}${a}"$'\n'
-            done
+            if [ ${#agents[@]} -gt 0 ]; then
+                for a in "${agents[@]}"; do
+                    agents_nl="${agents_nl}${a}"$'\n'
+                done
+            fi
             local body raw
             body=$(K2_SKIN_ID="$id" K2_SKIN_AGENTS="$agents_nl" python3 -c '
 import json,os
@@ -11899,7 +11913,11 @@ cmd_workspace_create() {
     [ "$no_agents_md" = true ] && extra+=("no_agents_md=1")
     [ "$fanout" = true ] && extra+=("fanout=1")
     local resp
-    resp=$(cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")" "${extra[@]}")
+    if [ ${#extra[@]} -gt 0 ]; then
+        resp=$(cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")" "${extra[@]}")
+    else
+        resp=$(cli_request "/cli/workspace/create" "path=$(urlencode "$target_path")")
+    fi
     cli_print_or_fail "$resp"
 }
 
@@ -12046,7 +12064,11 @@ cmd_workspace_open() {
     [ "$no_agents_md" = true ] && extra+=("no_agents_md=1")
     [ "$fanout" = true ] && extra+=("fanout=1")
     local resp
-    resp=$(cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")" "${extra[@]}")
+    if [ ${#extra[@]} -gt 0 ]; then
+        resp=$(cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")" "${extra[@]}")
+    else
+        resp=$(cli_request "/cli/workspace/open" "path=$(urlencode "$target_path")")
+    fi
     cli_print_or_fail "$resp"
 }
 
@@ -15816,7 +15838,7 @@ LIFECYCLE (less common)
   open <path> [--no-wiki] [--no-agents-md] [--fanout]
                                     Register existing folder (same defaults)
   remove <path>                     Deregister (files stay)
-  triage                            Plain-text summary of pending work
+  triage                            This workspace's inbox list (same as k2 inbox list)
 
 API / HOST-SESSIONS
   api-guest-policy get <ws>         Show owner guest policy (default if unset)
@@ -19258,6 +19280,11 @@ for r in rows:
 }
 
 cmd_workspace_triage() {
+    if [ $# -gt 0 ]; then
+        echo "Usage: k2 workspace triage" >&2
+        echo "This workspace's inbox list (same as k2 inbox list). Extra arguments are not accepted." >&2
+        exit 2
+    fi
     # 0.39.0f Phase 2.1b: /cli/work/inbox is HTTP 410 now. Use the
     # inbox-first endpoint and the inbox formatter so the output
     # matches the rest of the inbox surface.
@@ -27883,7 +27910,7 @@ EOF
             launch)            shift 2; cmd_workspace_launch "$@" ;;
             profile)           shift 2; cmd_workspace_profile "$@" ;;
             update)            shift 2; cmd_workspace_update "$@" ;;
-            triage)            cmd_workspace_triage ;;
+            triage)            shift 2; cmd_workspace_triage "$@" ;;
             # Existing lifecycle subverbs.
             create)            shift 2; cmd_workspace_create "$@" ;;
             open)              shift 2; cmd_workspace_open "$@" ;;

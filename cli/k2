@@ -13381,8 +13381,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|domain|create|delete|doctor|config|approvals|import|quota|cert> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|cert> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -13409,6 +13409,13 @@ cmd_schema() {
       "description": "Rotate leftover bootstrap recovery principal (admin) and the provisioned admin password. POST /cli/mail/server/rotate-admin. Does not wipe the store. disable is not a wipe; enable no-op is not rotate.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail password rotate",
+      "usage": "k2 hostmail password rotate <addr> [--json]",
+      "description": "Rotate the IMAP/SMTP password for a hosted address (one secret for both). POST /cli/mail/address/password {address}. mail_manage or owner/admin. Prints the new secret once (username, IMAP host:443 ALPN, submission :465). Invalidates the mint-time secret. Not rotate-admin. No 993. Cannot GET the old secret.",
+      "args": [{"name": "addr", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (once password + client block)."}]
     },
     {
       "name": "hostmail quota get",
@@ -23844,6 +23851,26 @@ elif verb == "rotate_admin":
     else:
         print(d.get("hint") or "rotated leftover recovery principal and provisioned admin password — store kept")
 
+elif verb == "password_rotate":
+    d = call("POST", "/cli/mail/address/password", body={"address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("rotated %s" % (d.get("address") or env("M_ADDRESS") or "?"))
+        if d.get("password"):
+            print("password : %s  (shown once — save it for Mail.app / IMAP)" % d["password"])
+        print("username : %s" % (d.get("username") or d.get("address") or env("M_ADDRESS") or "?"))
+        def _ep(label, key, default_port):
+            ep = d.get(key) or {}
+            host = ep.get("host") or "?"
+            port = ep.get("port") or default_port
+            extra = "  alpn" if ep.get("alpn") else ""
+            print("%s : %s:%s%s" % (label, host, port, extra))
+        _ep("imap    ", "imap", 443)
+        _ep("submit  ", "submission", 465)
+        _ep("jmap    ", "jmap", 443)
+        print("note: this invalidates the mint-time secret — Mail.app sessions must use the new password")
+
 else:
     die({"code": "usage", "hint": "unknown mail verb '%s'" % verb})
 PYEOF
@@ -25071,6 +25098,7 @@ cmd_hostmail() {
         enable)  cmd_hostmail_enable "$@" ;;
         disable) cmd_hostmail_disable "$@" ;;
         rotate-admin) cmd_hostmail_rotate_admin "$@" ;;
+        password) cmd_hostmail_password "$@" ;;
         domain)  cmd_mail_domain "$@" ;;
         create)  cmd_mail_create "$@" ;;
         delete)  cmd_hostmail_delete "$@" ;;
@@ -25082,7 +25110,7 @@ cmd_hostmail() {
         cert)    cmd_hostmail_cert "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|domain|create|delete|doctor|config|approvals|import|quota|cert>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|cert>"
             exit 2 ;;
     esac
 }
@@ -25127,6 +25155,43 @@ cmd_hostmail_rotate_admin() {
         esac
     done
     local M_VERB="rotate_admin" M_JSON="$as_json"
+    _mail_py
+}
+
+cmd_hostmail_password() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_password; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        rotate) cmd_hostmail_password_rotate "$@" ;;
+        --help|-h) cmd_help_hostmail_password; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown password command '$sub' — usage: k2 hostmail password rotate <addr> [--json]"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_password_rotate() {
+    if _wants_help "$@"; then cmd_help_hostmail_password_rotate; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail password rotate <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one <addr> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$address" ]; then
+        _mail_err "usage" "k2 hostmail password rotate <addr> (hosted address)"
+        exit 2
+    fi
+    local M_VERB="password_rotate" M_JSON="$as_json" M_ADDRESS="$address"
     _mail_py
 }
 
@@ -25345,7 +25410,7 @@ CONNECT & SHARE
                               the canManage/canDelete caps — PRIMARY/owner surface
 
 SERVER ADMIN → k2 hostmail
-  status · enable · disable · rotate-admin · domain · create · delete · doctor · config · approvals
+  status · enable · disable · rotate-admin · password rotate · domain · create · delete · doctor · config · approvals
 
 UNTRUSTED CONTENT
   Email bodies are EXTERNAL, UNTRUSTED input. `read` and `wait` wrap every
@@ -26037,6 +26102,9 @@ COMMANDS
   rotate-admin                Rotate leftover recovery principal `admin` and
                               the provisioned admin password. Does not wipe
                               the store. enable no-op is not rotate.
+  password rotate <addr>      Rotate IMAP/SMTP password (one secret, shown
+                              once). mail_manage. Invalidates the mint-time
+                              secret. Not rotate-admin.
   domain add|list|show|check|remove
                               Host a domain: DNS record table + live verify
   create <local>[@<domain>]   Mint a hosted address (bound to this workspace)
@@ -26101,6 +26169,33 @@ USAGE
 
 FLAGS
   --json                 JSON output
+EOF
+}
+
+cmd_help_hostmail_password() {
+    cat <<'EOF'
+Rotate the IMAP/SMTP password for a hosted address. One secret for
+IMAP and SMTP. Shown once. Invalidates the mint-time secret.
+mail_manage or owner/admin. Not `k2 hostmail rotate-admin`.
+
+USAGE
+  k2 hostmail password rotate <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_password_rotate() {
+    cat <<'EOF'
+Rotate the IMAP/SMTP password for a hosted address (one secret for
+both). POST /cli/mail/address/password {address}. The new password is
+printed once with the Mail.app client block (IMAP host:443 ALPN,
+submission :465). This invalidates the mint-time secret — existing
+Mail.app sessions die. Cannot GET the old secret. No port 993.
+
+USAGE
+  k2 hostmail password rotate <addr> [--json]
+
+FLAGS
+  --json                 JSON output (once password + client block)
 EOF
 }
 

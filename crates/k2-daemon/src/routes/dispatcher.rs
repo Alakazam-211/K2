@@ -758,6 +758,7 @@ async fn handle_one_request(
             | "/cli/mail/domain/check"
             | "/cli/mail/address/create"
             | "/cli/mail/address/delete"
+            | "/cli/mail/address/password"
             | "/cli/mail/send"
             | "/cli/mail/reply"
             | "/cli/mail/outbox/cancel"

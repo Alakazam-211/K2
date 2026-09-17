@@ -268,6 +268,24 @@ export async function retireAddress(project: string, address: string): Promise<v
   await daemonCliPost('mail/address/delete', { project, address })
 }
 
+/** Once IMAP/SMTP client block from POST /cli/mail/address/password.
+ *  Do not persist `password` on AddressRow. */
+export interface RotatedMailboxPassword {
+  ok: boolean
+  address: string
+  username: string
+  password: string
+  imap: { host: string; port: number; tls: boolean; alpn?: boolean }
+  submission: { host: string; port: number; tls: boolean }
+  jmap?: { host: string; port: number; tls: boolean }
+  note?: string
+}
+
+/** Rotate IMAP+SMTP (one secret). Shown once; does not persist. */
+export async function rotateAddressPassword(address: string): Promise<RotatedMailboxPassword> {
+  return daemonCliPost('mail/address/password', { address })
+}
+
 export async function fetchApprovals(): Promise<ApprovalItem[]> {
   const res = await daemonCliGet<{ ok: boolean; pending: ApprovalItem[] }>('mail/approvals/list')
   return Array.isArray(res?.pending) ? res.pending : []

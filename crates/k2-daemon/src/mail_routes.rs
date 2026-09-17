@@ -25,6 +25,7 @@
 //! | GET  /cli/mail/domain/show        | mail/routes_domains.rs  |
 //! | POST /cli/mail/address/create     | mail/routes_addresses.rs|
 //! | POST /cli/mail/address/delete     | mail/routes_addresses.rs|
+//! | POST /cli/mail/address/password   | mail/routes_addresses.rs|
 //! | GET  /cli/mail/address/list       | mail/routes_addresses.rs|
 //! | GET  /cli/mail/messages           | mail/routes_messages.rs |
 //! | GET  /cli/mail/read               | mail/routes_messages.rs |
@@ -166,6 +167,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/domain/check"
         | "/cli/mail/address/create"
         | "/cli/mail/address/delete"
+        | "/cli/mail/address/password"
         | "/cli/mail/send"
         | "/cli/mail/reply"
         | "/cli/mail/outbox/cancel"
@@ -227,6 +229,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/domain/check" => routes_domains::handle_domain_check(body),
         "/cli/mail/address/create" => routes_addresses::handle_address_create(body),
         "/cli/mail/address/delete" => routes_addresses::handle_address_delete(body),
+        "/cli/mail/address/password" => routes_addresses::handle_address_password(body),
         "/cli/mail/send" => routes_send::handle_send(body),
         "/cli/mail/reply" => routes_send::handle_reply(body),
         "/cli/mail/outbox/cancel" => routes_send::handle_outbox_cancel(body),
@@ -388,6 +391,7 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/quota"
             | "/cli/mail/cert/renew"
             | "/cli/mail/server/rotate-admin"
+            | "/cli/mail/address/password"
     )
 }
 
@@ -655,6 +659,7 @@ mod tests {
             "/cli/mail/quota",
             "/cli/mail/cert/renew",
             "/cli/mail/server/rotate-admin",
+            "/cli/mail/address/password",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }
@@ -718,6 +723,17 @@ mod tests {
         );
         let member_m5 = mail_manage_authorized("/cli/mail/domain/list", false, None);
         assert!(member_m5.is_err());
+        let pw = mail_manage_authorized("/cli/mail/address/password", false, Some(&p));
+        assert!(pw.is_err(), "M5 off password rotate is owner_only");
+        assert!(
+            mail_manage_authorized("/cli/mail/address/password", true, None).is_ok(),
+            "owner/admin rotates IMAP/SMTP password"
+        );
+        assert!(
+            !is_owner_level_mutation("/cli/mail/address/password"),
+            "password rotate is mail_manage, not leftover M6"
+        );
+        assert!(!is_mail_manage_surface("/cli/mail/address/create"));
     }
 
     /// GET on every POST-only mutation answers an explicit 405 through
@@ -737,6 +753,7 @@ mod tests {
             "/cli/mail/domain/check",
             "/cli/mail/address/create",
             "/cli/mail/address/delete",
+            "/cli/mail/address/password",
             "/cli/mail/send",
             "/cli/mail/reply",
             "/cli/mail/approvals/approve",
@@ -774,7 +791,10 @@ mod tests {
         );
         assert_eq!(quota_get.status, "400 Bad Request", "{}", quota_get.body);
         let quota_post = dispatch_post("/cli/mail/quota", b"{}");
-        assert_ne!(quota_post.status, "404 Not Found", "quota POST must be wired");
+        assert_ne!(
+            quota_post.status, "404 Not Found",
+            "quota POST must be wired"
+        );
         assert_eq!(quota_post.status, "400 Bad Request", "{}", quota_post.body);
         assert_eq!(
             dispatch_post("/cli/mail/unknown", b"{}").status,
@@ -789,10 +809,7 @@ mod tests {
             renew.body
         );
         let rotate = dispatch_post("/cli/mail/server/rotate-admin", b"{}");
-        assert_ne!(
-            rotate.status, "404 Not Found",
-            "rotate-admin must be wired"
-        );
+        assert_ne!(rotate.status, "404 Not Found", "rotate-admin must be wired");
         assert_ne!(rotate.status, "501 Not Implemented", "{}", rotate.body);
         assert!(
             !rotate.body.contains("alreadyEnabled"),
@@ -882,7 +899,11 @@ mod tests {
         assert_eq!(resp.status, "200 OK");
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(v["ok"], true);
-        for route in ["/cli/mail/address/create", "/cli/mail/address/delete"] {
+        for route in [
+            "/cli/mail/address/create",
+            "/cli/mail/address/delete",
+            "/cli/mail/address/password",
+        ] {
             let resp = dispatch_post(route, b"{}");
             assert_eq!(resp.status, "400 Bad Request", "route={route}");
             let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
@@ -1057,6 +1078,7 @@ mod tests {
         for agent_path in [
             "/cli/mail/address/create",
             "/cli/mail/address/delete",
+            "/cli/mail/address/password",
             "/cli/mail/send",
             "/cli/mail/reply",
             // S9: drafting into the bound external inbox is the AGENT

@@ -196,6 +196,10 @@ pub trait AddressEngine {
     ) -> Result<String, String>;
     fn disable_account(&self, stalwart_account_id: &str) -> Result<(), String>;
     fn destroy_account(&self, stalwart_account_id: &str) -> Result<(), String>;
+    /// Set the IMAP/SMTP Password credential by Stalwart account id.
+    /// Callers must pass `stalwart_account_id`, never username lookup
+    /// (`rotate_account_secret` is leftover bootstrap-admin recovery).
+    fn set_password(&self, stalwart_account_id: &str, new_secret: &str) -> Result<(), String>;
 }
 
 impl AddressEngine for StalwartClient {
@@ -220,6 +224,9 @@ impl AddressEngine for StalwartClient {
     }
     fn destroy_account(&self, stalwart_account_id: &str) -> Result<(), String> {
         self.account_destroy(stalwart_account_id)
+    }
+    fn set_password(&self, stalwart_account_id: &str, new_secret: &str) -> Result<(), String> {
+        self.account_set_password(stalwart_account_id, new_secret)
     }
 }
 
@@ -469,6 +476,21 @@ fn mint_json(
     }
     v
 }
+
+/// IMAP/SMTP client block shown once on mint and on password rotate.
+/// No 993 — IMAP is 443 ALPN, submission is 465.
+fn client_block(hostname: &str, username: &str, password: &str) -> serde_json::Value {
+    serde_json::json!({
+        "username": username,
+        "imap": { "host": hostname, "port": 443, "tls": true, "alpn": true },
+        "submission": { "host": hostname, "port": 465, "tls": true },
+        "jmap": { "host": hostname, "port": 443, "tls": true },
+        "password": password,
+    })
+}
+
+const ROTATE_NOTE: &str =
+    "this invalidates the mint-time secret — Mail.app and other IMAP/SMTP clients must use the new password";
 
 // ── Operations ──────────────────────────────────────────────────────────
 
@@ -726,6 +748,73 @@ pub fn retire_address(
     }))
 }
 
+/// Rotate the IMAP/SMTP secret for an **active hosted** address.
+/// Lookup is by address only (not minting-workspace, not canManage).
+/// Auth is the route gate (owner/admin or mail_manage).
+///
+/// Stalwart `account_set_password` first; vault `store_exact("account-{row.id}")`
+/// overwrites the deterministic key (never `store()`, which orphans a
+/// random ref). Vault failure still returns the once password — the
+/// engine already accepted it.
+pub fn rotate_address_password(
+    engine: &dyn AddressEngine,
+    secrets_store: &dyn SecretStore,
+    raw_address: &str,
+) -> Result<serde_json::Value, AddrError> {
+    let address = normalize_address(raw_address)?;
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        load_address(&conn, &address)
+    };
+    let Some(row) = row else {
+        return Err(AddrError::NotFound(format!(
+            "no hosted address '{address}'"
+        )));
+    };
+    if row.status != "active" {
+        return Err(AddrError::NotFound(format!(
+            "no hosted address '{address}'"
+        )));
+    }
+    let Some(account_id) = row
+        .stalwart_account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Err(AddrError::Engine(format!(
+            "address '{address}' has no mail-server account"
+        )));
+    };
+
+    let hostname = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        super::domains::server_info(&conn)
+            .and_then(|i| i.hostname)
+            .unwrap_or_default()
+    };
+
+    let password = secrets::generate_secret().map_err(AddrError::Engine)?;
+    engine
+        .set_password(account_id, &password)
+        .map_err(AddrError::Engine)?;
+    // Deterministic vault key so a later rotate overwrites. `store()`
+    // mints a random `mailsec_*` ref the row never records.
+    if let Err(e) = secrets_store.store_exact(&format!("account-{}", row.id), &password) {
+        k2_core::log_debug!(
+            "[mail] address password vault write failed after Stalwart set for {address}: {e}"
+        );
+    }
+
+    let mut v = client_block(&hostname, &row.address, &password);
+    v["ok"] = serde_json::Value::Bool(true);
+    v["address"] = serde_json::Value::String(row.address.clone());
+    v["note"] = serde_json::Value::String(ROTATE_NOTE.to_string());
+    Ok(v)
+}
+
 /// The caller's view (`k2 mail addresses`): ACTIVE rows only +
 /// `createdAt` + the cap usage `{used, cap}` (cap 0 = unlimited —
 /// callers render "unlimited").
@@ -832,8 +921,10 @@ pub(crate) mod tests {
         pub created_quotas: Mutex<Vec<(u64, u64)>>, // (bytes, messages)
         pub disabled: Mutex<Vec<String>>,
         pub destroyed: Mutex<Vec<String>>,
+        pub passwords_set: Mutex<Vec<(String, String)>>, // (account_id, secret)
         pub fail_create: bool,
         pub fail_disable: bool,
+        pub fail_set_password: bool,
         pub on_create: Option<Box<dyn Fn() + Send + Sync>>,
         next_id: Mutex<u32>,
     }
@@ -845,8 +936,10 @@ pub(crate) mod tests {
                 created_quotas: Mutex::new(Vec::new()),
                 disabled: Mutex::new(Vec::new()),
                 destroyed: Mutex::new(Vec::new()),
+                passwords_set: Mutex::new(Vec::new()),
                 fail_create: false,
                 fail_disable: false,
+                fail_set_password: false,
                 on_create: None,
                 next_id: Mutex::new(0),
             }
@@ -892,6 +985,17 @@ pub(crate) mod tests {
             self.destroyed.lock().unwrap().push(id.to_string());
             Ok(())
         }
+        fn set_password(&self, stalwart_account_id: &str, new_secret: &str) -> Result<(), String> {
+            assert_eq!(new_secret.len(), 64, "32 random bytes as hex");
+            if self.fail_set_password {
+                return Err("Account/set password rejected".to_string());
+            }
+            self.passwords_set
+                .lock()
+                .unwrap()
+                .push((stalwart_account_id.to_string(), new_secret.to_string()));
+            Ok(())
+        }
     }
 
     /// Recording secret vault (never the real ~/.k2 file).
@@ -918,6 +1022,16 @@ pub(crate) mod tests {
         }
         fn delete(&self, sref: &str) -> Result<(), String> {
             self.deleted.lock().unwrap().push(sref.to_string());
+            Ok(())
+        }
+        fn store_exact(&self, key: &str, secret: &str) -> Result<(), String> {
+            if self.fail_store {
+                return Err("vault unavailable".to_string());
+            }
+            self.stored
+                .lock()
+                .unwrap()
+                .push((key.to_string(), secret.to_string()));
             Ok(())
         }
     }
@@ -1633,6 +1747,127 @@ pub(crate) mod tests {
             Err(AddrError::Engine(_))
         ));
         assert_eq!(address_row(&address).unwrap().status, "active");
+        cleanup_domain(&domain);
+    }
+
+    fn seed_active_address(
+        address: &str,
+        domain_id: &str,
+        project_id: &str,
+        stalwart_account_id: Option<&str>,
+        status: &str,
+    ) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, \
+             owner_project_id, status, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 100)",
+            rusqlite::params![id, address, domain_id, stalwart_account_id, project_id, status],
+        )
+        .expect("seed address");
+        id
+    }
+
+    #[test]
+    fn rotate_pending_active_row_sets_password_once_via_account_id() {
+        let domain = unique("rot-pending") + ".example";
+        cleanup_domain(&domain);
+        let domain_id = seed_domain(&domain, "pending", Some("stw-pending"));
+        let engine = FakeAddrEngine::ok();
+        let vault = FakeVault::default();
+        let project = unique("proj");
+        let address = format!("precut@{domain}");
+        let row_id = seed_active_address(&address, &domain_id, &project, Some("acc-rot"), "active");
+
+        let v = rotate_address_password(&engine, &vault, &format!("  PRECUT@{domain} "))
+            .expect("rotate pending active");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["address"], address);
+        assert_eq!(v["username"], address);
+        let password = v["password"].as_str().expect("once password");
+        assert_eq!(password.len(), 64);
+        assert_eq!(v["imap"]["port"], 443);
+        assert_eq!(v["imap"]["alpn"], true);
+        assert_eq!(v["imap"]["tls"], true);
+        assert_eq!(v["submission"]["port"], 465);
+        assert_eq!(v["jmap"]["port"], 443);
+        assert_ne!(v["imap"]["port"], 993);
+        let note = v["note"].as_str().unwrap_or("");
+        assert!(note.contains("invalidates the mint-time secret"), "{note}");
+
+        assert_eq!(
+            engine.passwords_set.lock().unwrap().as_slice(),
+            [("acc-rot".to_string(), password.to_string())]
+        );
+        let stored = vault.stored.lock().unwrap();
+        assert_eq!(stored.len(), 1, "store_exact once, never store() orphan ref");
+        assert_eq!(stored[0].0, format!("account-{row_id}"));
+        assert_eq!(stored[0].1, password);
+        cleanup_domain(&domain);
+    }
+
+    #[test]
+    fn rotate_vault_failure_still_returns_password() {
+        let domain = unique("rot-vault") + ".example";
+        cleanup_domain(&domain);
+        let domain_id = seed_domain(&domain, "pending", Some("stw-p"));
+        let engine = FakeAddrEngine::ok();
+        let vault = FakeVault {
+            fail_store: true,
+            ..FakeVault::default()
+        };
+        let address = format!("box@{domain}");
+        seed_active_address(&address, &domain_id, &unique("proj"), Some("acc-v"), "active");
+
+        let v = rotate_address_password(&engine, &vault, &address).expect("engine won");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["password"].as_str().unwrap().len(), 64);
+        assert_eq!(engine.passwords_set.lock().unwrap().len(), 1);
+        assert!(vault.stored.lock().unwrap().is_empty());
+        cleanup_domain(&domain);
+    }
+
+    #[test]
+    fn rotate_skips_retired_and_does_not_use_rotate_account_secret_shape() {
+        let domain = unique("rot-miss") + ".example";
+        cleanup_domain(&domain);
+        let domain_id = seed_domain(&domain, "pending", Some("stw-p"));
+        let engine = FakeAddrEngine::ok();
+        let vault = FakeVault::default();
+        let project = unique("proj");
+        seed_active_address(
+            &format!("gone@{domain}"),
+            &domain_id,
+            &project,
+            Some("acc-gone"),
+            "retired",
+        );
+        match rotate_address_password(&engine, &vault, &format!("gone@{domain}")) {
+            Err(AddrError::NotFound(hint)) => assert!(hint.contains("hosted address"), "{hint}"),
+            other => panic!("retired must be not_found, got {other:?}"),
+        }
+        match rotate_address_password(&engine, &vault, &format!("ghost@{domain}")) {
+            Err(AddrError::NotFound(_)) => {}
+            other => panic!("unknown must be not_found, got {other:?}"),
+        }
+        assert!(engine.passwords_set.lock().unwrap().is_empty());
+        let refusing = FakeAddrEngine {
+            fail_set_password: true,
+            ..FakeAddrEngine::ok()
+        };
+        seed_active_address(
+            &format!("live@{domain}"),
+            &domain_id,
+            &project,
+            Some("acc-live"),
+            "active",
+        );
+        assert!(matches!(
+            rotate_address_password(&refusing, &vault, &format!("live@{domain}")),
+            Err(AddrError::Engine(_))
+        ));
+        assert!(vault.stored.lock().unwrap().is_empty(), "no vault on engine fail");
         cleanup_domain(&domain);
     }
 

@@ -202,6 +202,65 @@ pub fn handle_address_delete(body: &[u8]) -> CliResponse {
     }
 }
 
+/// `POST /cli/mail/address/password` body (`k2 hostmail password rotate <addr>`).
+/// Exact `{ "address" }` — no project, no secret. Auth is the dispatcher
+/// mail_manage gate (owner/admin OR mail_manage). Not canManage, not
+/// minting-workspace `authorize_address`.
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default)]
+struct PasswordBody {
+    address: String,
+}
+
+/// POST `/cli/mail/address/password` — rotate the IMAP/SMTP secret for
+/// an active hosted row (pending domains included). Once JSON copies
+/// the mint client block; GET is 405 via the shim.
+pub fn handle_address_password(body: &[u8]) -> CliResponse {
+    let b: PasswordBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => {
+            return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}"))
+        }
+    };
+    if b.address.trim().is_empty() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'address' — the hosted address to rotate, e.g. bot@acme.dev",
+        );
+    }
+    // Lookup is by address only. Engine needed only after we know the
+    // row exists (unknown → 404 without a live Stalwart).
+    let address = match addresses::normalize_address(&b.address) {
+        Ok(a) => a,
+        Err(e) => return addr_error_response(e),
+    };
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        addresses::load_address(&conn, &address)
+    };
+    let Some(row) = row else {
+        return addr_error_response(AddrError::NotFound(format!(
+            "no hosted address '{address}'"
+        )));
+    };
+    if row.status != "active" {
+        return addr_error_response(AddrError::NotFound(format!(
+            "no hosted address '{address}'"
+        )));
+    }
+    let (engine, _hostname) = match domains::engine_from_db() {
+        Ok(e) => e,
+        Err(hint) => return error_response("503 Service Unavailable", "not_ready", &hint),
+    };
+    let secrets_store = FileSecretStore::default();
+    match addresses::rotate_address_password(&engine, &secrets_store, &b.address) {
+        Ok(v) => ok_json(v),
+        Err(e) => addr_error_response(e),
+    }
+}
+
 // ── GET handler ─────────────────────────────────────────────────────────
 
 /// GET `/cli/mail/address/list` — two audiences, one route:
@@ -416,6 +475,46 @@ mod tests {
 
         cleanup_project(&project_id);
         cleanup_project(&project2);
+    }
+
+    // ── password rotate ──
+
+    #[test]
+    fn password_validates_body_looks_up_active_row_and_not_ready_without_server() {
+        let resp = handle_address_password(b"not json");
+        assert_eq!(resp.status, "400 Bad Request");
+        assert_eq!(body_json(&resp)["error"]["code"], "usage");
+
+        let resp = handle_address_password(br#"{}"#);
+        assert_eq!(resp.status, "400 Bad Request");
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("address"));
+
+        let resp = handle_address_password(br#"{"address":"ghost@x.example"}"#);
+        assert_eq!(resp.status, "404 Not Found");
+        assert_eq!(body_json(&resp)["error"]["code"], "not_found");
+
+        let (name, path) = unique("pw");
+        let project_id = insert_project(&name, &path, 5);
+        let addr = format!("box@{name}.example");
+        seed_address(&project_id, &addr, "retired", Some("acc-r"));
+        let resp = handle_address_password(
+            serde_json::json!({ "address": addr }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "not_found");
+
+        let live = format!("live@{name}.example");
+        seed_address(&project_id, &live, "active", Some("acc-live"));
+        // Extra project field is ignored — lookup is address-only, not
+        // minting-workspace authorize_address.
+        let resp = handle_address_password(
+            serde_json::json!({ "address": live, "project": path })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "503 Service Unavailable", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "not_ready");
+        cleanup_project(&project_id);
     }
 
     // ── list ──

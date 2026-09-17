@@ -66,6 +66,7 @@ import {
   mailErrorMessage,
   removeDomain,
   retireAddress,
+  rotateAddressPassword,
   setMailConfig,
   uninstallServer,
   type AddressRow,
@@ -77,12 +78,13 @@ import {
   type MailStatus,
   type OutboundItem,
   type PreflightReport,
+  type RotatedMailboxPassword,
 } from './email-api'
 
 export const EMAIL_HOSTING_MANIFEST: SettingEntry[] = [
   { id: 'email-hosting.server', section: 'email-hosting', label: 'Email Server', description: 'Enable and supervise the mail server (Linux deployments)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight', 'hosting'] },
   { id: 'email-hosting.domains', section: 'email-hosting', label: 'Email Domains', description: 'Add domains and verify MX / SPF / DKIM / DMARC records', keywords: ['domain', 'dns', 'mx', 'spf', 'dkim', 'dmarc', 'ptr', 'records', 'verify', 'zone'] },
-  { id: 'email-hosting.addresses', section: 'email-hosting', label: 'Email Addresses', description: 'Agent mailboxes per domain — caps, holders, retirement', keywords: ['address', 'mailbox', 'agent', 'cap', 'retire', 'mint'] },
+  { id: 'email-hosting.addresses', section: 'email-hosting', label: 'Email Addresses', description: 'Agent mailboxes per domain — caps, holders, retirement', keywords: ['address', 'mailbox', 'agent', 'cap', 'retire', 'mint', 'rotate', 'imap', 'smtp', 'password'] },
   { id: 'email-hosting.approvals', section: 'email-hosting', label: 'Send Approvals', description: 'Approve or deny agent outbound email', keywords: ['approval', 'approvals', 'outbox', 'send', 'deny', 'approve', 'queue', 'outbound'] },
   { id: 'email-hosting.send-mode', section: 'email-hosting', label: 'Send Mode & Relay', description: 'Direct send or smart-host relay, per domain', keywords: ['relay', 'smtp relay', 'direct', 'send mode', 'smart host', 'receive-only'] },
 ]
@@ -1088,7 +1090,9 @@ function AddressesPanel({
   const [inboxes, setInboxes] = useState<Inbox[] | null>(sample ? SAMPLE_INBOXES : null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [busyKind, setBusyKind] = useState<'retire' | 'rotate' | null>(null)
   const [capNote, setCapNote] = useState<string | null>(null)
+  const [onceCreds, setOnceCreds] = useState<RotatedMailboxPassword | null>(null)
 
   useEffect(() => {
     if (sample) {
@@ -1149,6 +1153,7 @@ function AddressesPanel({
       })
       if (!confirmed) return
       setBusyId(row.id)
+      setBusyKind('retire')
       try {
         await retireAddress(row.holderProjectId, row.address)
         // Optimistic: flip the row locally; the refetch confirms.
@@ -1165,10 +1170,33 @@ function AddressesPanel({
         useToastStore.getState().addToast(`Retire failed: ${mailErrorMessage(e)}`, 'error')
       } finally {
         setBusyId(null)
+        setBusyKind(null)
       }
     },
     [onChanged],
   )
+
+  const rotatePassword = useCallback(async (row: AddressRow): Promise<void> => {
+    const confirmed = await useConfirmDialogStore.getState().confirm({
+      title: `Rotate IMAP/SMTP password for ${row.address}?`,
+      message:
+        'Mail.app and other IMAP/SMTP sessions will die. The new password is shown once and cannot be retrieved again.',
+      confirmLabel: 'Rotate password',
+      destructive: true,
+    })
+    if (!confirmed) return
+    setBusyId(row.id)
+    setBusyKind('rotate')
+    try {
+      const creds = await rotateAddressPassword(row.address)
+      setOnceCreds(creds)
+    } catch (e) {
+      useToastStore.getState().addToast(`Rotate failed: ${mailErrorMessage(e)}`, 'error')
+    } finally {
+      setBusyId(null)
+      setBusyKind(null)
+    }
+  }, [])
 
   // Optimistic patch of one inbox's access row (primary/grants) — mutates
   // the loaded catalog in place, no refetch (no fetch-in-render).
@@ -1202,6 +1230,54 @@ function AddressesPanel({
 
   return (
     <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
+      {onceCreds && (
+        <div
+          className="border border-[var(--color-status-warning-soft)]/40 bg-[var(--color-status-warning-soft)]/10 p-3 space-y-2"
+          role="dialog"
+          aria-label="IMAP/SMTP password shown once"
+        >
+          <p className="text-[11px] font-semibold text-[var(--color-text-primary)]">
+            Store this password now — it cannot be retrieved again
+          </p>
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            {onceCreds.note ??
+              'This invalidates the mint-time secret. Mail.app sessions must use the new password.'}
+          </p>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-primary)]">
+            <dt className="text-[var(--color-text-muted)]">Host</dt>
+            <dd className="font-mono break-all">{onceCreds.imap?.host || '—'}</dd>
+            <dt className="text-[var(--color-text-muted)]">IMAP</dt>
+            <dd className="font-mono">
+              {onceCreds.imap?.port ?? 443}
+              {onceCreds.imap?.alpn ? ' ALPN' : ''}
+            </dd>
+            <dt className="text-[var(--color-text-muted)]">SMTP</dt>
+            <dd className="font-mono">{onceCreds.submission?.port ?? 465}</dd>
+            <dt className="text-[var(--color-text-muted)]">User</dt>
+            <dd className="font-mono break-all">{onceCreds.username || onceCreds.address}</dd>
+            <dt className="text-[var(--color-text-muted)]">Password</dt>
+            <dd className="font-mono break-all select-all">{onceCreds.password}</dd>
+          </dl>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="text-[11px] text-[var(--color-accent)] cursor-pointer"
+              onClick={() => {
+                void navigator.clipboard?.writeText(onceCreds.password)
+              }}
+            >
+              Copy password
+            </button>
+            <button
+              type="button"
+              className="text-[11px] text-[var(--color-text-secondary)] cursor-pointer"
+              onClick={() => setOnceCreds(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
       <div className="min-w-0" data-settings-id="email-hosting.addresses">
         <h2 className="text-base font-medium text-[var(--color-text-primary)]">Addresses</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
@@ -1255,14 +1331,26 @@ function AddressesPanel({
                         </p>
                       </div>
                       {r.status === 'active' && (
-                        <button
-                          type="button"
-                          disabled={!canMutate || busyId === r.id}
-                          onClick={() => void retire(r)}
-                          className="px-2 py-0.5 text-[10px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-                        >
-                          {busyId === r.id ? 'Retiring…' : 'Retire'}
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            disabled={!canMutate || busyId === r.id}
+                            onClick={() => void rotatePassword(r)}
+                            className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                          >
+                            {busyId === r.id && busyKind === 'rotate'
+                              ? 'Rotating…'
+                              : 'Rotate IMAP/SMTP password'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canMutate || busyId === r.id}
+                            onClick={() => void retire(r)}
+                            className="px-2 py-0.5 text-[10px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                          >
+                            {busyId === r.id && busyKind === 'retire' ? 'Retiring…' : 'Retire'}
+                          </button>
+                        </>
                       )}
                     </div>
                     {inbox && (

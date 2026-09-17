@@ -625,3 +625,93 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
         );
     });
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mail_address_password_rotate_auth_and_pending_row() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let a_handle = format!("pwa{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (a_id, _a_path) = seed_ws(&a_handle);
+        let hook_a = mint_scoped_hook_for(&a_id);
+
+        let addr = format!("precut@{a_handle}.example");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_domains (id, domain, stalwart_domain_id, status, send_mode, created_at) \
+                 VALUES (?1, ?2, 'stw-p', 'pending', 'receive-only', 100)",
+                params![uuid::Uuid::new_v4().to_string(), format!("{a_handle}.example")],
+            )
+            .expect("seed pending domain");
+            conn.execute(
+                "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, \
+                 owner_project_id, status, created_at, primary_can_manage, primary_can_delete) \
+                 VALUES (?1, ?2, 'dom-x', 'acc-p', ?3, 'active', 100, 1, 1)",
+                params![uuid::Uuid::new_v4().to_string(), addr, a_id],
+            )
+            .expect("seed pending active row with canManage");
+        }
+
+        let owner_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/address/password?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(owner_get.status, 405, "GET 405; {}", owner_get.body);
+
+        let off = http(
+            port,
+            "POST",
+            &format!("/cli/mail/address/password?token={hook_a}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_owner_only(&off, "M5 off password rotate");
+
+        // canManage on the hosted row does not open rotate (not quota
+        // authorize_address / not inbox canManage).
+        let can_manage_only = http(
+            port,
+            "POST",
+            &format!("/cli/mail/address/password?token={hook_a}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_eq!(can_manage_only.status, 403, "{}", can_manage_only.body);
+        assert!(
+            can_manage_only.body.contains("owner_only"),
+            "canManage-only must 403 owner_only: {}",
+            can_manage_only.body
+        );
+
+        let on = set_mail_manage(port, &a_id, 1);
+        assert_eq!(on.status, 200, "{}", on.body);
+
+        let manage = http(
+            port,
+            "POST",
+            &format!("/cli/mail/address/password?token={hook_a}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_not_owner_only(&manage, "mail_manage + pending active row");
+        // No live Stalwart in this harness — handler must still accept
+        // the pending active row (not 403 / not verified-only).
+        assert_ne!(manage.status, 403, "{}", manage.body);
+        assert_ne!(
+            manage.status, 404,
+            "pending active row is hosted: {}",
+            manage.body
+        );
+
+        let owner = http(
+            port,
+            "POST",
+            &format!("/cli/mail/address/password?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_not_owner_only(&owner, "owner rotates pending active row");
+        assert_ne!(owner.status, 404, "{}", owner.body);
+    });
+}

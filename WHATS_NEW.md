@@ -3,6 +3,16 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.146 — Hosted mail cutover tools, and the extra-window crash
+
+Hosted mail is ready to hold mailboxes **before** you point DNS at the box. Mail-manage agents can mint on a pending receive-only domain, import cPanel Maildirs (including Sent/Archive folders, not only Inbox), raise per-inbox quota, and rotate the **one** IMAP+SMTP password (`k2 hostmail password rotate`, and Settings → Email Hosting → Rotate next to Retire). Import waits up to two hours so large inboxes do not look failed at 30 seconds. Doctor `<domain>` no longer returns a fake empty success. Cert status stops lying about self-signed certificates. `k2 hostmail cert renew` retries ACME without a second `enable`. Extra LLM-tab / named-chat typecheck leftovers from 145 ship here if your 145 build missed them.
+
+Typing in Message-the-agent on a second window should no longer abort the Mac app (nil WebKit URL on IPC). Same crash as viewing several windows.
+
+CLI honesty: `k2 workspace open/create` no longer crash on empty extra args; `k2 terminal spawn` does not print success on an error; `k2 workspace triage` rejects extra args and the help says it is this workspace’s inbox list.
+
+Not in this build: hide compose unless an LLM pane, listen on IMAP 993 (use 443 ALPN), mail aliases, skin self-serve password reset, Omarchy pacman package (`release.sh` still does not build one).
+
 ## 0.40.145 — Login history, 5/5 password delay, tabs that resume
 
 Password guessing is capped at **five tries per IP per five minutes** — a delay, not an account lock (there is still no forgot-password on Connect). The Worker already does this on `https://<name>.app.k2.dev`. This build puts the same cap on the **daemon** login POST (dashboard, LAN, a raw IP) and on **skin** guest login. Sitting at the machine (loopback) is not capped. Unsigned tunnel login is still 404 from 0.40.144.

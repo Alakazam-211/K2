@@ -418,6 +418,10 @@ default-features = false
 [target.'cfg(target_vendor = "apple")'.dependencies.url]
 version = "2.5"
 
+[lints.rust]
+unused_unsafe = "allow"
+deprecated = "allow"
+
 [lints.rust.unexpected_cfgs]
 level = "warn"
 priority = 0

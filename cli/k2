@@ -13160,10 +13160,10 @@ cmd_schema() {
     {
       "name": "hostmail create",
       "usage": "k2 hostmail create <localpart>[@<domain>] [--domain <d>] [--id <client-id>] [--json]",
-      "description": "Mint a HOSTED email address on a verified domain (default: the workspace default). Capped per workspace; the cap counts ACTIVE addresses (delete frees a slot). --id is an idempotency key: retrying with the same --id returns the existing address instead of erroring. Plus-addressing (bot+tag@domain) gives unlimited tags without minting. Exit codes (whole mail family): 0 ok, 1 error, 2 bad usage or wait timeout, 3 gated/owner-only.",
+      "description": "Mint a HOSTED email address on a hosted domain (verified, or pending receive-only before NS cut; send/direct stay locked until DNS verifies). Default: the workspace default. Capped per workspace; the cap counts ACTIVE addresses (delete frees a slot). --id is an idempotency key: retrying with the same --id returns the existing address instead of erroring. Plus-addressing (bot+tag@domain) gives unlimited tags without minting. Exit codes (whole mail family): 0 ok, 1 error, 2 bad usage or wait timeout, 3 gated/owner-only.",
       "args": [{"name": "localpart", "required": true}],
       "flags": [
-        {"name": "--domain", "arg": "d", "description": "Mint on a specific verified domain."},
+        {"name": "--domain", "arg": "d", "description": "Mint on a specific hosted domain (verified, or pending receive-only)."},
         {"name": "--id", "arg": "client-id", "description": "Idempotency key — same --id returns the existing address (retry-safe)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -22978,6 +22978,8 @@ if verb == "create":
     else:
         word = "existing" if d.get("existing") else "created"
         print("%s %s   (%s)" % (word, d.get("address", "?"), cap_str(d.get("cap"))))
+        if d.get("note"):
+            print("note: %s" % d["note"])
         if d.get("existing"):
             print("(idempotent --id match — this address was already minted with this id)")
         else:
@@ -25188,9 +25190,11 @@ EOF
 
 cmd_help_mail_create() {
     cat <<'EOF'
-Mint an email address on a verified domain. Without a domain, the workspace
-default is used (see `k2 mail domains`); or spell it inline
-(research-bot@acme.dev) or via --domain.
+Mint an email address on a hosted domain (verified, or pending
+receive-only before NS cut — send/direct stay locked until DNS
+verifies). Without a domain, the workspace default is used (see
+`k2 mail domains`); or spell it inline (research-bot@acme.dev) or via
+--domain.
 
 Prints a once password plus IMAP/submission/JMAP host and port so the
 inbox can be added to Mail.app. An existing --id match does not re-print
@@ -25205,7 +25209,8 @@ ARGUMENTS
                          separator. A collision suggests <name>2.
 
 FLAGS
-  --domain <d>           Mint on a specific verified domain
+  --domain <d>           Mint on a specific hosted domain (verified, or
+                         pending receive-only)
   --id <client-id>       Idempotency key — retrying with the same --id returns
                          the existing address instead of erroring. Use it
                          whenever a retry is possible (crash-safe minting).

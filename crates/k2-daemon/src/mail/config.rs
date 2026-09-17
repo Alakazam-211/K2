@@ -22,6 +22,8 @@
 //!   to `direct` requires a stored server-level doctor run whose grade
 //!   is not `fail`; the refusal lists the failing checks and the
 //!   provider coaching ([`super::doctor::direct_send_gate`]).
+//! - **Pending domains cannot leave receive-only** until DNS verifies
+//!   (no `direct` or `relay` before live records match).
 //! - **Relay routes are pushed to Stalwart** when a domain enters
 //!   `relay` mode (and re-pushed when its attached config changes),
 //!   and CLEARED when it leaves — through the single ⚠ LIVE-BOX
@@ -653,6 +655,12 @@ pub fn set_send_mode(
             "domain '{domain}' is not hosted here — add it first (k2 mail domain add)"
         )));
     };
+    if row.status == "pending" && mode != "receive-only" {
+        return Err(CfgError::NotReady(format!(
+            "domain '{domain}' is pending — sendMode cannot leave receive-only until \
+             DNS verifies (no direct or relay). Your human can check it in Settings → Email"
+        )));
+    }
 
     let mut new_relay_id: Option<String> = row.relay_config_id.clone();
     let mut spf_note: Option<String> = None;
@@ -1140,6 +1148,47 @@ pub(crate) mod tests {
 
         clear_doctor_runs();
         cleanup_domain("cfg-direct.example");
+    }
+
+    #[test]
+    fn pending_domain_cannot_leave_receive_only() {
+        let _g = crate::mail::mail_server_test_lock();
+        let secrets = MapSecrets::default();
+        cleanup_domain("cfg-pending.example");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_domains (id, domain, send_mode, status, created_at) \
+                 VALUES ('dom-cfg-pending.example', 'cfg-pending.example', 'receive-only', \
+                 'pending', 100)",
+                [],
+            )
+            .expect("seed pending domain");
+        }
+        seed_doctor_run("pass");
+        let err = set_send_mode(&secrets, None, "cfg-pending.example", "direct", None)
+            .expect_err("pending cannot go direct");
+        let CfgError::NotReady(hint) = &err else {
+            panic!("must be NotReady, got {err:?}")
+        };
+        assert!(hint.contains("pending"), "{hint}");
+        assert!(hint.contains("receive-only"), "{hint}");
+        assert!(hint.contains("Settings → Email"), "{hint}");
+
+        let err = set_send_mode(&secrets, None, "cfg-pending.example", "relay", None)
+            .expect_err("pending cannot go relay");
+        assert!(
+            matches!(&err, CfgError::NotReady(h) if h.contains("receive-only")),
+            "{err:?}"
+        );
+
+        let v = set_send_mode(&secrets, None, "cfg-pending.example", "receive-only", None)
+            .expect("stay receive-only");
+        assert_eq!(v["sendMode"], "receive-only");
+
+        clear_doctor_runs();
+        cleanup_domain("cfg-pending.example");
     }
 
     #[test]

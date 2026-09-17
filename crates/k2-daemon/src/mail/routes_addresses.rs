@@ -97,7 +97,8 @@ struct CreateBody {
     client_id: Option<String>,
 }
 
-/// POST `/cli/mail/address/create` — S3: mint on a Verified domain,
+/// POST `/cli/mail/address/create` — S3: mint on a hosted domain
+/// (verified, or pending receive-only before NS cut),
 /// subject to the effective cap; idempotent via optional `clientId`
 /// (same (owner, clientId) returns the existing ACTIVE address with
 /// `existing: true`). Stalwart account + vaulted password + K2 row,

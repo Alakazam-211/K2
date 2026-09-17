@@ -65,7 +65,7 @@
 //! deletes the row (freeing the address string for re-minting).
 //! Nothing in S3 purges.
 
-use k2_core::db::schema::MailAddress;
+use k2_core::db::schema::{MailAddress, MailDomain};
 use rusqlite::Connection;
 
 use super::domains;
@@ -102,7 +102,8 @@ pub enum AddrError {
     Exists(String),
     /// Over the active-address cap → 409 `cap_reached`, §11.1.5 text.
     CapReached(String),
-    /// No verified domain / domain still pending → 503 `not_ready`.
+    /// No mintable domain / pending with send unlocked → 503 `not_ready`.
+    /// Pending + receive-only is mintable (mailboxes before NS cut).
     NotReady(String),
     /// Stalwart said no / transport failed → 502 `engine`.
     Engine(String),
@@ -283,19 +284,45 @@ fn count_active(conn: &Connection, project_id: &str) -> u32 {
 
 // ── Domain selection (explicit or the S2 default resolution) ────────────
 
+/// Hosted pending + receive-only is mintable so mailboxes exist before
+/// NS is cut to this server. Pending + direct/relay stays locked
+/// (send still needs live DNS). Unknown domains are never forced.
+fn domain_is_mintable(row: &MailDomain) -> Result<(), AddrError> {
+    if row.status == "verified" {
+        return Ok(());
+    }
+    if row.status == "pending" && row.send_mode == "receive-only" {
+        return Ok(());
+    }
+    if row.status == "pending" {
+        return Err(AddrError::NotReady(format!(
+            "domain '{}' is pending with sendMode '{}' — mint is allowed only on \
+             receive-only until DNS verifies; send/direct stay locked. Your human \
+             can check it in Settings → Email",
+            row.domain, row.send_mode
+        )));
+    }
+    Err(AddrError::NotReady(format!(
+        "domain '{}' is not verified yet — records are still propagating or \
+         missing; your human can check it in Settings → Email",
+        row.domain
+    )))
+}
+
 /// Pure mint-domain picker (fixture-tested; the impure wrapper feeds
 /// it the real rows + the configured default):
-/// - explicit domain → must be hosted (else `not_found`) AND Verified
-///   (else `not_ready` — DNS still propagating is a retry-later state);
-/// - no domain → S2's default resolution (§11.1.2 via
-///   `domains::resolve_default_domain`: the configured
-///   `mail_default_domain` when currently Verified, else the first
-///   Verified domain); no Verified domain at all → `not_ready`.
+/// - explicit domain → must be hosted (else `not_found`). Verified
+///   mints as today (any send_mode). Pending + receive-only is
+///   allowed; pending + direct/relay is `not_ready`. No `--force`.
+/// - no domain → verified default first (`mail_default_domain` when
+///   currently Verified, else first Verified); if none, fall through
+///   to the configured default or first hosted pending receive-only
+///   domain. Hard stop only when nothing mintable exists.
 pub fn pick_mint_domain(
     explicit: Option<&str>,
     configured_default: &str,
-    all: &[k2_core::db::schema::MailDomain],
-) -> Result<k2_core::db::schema::MailDomain, AddrError> {
+    all: &[MailDomain],
+) -> Result<MailDomain, AddrError> {
     if let Some(raw) = explicit {
         let domain =
             k2_core::mail_domain::normalize_mail_domain(raw).map_err(AddrError::Usage)?;
@@ -305,12 +332,7 @@ pub fn pick_mint_domain(
                  can mint on"
             )));
         };
-        if row.status != "verified" {
-            return Err(AddrError::NotReady(format!(
-                "domain '{domain}' is not verified yet — records are still propagating or \
-                 missing; your human can check it in Settings → Email"
-            )));
-        }
+        domain_is_mintable(row)?;
         return Ok(row.clone());
     }
     let verified: Vec<String> = all
@@ -318,9 +340,19 @@ pub fn pick_mint_domain(
         .filter(|d| d.status == "verified")
         .map(|d| d.domain.clone())
         .collect();
-    let Some(default) = domains::resolve_default_domain(configured_default, &verified) else {
+    let pending_ro: Vec<String> = all
+        .iter()
+        .filter(|d| d.status == "pending" && d.send_mode == "receive-only")
+        .map(|d| d.domain.clone())
+        .collect();
+    let default = domains::resolve_default_domain(configured_default, &verified)
+        .or_else(|| domains::resolve_default_domain(configured_default, &pending_ro));
+    let Some(default) = default else {
         return Err(AddrError::NotReady(
-            "no verified domain yet — ask your human to add one in Settings → Email".to_string(),
+            "no hosted domain ready to mint on — a pending receive-only domain is \
+             enough before NS cut; send stays locked until verified. Ask your human \
+             in Settings → Email"
+                .to_string(),
         ));
     };
     all.iter()
@@ -377,15 +409,16 @@ fn mint_json(
     cap: u32,
     hostname: &str,
     password: Option<&str>,
+    domain: &MailDomain,
 ) -> serde_json::Value {
-    let (local, domain) = row.address.split_once('@').unwrap_or((row.address.as_str(), ""));
+    let (local, domain_name) = row.address.split_once('@').unwrap_or((row.address.as_str(), ""));
     let host = hostname;
     let mut v = serde_json::json!({
         "ok": true,
         "id": row.id,
         "address": row.address,
         "localPart": local,
-        "domain": domain,
+        "domain": domain_name,
         "existing": existing,
         "createdAt": row.created_at,
         "cap": { "used": used, "cap": cap },
@@ -396,6 +429,15 @@ fn mint_json(
     });
     if let Some(pw) = password {
         v["password"] = serde_json::Value::String(pw.to_string());
+    }
+    if domain.status == "pending" {
+        v["pending"] = serde_json::Value::Bool(true);
+        v["sendMode"] = serde_json::Value::String(domain.send_mode.clone());
+        v["note"] = serde_json::Value::String(
+            "domain is pending and receive-only — mailbox exists before NS cut; \
+             send stays locked until DNS verifies"
+                .to_string(),
+        );
     }
     v
 }
@@ -463,7 +505,15 @@ pub fn mint_address(
             if let Some(existing) = load_by_client_id(&conn, project_id, cid) {
                 if existing.status == "active" {
                     let used = count_active(&conn, project_id);
-                    return Ok(mint_json(&existing, true, used, cap, &hostname, None));
+                    return Ok(mint_json(
+                        &existing,
+                        true,
+                        used,
+                        cap,
+                        &hostname,
+                        None,
+                        &domain_row,
+                    ));
                 }
                 conn.execute(
                     "UPDATE mail_addresses SET client_id = NULL WHERE id = ?1",
@@ -558,7 +608,15 @@ pub fn mint_address(
         created_at,
         retired_at: None,
     };
-    Ok(mint_json(&row, false, used + 1, cap, &hostname, Some(&password)))
+    Ok(mint_json(
+        &row,
+        false,
+        used + 1,
+        cap,
+        &hostname,
+        Some(&password),
+        &domain_row,
+    ))
 }
 
 /// Retire an address (§7.2): Stalwart account DISABLED (never
@@ -925,12 +983,16 @@ pub(crate) mod tests {
 
     // ── Domain picking (pure) ──
 
-    fn domain_fixture(domain: &str, status: &str) -> k2_core::db::schema::MailDomain {
-        k2_core::db::schema::MailDomain {
+    fn domain_fixture(domain: &str, status: &str) -> MailDomain {
+        domain_with_mode(domain, status, "receive-only")
+    }
+
+    fn domain_with_mode(domain: &str, status: &str, send_mode: &str) -> MailDomain {
+        MailDomain {
             id: format!("d-{domain}"),
             domain: domain.to_string(),
             stalwart_domain_id: Some(format!("stw-{domain}")),
-            send_mode: "receive-only".to_string(),
+            send_mode: send_mode.to_string(),
             relay_config_id: None,
             status: status.to_string(),
             dns_status_json: None,
@@ -950,9 +1012,16 @@ pub(crate) mod tests {
         // Explicit verified (un-normalized spelling still hits).
         let d = pick_mint_domain(Some("ACME.dev."), "", &all).expect("verified pick");
         assert_eq!(d.domain, "acme.dev");
-        // Explicit but pending → not_ready with the Settings pointer.
-        match pick_mint_domain(Some("pending.example"), "", &all) {
-            Err(AddrError::NotReady(hint)) => assert!(hint.contains("not verified"), "{hint}"),
+        // Explicit pending + receive-only → allowed (boxes before NS cut).
+        let d = pick_mint_domain(Some("pending.example"), "", &all).expect("pending receive-only");
+        assert_eq!(d.domain, "pending.example");
+        // Explicit pending + send_mode direct → still not_ready (send locked).
+        let pending_direct = vec![domain_with_mode("pending-send.example", "pending", "direct")];
+        match pick_mint_domain(Some("pending-send.example"), "", &pending_direct) {
+            Err(AddrError::NotReady(hint)) => {
+                assert!(hint.contains("Settings → Email"), "{hint}");
+                assert!(hint.contains("direct") || hint.contains("send"), "{hint}");
+            }
             other => panic!("must be NotReady, got {other:?}"),
         }
         // Explicit unknown → not_found naming `k2 mail domains`.
@@ -967,7 +1036,8 @@ pub(crate) mod tests {
         ));
         // Default: first verified when unconfigured; the configured
         // default wins when it is verified; a stale configured value
-        // falls back (S2's resolve_default_domain contract).
+        // falls back (S2's resolve_default_domain contract). Verified
+        // is preferred even when a pending receive-only domain exists.
         assert_eq!(pick_mint_domain(None, "", &all).expect("first").domain, "acme.dev");
         assert_eq!(
             pick_mint_domain(None, "beta.example", &all).expect("configured").domain,
@@ -977,11 +1047,35 @@ pub(crate) mod tests {
             pick_mint_domain(None, "gone.example", &all).expect("stale").domain,
             "acme.dev"
         );
-        // Nothing verified → not_ready.
+        assert_eq!(
+            pick_mint_domain(None, "pending.example", &all)
+                .expect("verified still preferred")
+                .domain,
+            "acme.dev"
+        );
+        // No verified, one pending receive-only hosted → that domain.
         let unverified = vec![domain_fixture("pending.example", "pending")];
-        match pick_mint_domain(None, "", &unverified) {
+        assert_eq!(
+            pick_mint_domain(None, "", &unverified)
+                .expect("pending receive-only default")
+                .domain,
+            "pending.example"
+        );
+        // Configured default among pending receive-only.
+        let two_pending = vec![
+            domain_fixture("alpha.example", "pending"),
+            domain_fixture("beta.example", "pending"),
+        ];
+        assert_eq!(
+            pick_mint_domain(None, "beta.example", &two_pending)
+                .expect("configured pending receive-only")
+                .domain,
+            "beta.example"
+        );
+        // No verified, only pending + direct → still not_ready.
+        match pick_mint_domain(None, "", &pending_direct) {
             Err(AddrError::NotReady(hint)) => {
-                assert!(hint.contains("no verified domain"), "{hint}")
+                assert!(hint.contains("Settings → Email"), "{hint}");
             }
             other => panic!("must be NotReady, got {other:?}"),
         }
@@ -1031,6 +1125,37 @@ pub(crate) mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].0, format!("account-{}", row.id));
         assert_eq!(stored[0].1.len(), 64, "32-byte random password, hex");
+        cleanup_domain(&domain);
+    }
+
+    #[test]
+    fn mint_on_pending_receive_only_creates_the_address() {
+        let domain = unique("pending-mint") + ".example";
+        cleanup_domain(&domain);
+        let domain_id = seed_domain(&domain, "pending", Some("stw-pending"));
+        let engine = FakeAddrEngine::ok();
+        let vault = FakeVault::default();
+        let project = unique("proj");
+
+        let v = mint_address(&engine, &vault, &project, 5, "precut", Some(&domain), None)
+            .expect("mint on pending receive-only");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["address"], format!("precut@{domain}"));
+        assert_eq!(v["existing"], false);
+        assert_eq!(v["pending"], true);
+        assert_eq!(v["sendMode"], "receive-only");
+        let note = v["note"].as_str().unwrap_or("");
+        assert!(note.contains("pending"), "{note}");
+        assert!(note.contains("receive-only"), "{note}");
+
+        assert_eq!(
+            engine.created.lock().unwrap().as_slice(),
+            [("precut".to_string(), "stw-pending".to_string())]
+        );
+        let row = address_row(&format!("precut@{domain}")).expect("row persisted");
+        assert_eq!(row.status, "active");
+        assert_eq!(row.domain_id, domain_id);
+        assert_eq!(row.owner_project_id, project);
         cleanup_domain(&domain);
     }
 

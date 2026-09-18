@@ -638,6 +638,22 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
         list_off_status, 403,
         "flag OFF UDS domain list; {list_off_body}"
     );
+    let (ca_off_status, ca_off_body) =
+        uds(&sock, &get("/cli/mail/catchall", Some(&token))).await;
+    assert_eq!(
+        ca_off_status, 403,
+        "flag OFF UDS catchall GET; {ca_off_body}"
+    );
+    assert!(
+        ca_off_body.contains("owner_only"),
+        "UDS catchall flag-off owner_only: {ca_off_body}"
+    );
+    let (al_off_status, al_off_body) =
+        uds(&sock, &post_json("/cli/mail/alias", &token, "{}")).await;
+    assert_eq!(
+        al_off_status, 403,
+        "flag OFF UDS alias POST; {al_off_body}"
+    );
     assert!(
         list_off_body.contains("owner_only"),
         "UDS list flag-off owner_only: {list_off_body}"
@@ -716,6 +732,24 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
         !qs_body.contains("owner_only"),
         "C5b UDS quota POST: {qs_body}"
     );
+
+    let (ca_status, ca_body) = uds(&sock, &get("/cli/mail/catchall", Some(&token))).await;
+    assert_ne!(ca_status, 403, "UDS flag ON catchall GET; {ca_body}");
+    assert!(
+        !ca_body.contains("owner_only"),
+        "C5b UDS catchall GET: {ca_body}"
+    );
+    let (al_status, al_body) = uds(&sock, &post_json("/cli/mail/alias", &token, "{}")).await;
+    assert_ne!(al_status, 403, "UDS flag ON alias POST; {al_body}");
+    let (fw_status, fw_body) =
+        uds(&sock, &post_json("/cli/mail/forward", &token, "{}")).await;
+    assert_ne!(fw_status, 403, "UDS flag ON forward POST; {fw_body}");
+    let (rm_status, rm_body) =
+        uds(&sock, &get("/cli/mail/alias/remove", Some(&token))).await;
+    assert_eq!(rm_status, 405, "UDS GET alias/remove 405; {rm_body}");
+    let (fu_status, fu_body) =
+        uds(&sock, &get("/cli/mail/forward/unset", Some(&token))).await;
+    assert_eq!(fu_status, 405, "UDS GET forward/unset 405; {fu_body}");
 
     let (cr_status, cr_body) = uds(&sock, &get("/cli/mail/cert/renew", Some(&token))).await;
     assert_eq!(cr_status, 405, "UDS GET cert/renew 405; {cr_body}");

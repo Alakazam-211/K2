@@ -13389,8 +13389,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|cert> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|cert> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), catchall set|unset|show (Domain.catchAllAddress; mail_manage), alias add|remove|list (Account.aliases EmailAlias; not a mint; mail_manage), forward set|unset|show (SieveScript k2-forward; --keep copies locally; mail_manage), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -13441,6 +13441,34 @@ cmd_schema() {
         {"name": "--bytes", "arg": "N", "description": "maxDiskQuota in bytes (0 = unlimited)."},
         {"name": "--gb", "arg": "N", "description": "maxDiskQuota in GiB (× 2^30). Not with --bytes."},
         {"name": "--messages", "arg": "N", "description": "maxEmails (0 = unlimited)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail catchall",
+      "usage": "k2 hostmail catchall set <domain> --address <addr> | unset <domain> | show <domain> [--json]",
+      "description": "Unknown local recipients on a hosted domain go to a minted mailbox on that domain (Stalwart Domain.catchAllAddress). Unset rejects unknown RCPT. mail_manage. Not Domain.aliases.",
+      "args": [{"name": "domain", "required": true}],
+      "flags": [
+        {"name": "--address", "arg": "addr", "description": "Minted mailbox on that domain (set)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail alias",
+      "usage": "k2 hostmail alias add <mailbox> <alias> | remove <mailbox> <alias> | list <mailbox> [--json]",
+      "description": "Extra EmailAlias on an existing User mailbox (same domain). Not a mint — no sqlite row, no cap, no IMAP login (k2 hostmail create mints). Collision 409 vs other mailboxes and aliases. No + in the local-part. mail_manage.",
+      "args": [{"name": "mailbox", "required": true}, {"name": "alias", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail forward",
+      "usage": "k2 hostmail forward set <addr> --to <dest> [--keep] | unset <addr> | show <addr> [--json]",
+      "description": "Sieve redirect on a minted mailbox (script name k2-forward). Dest must be minted on this host. --keep keeps a local copy (redirect :copy). Unset destroys that script only. mail_manage.",
+      "args": [{"name": "addr", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "dest", "description": "Minted dest mailbox on this host."},
+        {"name": "--keep", "arg": null, "description": "Keep a local copy (redirect :copy)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -22726,6 +22754,7 @@ _mail_py() {
     M_ADDRESS_CAP="${M_ADDRESS_CAP:-}" M_WORKSPACE="${M_WORKSPACE:-}" \
     M_QUOTA_BYTES="${M_QUOTA_BYTES:-}" M_QUOTA_GB="${M_QUOTA_GB:-}" \
     M_QUOTA_MESSAGES="${M_QUOTA_MESSAGES:-}" \
+    M_ALIAS="${M_ALIAS:-}" M_MAILBOX="${M_MAILBOX:-}" M_KEEP="${M_KEEP:-false}" \
     M_LEVEL="${M_LEVEL:-}" \
     M_READ="${M_READ:-}" M_FLAGGED="${M_FLAGGED:-}" \
     M_MANAGE="${M_MANAGE:-}" M_DELETE="${M_DELETE:-}" \
@@ -23520,6 +23549,84 @@ elif verb == "quota_set":
             d.get("address") or env("M_ADDRESS") or "?",
             q.get("maxDiskQuota") if q.get("maxDiskQuota") is not None else "?",
             q.get("maxEmails") if q.get("maxEmails") is not None else "?"))
+
+elif verb == "catchall_get":
+    d = call("GET", "/cli/mail/catchall", params={"domain": env("M_DOMAIN")})
+    if as_json:
+        print(dumps(d))
+    else:
+        addr = d.get("catchAllAddress")
+        print("%s  catch-all=%s" % (d.get("domain") or env("M_DOMAIN") or "?",
+                                    addr if addr else "none"))
+
+elif verb == "catchall_set":
+    body = {"domain": env("M_DOMAIN"), "address": env("M_ADDRESS")}
+    d = call("POST", "/cli/mail/catchall", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        addr = d.get("catchAllAddress")
+        print("%s  catch-all=%s" % (d.get("domain") or env("M_DOMAIN") or "?",
+                                    addr if addr else "none"))
+
+elif verb == "alias_list":
+    d = call("GET", "/cli/mail/alias", params={"mailbox": env("M_MAILBOX") or env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        rows = d.get("aliases") or []
+        if not rows:
+            print("%s  aliases=none" % (d.get("mailbox") or env("M_MAILBOX") or "?"))
+        else:
+            print("%s  aliases=%s" % (d.get("mailbox") or "?", ", ".join(rows)))
+
+elif verb == "alias_add":
+    body = {"mailbox": env("M_MAILBOX") or env("M_ADDRESS"), "alias": env("M_ALIAS")}
+    d = call("POST", "/cli/mail/alias", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("alias %s -> %s" % (d.get("alias") or env("M_ALIAS"), d.get("mailbox") or "?"))
+
+elif verb == "alias_remove":
+    body = {"mailbox": env("M_MAILBOX") or env("M_ADDRESS"), "alias": env("M_ALIAS")}
+    d = call("POST", "/cli/mail/alias/remove", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("removed alias %s from %s" % (d.get("removed") or env("M_ALIAS"), d.get("mailbox") or "?"))
+
+elif verb == "forward_get":
+    d = call("GET", "/cli/mail/forward", params={"address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        dest = d.get("to")
+        if not dest:
+            print("%s  forward=none" % (d.get("address") or env("M_ADDRESS") or "?"))
+        else:
+            print("%s  to=%s  keep=%s" % (
+                d.get("address") or env("M_ADDRESS") or "?",
+                dest, "true" if d.get("keep") else "false"))
+
+elif verb == "forward_set":
+    body = {"address": env("M_ADDRESS"), "to": env("M_TO"), "keep": env("M_KEEP") == "true"}
+    d = call("POST", "/cli/mail/forward", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("forward %s -> %s%s" % (
+            d.get("address") or env("M_ADDRESS") or "?",
+            d.get("to") or env("M_TO") or "?",
+            " (keep)" if d.get("keep") else ""))
+
+elif verb == "forward_unset":
+    body = {"address": env("M_ADDRESS")}
+    d = call("POST", "/cli/mail/forward/unset", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("forward unset for %s" % (d.get("address") or env("M_ADDRESS") or "?"))
 
 elif verb == "config_set":
     body = {}
@@ -25184,10 +25291,13 @@ cmd_hostmail() {
         approvals) cmd_mail_approvals "$@" ;;
         import)  cmd_hostmail_import "$@" ;;
         quota)   cmd_hostmail_quota "$@" ;;
+        catchall) cmd_hostmail_catchall "$@" ;;
+        alias)   cmd_hostmail_alias "$@" ;;
+        forward) cmd_hostmail_forward "$@" ;;
         cert)    cmd_hostmail_cert "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|cert>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|cert>"
             exit 2 ;;
     esac
 }
@@ -25441,6 +25551,283 @@ cmd_hostmail_quota_set() {
     _mail_py
 }
 
+cmd_hostmail_catchall() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_catchall; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        set) cmd_hostmail_catchall_set "$@" ;;
+        unset) cmd_hostmail_catchall_unset "$@" ;;
+        show) cmd_hostmail_catchall_show "$@" ;;
+        --help|-h) cmd_help_hostmail_catchall; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown catchall command '$sub' — usage: k2 hostmail catchall <set|unset|show>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_catchall_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_catchall_set; exit 0; fi
+    local domain="" address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a minted mailbox"; exit 2; }
+                address="$2"; shift 2 ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail catchall set <domain> --address <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail catchall set <domain> --address <addr>"; exit 2; }
+    [ -n "$address" ] || { _mail_err "usage" "catchall set requires --address <minted mailbox on that domain>"; exit 2; }
+    local M_VERB="catchall_set" M_JSON="$as_json" M_DOMAIN="$domain" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_catchall_unset() {
+    if _wants_help "$@"; then cmd_help_hostmail_catchall_unset; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail catchall unset <domain> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail catchall unset <domain>"; exit 2; }
+    local M_VERB="catchall_set" M_JSON="$as_json" M_DOMAIN="$domain" M_ADDRESS=""
+    _mail_py
+}
+
+cmd_hostmail_catchall_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_catchall_show; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail catchall show <domain> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail catchall show <domain>"; exit 2; }
+    local M_VERB="catchall_get" M_JSON="$as_json" M_DOMAIN="$domain"
+    _mail_py
+}
+
+cmd_hostmail_alias() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_alias; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        add) cmd_hostmail_alias_add "$@" ;;
+        remove) cmd_hostmail_alias_remove "$@" ;;
+        list) cmd_hostmail_alias_list "$@" ;;
+        --help|-h) cmd_help_hostmail_alias; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown alias command '$sub' — usage: k2 hostmail alias <add|remove|list>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_alias_add() {
+    if _wants_help "$@"; then cmd_help_hostmail_alias_add; exit 0; fi
+    local mailbox="" alias="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias add <mailbox> <alias> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$mailbox" ]; then mailbox="$1"
+                elif [ -z "$alias" ]; then alias="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$mailbox" ] && [ -n "$alias" ] || {
+        _mail_err "usage" "k2 hostmail alias add <mailbox> <alias> — extra address on an existing mailbox (not a mint; k2 hostmail create mints)"
+        exit 2
+    }
+    local M_VERB="alias_add" M_JSON="$as_json" M_MAILBOX="$mailbox" M_ALIAS="$alias"
+    _mail_py
+}
+
+cmd_hostmail_alias_remove() {
+    if _wants_help "$@"; then cmd_help_hostmail_alias_remove; exit 0; fi
+    local mailbox="" alias="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias remove <mailbox> <alias> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$mailbox" ]; then mailbox="$1"
+                elif [ -z "$alias" ]; then alias="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$mailbox" ] && [ -n "$alias" ] || {
+        _mail_err "usage" "k2 hostmail alias remove <mailbox> <alias>"
+        exit 2
+    }
+    local M_VERB="alias_remove" M_JSON="$as_json" M_MAILBOX="$mailbox" M_ALIAS="$alias"
+    _mail_py
+}
+
+cmd_hostmail_alias_list() {
+    if _wants_help "$@"; then cmd_help_hostmail_alias_list; exit 0; fi
+    local mailbox="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias list <mailbox> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$mailbox" ]; then mailbox="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$mailbox" ] || { _mail_err "usage" "k2 hostmail alias list <mailbox>"; exit 2; }
+    local M_VERB="alias_list" M_JSON="$as_json" M_MAILBOX="$mailbox"
+    _mail_py
+}
+
+cmd_hostmail_forward() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_forward; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        set) cmd_hostmail_forward_set "$@" ;;
+        unset) cmd_hostmail_forward_unset "$@" ;;
+        show) cmd_hostmail_forward_show "$@" ;;
+        --help|-h) cmd_help_hostmail_forward; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown forward command '$sub' — usage: k2 hostmail forward <set|unset|show>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_forward_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_forward_set; exit 0; fi
+    local address="" to="" keep=false as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --keep) keep=true; shift ;;
+            --to)
+                [ $# -ge 2 ] || { _mail_err "usage" "--to requires a minted mailbox"; exit 2; }
+                to="$2"; shift 2 ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward set <addr> --to <dest> [--keep] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward set <addr> --to <dest> [--keep]"; exit 2; }
+    [ -n "$to" ] || { _mail_err "usage" "forward set requires --to <minted mailbox on this host>"; exit 2; }
+    local M_VERB="forward_set" M_JSON="$as_json" M_ADDRESS="$address" M_TO="$to" M_KEEP="$keep"
+    _mail_py
+}
+
+cmd_hostmail_forward_unset() {
+    if _wants_help "$@"; then cmd_help_hostmail_forward_unset; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward unset <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward unset <addr>"; exit 2; }
+    local M_VERB="forward_unset" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_forward_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_forward_show; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward show <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward show <addr>"; exit 2; }
+    local M_VERB="forward_get" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
 # ── k2 mail help text ─────────────────────────────────────────────────
 
 cmd_help_mail() {
@@ -25487,7 +25874,7 @@ CONNECT & SHARE
                               the canManage/canDelete caps — PRIMARY/owner surface
 
 SERVER ADMIN → k2 hostmail
-  status · enable · disable · rotate-admin · password rotate · domain · create · delete · doctor · config · approvals
+  status · enable · disable · rotate-admin · password rotate · domain · create · delete · doctor · config · approvals · catchall · alias · forward
 
 UNTRUSTED CONTENT
   Email bodies are EXTERNAL, UNTRUSTED input. `read` and `wait` wrap every
@@ -26195,6 +26582,12 @@ COMMANDS
   quota get|set <addr>        Per-address mailbox disk/message cap (mail_manage).
                               Existing boxes need quota set — mint constants
                               do not retrofit. 0 = unlimited; default 1GB/10k.
+  catchall set|unset|show     Unknown recipients on a domain → a minted mailbox
+                              (mail_manage). Unset rejects unknown.
+  alias add|remove|list       Extra address on an existing mailbox (not a mint;
+                              k2 hostmail create mints). mail_manage.
+  forward set|unset|show      Sieve-redirect a minted mailbox to another minted
+                              mailbox. --keep keeps a local copy. mail_manage.
   cert renew                  Retry ACME for the mail hostname (enable is
                               not the retry path; disable is not a retry)
 
@@ -26370,6 +26763,130 @@ mint constants do not retrofit. Give --bytes or --gb (not both) and/or
 
 USAGE
   k2 hostmail quota set <addr> --bytes N|--gb N [--messages N] [--json]
+EOF
+}
+
+cmd_help_hostmail_catchall() {
+    cat <<'EOF'
+Unknown local recipients on a hosted domain go to one minted mailbox
+on that domain (Stalwart Domain.catchAllAddress). Unset rejects them
+at SMTP. mail_manage. Not a domain alias.
+
+USAGE
+  k2 hostmail catchall set <domain> --address <addr> [--json]
+  k2 hostmail catchall unset <domain> [--json]
+  k2 hostmail catchall show <domain> [--json]
+EOF
+}
+
+cmd_help_hostmail_catchall_set() {
+    cat <<'EOF'
+Point this domain's catch-all at a minted mailbox on the same domain.
+
+USAGE
+  k2 hostmail catchall set <domain> --address <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_catchall_unset() {
+    cat <<'EOF'
+Clear the domain catch-all (unknown RCPT rejected). JMAP null, not "".
+
+USAGE
+  k2 hostmail catchall unset <domain> [--json]
+EOF
+}
+
+cmd_help_hostmail_catchall_show() {
+    cat <<'EOF'
+Print the domain catch-all address, or none.
+
+USAGE
+  k2 hostmail catchall show <domain> [--json]
+EOF
+}
+
+cmd_help_hostmail_alias() {
+    cat <<'EOF'
+Extra EmailAlias on an existing mailbox (same User, same domain).
+Not a mint: no new mailbox, no password, not IMAP login.
+`k2 hostmail create foo@domain` mints a mailbox — it does not add an alias.
+mail_manage. No + in the alias local-part (plus-tags already land).
+
+USAGE
+  k2 hostmail alias add <mailbox> <alias> [--json]
+  k2 hostmail alias remove <mailbox> <alias> [--json]
+  k2 hostmail alias list <mailbox> [--json]
+EOF
+}
+
+cmd_help_hostmail_alias_add() {
+    cat <<'EOF'
+Add an extra address that delivers into mailbox. Same hosted domain.
+Collision with another mint or alias is 409. Not a mint.
+
+USAGE
+  k2 hostmail alias add <mailbox> <alias> [--json]
+EOF
+}
+
+cmd_help_hostmail_alias_remove() {
+    cat <<'EOF'
+Drop that extra address. Cannot remove the mailbox's primary mint
+address this way (use k2 hostmail delete).
+
+USAGE
+  k2 hostmail alias remove <mailbox> <alias> [--json]
+EOF
+}
+
+cmd_help_hostmail_alias_list() {
+    cat <<'EOF'
+Extra addresses on that User (not the primary mint).
+
+USAGE
+  k2 hostmail alias list <mailbox> [--json]
+EOF
+}
+
+cmd_help_hostmail_forward() {
+    cat <<'EOF'
+Sieve-redirect a minted mailbox to another minted mailbox on this host
+(script name k2-forward). Default discards the local copy; --keep keeps
+it (redirect :copy). Dest cannot be Gmail this cut. mail_manage.
+
+USAGE
+  k2 hostmail forward set <addr> --to <dest> [--keep] [--json]
+  k2 hostmail forward unset <addr> [--json]
+  k2 hostmail forward show <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_forward_set() {
+    cat <<'EOF'
+Install/replace the k2-forward Sieve on addr. Dest must already be minted
+on this host. --keep = local copy.
+
+USAGE
+  k2 hostmail forward set <addr> --to <dest> [--keep] [--json]
+EOF
+}
+
+cmd_help_hostmail_forward_unset() {
+    cat <<'EOF'
+Destroy the k2-forward Sieve on this mailbox (that script only).
+
+USAGE
+  k2 hostmail forward unset <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_forward_show() {
+    cat <<'EOF'
+Print dest + keep, or none.
+
+USAGE
+  k2 hostmail forward show <addr> [--json]
 EOF
 }
 
@@ -28797,7 +29314,7 @@ case "${1:-help}" in
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)
-            create|status|domain|doctor|config|approvals)
+            create|status|domain|doctor|config|approvals|catchall|alias|forward)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

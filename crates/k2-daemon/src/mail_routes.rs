@@ -61,6 +61,14 @@
 //! | GET  /cli/mail/folder/list        | mail/routes_messages.rs |
 //! | GET  /cli/mail/quota              | mail/quota.rs          |
 //! | POST /cli/mail/quota              | mail/quota.rs          |
+//! | GET  /cli/mail/catchall           | mail/catchall.rs       |
+//! | POST /cli/mail/catchall           | mail/catchall.rs       |
+//! | GET  /cli/mail/alias              | mail/alias.rs          |
+//! | POST /cli/mail/alias              | mail/alias.rs          |
+//! | POST /cli/mail/alias/remove       | mail/alias.rs          |
+//! | GET  /cli/mail/forward            | mail/forward.rs        |
+//! | POST /cli/mail/forward            | mail/forward.rs        |
+//! | POST /cli/mail/forward/unset      | mail/forward.rs        |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -154,6 +162,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // provider — NEVER the secret value.
         "/cli/mail/oauth-config" => routes_oauth_config::handle_oauth_config_get(params),
         "/cli/mail/quota" => crate::mail::quota::handle_quota_get(params),
+        "/cli/mail/catchall" => crate::mail::catchall::handle_catchall_get(params),
+        "/cli/mail/alias" => crate::mail::alias::handle_alias_list(params),
+        "/cli/mail/forward" => crate::mail::forward::handle_forward_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -198,7 +209,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/folder/rename"
         | "/cli/mail/draft"
         | "/cli/mail/import"
-        | "/cli/mail/cert/renew" => CliResponse::method_not_allowed(),
+        | "/cli/mail/cert/renew"
+        | "/cli/mail/alias/remove"
+        | "/cli/mail/forward/unset" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -267,6 +280,11 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/draft" => routes_external::handle_draft(body),
         "/cli/mail/import" => crate::mail::import::handle_import(body),
         "/cli/mail/quota" => crate::mail::quota::handle_quota_set(body),
+        "/cli/mail/catchall" => crate::mail::catchall::handle_catchall_post(body),
+        "/cli/mail/alias" => crate::mail::alias::handle_alias_add(body),
+        "/cli/mail/alias/remove" => crate::mail::alias::handle_alias_remove(body),
+        "/cli/mail/forward" => crate::mail::forward::handle_forward_set(body),
+        "/cli/mail/forward/unset" => crate::mail::forward::handle_forward_unset(body),
         "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
         _ => CliResponse::not_found(),
     }
@@ -389,6 +407,11 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/config/set"
             | "/cli/mail/import"
             | "/cli/mail/quota"
+            | "/cli/mail/catchall"
+            | "/cli/mail/alias"
+            | "/cli/mail/alias/remove"
+            | "/cli/mail/forward"
+            | "/cli/mail/forward/unset"
             | "/cli/mail/cert/renew"
             | "/cli/mail/server/rotate-admin"
             | "/cli/mail/address/password"
@@ -657,6 +680,11 @@ mod tests {
             "/cli/mail/config/set",
             "/cli/mail/import",
             "/cli/mail/quota",
+            "/cli/mail/catchall",
+            "/cli/mail/alias",
+            "/cli/mail/alias/remove",
+            "/cli/mail/forward",
+            "/cli/mail/forward/unset",
             "/cli/mail/cert/renew",
             "/cli/mail/server/rotate-admin",
             "/cli/mail/address/password",
@@ -734,6 +762,13 @@ mod tests {
             "password rotate is mail_manage, not leftover M6"
         );
         assert!(!is_mail_manage_surface("/cli/mail/address/create"));
+        let caf = mail_manage_authorized("/cli/mail/catchall", false, Some(&p));
+        assert!(caf.is_err(), "M5 off catchall is owner_only");
+        assert!(
+            mail_manage_authorized("/cli/mail/alias", true, None).is_ok(),
+            "owner/admin alias"
+        );
+        assert!(!is_owner_level_mutation("/cli/mail/forward"));
     }
 
     /// GET on every POST-only mutation answers an explicit 405 through
@@ -778,6 +813,8 @@ mod tests {
             "/cli/mail/import",
             "/cli/mail/cert/renew",
             "/cli/mail/server/rotate-admin",
+            "/cli/mail/alias/remove",
+            "/cli/mail/forward/unset",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
@@ -796,6 +833,48 @@ mod tests {
             "quota POST must be wired"
         );
         assert_eq!(quota_post.status, "400 Bad Request", "{}", quota_post.body);
+        let catchall_get = dispatch("/cli/mail/catchall", &params).expect("catchall GET claimed");
+        assert_ne!(
+            catchall_get.status, "405 Method Not Allowed",
+            "GET /cli/mail/catchall is show, not POST-only: {}",
+            catchall_get.body
+        );
+        assert_eq!(
+            catchall_get.status, "400 Bad Request",
+            "{}",
+            catchall_get.body
+        );
+        let alias_get = dispatch("/cli/mail/alias", &params).expect("alias GET claimed");
+        assert_ne!(
+            alias_get.status, "405 Method Not Allowed",
+            "GET /cli/mail/alias is list: {}",
+            alias_get.body
+        );
+        let forward_get = dispatch("/cli/mail/forward", &params).expect("forward GET claimed");
+        assert_ne!(
+            forward_get.status, "405 Method Not Allowed",
+            "GET /cli/mail/forward is show: {}",
+            forward_get.body
+        );
+        for post_path in [
+            "/cli/mail/catchall",
+            "/cli/mail/alias",
+            "/cli/mail/alias/remove",
+            "/cli/mail/forward",
+            "/cli/mail/forward/unset",
+        ] {
+            let r = dispatch_post(post_path, b"{}");
+            assert_ne!(r.status, "404 Not Found", "{post_path} POST must be wired");
+            assert_ne!(
+                r.status, "405 Method Not Allowed",
+                "{post_path} POST is allowed"
+            );
+        }
+        assert!(!is_owner_level_mutation("/cli/mail/catchall"));
+        assert!(!is_owner_level_mutation("/cli/mail/alias"));
+        assert!(!is_owner_level_mutation("/cli/mail/forward"));
+        assert!(!is_owner_level_mutation("/cli/mail/alias/remove"));
+        assert!(!is_owner_level_mutation("/cli/mail/forward/unset"));
         assert_eq!(
             dispatch_post("/cli/mail/unknown", b"{}").status,
             "404 Not Found"

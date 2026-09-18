@@ -712,6 +712,42 @@ impl StalwartClient {
         parse_domain_get_zonefile(stalwart_domain_id, &resp)
     }
 
+    /// Read `Domain.catchAllAddress` (full addr or none). Properties
+    /// list is catch-all only — do not send `aliases`.
+    pub fn domain_get_catchall(
+        &self,
+        stalwart_domain_id: &str,
+    ) -> Result<Option<String>, String> {
+        let resp = self.registry_call(
+            "x:Domain/get",
+            serde_json::json!({
+                "ids": [stalwart_domain_id],
+                "properties": ["catchAllAddress"],
+            }),
+        )?;
+        parse_domain_get_catchall(stalwart_domain_id, &resp)
+    }
+
+    /// Patch **only** `catchAllAddress` (full addr or JSON null).
+    /// Never writes `Domain.aliases`.
+    pub fn domain_set_catchall(
+        &self,
+        stalwart_domain_id: &str,
+        address: Option<&str>,
+    ) -> Result<(), String> {
+        let value = match address {
+            Some(a) => serde_json::Value::String(a.to_string()),
+            None => serde_json::Value::Null,
+        };
+        let resp = self.registry_call(
+            "x:Domain/set",
+            serde_json::json!({
+                "update": { stalwart_domain_id: { "catchAllAddress": value } }
+            }),
+        )?;
+        parse_set_updated("x:Domain/set", stalwart_domain_id, &resp)
+    }
+
     // ── S3 account calls ────────────────────────────────────────────
 
     /// S3 — create one mailbox account per minted address (PRD §7.1):
@@ -815,6 +851,57 @@ impl StalwartClient {
             }),
         )?;
         parse_account_get_quotas(stalwart_account_id, &resp)
+    }
+
+    /// `x:Account/query` with no name filter — every registry account id.
+    pub fn account_query_ids(&self) -> Result<Vec<String>, String> {
+        let resp = self.registry_call("x:Account/query", serde_json::json!({}))?;
+        Ok(parse_query_ids(&resp))
+    }
+
+    /// `x:Account/get` name + domainId + aliases (List<EmailAlias>).
+    pub fn account_get_user(&self, stalwart_account_id: &str) -> Result<AccountUser, String> {
+        let resp = self.registry_call(
+            "x:Account/get",
+            serde_json::json!({
+                "ids": [stalwart_account_id],
+                "properties": ["name", "domainId", "aliases"],
+            }),
+        )?;
+        parse_account_get_user(stalwart_account_id, &resp)
+    }
+
+    /// All User accounts with aliases (collision scan).
+    pub fn account_list_users(&self) -> Result<Vec<AccountUser>, String> {
+        let ids = self.account_query_ids()?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:Account/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": ["name", "domainId", "aliases"],
+            }),
+        )?;
+        parse_account_get_users(&resp)
+    }
+
+    /// Replace `Account.aliases` with an **index-keyed object**
+    /// (`"0"|"1"|…`). A JSON array is `invalidPatch` on 0.16.10.
+    pub fn account_set_aliases(
+        &self,
+        stalwart_account_id: &str,
+        aliases: &[EmailAlias],
+    ) -> Result<(), String> {
+        let patch = aliases_to_index_map(aliases);
+        let resp = self.registry_call(
+            "x:Account/set",
+            serde_json::json!({
+                "update": { stalwart_account_id: { "aliases": patch } }
+            }),
+        )?;
+        parse_set_updated("x:Account/set", stalwart_account_id, &resp)
     }
 
     /// S3 — destroy an account. COMPENSATING ACTION ONLY (mint
@@ -1097,6 +1184,21 @@ impl StalwartClient {
         parse_method_response(method, &resp)
     }
 
+    /// RFC 9661 Sieve on the mailbox `accountId` (delegated ApiKey).
+    /// `using` includes `urn:ietf:params:jmap:sieve` — live `mail_call`
+    /// is core+mail only and would `unknownMethod`.
+    fn sieve_call(
+        &self,
+        account_id: &str,
+        method: &str,
+        mut args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        args["accountId"] = serde_json::Value::String(account_id.to_string());
+        let api_url = self.discover_api_url()?;
+        let resp = self.post_json_url(&api_url, &sieve_envelope(method, args))?;
+        parse_method_response(method, &resp)
+    }
+
     /// S4 — the target account's Inbox mailbox id (`Mailbox/query`
     /// filtered on the RFC 8621 `role: "inbox"`). Every read/wait
     /// query scopes to it.
@@ -1311,6 +1413,86 @@ impl StalwartClient {
             .and_then(|x| x.as_str())
             .map(str::to_string)
             .ok_or_else(|| "POST blob: no blobId in reply".to_string())
+    }
+
+    /// RFC 9661 `SieveScript/query` for the K2 forward script name.
+    pub fn sieve_script_query_id(
+        &self,
+        account_id: &str,
+        name: &str,
+    ) -> Result<Option<String>, String> {
+        let args = self.sieve_call(
+            account_id,
+            "SieveScript/query",
+            serde_json::json!({ "filter": { "name": name } }),
+        )?;
+        Ok(parse_query_ids(&args).into_iter().next())
+    }
+
+    /// Install/replace the `k2-forward` Sieve on this mailbox.
+    /// `--keep` → `require ["copy"]; redirect :copy`. Else `redirect`.
+    pub fn sieve_k2_forward_set(
+        &self,
+        account_id: &str,
+        dest: &str,
+        keep: bool,
+    ) -> Result<(), String> {
+        let script = k2_forward_script(dest, keep);
+        let blob_id = self.blob_upload(account_id, script.as_bytes())?;
+        let existing = self.sieve_script_query_id(account_id, K2_FORWARD_SCRIPT)?;
+        let args = if let Some(id) = existing {
+            serde_json::json!({
+                "update": { id.clone(): { "blobId": blob_id } },
+                "onSuccessActivateScript": id,
+            })
+        } else {
+            serde_json::json!({
+                "create": {
+                    CREATE_TAG: {
+                        "name": K2_FORWARD_SCRIPT,
+                        "blobId": blob_id,
+                    }
+                },
+                "onSuccessActivateScript": format!("#{CREATE_TAG}"),
+            })
+        };
+        let resp = self.sieve_call(account_id, "SieveScript/set", args)?;
+        expect_set_clean("SieveScript/set", &resp)
+    }
+
+    /// Destroy **only** the `k2-forward` script. Idempotent if absent.
+    pub fn sieve_k2_forward_destroy(&self, account_id: &str) -> Result<(), String> {
+        let Some(id) = self.sieve_script_query_id(account_id, K2_FORWARD_SCRIPT)? else {
+            return Ok(());
+        };
+        let resp = self.sieve_call(
+            account_id,
+            "SieveScript/set",
+            serde_json::json!({ "destroy": [id] }),
+        )?;
+        parse_set_destroyed("SieveScript/set", &id, &resp)
+    }
+
+    /// Read dest + keep from the active `k2-forward` blob, if any.
+    pub fn sieve_k2_forward_get(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<(String, bool)>, String> {
+        let Some(id) = self.sieve_script_query_id(account_id, K2_FORWARD_SCRIPT)? else {
+            return Ok(None);
+        };
+        let args = self.sieve_call(
+            account_id,
+            "SieveScript/get",
+            serde_json::json!({
+                "ids": [id],
+                "properties": ["name", "blobId"],
+            }),
+        )?;
+        let blob_id = parse_sieve_blob_id(&id, &args)?;
+        let bytes = self.blob_download(account_id, &blob_id, K2_FORWARD_SCRIPT, "application/sieve")?;
+        let src = String::from_utf8_lossy(&bytes);
+        Ok(parse_k2_forward_script(&src))
     }
 
     /// RFC 8621 `Email/import` of a previously uploaded blob into Inbox.
@@ -1797,6 +1979,243 @@ fn parse_account_get_quotas(id: &str, args: &serde_json::Value) -> Result<serde_
     }
 }
 
+/// Stalwart 0.16 `EmailAlias` (`name` local-part + `domainId`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmailAlias {
+    pub name: String,
+    pub domain_id: String,
+    pub enabled: bool,
+}
+
+/// `x:Account` `@type: User` slice used by alias add/list/remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountUser {
+    pub id: String,
+    pub name: String,
+    pub domain_id: String,
+    pub aliases: Vec<EmailAlias>,
+}
+
+/// Index-keyed object (`"0"|"1"|…`) — a JSON array is `invalidPatch`.
+pub fn aliases_to_index_map(aliases: &[EmailAlias]) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for (i, a) in aliases.iter().enumerate() {
+        map.insert(
+            i.to_string(),
+            serde_json::json!({
+                "name": a.name,
+                "domainId": a.domain_id,
+                "enabled": a.enabled,
+            }),
+        );
+    }
+    serde_json::Value::Object(map)
+}
+
+pub fn parse_email_aliases(v: Option<&serde_json::Value>) -> Vec<EmailAlias> {
+    let Some(v) = v else {
+        return Vec::new();
+    };
+    if v.is_null() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if let Some(arr) = v.as_array() {
+        for e in arr {
+            if let Some(a) = parse_one_email_alias(e) {
+                out.push(a);
+            }
+        }
+        return out;
+    }
+    if let Some(obj) = v.as_object() {
+        let mut keys: Vec<&String> = obj.keys().collect();
+        keys.sort_by_key(|k| k.parse::<usize>().unwrap_or(usize::MAX));
+        for k in keys {
+            if let Some(a) = parse_one_email_alias(&obj[k]) {
+                out.push(a);
+            }
+        }
+    }
+    out
+}
+
+fn parse_one_email_alias(v: &serde_json::Value) -> Option<EmailAlias> {
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_ascii_lowercase();
+    let domain_id = v
+        .get("domainId")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
+    Some(EmailAlias {
+        name,
+        domain_id,
+        enabled,
+    })
+}
+
+/// Collision vs another User's primary `name@domainId` or EmailAlias.
+/// Own account id is excluded (idempotent add on self).
+pub fn alias_collides(
+    mailbox_account_id: &str,
+    alias_local: &str,
+    domain_id: &str,
+    users: &[AccountUser],
+) -> bool {
+    let local = alias_local.trim().to_ascii_lowercase();
+    for u in users {
+        if u.id == mailbox_account_id {
+            continue;
+        }
+        if u.name.eq_ignore_ascii_case(&local) && u.domain_id == domain_id {
+            return true;
+        }
+        if u
+            .aliases
+            .iter()
+            .any(|a| a.name == local && a.domain_id == domain_id)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn parse_account_user_entry(e: &serde_json::Value) -> Option<AccountUser> {
+    let id = e.get("id").and_then(|v| v.as_str())?.to_string();
+    let name = e
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let domain_id = e
+        .get("domainId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some(AccountUser {
+        id,
+        name,
+        domain_id,
+        aliases: parse_email_aliases(e.get("aliases")),
+    })
+}
+
+fn parse_account_get_user(id: &str, args: &serde_json::Value) -> Result<AccountUser, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)));
+    let Some(entry) = entry else {
+        return Err(format!("x:Account/get: account '{id}' not in the reply list"));
+    };
+    parse_account_user_entry(entry)
+        .ok_or_else(|| format!("x:Account/get: account '{id}' has no id"))
+}
+
+fn parse_account_get_users(args: &serde_json::Value) -> Result<Vec<AccountUser>, String> {
+    let list = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "x:Account/get: reply has no list".to_string())?;
+    Ok(list.iter().filter_map(parse_account_user_entry).collect())
+}
+
+fn parse_domain_get_catchall(
+    id: &str,
+    args: &serde_json::Value,
+) -> Result<Option<String>, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)));
+    let Some(entry) = entry else {
+        return Err(format!("x:Domain/get: domain '{id}' not in the reply list"));
+    };
+    match entry.get("catchAllAddress") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(t.to_string()))
+            }
+        }
+        Some(_) => Err(format!(
+            "x:Domain/get: domain '{id}' catchAllAddress is not a string or null"
+        )),
+    }
+}
+
+/// Sieve body for `k2-forward`. Dest is quoted; keep uses `:copy`.
+pub fn k2_forward_script(dest: &str, keep: bool) -> String {
+    let quoted = sieve_quote(dest);
+    if keep {
+        format!("require [\"copy\"];\nredirect :copy {quoted};\n")
+    } else {
+        format!("redirect {quoted};\n")
+    }
+}
+
+fn sieve_quote(addr: &str) -> String {
+    let escaped = addr.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+fn sieve_unquote(s: &str) -> Option<String> {
+    let s = s.trim();
+    if let Some(inner) = s.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        return Some(inner.replace("\\\"", "\"").replace("\\\\", "\\"));
+    }
+    if !s.is_empty() {
+        return Some(s.to_string());
+    }
+    None
+}
+
+pub fn parse_k2_forward_script(src: &str) -> Option<(String, bool)> {
+    let mut dest = None;
+    let mut keep = false;
+    for line in src.lines() {
+        let t = line.trim().trim_end_matches(';').trim();
+        if let Some(rest) = t.strip_prefix("redirect") {
+            let rest = rest.trim();
+            if let Some(addr) = rest.strip_prefix(":copy") {
+                keep = true;
+                dest = sieve_unquote(addr.trim());
+            } else {
+                dest = sieve_unquote(rest);
+            }
+        }
+    }
+    dest.map(|d| (d, keep))
+}
+
+fn parse_sieve_blob_id(id: &str, args: &serde_json::Value) -> Result<String, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)));
+    let Some(entry) = entry else {
+        return Err(format!("SieveScript/get: '{id}' not in the reply list"));
+    };
+    entry
+        .get("blobId")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .ok_or_else(|| format!("SieveScript/get: '{id}' has no blobId"))
+}
+
 /// Pure `x:Account/get` reply parser: our id's `name`.
 fn parse_account_get_name(id: &str, args: &serde_json::Value) -> Result<String, String> {
     args.get("list")
@@ -1919,6 +2338,16 @@ pub fn rewrite_route_expression(
 /// registry envelope's Stalwart capability.
 const JMAP_MAIL_USING: [&str; 2] = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"];
 
+/// RFC 9661 Sieve — required on `SieveScript/*` or the call is
+/// `notRequest` / `unknownMethod`. Not `x:SieveUserScript`.
+const JMAP_SIEVE_USING: [&str; 2] = [
+    "urn:ietf:params:jmap:core",
+    "urn:ietf:params:jmap:sieve",
+];
+
+/// Hostmail forward script name. Unset destroys this name only.
+pub const K2_FORWARD_SCRIPT: &str = "k2-forward";
+
 /// Per-part body cap on `Email/get` (`maxBodyValueBytes`): 256 KiB of
 /// text per part is far beyond any verification mail and bounds the
 /// daemon's per-message memory. `isTruncated` rides the bodyValue when
@@ -1993,6 +2422,13 @@ const FULL_PROPERTIES: [&str; 15] = [
 fn mail_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "using": JMAP_MAIL_USING,
+        "methodCalls": [[method, args, "0"]],
+    })
+}
+
+fn sieve_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "using": JMAP_SIEVE_USING,
         "methodCalls": [[method, args, "0"]],
     })
 }
@@ -3732,6 +4168,214 @@ mod s3_account_tests {
             .account_create("bot", "dom-1", "super-secret-pw", 1, 1)
             .expect_err("closed port must fail");
         assert!(!err.contains("super-secret-pw"), "password leaked: {err}");
+    }
+
+    #[test]
+    fn domain_set_catchall_sends_null_not_empty_and_omits_aliases() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"b": {}}, "primaryAccounts": {"urn:stalwart:jmap": "b"}}"#
+                .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:Domain/set", { "updated": { "dom-1": null } }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session.clone(), set_reply.clone()]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.domain_set_catchall("dom-1", None).expect("unset");
+        let _sess = rx.recv().expect("session");
+        let req = rx.recv().expect("Domain/set");
+        let body = body_json(&req);
+        assert_eq!(body["methodCalls"][0][0], "x:Domain/set");
+        let patch = &body["methodCalls"][0][1]["update"]["dom-1"];
+        assert!(patch["catchAllAddress"].is_null(), "{patch}");
+        assert!(
+            patch.get("aliases").is_none(),
+            "Domain.aliases must never be written: {patch}"
+        );
+
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:Domain/set", { "updated": { "dom-1": null } }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.domain_set_catchall("dom-1", Some("post@acme.dev"))
+            .expect("set");
+        let _sess = rx.recv().expect("session");
+        let req = rx.recv().expect("Domain/set");
+        let body = body_json(&req);
+        let patch = &body["methodCalls"][0][1]["update"]["dom-1"];
+        assert_eq!(patch["catchAllAddress"], "post@acme.dev");
+        assert!(patch.get("aliases").is_none(), "{patch}");
+    }
+
+    #[test]
+    fn domain_get_catchall_parses_null_and_addr() {
+        let null = serde_json::json!({
+            "list": [{ "id": "dom-1", "catchAllAddress": null }],
+            "notFound": [],
+        });
+        assert_eq!(parse_domain_get_catchall("dom-1", &null).expect("null"), None);
+        let addr = serde_json::json!({
+            "list": [{ "id": "dom-1", "catchAllAddress": "post@acme.dev" }],
+        });
+        assert_eq!(
+            parse_domain_get_catchall("dom-1", &addr).expect("addr"),
+            Some("post@acme.dev".into())
+        );
+        assert!(parse_domain_get_catchall("zz", &addr).is_err());
+    }
+
+    #[test]
+    fn account_set_aliases_is_index_keyed_not_array() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:Account/set", { "updated": { "e": null } }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.account_set_aliases(
+            "e",
+            &[EmailAlias {
+                name: "sales".into(),
+                domain_id: "dom-1".into(),
+                enabled: true,
+            }],
+        )
+        .expect("set aliases");
+        let _sess = rx.recv().expect("session");
+        let req = rx.recv().expect("Account/set");
+        let body = body_json(&req);
+        assert_eq!(body["methodCalls"][0][0], "x:Account/set");
+        assert_ne!(body["methodCalls"][0][0], "x:User/set");
+        let aliases = &body["methodCalls"][0][1]["update"]["e"]["aliases"];
+        assert!(aliases.is_object(), "index-keyed object, not array: {aliases}");
+        assert!(aliases.as_array().is_none(), "{aliases}");
+        assert_eq!(aliases["0"]["name"], "sales");
+        assert_eq!(aliases["0"]["domainId"], "dom-1");
+        assert_eq!(aliases["0"]["enabled"], true);
+    }
+
+    #[test]
+    fn parse_email_aliases_index_keyed_and_array() {
+        let keyed = serde_json::json!({
+            "1": { "name": "info", "domainId": "d", "enabled": true },
+            "0": { "name": "Sales", "domainId": "d", "enabled": true },
+        });
+        let got = parse_email_aliases(Some(&keyed));
+        assert_eq!(got[0].name, "sales");
+        assert_eq!(got[1].name, "info");
+        let arr = serde_json::json!([{ "name": "x", "domainId": "d" }]);
+        assert_eq!(parse_email_aliases(Some(&arr))[0].name, "x");
+        assert!(parse_email_aliases(Some(&serde_json::Value::Null)).is_empty());
+    }
+
+    #[test]
+    fn k2_forward_script_keep_and_default() {
+        let def = k2_forward_script("dest@acme.dev", false);
+        assert!(def.contains("redirect \"dest@acme.dev\";"), "{def}");
+        assert!(!def.contains(":copy"), "{def}");
+        assert!(!def.contains("require"), "{def}");
+        let keep = k2_forward_script("dest@acme.dev", true);
+        assert!(keep.contains("require [\"copy\"];"), "{keep}");
+        assert!(keep.contains("redirect :copy \"dest@acme.dev\";"), "{keep}");
+        assert_eq!(
+            parse_k2_forward_script(&def),
+            Some(("dest@acme.dev".into(), false))
+        );
+        assert_eq!(
+            parse_k2_forward_script(&keep),
+            Some(("dest@acme.dev".into(), true))
+        );
+    }
+
+    #[test]
+    fn sieve_k2_forward_set_declares_sieve_capability_and_name() {
+        let session = serde_json::json!({
+            "apiUrl": "/jmap/",
+            "uploadUrl": "/jmap/upload/{accountId}/",
+            "accounts": { "b": {} },
+            "primaryAccounts": { "urn:stalwart:jmap": "b" },
+        })
+        .to_string();
+        let blob = serde_json::json!({ "blobId": "Bfwd" }).to_string();
+        let query = serde_json::json!({
+            "methodResponses": [["SieveScript/query", { "ids": [] }, "0"]],
+        })
+        .to_string();
+        let set = serde_json::json!({
+            "methodResponses": [["SieveScript/set", {
+                "created": { "k2": { "id": "s1" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![
+            session.clone(),
+            blob,
+            session,
+            query,
+            set,
+        ]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.sieve_k2_forward_set("acc-1", "dest@acme.dev", true)
+            .expect("set forward");
+
+        let blob_sess = rx.recv().expect("blob session");
+        assert!(blob_sess.starts_with("GET /jmap/session"), "{blob_sess}");
+        let blob_req = rx.recv().expect("blob POST");
+        assert!(blob_req.contains("POST /jmap/upload/acc-1/"), "{blob_req}");
+        assert!(
+            blob_req.contains("require [\"copy\"];") && blob_req.contains("redirect :copy"),
+            "{blob_req}"
+        );
+        let _disc = rx.recv().expect("sieve session");
+        let q = body_json(&rx.recv().expect("query"));
+        assert_eq!(q["methodCalls"][0][0], "SieveScript/query");
+        assert_eq!(q["using"][1], "urn:ietf:params:jmap:sieve");
+        assert_eq!(q["methodCalls"][0][1]["filter"]["name"], K2_FORWARD_SCRIPT);
+        let set_req = body_json(&rx.recv().expect("set"));
+        assert_eq!(set_req["methodCalls"][0][0], "SieveScript/set");
+        assert_ne!(set_req["methodCalls"][0][0], "x:SieveScript/set");
+        assert_ne!(set_req["methodCalls"][0][0], "x:SieveSystemScript/set");
+        assert_eq!(set_req["using"][1], "urn:ietf:params:jmap:sieve");
+        let create = &set_req["methodCalls"][0][1]["create"]["k2"];
+        assert_eq!(create["name"], "k2-forward");
+        assert_eq!(create["blobId"], "Bfwd");
+        assert_eq!(
+            set_req["methodCalls"][0][1]["onSuccessActivateScript"],
+            "#k2"
+        );
+    }
+
+    #[test]
+    fn sieve_k2_forward_destroy_only_that_name() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"b": {}}, "primaryAccounts": {"urn:stalwart:jmap": "b"}}"#
+                .to_string();
+        let query = serde_json::json!({
+            "methodResponses": [["SieveScript/query", { "ids": ["s1"] }, "0"]],
+        })
+        .to_string();
+        let destroy = serde_json::json!({
+            "methodResponses": [["SieveScript/set", { "destroyed": ["s1"] }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, query, destroy]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.sieve_k2_forward_destroy("acc-1").expect("destroy");
+        let _sess = rx.recv().expect("session");
+        let q = body_json(&rx.recv().expect("query"));
+        assert_eq!(q["methodCalls"][0][1]["filter"]["name"], "k2-forward");
+        let d = body_json(&rx.recv().expect("destroy"));
+        assert_eq!(d["methodCalls"][0][0], "SieveScript/set");
+        assert_eq!(d["methodCalls"][0][1]["destroy"][0], "s1");
+        assert!(
+            d["methodCalls"][0][1].get("create").is_none(),
+            "unset must not recreate: {d}"
+        );
     }
 }
 

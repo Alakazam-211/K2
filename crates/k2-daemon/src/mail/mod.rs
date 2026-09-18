@@ -100,16 +100,20 @@
 
 pub mod access;
 pub mod addresses;
+pub mod alias;
+pub mod catchall;
 pub mod config;
-pub mod identity;
-pub mod import;
 pub mod dns_verify;
 pub mod doctor;
 pub mod domains;
 pub mod external;
 pub mod external_imap;
 pub mod external_smtp;
+pub mod forward;
 pub mod graph;
+pub mod hostmail_auth;
+pub mod identity;
+pub mod import;
 pub mod jmap;
 pub mod messages;
 pub mod oauth;
@@ -125,9 +129,9 @@ pub mod routes_messages;
 pub mod routes_oauth_config;
 pub mod routes_send;
 pub mod routes_server;
+pub mod schedule;
 pub mod secrets;
 pub mod send;
-pub mod schedule;
 pub mod supervisor;
 pub mod sysops;
 

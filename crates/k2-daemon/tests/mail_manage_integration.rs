@@ -293,6 +293,27 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             Some("{}"),
         );
         assert_owner_only(&rotate_off, "default OFF agent rotate-admin");
+        let catchall_off = http(
+            port,
+            "GET",
+            &format!("/cli/mail/catchall?token={hook_a}"),
+            None,
+        );
+        assert_owner_only(&catchall_off, "default OFF agent catchall");
+        let alias_off = http(
+            port,
+            "POST",
+            &format!("/cli/mail/alias?token={hook_a}"),
+            Some("{}"),
+        );
+        assert_owner_only(&alias_off, "default OFF agent alias");
+        let forward_off = http(
+            port,
+            "POST",
+            &format!("/cli/mail/forward?token={hook_a}"),
+            Some("{}"),
+        );
+        assert_owner_only(&forward_off, "default OFF agent forward");
         assert!(
             disable_off
                 .body
@@ -506,6 +527,14 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/import", Some("{}")),
             ("POST", "/cli/mail/quota", Some("{}")),
             ("GET", "/cli/mail/quota", None),
+            ("POST", "/cli/mail/catchall", Some("{}")),
+            ("GET", "/cli/mail/catchall", None),
+            ("POST", "/cli/mail/alias", Some("{}")),
+            ("GET", "/cli/mail/alias", None),
+            ("POST", "/cli/mail/alias/remove", Some("{}")),
+            ("POST", "/cli/mail/forward", Some("{}")),
+            ("GET", "/cli/mail/forward", None),
+            ("POST", "/cli/mail/forward/unset", Some("{}")),
             ("POST", "/cli/mail/cert/renew", Some("{}")),
             ("POST", "/cli/mail/server/rotate-admin", Some("{}")),
         ] {
@@ -539,6 +568,39 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             quota_get.status, 400,
             "GET quota without address is usage; {}",
             quota_get.body
+        );
+        let alias_rm = http(
+            port,
+            "GET",
+            &format!("/cli/mail/alias/remove?token={hook_a}"),
+            None,
+        );
+        assert_eq!(
+            alias_rm.status, 405,
+            "GET alias/remove 405; {}",
+            alias_rm.body
+        );
+        let fwd_unset = http(
+            port,
+            "GET",
+            &format!("/cli/mail/forward/unset?token={hook_a}"),
+            None,
+        );
+        assert_eq!(
+            fwd_unset.status, 405,
+            "GET forward/unset 405; {}",
+            fwd_unset.body
+        );
+        let catchall_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/catchall?token={hook_a}"),
+            None,
+        );
+        assert_ne!(
+            catchall_get.status, 405,
+            "GET /cli/mail/catchall is show; {}",
+            catchall_get.body
         );
         let renew_get = http(
             port,

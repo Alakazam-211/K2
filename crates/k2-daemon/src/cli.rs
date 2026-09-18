@@ -170,6 +170,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::dns_routes::dispatch(path, params) {
         return resp;
     }
+    // Custom domains / certs — GET list + 405 twins for POST-only verbs.
+    if let Some(resp) = crate::domain_routes::dispatch(path, params) {
+        return resp;
+    }
     // Published services — GET list/logs + 405 twins for POST-only verbs.
     if let Some(resp) = crate::publish_routes::dispatch(path, params) {
         return resp;

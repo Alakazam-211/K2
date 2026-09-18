@@ -117,6 +117,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   companion: 'K2 Companion',
   connections: 'Connected Servers',
   'k2-connect': 'Tunnel',
+  domains: 'Domains',
   'k2-access': 'Server Access',
   'api-tokens': 'API Keys',
   'email-hosting': 'Email Hosting',

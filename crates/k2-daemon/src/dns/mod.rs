@@ -29,6 +29,10 @@ or Workspaces → (workspace) → Allow DNS manage";
 pub const ZONE_LIFECYCLE_HINT: &str =
     "agents cannot create or delete zones — zone lifecycle is owner-only";
 
+/// Teaching text when a DNS write targets a zone not attached on this box.
+pub const DNS_ZONE_NOT_ATTACHED_HINT: &str = "this DNS zone is not attached to this server — \
+the owner can attach it in Settings → K2 Server → Domains (or `k2 domain add`)";
+
 /// Teaching text when NS (or any non-envelope type) is requested.
 pub fn unsupported_type_hint(rtype: &str) -> String {
     format!(

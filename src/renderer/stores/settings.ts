@@ -62,6 +62,8 @@ export type SettingsSection =
   | 'dictation-lab'
   | 'connections'
   | 'k2-connect'
+  /** Settings → K2 Server → Domains (custom-domain inventory + certs). */
+  | 'domains'
   /** Settings → K2 Server → Server Access (K2 Connect people/roles). */
   | 'k2-access'
   | 'api-tokens'

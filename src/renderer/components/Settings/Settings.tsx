@@ -21,6 +21,7 @@ import { CompanionSection, COMPANION_MANIFEST } from './sections/CompanionSectio
 import { CONNECTIONS_MANIFEST } from './sections/ConnectionsSection'
 import { K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
 import { K2ConnectSettingsShell } from './sections/K2ConnectSettingsShell'
+import { DomainsSection, DOMAINS_MANIFEST } from './sections/DomainsSection'
 import { ApiTokensSection, API_TOKENS_MANIFEST } from './sections/ApiTokensSection'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
@@ -82,6 +83,7 @@ function settingsNav(): NavBlock[] {
       title: 'K2 Server',
       items: [
         { id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },
+        { id: 'domains', label: 'Domains' },
         { id: 'k2-access', label: 'Server Access' },
         { id: 'connections', label: 'Connected Servers' },
         { id: 'api-tokens', label: 'API Keys' },
@@ -154,6 +156,7 @@ export default function Settings(): React.JSX.Element {
       ...COMPANION_MANIFEST,
       ...CONNECTIONS_MANIFEST,
       ...K2_CONNECT_MANIFEST,
+      ...DOMAINS_MANIFEST,
       ...API_TOKENS_MANIFEST,
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
@@ -417,6 +420,11 @@ export default function Settings(): React.JSX.Element {
             {/* Host | Servers primary tabs (full width). Deep-link
                 `connections` opens Servers; `k2-connect` opens Host. */}
             <K2ConnectSettingsShell />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'domains' && (
+          <SectionErrorBoundary>
+            <DomainsSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'api-tokens' && (

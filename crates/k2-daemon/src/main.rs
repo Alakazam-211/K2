@@ -91,6 +91,8 @@ mod v1_db;
 // DNS K1 — control-plane proxy + principal-bound `/cli/dns/*` routes.
 mod dns;
 mod dns_routes;
+mod domains;
+mod domain_routes;
 mod misc_routes;
 mod ops_routes;
 mod ops_stream_ws;

@@ -214,6 +214,9 @@ pub fn handle_records(params: &HashMap<String, String>) -> CliResponse {
         Ok(id) => id,
         Err(r) => return r,
     };
+    if let Err(r) = crate::domains::routes::require_zone_attached_for_write(&zone_id) {
+        return r;
+    }
     let agent = agent_name(params);
     let path = format!("/api/dns/zones/{zone_id}");
     proxy_to_cli("GET", &path, agent.as_deref(), None)
@@ -285,6 +288,9 @@ pub fn handle_record_add(params: &HashMap<String, String>) -> CliResponse {
         Ok(id) => id,
         Err(r) => return r,
     };
+    if let Err(r) = crate::domains::routes::require_zone_attached_for_write(&zone_id) {
+        return r;
+    }
 
     let mut body = serde_json::json!({
         "type": rtype,
@@ -342,6 +348,22 @@ pub fn handle_record_remove(params: &HashMap<String, String>) -> CliResponse {
         );
     };
 
+    // Belt: if the caller named a zone/domain, refuse unattached writes
+    // even when the record id would otherwise proxy through.
+    if params.get("zone").is_some()
+        || params.get("zone_id").is_some()
+        || params.get("domain").is_some()
+    {
+        match resolve_zone_id(params) {
+            Ok(zone_id) => {
+                if let Err(r) = crate::domains::routes::require_zone_attached_for_write(&zone_id) {
+                    return r;
+                }
+            }
+            Err(r) => return r,
+        }
+    }
+
     let agent = agent_name(params);
     let path = format!("/api/dns/records/{record_id}");
     proxy_to_cli("DELETE", &path, agent.as_deref(), None)
@@ -359,6 +381,9 @@ pub fn handle_verify(params: &HashMap<String, String>) -> CliResponse {
         Ok(id) => id,
         Err(r) => return r,
     };
+    if let Err(r) = crate::domains::routes::require_zone_attached_for_write(&zone_id) {
+        return r;
+    }
     let agent = agent_name(params);
     let path = format!("/api/dns/zones/{zone_id}/verify");
     proxy_to_cli("POST", &path, agent.as_deref(), Some("{}"))
@@ -745,6 +770,36 @@ mod tests {
         params.insert("type".into(), "NS".into());
         let deny = handle_record_add(&params);
         assert_eq!(deny.status, "400 Bad Request");
+
+        cleanup(id);
+    }
+
+    #[test]
+    fn record_add_unattached_zone_is_403() {
+        let _ = k2_core::db::init_for_tests();
+        let id = "e5e5e5e5-e5e5-e5e5-e5e5-e5e5e5e5e5e5";
+        let path = "/tmp/k2-dns-unattached";
+        seed_project(id, path, "dns-unattached");
+        enable_dns(path);
+
+        let principal = HookPrincipal {
+            workspace_uuid: id.to_string(),
+            agent_address: "agent-unattached".to_string(),
+        };
+        let mut params = HashMap::new();
+        crate::caller_workspace::stamp_principal(&mut params, &principal);
+        params.insert("type".into(), "A".into());
+        params.insert("name".into(), "www".into());
+        params.insert("value".into(), "203.0.113.10".into());
+        params.insert("zone".into(), "zone-not-attached".into());
+
+        let resp = handle_record_add(&params);
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert!(
+            resp.body.contains("dns_zone_not_attached"),
+            "{}",
+            resp.body
+        );
 
         cleanup(id);
     }

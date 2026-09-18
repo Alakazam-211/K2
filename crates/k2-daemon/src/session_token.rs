@@ -563,6 +563,13 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/whoami",
         "/cli/chatter",
         "/cli/chatterlog",
+        // Custom domains / certs (prd-custom-domains A9). Exact paths
+        // only — never prefix `/cli/domains/` or `/cli/certs/` (attach
+        // + PEM upload stay owner/admin).
+        "/cli/domains",
+        "/cli/certs",
+        "/cli/certs/issue",
+        "/cli/certs/renew",
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
@@ -1236,6 +1243,22 @@ mod tests {
         assert!(is_agent_verb("/cli/dns/records/add"));
         assert!(is_agent_verb("/cli/dns/records/remove"));
         assert!(is_agent_verb("/cli/dns/verify"));
+        // Custom domains: list + cert issue/renew are agent verbs;
+        // attach/remove/names/upload are owner-only (no prefix).
+        assert!(is_agent_verb("/cli/domains"));
+        assert!(is_agent_verb("/cli/certs"));
+        assert!(is_agent_verb("/cli/certs/issue"));
+        assert!(is_agent_verb("/cli/certs/renew"));
+        assert!(
+            !is_agent_verb("/cli/domains/remove"),
+            "attach/remove is owner/admin — not an agent verb"
+        );
+        assert!(!is_agent_verb("/cli/domains/names"));
+        assert!(!is_agent_verb("/cli/domains/names/remove"));
+        assert!(
+            !is_agent_verb("/cli/certs/upload"),
+            "PEM upload is owner-only"
+        );
         // C1 (0.40.45): connections list/add/remove (mutate toggle-gated).
         assert!(is_agent_verb("/cli/connections"));
         assert!(
@@ -1438,6 +1461,14 @@ mod tests {
             !is_agent_verb("/cli/dns/zones/delete"),
             "scoped token must NOT delete zones"
         );
+        // A9: no prefix `/cli/domains/` or `/cli/certs/`.
+        assert!(is_agent_verb("/cli/domains"));
+        assert!(!is_agent_verb("/cli/domains/remove"));
+        assert!(!is_agent_verb("/cli/domains/names"));
+        assert!(is_agent_verb("/cli/certs"));
+        assert!(is_agent_verb("/cli/certs/issue"));
+        assert!(is_agent_verb("/cli/certs/renew"));
+        assert!(!is_agent_verb("/cli/certs/upload"));
     }
 
     #[test]

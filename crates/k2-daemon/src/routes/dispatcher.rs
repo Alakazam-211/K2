@@ -851,6 +851,13 @@ async fn handle_one_request(
             | "/cli/dns/verify"
             | "/cli/dns/zones/create"
             | "/cli/dns/zones/delete"
+            // Custom domains (prd-custom-domains A2/A14). Dual GET+POST
+            // on exact `/cli/domains` is list vs attach. Attach/remove/
+            // names are owner/admin (not is_agent_verb).
+            | "/cli/domains"
+            | "/cli/domains/remove"
+            | "/cli/domains/names"
+            | "/cli/domains/names/remove"
             // Projects V1 P2 (prd-projects-v1 §4.1) — project-GROUP
             // mutations (NOT the legacy /cli/projects/* workspace
             // registry). JSON-bodied POSTs (msg carries free chat text;
@@ -5008,6 +5015,40 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // Custom domains — owner/admin attach/remove/names. Agents get
+        // owner_only (exit 3), not opaque invalid-token. GET list is the
+        // dual-auth arm below.
+        p if is_post
+            && post_allowed
+            && (p == "/cli/domains"
+                || p == "/cli/domains/remove"
+                || p == "/cli/domains/names"
+                || p == "/cli/domains/names/remove") =>
+        {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                let r = auth_scope_failure(p, &query, bearer_token.as_deref());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::domain_routes::dispatch_post(&p_owned, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // K2 Mail — `/cli/mail/*` mutations. JSON-bodied POSTs;
         // token_ok + require_post per feedback_post_only_route_guards.
         // OWNER-OR-ADMIN additionally gates the server/domain/config/
@@ -7534,6 +7575,42 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // Custom domains / certs GET. Mutating GET paths 405 before auth
+        // so agents see 405 not owner_only. List is dual-auth (owner or
+        // dns_manage).
+        p if crate::domain_routes::is_domains_or_certs_path(p) => {
+            let _ = stream.read(&mut buf).await;
+            if crate::domain_routes::is_mutating_get_path(p) {
+                let r = crate::cli_response::CliResponse::method_not_allowed();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let r = auth_scope_failure(p, &query, bearer_token.as_deref());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let mut params = super::http::parse_params(&path, &query);
+            if let Some(ref principal) = scoped_principal {
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::cli::dispatch(&p_owned, &params)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // K2 Mail S11 / E1 — the unified inbox catalog. Dual-auth like
         // every other mail GET: owner/connect-user via token_ok OR a
         // scoped hook principal via require_hook. Principal is stamped
@@ -8791,6 +8868,20 @@ fn auth_scope_failure(
                     "error": {
                         "code": "owner_only",
                         "hint": "requires owner/admin — ask your human (OS schedule install, fleet-wide heartbeat list, and set-show-sessions are owner surfaces; use k2 heartbeat schedule/list/fire for workspace schedules)",
+                    },
+                })
+                .to_string(),
+            };
+        }
+        if path.starts_with("/cli/domains") || path == "/cli/certs/upload" {
+            return crate::cli_response::CliResponse {
+                status: "403 Forbidden",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "ok": false,
+                    "error": {
+                        "code": "owner_only",
+                        "hint": "requires owner/admin — agents cannot attach or remove domains (k2 domain add/remove / k2 domain name). Use k2 domain list and k2 dns on attached zones.",
                     },
                 })
                 .to_string(),

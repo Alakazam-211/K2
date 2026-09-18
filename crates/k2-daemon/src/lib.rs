@@ -77,6 +77,9 @@ pub mod v1_db;
 // (local capability envelope + tunnel-token proxy to k2-dev-web).
 pub mod dns;
 pub mod dns_routes;
+// Custom-domain inventory + certs (prd-custom-domains-and-certs-v1).
+pub mod domains;
+pub mod domain_routes;
 pub mod misc_routes;
 pub mod ops_routes;
 pub mod ops_stream_ws;

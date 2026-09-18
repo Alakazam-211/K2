@@ -168,6 +168,8 @@ pub mod project_groups;
 pub mod projects_ops;
 /// Daemon-owned published services (`published_services` / migration 0104).
 pub mod published_services;
+/// Host-wide custom-domain inventory (`domain_bindings` / `domain_names`, 0120).
+pub mod domains;
 /// Daemon-owned workspace resources (`workspace_resources` / migration 0105).
 pub mod workspace_resources;
 pub mod push;

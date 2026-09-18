@@ -212,6 +212,9 @@ _cli_tool_id_for_verb() {
         db) echo "db" ;;
         store) echo "store" ;;
         dns) echo "dns" ;;
+        # Custom-domain inventory + certs share the locked dns tool id
+        # (prd-custom-domains A10). Unknown verbs elevate as Open.
+        domain|cert) echo "dns" ;;
         publish) echo "publish" ;;
         # Headless Connect account pairing (login/status/logout). Distinct
         # from publish (nested-subdomain control plane) so login is not
@@ -555,6 +558,9 @@ _uds_eligible() {
         /cli/inbox/*|/cli/review-checklist/*) return 0 ;;
         # DNS K1 — cell_server serves /cli/dns/* POSTs + is_agent_verb GETs.
         /cli/dns/*) return 0 ;;
+        # Custom domains: GET list is an agent verb. Attach POSTs are
+        # owner-only and fall through to TCP after UDS 404.
+        /cli/domains|/cli/certs|/cli/certs/*) return 0 ;;
         # Publish hosted services — /cli/publish/* (agent verb, not /cli/tunnel/).
         /cli/publish/*) return 0 ;;
         # C1 — connections list/add/remove (mutate toggle-gated server-side).
@@ -12191,6 +12197,8 @@ cmd_help() {
         db)                       cmd_help_db ;;
         store)                    cmd_help_store ;;
         dns)                      cmd_help_dns ;;
+        domain)                   cmd_help_domain ;;
+        cert)                     cmd_help_cert ;;
         project)                  cmd_help_project ;;
         workspace)                cmd_help_workspace ;;
         skills)                   cmd_help_skills ;;
@@ -13493,6 +13501,65 @@ cmd_schema() {
       "description": "Manage DNS records for K2 Connect zones (toggle-gated). access/list/records/record add|remove/verify. Exit 3 when off — Settings → K2 Connect (Allow agents to manage DNS records) or Workspaces → (workspace) → Allow DNS manage. Not for nested *.k2.dev (publish) or tunnel. ID/locked tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
+    },
+    {
+      "name": "domain list",
+      "usage": "k2 domain list [--json]",
+      "description": "List custom domains attached to this server. Not k2 hostmail domain. Locked dns tool.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON inventory."}]
+    },
+    {
+      "name": "domain add",
+      "usage": "k2 domain add <apex> [--json]",
+      "description": "Attach an apex to this server (idempotent). Does not transfer NS. Owner/admin; agents exit 3.",
+      "args": [{"name": "apex", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
+    },
+    {
+      "name": "domain remove",
+      "usage": "k2 domain remove <apex> [--json]",
+      "description": "Detach an apex (cascades hostnames). Owner/admin; agents exit 3.",
+      "args": [{"name": "apex", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
+    },
+    {
+      "name": "domain name add",
+      "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]",
+      "description": "Add a hostname under an attached apex. Owner/admin; agents exit 3.",
+      "args": [{"name": "hostname", "required": true}],
+      "flags": [
+        {"name": "--role", "arg": "mail|publish|direct|other", "description": "Informational role (default other)."},
+        {"name": "--json", "arg": null, "description": "JSON response."}
+      ]
+    },
+    {
+      "name": "domain name remove",
+      "usage": "k2 domain name remove <hostname> [--json]",
+      "description": "Remove a hostname from this server's inventory. Owner/admin; agents exit 3.",
+      "args": [{"name": "hostname", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
+    },
+    {
+      "name": "domain",
+      "usage": "k2 domain <list|add|remove|name> ...",
+      "description": "Attach custom domains to THIS server (owner). Not k2 hostmail domain. Not a nameserver cutover. Locked dns tool.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
+    },
+    {
+      "name": "cert list",
+      "usage": "k2 cert list [--json]",
+      "description": "List cert state for attached hostnames. Not k2 hostmail cert. Locked dns tool.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON inventory."}]
+    },
+    {
+      "name": "cert",
+      "usage": "k2 cert <list|issue|renew> ...",
+      "description": "Certificates for hostnames attached on THIS server. list now; issue/renew in the certs slice. Not k2 hostmail cert. Locked dns tool.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "checkin",
@@ -14926,6 +14993,8 @@ WHAT THE CLI TOUCHES
              daemon-owned process. Two lists: processes vs DNS labels.
   k2 dns     Connect zones (toggle-gated). Not nested labels (publish),
              not the device tunnel, not mail MX (hostmail).
+  k2 domain  Attach an apex to THIS server (owner). Not hostmail domain.
+  k2 cert    Certs for attached hostnames. Not hostmail cert.
 
 WHAT NOT TO CONFUSE
   Connect users (`k2 users`) are humans on this daemon — study people.
@@ -19501,6 +19570,14 @@ DAEMON LIFECYCLE
   daemon hooks status [--limit N] [--json]      Hook pipeline state
   daemon reap                                   GC dead-PID sessions
   daemon uninstall                              Remove daemon plist
+
+DOMAINS (custom names this box terminates — not hostmail, not tunnel)
+  domain list [--json]                          Apex + hostnames attached here
+  domain add <apex>                             Attach apex (not NS transfer; owner)
+  domain remove <apex>                          Detach (cascades names)
+  domain name add <hostname> [--role …]         Hostname under an attached apex
+  domain name remove <hostname>
+  cert list [--json]                            Cert column for attached hostnames
 
 TUNNEL (device → primary *.k2.dev; not custom DNS zones)
   tunnel start [--subdomain <s>]                Start the frpc tunnel
@@ -26352,6 +26429,7 @@ DNS_GATED_HINT = (
 
 GATED_CODES = frozenset({
     "gated", "forbidden", "dns_manage_disabled", "owner_only",
+    "dns_zone_not_attached",
 })
 USAGE_CODES = frozenset({
     "usage", "type_not_allowed",
@@ -26739,7 +26817,10 @@ delegation when the owner opts in. Zone create/delete is owner/dashboard-only.
 
 PRODUCT BOUNDARY (agents: pick the right tool)
   Custom zone records (A/TXT/MX/…)     → k2 dns (this family; zone must already
-                                           exist + be delegated; manage toggle ON)
+                                           exist, be attached on this server, and
+                                           be delegated; manage toggle ON)
+  Attach apex / hostnames on this box  → k2 domain (owner; not hostmail domain)
+  Box certs for attached hostnames     → k2 cert (not hostmail cert renew)
   Nested label.user.k2.dev + target    → k2 publish subdomain
   Device tunnel to primary *.k2.dev    → k2 tunnel
   Hosted mail domain / MX recipe       → k2 hostmail domain (owner)
@@ -26893,6 +26974,423 @@ ARGUMENTS
 
 FLAGS
   --json                 JSON verification result
+EOF
+}
+
+# ── Custom domains / certs (prd-custom-domains-and-certs-v1) ──────────
+# `k2 domain` is box inventory (attach apex + hostnames). Not
+# `k2 hostmail domain` (mail MX recipe). Tool id is locked `dns`.
+
+_dom_err() {
+    local code="$1" hint="$2"
+    CODE="$code" HINT="$hint" python3 -c 'import json,os
+print(json.dumps({"error": {"code": os.environ["CODE"], "hint": os.environ["HINT"]}},
+                 ensure_ascii=False, separators=(",", ":")))' >&2 \
+        || echo "Error ($code): $hint" >&2
+}
+
+_dom_handle_resp() {
+    RESP="${RESP:-}" AS_JSON="${AS_JSON:-false}" D_VERB="${D_VERB:-}" python3 - <<'PYEOF'
+import json, os, sys
+
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+raw = os.environ.get("RESP", "")
+as_json = os.environ.get("AS_JSON") == "true"
+verb = os.environ.get("D_VERB", "")
+
+def dumps(obj):
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+GATED_CODES = frozenset({
+    "gated", "forbidden", "dns_manage_disabled", "owner_only",
+    "dns_zone_not_attached",
+})
+USAGE_CODES = frozenset({"usage", "invalid_domain", "invalid_role", "hostname_not_under_apex"})
+
+def die(err, exit_code=None):
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    code = err.get("code", "error") if isinstance(err, dict) else "error"
+    hint = err.get("hint", "") if isinstance(err, dict) else str(err)
+    sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
+    if exit_code is None:
+        if code in GATED_CODES:
+            exit_code = 3
+        elif code in USAGE_CODES:
+            exit_code = 2
+        else:
+            exit_code = 1
+    sys.exit(exit_code)
+
+if not raw or not raw.strip():
+    die({"code": "daemon_unreachable",
+         "hint": "no response from the K2 daemon (is it running?)"})
+
+try:
+    d = json.loads(raw)
+except Exception:
+    die({"code": "bad_response",
+         "hint": "daemon returned an unparseable response: %r" % raw[:200]})
+
+err = d.get("error")
+if err is not None:
+    if isinstance(err, str):
+        err = {"code": "error", "hint": err}
+    elif not isinstance(err, dict):
+        err = {"code": "error", "hint": str(err)}
+    die(err)
+
+if d.get("ok") is False:
+    die({"code": "error", "hint": "unexpected daemon response: %s" % dumps(d)[:200]})
+
+if as_json:
+    print(dumps(d))
+    sys.exit(0)
+
+if verb == "list":
+    domains = d.get("domains") or []
+    if not domains:
+        print("(no custom domains attached to this server)")
+        print("hint: k2 domain add <apex> — attach ≠ nameserver transfer")
+        sys.exit(0)
+    print("%-28s  %-8s  %s" % ("APEX", "DNS", "ZONE"))
+    for row in domains:
+        if not isinstance(row, dict):
+            print(str(row))
+            continue
+        write = "write" if row.get("dnsWrite") else "byo"
+        print("%-28s  %-8s  %s" % (
+            row.get("apex") or "?",
+            write,
+            row.get("zoneId") or "-",
+        ))
+        for n in row.get("names") or []:
+            if not isinstance(n, dict):
+                continue
+            cert = (n.get("cert") or {}).get("state") or "missing"
+            print("  %-26s  %-8s  cert %s" % (n.get("hostname") or "?", n.get("role") or "other", cert))
+    sys.exit(0)
+
+if verb == "certs":
+    certs = d.get("certs") or []
+    if not certs:
+        print("(no attached hostnames)")
+        sys.exit(0)
+    print("%-32s  %-8s  %s" % ("HOSTNAME", "ROLE", "CERT"))
+    for c in certs:
+        if not isinstance(c, dict):
+            print(str(c))
+            continue
+        cert = (c.get("cert") or {}).get("state") or "missing"
+        print("%-32s  %-8s  %s" % (c.get("hostname") or "?", c.get("role") or "other", cert))
+    sys.exit(0)
+
+# add / remove / name — compact success
+if verb in ("add", "remove", "name-add", "name-remove", "issue", "renew"):
+    print(dumps(d) if as_json else dumps({k: d[k] for k in d if k != "ok"} or d))
+    sys.exit(0)
+
+print(dumps(d))
+sys.exit(0)
+PYEOF
+}
+
+cmd_domain_list() {
+    if _wants_help "$@"; then cmd_help_domain_list; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _dom_err "usage" "unknown flag '$1' — usage: k2 domain list [--json]"
+                exit 2 ;;
+            *)
+                _dom_err "usage" "unexpected argument '$1' — usage: k2 domain list [--json]"
+                exit 2 ;;
+        esac
+    done
+    local RESP
+    RESP=$(cli_send cli_request "/cli/domains") || RESP=""
+    local AS_JSON="$as_json" D_VERB="list"
+    _dom_handle_resp
+}
+
+cmd_domain_add() {
+    if _wants_help "$@"; then cmd_help_domain_add; exit 0; fi
+    local apex="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _dom_err "usage" "unknown flag '$1' — usage: k2 domain add <apex> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$apex" ]; then apex="$1"; else
+                    _dom_err "usage" "unexpected extra argument '$1' — one <apex> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$apex" ]; then
+        _dom_err "usage" "domain add requires an <apex> (example.com) — this is not k2 hostmail domain"
+        exit 2
+    fi
+    local body RESP
+    body=$(D_APEX="$apex" python3 -c 'import json,os; print(json.dumps({"apex": os.environ["D_APEX"]}))')
+    RESP=$(cli_send cli_post_json "/cli/domains" "$body") || RESP=""
+    local AS_JSON="$as_json" D_VERB="add"
+    _dom_handle_resp
+}
+
+cmd_domain_remove() {
+    if _wants_help "$@"; then cmd_help_domain_remove; exit 0; fi
+    local apex="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _dom_err "usage" "unknown flag '$1' — usage: k2 domain remove <apex> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$apex" ]; then apex="$1"; else
+                    _dom_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$apex" ]; then
+        _dom_err "usage" "domain remove requires an <apex>"
+        exit 2
+    fi
+    local body RESP
+    body=$(D_APEX="$apex" python3 -c 'import json,os; print(json.dumps({"apex": os.environ["D_APEX"]}))')
+    RESP=$(cli_send cli_post_json "/cli/domains/remove" "$body") || RESP=""
+    local AS_JSON="$as_json" D_VERB="remove"
+    _dom_handle_resp
+}
+
+cmd_domain_name_add() {
+    if _wants_help "$@"; then cmd_help_domain_name_add; exit 0; fi
+    local hostname="" role="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --role)
+                [ $# -ge 2 ] || { _dom_err "usage" "--role requires mail|publish|direct|other"; exit 2; }
+                role="$2"; shift 2 ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _dom_err "usage" "unknown flag '$1' — usage: k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$hostname" ]; then hostname="$1"; else
+                    _dom_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$hostname" ]; then
+        _dom_err "usage" "domain name add requires a <hostname>"
+        exit 2
+    fi
+    local body RESP
+    body=$(D_HOST="$hostname" D_ROLE="$role" python3 -c 'import json,os
+b={"hostname": os.environ["D_HOST"]}
+r=os.environ.get("D_ROLE","").strip()
+if r: b["role"]=r
+print(json.dumps(b))')
+    RESP=$(cli_send cli_post_json "/cli/domains/names" "$body") || RESP=""
+    local AS_JSON="$as_json" D_VERB="name-add"
+    _dom_handle_resp
+}
+
+cmd_domain_name_remove() {
+    if _wants_help "$@"; then cmd_help_domain_name_remove; exit 0; fi
+    local hostname="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _dom_err "usage" "unknown flag '$1' — usage: k2 domain name remove <hostname> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$hostname" ]; then hostname="$1"; else
+                    _dom_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$hostname" ]; then
+        _dom_err "usage" "domain name remove requires a <hostname>"
+        exit 2
+    fi
+    local body RESP
+    body=$(D_HOST="$hostname" python3 -c 'import json,os; print(json.dumps({"hostname": os.environ["D_HOST"]}))')
+    RESP=$(cli_send cli_post_json "/cli/domains/names/remove" "$body") || RESP=""
+    local AS_JSON="$as_json" D_VERB="name-remove"
+    _dom_handle_resp
+}
+
+cmd_domain_name() {
+    case "${1:-}" in
+        add) shift; cmd_domain_name_add "$@" ;;
+        remove|rm|delete|del) shift; cmd_domain_name_remove "$@" ;;
+        --help|-h|'') cmd_help_domain_name; exit 0 ;;
+        *)
+            _dom_err "usage" "unknown name command '${1:-}' — use add | remove (see k2 domain name --help)"
+            exit 2 ;;
+    esac
+}
+
+cmd_domain() {
+    case "${1:-}" in
+        list) shift; cmd_domain_list "$@" ;;
+        add) shift; cmd_domain_add "$@" ;;
+        remove|rm|delete|del) shift; cmd_domain_remove "$@" ;;
+        name) shift; cmd_domain_name "$@" ;;
+        --help|-h|'') cmd_help_domain; exit 0 ;;
+        *)
+            _dom_err "usage" "unknown command '${1:-}' — see k2 domain --help (not k2 hostmail domain)"
+            exit 2 ;;
+    esac
+}
+
+cmd_cert_list() {
+    if _wants_help "$@"; then cmd_help_cert_list; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _dom_err "usage" "unknown flag '$1' — usage: k2 cert list [--json]"
+                exit 2 ;;
+            *)
+                _dom_err "usage" "unexpected argument '$1' — usage: k2 cert list [--json]"
+                exit 2 ;;
+        esac
+    done
+    local RESP
+    RESP=$(cli_send cli_request "/cli/certs") || RESP=""
+    local AS_JSON="$as_json" D_VERB="certs"
+    _dom_handle_resp
+}
+
+cmd_cert() {
+    case "${1:-}" in
+        list) shift; cmd_cert_list "$@" ;;
+        issue|renew)
+            _dom_err "usage" "k2 cert ${1} lands in the certs slice — attach the hostname with k2 domain name add first. Not k2 hostmail cert."
+            exit 2 ;;
+        --help|-h|'') cmd_help_cert; exit 0 ;;
+        *)
+            _dom_err "usage" "unknown command '${1:-}' — see k2 cert --help (box inventory; not k2 hostmail cert)"
+            exit 2 ;;
+    esac
+}
+
+cmd_help_domain() {
+    cat <<'EOF'
+k2 domain — attach custom domains to THIS server (owner)
+
+This is box inventory: apex + hostnames this machine may terminate.
+It is NOT `k2 hostmail domain` (mail MX recipe) and NOT a nameserver
+cutover. Agents get 403 exit 3 on add/remove.
+
+USAGE
+  k2 domain list [--json]
+  k2 domain add <apex> [--json]
+  k2 domain remove <apex> [--json]
+  k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]
+  k2 domain name remove <hostname> [--json]
+
+See also: k2 dns (records on attached K2-hosted zones), k2 cert (certs
+for attached hostnames), k2 hostmail domain (mail).
+EOF
+}
+
+cmd_help_domain_list() {
+    cat <<'EOF'
+List custom domains attached to this server.
+
+USAGE
+  k2 domain list [--json]
+EOF
+}
+
+cmd_help_domain_add() {
+    cat <<'EOF'
+Attach an apex to this server (idempotent). Does not transfer NS.
+
+USAGE
+  k2 domain add <apex> [--json]
+EOF
+}
+
+cmd_help_domain_remove() {
+    cat <<'EOF'
+Detach an apex from this server (cascades hostnames).
+
+USAGE
+  k2 domain remove <apex> [--json]
+EOF
+}
+
+cmd_help_domain_name() {
+    cat <<'EOF'
+Add or remove a hostname under an attached apex.
+
+USAGE
+  k2 domain name add <hostname> [--role mail|publish|direct|other]
+  k2 domain name remove <hostname>
+EOF
+}
+
+cmd_help_domain_name_add() {
+    cat <<'EOF'
+Add a hostname under an attached apex.
+
+USAGE
+  k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]
+EOF
+}
+
+cmd_help_domain_name_remove() {
+    cat <<'EOF'
+Remove a hostname from this server's inventory.
+
+USAGE
+  k2 domain name remove <hostname> [--json]
+EOF
+}
+
+cmd_help_cert() {
+    cat <<'EOF'
+k2 cert — certificates for hostnames attached on THIS server
+
+This is box inventory (`k2 cert list`). Issue/renew land with the certs
+slice. Not `k2 hostmail cert renew` (that becomes an alias of this issuer).
+
+USAGE
+  k2 cert list [--json]
+  k2 cert issue <hostname>     (certs slice)
+  k2 cert renew <hostname>     (certs slice)
+EOF
+}
+
+cmd_help_cert_list() {
+    cat <<'EOF'
+List cert state for attached hostnames.
+
+USAGE
+  k2 cert list [--json]
 EOF
 }
 
@@ -28264,6 +28762,16 @@ case "${1:-help}" in
                 _dns_err "usage" "unknown command '${2:-}' — see k2 dns --help"
                 exit 2 ;;
         esac
+        ;;
+    domain)
+        # Box inventory (prd-custom-domains). Not `k2 hostmail domain`.
+        shift
+        cmd_domain "$@"
+        ;;
+    cert)
+        # Box certs for attached hostnames. Not `k2 hostmail cert`.
+        shift
+        cmd_cert "$@"
         ;;
     agents)
         # 0.39.0f Phase 2.1b: all `agents *` subverbs hard-deprecate.

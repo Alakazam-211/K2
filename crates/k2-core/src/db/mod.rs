@@ -985,6 +985,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0119_mail_quota",
             include_str!("../../drizzle_sql/0119_mail_quota.sql"),
         ),
+        // 0120 — host-wide custom-domain inventory (prd-custom-domains A1).
+        // domain_bindings (apex PK, zone_id, dns_write) + domain_names
+        // (hostname PK, apex, role). Attach ≠ NS transfer.
+        (
+            "0120_domain_bindings",
+            include_str!("../../drizzle_sql/0120_domain_bindings.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1532,6 +1539,8 @@ mod tests {
             "workspace_relations",
             "focus_groups",
             "published_services",
+            "domain_bindings",
+            "domain_names",
         ] {
             let count: i64 = conn
                 .query_row(
@@ -2372,6 +2381,8 @@ mod tests {
             "published_services",
             "overlay_conversations",
             "overlay_host",
+            "domain_bindings",
+            "domain_names",
         ] {
             let exists: i64 = conn
                 .query_row(

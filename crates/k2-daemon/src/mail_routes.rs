@@ -69,6 +69,12 @@
 //! | GET  /cli/mail/forward            | mail/forward.rs        |
 //! | POST /cli/mail/forward            | mail/forward.rs        |
 //! | POST /cli/mail/forward/unset      | mail/forward.rs        |
+//! | GET  /cli/mail/ooo                | mail/ooo.rs            |
+//! | POST /cli/mail/ooo                | mail/ooo.rs            |
+//! | POST /cli/mail/ooo/unset          | mail/ooo.rs            |
+//! | GET  /cli/mail/footer             | mail/footer.rs         |
+//! | POST /cli/mail/footer             | mail/footer.rs         |
+//! | POST /cli/mail/footer/unset       | mail/footer.rs         |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -165,6 +171,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/catchall" => crate::mail::catchall::handle_catchall_get(params),
         "/cli/mail/alias" => crate::mail::alias::handle_alias_list(params),
         "/cli/mail/forward" => crate::mail::forward::handle_forward_get(params),
+        "/cli/mail/ooo" => crate::mail::ooo::handle_ooo_get(params),
+        "/cli/mail/footer" => crate::mail::footer::handle_footer_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -211,7 +219,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/import"
         | "/cli/mail/cert/renew"
         | "/cli/mail/alias/remove"
-        | "/cli/mail/forward/unset" => CliResponse::method_not_allowed(),
+        | "/cli/mail/forward/unset"
+        | "/cli/mail/ooo/unset"
+        | "/cli/mail/footer/unset" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -285,6 +295,10 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/alias/remove" => crate::mail::alias::handle_alias_remove(body),
         "/cli/mail/forward" => crate::mail::forward::handle_forward_set(body),
         "/cli/mail/forward/unset" => crate::mail::forward::handle_forward_unset(body),
+        "/cli/mail/ooo" => crate::mail::ooo::handle_ooo_set(body),
+        "/cli/mail/ooo/unset" => crate::mail::ooo::handle_ooo_unset(body),
+        "/cli/mail/footer" => crate::mail::footer::handle_footer_set(body),
+        "/cli/mail/footer/unset" => crate::mail::footer::handle_footer_unset(body),
         "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
         _ => CliResponse::not_found(),
     }
@@ -412,6 +426,10 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/alias/remove"
             | "/cli/mail/forward"
             | "/cli/mail/forward/unset"
+            | "/cli/mail/ooo"
+            | "/cli/mail/ooo/unset"
+            | "/cli/mail/footer"
+            | "/cli/mail/footer/unset"
             | "/cli/mail/cert/renew"
             | "/cli/mail/server/rotate-admin"
             | "/cli/mail/address/password"
@@ -685,6 +703,10 @@ mod tests {
             "/cli/mail/alias/remove",
             "/cli/mail/forward",
             "/cli/mail/forward/unset",
+            "/cli/mail/ooo",
+            "/cli/mail/ooo/unset",
+            "/cli/mail/footer",
+            "/cli/mail/footer/unset",
             "/cli/mail/cert/renew",
             "/cli/mail/server/rotate-admin",
             "/cli/mail/address/password",
@@ -769,6 +791,19 @@ mod tests {
             "owner/admin alias"
         );
         assert!(!is_owner_level_mutation("/cli/mail/forward"));
+        assert!(
+            !is_owner_level_mutation("/cli/mail/ooo")
+                && !is_owner_level_mutation("/cli/mail/footer"),
+            "ooo/footer are mail_manage, not leftover M6"
+        );
+        let ooo_off = mail_manage_authorized("/cli/mail/ooo", false, Some(&p));
+        assert!(ooo_off.is_err(), "M5 off ooo is owner_only");
+        assert!(
+            mail_manage_authorized("/cli/mail/ooo", true, None).is_ok(),
+            "owner/admin sets OOO"
+        );
+        let footer_off = mail_manage_authorized("/cli/mail/footer", false, Some(&p));
+        assert!(footer_off.is_err(), "M5 off footer is owner_only");
     }
 
     /// GET on every POST-only mutation answers an explicit 405 through
@@ -815,6 +850,8 @@ mod tests {
             "/cli/mail/server/rotate-admin",
             "/cli/mail/alias/remove",
             "/cli/mail/forward/unset",
+            "/cli/mail/ooo/unset",
+            "/cli/mail/footer/unset",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
@@ -875,6 +912,32 @@ mod tests {
         assert!(!is_owner_level_mutation("/cli/mail/forward"));
         assert!(!is_owner_level_mutation("/cli/mail/alias/remove"));
         assert!(!is_owner_level_mutation("/cli/mail/forward/unset"));
+        let ooo_get = dispatch("/cli/mail/ooo", &params).expect("ooo GET claimed");
+        assert_ne!(
+            ooo_get.status, "405 Method Not Allowed",
+            "GET /cli/mail/ooo is show, not POST-only: {}",
+            ooo_get.body
+        );
+        assert_eq!(ooo_get.status, "400 Bad Request", "{}", ooo_get.body);
+        let ooo_post = dispatch_post("/cli/mail/ooo", b"{}");
+        assert_ne!(ooo_post.status, "404 Not Found", "ooo POST must be wired");
+        assert_eq!(ooo_post.status, "400 Bad Request", "{}", ooo_post.body);
+        let footer_get = dispatch("/cli/mail/footer", &params).expect("footer GET claimed");
+        assert_ne!(
+            footer_get.status, "405 Method Not Allowed",
+            "GET /cli/mail/footer is show: {}",
+            footer_get.body
+        );
+        let footer_post = dispatch_post("/cli/mail/footer", b"{}");
+        assert_ne!(
+            footer_post.status, "404 Not Found",
+            "footer POST must be wired"
+        );
+        assert_eq!(
+            footer_post.status, "400 Bad Request",
+            "{}",
+            footer_post.body
+        );
         assert_eq!(
             dispatch_post("/cli/mail/unknown", b"{}").status,
             "404 Not Found"

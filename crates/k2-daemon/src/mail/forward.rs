@@ -10,6 +10,7 @@ use crate::cli_response::CliResponse;
 use crate::mail::hostmail_auth::{
     account_id_of, authorize_mailbox, engine, err_json, require_active_mint,
 };
+use crate::mail::sieve_user::{self, ForwardBlock, SievePatch};
 
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default)]
@@ -47,25 +48,27 @@ pub fn handle_forward_get(params: &HashMap<String, String>) -> CliResponse {
         Ok(c) => c,
         Err(resp) => return resp,
     };
-    match client.sieve_k2_forward_get(&account_id) {
-        Ok(Some((to, keep))) => CliResponse::ok_json(
-            serde_json::json!({
-                "ok": true,
-                "address": row.address,
-                "to": to,
-                "keep": keep,
-            })
-            .to_string(),
-        ),
-        Ok(None) => CliResponse::ok_json(
-            serde_json::json!({
-                "ok": true,
-                "address": row.address,
-                "to": serde_json::Value::Null,
-                "keep": false,
-            })
-            .to_string(),
-        ),
+    match sieve_user::load_user_sieve(&client, &account_id) {
+        Ok((sieve, _)) => match sieve.forward {
+            Some(fwd) => CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "address": row.address,
+                    "to": fwd.dest,
+                    "keep": fwd.keep,
+                })
+                .to_string(),
+            ),
+            None => CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "address": row.address,
+                    "to": serde_json::Value::Null,
+                    "keep": false,
+                })
+                .to_string(),
+            ),
+        },
         Err(e) => err_json("502 Bad Gateway", "engine", e),
     }
 }
@@ -109,7 +112,14 @@ pub fn handle_forward_set(body: &[u8]) -> CliResponse {
         Ok(c) => c,
         Err(resp) => return resp,
     };
-    if let Err(e) = client.sieve_k2_forward_set(&account_id, &dest.address, keep) {
+    if let Err(e) = sieve_user::patch_user_sieve(
+        &client,
+        &account_id,
+        SievePatch::SetForward(ForwardBlock {
+            dest: dest.address.clone(),
+            keep,
+        }),
+    ) {
         return err_json("502 Bad Gateway", "engine", e);
     }
     CliResponse::ok_json(
@@ -149,7 +159,7 @@ pub fn handle_forward_unset(body: &[u8]) -> CliResponse {
         Ok(c) => c,
         Err(resp) => return resp,
     };
-    match client.sieve_k2_forward_destroy(&account_id) {
+    match sieve_user::patch_user_sieve(&client, &account_id, SievePatch::UnsetForward) {
         Ok(_) => CliResponse::ok_json(
             serde_json::json!({
                 "ok": true,

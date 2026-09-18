@@ -750,6 +750,25 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
     let (fu_status, fu_body) =
         uds(&sock, &get("/cli/mail/forward/unset", Some(&token))).await;
     assert_eq!(fu_status, 405, "UDS GET forward/unset 405; {fu_body}");
+    let (ooo_status, ooo_body) = uds(&sock, &get("/cli/mail/ooo", Some(&token))).await;
+    assert_ne!(ooo_status, 405, "UDS GET ooo is show; {ooo_body}");
+    assert_ne!(ooo_status, 403, "UDS flag ON ooo GET; {ooo_body}");
+    assert!(
+        !ooo_body.contains("owner_only"),
+        "UDS ooo GET: {ooo_body}"
+    );
+    let (ooo_unset_status, ooo_unset_body) =
+        uds(&sock, &get("/cli/mail/ooo/unset", Some(&token))).await;
+    assert_eq!(
+        ooo_unset_status, 405,
+        "UDS GET ooo/unset 405; {ooo_unset_body}"
+    );
+    let (ft_status, ft_body) = uds(&sock, &get("/cli/mail/footer", Some(&token))).await;
+    assert_ne!(ft_status, 405, "UDS GET footer is show; {ft_body}");
+    assert_ne!(ft_status, 403, "UDS flag ON footer GET; {ft_body}");
+    let (ftu_status, ftu_body) =
+        uds(&sock, &get("/cli/mail/footer/unset", Some(&token))).await;
+    assert_eq!(ftu_status, 405, "UDS GET footer/unset 405; {ftu_body}");
 
     let (cr_status, cr_body) = uds(&sock, &get("/cli/mail/cert/renew", Some(&token))).await;
     assert_eq!(cr_status, 405, "UDS GET cert/renew 405; {cr_body}");

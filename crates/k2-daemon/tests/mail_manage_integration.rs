@@ -535,6 +535,12 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/forward", Some("{}")),
             ("GET", "/cli/mail/forward", None),
             ("POST", "/cli/mail/forward/unset", Some("{}")),
+            ("POST", "/cli/mail/ooo", Some("{}")),
+            ("GET", "/cli/mail/ooo", None),
+            ("POST", "/cli/mail/ooo/unset", Some("{}")),
+            ("POST", "/cli/mail/footer", Some("{}")),
+            ("GET", "/cli/mail/footer", None),
+            ("POST", "/cli/mail/footer/unset", Some("{}")),
             ("POST", "/cli/mail/cert/renew", Some("{}")),
             ("POST", "/cli/mail/server/rotate-admin", Some("{}")),
         ] {
@@ -601,6 +607,38 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             catchall_get.status, 405,
             "GET /cli/mail/catchall is show; {}",
             catchall_get.body
+        let ooo_get = http(port, "GET", &format!("/cli/mail/ooo?token={hook_a}"), None);
+        assert_ne!(
+            ooo_get.status, 405,
+            "GET /cli/mail/ooo is show; {}",
+            ooo_get.body
+        );
+        assert_eq!(
+            ooo_get.status, 400,
+            "GET ooo without address; {}",
+            ooo_get.body
+        );
+        let ooo_unset_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/ooo/unset?token={hook_a}"),
+            None,
+        );
+        assert_eq!(
+            ooo_unset_get.status, 405,
+            "GET ooo/unset 405; {}",
+            ooo_unset_get.body
+        );
+        let footer_unset_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/footer/unset?token={hook_a}"),
+            None,
+        );
+        assert_eq!(
+            footer_unset_get.status, 405,
+            "GET footer/unset 405; {}",
+            footer_unset_get.body
         );
         let renew_get = http(
             port,
@@ -775,5 +813,87 @@ async fn mail_address_password_rotate_auth_and_pending_row() {
         );
         assert_not_owner_only(&owner, "owner rotates pending active row");
         assert_ne!(owner.status, 404, "{}", owner.body);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mail_ooo_footer_auth_unminted_and_get_405() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let a_handle = format!("oooa{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (a_id, _a_path) = seed_ws(&a_handle);
+        let hook_a = mint_scoped_hook_for(&a_id);
+        let addr = format!("ooo@{a_handle}.example");
+
+        let off = http(
+            port,
+            "POST",
+            &format!("/cli/mail/ooo?token={hook_a}"),
+            Some(&format!(r#"{{"address":"{addr}","text":"away"}}"#)),
+        );
+        assert_owner_only(&off, "M5 off ooo set");
+        let footer_off = http(
+            port,
+            "POST",
+            &format!("/cli/mail/footer?token={hook_a}"),
+            Some(r#"{"text":"Acme"}"#),
+        );
+        assert_owner_only(&footer_off, "M5 off footer set");
+
+        let on = set_mail_manage(port, &a_id, 1);
+        assert_eq!(on.status, 200, "{}", on.body);
+
+        let missing = http(
+            port,
+            "POST",
+            &format!("/cli/mail/ooo?token={hook_a}"),
+            Some(&format!(r#"{{"address":"{addr}","text":"away"}}"#)),
+        );
+        assert_not_owner_only(&missing, "mail_manage ooo unminted");
+        assert_eq!(missing.status, 404, "unminted ooo 404; {}", missing.body);
+        assert!(missing.body.contains("not_found"), "{}", missing.body);
+
+        let days = http(
+            port,
+            "POST",
+            &format!("/cli/mail/ooo?token={hook_a}"),
+            Some(&format!(
+                r#"{{"address":"{addr}","text":"away","days":99}}"#
+            )),
+        );
+        assert_eq!(days.status, 400, "days out of range; {}", days.body);
+
+        let domain = http(
+            port,
+            "POST",
+            &format!("/cli/mail/footer?token={hook_a}"),
+            Some(r#"{"text":"Acme","domain":"acme.test"}"#),
+        );
+        assert_eq!(domain.status, 400, "--domain 400; {}", domain.body);
+
+        let html = http(
+            port,
+            "POST",
+            &format!("/cli/mail/footer?token={hook_a}"),
+            Some(r#"{"text":"<html>nope</html>"}"#),
+        );
+        assert_eq!(html.status, 400, "HTML footer 400; {}", html.body);
+
+        let owner_ooo = http(
+            port,
+            "GET",
+            &format!("/cli/mail/ooo/unset?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(owner_ooo.status, 405, "GET ooo/unset; {}", owner_ooo.body);
+        let owner_ft = http(
+            port,
+            "GET",
+            &format!("/cli/mail/footer/unset?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(owner_ft.status, 405, "GET footer/unset; {}", owner_ft.body);
     });
 }

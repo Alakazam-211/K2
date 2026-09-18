@@ -13391,6 +13391,8 @@ cmd_schema() {
       "name": "hostmail",
       "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|cert> ... (server admin)",
       "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), catchall set|unset|show (Domain.catchAllAddress; mail_manage), alias add|remove|list (Account.aliases EmailAlias; not a mint; mail_manage), forward set|unset|show (SieveScript k2-forward; --keep copies locally; mail_manage), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|ooo|footer|cert> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -13451,6 +13453,14 @@ cmd_schema() {
       "args": [{"name": "domain", "required": true}],
       "flags": [
         {"name": "--address", "arg": "addr", "description": "Minted mailbox on that domain (set)."},
+      "name": "hostmail ooo set",
+      "usage": "k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE] [--json]",
+      "description": "Set out-of-office auto-reply (Stalwart vacation) on a minted mailbox. POST /cli/mail/ooo. mail_manage. --text is literal; @path reads a file; - reads stdin. --days 1-31 (default 7). --until UTC YYYY-MM-DD. Unminted address is 404.",
+      "args": [{"name": "addr", "required": true}],
+      "flags": [
+        {"name": "--text", "arg": "FILE_OR_STRING", "description": "Vacation body. Literal, @path, or - for stdin."},
+        {"name": "--days", "arg": "N", "description": "RFC 5230 :days (1-31, default 7)."},
+        {"name": "--until", "arg": "DATE", "description": "UTC YYYY-MM-DD currentdate wrap."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -13469,8 +13479,42 @@ cmd_schema() {
       "flags": [
         {"name": "--to", "arg": "dest", "description": "Minted dest mailbox on this host."},
         {"name": "--keep", "arg": null, "description": "Keep a local copy (redirect :copy)."},
+      "name": "hostmail ooo unset",
+      "usage": "k2 hostmail ooo unset <addr> [--json]",
+      "description": "Remove vacation from that mailbox's user Sieve (leaves forward if present). POST /cli/mail/ooo/unset. GET is 405.",
+      "args": [{"name": "addr", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail ooo show",
+      "usage": "k2 hostmail ooo show <addr> [--json]",
+      "description": "Show OOO on/off, days, until, text preview. GET /cli/mail/ooo?address=. mail_manage.",
+      "args": [{"name": "addr", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail footer set",
+      "usage": "k2 hostmail footer set --text FILE_OR_STRING [--json]",
+      "description": "Set the host-wide outbound company footer (DATA-stage trusted Sieve). POST /cli/mail/footer. mail_manage. Plain text, max 4096 bytes. --domain is 400 this cut. --text is literal; @path reads a file; - reads stdin.",
+      "args": [],
+      "flags": [
+        {"name": "--text", "arg": "FILE_OR_STRING", "description": "Footer body. Literal, @path, or - for stdin."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
+    },
+    {
+      "name": "hostmail footer unset",
+      "usage": "k2 hostmail footer unset [--json]",
+      "description": "Remove the host-wide footer script. POST /cli/mail/footer/unset. GET is 405. --domain is 400 this cut.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail footer show",
+      "usage": "k2 hostmail footer show [--json]",
+      "description": "Show the current host-wide outbound footer or none. GET /cli/mail/footer. mail_manage.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "dns access",
@@ -22755,6 +22799,7 @@ _mail_py() {
     M_QUOTA_BYTES="${M_QUOTA_BYTES:-}" M_QUOTA_GB="${M_QUOTA_GB:-}" \
     M_QUOTA_MESSAGES="${M_QUOTA_MESSAGES:-}" \
     M_ALIAS="${M_ALIAS:-}" M_MAILBOX="${M_MAILBOX:-}" M_KEEP="${M_KEEP:-false}" \
+    M_TEXT="${M_TEXT:-}" M_DAYS="${M_DAYS:-}" M_UNTIL="${M_UNTIL:-}" \
     M_LEVEL="${M_LEVEL:-}" \
     M_READ="${M_READ:-}" M_FLAGGED="${M_FLAGGED:-}" \
     M_MANAGE="${M_MANAGE:-}" M_DELETE="${M_DELETE:-}" \
@@ -24055,6 +24100,75 @@ elif verb == "password_rotate":
         _ep("jmap    ", "jmap", 443)
         print("note: this invalidates the mint-time secret — Mail.app sessions must use the new password")
 
+elif verb == "ooo_get":
+    d = call("GET", "/cli/mail/ooo", params={"address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        if d.get("enabled"):
+            until = d.get("until") or "none"
+            print("%s  ooo on  days=%s  until=%s" % (
+                d.get("address") or env("M_ADDRESS") or "?",
+                d.get("days") if d.get("days") is not None else "?",
+                until))
+            if d.get("text"):
+                print(d["text"])
+        else:
+            print("%s  ooo off" % (d.get("address") or env("M_ADDRESS") or "?"))
+
+elif verb == "ooo_set":
+    body = {"address": env("M_ADDRESS"), "text": env("M_TEXT")}
+    if env("M_DAYS") != "":
+        body["days"] = int(env("M_DAYS"))
+    if env("M_UNTIL") != "":
+        body["until"] = env("M_UNTIL")
+    d = call("POST", "/cli/mail/ooo", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("ooo set for %s  days=%s  until=%s" % (
+            d.get("address") or env("M_ADDRESS") or "?",
+            d.get("days") if d.get("days") is not None else "7",
+            d.get("until") or "none"))
+
+elif verb == "ooo_unset":
+    d = call("POST", "/cli/mail/ooo/unset", body={"address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("ooo unset for %s" % (d.get("address") or env("M_ADDRESS") or "?"))
+
+elif verb == "footer_get":
+    d = call("GET", "/cli/mail/footer")
+    if as_json:
+        print(dumps(d))
+    else:
+        if d.get("enabled") and d.get("text"):
+            print("footer on")
+            print(d["text"])
+        else:
+            print("footer off")
+
+elif verb == "footer_set":
+    body = {"text": env("M_TEXT")}
+    if env("M_DOMAIN") != "":
+        body["domain"] = env("M_DOMAIN")
+    d = call("POST", "/cli/mail/footer", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("footer set")
+
+elif verb == "footer_unset":
+    body = {}
+    if env("M_DOMAIN") != "":
+        body["domain"] = env("M_DOMAIN")
+    d = call("POST", "/cli/mail/footer/unset", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("footer unset")
+
 else:
     die({"code": "usage", "hint": "unknown mail verb '%s'" % verb})
 PYEOF
@@ -25298,6 +25412,12 @@ cmd_hostmail() {
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
             _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|cert>"
+        ooo)     cmd_hostmail_ooo "$@" ;;
+        footer)  cmd_hostmail_footer "$@" ;;
+        cert)    cmd_hostmail_cert "$@" ;;
+        --help|-h) cmd_help_hostmail; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|ooo|footer|cert>"
             exit 2 ;;
     esac
 }
@@ -25561,6 +25681,38 @@ cmd_hostmail_catchall() {
         --help|-h) cmd_help_hostmail_catchall; exit 0 ;;
         *)
             _mail_err "usage" "unknown catchall command '$sub' — usage: k2 hostmail catchall <set|unset|show>"
+# --text is literal; @path reads a file; - reads stdin. Never "if the
+# arg exists as a path".
+_hostmail_read_text() {
+    local raw="$1"
+    if [ "$raw" = "-" ]; then
+        cat
+    elif [ "${raw#@}" != "$raw" ]; then
+        local path="${raw#@}"
+        if [ -z "$path" ]; then
+            _mail_err "usage" "--text @path needs a path"
+            return 1
+        fi
+        if [ ! -f "$path" ]; then
+            _mail_err "usage" "no such file: $path"
+            return 1
+        fi
+        cat "$path"
+    else
+        printf '%s' "$raw"
+    fi
+}
+
+cmd_hostmail_ooo() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_ooo; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        set) cmd_hostmail_ooo_set "$@" ;;
+        unset) cmd_hostmail_ooo_unset "$@" ;;
+        show) cmd_hostmail_ooo_show "$@" ;;
+        --help|-h) cmd_help_hostmail_ooo; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown ooo command '$sub' — usage: k2 hostmail ooo <set|unset|show>"
             exit 2 ;;
     esac
 }
@@ -25758,6 +25910,22 @@ cmd_hostmail_forward_set() {
             --to)
                 [ $# -ge 2 ] || { _mail_err "usage" "--to requires a minted mailbox"; exit 2; }
                 to="$2"; shift 2 ;;
+cmd_hostmail_ooo_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_ooo_set; exit 0; fi
+    local address="" text="" days="" until="" as_json=false text_set=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --text)
+                [ $# -ge 2 ] || { _mail_err "usage" "--text requires a value (literal, @path, or -)"; exit 2; }
+                if ! text="$(_hostmail_read_text "$2")"; then exit 2; fi
+                text_set=true; shift 2 ;;
+            --days)
+                [ $# -ge 2 ] || { _mail_err "usage" "--days requires 1-31"; exit 2; }
+                days="$2"; shift 2 ;;
+            --until)
+                [ $# -ge 2 ] || { _mail_err "usage" "--until requires UTC YYYY-MM-DD"; exit 2; }
+                until="$2"; shift 2 ;;
             --address)
                 [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
                 address="$2"; shift 2 ;;
@@ -25767,6 +25935,11 @@ cmd_hostmail_forward_set() {
             *)
                 if [ -z "$address" ]; then address="$1"; else
                     _mail_err "usage" "unexpected extra argument '$1'"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
                     exit 2
                 fi
                 shift ;;
@@ -25780,6 +25953,21 @@ cmd_hostmail_forward_set() {
 
 cmd_hostmail_forward_unset() {
     if _wants_help "$@"; then cmd_help_hostmail_forward_unset; exit 0; fi
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE]"; exit 2; }
+    $text_set || { _mail_err "usage" "ooo set needs --text (literal, @path, or -)"; exit 2; }
+    if [ -n "$days" ]; then
+        if ! _mail_is_uint "$days" || [ "$days" -lt 1 ] || [ "$days" -gt 31 ]; then
+            _mail_err "usage" "--days must be 1-31"
+            exit 2
+        fi
+    fi
+    local M_VERB="ooo_set" M_JSON="$as_json" M_ADDRESS="$address" \
+          M_TEXT="$text" M_DAYS="$days" M_UNTIL="$until"
+    _mail_py
+}
+
+cmd_hostmail_ooo_unset() {
+    if _wants_help "$@"; then cmd_help_hostmail_ooo_unset; exit 0; fi
     local address="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -25793,6 +25981,11 @@ cmd_hostmail_forward_unset() {
             *)
                 if [ -z "$address" ]; then address="$1"; else
                     _mail_err "usage" "unexpected extra argument '$1'"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ooo unset <addr>"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
                     exit 2
                 fi
                 shift ;;
@@ -25805,6 +25998,13 @@ cmd_hostmail_forward_unset() {
 
 cmd_hostmail_forward_show() {
     if _wants_help "$@"; then cmd_help_hostmail_forward_show; exit 0; fi
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo unset <addr>"; exit 2; }
+    local M_VERB="ooo_unset" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_ooo_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_ooo_show; exit 0; fi
     local address="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -25818,6 +26018,11 @@ cmd_hostmail_forward_show() {
             *)
                 if [ -z "$address" ]; then address="$1"; else
                     _mail_err "usage" "unexpected extra argument '$1'"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ooo show <addr>"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
                     exit 2
                 fi
                 shift ;;
@@ -25825,6 +26030,90 @@ cmd_hostmail_forward_show() {
     done
     [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward show <addr>"; exit 2; }
     local M_VERB="forward_get" M_JSON="$as_json" M_ADDRESS="$address"
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo show <addr>"; exit 2; }
+    local M_VERB="ooo_get" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_footer() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_footer; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        set) cmd_hostmail_footer_set "$@" ;;
+        unset) cmd_hostmail_footer_unset "$@" ;;
+        show) cmd_hostmail_footer_show "$@" ;;
+        --help|-h) cmd_help_hostmail_footer; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown footer command '$sub' — usage: k2 hostmail footer <set|unset|show>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_footer_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_footer_set; exit 0; fi
+    local text="" domain="" as_json=false text_set=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --text)
+                [ $# -ge 2 ] || { _mail_err "usage" "--text requires a value (literal, @path, or -)"; exit 2; }
+                if ! text="$(_hostmail_read_text "$2")"; then exit 2; fi
+                text_set=true; shift 2 ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain is reserved (footer is host-wide)"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail footer set --text FILE_OR_STRING"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail footer set --text FILE_OR_STRING"
+                exit 2 ;;
+        esac
+    done
+    $text_set || { _mail_err "usage" "footer set needs --text (literal, @path, or -)"; exit 2; }
+    local M_VERB="footer_set" M_JSON="$as_json" M_TEXT="$text" M_DOMAIN="$domain"
+    _mail_py
+}
+
+cmd_hostmail_footer_unset() {
+    if _wants_help "$@"; then cmd_help_hostmail_footer_unset; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain is reserved (footer is host-wide)"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail footer unset"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail footer unset"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="footer_unset" M_JSON="$as_json" M_DOMAIN="$domain"
+    _mail_py
+}
+
+cmd_hostmail_footer_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_footer_show; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                _mail_err "usage" "--domain is reserved — footer is host-wide this cut"
+                exit 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail footer show"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail footer show"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="footer_get" M_JSON="$as_json"
     _mail_py
 }
 
@@ -26588,6 +26877,10 @@ COMMANDS
                               k2 hostmail create mints). mail_manage.
   forward set|unset|show      Sieve-redirect a minted mailbox to another minted
                               mailbox. --keep keeps a local copy. mail_manage.
+  ooo set|unset|show <addr>   Out-of-office auto-reply (vacation) on a minted
+                              mailbox. mail_manage. --text literal|@path|-.
+  footer set|unset|show       Host-wide outbound company footer (plain text).
+                              mail_manage. --domain is 400 this cut.
   cert renew                  Retry ACME for the mail hostname (enable is
                               not the retry path; disable is not a retry)
 
@@ -26887,6 +27180,89 @@ Print dest + keep, or none.
 
 USAGE
   k2 hostmail forward show <addr> [--json]
+cmd_help_hostmail_ooo() {
+    cat <<'EOF'
+Out-of-office auto-reply on a minted mailbox (Stalwart vacation).
+mail_manage. Unminted address is 404. --text is literal; @path reads
+a file; - reads stdin. --days 1-31 (default 7). --until UTC YYYY-MM-DD.
+
+USAGE
+  k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE] [--json]
+  k2 hostmail ooo unset <addr> [--json]
+  k2 hostmail ooo show <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_ooo_set() {
+    cat <<'EOF'
+Set out-of-office auto-reply (Stalwart vacation) on a minted mailbox.
+mail_manage. :from and :addresses are the primary mint address.
+--text is literal; @path reads a file; - reads stdin.
+
+USAGE
+  k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE] [--json]
+EOF
+}
+
+cmd_help_hostmail_ooo_unset() {
+    cat <<'EOF'
+Remove vacation from that mailbox's user Sieve. Leaves a forward
+block if present. POST /cli/mail/ooo/unset. GET is 405.
+
+USAGE
+  k2 hostmail ooo unset <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_ooo_show() {
+    cat <<'EOF'
+Show OOO on/off, days, until, and text. GET /cli/mail/ooo?address=.
+
+USAGE
+  k2 hostmail ooo show <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_footer() {
+    cat <<'EOF'
+Host-wide outbound company footer (DATA-stage trusted Sieve).
+mail_manage. Plain text only, max 4096 bytes. --domain is reserved
+and 400 this cut. Personal signatures stay in the client.
+
+USAGE
+  k2 hostmail footer set --text FILE_OR_STRING [--json]
+  k2 hostmail footer unset [--json]
+  k2 hostmail footer show [--json]
+EOF
+}
+
+cmd_help_hostmail_footer_set() {
+    cat <<'EOF'
+Set the host-wide outbound footer appended to text/plain parts on
+authenticated submission (587/465). --text is literal; @path reads
+a file; - reads stdin. --domain is 400 this cut.
+
+USAGE
+  k2 hostmail footer set --text FILE_OR_STRING [--json]
+EOF
+}
+
+cmd_help_hostmail_footer_unset() {
+    cat <<'EOF'
+Remove the host-wide footer script. POST /cli/mail/footer/unset.
+GET is 405. --domain is 400 this cut.
+
+USAGE
+  k2 hostmail footer unset [--json]
+EOF
+}
+
+cmd_help_hostmail_footer_show() {
+    cat <<'EOF'
+Show the current host-wide outbound footer or none.
+
+USAGE
+  k2 hostmail footer show [--json]
 EOF
 }
 
@@ -29315,6 +29691,7 @@ case "${1:-help}" in
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)
             create|status|domain|doctor|config|approvals|catchall|alias|forward)
+            create|status|domain|doctor|config|approvals|ooo|footer)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

@@ -817,6 +817,10 @@ async fn handle_one_request(
             | "/cli/mail/alias/remove"
             | "/cli/mail/forward"
             | "/cli/mail/forward/unset"
+            | "/cli/mail/ooo"
+            | "/cli/mail/ooo/unset"
+            | "/cli/mail/footer"
+            | "/cli/mail/footer/unset"
             | "/cli/mail/cert/renew"
             | "/cli/mail/server/rotate-admin"
             // Per-workspace hosted-mail manage toggle. Dedicated POST

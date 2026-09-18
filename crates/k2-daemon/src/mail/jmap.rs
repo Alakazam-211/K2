@@ -1561,6 +1561,329 @@ impl StalwartClient {
         }
         Ok(bytes.to_vec())
     }
+
+    // ── RFC 9661 SieveScript (user scripts) + trusted DATA footer ──
+
+    fn sieve_call(
+        &self,
+        account_id: &str,
+        method: &str,
+        mut args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        args["accountId"] = serde_json::Value::String(account_id.to_string());
+        let api_url = self.discover_api_url()?;
+        let resp = self.post_json_url(&api_url, &sieve_envelope(method, args))?;
+        parse_method_response(method, &resp)
+    }
+
+    /// List the mailbox's RFC 9661 Sieve scripts (`SieveScript/query` +
+    /// `SieveScript/get`). Not `x:SieveScript`. Not VacationResponse.
+    pub fn sieve_scripts_list(&self, account_id: &str) -> Result<Vec<SieveScriptInfo>, String> {
+        let queried = self.sieve_call(
+            account_id,
+            "SieveScript/query",
+            serde_json::json!({}),
+        )?;
+        let ids = parse_query_ids(&queried);
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let got = self.sieve_call(
+            account_id,
+            "SieveScript/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": ["id", "name", "blobId", "isActive"],
+            }),
+        )?;
+        Ok(parse_sieve_script_list(&got))
+    }
+
+    pub fn sieve_script_blob(&self, account_id: &str, blob_id: &str) -> Result<Vec<u8>, String> {
+        self.blob_download(account_id, blob_id, "k2.sieve", "application/sieve")
+    }
+
+    /// Create or update the named `k2` script and activate it. Optionally
+    /// destroy leftover `k2-forward` ids in the same set.
+    pub fn sieve_script_put_k2(
+        &self,
+        account_id: &str,
+        existing_id: Option<&str>,
+        blob_id: &str,
+        destroy_ids: &[String],
+    ) -> Result<(), String> {
+        let mut args = serde_json::Map::new();
+        let activate = match existing_id {
+            Some(id) => {
+                args.insert(
+                    "update".to_string(),
+                    serde_json::json!({ id: { "blobId": blob_id } }),
+                );
+                id.to_string()
+            }
+            None => {
+                args.insert(
+                    "create".to_string(),
+                    serde_json::json!({
+                        CREATE_TAG: { "name": "k2", "blobId": blob_id }
+                    }),
+                );
+                format!("#{CREATE_TAG}")
+            }
+        };
+        args.insert(
+            "onSuccessActivateScript".to_string(),
+            serde_json::Value::String(activate),
+        );
+        if !destroy_ids.is_empty() {
+            args.insert(
+                "destroy".to_string(),
+                serde_json::Value::Array(
+                    destroy_ids
+                        .iter()
+                        .map(|s| serde_json::Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        let resp = self.sieve_call(
+            account_id,
+            "SieveScript/set",
+            serde_json::Value::Object(args),
+        )?;
+        expect_set_clean("SieveScript/set", &resp)
+    }
+
+    pub fn sieve_scripts_destroy(&self, account_id: &str, ids: &[String]) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let resp = self.sieve_call(
+            account_id,
+            "SieveScript/set",
+            serde_json::json!({
+                "destroy": ids,
+                "onSuccessActivateScript": null,
+            }),
+        )?;
+        expect_set_clean("SieveScript/set", &resp)
+    }
+
+    /// Trusted DATA-stage system scripts (`x:SieveSystemScript`).
+    pub fn system_scripts_list(&self) -> Result<Vec<SystemScriptInfo>, String> {
+        let resp = self.registry_call("x:SieveSystemScript/get", serde_json::json!({}))?;
+        Ok(parse_system_script_list(&resp))
+    }
+
+    pub fn system_script_put(&self, name: &str, contents: &str) -> Result<(), String> {
+        let existing = self.system_scripts_list()?;
+        let existing_id = existing.iter().find(|s| s.name == name).map(|s| s.id.clone());
+        let args = match existing_id {
+            Some(id) => serde_json::json!({
+                "update": { id: { "contents": contents, "isActive": true, "name": name } }
+            }),
+            None => serde_json::json!({
+                "create": {
+                    CREATE_TAG: {
+                        "name": name,
+                        "isActive": true,
+                        "contents": contents,
+                    }
+                }
+            }),
+        };
+        let resp = self.registry_call("x:SieveSystemScript/set", args)?;
+        expect_set_clean("x:SieveSystemScript/set", &resp)
+    }
+
+    pub fn system_script_destroy(&self, name: &str) -> Result<bool, String> {
+        let existing = self.system_scripts_list()?;
+        let Some(found) = existing.into_iter().find(|s| s.name == name) else {
+            return Ok(false);
+        };
+        let resp = self.registry_call(
+            "x:SieveSystemScript/set",
+            serde_json::json!({ "destroy": [found.id] }),
+        )?;
+        parse_set_destroyed("x:SieveSystemScript/set", &found.id, &resp)?;
+        Ok(true)
+    }
+
+    pub fn mta_stage_data_get_script(&self) -> Result<serde_json::Value, String> {
+        let resp = self.registry_call(
+            "x:MtaStageData/get",
+            serde_json::json!({
+                "ids": [MTA_STAGE_DATA_SINGLETON_ID],
+                "properties": ["script"],
+            }),
+        )?;
+        parse_mta_stage_script(&resp)
+    }
+
+    pub fn mta_stage_data_set_script(&self, script: serde_json::Value) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:MtaStageData/set",
+            serde_json::json!({
+                "update": { MTA_STAGE_DATA_SINGLETON_ID: { "script": script } }
+            }),
+        )?;
+        parse_set_updated("x:MtaStageData/set", MTA_STAGE_DATA_SINGLETON_ID, &resp)
+    }
+}
+
+/// RFC 9661 SieveScript list entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SieveScriptInfo {
+    pub id: String,
+    pub name: String,
+    pub blob_id: String,
+    pub is_active: bool,
+}
+
+/// Trusted `x:SieveSystemScript` list entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemScriptInfo {
+    pub id: String,
+    pub name: String,
+    pub contents: String,
+    pub is_active: bool,
+}
+
+const MTA_STAGE_DATA_SINGLETON_ID: &str = "singleton";
+
+const JMAP_SIEVE_USING: [&str; 2] = [
+    "urn:ietf:params:jmap:core",
+    "urn:ietf:params:jmap:sieve",
+];
+
+fn sieve_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "using": JMAP_SIEVE_USING,
+        "methodCalls": [[method, args, "0"]],
+    })
+}
+
+fn parse_sieve_script_list(args: &serde_json::Value) -> Vec<SieveScriptInfo> {
+    args.get("list")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|m| {
+                    let id = m.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty())?;
+                    let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let blob_id = m
+                        .get("blobId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let is_active = m.get("isActive").and_then(|v| v.as_bool()).unwrap_or(false);
+                    Some(SieveScriptInfo {
+                        id: id.to_string(),
+                        name,
+                        blob_id,
+                        is_active,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_system_script_list(args: &serde_json::Value) -> Vec<SystemScriptInfo> {
+    args.get("list")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|m| {
+                    let id = m.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty())?;
+                    let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let contents = m
+                        .get("contents")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let is_active = m.get("isActive").and_then(|v| v.as_bool()).unwrap_or(false);
+                    Some(SystemScriptInfo {
+                        id: id.to_string(),
+                        name,
+                        contents,
+                        is_active,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_mta_stage_script(args: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| {
+            a.iter()
+                .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(MTA_STAGE_DATA_SINGLETON_ID))
+        })
+        .ok_or_else(|| "x:MtaStageData/get: singleton not in the reply list".to_string())?;
+    Ok(entry
+        .get("script")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({"else": "false"})))
+}
+
+/// DATA-stage `script` expression: run `k2-footer` only when
+/// `authenticated_as` is set (outbound submission). Preserve other
+/// match rows.
+pub fn rewrite_data_script_footer(
+    expr: &serde_json::Value,
+    footer_name: Option<&str>,
+) -> serde_json::Value {
+    let else_ = expr
+        .get("else")
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::String("false".to_string()));
+    let our_if = "!is_empty(authenticated_as)";
+    let mut matches: Vec<(usize, serde_json::Value)> = Vec::new();
+    if let Some(m) = expr.get("match").and_then(|v| v.as_object()) {
+        for (k, v) in m {
+            if let Ok(idx) = k.parse::<usize>() {
+                matches.push((idx, v.clone()));
+            }
+        }
+    }
+    matches.sort_by_key(|(i, _)| *i);
+    let mut kept: Vec<serde_json::Value> = matches
+        .into_iter()
+        .map(|(_, v)| v)
+        .filter(|v| v.get("if").and_then(|s| s.as_str()) != Some(our_if))
+        .collect();
+    if let Some(name) = footer_name {
+        kept.push(serde_json::json!({ "if": our_if, "then": format!("'{name}'") }));
+    }
+    if kept.is_empty() {
+        return serde_json::json!({ "else": "false" });
+    }
+    let map: serde_json::Map<String, serde_json::Value> = kept
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| (i.to_string(), v))
+        .collect();
+    serde_json::json!({ "match": map, "else": else_ })
+}
+
+/// True when the DATA script still selects `k2-footer` on authenticated
+/// submission (so unset may reset it).
+pub fn data_script_points_at_footer(expr: &serde_json::Value, name: &str) -> bool {
+    let want = format!("'{name}'");
+    if let Some(m) = expr.get("match").and_then(|v| v.as_object()) {
+        for v in m.values() {
+            if v.get("then").and_then(|s| s.as_str()) == Some(want.as_str())
+                || v.get("then").and_then(|s| s.as_str()) == Some(name)
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 // ── Session-document parsers ────────────────────────────────────────────
@@ -4914,5 +5237,177 @@ mod s6_relay_tests {
         let destroy = body_json(&rx.recv().expect("req5"));
         assert_eq!(destroy["methodCalls"][0][0], "x:MtaRoute/set");
         assert_eq!(destroy["methodCalls"][0][1]["destroy"][0], "R1");
+    }
+}
+
+#[cfg(test)]
+mod sieve_jmap_tests {
+    use super::tests::{body_json, spawn_mock_server};
+    use super::*;
+
+    #[test]
+    fn sieve_envelope_is_rfc_9661_not_registry() {
+        let env = sieve_envelope("SieveScript/set", serde_json::json!({"accountId": "e"}));
+        assert_eq!(env["using"][0], "urn:ietf:params:jmap:core");
+        assert_eq!(env["using"][1], "urn:ietf:params:jmap:sieve");
+        assert_eq!(env["using"].as_array().map(|a| a.len()), Some(2));
+        assert_ne!(env["using"][1], "urn:stalwart:jmap");
+        assert_eq!(env["methodCalls"][0][0], "SieveScript/set");
+        assert_ne!(env["methodCalls"][0][0], "x:SieveScript/set");
+        assert_ne!(env["methodCalls"][0][0], "VacationResponse/set");
+    }
+
+    #[test]
+    fn sieve_script_put_k2_records_blob_then_set_with_sieve_using() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "uploadUrl": "http://127.0.0.1/upload/{accountId}", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let upload = r#"{"blobId":"blob-k2"}"#.to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["SieveScript/set", {
+                "created": { "k2": { "id": "s1" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session.clone(), upload, session, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let blob = c
+            .blob_upload("acct-e", b"require [\"vacation\"];")
+            .expect("upload");
+        assert_eq!(blob, "blob-k2");
+        c.sieve_script_put_k2("acct-e", None, &blob, &[])
+            .expect("SieveScript/set");
+
+        let _sess = rx.recv().expect("session");
+        let up = rx.recv().expect("blob POST");
+        assert!(up.contains("POST "), "{up}");
+        let _sess2 = rx.recv().expect("session 2");
+        let set = body_json(&rx.recv().expect("SieveScript/set"));
+        assert_eq!(set["using"][1], "urn:ietf:params:jmap:sieve");
+        assert_eq!(set["methodCalls"][0][0], "SieveScript/set");
+        assert_ne!(set["methodCalls"][0][0], "x:SieveScript/set");
+        assert_ne!(set["methodCalls"][0][0], "VacationResponse/set");
+        let args = &set["methodCalls"][0][1];
+        assert_eq!(args["accountId"], "acct-e");
+        assert_eq!(args["create"]["k2"]["name"], "k2");
+        assert_eq!(args["create"]["k2"]["blobId"], "blob-k2");
+        assert_eq!(args["onSuccessActivateScript"], "#k2");
+    }
+
+    #[test]
+    fn sieve_script_put_k2_update_destroys_legacy_forward() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["SieveScript/set", {
+                "updated": { "s1": null },
+                "destroyed": ["fwd1"],
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.sieve_script_put_k2("acct-e", Some("s1"), "blob-2", &["fwd1".to_string()])
+            .expect("update");
+        let _sess = rx.recv().expect("session");
+        let set = body_json(&rx.recv().expect("set"));
+        let args = &set["methodCalls"][0][1];
+        assert_eq!(args["update"]["s1"]["blobId"], "blob-2");
+        assert_eq!(args["destroy"][0], "fwd1");
+        assert_eq!(args["onSuccessActivateScript"], "s1");
+        assert_eq!(set["methodCalls"][0][0], "SieveScript/set");
+    }
+
+    #[test]
+    fn system_script_put_is_registry_k2_footer() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let get_reply = serde_json::json!({
+            "methodResponses": [["x:SieveSystemScript/get", { "list": [], "notFound": [] }, "0"]],
+        })
+        .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:SieveSystemScript/set", {
+                "created": { "k2": { "id": "sys1" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, get_reply, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.system_script_put("k2-footer", "require [\"variables\"];")
+            .expect("put");
+        let _sess = rx.recv().expect("session");
+        let get = body_json(&rx.recv().expect("get"));
+        assert_eq!(get["methodCalls"][0][0], "x:SieveSystemScript/get");
+        assert_eq!(get["using"][1], "urn:stalwart:jmap");
+        let set = body_json(&rx.recv().expect("set"));
+        assert_eq!(set["methodCalls"][0][0], "x:SieveSystemScript/set");
+        let create = &set["methodCalls"][0][1]["create"]["k2"];
+        assert_eq!(create["name"], "k2-footer");
+        assert_eq!(create["isActive"], true);
+        assert!(
+            create["contents"].as_str().unwrap().contains("require"),
+            "{create}"
+        );
+    }
+
+    #[test]
+    fn mta_stage_data_set_authenticated_as_match() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:MtaStageData/set", {
+                "updated": { "singleton": null },
+            }, "0"]],
+        })
+        .to_string();
+        let script = rewrite_data_script_footer(
+            &serde_json::json!({"else": "false"}),
+            Some("k2-footer"),
+        );
+        assert_eq!(script["match"]["0"]["if"], "!is_empty(authenticated_as)");
+        assert_eq!(script["match"]["0"]["then"], "'k2-footer'");
+        assert_eq!(script["else"], "false");
+        assert!(data_script_points_at_footer(&script, "k2-footer"));
+        let cleared = rewrite_data_script_footer(&script, None);
+        assert_eq!(cleared, serde_json::json!({"else": "false"}));
+        assert!(!data_script_points_at_footer(&cleared, "k2-footer"));
+
+        let (port, rx) = spawn_mock_server(vec![session, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.mta_stage_data_set_script(script).expect("set");
+        let _sess = rx.recv().expect("session");
+        let set = body_json(&rx.recv().expect("MtaStageData/set"));
+        assert_eq!(set["methodCalls"][0][0], "x:MtaStageData/set");
+        let patch = &set["methodCalls"][0][1]["update"]["singleton"]["script"];
+        assert_eq!(patch["match"]["0"]["if"], "!is_empty(authenticated_as)");
+        assert_eq!(patch["match"]["0"]["then"], "'k2-footer'");
+    }
+
+    #[test]
+    fn sieve_scripts_destroy_deactivates() {
+        let session =
+            r#"{"apiUrl": "/jmap/", "accounts": {"d": {}}, "primaryAccounts": {"urn:stalwart:jmap": "d"}}"#
+                .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["SieveScript/set", {
+                "destroyed": ["s1"],
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![session, set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.sieve_scripts_destroy("acct-e", &["s1".to_string()])
+            .expect("destroy");
+        let _sess = rx.recv().expect("session");
+        let set = body_json(&rx.recv().expect("set"));
+        assert_eq!(set["using"][1], "urn:ietf:params:jmap:sieve");
+        assert_eq!(set["methodCalls"][0][0], "SieveScript/set");
+        let args = &set["methodCalls"][0][1];
+        assert_eq!(args["destroy"][0], "s1");
+        assert!(args["onSuccessActivateScript"].is_null(), "{args}");
     }
 }

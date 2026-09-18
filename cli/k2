@@ -13389,8 +13389,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -13545,6 +13545,44 @@ cmd_schema() {
       "description": "Revoke one app password on a hosted mailbox. POST /cli/mail/app-password/revoke {address, id}. mail_manage. Unknown id is 404. GET is 405.",
       "args": [{"name": "addr", "required": true}, {"name": "id", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail dkim show",
+      "usage": "k2 hostmail dkim show <domain> [--json]",
+      "description": "List DKIM selectors/stage/expected TXT for a hosted domain. GET /cli/mail/dkim. mail_manage.",
+      "args": [{"name": "domain", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail dkim rotate",
+      "usage": "k2 hostmail dkim rotate <domain> [--json]",
+      "description": "Mint a new Ed25519+RSA DKIM pair. Plants TXT only if dnsWrite already. POST /cli/mail/dkim. mail_manage.",
+      "args": [{"name": "domain", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail dkim retire",
+      "usage": "k2 hostmail dkim retire <domain> <selector> [--json]",
+      "description": "Destroy one old DKIM selector after overlap. POST /cli/mail/dkim/retire. mail_manage.",
+      "args": [{"name": "domain", "required": true}, {"name": "selector", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail dmarc show",
+      "usage": "k2 hostmail dmarc show <domain> [--json]",
+      "description": "Live _dmarc TXT plus reportAddressUri. GET /cli/mail/dmarc. mail_manage. Does not rewrite DNS.",
+      "args": [{"name": "domain", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail dmarc report-to",
+      "usage": "k2 hostmail dmarc report-to <domain> --address <minted> [--json]",
+      "description": "Set Domain.reportAddressUri to a minted inbox. Prints rua= to plant. Does not rewrite _dmarc. POST /cli/mail/dmarc. mail_manage.",
+      "args": [{"name": "domain", "required": true}],
+      "flags": [
+        {"name": "--address", "arg": "minted", "description": "Minted inbox on that domain."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
     },
     {
       "name": "dns access",
@@ -24238,6 +24276,72 @@ elif verb == "app_password_revoke":
     else:
         print("revoked %s on %s" % (d.get("id") or env("M_ID") or "?", d.get("address") or env("M_ADDRESS") or "?"))
 
+elif verb == "dkim_show":
+    d = call("GET", "/cli/mail/dkim", params={"domain": env("M_DOMAIN")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("dkim  %s" % (d.get("domain") or env("M_DOMAIN") or "?"))
+        for s in d.get("signatures") or []:
+            print("  %-28s  %-8s  %-22s  %s" % (
+                s.get("selector") or "?",
+                s.get("stage") or "?",
+                s.get("type") or "?",
+                s.get("match") or "?"))
+            if s.get("expected"):
+                print("    TXT %s" % (s.get("name") or ""))
+                print("    %s" % s["expected"])
+
+elif verb == "dkim_rotate":
+    d = call("POST", "/cli/mail/dkim", body={"domain": env("M_DOMAIN")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("rotated dkim on %s  planted=%s" % (
+            d.get("domain") or env("M_DOMAIN") or "?",
+            d.get("planted")))
+        for rec in d.get("records") or []:
+            print("%s  TXT  %s" % (rec.get("name") or "?", rec.get("value") or rec.get("expectedDisplay") or ""))
+        if not d.get("planted"):
+            print("plant this TXT at your DNS host (this box is not dnsWrite)")
+
+elif verb == "dkim_retire":
+    d = call("POST", "/cli/mail/dkim/retire",
+             body={"domain": env("M_DOMAIN"), "selector": env("M_SELECTOR")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("retired selector %s on %s" % (
+            d.get("selector") or env("M_SELECTOR") or "?",
+            d.get("domain") or env("M_DOMAIN") or "?"))
+
+elif verb == "dmarc_show":
+    d = call("GET", "/cli/mail/dmarc", params={"domain": env("M_DOMAIN")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("dmarc %s" % (d.get("domain") or env("M_DOMAIN") or "?"))
+        rec = d.get("dmarc") or {}
+        print("  txt     : %s" % (rec.get("expected") or "?"))
+        print("  live    : %s" % (rec.get("match") or "?"))
+        print("  report  : %s%s" % (
+            d.get("reportAddressUri") or "mailto:postmaster",
+            "" if d.get("reportAddressMinted") else "  (not a minted inbox)"))
+        print("  plant   : %s" % (d.get("suggestedRua") or ""))
+        if d.get("note"):
+            print("  note    : %s" % d["note"])
+
+elif verb == "dmarc_report_to":
+    d = call("POST", "/cli/mail/dmarc",
+             body={"domain": env("M_DOMAIN"), "address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("dmarc report-to %s → %s" % (
+            d.get("domain") or env("M_DOMAIN") or "?",
+            d.get("reportAddressUri") or env("M_ADDRESS") or "?"))
+        print("plant DNS: %s" % (d.get("suggestedRua") or ""))
+
 elif verb == "list_create":
     body = {"address": env("M_ADDRESS"), "members": env_list("M_MEMBERS")}
     d = call("POST", "/cli/mail/list", body=body)
@@ -25611,9 +25715,11 @@ cmd_hostmail() {
         queue)   cmd_hostmail_queue "$@" ;;
         acl)     cmd_hostmail_acl "$@" ;;
         autoconfig) cmd_hostmail_autoconfig "$@" ;;
+        dkim)    cmd_hostmail_dkim "$@" ;;
+        dmarc)   cmd_hostmail_dmarc "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc>"
             exit 2 ;;
     esac
 }
@@ -26823,6 +26929,167 @@ cmd_hostmail_autoconfig_apply() {
     _mail_py
 }
 
+cmd_hostmail_dkim() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_dkim; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        show) cmd_hostmail_dkim_show "$@" ;;
+        rotate) cmd_hostmail_dkim_rotate "$@" ;;
+        retire) cmd_hostmail_dkim_retire "$@" ;;
+        --help|-h) cmd_help_hostmail_dkim; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown dkim command '$sub' — usage: k2 hostmail dkim <show|rotate|retire>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_dkim_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_dkim_show; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail dkim show <domain> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one domain only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail dkim show <domain>"; exit 2; }
+    local M_VERB="dkim_show" M_JSON="$as_json" M_DOMAIN="$domain"
+    _mail_py
+}
+
+cmd_hostmail_dkim_rotate() {
+    if _wants_help "$@"; then cmd_help_hostmail_dkim_rotate; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail dkim rotate <domain> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one domain only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail dkim rotate <domain>"; exit 2; }
+    local M_VERB="dkim_rotate" M_JSON="$as_json" M_DOMAIN="$domain"
+    _mail_py
+}
+
+cmd_hostmail_dkim_retire() {
+    if _wants_help "$@"; then cmd_help_hostmail_dkim_retire; exit 0; fi
+    local domain="" selector="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            --selector)
+                [ $# -ge 2 ] || { _mail_err "usage" "--selector requires a value"; exit 2; }
+                selector="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail dkim retire <domain> <selector> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"
+                elif [ -z "$selector" ]; then selector="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] && [ -n "$selector" ] || { _mail_err "usage" "k2 hostmail dkim retire <domain> <selector>"; exit 2; }
+    local M_VERB="dkim_retire" M_JSON="$as_json" M_DOMAIN="$domain" M_SELECTOR="$selector"
+    _mail_py
+}
+
+cmd_hostmail_dmarc() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_dmarc; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        show) cmd_hostmail_dmarc_show "$@" ;;
+        report-to) cmd_hostmail_dmarc_report_to "$@" ;;
+        --help|-h) cmd_help_hostmail_dmarc; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown dmarc command '$sub' — usage: k2 hostmail dmarc <show|report-to>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_dmarc_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_dmarc_show; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail dmarc show <domain> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one domain only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail dmarc show <domain>"; exit 2; }
+    local M_VERB="dmarc_show" M_JSON="$as_json" M_DOMAIN="$domain"
+    _mail_py
+}
+
+cmd_hostmail_dmarc_report_to() {
+    if _wants_help "$@"; then cmd_help_hostmail_dmarc_report_to; exit 0; fi
+    local domain="" address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail dmarc report-to <domain> --address <minted> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail dmarc report-to <domain> --address <minted>"; exit 2; }
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail dmarc report-to <domain> --address <minted>"; exit 2; }
+    local M_VERB="dmarc_report_to" M_JSON="$as_json" M_DOMAIN="$domain" M_ADDRESS="$address"
+    _mail_py
+}
+
 # ── k2 mail help text ─────────────────────────────────────────────────
 
 cmd_help_mail() {
@@ -27822,6 +28089,82 @@ Revoke one app password on a hosted mailbox. POST
 
 USAGE
   k2 hostmail app-password revoke <addr> <id> [--json]
+EOF
+}
+
+cmd_help_hostmail_dkim() {
+    cat <<'EOF'
+DKIM selectors for a hosted domain. Stalwart signs; DNS publishes.
+Rotate generates a new Ed25519+RSA pair (Stalwart selector template)
+and plants TXT when this box already has dnsWrite. The previous
+selector stays until retire. mail_manage.
+
+USAGE
+  k2 hostmail dkim show <domain> [--json]
+  k2 hostmail dkim rotate <domain> [--json]
+  k2 hostmail dkim retire <domain> <selector> [--json]
+EOF
+}
+
+cmd_help_hostmail_dkim_show() {
+    cat <<'EOF'
+List DKIM selectors, stage, expected TXT, and live DNS match.
+Not a second domain check (that is k2 hostmail domain check).
+
+USAGE
+  k2 hostmail dkim show <domain> [--json]
+EOF
+}
+
+cmd_help_hostmail_dkim_rotate() {
+    cat <<'EOF'
+Mint a new DKIM pair in Stalwart, print the TXT, and plant it when
+this box already has dnsWrite on the apex. Does not bind a zone.
+BYO NS prints the record (planted:false, exit 0). mail_manage.
+
+USAGE
+  k2 hostmail dkim rotate <domain> [--json]
+EOF
+}
+
+cmd_help_hostmail_dkim_retire() {
+    cat <<'EOF'
+Drop one old DKIM selector after overlap. Removes the TXT when we
+host DNS. mail_manage.
+
+USAGE
+  k2 hostmail dkim retire <domain> <selector> [--json]
+EOF
+}
+
+cmd_help_hostmail_dmarc() {
+    cat <<'EOF'
+DMARC report mailbox. show prints live _dmarc TXT plus
+reportAddressUri. report-to points Stalwart at a minted inbox and
+prints the rua= line to plant — it does not rewrite DNS. mail_manage.
+
+USAGE
+  k2 hostmail dmarc show <domain> [--json]
+  k2 hostmail dmarc report-to <domain> --address <minted> [--json]
+EOF
+}
+
+cmd_help_hostmail_dmarc_show() {
+    cat <<'EOF'
+Live _dmarc TXT, current reportAddressUri, and the rua= line to plant.
+
+USAGE
+  k2 hostmail dmarc show <domain> [--json]
+EOF
+}
+
+cmd_help_hostmail_dmarc_report_to() {
+    cat <<'EOF'
+Set Domain.reportAddressUri to a minted inbox on that domain. Does
+not mint and does not rewrite _dmarc TXT.
+
+USAGE
+  k2 hostmail dmarc report-to <domain> --address <minted> [--json]
 EOF
 }
 
@@ -30533,7 +30876,7 @@ case "${1:-help}" in
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)
-            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password)
+            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|dkim|dmarc)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

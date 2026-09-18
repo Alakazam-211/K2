@@ -314,6 +314,27 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             Some("{}"),
         );
         assert_owner_only(&forward_off, "default OFF agent forward");
+        let dkim_off = http(
+            port,
+            "GET",
+            &format!("/cli/mail/dkim?token={hook_a}"),
+            None,
+        );
+        assert_owner_only(&dkim_off, "default OFF agent dkim show");
+        assert!(
+            dkim_off
+                .body
+                .contains("Allow agents to manage hosted mail on this host"),
+            "flag-off dkim names Settings: {}",
+            dkim_off.body
+        );
+        let dmarc_off = http(
+            port,
+            "POST",
+            &format!("/cli/mail/dmarc/report-to?token={hook_a}"),
+            Some("{}"),
+        );
+        assert_owner_only(&dmarc_off, "default OFF agent dmarc report-to");
         assert!(
             disable_off
                 .body
@@ -546,10 +567,35 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/app-password/revoke", Some("{}")),
             ("POST", "/cli/mail/cert/renew", Some("{}")),
             ("POST", "/cli/mail/server/rotate-admin", Some("{}")),
+            ("GET", "/cli/mail/dkim", None),
+            ("POST", "/cli/mail/dkim", Some("{}")),
+            ("POST", "/cli/mail/dkim/rotate", Some("{}")),
+            ("POST", "/cli/mail/dkim/retire", Some("{}")),
+            ("GET", "/cli/mail/dmarc", None),
+            ("POST", "/cli/mail/dmarc", Some("{}")),
+            ("POST", "/cli/mail/dmarc/report-to", Some("{}")),
         ] {
             let r = http(port, method, &format!("{path}?token={hook_a}"), body);
             assert_not_owner_only(&r, &format!("C5b flag ON opens {path}"));
         }
+        let retire_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/dkim/retire?token={hook_a}"),
+            None,
+        );
+        assert_eq!(
+            retire_get.status, 405,
+            "GET /cli/mail/dkim/retire 405; {}",
+            retire_get.body
+        );
+        let dkim_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/dkim?token={hook_a}"),
+            None,
+        );
+        assert_ne!(dkim_get.status, 405, "GET dkim show; {}", dkim_get.body);
 
         let import_get = http(
             port,

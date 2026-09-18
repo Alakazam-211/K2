@@ -841,6 +841,11 @@ async fn handle_one_request(
             | "/cli/mail/acl"
             | "/cli/mail/acl/revoke"
             | "/cli/mail/autoconfig"
+            | "/cli/mail/dkim"
+            | "/cli/mail/dkim/rotate"
+            | "/cli/mail/dkim/retire"
+            | "/cli/mail/dmarc"
+            | "/cli/mail/dmarc/report-to"
             // Per-workspace hosted-mail manage toggle. Dedicated POST
             // (not workspace/set, not GET /cli/dns-manage). GET → 405.
             | "/cli/mail-manage"

@@ -131,6 +131,8 @@ pub mod ooo;
 pub mod preflight;
 pub mod queue;
 pub mod quota;
+pub mod dkim;
+pub mod dmarc;
 pub mod routes_access;
 pub mod routes_addresses;
 pub mod routes_domains;

@@ -78,6 +78,13 @@
 //! | GET  /cli/mail/app-password       | mail/app_password.rs   |
 //! | POST /cli/mail/app-password       | mail/app_password.rs   |
 //! | POST /cli/mail/app-password/revoke| mail/app_password.rs   |
+//! | GET  /cli/mail/dkim               | mail/dkim.rs           |
+//! | POST /cli/mail/dkim               | mail/dkim.rs           |
+//! | POST /cli/mail/dkim/rotate        | mail/dkim.rs           |
+//! | POST /cli/mail/dkim/retire        | mail/dkim.rs           |
+//! | GET  /cli/mail/dmarc              | mail/dmarc.rs          |
+//! | POST /cli/mail/dmarc              | mail/dmarc.rs          |
+//! | POST /cli/mail/dmarc/report-to    | mail/dmarc.rs          |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -183,6 +190,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/acl" => crate::mail::acl::handle_acl_get(params),
         "/cli/mail/autoconfig" => crate::mail::autoconfig::handle_autoconfig_get(params),
         "/cli/mail/app-password" => crate::mail::app_password::handle_app_password_get(params),
+        "/cli/mail/dkim" => crate::mail::dkim::handle_dkim_get(params),
+        "/cli/mail/dmarc" => crate::mail::dmarc::handle_dmarc_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -241,7 +250,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/queue/retry"
         | "/cli/mail/queue/drop"
         | "/cli/mail/acl/revoke"
-        | "/cli/mail/app-password/revoke" => CliResponse::method_not_allowed(),
+        | "/cli/mail/app-password/revoke"
+        | "/cli/mail/dkim/rotate"
+        | "/cli/mail/dkim/retire"
+        | "/cli/mail/dmarc/report-to" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -337,6 +349,11 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/acl" => crate::mail::acl::handle_acl_grant(body),
         "/cli/mail/acl/revoke" => crate::mail::acl::handle_acl_revoke(body),
         "/cli/mail/autoconfig" => crate::mail::autoconfig::handle_autoconfig_apply(body),
+        "/cli/mail/dkim" | "/cli/mail/dkim/rotate" => crate::mail::dkim::handle_dkim_rotate(body),
+        "/cli/mail/dkim/retire" => crate::mail::dkim::handle_dkim_retire(body),
+        "/cli/mail/dmarc" | "/cli/mail/dmarc/report-to" => {
+            crate::mail::dmarc::handle_dmarc_report_to(body)
+        }
         _ => CliResponse::not_found(),
     }
 }
@@ -487,6 +504,11 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/autoconfig"
             | "/cli/mail/app-password"
             | "/cli/mail/app-password/revoke"
+            | "/cli/mail/dkim"
+            | "/cli/mail/dkim/rotate"
+            | "/cli/mail/dkim/retire"
+            | "/cli/mail/dmarc"
+            | "/cli/mail/dmarc/report-to"
     )
 }
 
@@ -781,6 +803,11 @@ mod tests {
             "/cli/mail/autoconfig",
             "/cli/mail/app-password",
             "/cli/mail/app-password/revoke",
+            "/cli/mail/dkim",
+            "/cli/mail/dkim/rotate",
+            "/cli/mail/dkim/retire",
+            "/cli/mail/dmarc",
+            "/cli/mail/dmarc/report-to",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }
@@ -794,6 +821,8 @@ mod tests {
             "/cli/mail-manage",
             "/cli/mail/link/oauth/start",
             "/cli/mail/external/add",
+            "/cli/mail/domain/dkim",
+            "/cli/mail/domain/dmarc",
         ] {
             assert!(!is_mail_manage_surface(p), "not M5: {p}");
         }
@@ -890,6 +919,17 @@ mod tests {
             "app-password is mail_manage, not leftover M6"
         );
         assert!(!is_owner_level_mutation("/cli/mail/app-password/revoke"));
+        let dkim_off = mail_manage_authorized("/cli/mail/dkim", false, Some(&p));
+        assert!(dkim_off.is_err(), "M5 off dkim is owner_only");
+        assert!(
+            mail_manage_authorized("/cli/mail/dkim", true, None).is_ok(),
+            "owner/admin dkim"
+        );
+        assert!(
+            mail_manage_authorized("/cli/mail/dmarc/report-to", true, None).is_ok()
+        );
+        assert!(!is_owner_level_mutation("/cli/mail/dkim"));
+        assert!(!is_owner_level_mutation("/cli/mail/dmarc"));
     }
 
     /// GET on every POST-only mutation answers an explicit 405 through
@@ -1107,6 +1147,33 @@ mod tests {
             "{}",
             ap_revoke_post.body
         );
+        let dkim_get = dispatch("/cli/mail/dkim", &params).expect("dkim GET claimed");
+        assert_ne!(
+            dkim_get.status, "405 Method Not Allowed",
+            "GET /cli/mail/dkim is show, not POST-only: {}",
+            dkim_get.body
+        );
+        assert_eq!(dkim_get.status, "400 Bad Request", "{}", dkim_get.body);
+        let dmarc_get = dispatch("/cli/mail/dmarc", &params).expect("dmarc GET claimed");
+        assert_ne!(dmarc_get.status, "405 Method Not Allowed", "{}", dmarc_get.body);
+        assert_eq!(dmarc_get.status, "400 Bad Request", "{}", dmarc_get.body);
+        for mutator in [
+            "/cli/mail/dkim/rotate",
+            "/cli/mail/dkim/retire",
+            "/cli/mail/dmarc/report-to",
+        ] {
+            let resp = dispatch(mutator, &params).expect("claimed");
+            assert_eq!(resp.status, "405 Method Not Allowed", "GET {mutator}");
+        }
+        let dkim_post = dispatch_post("/cli/mail/dkim", b"{}");
+        assert_ne!(dkim_post.status, "404 Not Found", "dkim POST must be wired");
+        assert_eq!(dkim_post.status, "400 Bad Request", "{}", dkim_post.body);
+        let dkim_rotate = dispatch_post("/cli/mail/dkim/rotate", b"{}");
+        assert_ne!(dkim_rotate.status, "404 Not Found");
+        let dkim_retire = dispatch_post("/cli/mail/dkim/retire", b"{}");
+        assert_ne!(dkim_retire.status, "404 Not Found");
+        let dmarc_post = dispatch_post("/cli/mail/dmarc", b"{}");
+        assert_ne!(dmarc_post.status, "404 Not Found");
         assert_eq!(
             dispatch_post("/cli/mail/unknown", b"{}").status,
             "404 Not Found"

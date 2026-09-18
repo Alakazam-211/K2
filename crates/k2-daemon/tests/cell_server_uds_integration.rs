@@ -793,6 +793,13 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
     let (ap_rev_status, ap_rev_body) =
         uds(&sock, &get("/cli/mail/app-password/revoke", Some(&token))).await;
     assert_eq!(ap_rev_status, 405, "UDS GET app-password/revoke 405; {ap_rev_body}");
+    let (dk_status, dk_body) = uds(&sock, &get("/cli/mail/dkim", Some(&token))).await;
+    assert_ne!(dk_status, 403, "UDS flag ON dkim GET; {dk_body}");
+    assert!(!dk_body.contains("owner_only"), "C5b UDS dkim GET: {dk_body}");
+    let (dkr_status, dkr_body) = uds(&sock, &get("/cli/mail/dkim/retire", Some(&token))).await;
+    assert_eq!(dkr_status, 405, "UDS GET dkim/retire 405; {dkr_body}");
+    let (dm_status, dm_body) = uds(&sock, &get("/cli/mail/dmarc", Some(&token))).await;
+    assert_ne!(dm_status, 403, "UDS flag ON dmarc GET; {dm_body}");
 
     let (cr_status, cr_body) = uds(&sock, &get("/cli/mail/cert/renew", Some(&token))).await;
     assert_eq!(cr_status, 405, "UDS GET cert/renew 405; {cr_body}");

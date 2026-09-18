@@ -173,6 +173,74 @@ pub struct AppPasswordInfo {
     pub created_at: serde_json::Value,
 }
 
+/// One `x:DkimSignature` object. `privateKey` is never requested.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DkimSignature {
+    pub id: String,
+    pub selector: String,
+    pub type_name: String,
+    pub stage: String,
+    pub public_key: Option<String>,
+    pub next_transition_at: Option<String>,
+}
+
+/// Result of [`StalwartClient::dkim_force_rotate`]. Previous ids are
+/// kept (retire / domain-remove destroy them).
+#[derive(Debug, Clone)]
+pub struct DkimRotatePlan {
+    pub previous: Vec<DkimSignature>,
+    pub minted: Vec<DkimSignature>,
+    pub used_pem_fallback: bool,
+}
+
+#[derive(Clone, Copy)]
+enum DkimAlg {
+    Ed25519,
+    Rsa,
+}
+
+fn utc_now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn dkim_poll_attempts() -> u32 {
+    std::env::var("K2_DKIM_POLL_ATTEMPTS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(20)
+}
+
+fn dkim_poll_ms() -> u64 {
+    std::env::var("K2_DKIM_POLL_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(500)
+}
+
+fn unique_selector(taken: &std::collections::HashSet<String>, base: &str) -> String {
+    if !taken.contains(base) {
+        return base.to_string();
+    }
+    for n in 2..50 {
+        let s = format!("{base}-{n}");
+        if !taken.contains(&s) {
+            return s;
+        }
+    }
+    format!("{base}-x")
+}
+
+fn generate_dkim_pem(alg: DkimAlg) -> Result<String, String> {
+    let kp = match alg {
+        DkimAlg::Ed25519 => rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519)
+            .map_err(|e| format!("ed25519 dkim pem: {e}"))?,
+        DkimAlg::Rsa => rcgen::KeyPair::generate_for(&rcgen::PKCS_RSA_SHA256)
+            .map_err(|e| format!("rsa dkim pem: {e}"))?,
+    };
+    Ok(kp.serialize_pem())
+}
+
 impl StalwartClient {
     /// Bearer-auth client (steady state: the minted ApiKey).
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
@@ -833,6 +901,251 @@ impl StalwartClient {
             }),
         )?;
         parse_set_updated("x:Domain/set", stalwart_domain_id, &resp)
+    }
+
+    /// `x:Domain/get` `reportAddressUri` (DMARC/TLS-RPT dest). Default
+    /// on a fresh Stalwart domain is `"mailto:postmaster"` — not a
+    /// minted inbox. Missing/null → `None`.
+    pub fn domain_get_report_address_uri(
+        &self,
+        stalwart_domain_id: &str,
+    ) -> Result<Option<String>, String> {
+        let resp = self.registry_call(
+            "x:Domain/get",
+            serde_json::json!({
+                "ids": [stalwart_domain_id],
+                "properties": ["reportAddressUri"],
+            }),
+        )?;
+        parse_domain_get_report_address(stalwart_domain_id, &resp)
+    }
+
+    /// `x:Domain/set` update `reportAddressUri`. Full `mailto:` URI
+    /// (or JSON null). Does not rewrite `_dmarc` TXT.
+    pub fn domain_set_report_address_uri(
+        &self,
+        stalwart_domain_id: &str,
+        uri: Option<&str>,
+    ) -> Result<(), String> {
+        let value = match uri {
+            Some(u) => serde_json::Value::String(u.to_string()),
+            None => serde_json::Value::Null,
+        };
+        let resp = self.registry_call(
+            "x:Domain/set",
+            serde_json::json!({
+                "update": { stalwart_domain_id: { "reportAddressUri": value } }
+            }),
+        )?;
+        parse_set_updated("x:Domain/set", stalwart_domain_id, &resp)
+    }
+
+    /// `x:DkimSignature/query` filter `domainId`. Empty is ok.
+    pub fn dkim_query_ids(&self, stalwart_domain_id: &str) -> Result<Vec<String>, String> {
+        let resp = self.registry_call(
+            "x:DkimSignature/query",
+            serde_json::json!({ "filter": { "domainId": stalwart_domain_id } }),
+        )?;
+        Ok(parse_query_ids(&resp))
+    }
+
+    /// `x:DkimSignature/get` for selector/stage/publicKey. Never
+    /// requests `privateKey`.
+    pub fn dkim_get(&self, ids: &[String]) -> Result<Vec<DkimSignature>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:DkimSignature/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": [
+                    "selector",
+                    "@type",
+                    "stage",
+                    "publicKey",
+                    "nextTransitionAt",
+                    "domainId"
+                ],
+            }),
+        )?;
+        parse_dkim_get_list(&resp)
+    }
+
+    pub fn dkim_list(&self, stalwart_domain_id: &str) -> Result<Vec<DkimSignature>, String> {
+        let ids = self.dkim_query_ids(stalwart_domain_id)?;
+        self.dkim_get(&ids)
+    }
+
+    /// Patch `stage` / `nextTransitionAt` on existing signatures.
+    /// Rotate uses this; it must not `destroy`.
+    pub fn dkim_update(
+        &self,
+        updates: &[(String, serde_json::Value)],
+    ) -> Result<(), String> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let mut map = serde_json::Map::new();
+        for (id, patch) in updates {
+            map.insert(id.clone(), patch.clone());
+        }
+        let resp = self.registry_call(
+            "x:DkimSignature/set",
+            serde_json::json!({ "update": map }),
+        )?;
+        expect_set_clean("x:DkimSignature/set", &resp)?;
+        for (id, _) in updates {
+            parse_set_updated("x:DkimSignature/set", id, &resp)?;
+        }
+        Ok(())
+    }
+
+    /// PEM-create fallback: `stage` must be `pending` (Stalwart
+    /// default is `active` and would sign before DNS).
+    pub fn dkim_create_pending(
+        &self,
+        stalwart_domain_id: &str,
+        type_name: &str,
+        selector: &str,
+        private_key_pem: &str,
+    ) -> Result<String, String> {
+        let args = serde_json::json!({
+            "create": {
+                CREATE_TAG: {
+                    "@type": type_name,
+                    "domainId": stalwart_domain_id,
+                    "selector": selector,
+                    "privateKey": { "@type": "Text", "secret": private_key_pem },
+                    "stage": "pending",
+                }
+            }
+        });
+        let resp = self.registry_call("x:DkimSignature/set", args)?;
+        parse_set_created_id("x:DkimSignature/set", &resp)
+    }
+
+    /// Destroy **one** selector (retire). Domain-remove cascade is
+    /// [`Self::domain_delete`] — rotate must not call this on the
+    /// active pair.
+    pub fn dkim_destroy(&self, ids: &[String]) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let resp = self.registry_call(
+            "x:DkimSignature/set",
+            serde_json::json!({ "destroy": ids }),
+        )?;
+        expect_set_clean("x:DkimSignature/set", &resp)?;
+        for id in ids {
+            parse_set_destroyed("x:DkimSignature/set", id, &resp)?;
+        }
+        Ok(())
+    }
+
+    /// Emergency rotate with Manual DNS: poke `nextTransitionAt`, then
+    /// `x:Task` `DkimManagement`. If the task path does not mint,
+    /// PEM-create a pending Ed25519+RSA pair. Never destroys the
+    /// previous ids.
+    pub fn dkim_force_rotate(&self, stalwart_domain_id: &str) -> Result<DkimRotatePlan, String> {
+        let previous = self.dkim_list(stalwart_domain_id)?;
+        let now = utc_now_rfc3339();
+        let poke: Vec<(String, serde_json::Value)> = previous
+            .iter()
+            .filter(|s| s.stage == "active")
+            .map(|s| {
+                (
+                    s.id.clone(),
+                    serde_json::json!({ "nextTransitionAt": now }),
+                )
+            })
+            .collect();
+        self.dkim_update(&poke)?;
+
+        let task_err = self.task_create_dkim_management(stalwart_domain_id).err();
+        let old_ids: std::collections::HashSet<String> =
+            previous.iter().map(|s| s.id.clone()).collect();
+        let mut minted = if task_err.is_none() {
+            self.poll_new_dkim(stalwart_domain_id, &old_ids)?
+        } else {
+            Vec::new()
+        };
+        let mut used_pem_fallback = false;
+        if minted.is_empty() {
+            used_pem_fallback = true;
+            minted = self.pem_create_pending_pair(stalwart_domain_id, &previous)?;
+        }
+        Ok(DkimRotatePlan {
+            previous,
+            minted,
+            used_pem_fallback,
+        })
+    }
+
+    fn task_create_dkim_management(&self, stalwart_domain_id: &str) -> Result<(), String> {
+        let now = utc_now_rfc3339();
+        let args = serde_json::json!({
+            "create": {
+                CREATE_TAG: {
+                    "@type": "DkimManagement",
+                    "domainId": stalwart_domain_id,
+                    "status": { "@type": "Pending", "due": now },
+                }
+            }
+        });
+        let resp = self.registry_call("x:Task/set", args)?;
+        parse_set_created_id("x:Task/set", &resp).map(|_| ())
+    }
+
+    fn poll_new_dkim(
+        &self,
+        stalwart_domain_id: &str,
+        old_ids: &std::collections::HashSet<String>,
+    ) -> Result<Vec<DkimSignature>, String> {
+        let attempts = dkim_poll_attempts();
+        let sleep_ms = dkim_poll_ms();
+        let mut last = Vec::new();
+        for i in 0..attempts {
+            let all = self.dkim_list(stalwart_domain_id)?;
+            last = all
+                .into_iter()
+                .filter(|s| !old_ids.contains(&s.id))
+                .collect();
+            if last.len() >= 2 {
+                return Ok(last);
+            }
+            if i + 1 < attempts && sleep_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+            }
+        }
+        Ok(last)
+    }
+
+    fn pem_create_pending_pair(
+        &self,
+        stalwart_domain_id: &str,
+        existing: &[DkimSignature],
+    ) -> Result<Vec<DkimSignature>, String> {
+        let taken: std::collections::HashSet<String> =
+            existing.iter().map(|s| s.selector.clone()).collect();
+        let date = chrono::Utc::now().format("%Y%m%d").to_string();
+        let ed_sel = unique_selector(&taken, &format!("v1-ed25519-{date}"));
+        let rsa_sel = unique_selector(&taken, &format!("v1-rsa-{date}"));
+        let ed_pem = generate_dkim_pem(DkimAlg::Ed25519)?;
+        let rsa_pem = generate_dkim_pem(DkimAlg::Rsa)?;
+        let ed_id = self.dkim_create_pending(
+            stalwart_domain_id,
+            "Dkim1Ed25519Sha256",
+            &ed_sel,
+            &ed_pem,
+        )?;
+        let rsa_id = self.dkim_create_pending(
+            stalwart_domain_id,
+            "Dkim1RsaSha256",
+            &rsa_sel,
+            &rsa_pem,
+        )?;
+        self.dkim_get(&[ed_id, rsa_id])
     }
 
     // ── S3 account calls ────────────────────────────────────────────
@@ -2591,6 +2904,83 @@ fn parse_set_destroyed(method: &str, id: &str, args: &serde_json::Value) -> Resu
     }
     Err(format!("{method} destroy: '{id}' not in the destroyed list"))
 }
+
+fn parse_domain_get_report_address(
+    id: &str,
+    args: &serde_json::Value,
+) -> Result<Option<String>, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)));
+    let Some(entry) = entry else {
+        return Err(format!("x:Domain/get: domain '{id}' not in the reply list"));
+    };
+    match entry.get("reportAddressUri") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => Ok(v
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)),
+    }
+}
+
+fn parse_dkim_get_list(args: &serde_json::Value) -> Result<Vec<DkimSignature>, String> {
+    let list = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "x:DkimSignature/get: reply has no list".to_string())?;
+    let mut out = Vec::with_capacity(list.len());
+    for e in list {
+        let id = e
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "x:DkimSignature/get: entry has no id".to_string())?;
+        let selector = e
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("")
+            .to_string();
+        let type_name = e
+            .get("@type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let stage = e
+            .get("stage")
+            .and_then(|v| v.as_str())
+            .unwrap_or("active")
+            .to_string();
+        let public_key = e
+            .get("publicKey")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        let next_transition_at = e
+            .get("nextTransitionAt")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        out.push(DkimSignature {
+            id: id.to_string(),
+            selector,
+            type_name,
+            stage,
+            public_key,
+            next_transition_at,
+        });
+    }
+    Ok(out)
+}
+
+
 
 /// Pure `x:AppPassword/set` create parser: `created.k2` must carry
 /// server-set `id` + `secret`. `notCreated` surfaces the SetError.

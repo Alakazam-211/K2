@@ -1421,6 +1421,11 @@ mod tests {
             "/cli/mail/autoconfig",
             "/cli/mail/app-password",
             "/cli/mail/app-password/revoke",
+            "/cli/mail/dkim",
+            "/cli/mail/dkim/rotate",
+            "/cli/mail/dkim/retire",
+            "/cli/mail/dmarc",
+            "/cli/mail/dmarc/report-to",
         ] {
             assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
         }

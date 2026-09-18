@@ -732,6 +732,27 @@ pub fn effective_rows(conn: &Connection, row: &MailDomain) -> Vec<RecordRow> {
     rows
 }
 
+/// Rebuild `dns_status_json` from a fresh `dnsZoneFile` (rotate/retire).
+pub fn refresh_stored_zone(
+    conn: &Connection,
+    row: &MailDomain,
+    zone_text: &str,
+) -> Result<DnsStatus, String> {
+    let hostname = server_info(conn).and_then(|i| i.hostname);
+    let records = build_rows(&row.domain, &parse_zone_file(zone_text), hostname.as_deref());
+    let status = DnsStatus {
+        records,
+        zone_file: zone_text.to_string(),
+    };
+    let json = serde_json::to_string(&status).map_err(|e| format!("dns status serialize: {e}"))?;
+    conn.execute(
+        "UPDATE mail_domains SET dns_status_json = ?1 WHERE id = ?2",
+        rusqlite::params![json, row.id],
+    )
+    .map_err(|e| format!("dns status update: {e}"))?;
+    Ok(status)
+}
+
 /// Persist a verification pass: the updated record table +
 /// `last_checked_at` + domain status (+ `verified_at` on the flip).
 pub fn save_check(

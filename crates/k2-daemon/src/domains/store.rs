@@ -149,8 +149,9 @@ fn jmap_plant_via_engine(chain_pem: &str, key_pem: &str) -> Result<(), String> {
     })?;
     client
         .certificate_plant(chain_pem, key_pem)
-        .map(|_| ())
-        .map_err(|e| format!("plant mail PEM via x:Certificate/set: {e}"))
+        .map_err(|e| format!("plant mail PEM via x:Certificate/set: {e}"))?;
+    crate::mail::supervisor::restart_stalwart_to_reload_tls()
+        .map_err(|e| format!("restart stalwart to load planted cert (not hostmail disable): {e}"))
 }
 
 #[cfg(test)]

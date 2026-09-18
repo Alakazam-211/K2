@@ -511,6 +511,31 @@ pub fn stalwart_unit_state() -> String {
     }
 }
 
+/// Restart the Stalwart unit so listeners re-read Certificate objects.
+/// JMAP `x:Certificate/set` persists in RocksDB but 443/465 keep the
+/// previous acceptor until this restart. Not `hostmail disable`.
+pub fn restart_stalwart_to_reload_tls() -> Result<(), String> {
+    #[cfg(test)]
+    {
+        return Ok(());
+    }
+    #[cfg(not(test))]
+    {
+        RealSystemOps
+            .systemctl(&["restart", STALWART_UNIT])
+            .map(|_| ())?;
+        // Listeners come back after the process is up.
+        for _ in 0..30 {
+            if stalwart_unit_state().trim() == "active" {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        Err("stalwart unit did not become active after TLS reload restart".into())
+    }
+}
+
 pub fn is_already_enabled() -> bool {
     let unit = stalwart_unit_state();
     if is_already_enabled_with(current_status().as_deref(), &unit) {

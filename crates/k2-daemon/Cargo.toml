@@ -210,6 +210,10 @@ lettre = { version = "0.11", default-features = false, features = [
     "hostname",
     "pool",
 ] }
+# On-box Let's Encrypt client for custom-domain certs (prd-custom-domains C17).
+# No rcgen feature: we mint the CSR with the workspace rcgen 0.13 already
+# pinned. aws-lc-rs matches the rustls provider installed at daemon boot.
+instant-acme = { version = "0.8", default-features = false, features = ["hyper-rustls", "aws-lc-rs"] }
 
 # Sandbox P2b worker — Linux-only deps for the host jail. Both are OPTIONAL and
 # pulled in ONLY by the `sandbox-microvm` feature (via `dep:`), so a default or

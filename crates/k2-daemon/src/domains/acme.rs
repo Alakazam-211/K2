@@ -1,0 +1,507 @@
+//! On-box ACME for custom-domain hostnames (C6/C17/C18).
+//!
+//! Proof order: DNS-01 if `dns_write`; else HTTP-01 on :80; else TLS-ALPN
+//! if this box can bind :443. DNS-01 plants relative TXT via existing
+//! `/cli/dns/records/add` (`managed_by=user`), waits syncd, deletes after.
+//! Never cert.k2.dev. Never silent rcgen.
+
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use instant_acme::{
+    Account, ChallengeType, Identifier, NewAccount, NewOrder, OrderStatus, RetryPolicy,
+};
+use k2_core::domains::{get_name, hostname_under_apex, DomainBinding, DomainName};
+use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+
+use crate::dns::proxy::proxy_request;
+use crate::domains::store::{self, AcmeConfig, InstalledPem};
+
+const PROD_DIR: &str = "https://acme-v02.api.letsencrypt.org/directory";
+const STAGING_DIR: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChallengeKind {
+    Dns01,
+    Http01,
+    TlsAlpn01,
+}
+
+pub fn acme_txt_relative_name(hostname: &str, apex: &str) -> String {
+    if hostname == apex {
+        "_acme-challenge".into()
+    } else if let Some(rest) = hostname.strip_suffix(&format!(".{apex}")) {
+        format!("_acme-challenge.{rest}")
+    } else {
+        "_acme-challenge".into()
+    }
+}
+
+fn dns_wait_secs() -> u64 {
+    std::env::var("K2_ACME_DNS_WAIT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10)
+}
+
+fn acme_directory(cfg: &AcmeConfig) -> String {
+    if let Ok(v) = std::env::var("K2_ACME_DIRECTORY") {
+        if !v.trim().is_empty() {
+            return v.trim().to_string();
+        }
+    }
+    if std::env::var("K2_ACME_STAGING")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        return STAGING_DIR.to_string();
+    }
+    if let Some(d) = cfg.directory.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        return d.to_string();
+    }
+    // Tests default to staging so a mistaken live run cannot burn prod.
+    if cfg!(test) {
+        STAGING_DIR.to_string()
+    } else {
+        PROD_DIR.to_string()
+    }
+}
+
+fn reject_k2_dev(hostname: &str) -> Result<(), String> {
+    if hostname == "k2.dev" || hostname.ends_with(".k2.dev") {
+        return Err(
+            "Connect {label}.k2.dev names stay on cert.k2.dev — do not issue them here".into(),
+        );
+    }
+    Ok(())
+}
+
+pub fn select_challenge(binding: &DomainBinding) -> Result<ChallengeKind, String> {
+    if binding.dns_write {
+        if crate::dns::proxy::tunnel_bearer_token().is_err() {
+            return Err(
+                "DNS-01 needs a Connect tunnel token to plant TXT via k2 dns — \
+pair K2 Connect, or point the name here and use HTTP-01/:80 or TLS-ALPN/:443"
+                    .into(),
+            );
+        }
+        return Ok(ChallengeKind::Dns01);
+    }
+    if std::env::var("K2_ACME_HTTP01")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+        || port_seems_free(80)
+    {
+        return Ok(ChallengeKind::Http01);
+    }
+    if port_seems_free(443) {
+        return Ok(ChallengeKind::TlsAlpn01);
+    }
+    Err(
+        "no ACME proof available: zone is not dns_write (DNS-01), :80 is closed (HTTP-01), \
+and :443 is not free (TLS-ALPN). Attach a K2-hosted zone or open :80"
+            .into(),
+    )
+}
+
+fn port_seems_free(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+pub fn issue_attached(hostname: &str) -> Result<InstalledPem, String> {
+    reject_k2_dev(hostname)?;
+    let (binding, name) = lookup_attached(hostname)?;
+    let kind = select_challenge(&binding)?;
+    issue_with_challenge(hostname, &binding, &name, kind)
+}
+
+pub fn renew_attached(hostname: &str) -> Result<InstalledPem, String> {
+    issue_attached(hostname)
+}
+
+fn lookup_attached(hostname: &str) -> Result<(DomainBinding, DomainName), String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let name = get_name(&conn, hostname)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("hostname '{hostname}' is not attached"))?;
+    let binding = k2_core::domains::get_binding(&conn, &name.apex)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("apex '{}' is not attached", name.apex))?;
+    if !hostname_under_apex(hostname, &binding.apex) {
+        return Err(format!(
+            "hostname '{hostname}' is not under apex {}",
+            binding.apex
+        ));
+    }
+    Ok((binding, name))
+}
+
+fn issue_with_challenge(
+    hostname: &str,
+    binding: &DomainBinding,
+    name: &DomainName,
+    kind: ChallengeKind,
+) -> Result<InstalledPem, String> {
+    if fake_enabled() {
+        let pem = fake_issue(hostname, binding, kind)?;
+        store::install(hostname, &pem.chain_pem, &pem.key_pem)?;
+        if name.role == k2_core::domains::ROLE_MAIL {
+            let _ = store::plant_mail_pem(hostname, &pem.chain_pem, &pem.key_pem);
+        }
+        return Ok(pem);
+    }
+    let pem = live_issue(hostname, binding, kind)?;
+    store::install(hostname, &pem.chain_pem, &pem.key_pem)?;
+    if name.role == k2_core::domains::ROLE_MAIL {
+        let _ = store::plant_mail_pem(hostname, &pem.chain_pem, &pem.key_pem);
+    }
+    Ok(pem)
+}
+
+fn fake_enabled() -> bool {
+    std::env::var("K2_ACME_FAKE")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+        || cfg!(test)
+}
+
+fn fake_issue(
+    hostname: &str,
+    binding: &DomainBinding,
+    kind: ChallengeKind,
+) -> Result<InstalledPem, String> {
+    if kind == ChallengeKind::Dns01 {
+        let rec = plant_txt(binding, hostname, "fake-dns01-token")?;
+        std::thread::sleep(Duration::from_secs(dns_wait_secs().min(1)));
+        let _ = delete_txt(&rec);
+    }
+    mint_fake_le(hostname)
+}
+
+fn mint_fake_le(hostname: &str) -> Result<InstalledPem, String> {
+    let mut ca_params =
+        CertificateParams::new(vec!["Let's Encrypt Fake CA".to_string()]).map_err(|e| e.to_string())?;
+    let mut ca_dn = DistinguishedName::new();
+    ca_dn.push(DnType::CommonName, "Let's Encrypt Fake");
+    ca_params.distinguished_name = ca_dn;
+    ca_params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca_key = KeyPair::generate().map_err(|e| e.to_string())?;
+    let ca = ca_params.self_signed(&ca_key).map_err(|e| e.to_string())?;
+
+    let mut leaf = CertificateParams::new(vec![hostname.to_string()]).map_err(|e| e.to_string())?;
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, hostname.to_string());
+    leaf.distinguished_name = dn;
+    let leaf_key = KeyPair::generate().map_err(|e| e.to_string())?;
+    let cert = leaf
+        .signed_by(&leaf_key, &ca, &ca_key)
+        .map_err(|e| e.to_string())?;
+    Ok(InstalledPem {
+        hostname: hostname.to_string(),
+        chain_pem: format!("{}{}", cert.pem(), ca.pem()),
+        key_pem: leaf_key.serialize_pem(),
+    })
+}
+
+fn live_issue(
+    hostname: &str,
+    binding: &DomainBinding,
+    kind: ChallengeKind,
+) -> Result<InstalledPem, String> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("acme runtime: {e}"))?;
+    rt.block_on(live_issue_async(hostname, binding, kind))
+}
+
+async fn live_issue_async(
+    hostname: &str,
+    binding: &DomainBinding,
+    kind: ChallengeKind,
+) -> Result<InstalledPem, String> {
+    let cfg = store::load_acme_config();
+    let directory = acme_directory(&cfg);
+    let contacts: Vec<String> = cfg
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|e| {
+            if e.starts_with("mailto:") {
+                e.to_string()
+            } else {
+                format!("mailto:{e}")
+            }
+        })
+        .into_iter()
+        .collect();
+    let contact_refs: Vec<&str> = contacts.iter().map(|s| s.as_str()).collect();
+
+    let (account, creds) = if let Ok(raw) = std::fs::read_to_string(store::acme_account_path()) {
+        let creds: instant_acme::AccountCredentials =
+            serde_json::from_str(&raw).map_err(|e| format!("acme account: {e}"))?;
+        let account = Account::builder()
+            .map_err(|e| format!("acme account builder: {e}"))?
+            .from_credentials(creds)
+            .await
+            .map_err(|e| format!("acme restore account: {e}"))?;
+        (account, None)
+    } else {
+        Account::builder()
+            .map_err(|e| format!("acme account builder: {e}"))?
+            .create(
+                &NewAccount {
+                    contact: &contact_refs,
+                    terms_of_service_agreed: true,
+                    only_return_existing: false,
+                },
+                directory.clone(),
+                None,
+            )
+            .await
+            .map(|(a, c)| (a, Some(c)))
+            .map_err(|e| format!("acme create account: {e}"))?
+    };
+    if let Some(creds) = creds {
+        if let Ok(body) = serde_json::to_string_pretty(&creds) {
+            let _ = store::save_acme_config(&cfg);
+            let dir = store::certs_root();
+            let _ = std::fs::create_dir_all(&dir);
+            let path = store::acme_account_path();
+            let _ = std::fs::write(&path, body);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+
+    let identifiers = vec![Identifier::Dns(hostname.to_string())];
+    let mut order = account
+        .new_order(&NewOrder::new(&identifiers))
+        .await
+        .map_err(|e| format!("acme new order: {e}"))?;
+
+    let challenge_ty = match kind {
+        ChallengeKind::Dns01 => ChallengeType::Dns01,
+        ChallengeKind::Http01 => ChallengeType::Http01,
+        ChallengeKind::TlsAlpn01 => ChallengeType::TlsAlpn01,
+    };
+
+    let mut planted: Option<String> = None;
+    let mut http_guard: Option<Http01Guard> = None;
+    let mut authorizations = order.authorizations();
+    while let Some(result) = authorizations.next().await {
+        let mut authz = result.map_err(|e| format!("acme authz: {e}"))?;
+        match authz.status {
+            instant_acme::AuthorizationStatus::Pending => {}
+            instant_acme::AuthorizationStatus::Valid => continue,
+            other => return Err(format!("acme authorization {other:?}")),
+        }
+        let mut challenge = authz
+            .challenge(challenge_ty.clone())
+            .ok_or_else(|| format!("ACME server offered no {kind:?} challenge"))?;
+        match kind {
+            ChallengeKind::Dns01 => {
+                let txt = challenge.key_authorization().dns_value();
+                let rec = plant_txt(binding, hostname, &txt)?;
+                planted = Some(rec);
+                std::thread::sleep(Duration::from_secs(dns_wait_secs()));
+            }
+            ChallengeKind::Http01 => {
+                let token = challenge.token.clone();
+                let body = challenge.key_authorization().as_str().to_string();
+                http_guard = Some(Http01Guard::spawn(&token, &body)?);
+            }
+            ChallengeKind::TlsAlpn01 => {
+                return Err(
+                    "TLS-ALPN-01 needs this box to own :443 for the ACME handshake — \
+use DNS-01 (attach a K2-hosted zone) or HTTP-01 on :80"
+                        .into(),
+                );
+            }
+        }
+        challenge
+            .set_ready()
+            .await
+            .map_err(|e| format!("acme set_ready: {e}"))?;
+    }
+    drop(authorizations);
+
+    let status = order
+        .poll_ready(&RetryPolicy::default())
+        .await
+        .map_err(|e| format!("acme poll: {e}"))?;
+    if let Some(id) = planted.take() {
+        let _ = delete_txt(&id);
+    }
+    drop(http_guard);
+    if status != OrderStatus::Ready {
+        return Err(format!("acme order not ready: {status:?}"));
+    }
+
+    let mut params =
+        CertificateParams::new(vec![hostname.to_string()]).map_err(|e| e.to_string())?;
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, hostname.to_string());
+    params.distinguished_name = dn;
+    let key = KeyPair::generate().map_err(|e| e.to_string())?;
+    let csr = params
+        .serialize_request(&key)
+        .map_err(|e| format!("csr: {e}"))?;
+    order
+        .finalize_csr(csr.der())
+        .await
+        .map_err(|e| format!("acme finalize: {e}"))?;
+    let chain = order
+        .poll_certificate(&RetryPolicy::default())
+        .await
+        .map_err(|e| format!("acme certificate: {e}"))?;
+    Ok(InstalledPem {
+        hostname: hostname.to_string(),
+        chain_pem: chain,
+        key_pem: key.serialize_pem(),
+    })
+}
+
+fn plant_txt(binding: &DomainBinding, hostname: &str, value: &str) -> Result<String, String> {
+    let zone_id = binding
+        .zone_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "dns_write binding has no zone id — cannot plant TXT".to_string())?;
+    let name = acme_txt_relative_name(hostname, &binding.apex);
+    let body = serde_json::json!({
+        "type": "TXT",
+        "name": name,
+        "content": value,
+        "ttl": 60,
+    })
+    .to_string();
+    let path = format!("/api/dns/zones/{zone_id}/records");
+    let resp = proxy_request("POST", &path, Some("k2-acme"), Some(&body))?;
+    if resp.status != 200 && resp.status != 201 {
+        return Err(format!(
+            "plant _acme-challenge TXT failed HTTP {}: {}",
+            resp.status, resp.body
+        ));
+    }
+    let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap_or(serde_json::json!({}));
+    v.pointer("/record/id")
+        .or_else(|| v.get("id"))
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "plant TXT succeeded but response had no record id".to_string())
+}
+
+fn delete_txt(record_id: &str) -> Result<(), String> {
+    let path = format!("/api/dns/records/{record_id}");
+    let resp = proxy_request("DELETE", &path, Some("k2-acme"), None)?;
+    if resp.status == 200 || resp.status == 204 || resp.status == 404 {
+        Ok(())
+    } else {
+        Err(format!(
+            "delete ACME TXT {record_id} HTTP {}: {}",
+            resp.status, resp.body
+        ))
+    }
+}
+
+struct Http01Guard {
+    stop: Arc<Mutex<bool>>,
+}
+
+impl Http01Guard {
+    fn spawn(token: &str, body: &str) -> Result<Self, String> {
+        let port: u16 = std::env::var("K2_ACME_HTTP_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(80);
+        let listener = TcpListener::bind(("0.0.0.0", port))
+            .or_else(|_| TcpListener::bind(("127.0.0.1", port)))
+            .map_err(|e| {
+                format!("HTTP-01 cannot bind :{port} ({e}) — open :80 or use DNS-01")
+            })?;
+        let _ = listener.set_nonblocking(true);
+        let stop = Arc::new(Mutex::new(false));
+        let stop_c = Arc::clone(&stop);
+        let path = format!("/.well-known/acme-challenge/{token}");
+        let payload = body.to_string();
+        std::thread::spawn(move || loop {
+            if *stop_c.lock().unwrap() {
+                break;
+            }
+            match listener.accept() {
+                Ok((mut sock, _)) => {
+                    let mut buf = [0u8; 2048];
+                    let n = sock.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let ok = req.contains(&path);
+                    let resp = if ok {
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                            payload.len()
+                        )
+                    } else {
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            .to_string()
+                    };
+                    let _ = sock.write_all(resp.as_bytes());
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        });
+        Ok(Self { stop })
+    }
+}
+
+impl Drop for Http01Guard {
+    fn drop(&mut self) {
+        if let Ok(mut g) = self.stop.lock() {
+            *g = true;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_txt_name_for_mail_and_apex() {
+        assert_eq!(
+            acme_txt_relative_name("lztek.io", "lztek.io"),
+            "_acme-challenge"
+        );
+        assert_eq!(
+            acme_txt_relative_name("mail.lztek.io", "lztek.io"),
+            "_acme-challenge.mail"
+        );
+        assert_eq!(
+            acme_txt_relative_name("a.b.lztek.io", "lztek.io"),
+            "_acme-challenge.a.b"
+        );
+    }
+
+    #[test]
+    fn k2_dev_names_are_rejected() {
+        assert!(reject_k2_dev("rosson.k2.dev").is_err());
+        assert!(reject_k2_dev("mail.lztek.io").is_ok());
+    }
+
+    #[test]
+    fn fake_le_cert_is_not_rcgen() {
+        let pem = mint_fake_le("mail.example.com").expect("mint");
+        assert!(pem.chain_pem.contains("BEGIN CERTIFICATE"));
+        assert!(pem.key_pem.contains("BEGIN"));
+        assert!(
+            !pem.chain_pem.to_ascii_lowercase().contains("rcgen"),
+            "fake leaf must not look like rcgen"
+        );
+    }
+}

@@ -92,6 +92,14 @@ assert_contains "domain help mentions attach" "$help" "attach"
 assert_contains "domain help not hostmail" "$help" "hostmail"
 help="$("$K2_CLI" cert --help)"
 assert_contains "cert help not hostmail cert" "$help" "hostmail"
+assert_contains "cert help has issue" "$help" "issue"
+
+set +e
+out="$("$K2_CLI" cert issue 2>&1)"
+rc=$?
+set -e
+assert_eq "cert issue missing hostname exit" "$rc" "2"
+assert_contains "cert issue usage" "$out" "usage"
 
 echo "== schema =="
 schema="$("$K2_CLI" --schema 2>/dev/null || true)"

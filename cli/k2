@@ -27283,12 +27283,67 @@ cmd_cert_list() {
     _dom_handle_resp
 }
 
+cmd_cert_issue() {
+    if _wants_help "$@"; then cmd_help_cert_issue; exit 0; fi
+    local hostname="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _dom_err "usage" "unknown flag '$1' — usage: k2 cert issue <hostname> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$hostname" ]; then hostname="$1"; else
+                    _dom_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$hostname" ]; then
+        _dom_err "usage" "cert issue requires an attached <hostname>"
+        exit 2
+    fi
+    local body RESP
+    body=$(D_HOST="$hostname" python3 -c 'import json,os; print(json.dumps({"hostname": os.environ["D_HOST"]}))')
+    RESP=$(cli_send cli_post_json "/cli/certs/issue" "$body") || RESP=""
+    local AS_JSON="$as_json" D_VERB="issue"
+    _dom_handle_resp
+}
+
+cmd_cert_renew() {
+    if _wants_help "$@"; then cmd_help_cert_renew; exit 0; fi
+    local hostname="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _dom_err "usage" "unknown flag '$1' — usage: k2 cert renew <hostname> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$hostname" ]; then hostname="$1"; else
+                    _dom_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$hostname" ]; then
+        _dom_err "usage" "cert renew requires an attached <hostname>"
+        exit 2
+    fi
+    local body RESP
+    body=$(D_HOST="$hostname" python3 -c 'import json,os; print(json.dumps({"hostname": os.environ["D_HOST"]}))')
+    RESP=$(cli_send cli_post_json "/cli/certs/renew" "$body") || RESP=""
+    local AS_JSON="$as_json" D_VERB="renew"
+    _dom_handle_resp
+}
+
 cmd_cert() {
     case "${1:-}" in
         list) shift; cmd_cert_list "$@" ;;
-        issue|renew)
-            _dom_err "usage" "k2 cert ${1} lands in the certs slice — attach the hostname with k2 domain name add first. Not k2 hostmail cert."
-            exit 2 ;;
+        issue) shift; cmd_cert_issue "$@" ;;
+        renew) shift; cmd_cert_renew "$@" ;;
         --help|-h|'') cmd_help_cert; exit 0 ;;
         *)
             _dom_err "usage" "unknown command '${1:-}' — see k2 cert --help (box inventory; not k2 hostmail cert)"
@@ -27380,8 +27435,26 @@ slice. Not `k2 hostmail cert renew` (that becomes an alias of this issuer).
 
 USAGE
   k2 cert list [--json]
-  k2 cert issue <hostname>     (certs slice)
-  k2 cert renew <hostname>     (certs slice)
+  k2 cert issue <hostname> [--json]
+  k2 cert renew <hostname> [--json]
+EOF
+}
+
+cmd_help_cert_issue() {
+    cat <<'EOF'
+Issue a Let's Encrypt cert for an attached hostname (on-box ACME).
+
+USAGE
+  k2 cert issue <hostname> [--json]
+EOF
+}
+
+cmd_help_cert_renew() {
+    cat <<'EOF'
+Renew the cert for an attached hostname. Never hostmail disable/enable.
+
+USAGE
+  k2 cert renew <hostname> [--json]
 EOF
 }
 

@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 
 use k2_core::domains::{
-    apex_attached_for_write, get_binding, hostname_under_apex, list_bindings, list_names_for_apex,
-    normalize_apex, normalize_hostname, normalize_role, remove_binding, remove_name,
-    upsert_binding, upsert_name, DomainBinding, DomainName,
+    apex_attached_for_write, get_binding, get_name, hostname_under_apex, list_bindings,
+    list_names_for_apex, normalize_apex, normalize_hostname, normalize_role, remove_binding,
+    remove_name, upsert_binding, upsert_name, DomainBinding, DomainName,
 };
 
 use crate::cli_response::CliResponse;
@@ -101,15 +101,11 @@ fn gate_agent_list() -> Result<(), CliResponse> {
     Ok(())
 }
 
-fn missing_cert() -> serde_json::Value {
-    serde_json::json!({ "state": "missing" })
-}
-
 fn name_json(n: &DomainName) -> serde_json::Value {
     serde_json::json!({
         "hostname": n.hostname,
         "role": n.role,
-        "cert": missing_cert(),
+        "cert": crate::domains::status::cert_json_for(&n.hostname, &n.role),
     })
 }
 
@@ -305,7 +301,7 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
                     "hostname": n.hostname,
                     "apex": n.apex,
                     "role": n.role,
-                    "cert": missing_cert(),
+                    "cert": crate::domains::status::cert_json_for(&n.hostname, &n.role),
                 }
             })
             .to_string(),
@@ -376,11 +372,135 @@ pub fn handle_certs_list(_params: &HashMap<String, String>) -> CliResponse {
                 "hostname": n.hostname,
                 "apex": n.apex,
                 "role": n.role,
-                "cert": missing_cert(),
+                "cert": crate::domains::status::cert_json_for(&n.hostname, &n.role),
             })
         })
         .collect();
     CliResponse::ok_json(serde_json::json!({ "ok": true, "certs": certs }).to_string())
+}
+
+fn gate_agent_issue() -> Result<(), CliResponse> {
+    gate_agent_list()
+}
+
+/// POST `/cli/certs/issue` `{hostname}`.
+pub fn handle_issue(params: &HashMap<String, String>) -> CliResponse {
+    if let Err(r) = gate_agent_issue() {
+        return r;
+    }
+    let Some(raw) = body_str(params, &["hostname", "name"]) else {
+        return error_response("400 Bad Request", "usage", "missing 'hostname'");
+    };
+    let hostname = match normalize_hostname(raw) {
+        Ok(h) => h,
+        Err(e) => return error_response("400 Bad Request", "invalid_domain", &e),
+    };
+    match crate::domains::acme::issue_attached(&hostname) {
+        Ok(pem) => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let role = get_name(&conn, &hostname)
+                .ok()
+                .flatten()
+                .map(|n| n.role)
+                .unwrap_or_else(|| "other".into());
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "hostname": pem.hostname,
+                    "cert": crate::domains::status::cert_json_for(&hostname, &role),
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => {
+            let not_attached = e.contains("not attached");
+            error_response(
+                if not_attached {
+                    "404 Not Found"
+                } else {
+                    "400 Bad Request"
+                },
+                if not_attached { "not_found" } else { "acme" },
+                &e,
+            )
+        }
+    }
+}
+
+/// POST `/cli/certs/renew` `{hostname}`. Never hostmail disable/enable.
+pub fn handle_renew(params: &HashMap<String, String>) -> CliResponse {
+    handle_issue(params)
+}
+
+/// POST `/cli/certs/upload` `{hostname, certPem, keyPem}` — owner-only.
+pub fn handle_upload(params: &HashMap<String, String>) -> CliResponse {
+    let Some(raw) = body_str(params, &["hostname", "name"]) else {
+        return error_response("400 Bad Request", "usage", "missing 'hostname'");
+    };
+    let hostname = match normalize_hostname(raw) {
+        Ok(h) => h,
+        Err(e) => return error_response("400 Bad Request", "invalid_domain", &e),
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Some(name) = get_name(&conn, &hostname).ok().flatten() else {
+        return error_response(
+            "404 Not Found",
+            "not_found",
+            &format!("hostname '{hostname}' is not attached"),
+        );
+    };
+    let cert_pem = body_str(params, &["certPem", "cert", "certificate"]).unwrap_or("");
+    let key_pem = body_str(params, &["keyPem", "key", "privateKey"]).unwrap_or("");
+    match crate::domains::store::install(&hostname, cert_pem, key_pem) {
+        Ok(_) => {
+            if name.role == k2_core::domains::ROLE_MAIL {
+                let _ = crate::domains::store::plant_mail_pem(&hostname, cert_pem, key_pem);
+            }
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "hostname": hostname,
+                    "cert": crate::domains::status::cert_json_for(&hostname, &name.role),
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => error_response("400 Bad Request", "upload", &e),
+    }
+}
+
+/// POST `/cli/certs/config` `{email?, directory?}` — owner ACME override.
+pub fn handle_config_set(params: &HashMap<String, String>) -> CliResponse {
+    let mut cfg = crate::domains::store::load_acme_config();
+    if let Some(e) = body_str(params, &["email"]) {
+        cfg.email = if e.is_empty() { None } else { Some(e.to_string()) };
+    }
+    if let Some(d) = body_str(params, &["directory"]) {
+        cfg.directory = if d.is_empty() {
+            None
+        } else {
+            Some(d.to_string())
+        };
+    }
+    match crate::domains::store::save_acme_config(&cfg) {
+        Ok(()) => CliResponse::ok_json(serde_json::json!({ "ok": true, "config": cfg }).to_string()),
+        Err(e) => error_response("500 Internal Server Error", "config", &e),
+    }
+}
+
+pub fn handle_issue_post(body: &[u8]) -> CliResponse {
+    handle_issue(&params_from_post(body))
+}
+pub fn handle_renew_post(body: &[u8]) -> CliResponse {
+    handle_renew(&params_from_post(body))
+}
+pub fn handle_upload_post(body: &[u8]) -> CliResponse {
+    handle_upload(&params_from_post(body))
+}
+pub fn handle_config_post(body: &[u8]) -> CliResponse {
+    handle_config_set(&params_from_post(body))
 }
 
 pub fn handle_attach_post(body: &[u8]) -> CliResponse {
@@ -440,7 +560,7 @@ pub fn require_apex_attached_for_write(apex: &str) -> Result<(), CliResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k2_core::domains::{get_name, upsert_binding};
+    use k2_core::domains::upsert_binding;
 
     fn init() {
         let _ = k2_core::db::init_for_tests();
@@ -510,5 +630,83 @@ mod tests {
             let conn = db.lock();
             let _ = remove_binding(&conn, "byo-attach.example");
         }
+    }
+
+    #[test]
+    fn issue_unattached_is_404() {
+        init();
+        let mut params = HashMap::new();
+        params.insert("hostname".into(), "nope.example.com".into());
+        let resp = handle_issue(&params);
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        assert!(resp.body.contains("not_found") || resp.body.contains("not attached"), "{}", resp.body);
+    }
+
+    #[test]
+    fn issue_attached_fake_writes_0600_not_rcgen() {
+        init();
+        std::env::set_var("K2_ACME_FAKE", "1");
+        std::env::set_var("K2_ACME_DNS_WAIT_SECS", "0");
+        let home = std::env::temp_dir().join(format!(
+            "k2-issue-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&home);
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            upsert_binding(&conn, "example.com", None, false).unwrap();
+            upsert_name(&conn, "app.example.com", "example.com", "other").unwrap();
+        }
+        std::env::set_var("K2_ACME_HTTP01", "1");
+        let mut params = HashMap::new();
+        params.insert("hostname".into(), "app.example.com".into());
+        let resp = handle_issue(&params);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert!(
+            crate::domains::store::key_mode_is_0600("app.example.com"),
+            "privkey must be 0600"
+        );
+        let body = resp.body.to_ascii_lowercase();
+        assert!(!body.contains("rcgen"), "{body}");
+        assert!(body.contains("issued") || body.contains("let's encrypt"), "{body}");
+        match prev {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = remove_binding(&conn, "example.com");
+        let _ = std::fs::remove_dir_all(home);
+        std::env::remove_var("K2_ACME_HTTP01");
+    }
+
+    #[test]
+    fn upload_unattached_is_404() {
+        init();
+        let mut params = HashMap::new();
+        params.insert("hostname".into(), "missing.example.com".into());
+        params.insert("certPem".into(), "-----BEGIN CERTIFICATE-----\nM\n-----END CERTIFICATE-----\n".into());
+        params.insert("keyPem".into(), "-----BEGIN PRIVATE KEY-----\nM\n-----END PRIVATE KEY-----\n".into());
+        let resp = handle_upload(&params);
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+    }
+
+    #[test]
+    fn renew_is_the_same_issuer_as_issue() {
+        // C8: renew retries issue. Never hostmail disable/enable.
+        init();
+        let mut params = HashMap::new();
+        params.insert("hostname".into(), "nope.example.com".into());
+        let issue = handle_issue(&params);
+        let renew = handle_renew(&params);
+        assert_eq!(issue.status, renew.status);
+        assert_eq!(issue.status, "404 Not Found");
     }
 }

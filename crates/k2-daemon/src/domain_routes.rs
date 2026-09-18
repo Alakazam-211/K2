@@ -23,7 +23,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/domains/names/remove"
         | "/cli/certs/issue"
         | "/cli/certs/renew"
-        | "/cli/certs/upload" => CliResponse::method_not_allowed(),
+        | "/cli/certs/upload"
+        | "/cli/certs/config" => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
     };
     Some(resp)
@@ -35,6 +36,10 @@ pub fn dispatch_post(path: &str, body: &[u8]) -> CliResponse {
         "/cli/domains/remove" => routes::handle_remove_post(body),
         "/cli/domains/names" => routes::handle_names_add_post(body),
         "/cli/domains/names/remove" => routes::handle_names_remove_post(body),
+        "/cli/certs/issue" => routes::handle_issue_post(body),
+        "/cli/certs/renew" => routes::handle_renew_post(body),
+        "/cli/certs/upload" => routes::handle_upload_post(body),
+        "/cli/certs/config" => routes::handle_config_post(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -56,6 +61,7 @@ pub fn is_mutating_get_path(path: &str) -> bool {
             | "/cli/certs/issue"
             | "/cli/certs/renew"
             | "/cli/certs/upload"
+            | "/cli/certs/config"
     )
 }
 

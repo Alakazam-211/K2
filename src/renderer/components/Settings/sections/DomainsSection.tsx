@@ -74,6 +74,7 @@ export const DOMAINS_MANIFEST: SettingEntry[] = [
 function certLabel(cert?: CertState): string {
   const state = cert?.state || 'missing'
   if (state === 'missing') return '—'
+  if (cert?.issuer) return `${state} (${cert.issuer})`
   return state
 }
 
@@ -84,6 +85,11 @@ export function DomainsSection(): React.JSX.Element {
   const [hostname, setHostname] = useState('')
   const [role, setRole] = useState('other')
   const [busy, setBusy] = useState(false)
+  const [acmeEmail, setAcmeEmail] = useState('')
+  const [acmeDir, setAcmeDir] = useState('')
+  const [uploadHost, setUploadHost] = useState('')
+  const [uploadCert, setUploadCert] = useState('')
+  const [uploadKey, setUploadKey] = useState('')
 
   const refresh = useCallback(async () => {
     try {
@@ -134,6 +140,64 @@ export function DomainsSection(): React.JSX.Element {
     try {
       await cliPost('/cli/domains/names', { hostname: v, role })
       setHostname('')
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const issue = async (value: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await cliPost('/cli/certs/issue', { hostname: value })
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const renew = async (value: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await cliPost('/cli/certs/renew', { hostname: value })
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveAcme = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await cliPost('/cli/certs/config', { email: acmeEmail, directory: acmeDir })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const uploadPem = async () => {
+    if (busy || !uploadHost.trim()) return
+    if (!window.confirm(`Replace the cert for ${uploadHost.trim()} with this PEM?`)) return
+    setBusy(true)
+    try {
+      await cliPost('/cli/certs/upload', {
+        hostname: uploadHost.trim(),
+        certPem: uploadCert,
+        keyPem: uploadKey,
+      })
+      setUploadCert('')
+      setUploadKey('')
       await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -238,13 +302,29 @@ export function DomainsSection(): React.JSX.Element {
                       {n.role} · cert {certLabel(n.cert)}
                     </span>
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => void removeName(n.hostname)}
-                    className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
-                  >
-                    Remove
-                  </button>
+                  <span className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void issue(n.hostname)}
+                      className="text-[10px] text-[var(--color-accent)] no-drag cursor-pointer"
+                    >
+                      Issue
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void renew(n.hostname)}
+                      className="text-[10px] text-[var(--color-accent)] no-drag cursor-pointer"
+                    >
+                      Renew
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void removeName(n.hostname)}
+                      className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  </span>
                 </div>
               ))}
             </div>
@@ -286,6 +366,64 @@ export function DomainsSection(): React.JSX.Element {
             Add
           </button>
         </div>
+      </div>
+
+      <div className="mt-4 px-3 py-3 border border-[var(--color-border)]">
+        <div className="text-xs text-[var(--color-text-primary)]">ACME override</div>
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-2">
+          Optional email and directory URL (ZeroSSL / staging). Default is Let&apos;s Encrypt.
+        </p>
+        <div className="flex gap-2 mb-2">
+          <input
+            value={acmeEmail}
+            onChange={(e) => setAcmeEmail(e.target.value)}
+            placeholder="acme@example.com"
+            className="flex-1 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)]"
+          />
+          <input
+            value={acmeDir}
+            onChange={(e) => setAcmeDir(e.target.value)}
+            placeholder="https://acme-v02.api.letsencrypt.org/directory"
+            className="flex-1 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)]"
+          />
+          <button
+            type="button"
+            onClick={() => void saveAcme()}
+            className="px-2 py-1 text-xs border border-[var(--color-border)] no-drag cursor-pointer"
+          >
+            Save
+          </button>
+        </div>
+        <div className="text-xs text-[var(--color-text-primary)] mt-3">Upload PEM</div>
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-2">
+          Owner only. Replaces the on-box key for one attached hostname.
+        </p>
+        <input
+          value={uploadHost}
+          onChange={(e) => setUploadHost(e.target.value)}
+          placeholder="mail.example.com"
+          className="w-full mb-2 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)]"
+        />
+        <textarea
+          value={uploadCert}
+          onChange={(e) => setUploadCert(e.target.value)}
+          placeholder="-----BEGIN CERTIFICATE-----"
+          className="w-full mb-2 px-2 py-1 text-[10px] font-mono h-16 bg-[var(--color-bg)] border border-[var(--color-border)]"
+        />
+        <textarea
+          value={uploadKey}
+          onChange={(e) => setUploadKey(e.target.value)}
+          placeholder="-----BEGIN PRIVATE KEY-----"
+          className="w-full mb-2 px-2 py-1 text-[10px] font-mono h-16 bg-[var(--color-bg)] border border-[var(--color-border)]"
+        />
+        <button
+          type="button"
+          onClick={() => void uploadPem()}
+          disabled={busy || !uploadHost.trim() || !uploadCert.trim() || !uploadKey.trim()}
+          className="px-2 py-1 text-xs border border-[var(--color-border)] disabled:opacity-40 no-drag cursor-pointer"
+        >
+          Upload
+        </button>
       </div>
     </div>
   )

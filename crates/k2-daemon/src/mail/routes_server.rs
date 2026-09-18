@@ -425,8 +425,8 @@ pub fn handle_server_rotate_admin(_body: &[u8]) -> CliResponse {
     }
 }
 
-/// POST `/cli/mail/cert/renew` — L7: retry ACME for the mail hostname
-/// only. Not enable, not disable, not SIGTERM, not a store wipe.
+/// POST `/cli/mail/cert/renew` — L7 / C14: thin alias of `/cli/certs/renew`
+/// for the attached mail hostname. Never disable+enable.
 pub fn handle_cert_renew(_body: &[u8]) -> CliResponse {
     let hostname = {
         let db = k2_core::db::shared();
@@ -446,6 +446,20 @@ pub fn handle_cert_renew(_body: &[u8]) -> CliResponse {
             "the mail server is not installed — enable it before cert renew".to_string(),
         );
     };
+    // One issuer: custom-domain ACME when the mail hostname is attached.
+    let attached = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::get_name(&conn, &hostname)
+            .ok()
+            .flatten()
+            .is_some()
+    };
+    if attached {
+        let mut params = std::collections::HashMap::new();
+        params.insert("hostname".into(), hostname);
+        return crate::domains::routes::handle_renew(&params);
+    }
     let client = match crate::mail::domains::engine_from_db() {
         Ok((c, _)) => c,
         Err(e) => {

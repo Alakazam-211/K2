@@ -676,6 +676,9 @@ mod unix_impl {
             p if p.starts_with("/cli/dns/") && is_post => {
                 from_cli(crate::dns_routes::dispatch_post(p, body))
             }
+            p if (p == "/cli/certs/issue" || p == "/cli/certs/renew") && is_post => {
+                from_cli(crate::domain_routes::dispatch_post(p, body))
+            }
             // Published services: POST run/start/stop/rm + subdomain
             // claim/unclaim. CLI `cli_post_json` / `cli_post` send JSON or
             // query params; cell handle_conn only merges form, so flatten

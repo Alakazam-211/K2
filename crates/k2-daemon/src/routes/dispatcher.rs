@@ -858,6 +858,10 @@ async fn handle_one_request(
             | "/cli/domains/remove"
             | "/cli/domains/names"
             | "/cli/domains/names/remove"
+            | "/cli/certs/issue"
+            | "/cli/certs/renew"
+            | "/cli/certs/upload"
+            | "/cli/certs/config"
             // Projects V1 P2 (prd-projects-v1 §4.1) — project-GROUP
             // mutations (NOT the legacy /cli/projects/* workspace
             // registry). JSON-bodied POSTs (msg carries free chat text;
@@ -5020,10 +5024,44 @@ async fn handle_one_request(
         // dual-auth arm below.
         p if is_post
             && post_allowed
+            && (p == "/cli/certs/issue" || p == "/cli/certs/renew") =>
+        {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let _ = stream.read(&mut buf).await;
+                let r = auth_scope_failure(p, &query, bearer_token.as_deref());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    crate::domain_routes::dispatch_post(&p_owned, &body_bytes)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        p if is_post
+            && post_allowed
             && (p == "/cli/domains"
                 || p == "/cli/domains/remove"
                 || p == "/cli/domains/names"
-                || p == "/cli/domains/names/remove") =>
+                || p == "/cli/domains/names/remove"
+                || p == "/cli/certs/upload"
+                || p == "/cli/certs/config") =>
         {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;

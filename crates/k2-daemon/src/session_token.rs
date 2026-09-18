@@ -1426,6 +1426,8 @@ mod tests {
             "/cli/mail/dkim/retire",
             "/cli/mail/dmarc",
             "/cli/mail/dmarc/report-to",
+            "/cli/mail/ptr",
+            "/cli/mail/ptr/set",
         ] {
             assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
         }

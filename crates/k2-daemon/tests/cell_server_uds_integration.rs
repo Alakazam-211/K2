@@ -800,6 +800,22 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
     assert_eq!(dkr_status, 405, "UDS GET dkim/retire 405; {dkr_body}");
     let (dm_status, dm_body) = uds(&sock, &get("/cli/mail/dmarc", Some(&token))).await;
     assert_ne!(dm_status, 403, "UDS flag ON dmarc GET; {dm_body}");
+    // Do not GET /cli/mail/ptr show over UDS here — it dials what-is-my-ip/DNS.
+    // Gate + 405 covered via ptr/set; show unit-tested with FakeEnv.
+    let (ptr_set_status, ptr_set_body) =
+        uds(&sock, &get("/cli/mail/ptr/set", Some(&token))).await;
+    assert_eq!(ptr_set_status, 405, "UDS GET ptr/set 405; {ptr_set_body}");
+    let (ptr_post_status, ptr_post_body) =
+        uds(&sock, &post_json("/cli/mail/ptr/set", &token, "{}")).await;
+    assert_ne!(ptr_post_status, 403, "UDS flag ON ptr/set POST; {ptr_post_body}");
+    assert!(
+        !ptr_post_body.contains("owner_only"),
+        "C5b UDS ptr/set POST: {ptr_post_body}"
+    );
+    assert_eq!(
+        ptr_post_status, 400,
+        "UDS ptr/set without hostname is usage; {ptr_post_body}"
+    );
 
     let (cr_status, cr_body) = uds(&sock, &get("/cli/mail/cert/renew", Some(&token))).await;
     assert_eq!(cr_status, 405, "UDS GET cert/renew 405; {cr_body}");

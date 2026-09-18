@@ -85,6 +85,9 @@
 //! | GET  /cli/mail/dmarc              | mail/dmarc.rs          |
 //! | POST /cli/mail/dmarc              | mail/dmarc.rs          |
 //! | POST /cli/mail/dmarc/report-to    | mail/dmarc.rs          |
+//! | GET  /cli/mail/ptr                | mail/ptr.rs            |
+//! | POST /cli/mail/ptr                | mail/ptr.rs (show)     |
+//! | POST /cli/mail/ptr/set            | mail/ptr.rs            |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -192,6 +195,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/app-password" => crate::mail::app_password::handle_app_password_get(params),
         "/cli/mail/dkim" => crate::mail::dkim::handle_dkim_get(params),
         "/cli/mail/dmarc" => crate::mail::dmarc::handle_dmarc_get(params),
+        "/cli/mail/ptr" => crate::mail::ptr::handle_ptr_show(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -253,7 +257,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/app-password/revoke"
         | "/cli/mail/dkim/rotate"
         | "/cli/mail/dkim/retire"
-        | "/cli/mail/dmarc/report-to" => CliResponse::method_not_allowed(),
+        | "/cli/mail/dmarc/report-to"
+        | "/cli/mail/ptr/set" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -354,6 +359,9 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/dmarc" | "/cli/mail/dmarc/report-to" => {
             crate::mail::dmarc::handle_dmarc_report_to(body)
         }
+        // Dual GET+POST show; set is a separate path.
+        "/cli/mail/ptr" => crate::mail::ptr::handle_ptr_show_post(body),
+        "/cli/mail/ptr/set" => crate::mail::ptr::handle_ptr_set(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -509,6 +517,8 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/dkim/retire"
             | "/cli/mail/dmarc"
             | "/cli/mail/dmarc/report-to"
+            | "/cli/mail/ptr"
+            | "/cli/mail/ptr/set"
     )
 }
 
@@ -808,6 +818,8 @@ mod tests {
             "/cli/mail/dkim/retire",
             "/cli/mail/dmarc",
             "/cli/mail/dmarc/report-to",
+            "/cli/mail/ptr",
+            "/cli/mail/ptr/set",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }
@@ -930,6 +942,18 @@ mod tests {
         );
         assert!(!is_owner_level_mutation("/cli/mail/dkim"));
         assert!(!is_owner_level_mutation("/cli/mail/dmarc"));
+        let ptr_off = mail_manage_authorized("/cli/mail/ptr", false, Some(&p));
+        assert!(ptr_off.is_err(), "M5 off ptr is owner_only");
+        assert!(
+            mail_manage_authorized("/cli/mail/ptr", true, None).is_ok(),
+            "owner/admin ptr show"
+        );
+        assert!(
+            mail_manage_authorized("/cli/mail/ptr/set", true, None).is_ok(),
+            "owner/admin ptr set"
+        );
+        assert!(!is_owner_level_mutation("/cli/mail/ptr"));
+        assert!(!is_owner_level_mutation("/cli/mail/ptr/set"));
     }
 
     /// GET on every POST-only mutation answers an explicit 405 through
@@ -987,11 +1011,30 @@ mod tests {
             "/cli/mail/queue/retry",
             "/cli/mail/queue/drop",
             "/cli/mail/acl/revoke",
+            "/cli/mail/ptr/set",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
             assert!(resp.body.contains("POST required"), "body={}", resp.body);
         }
+        // GET /cli/mail/ptr is show (not 405). Do not call the live
+        // handler here — it dials what-is-my-ip; coverage lives in
+        // mail::ptr unit tests with FakeEnv.
+        assert!(
+            is_mail_manage_surface("/cli/mail/ptr")
+                && is_mail_manage_surface("/cli/mail/ptr/set"),
+            "ptr paths are M5 exact"
+        );
+        let ptr_set = dispatch_post("/cli/mail/ptr/set", b"{}");
+        assert_ne!(
+            ptr_set.status, "404 Not Found",
+            "POST /cli/mail/ptr/set must be wired"
+        );
+        assert_eq!(
+            ptr_set.status, "400 Bad Request",
+            "missing hostname is usage (before network): {}",
+            ptr_set.body
+        );
         let quota_get = dispatch("/cli/mail/quota", &params).expect("quota GET claimed");
         assert_ne!(
             quota_get.status, "405 Method Not Allowed",

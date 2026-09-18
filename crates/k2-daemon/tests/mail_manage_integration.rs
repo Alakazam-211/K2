@@ -335,6 +335,33 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             Some("{}"),
         );
         assert_owner_only(&dmarc_off, "default OFF agent dmarc report-to");
+        let ptr_off = http(
+            port,
+            "GET",
+            &format!("/cli/mail/ptr?token={hook_a}"),
+            None,
+        );
+        assert_owner_only(&ptr_off, "default OFF agent ptr show");
+        assert!(
+            ptr_off
+                .body
+                .contains("Allow agents to manage hosted mail on this host"),
+            "flag-off ptr names Settings: {}",
+            ptr_off.body
+        );
+        let ptr_set_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/ptr/set?token={hook_a}"),
+            None,
+        );
+        // Flag OFF still hits the manage gate before method; when flag ON
+        // (below) GET set is 405. Here owner_only is also acceptable.
+        assert!(
+            ptr_set_get.status == 403 || ptr_set_get.status == 405,
+            "GET ptr/set without manage: {}",
+            ptr_set_get.body
+        );
         assert!(
             disable_off
                 .body
@@ -574,6 +601,9 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("GET", "/cli/mail/dmarc", None),
             ("POST", "/cli/mail/dmarc", Some("{}")),
             ("POST", "/cli/mail/dmarc/report-to", Some("{}")),
+            // POST set without hostname is usage 400 (no network). Do not
+            // GET|POST /cli/mail/ptr show here — it dials what-is-my-ip/DNS.
+            ("POST", "/cli/mail/ptr/set", Some("{}")),
         ] {
             let r = http(port, method, &format!("{path}?token={hook_a}"), body);
             assert_not_owner_only(&r, &format!("C5b flag ON opens {path}"));
@@ -596,6 +626,34 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             None,
         );
         assert_ne!(dkim_get.status, 405, "GET dkim show; {}", dkim_get.body);
+
+        let ptr_set_get_on = http(
+            port,
+            "GET",
+            &format!("/cli/mail/ptr/set?token={hook_a}"),
+            None,
+        );
+        assert_eq!(
+            ptr_set_get_on.status, 405,
+            "GET /cli/mail/ptr/set 405; {}",
+            ptr_set_get_on.body
+        );
+        let ptr_set_post_on = http(
+            port,
+            "POST",
+            &format!("/cli/mail/ptr/set?token={hook_a}"),
+            Some("{}"),
+        );
+        assert_eq!(
+            ptr_set_post_on.status, 400,
+            "flag ON ptr set without hostname is usage (no network); {}",
+            ptr_set_post_on.body
+        );
+        assert!(
+            !ptr_set_post_on.body.contains("owner_only"),
+            "flag ON ptr set must not owner_only; {}",
+            ptr_set_post_on.body
+        );
 
         let import_get = http(
             port,

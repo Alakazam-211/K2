@@ -846,6 +846,10 @@ async fn handle_one_request(
             | "/cli/mail/dkim/retire"
             | "/cli/mail/dmarc"
             | "/cli/mail/dmarc/report-to"
+            // Hostmail PTR/HELO (prd-hostmail-ptr-helo-v1). Exact paths —
+            // dual GET+POST show on /cli/mail/ptr; set is POST-only.
+            | "/cli/mail/ptr"
+            | "/cli/mail/ptr/set"
             // Per-workspace hosted-mail manage toggle. Dedicated POST
             // (not workspace/set, not GET /cli/dns-manage). GET → 405.
             | "/cli/mail-manage"

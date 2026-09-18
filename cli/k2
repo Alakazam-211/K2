@@ -13428,14 +13428,14 @@ cmd_schema() {
     {
       "name": "hostmail quota get",
       "usage": "k2 hostmail quota get <addr> [--json]",
-      "description": "Read live Stalwart mailbox quotas (maxDiskQuota / maxEmails) for a hosted address. GET /cli/mail/quota?address=. mail_manage. 0 = unlimited. Default for new mints is 1GB/10k; existing boxes need quota set (mint constants do not retrofit).",
+      "description": "Read live Stalwart mailbox quotas (maxDiskQuota / maxEmails) for a hosted address. GET /cli/mail/quota?address=. mail_manage. 0 = unlimited. New mints default unlimited; mail-manage sets a cap per inbox. Existing boxes need quota set (mint constants do not retrofit).",
       "args": [{"name": "addr", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "hostmail quota set",
       "usage": "k2 hostmail quota set <addr> --bytes N|--gb N [--messages N] [--json]",
-      "description": "Patch a hosted mailbox's Stalwart Account quotas. POST /cli/mail/quota {address, bytes|gb, messages}. mail_manage. 0 = unlimited. Give --bytes or --gb (not both). Existing boxes need this — mint constants do not retrofit.",
+      "description": "Patch a hosted mailbox's Stalwart Account quotas. POST /cli/mail/quota {address, bytes|gb, messages}. mail_manage. 0 = unlimited. Give --bytes or --gb (not both). New mints default unlimited; raise or cap existing boxes here — mint constants do not retrofit.",
       "args": [{"name": "addr", "required": true}],
       "flags": [
         {"name": "--bytes", "arg": "N", "description": "maxDiskQuota in bytes (0 = unlimited)."},
@@ -27696,9 +27696,9 @@ cmd_help_mail_config() {
 Read or change mail configuration. Global defaults stay owner. mail_manage
 agents may set --address-cap / --agent-send / --quota-bytes / --quota-gb /
 --quota-messages with --workspace. With no setting flags it prints the
-current config; with flags it applies them. 0 = unlimited. Default mailbox
-quota is 1 GB / 10k messages. Existing boxes need `k2 hostmail quota set`
-(mint constants do not retrofit).
+current config; with flags it applies them. 0 = unlimited. New mints
+default unlimited; mail-manage sets a cap per inbox. Existing boxes
+need `k2 hostmail quota set` (mint constants do not retrofit).
 
 USAGE
   k2 hostmail config                                   Read the effective config
@@ -27720,13 +27720,12 @@ FLAGS
                          (pair with --workspace for a per-workspace override)
   --address-cap <n>      Addresses per workspace (0 = unlimited; default 5).
                          Pair with --workspace; the global default is owner.
-  --quota-bytes <n>      Mailbox disk quota for NEW mints (0 = unlimited;
-                         default 1 GB). Pair with --workspace. Existing
-                         boxes need `k2 hostmail quota set` — mint constants
-                         do not retrofit.
+  --quota-bytes <n>      Mailbox disk quota for NEW mints (0 = unlimited,
+                         and that is the default). Pair with --workspace.
+                         Existing boxes need `k2 hostmail quota set`.
   --quota-gb <n>         Same as --quota-bytes, in GiB (× 2^30). Not both.
-  --quota-messages <n>   Mailbox message cap for NEW mints (0 = unlimited;
-                         default 10_000). Pair with --workspace.
+  --quota-messages <n>   Mailbox message cap for NEW mints (0 = unlimited,
+                         and that is the default). Pair with --workspace.
   --workspace <ws>       Scope --agent-send/--address-cap/--quota-* to one
                          workspace (required for mail_manage agents)
   --json                 JSON output
@@ -27999,7 +27998,7 @@ COMMANDS
   import --address <a>        Import Maildir and/or IMAP into a hosted address
   quota get|set <addr>        Per-address mailbox disk/message cap (mail_manage).
                               Existing boxes need quota set — mint constants
-                              do not retrofit. 0 = unlimited; default 1GB/10k.
+                              do not retrofit. 0 = unlimited (and the default).
   catchall set|unset|show     Unknown recipients on a domain → a minted mailbox
                               (mail_manage). Unset rejects unknown.
   alias add|remove|list       Extra address on an existing mailbox (not a mint;
@@ -28168,9 +28167,9 @@ EOF
 cmd_help_hostmail_quota() {
     cat <<'EOF'
 Per-address mailbox disk and message caps. mail_manage agents (or
-owner/admin) may raise existing hosted boxes. 0 = unlimited. Default
-for NEW mints is 1 GB / 10k messages; mint constants do not retrofit
-existing addresses — use `quota set`.
+owner/admin) may cap existing hosted boxes. 0 = unlimited. NEW mints
+default unlimited; mint constants do not retrofit existing addresses —
+use `quota set`.
 
 USAGE
   k2 hostmail quota get <addr> [--json]
@@ -28181,7 +28180,7 @@ EOF
 cmd_help_hostmail_quota_get() {
     cat <<'EOF'
 Read the live Stalwart quota object for a hosted address (engine truth).
-mail_manage; 0 = unlimited; default 1GB/10k on new mints.
+mail_manage; 0 = unlimited (and the default on new mints).
 
 USAGE
   k2 hostmail quota get <addr> [--json]

@@ -86,15 +86,16 @@ fn default_mail_address_cap() -> u32 {
 }
 
 /// Fallback mailbox disk quota for new mints when the workspace has no
-/// override (1 GB). 0 = unlimited. Existing addresses are not retrofitted.
+/// override. **0 = unlimited.** Mail-manage sets a cap per inbox.
+/// Existing addresses are not retrofitted.
 fn default_mail_quota_bytes() -> u64 {
-    1_073_741_824
+    0
 }
 
 /// Fallback mailbox message cap for new mints when the workspace has no
-/// override (10_000). 0 = unlimited.
+/// override. **0 = unlimited.**
 fn default_mail_quota_messages() -> u64 {
-    10_000
+    0
 }
 
 /// P1.C — default Active-Bar tenure window: 24 hours.
@@ -469,15 +470,17 @@ pub struct AppSettings {
     #[serde(default = "default_mail_address_cap")]
     pub mail_address_cap: u32,
     /// GLOBAL default mailbox disk quota in bytes for new mints
-    /// (1 GB). Per-workspace `projects.mail_quota_bytes` overrides it;
-    /// effective resolver: `workspace::settings::mail_quota_bytes_for_path`.
-    /// 0 = unlimited (passed through to Stalwart `maxDiskQuota`).
+    /// (**0 = unlimited**). Per-workspace `projects.mail_quota_bytes`
+    /// overrides it; effective resolver:
+    /// `workspace::settings::mail_quota_bytes_for_path`. Passed through
+    /// to Stalwart `maxDiskQuota`.
     #[serde(default = "default_mail_quota_bytes")]
     pub mail_quota_bytes: u64,
-    /// GLOBAL default mailbox message cap for new mints (10_000).
-    /// Per-workspace `projects.mail_quota_messages` overrides it;
-    /// effective resolver: `workspace::settings::mail_quota_messages_for_path`.
-    /// 0 = unlimited (passed through to Stalwart `maxEmails`).
+    /// GLOBAL default mailbox message cap for new mints
+    /// (**0 = unlimited**). Per-workspace `projects.mail_quota_messages`
+    /// overrides it; effective resolver:
+    /// `workspace::settings::mail_quota_messages_for_path`. Passed
+    /// through to Stalwart `maxEmails`.
     #[serde(default = "default_mail_quota_messages")]
     pub mail_quota_messages: u64,
     /// K2 Mail S2 (prd-email-server-v1 §11.1.2) — the GLOBAL default

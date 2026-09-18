@@ -77,9 +77,12 @@ use super::secrets::{self, SecretStore};
 /// the retention seam above.
 pub const RETENTION_DAYS: u32 = 90;
 
-/// §12: per-address mailbox quota, applied at Stalwart account create.
-pub const QUOTA_BYTES: u64 = 1_073_741_824; // 1 GB
-pub const QUOTA_MAX_MESSAGES: u64 = 10_000;
+/// Per-address mailbox quota applied at Stalwart account create when
+/// the workspace has no override. **0 = unlimited.** Mail-manage
+/// sets a cap later with `k2 hostmail quota set`. Existing boxes are
+/// not retrofitted.
+pub const QUOTA_BYTES: u64 = 0;
+pub const QUOTA_MAX_MESSAGES: u64 = 0;
 
 /// Local-part bounds (§7.2).
 const MAX_LOCAL_PART_LEN: usize = 64;
@@ -1317,7 +1320,7 @@ pub(crate) mod tests {
         assert_eq!(
             engine.created_quotas.lock().unwrap().as_slice(),
             [(QUOTA_BYTES, QUOTA_MAX_MESSAGES)],
-            "pending mint still uses fallback 1GB/10k without a workspace override"
+            "pending mint still uses fallback unlimited (0/0) without a workspace override"
         );
         let row = address_row(&format!("precut@{domain}")).expect("row persisted");
         assert_eq!(row.status, "active");

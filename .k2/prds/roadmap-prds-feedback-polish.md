@@ -151,6 +151,15 @@ Headline pair (**1–2**): status before kill · stop that actually stops.
 | **Fleet observability / agent-ops** | PRD | `.k2/prds/prd-observability-agent-ops.md` |
 | **Relay redundancy** | PRD | `.k2/prds/prd-relay-redundancy-v1.md` |
 | **Billing lifecycle / dedicated tier** | PRDs | `.k2/prds/prd-billing-lifecycle-v1.md`, `.k2/prds/prd-dedicated-tier-permission-model-v1.md` |
+| **Custom domains + certs (Option 1)** | GO · hopped lztek 2026-09-18 · A8 live | `.k2/prds/prd-custom-domains-and-certs-v1.md` |
+| **DNS-manage custodian CLI** | Draft 2026-09-18 · not vs-live | `.k2/prds/prd-dns-manage-custodian-cli-v1.md` — name add/remove under dns_manage; no new toggle. |
+| **Hostmail catch-all / alias / forward** | Draft 2026-09-18 · not vs-live | `.k2/prds/prd-hostmail-catchall-alias-forward-v1.md` — Stalwart objects as-is; no virtual-forwarder; no domain aliases. |
+| **Hostmail OOO + company footer** | Draft 2026-09-18 · vs-live O8–O16 · GO implementer in flight | `.k2/prds/prd-hostmail-ooo-footer-v1.md` |
+| **Hostmail next CLI (5)** | Draft 2026-09-18 · vs-live in flight | `.k2/prds/prd-hostmail-next-cli-v1.md` |
+| **Hostmail app passwords** | Draft 2026-09-18 · not vs-live | `.k2/prds/prd-hostmail-app-passwords-v1.md` |
+| **Hostmail DKIM rotate + DMARC report-to** | Draft 2026-09-18 · vs-live K6–K16 folded · implementer in flight | `.k2/prds/prd-hostmail-dkim-dmarc-v1.md` |
+| **People hub** | vs-live **H17–H29 folded**. Do **not** implement until go. | `.k2/prds/prd-people-hub-v1.md` · review `.k2/prds/prd-people-hub-v1-vs-live.md` — one person, N skins, N mailboxes, 0–1 Connect; extra-gate `owner_role_identity`; Settings id `'people'` must not reuse ConnectTab `'people'`. |
+| **Hostmail LZTEK remaining** | Wrap-up 2026-09-18 after 147 e2e. Hop quota-unlimited + autoconfig hostname. DMARC/sendMode/DKIM rotate stay parked. | `.k2/prds/prd-hostmail-lztek-remaining-v1.md` |
 
 ### B6 · Email / mail
 

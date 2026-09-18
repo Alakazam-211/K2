@@ -933,8 +933,8 @@ fn mail_quota_i64_for_path(project_path: &str, column: &str) -> Option<i64> {
 /// EFFECTIVE mailbox disk quota in bytes for new mints on
 /// `project_path`. 0 = unlimited. Per-workspace override wins when
 /// present and non-negative; otherwise the global
-/// `AppSettings.mail_quota_bytes` default (1 GB). A negative stored
-/// value falls back to the global default (never to unlimited).
+/// `AppSettings.mail_quota_bytes` default (0 = unlimited). A negative
+/// stored value falls back to the global default (never to unlimited).
 pub fn mail_quota_bytes_for_path(project_path: &str) -> u64 {
     match mail_quota_i64_for_path(project_path, "mail_quota_bytes") {
         Some(v) if v >= 0 => v as u64,
@@ -944,7 +944,7 @@ pub fn mail_quota_bytes_for_path(project_path: &str) -> u64 {
 
 /// EFFECTIVE mailbox message cap for new mints on `project_path`.
 /// 0 = unlimited. Same inherit/fallback rules as
-/// [`mail_quota_bytes_for_path`] (global default 10_000).
+/// [`mail_quota_bytes_for_path`] (global default 0 = unlimited).
 pub fn mail_quota_messages_for_path(project_path: &str) -> u64 {
     match mail_quota_i64_for_path(project_path, "mail_quota_messages") {
         Some(v) if v >= 0 => v as u64,
@@ -2046,15 +2046,15 @@ mod tests {
         let path = unique_path("mail-quota");
         let _pid = insert_project(&path);
 
-        assert_eq!(mail_quota_bytes_for_path(&path), 1_073_741_824);
-        assert_eq!(mail_quota_messages_for_path(&path), 10_000);
+        assert_eq!(mail_quota_bytes_for_path(&path), 0);
+        assert_eq!(mail_quota_messages_for_path(&path), 0);
         assert_eq!(
             mail_quota_bytes_for_path("/tmp/never-registered-quota"),
-            1_073_741_824
+            0
         );
         assert_eq!(
             mail_quota_messages_for_path("/tmp/never-registered-quota"),
-            10_000
+            0
         );
 
         crate::app_settings::update(serde_json::json!({

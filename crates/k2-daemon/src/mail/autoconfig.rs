@@ -28,12 +28,37 @@ fn is_autoconfig_row(row: &RecordRow) -> bool {
         || n.contains("ua-auto-config")
 }
 
+/// Current mail hostname for autoconfig targets: attached
+/// `domain_names.role=mail` on this apex, else `mail_server.hostname`.
+/// Never leave `mail.<connect>.k2.dev` on a custom apex (L2).
+fn mail_hostname_for_apex(apex: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if let Ok(names) = k2_core::domains::list_names_for_apex(&conn, apex) {
+        if let Some(n) = names
+            .into_iter()
+            .find(|n| n.role.eq_ignore_ascii_case("mail"))
+        {
+            let h = n.hostname.trim().trim_end_matches('.').to_string();
+            if !h.is_empty() {
+                return Some(h);
+            }
+        }
+    }
+    domains::server_info(&conn).and_then(|i| i.hostname)
+}
+
 /// Advanced autoconfig rows from a zone file — never invent records
 /// the live zone did not emit (`ZONE_FIXTURE` has no `_imaps._tcp`).
-pub(crate) fn autoconfig_rows(domain: &str, zone_text: &str) -> Vec<RecordRow> {
+pub(crate) fn autoconfig_rows(
+    domain: &str,
+    zone_text: &str,
+    hostname: Option<&str>,
+) -> Vec<RecordRow> {
     let recs = domains::parse_zone_file(zone_text);
-    domains::build_rows(domain, &recs, None)
-        .into_iter()
+    let mut rows = domains::build_rows(domain, &recs, hostname);
+    domains::apply_current_hostname_advanced(&mut rows, hostname);
+    rows.into_iter()
         .filter(|r| r.category == CAT_ADVANCED && is_autoconfig_row(r))
         .collect()
 }
@@ -165,7 +190,8 @@ pub fn handle_autoconfig_get(params: &HashMap<String, String>) -> CliResponse {
         Ok(z) => z,
         Err(r) => return r,
     };
-    let rows = autoconfig_rows(&domain, &zone);
+    let hostname = mail_hostname_for_apex(&domain);
+    let rows = autoconfig_rows(&domain, &zone, hostname.as_deref());
     CliResponse::ok_json(show_payload(&domain, &rows).to_string())
 }
 
@@ -193,7 +219,8 @@ pub fn handle_autoconfig_apply(body: &[u8]) -> CliResponse {
         Ok(z) => z,
         Err(r) => return r,
     };
-    let rows = autoconfig_rows(&domain, &zone);
+    let hostname = mail_hostname_for_apex(&domain);
+    let rows = autoconfig_rows(&domain, &zone, hostname.as_deref());
     let mut payload = show_payload(&domain, &rows);
     payload["bind"] = serde_json::json!(false);
     let Some(zone_id) = lookup_dns_zone_id(&domain) else {
@@ -235,7 +262,7 @@ mod tests {
 
     #[test]
     fn fixture_rows_match_live_zone_not_invented_imaps() {
-        let rows = autoconfig_rows("acme.dev", ZONE_FIXTURE);
+        let rows = autoconfig_rows("acme.dev", ZONE_FIXTURE, Some("mail.acme.dev"));
         let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
         assert!(names.iter().any(|n| n.contains("autoconfig")), "{names:?}");
         assert!(
@@ -271,5 +298,31 @@ mod tests {
         let r = handle_autoconfig_apply(br#"{"domain":"no-such-autoconfig.test"}"#);
         assert_eq!(r.status, "404 Not Found", "{}", r.body);
         assert!(!r.body.contains("zones/bind"), "{}", r.body);
+    }
+
+    #[test]
+    fn autoconfig_rewrites_connect_host_to_attached_mail_hostname() {
+        let zone = "\
+autoconfig.lztek.io. IN CNAME mail.lztek.k2.dev.\n\
+autodiscover.lztek.io. IN CNAME mail.lztek.k2.dev.\n\
+_imaps._tcp.lztek.io. IN SRV 0 1 993 mail.lztek.k2.dev.\n\
+_jmap._tcp.lztek.io. IN SRV 0 1 443 mail.lztek.k2.dev.\n\
+_submissions._tcp.lztek.io. IN SRV 0 1 465 mail.lztek.k2.dev.\n";
+        let rows = autoconfig_rows("lztek.io", zone, Some("mail.lztek.io"));
+        assert!(!rows.is_empty(), "{rows:?}");
+        for r in &rows {
+            assert!(
+                !r.expected.to_ascii_lowercase().contains("lztek.k2.dev"),
+                "must not plant Connect host: {} {}",
+                r.name,
+                r.expected
+            );
+            assert!(
+                r.expected.to_ascii_lowercase().contains("mail.lztek.io"),
+                "attached mail hostname: {} {}",
+                r.name,
+                r.expected
+            );
+        }
     }
 }

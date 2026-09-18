@@ -173,6 +173,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/forward" => crate::mail::forward::handle_forward_get(params),
         "/cli/mail/ooo" => crate::mail::ooo::handle_ooo_get(params),
         "/cli/mail/footer" => crate::mail::footer::handle_footer_get(params),
+        "/cli/mail/list" => crate::mail::lists::handle_list_get(params),
+        "/cli/mail/list/members" => crate::mail::lists::handle_members_get(params),
+        "/cli/mail/spam/quarantine" => crate::mail::spam::handle_quarantine_get(params),
+        "/cli/mail/queue" => crate::mail::queue::handle_queue_get(params),
+        "/cli/mail/acl" => crate::mail::acl::handle_acl_get(params),
+        "/cli/mail/autoconfig" => crate::mail::autoconfig::handle_autoconfig_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -221,7 +227,16 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/alias/remove"
         | "/cli/mail/forward/unset"
         | "/cli/mail/ooo/unset"
-        | "/cli/mail/footer/unset" => CliResponse::method_not_allowed(),
+        | "/cli/mail/footer/unset"
+        | "/cli/mail/list/delete"
+        | "/cli/mail/spam/train"
+        | "/cli/mail/spam/allow"
+        | "/cli/mail/spam/block"
+        | "/cli/mail/spam/quarantine/release"
+        | "/cli/mail/spam/quarantine/discard"
+        | "/cli/mail/queue/retry"
+        | "/cli/mail/queue/drop"
+        | "/cli/mail/acl/revoke" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -300,6 +315,19 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/footer" => crate::mail::footer::handle_footer_set(body),
         "/cli/mail/footer/unset" => crate::mail::footer::handle_footer_unset(body),
         "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
+        "/cli/mail/list" => crate::mail::lists::handle_list_create(body),
+        "/cli/mail/list/members" => crate::mail::lists::handle_members_post(body),
+        "/cli/mail/list/delete" => crate::mail::lists::handle_list_delete(body),
+        "/cli/mail/spam/train" => crate::mail::spam::handle_train(body),
+        "/cli/mail/spam/allow" => crate::mail::spam::handle_allow(body),
+        "/cli/mail/spam/block" => crate::mail::spam::handle_block(body),
+        "/cli/mail/spam/quarantine/release" => crate::mail::spam::handle_quarantine_release(body),
+        "/cli/mail/spam/quarantine/discard" => crate::mail::spam::handle_quarantine_discard(body),
+        "/cli/mail/queue/retry" => crate::mail::queue::handle_retry(body),
+        "/cli/mail/queue/drop" => crate::mail::queue::handle_drop(body),
+        "/cli/mail/acl" => crate::mail::acl::handle_acl_grant(body),
+        "/cli/mail/acl/revoke" => crate::mail::acl::handle_acl_revoke(body),
+        "/cli/mail/autoconfig" => crate::mail::autoconfig::handle_autoconfig_apply(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -433,6 +461,21 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/cert/renew"
             | "/cli/mail/server/rotate-admin"
             | "/cli/mail/address/password"
+            | "/cli/mail/list"
+            | "/cli/mail/list/members"
+            | "/cli/mail/list/delete"
+            | "/cli/mail/spam/train"
+            | "/cli/mail/spam/allow"
+            | "/cli/mail/spam/block"
+            | "/cli/mail/spam/quarantine"
+            | "/cli/mail/spam/quarantine/release"
+            | "/cli/mail/spam/quarantine/discard"
+            | "/cli/mail/queue"
+            | "/cli/mail/queue/retry"
+            | "/cli/mail/queue/drop"
+            | "/cli/mail/acl"
+            | "/cli/mail/acl/revoke"
+            | "/cli/mail/autoconfig"
     )
 }
 
@@ -710,6 +753,21 @@ mod tests {
             "/cli/mail/cert/renew",
             "/cli/mail/server/rotate-admin",
             "/cli/mail/address/password",
+            "/cli/mail/list",
+            "/cli/mail/list/members",
+            "/cli/mail/list/delete",
+            "/cli/mail/spam/train",
+            "/cli/mail/spam/allow",
+            "/cli/mail/spam/block",
+            "/cli/mail/spam/quarantine",
+            "/cli/mail/spam/quarantine/release",
+            "/cli/mail/spam/quarantine/discard",
+            "/cli/mail/queue",
+            "/cli/mail/queue/retry",
+            "/cli/mail/queue/drop",
+            "/cli/mail/acl",
+            "/cli/mail/acl/revoke",
+            "/cli/mail/autoconfig",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }
@@ -852,6 +910,15 @@ mod tests {
             "/cli/mail/forward/unset",
             "/cli/mail/ooo/unset",
             "/cli/mail/footer/unset",
+            "/cli/mail/list/delete",
+            "/cli/mail/spam/train",
+            "/cli/mail/spam/allow",
+            "/cli/mail/spam/block",
+            "/cli/mail/spam/quarantine/release",
+            "/cli/mail/spam/quarantine/discard",
+            "/cli/mail/queue/retry",
+            "/cli/mail/queue/drop",
+            "/cli/mail/acl/revoke",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
@@ -937,6 +1004,51 @@ mod tests {
             footer_post.status, "400 Bad Request",
             "{}",
             footer_post.body
+        for route in [
+            "/cli/mail/list",
+            "/cli/mail/list/members",
+            "/cli/mail/spam/quarantine",
+            "/cli/mail/queue",
+            "/cli/mail/acl",
+            "/cli/mail/autoconfig",
+        ] {
+            let get = dispatch(route, &params).expect("N16 show/list GET claimed");
+            assert_ne!(
+                get.status, "405 Method Not Allowed",
+                "GET {route} is dual show/list, not POST-only: {}",
+                get.body
+            );
+            assert_ne!(get.status, "404 Not Found", "GET {route} must be wired");
+        }
+        for (route, body) in [
+            ("/cli/mail/list", br#"{}"#.as_slice()),
+            ("/cli/mail/list/members", br#"{}"#),
+            ("/cli/mail/list/delete", br#"{}"#),
+            ("/cli/mail/spam/train", br#"{}"#),
+            ("/cli/mail/spam/allow", br#"{}"#),
+            ("/cli/mail/spam/block", br#"{}"#),
+            ("/cli/mail/spam/quarantine/release", br#"{}"#),
+            ("/cli/mail/spam/quarantine/discard", br#"{}"#),
+            ("/cli/mail/queue/retry", br#"{}"#),
+            ("/cli/mail/queue/drop", br#"{}"#),
+            ("/cli/mail/acl", br#"{}"#),
+            ("/cli/mail/acl/revoke", br#"{}"#),
+            ("/cli/mail/autoconfig", br#"{}"#),
+        ] {
+            let post = dispatch_post(route, body);
+            assert_ne!(
+                post.status, "404 Not Found",
+                "N16 POST {route} must be wired"
+            );
+        }
+        assert!(
+            is_mail_manage_surface("/cli/mail/acl") && !is_owner_level_mutation("/cli/mail/acl"),
+            "ACL is mail_manage, not /cli/mail/access/"
+        );
+        assert!(
+            !is_mail_manage_surface("/cli/mail/access/acl")
+                && is_owner_level_mutation("/cli/mail/access/grant"),
+            "do not hang ACL under /cli/mail/access/"
         );
         assert_eq!(
             dispatch_post("/cli/mail/unknown", b"{}").status,

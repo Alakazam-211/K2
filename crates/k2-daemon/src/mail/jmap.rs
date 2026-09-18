@@ -918,6 +918,247 @@ impl StalwartClient {
         parse_set_destroyed("x:Account/set", stalwart_account_id, &resp)
     }
 
+    // ── Next hostmail CLI (prd-hostmail-next-cli-v1) ─────────────────
+
+    /// `x:Domain/get` `catchAllAddress` (full addr or JSON null).
+    pub fn domain_get_catchall(
+        &self,
+        stalwart_domain_id: &str,
+    ) -> Result<Option<String>, String> {
+        let resp = self.registry_call(
+            "x:Domain/get",
+            serde_json::json!({
+                "ids": [stalwart_domain_id],
+                "properties": ["catchAllAddress"],
+            }),
+        )?;
+        parse_domain_get_catchall(stalwart_domain_id, &resp)
+    }
+
+    /// `x:Account/get` aliases list for collision checks.
+    pub fn account_get_aliases(
+        &self,
+        stalwart_account_id: &str,
+    ) -> Result<Vec<AccountAlias>, String> {
+        let resp = self.registry_call(
+            "x:Account/get",
+            serde_json::json!({
+                "ids": [stalwart_account_id],
+                "properties": ["name", "domainId", "emailAddress", "aliases"],
+            }),
+        )?;
+        parse_account_get_aliases(stalwart_account_id, &resp)
+    }
+
+    /// `x:Account/query` by `domainId` — fail loud if the filter is
+    /// unknown (do not invent a second listing).
+    pub fn account_query_ids_for_domain(
+        &self,
+        stalwart_domain_id: &str,
+    ) -> Result<Vec<String>, String> {
+        let resp = self.registry_call(
+            "x:Account/query",
+            serde_json::json!({ "filter": { "domainId": stalwart_domain_id } }),
+        )?;
+        Ok(parse_query_ids(&resp))
+    }
+
+    /// `x:MailingList/query`. Empty ids is not an error.
+    pub fn mailing_list_query(&self, filter: serde_json::Value) -> Result<Vec<String>, String> {
+        let resp = self.registry_call(
+            "x:MailingList/query",
+            serde_json::json!({ "filter": filter }),
+        )?;
+        Ok(parse_query_ids(&resp))
+    }
+
+    pub fn mailing_list_get(&self, ids: &[String]) -> Result<Vec<MailingListInfo>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:MailingList/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": ["id", "name", "domainId", "emailAddress", "recipients", "description"],
+            }),
+        )?;
+        Ok(parse_mailing_list_get(&resp))
+    }
+
+    /// Create a mailing list. Recipients is a set object `{addr: true}`.
+    /// Do not mint an Account. Do not write Domain.aliases.
+    pub fn mailing_list_create(
+        &self,
+        local_part: &str,
+        stalwart_domain_id: &str,
+        recipients: &serde_json::Value,
+    ) -> Result<String, String> {
+        let resp = self.registry_call(
+            "x:MailingList/set",
+            serde_json::json!({
+                "create": {
+                    CREATE_TAG: {
+                        "name": local_part,
+                        "domainId": stalwart_domain_id,
+                        "recipients": recipients,
+                        "aliases": {},
+                    }
+                }
+            }),
+        )?;
+        parse_set_created_id("x:MailingList/set", &resp)
+    }
+
+    pub fn mailing_list_set_recipients(
+        &self,
+        list_id: &str,
+        recipients: &serde_json::Value,
+    ) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:MailingList/set",
+            serde_json::json!({
+                "update": { list_id: { "recipients": recipients } }
+            }),
+        )?;
+        parse_set_updated("x:MailingList/set", list_id, &resp)
+    }
+
+    pub fn mailing_list_destroy(&self, list_id: &str) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:MailingList/set",
+            serde_json::json!({ "destroy": [list_id] }),
+        )?;
+        parse_set_destroyed("x:MailingList/set", list_id, &resp)
+    }
+
+    /// Probe `x:MemoryLookupKey/query` for a namespace. Success (even
+    /// empty ids) means the namespace exists. Fail loud on
+    /// `unknownMethod` / invalid filter — caller tries the next name.
+    pub fn memory_lookup_query_namespace(&self, namespace: &str) -> Result<Vec<String>, String> {
+        let resp = self.registry_call(
+            "x:MemoryLookupKey/query",
+            serde_json::json!({ "filter": { "namespace": namespace } }),
+        )?;
+        Ok(parse_query_ids(&resp))
+    }
+
+    pub fn memory_lookup_key_create(&self, namespace: &str, key: &str) -> Result<String, String> {
+        let resp = self.registry_call(
+            "x:MemoryLookupKey/set",
+            serde_json::json!({
+                "create": {
+                    CREATE_TAG: {
+                        "namespace": namespace,
+                        "key": key,
+                        "isGlobPattern": false,
+                    }
+                }
+            }),
+        )?;
+        parse_set_created_id("x:MemoryLookupKey/set", &resp)
+    }
+
+    /// `x:Action/set` create `@type: InvalidateCaches` — lookup lists
+    /// do not apply until reload. Not hostmail disable.
+    pub fn action_invalidate_caches(&self) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Action/set",
+            serde_json::json!({
+                "create": { CREATE_TAG: { "@type": "InvalidateCaches" } }
+            }),
+        )?;
+        parse_set_created_id("x:Action/set", &resp).map(|_| ())
+    }
+
+    pub fn queued_message_query(&self) -> Result<Vec<String>, String> {
+        let resp = self.registry_call("x:QueuedMessage/query", serde_json::json!({}))?;
+        Ok(parse_query_ids(&resp))
+    }
+
+    pub fn queued_message_get(&self, ids: &[String]) -> Result<Vec<QueuedMessageInfo>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:QueuedMessage/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": ["id", "nextRetry", "returnPath", "recipients", "blobId"],
+            }),
+        )?;
+        Ok(parse_queued_message_get(&resp))
+    }
+
+    pub fn queued_message_retry(&self, id: &str, next_retry: &str) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:QueuedMessage/set",
+            serde_json::json!({
+                "update": { id: { "nextRetry": next_retry } }
+            }),
+        )?;
+        parse_set_updated("x:QueuedMessage/set", id, &resp)
+    }
+
+    pub fn queued_message_destroy(&self, id: &str) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:QueuedMessage/set",
+            serde_json::json!({ "destroy": [id] }),
+        )?;
+        parse_set_destroyed("x:QueuedMessage/set", id, &resp)
+    }
+
+    /// Probe Inbox `shareWith`. `Ok(None)` = unknownProperty / omitted
+    /// (IMAP SETACL fallback). `Ok(Some)` = JMAP sharing is live.
+    pub fn mailbox_probe_share_with(
+        &self,
+        account_id: &str,
+        mailbox_id: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        match self.mail_call(
+            account_id,
+            "Mailbox/get",
+            serde_json::json!({
+                "ids": [mailbox_id],
+                "properties": ["shareWith", "myRights"],
+            }),
+        ) {
+            Ok(args) => Ok(parse_mailbox_share_with(mailbox_id, &args)),
+            Err(e) if e.contains("unknownProperty") || e.contains("invalidArguments") => {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn mailbox_set_share_with(
+        &self,
+        account_id: &str,
+        mailbox_id: &str,
+        share_with: serde_json::Value,
+    ) -> Result<(), String> {
+        let args = self.mail_call(
+            account_id,
+            "Mailbox/set",
+            serde_json::json!({
+                "update": { mailbox_id: { "shareWith": share_with } }
+            }),
+        )?;
+        parse_set_updated("Mailbox/set", mailbox_id, &args)
+    }
+
+    pub fn mailbox_id_for_role(&self, account_id: &str, role: &str) -> Result<String, String> {
+        if role == "inbox" {
+            return self.mailbox_inbox_id(account_id);
+        }
+        let boxes = self.mailbox_list(account_id)?;
+        boxes
+            .iter()
+            .find(|m| m.role.as_deref() == Some(role))
+            .map(|m| m.id.clone())
+            .ok_or_else(|| format!("Mailbox/query: the account has no '{role}' mailbox"))
+    }
+
     // ── S6 relay (smart host) ───────────────────────────────────────
 
     /// S6 — apply (`Some`) or clear (`None`) the SMART-HOST outbound
@@ -2310,6 +2551,9 @@ pub struct EmailAlias {
     pub enabled: bool,
 }
 
+/// Alias of [`EmailAlias`] — next-cli lists used this name.
+pub type AccountAlias = EmailAlias;
+
 /// `x:Account` `@type: User` slice used by alias add/list/remove.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountUser {
@@ -2449,6 +2693,24 @@ fn parse_account_get_users(args: &serde_json::Value) -> Result<Vec<AccountUser>,
         .and_then(|v| v.as_array())
         .ok_or_else(|| "x:Account/get: reply has no list".to_string())?;
     Ok(list.iter().filter_map(parse_account_user_entry).collect())
+/// `x:MailingList/get` row. Recipients is a set object on the wire.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MailingListInfo {
+    pub id: String,
+    pub name: String,
+    pub domain_id: String,
+    pub email_address: Option<String>,
+    pub recipients: serde_json::Value,
+    pub description: Option<String>,
+}
+
+/// `x:QueuedMessage/get` row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueuedMessageInfo {
+    pub id: String,
+    pub next_retry: Option<String>,
+    pub return_path: Option<String>,
+    pub recipients: serde_json::Value,
 }
 
 fn parse_domain_get_catchall(
@@ -2537,6 +2799,159 @@ fn parse_sieve_blob_id(id: &str, args: &serde_json::Value) -> Result<String, Str
         .filter(|s| !s.is_empty())
         .map(String::from)
         .ok_or_else(|| format!("SieveScript/get: '{id}' has no blobId"))
+}
+
+fn parse_account_get_aliases(
+    id: &str,
+    args: &serde_json::Value,
+) -> Result<Vec<AccountAlias>, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)));
+    let Some(entry) = entry else {
+        return Err(format!("x:Account/get: account '{id}' not in the reply list"));
+    };
+    Ok(parse_alias_list(entry.get("aliases")))
+}
+
+fn parse_alias_list(v: Option<&serde_json::Value>) -> Vec<AccountAlias> {
+    let Some(v) = v else {
+        return Vec::new();
+    };
+    if let Some(arr) = v.as_array() {
+        return arr.iter().filter_map(parse_one_alias).collect();
+    }
+    if let Some(obj) = v.as_object() {
+        return obj.values().filter_map(parse_one_alias).collect();
+    }
+    Vec::new()
+}
+
+fn parse_one_alias(v: &serde_json::Value) -> Option<AccountAlias> {
+    let name = v.get("name").and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty())?;
+    let domain_id = v
+        .get("domainId")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
+    Some(AccountAlias {
+        name: name.to_string(),
+        domain_id,
+        enabled,
+    })
+}
+
+fn parse_mailing_list_get(args: &serde_json::Value) -> Vec<MailingListInfo> {
+    args.get("list")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|e| {
+                    let id = e.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty())?;
+                    Some(MailingListInfo {
+                        id: id.to_string(),
+                        name: e
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        domain_id: e
+                            .get("domainId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        email_address: e
+                            .get("emailAddress")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string),
+                        recipients: e
+                            .get("recipients")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({})),
+                        description: e
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_queued_message_get(args: &serde_json::Value) -> Vec<QueuedMessageInfo> {
+    args.get("list")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|e| {
+                    let id = e.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty())?;
+                    Some(QueuedMessageInfo {
+                        id: id.to_string(),
+                        next_retry: e
+                            .get("nextRetry")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        return_path: e
+                            .get("returnPath")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        recipients: e
+                            .get("recipients")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({})),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_mailbox_share_with(id: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
+    let entry = args.get("list").and_then(|v| v.as_array()).and_then(|a| {
+        a.iter()
+            .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id))
+    })?;
+    entry.get("shareWith").cloned()
+}
+
+/// Recipients set-object `{addr: true, …}` — never a JSON array.
+pub fn recipients_set_object(addrs: &[String]) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for a in addrs {
+        map.insert(a.clone(), serde_json::json!(true));
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Parse recipients whether the engine served a set object or (wrongly)
+/// an array. Always return unique lowercase addresses.
+pub fn recipients_addrs(v: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(obj) = v.as_object() {
+        for (k, val) in obj {
+            if val.as_bool() == Some(true) || val.is_object() {
+                let t = k.trim().to_ascii_lowercase();
+                if !t.is_empty() && !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+    } else if let Some(arr) = v.as_array() {
+        for e in arr {
+            if let Some(s) = e.as_str() {
+                let t = s.trim().to_ascii_lowercase();
+                if !t.is_empty() && !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Pure `x:Account/get` reply parser: our id's `name`.
@@ -5350,6 +5765,44 @@ mod sieve_jmap_tests {
         assert!(
             create["contents"].as_str().unwrap().contains("require"),
             "{create}"
+mod next_cli_jmap_tests {
+    use super::tests::{body_json, spawn_mock_server};
+    use super::*;
+
+    fn session() -> String {
+        r#"{"apiUrl":"/jmap/","accounts":{"b":{}},"primaryAccounts":{"urn:stalwart:jmap":"b","urn:ietf:params:jmap:mail":"b"}}"#.to_string()
+    }
+
+    fn method_ok(method: &str, args: serde_json::Value) -> String {
+        serde_json::json!({ "methodResponses": [[method, args, "0"]] }).to_string()
+    }
+
+    #[test]
+    fn mailing_list_create_sends_recipients_set_object_not_array() {
+        let created = method_ok(
+            "x:MailingList/set",
+            serde_json::json!({ "created": { "k2": { "id": "ml1" } } }),
+        );
+        let (port, rx) = spawn_mock_server(vec![session(), created]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let recips = recipients_set_object(&["a@acme.dev".into(), "b@acme.dev".into()]);
+        let id = c
+            .mailing_list_create("team", "dom-1", &recips)
+            .expect("create");
+        assert_eq!(id, "ml1");
+        let _sess = rx.recv().expect("session");
+        let body = body_json(&rx.recv().expect("set"));
+        assert_eq!(body["methodCalls"][0][0], "x:MailingList/set");
+        let create = &body["methodCalls"][0][1]["create"]["k2"];
+        assert_eq!(create["name"], "team");
+        assert_eq!(create["domainId"], "dom-1");
+        assert!(create["recipients"].is_object(), "{}", create);
+        assert_eq!(create["recipients"]["a@acme.dev"], true);
+        assert!(create["recipients"].as_array().is_none());
+        assert_eq!(create["aliases"], serde_json::json!({}));
+        assert!(
+            create.get("@type").is_none(),
+            "list is not an Account: {create}"
         );
     }
 
@@ -5409,5 +5862,103 @@ mod sieve_jmap_tests {
         let args = &set["methodCalls"][0][1];
         assert_eq!(args["destroy"][0], "s1");
         assert!(args["onSuccessActivateScript"].is_null(), "{args}");
+    fn mailing_list_destroy_is_set_destroy() {
+        let destroyed = method_ok(
+            "x:MailingList/set",
+            serde_json::json!({ "destroyed": ["ml1"] }),
+        );
+        let (port, rx) = spawn_mock_server(vec![session(), destroyed]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.mailing_list_destroy("ml1").expect("destroy");
+        let _sess = rx.recv().expect("session");
+        let body = body_json(&rx.recv().expect("set"));
+        assert_eq!(body["methodCalls"][0][1]["destroy"][0], "ml1");
+    }
+
+    #[test]
+    fn queued_message_retry_patches_next_retry_drop_destroys() {
+        let updated = method_ok(
+            "x:QueuedMessage/set",
+            serde_json::json!({ "updated": { "q1": null } }),
+        );
+        let destroyed = method_ok(
+            "x:QueuedMessage/set",
+            serde_json::json!({ "destroyed": ["q1"] }),
+        );
+        let (port, rx) = spawn_mock_server(vec![session(), updated, destroyed]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.queued_message_retry("q1", "2026-09-18T00:00:00Z")
+            .expect("retry");
+        c.queued_message_destroy("q1").expect("drop");
+        let _s1 = rx.recv().expect("s1");
+        let retry = body_json(&rx.recv().expect("retry"));
+        assert_eq!(retry["methodCalls"][0][0], "x:QueuedMessage/set");
+        assert_eq!(
+            retry["methodCalls"][0][1]["update"]["q1"]["nextRetry"],
+            "2026-09-18T00:00:00Z"
+        );
+        assert!(
+            retry["methodCalls"][0][1].get("destroy").is_none(),
+            "retry is not destroy"
+        );
+        let drop = body_json(&rx.recv().expect("drop"));
+        assert_eq!(drop["methodCalls"][0][1]["destroy"][0], "q1");
+    }
+
+    #[test]
+    fn memory_lookup_then_invalidate_caches() {
+        let q = method_ok("x:MemoryLookupKey/query", serde_json::json!({ "ids": [] }));
+        let created = method_ok(
+            "x:MemoryLookupKey/set",
+            serde_json::json!({ "created": { "k2": { "id": "lk1" } } }),
+        );
+        let action = method_ok(
+            "x:Action/set",
+            serde_json::json!({ "created": { "k2": { "id": "act1" } } }),
+        );
+        let (port, rx) = spawn_mock_server(vec![session(), q, created, action]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.memory_lookup_query_namespace("trusted-domains")
+            .expect("probe");
+        c.memory_lookup_key_create("trusted-domains", "spam.example")
+            .expect("create");
+        c.action_invalidate_caches().expect("invalidate");
+        let _s = rx.recv().expect("session");
+        let qbody = body_json(&rx.recv().expect("query"));
+        assert_eq!(qbody["methodCalls"][0][0], "x:MemoryLookupKey/query");
+        let cbody = body_json(&rx.recv().expect("create"));
+        let create = &cbody["methodCalls"][0][1]["create"]["k2"];
+        assert_eq!(create["namespace"], "trusted-domains");
+        assert_eq!(create["key"], "spam.example");
+        assert_eq!(create["isGlobPattern"], false);
+        let abody = body_json(&rx.recv().expect("action"));
+        assert_eq!(
+            abody["methodCalls"][0][1]["create"]["k2"]["@type"],
+            "InvalidateCaches"
+        );
+    }
+
+    #[test]
+    fn unknown_spam_method_fails_loud() {
+        let err = serde_json::json!({
+            "methodResponses": [["error", {
+                "type": "unknownMethod",
+                "description": "x:Spam/train is not known",
+            }, "0"]],
+        })
+        .to_string();
+        let (port, _rx) = spawn_mock_server(vec![session(), err]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let e = c
+            .memory_lookup_query_namespace("nope")
+            .expect_err("unknownMethod");
+        assert!(e.contains("unknownMethod"), "{e}");
+    }
+
+    #[test]
+    fn recipients_set_roundtrip() {
+        let v = recipients_set_object(&["A@B.test".into()]);
+        assert_eq!(v["A@B.test"], true);
+        assert_eq!(recipients_addrs(&serde_json::json!({"x@y.z": true})), vec!["x@y.z"]);
     }
 }

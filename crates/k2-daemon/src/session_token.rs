@@ -1404,6 +1404,21 @@ mod tests {
             "/cli/mail/cert/renew",
             "/cli/mail/server/rotate-admin",
             "/cli/mail/address/password",
+            "/cli/mail/list",
+            "/cli/mail/list/members",
+            "/cli/mail/list/delete",
+            "/cli/mail/spam/train",
+            "/cli/mail/spam/allow",
+            "/cli/mail/spam/block",
+            "/cli/mail/spam/quarantine",
+            "/cli/mail/spam/quarantine/release",
+            "/cli/mail/spam/quarantine/discard",
+            "/cli/mail/queue",
+            "/cli/mail/queue/retry",
+            "/cli/mail/queue/drop",
+            "/cli/mail/acl",
+            "/cli/mail/acl/revoke",
+            "/cli/mail/autoconfig",
         ] {
             assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
         }

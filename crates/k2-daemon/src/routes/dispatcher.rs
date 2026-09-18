@@ -823,6 +823,22 @@ async fn handle_one_request(
             | "/cli/mail/footer/unset"
             | "/cli/mail/cert/renew"
             | "/cli/mail/server/rotate-admin"
+            // Next hostmail CLI (prd-hostmail-next-cli-v1 N7/N16).
+            // Exact paths — do not glob `/cli/mail/`. Dual GET+POST on
+            // show/list; GET of mutators is 405 in mail_routes::dispatch.
+            | "/cli/mail/list"
+            | "/cli/mail/list/members"
+            | "/cli/mail/list/delete"
+            | "/cli/mail/spam/train"
+            | "/cli/mail/spam/allow"
+            | "/cli/mail/spam/block"
+            | "/cli/mail/spam/quarantine/release"
+            | "/cli/mail/spam/quarantine/discard"
+            | "/cli/mail/queue/retry"
+            | "/cli/mail/queue/drop"
+            | "/cli/mail/acl"
+            | "/cli/mail/acl/revoke"
+            | "/cli/mail/autoconfig"
             // Per-workspace hosted-mail manage toggle. Dedicated POST
             // (not workspace/set, not GET /cli/dns-manage). GET → 405.
             | "/cli/mail-manage"

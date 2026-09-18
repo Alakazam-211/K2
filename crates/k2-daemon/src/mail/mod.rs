@@ -99,9 +99,11 @@
 //!   [`routes_send`], [`routes_external`] (external CRUD + draft).
 
 pub mod access;
+pub mod acl;
 pub mod addresses;
 pub mod alias;
 pub mod catchall;
+pub mod autoconfig;
 pub mod config;
 pub mod dns_verify;
 pub mod doctor;
@@ -113,14 +115,17 @@ pub mod forward;
 pub mod graph;
 pub mod hostmail_auth;
 pub mod footer;
+pub mod hosted;
 pub mod identity;
 pub mod import;
 pub mod jmap;
+pub mod lists;
 pub mod messages;
 pub mod oauth;
 pub mod oauth_config;
 pub mod ooo;
 pub mod preflight;
+pub mod queue;
 pub mod quota;
 pub mod routes_access;
 pub mod routes_addresses;
@@ -135,6 +140,7 @@ pub mod schedule;
 pub mod secrets;
 pub mod send;
 pub mod sieve_user;
+pub mod spam;
 pub mod supervisor;
 pub mod sysops;
 

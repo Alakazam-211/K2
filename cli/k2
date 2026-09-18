@@ -13393,6 +13393,8 @@ cmd_schema() {
       "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), catchall set|unset|show (Domain.catchAllAddress; mail_manage), alias add|remove|list (Account.aliases EmailAlias; not a mint; mail_manage), forward set|unset|show (SieveScript k2-forward; --keep copies locally; mail_manage), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|ooo|footer|cert> ... (server admin)",
       "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|cert|list|spam|queue|acl|autoconfig> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), list (mailing lists; not k2 mail list inboxes), spam (train/allow/block/quarantine), queue (outbound x:QueuedMessage), acl (IMAP/JMAP sharing; not k2 mail access), autoconfig (dnsZoneFile plant via k2 dns, not A8 bind), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -22814,6 +22816,11 @@ _mail_py() {
     M_MAILDIR="${M_MAILDIR:-}" M_IMAPSYNC_HOST="${M_IMAPSYNC_HOST:-}" \
     M_IMAPSYNC_USER="${M_IMAPSYNC_USER:-}" M_IMAPSYNC_PASS="${M_IMAPSYNC_PASS:-}" \
     M_IMAPSYNC_PORT="${M_IMAPSYNC_PORT:-}" M_SKIP_INBOX="${M_SKIP_INBOX:-false}" \
+    M_MEMBERS="${M_MEMBERS:-}" M_LIST_OP="${M_LIST_OP:-}" \
+    M_SENDER="${M_SENDER:-}" M_CLASS="${M_CLASS:-}" \
+    M_MAILBOX="${M_MAILBOX:-}" M_RIGHTS="${M_RIGHTS:-}" \
+    M_ACL_READ="${M_ACL_READ:-false}" M_ACL_WRITE="${M_ACL_WRITE:-false}" \
+    M_ACL_POST="${M_ACL_POST:-false}" M_ACL_ADMIN="${M_ACL_ADMIN:-false}" \
     python3 - <<'PYEOF'
 import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
@@ -24168,6 +24175,130 @@ elif verb == "footer_unset":
         print(dumps(d))
     else:
         print("footer unset")
+elif verb == "list_create":
+    body = {"address": env("M_ADDRESS"), "members": env_list("M_MEMBERS")}
+    d = call("POST", "/cli/mail/list", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("list %s members=%s" % (d.get("address") or env("M_ADDRESS"),
+            ",".join(d.get("members") or [])))
+
+elif verb == "list_show":
+    d = call("GET", "/cli/mail/list", params={"address": env("M_ADDRESS")})
+    print(dumps(d) if as_json else "list %s members=%s" % (
+        d.get("address") or env("M_ADDRESS"), ",".join(d.get("members") or [])))
+
+elif verb == "list_members":
+    body = {"address": env("M_ADDRESS")}
+    op = env("M_LIST_OP")
+    members = env_list("M_MEMBERS")
+    if op == "add":
+        body["add"] = members
+    else:
+        body["remove"] = members
+    d = call("POST", "/cli/mail/list/members", body=body)
+    print(dumps(d) if as_json else "list %s members=%s" % (
+        d.get("address") or env("M_ADDRESS"), ",".join(d.get("members") or [])))
+
+elif verb == "list_delete":
+    d = call("POST", "/cli/mail/list/delete", body={"address": env("M_ADDRESS")})
+    print(dumps(d) if as_json else "deleted list %s" % (d.get("address") or env("M_ADDRESS")))
+
+elif verb == "spam_train":
+    d = call("POST", "/cli/mail/spam/train", body={
+        "address": env("M_ADDRESS"), "messageId": env("M_ID"), "class": env("M_CLASS")})
+    print(dumps(d) if as_json else "trained %s as %s" % (d.get("id") or env("M_ID"), d.get("class") or env("M_CLASS")))
+
+elif verb == "spam_sender":
+    route = "/cli/mail/spam/allow" if env("M_LIST_OP") == "allow" else "/cli/mail/spam/block"
+    d = call("POST", route, body={"sender": env("M_SENDER")})
+    print(dumps(d) if as_json else "%s %s" % (d.get("action") or env("M_LIST_OP"), d.get("key") or env("M_SENDER")))
+
+elif verb == "spam_quarantine_list":
+    d = call("GET", "/cli/mail/spam/quarantine", params={"address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        rows = d.get("messages") or []
+        if not rows:
+            print("No quarantined messages.")
+        else:
+            for m in rows:
+                print("%s  %s" % (m.get("id") or "?", m.get("subject") or ""))
+
+elif verb == "spam_quarantine_id":
+    op = env("M_LIST_OP")
+    route = "/cli/mail/spam/quarantine/release" if op == "release" else "/cli/mail/spam/quarantine/discard"
+    d = call("POST", route, body={"address": env("M_ADDRESS"), "id": env("M_ID")})
+    print(dumps(d) if as_json else "%s %s -> %s" % (op, d.get("id") or env("M_ID"), d.get("folder") or "?"))
+
+elif verb == "queue_list":
+    d = call("GET", "/cli/mail/queue")
+    if as_json:
+        print(dumps(d))
+    else:
+        rows = d.get("messages") or []
+        if not rows:
+            print("Outbound queue is empty.")
+        else:
+            for m in rows:
+                print("%s  retry=%s  from=%s" % (m.get("id") or "?", m.get("nextRetry") or "-", m.get("returnPath") or "-"))
+
+elif verb == "queue_retry":
+    d = call("POST", "/cli/mail/queue/retry", body={"id": env("M_ID")})
+    print(dumps(d) if as_json else "retry %s next=%s" % (d.get("id") or env("M_ID"), d.get("nextRetry") or "?"))
+
+elif verb == "queue_drop":
+    d = call("POST", "/cli/mail/queue/drop", body={"id": env("M_ID")})
+    print(dumps(d) if as_json else "dropped queued %s" % (d.get("id") or env("M_ID")))
+
+elif verb == "acl_grant":
+    body = {"mailbox": env("M_MAILBOX"), "user": env("M_USER")}
+    if env("M_RIGHTS"):
+        body["rights"] = env("M_RIGHTS")
+    if env("M_ACL_READ") == "true":
+        body["read"] = True
+    if env("M_ACL_WRITE") == "true":
+        body["write"] = True
+    if env("M_ACL_POST") == "true":
+        body["post"] = True
+    if env("M_ACL_ADMIN") == "true":
+        body["admin"] = True
+    d = call("POST", "/cli/mail/acl", body=body)
+    print(dumps(d) if as_json else "acl grant %s -> %s rights=%s" % (
+        d.get("user") or env("M_USER"), d.get("mailbox") or env("M_MAILBOX"), d.get("rights") or "?"))
+
+elif verb == "acl_revoke":
+    d = call("POST", "/cli/mail/acl/revoke", body={"mailbox": env("M_MAILBOX"), "user": env("M_USER")})
+    print(dumps(d) if as_json else "acl revoke %s from %s" % (
+        d.get("user") or env("M_USER"), d.get("mailbox") or env("M_MAILBOX")))
+
+elif verb == "acl_show":
+    d = call("GET", "/cli/mail/acl", params={"mailbox": env("M_MAILBOX")})
+    print(dumps(d) if as_json else dumps(d.get("shareWith") or d))
+
+elif verb == "autoconfig_show":
+    d = call("GET", "/cli/mail/autoconfig", params={"domain": env("M_DOMAIN")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("thunderbird  %s" % (d.get("thunderbirdUrl") or ""))
+        print("autodiscover %s" % (d.get("autodiscoverUrl") or ""))
+        for rec in d.get("records") or []:
+            print("%s  %s  %s" % (rec.get("type") or "?", rec.get("name") or "?", rec.get("value") or rec.get("display") or ""))
+
+elif verb == "autoconfig_apply":
+    d = call("POST", "/cli/mail/autoconfig", body={"domain": env("M_DOMAIN")})
+    if as_json:
+        print(dumps(d))
+    else:
+        if d.get("planted"):
+            print("planted autoconfig records for %s via k2 dns (not A8 bind)" % (d.get("domain") or env("M_DOMAIN")))
+        else:
+            print(d.get("hint") or "print these records at your registrar:")
+            for rec in d.get("records") or []:
+                print("%s  %s  %s" % (rec.get("type") or "?", rec.get("name") or "?", rec.get("value") or rec.get("display") or ""))
 
 else:
     die({"code": "usage", "hint": "unknown mail verb '%s'" % verb})
@@ -25409,6 +25540,11 @@ cmd_hostmail() {
         alias)   cmd_hostmail_alias "$@" ;;
         forward) cmd_hostmail_forward "$@" ;;
         cert)    cmd_hostmail_cert "$@" ;;
+        list)    cmd_hostmail_list "$@" ;;
+        spam)    cmd_hostmail_spam "$@" ;;
+        queue)   cmd_hostmail_queue "$@" ;;
+        acl)     cmd_hostmail_acl "$@" ;;
+        autoconfig) cmd_hostmail_autoconfig "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
             _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|cert>"
@@ -25418,6 +25554,7 @@ cmd_hostmail() {
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
             _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|ooo|footer|cert>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|cert|list|spam|queue|acl|autoconfig>"
             exit 2 ;;
     esac
 }
@@ -25713,6 +25850,18 @@ cmd_hostmail_ooo() {
         --help|-h) cmd_help_hostmail_ooo; exit 0 ;;
         *)
             _mail_err "usage" "unknown ooo command '$sub' — usage: k2 hostmail ooo <set|unset|show>"
+# Bare `k2 hostmail list` is usage (mailing lists), not inbox catalog.
+cmd_hostmail_list() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_list; exit 2; fi
+    local sub="$1"; shift
+    case "$sub" in
+        create) cmd_hostmail_list_create "$@" ;;
+        members) cmd_hostmail_list_members "$@" ;;
+        delete) cmd_hostmail_list_delete "$@" ;;
+        show) cmd_hostmail_list_show "$@" ;;
+        --help|-h) cmd_help_hostmail_list; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown list command '$sub' — usage: k2 hostmail list <create|members|delete|show>"
             exit 2 ;;
     esac
 }
@@ -25720,6 +25869,137 @@ cmd_hostmail_ooo() {
 cmd_hostmail_catchall_set() {
     if _wants_help "$@"; then cmd_help_hostmail_catchall_set; exit 0; fi
     local domain="" address="" as_json=false
+cmd_hostmail_list_create() {
+    if _wants_help "$@"; then cmd_help_hostmail_list_create; exit 0; fi
+    local address="" members="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --member)
+                [ $# -ge 2 ] || { _mail_err "usage" "--member requires an address"; exit 2; }
+                if [ -n "$members" ]; then members="$members
+$2"; else members="$2"; fi
+                shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail list create <addr> --member <a> [--member <a>…] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail list create <addr> --member <a>…"; exit 2; }
+    local M_VERB="list_create" M_JSON="$as_json" M_ADDRESS="$address" M_MEMBERS="$members"
+    _mail_py
+}
+
+cmd_hostmail_list_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_list_show; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail list show <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail list show <addr>"; exit 2; }
+    local M_VERB="list_show" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_list_members() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_list_members; exit 0; fi
+    local sub="$1"
+    case "$sub" in
+        add|remove)
+            shift
+            cmd_hostmail_list_members_mutate "$sub" "$@" ;;
+        --help|-h) cmd_help_hostmail_list_members; exit 0 ;;
+        *)
+            cmd_hostmail_list_show "$@" ;;
+    esac
+}
+
+cmd_hostmail_list_members_mutate() {
+    local op="$1"; shift
+    if _wants_help "$@"; then cmd_help_hostmail_list_members; exit 0; fi
+    local address="" members="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --member)
+                [ $# -ge 2 ] || { _mail_err "usage" "--member requires an address"; exit 2; }
+                if [ -n "$members" ]; then members="$members
+$2"; else members="$2"; fi
+                shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail list members $op <addr> --member <a>…"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail list members $op <addr> --member <a>…"; exit 2; }
+    [ -n "$members" ] || { _mail_err "usage" "give --member <addr>"; exit 2; }
+    local M_VERB="list_members" M_JSON="$as_json" M_ADDRESS="$address" M_LIST_OP="$op" M_MEMBERS="$members"
+    _mail_py
+}
+
+cmd_hostmail_list_delete() {
+    if _wants_help "$@"; then cmd_help_hostmail_list_delete; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail list delete <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail list delete <addr>"; exit 2; }
+    local M_VERB="list_delete" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_spam() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_spam; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        ham|spam) cmd_hostmail_spam_train "$sub" "$@" ;;
+        allow|block) cmd_hostmail_spam_sender "$sub" "$@" ;;
+        quarantine) cmd_hostmail_spam_quarantine "$@" ;;
+        --help|-h) cmd_help_hostmail_spam; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown spam command '$sub' — usage: k2 hostmail spam <ham|spam|allow|block|quarantine>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_spam_train() {
+    local class="$1"; shift
+    if _wants_help "$@"; then cmd_help_hostmail_spam_train; exit 0; fi
+    local address="" msgid="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
@@ -25734,6 +26014,13 @@ cmd_hostmail_catchall_set() {
                 exit 2 ;;
             *)
                 if [ -z "$domain" ]; then domain="$1"; else
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail spam $class <message-id> --address <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$msgid" ]; then msgid="$1"; else
                     _mail_err "usage" "unexpected extra argument '$1'"
                     exit 2
                 fi
@@ -25760,6 +26047,24 @@ cmd_hostmail_catchall_unset() {
                 exit 2 ;;
             *)
                 if [ -z "$domain" ]; then domain="$1"; else
+    [ -n "$msgid" ] || { _mail_err "usage" "k2 hostmail spam $class <message-id> --address <addr>"; exit 2; }
+    [ -n "$address" ] || { _mail_err "usage" "--address is required (ids are per-inbox)"; exit 2; }
+    local M_VERB="spam_train" M_JSON="$as_json" M_ADDRESS="$address" M_ID="$msgid" M_CLASS="$class"
+    _mail_py
+}
+
+cmd_hostmail_spam_sender() {
+    local op="$1"; shift
+    if _wants_help "$@"; then cmd_help_hostmail_spam_sender; exit 0; fi
+    local sender="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail spam $op <sender> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$sender" ]; then sender="$1"; else
                     _mail_err "usage" "unexpected extra argument '$1'"
                     exit 2
                 fi
@@ -25806,6 +26111,20 @@ cmd_hostmail_alias() {
         --help|-h) cmd_help_hostmail_alias; exit 0 ;;
         *)
             _mail_err "usage" "unknown alias command '$sub' — usage: k2 hostmail alias <add|remove|list>"
+    [ -n "$sender" ] || { _mail_err "usage" "k2 hostmail spam $op <sender>"; exit 2; }
+    local M_VERB="spam_sender" M_JSON="$as_json" M_SENDER="$sender" M_LIST_OP="$op"
+    _mail_py
+}
+
+cmd_hostmail_spam_quarantine() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_spam_quarantine; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        list) cmd_hostmail_spam_quarantine_list "$@" ;;
+        release|discard) cmd_hostmail_spam_quarantine_id "$sub" "$@" ;;
+        --help|-h) cmd_help_hostmail_spam_quarantine; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown quarantine command '$sub' — usage: k2 hostmail spam quarantine <list|release|discard>"
             exit 2 ;;
     esac
 }
@@ -25823,6 +26142,20 @@ cmd_hostmail_alias_add() {
                 if [ -z "$mailbox" ]; then mailbox="$1"
                 elif [ -z "$alias" ]; then alias="$1"
                 else
+cmd_hostmail_spam_quarantine_list() {
+    if _wants_help "$@"; then cmd_help_hostmail_spam_quarantine; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail spam quarantine list --address <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
                     _mail_err "usage" "unexpected extra argument '$1'"
                     exit 2
                 fi
@@ -25850,6 +26183,26 @@ cmd_hostmail_alias_remove() {
                 if [ -z "$mailbox" ]; then mailbox="$1"
                 elif [ -z "$alias" ]; then alias="$1"
                 else
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail spam quarantine list --address <addr>"; exit 2; }
+    local M_VERB="spam_quarantine_list" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_spam_quarantine_id() {
+    local op="$1"; shift
+    if _wants_help "$@"; then cmd_help_hostmail_spam_quarantine; exit 0; fi
+    local address="" msgid="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail spam quarantine $op <id> --address <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$msgid" ]; then msgid="$1"; else
                     _mail_err "usage" "unexpected extra argument '$1'"
                     exit 2
                 fi
@@ -25867,11 +26220,116 @@ cmd_hostmail_alias_remove() {
 cmd_hostmail_alias_list() {
     if _wants_help "$@"; then cmd_help_hostmail_alias_list; exit 0; fi
     local mailbox="" as_json=false
+    [ -n "$msgid" ] || { _mail_err "usage" "k2 hostmail spam quarantine $op <id> --address <addr>"; exit 2; }
+    [ -n "$address" ] || { _mail_err "usage" "--address is required"; exit 2; }
+    local M_VERB="spam_quarantine_id" M_JSON="$as_json" M_ADDRESS="$address" M_ID="$msgid" M_LIST_OP="$op"
+    _mail_py
+}
+
+cmd_hostmail_queue() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_queue; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        list) cmd_hostmail_queue_list "$@" ;;
+        retry) cmd_hostmail_queue_retry "$@" ;;
+        drop) cmd_hostmail_queue_drop "$@" ;;
+        --help|-h) cmd_help_hostmail_queue; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown queue command '$sub' — usage: k2 hostmail queue <list|retry|drop>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_queue_list() {
+    if _wants_help "$@"; then cmd_help_hostmail_queue; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail queue list [--json]"; exit 2 ;;
+        esac
+    done
+    local M_VERB="queue_list" M_JSON="$as_json"
+    _mail_py
+}
+
+cmd_hostmail_queue_retry() {
+    if _wants_help "$@"; then cmd_help_hostmail_queue; exit 0; fi
+    local id="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
             -*)
                 _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias list <mailbox> [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail queue retry <id> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$id" ] || { _mail_err "usage" "k2 hostmail queue retry <id>"; exit 2; }
+    local M_VERB="queue_retry" M_JSON="$as_json" M_ID="$id"
+    _mail_py
+}
+
+cmd_hostmail_queue_drop() {
+    if _wants_help "$@"; then cmd_help_hostmail_queue; exit 0; fi
+    local id="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail queue drop <id> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$id" ] || { _mail_err "usage" "k2 hostmail queue drop <id>"; exit 2; }
+    local M_VERB="queue_drop" M_JSON="$as_json" M_ID="$id"
+    _mail_py
+}
+
+cmd_hostmail_acl() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_acl; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        grant) cmd_hostmail_acl_grant "$@" ;;
+        revoke) cmd_hostmail_acl_revoke "$@" ;;
+        show) cmd_hostmail_acl_show "$@" ;;
+        --help|-h) cmd_help_hostmail_acl; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown acl command '$sub' — usage: k2 hostmail acl <grant|revoke|show>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_acl_grant() {
+    if _wants_help "$@"; then cmd_help_hostmail_acl; exit 0; fi
+    local mailbox="" user="" rights="" readf=false writef=false postf=false adminf=false as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --user)
+                [ $# -ge 2 ] || { _mail_err "usage" "--user requires a minted address"; exit 2; }
+                user="$2"; shift 2 ;;
+            --rights)
+                [ $# -ge 2 ] || { _mail_err "usage" "--rights requires lrswipkxtena"; exit 2; }
+                rights="$2"; shift 2 ;;
+            --read) readf=true; shift ;;
+            --write) writef=true; shift ;;
+            --post) postf=true; shift ;;
+            --admin) adminf=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail acl grant <mailbox> --user <addr> --rights lrswipkxten | --read|--write|--post|--admin"
                 exit 2 ;;
             *)
                 if [ -z "$mailbox" ]; then mailbox="$1"; else
@@ -25896,6 +26354,70 @@ cmd_hostmail_forward() {
         --help|-h) cmd_help_hostmail_forward; exit 0 ;;
         *)
             _mail_err "usage" "unknown forward command '$sub' — usage: k2 hostmail forward <set|unset|show>"
+    [ -n "$mailbox" ] || { _mail_err "usage" "k2 hostmail acl grant <mailbox> --user <addr> …"; exit 2; }
+    [ -n "$user" ] || { _mail_err "usage" "--user is required"; exit 2; }
+    local M_VERB="acl_grant" M_JSON="$as_json" M_MAILBOX="$mailbox" M_USER="$user" \
+          M_RIGHTS="$rights" M_ACL_READ="$readf" M_ACL_WRITE="$writef" M_ACL_POST="$postf" M_ACL_ADMIN="$adminf"
+    _mail_py
+}
+
+cmd_hostmail_acl_revoke() {
+    if _wants_help "$@"; then cmd_help_hostmail_acl; exit 0; fi
+    local mailbox="" user="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --user)
+                [ $# -ge 2 ] || { _mail_err "usage" "--user requires a minted address"; exit 2; }
+                user="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail acl revoke <mailbox> --user <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$mailbox" ]; then mailbox="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$mailbox" ] || { _mail_err "usage" "k2 hostmail acl revoke <mailbox> --user <addr>"; exit 2; }
+    [ -n "$user" ] || { _mail_err "usage" "--user is required"; exit 2; }
+    local M_VERB="acl_revoke" M_JSON="$as_json" M_MAILBOX="$mailbox" M_USER="$user"
+    _mail_py
+}
+
+cmd_hostmail_acl_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_acl; exit 0; fi
+    local mailbox="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail acl show <mailbox> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$mailbox" ]; then mailbox="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$mailbox" ] || { _mail_err "usage" "k2 hostmail acl show <mailbox>"; exit 2; }
+    local M_VERB="acl_show" M_JSON="$as_json" M_MAILBOX="$mailbox"
+    _mail_py
+}
+
+cmd_hostmail_autoconfig() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_autoconfig; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        show) cmd_hostmail_autoconfig_show "$@" ;;
+        apply) cmd_hostmail_autoconfig_apply "$@" ;;
+        --help|-h) cmd_help_hostmail_autoconfig; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown autoconfig command '$sub' — usage: k2 hostmail autoconfig <show|apply>"
             exit 2 ;;
     esac
 }
@@ -26077,6 +26599,8 @@ cmd_hostmail_footer_set() {
 
 cmd_hostmail_footer_unset() {
     if _wants_help "$@"; then cmd_help_hostmail_footer_unset; exit 0; fi
+cmd_hostmail_autoconfig_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_autoconfig; exit 0; fi
     local domain="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -26114,6 +26638,41 @@ cmd_hostmail_footer_show() {
         esac
     done
     local M_VERB="footer_get" M_JSON="$as_json"
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail autoconfig show <domain> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail autoconfig show <domain>"; exit 2; }
+    local M_VERB="autoconfig_show" M_JSON="$as_json" M_DOMAIN="$domain"
+    _mail_py
+}
+
+cmd_hostmail_autoconfig_apply() {
+    if _wants_help "$@"; then cmd_help_hostmail_autoconfig; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail autoconfig apply <domain> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail autoconfig apply <domain>"; exit 2; }
+    local M_VERB="autoconfig_apply" M_JSON="$as_json" M_DOMAIN="$domain"
     _mail_py
 }
 
@@ -26883,6 +27442,18 @@ COMMANDS
                               mail_manage. --domain is 400 this cut.
   cert renew                  Retry ACME for the mail hostname (enable is
                               not the retry path; disable is not a retry)
+  list create|members|delete|show
+                              Mailing lists (x:MailingList). Members minted-only.
+                              Bare `k2 hostmail list` is usage — not inbox catalog
+                              (`k2 mail list` still lists inboxes).
+  spam ham|spam|allow|block|quarantine
+                              Train Junk/$junk; allow/block sender domain;
+                              quarantine is that mailbox's Junk (discard = Trash).
+  queue list|retry|drop       Outbound x:QueuedMessage. drop is not mailbox Trash.
+  acl grant|revoke|show       IMAP/JMAP sharing between minted Users. Not
+                              `k2 mail access grant` (agent layer).
+  autoconfig show|apply       dnsZoneFile advanced rows. apply plants via k2 dns
+                              if we host NS; BYO prints. Not A8 bind.
 
 Run 'k2 hostmail <command> --help' for details.
 EOF
@@ -27263,6 +27834,83 @@ Show the current host-wide outbound footer or none.
 
 USAGE
   k2 hostmail footer show [--json]
+cmd_help_hostmail_list() {
+    cat <<'EOF'
+Mailing lists (Stalwart x:MailingList). Members are minted inboxes
+this cut. Not aliases. Not `k2 mail list` (inboxes). Bare
+`k2 hostmail list` is this usage.
+
+USAGE
+  k2 hostmail list create <addr> --member <a> [--member <a>…] [--json]
+  k2 hostmail list show <addr> [--json]
+  k2 hostmail list members <addr> [--json]
+  k2 hostmail list members add <addr> --member <a>… [--json]
+  k2 hostmail list members remove <addr> --member <a>… [--json]
+  k2 hostmail list delete <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_list_create() { cmd_help_hostmail_list; }
+cmd_help_hostmail_list_show() { cmd_help_hostmail_list; }
+cmd_help_hostmail_list_members() { cmd_help_hostmail_list; }
+cmd_help_hostmail_list_delete() { cmd_help_hostmail_list; }
+
+cmd_help_hostmail_spam() {
+    cat <<'EOF'
+Train Stalwart's classifier via Junk / $junk (no x:Spam). allow/block
+stores the sender domain on x:MemoryLookupKey then InvalidateCaches.
+Quarantine is that mailbox's Junk; discard moves to Trash (never
+EXPUNGE).
+
+USAGE
+  k2 hostmail spam ham|spam <message-id> --address <addr> [--json]
+  k2 hostmail spam allow|block <sender> [--json]
+  k2 hostmail spam quarantine list --address <addr> [--json]
+  k2 hostmail spam quarantine release|discard <id> --address <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_spam_train() { cmd_help_hostmail_spam; }
+cmd_help_hostmail_spam_sender() { cmd_help_hostmail_spam; }
+cmd_help_hostmail_spam_quarantine() { cmd_help_hostmail_spam; }
+
+cmd_help_hostmail_queue() {
+    cat <<'EOF'
+Outbound queue (x:QueuedMessage). retry patches nextRetry. drop
+destroys the queued message — not mailbox Trash, not EXPUNGE, not
+`k2 mail delete`.
+
+USAGE
+  k2 hostmail queue list [--json]
+  k2 hostmail queue retry <id> [--json]
+  k2 hostmail queue drop <id> [--json]
+EOF
+}
+
+cmd_help_hostmail_acl() {
+    cat <<'EOF'
+IMAP/JMAP sharing between minted Users (Mail.app rights). Does not
+replace `k2 mail access grant` (agent CLI layer). Both mailbox and
+user must be minted. Probe Mailbox/set shareWith; fallback IMAP SETACL.
+K2 never EXPUNGEs.
+
+USAGE
+  k2 hostmail acl grant <mailbox> --user <addr> --rights lrswipkxten [--json]
+  k2 hostmail acl grant <mailbox> --user <addr> --read|--write|--post|--admin [--json]
+  k2 hostmail acl revoke <mailbox> --user <addr> [--json]
+  k2 hostmail acl show <mailbox> [--json]
+EOF
+}
+
+cmd_help_hostmail_autoconfig() {
+    cat <<'EOF'
+Autoconfig / Autodiscover DNS from Stalwart dnsZoneFile advanced rows.
+apply plants via k2 dns (POST /cli/dns/records/add) only if the apex
+is a zone on GET /cli/dns/zones. BYO prints records. Not A8 bind.
+
+USAGE
+  k2 hostmail autoconfig show <domain> [--json]
+  k2 hostmail autoconfig apply <domain> [--json]
 EOF
 }
 
@@ -29692,6 +30340,9 @@ case "${1:-help}" in
             # address-retire verb is `k2 hostmail delete`.)
             create|status|domain|doctor|config|approvals|catchall|alias|forward)
             create|status|domain|doctor|config|approvals|ooo|footer)
+                _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
+                exit 2 ;;
+            spam|queue|acl|autoconfig)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

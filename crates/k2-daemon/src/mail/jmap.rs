@@ -448,7 +448,9 @@ impl StalwartClient {
 
     /// ✔ LIVE-VERIFIED: apply the §5.3 port plan in ONE
     /// `x:NetworkListener/set`:
-    /// - destroy the default `imaps`/`pop3s`/`sieve` listeners (§10);
+    /// - destroy default `pop3s`/`sieve` (§10). Keep/create `imap` :143
+    ///   STARTTLS and `imaps` :993 implicit (Mail.app). Do **not**
+    ///   destroy `imaps` anymore (L6 leftover closed 2026-09-18).
     /// - move the default plain-HTTP `http` listener from `[::]:8080`
     ///   to the LOOPBACK mgmt bind (`127.0.0.1:8180`) — this is both
     ///   "setup listener off" (pre-mortem #13) and the permanent mgmt
@@ -470,9 +472,11 @@ impl StalwartClient {
         let mut update = serde_json::Map::new();
         let mut create = serde_json::Map::new();
         let mut has_submission = false;
+        let mut has_imap = false;
+        let mut has_imaps = false;
         for l in listeners {
             match l.name.as_str() {
-                "imaps" | "pop3s" | "sieve" => destroy.push(l.id.clone()),
+                "pop3s" | "sieve" => destroy.push(l.id.clone()),
                 "http" => {
                     update.insert(
                         l.id.clone(),
@@ -486,6 +490,8 @@ impl StalwartClient {
                     );
                 }
                 "submission" => has_submission = true,
+                "imap" => has_imap = true,
+                "imaps" => has_imaps = true,
                 _ => {}
             }
         }
@@ -498,6 +504,30 @@ impl StalwartClient {
                     "protocol": "smtp",
                     "useTls": true,
                     "tlsImplicit": false,
+                }),
+            );
+        }
+        if !has_imap {
+            create.insert(
+                "imap".to_string(),
+                serde_json::json!({
+                    "name": "imap",
+                    "bind": { "[::]:143": true },
+                    "protocol": "imap",
+                    "useTls": true,
+                    "tlsImplicit": false,
+                }),
+            );
+        }
+        if !has_imaps {
+            create.insert(
+                "imaps".to_string(),
+                serde_json::json!({
+                    "name": "imaps",
+                    "bind": { "[::]:993": true },
+                    "protocol": "imap",
+                    "useTls": true,
+                    "tlsImplicit": true,
                 }),
             );
         }
@@ -2813,7 +2843,7 @@ mod tests {
             "methodResponses": [["x:NetworkListener/set", {
                 "created": { "k2": { "id": "L-new" } },
                 "updated": { "L-http": null, "L-https": null },
-                "destroyed": ["L-imaps", "L-pop3s", "L-sieve"],
+                "destroyed": ["L-pop3s", "L-sieve"],
             }, "0"]],
         })
         .to_string();
@@ -2840,7 +2870,14 @@ mod tests {
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
-        assert_eq!(destroy, ["L-imaps", "L-pop3s", "L-sieve"], "§10 listeners torn out");
+        assert_eq!(destroy, ["L-pop3s", "L-sieve"], "pop3s/sieve torn out; imaps kept");
+        assert!(
+            !destroy.contains(&"L-imaps"),
+            "Mail.app IMAPS 993 must survive the port plan: {destroy:?}"
+        );
+        assert_eq!(args["create"]["imap"]["name"], "imap");
+        assert_eq!(args["create"]["imap"]["bind"]["[::]:143"], true);
+        assert_eq!(args["create"]["imap"]["tlsImplicit"], false);
         assert_eq!(
             args["update"]["L-http"]["bind"]["127.0.0.1:8180"], true,
             "the 8080 listener becomes the loopback mgmt endpoint"

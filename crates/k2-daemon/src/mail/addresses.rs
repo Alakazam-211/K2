@@ -458,7 +458,8 @@ fn mint_json(
         "createdAt": row.created_at,
         "cap": { "used": used, "cap": cap },
         "username": row.address,
-        "imap": { "host": host, "port": 443, "tls": true, "alpn": true },
+        "imap": { "host": host, "port": 993, "tls": true },
+        "imapStartTls": { "host": host, "port": 143, "startTls": true },
         "submission": { "host": host, "port": 465, "tls": true },
         "jmap": { "host": host, "port": 443, "tls": true },
     });
@@ -478,11 +479,12 @@ fn mint_json(
 }
 
 /// IMAP/SMTP client block shown once on mint and on password rotate.
-/// No 993 — IMAP is 443 ALPN, submission is 465.
+/// IMAPS 993 + IMAP STARTTLS 143; submission 465; JMAP 443.
 fn client_block(hostname: &str, username: &str, password: &str) -> serde_json::Value {
     serde_json::json!({
         "username": username,
-        "imap": { "host": hostname, "port": 443, "tls": true, "alpn": true },
+        "imap": { "host": hostname, "port": 993, "tls": true },
+        "imapStartTls": { "host": hostname, "port": 143, "startTls": true },
         "submission": { "host": hostname, "port": 465, "tls": true },
         "jmap": { "host": hostname, "port": 443, "tls": true },
         "password": password,
@@ -1264,9 +1266,9 @@ pub(crate) mod tests {
         assert!(v["createdAt"].as_i64().unwrap() > 0);
         assert!(v["password"].as_str().unwrap().len() >= 32, "once password");
         assert_eq!(v["username"], format!("scout@{domain}"));
-        assert_eq!(v["imap"]["port"], 443);
-        assert_eq!(v["imap"]["alpn"], true);
+        assert_eq!(v["imap"]["port"], 993);
         assert_eq!(v["imap"]["tls"], true);
+        assert_eq!(v["imapStartTls"]["port"], 143);
         assert_eq!(v["submission"]["port"], 465);
         assert_eq!(v["jmap"]["port"], 443);
 
@@ -1787,12 +1789,11 @@ pub(crate) mod tests {
         assert_eq!(v["username"], address);
         let password = v["password"].as_str().expect("once password");
         assert_eq!(password.len(), 64);
-        assert_eq!(v["imap"]["port"], 443);
-        assert_eq!(v["imap"]["alpn"], true);
+        assert_eq!(v["imap"]["port"], 993);
         assert_eq!(v["imap"]["tls"], true);
+        assert_eq!(v["imapStartTls"]["port"], 143);
         assert_eq!(v["submission"]["port"], 465);
         assert_eq!(v["jmap"]["port"], 443);
-        assert_ne!(v["imap"]["port"], 993);
         let note = v["note"].as_str().unwrap_or("");
         assert!(note.contains("invalidates the mint-time secret"), "{note}");
 

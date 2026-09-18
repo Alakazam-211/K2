@@ -60,47 +60,82 @@ fn engine() -> Result<StalwartClient, CliResponse> {
 
 /// Trusted DATA-stage append: `foreverypart` `text/plain` only; skip
 /// if the part already contains the exact footer (idempotent).
+///
+/// Shape matches Stalwart's documented DATA-stage sample (`set` a
+/// quoted string, `foreverypart {`, `extracttext`, `replace "${…}"`)
+/// so the trusted compiler accepts it. `text:` without a trailing `;`
+/// is what failed `x:SieveSystemScript/set` on lztek.
 pub fn compose_footer_script(text: &str) -> String {
+    let escaped = sieve_quote_string(text);
     format!(
-        "require [\"foreverypart\", \"mime\", \"replace\", \"extracttext\", \"variables\"];\n\
-         set \"{FOOTER_VAR}\" text:\n\
-         {text}\n\
-         .\n\
-         foreverypart\n\
-         {{\n\
-           if header :mime :contenttype :is \"Content-Type\" \"text/plain\"\n\
-           {{\n\
+        "require [\"variables\", \"replace\", \"mime\", \"foreverypart\", \"extracttext\"];\n\
+         set \"{FOOTER_VAR}\" \"\\r\\n\\r\\n{escaped}\";\n\
+         foreverypart {{\n\
+           if header :mime :contenttype :is \"Content-Type\" \"text/plain\" {{\n\
              extracttext \"text_content\";\n\
              if not string :contains \"${{text_content}}\" \"${{{FOOTER_VAR}}}\" {{\n\
-               replace text:\n\
-         ${{text_content}}\n\
-         \n\
-         ${{{FOOTER_VAR}}}\n\
-         .\n\
+               replace \"${{text_content}}${{{FOOTER_VAR}}}\";\n\
              }}\n\
            }}\n\
          }}\n"
     )
 }
 
-fn parse_footer_text(contents: &str) -> Option<String> {
-    let key = format!("set \"{FOOTER_VAR}\" text:");
-    let i = contents.find(&key)?;
-    let after = &contents[i + key.len()..];
-    let after = after.strip_prefix('\r').unwrap_or(after);
-    let after = after.strip_prefix('\n').unwrap_or(after);
-    let mut body = String::new();
-    for line in after.lines() {
-        let line = line.trim_end_matches('\r');
-        if line == "." {
-            return Some(body.trim_end_matches('\n').to_string());
+fn sieve_quote_string(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\r' => {}
+            '\n' => out.push_str("\\r\\n"),
+            _ => out.push(c),
         }
-        if !body.is_empty() {
-            body.push('\n');
-        }
-        body.push_str(line);
     }
-    None
+    out
+}
+
+fn parse_footer_text(contents: &str) -> Option<String> {
+    let key = format!("set \"{FOOTER_VAR}\" ");
+    let i = contents.find(&key)?;
+    let after = contents[i + key.len()..].trim_start();
+    if let Some(rest) = after.strip_prefix("text:") {
+        let rest = rest.strip_prefix('\r').unwrap_or(rest);
+        let rest = rest.strip_prefix('\n').unwrap_or(rest);
+        let mut body = String::new();
+        for line in rest.lines() {
+            let line = line.trim_end_matches('\r');
+            if line == "." {
+                return Some(body.trim_end_matches('\n').to_string());
+            }
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(line);
+        }
+        return None;
+    }
+    if !after.starts_with('"') {
+        return None;
+    }
+    let inner = after.strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some(other) => out.push(other),
+                None => break,
+            },
+            '"' => break,
+            _ => out.push(c),
+        }
+    }
+    Some(out.trim_start_matches(['\r', '\n']).to_string())
 }
 
 /// GET `/cli/mail/footer`
@@ -286,10 +321,15 @@ mod tests {
     #[test]
     fn compose_footer_is_plain_foreverypart_contains_guard() {
         let src = compose_footer_script("Acme Legal — confidential.");
-        assert!(src.contains("foreverypart"), "{src}");
+        assert!(src.contains("foreverypart {"), "{src}");
         assert!(src.contains("text/plain"), "{src}");
         assert!(!src.contains("text/html"), "{src}");
         assert!(src.contains(":contains"), "{src}");
+        assert!(
+            src.contains("replace \"${text_content}${k2footer}\""),
+            "{src}"
+        );
+        assert!(!src.contains("replace text:"), "{src}");
         assert!(src.contains("Acme Legal — confidential."), "{src}");
         assert_eq!(
             parse_footer_text(&src).as_deref(),

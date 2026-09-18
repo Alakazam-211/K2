@@ -128,20 +128,59 @@ fn collision_user(address: &str) -> Result<(), CliResponse> {
     Ok(())
 }
 
+/// Stalwart 0.16 `x:MailingList/query` rejects `emailAddress`
+/// (`unsupportedFilter`). Filter by `name` + `domainId` (N9: name is
+/// the local-part; emailAddress is server-set). Fall back to
+/// `domainId` then match locally.
+fn query_list_ids(
+    engine: &StalwartClient,
+    local: &str,
+    domain_id: &str,
+) -> Result<Vec<String>, CliResponse> {
+    match engine.mailing_list_query(serde_json::json!({
+        "name": local,
+        "domainId": domain_id,
+    })) {
+        Ok(ids) => Ok(ids),
+        Err(e) if e.to_ascii_lowercase().contains("unsupportedfilter") => engine
+            .mailing_list_query(serde_json::json!({ "domainId": domain_id }))
+            .map_err(|e2| err_json("502 Bad Gateway", "engine", e2)),
+        Err(e) => Err(err_json("502 Bad Gateway", "engine", e)),
+    }
+}
+
+fn row_matches_address(row: &jmap::MailingListInfo, address: &str, domain_id: &str) -> bool {
+    if row
+        .email_address
+        .as_deref()
+        .is_some_and(|e| e.eq_ignore_ascii_case(address))
+    {
+        return true;
+    }
+    let local = address.split('@').next().unwrap_or("");
+    !row.name.is_empty()
+        && row.name.eq_ignore_ascii_case(local)
+        && (row.domain_id.is_empty() || row.domain_id == domain_id)
+}
+
 fn collision_engine(
     engine: &StalwartClient,
     address: &str,
     domain_id: &str,
 ) -> Result<(), CliResponse> {
-    let found = engine
-        .mailing_list_query(serde_json::json!({ "emailAddress": address }))
-        .map_err(|e| err_json("502 Bad Gateway", "engine", e))?;
+    let local = address.split('@').next().unwrap_or("");
+    let found = query_list_ids(engine, local, domain_id)?;
     if !found.is_empty() {
-        return Err(err_json(
-            "409 Conflict",
-            "exists",
-            format!("'{address}' is already a mailing list"),
-        ));
+        let rows = engine
+            .mailing_list_get(&found)
+            .map_err(|e| err_json("502 Bad Gateway", "engine", e))?;
+        if rows.iter().any(|r| row_matches_address(r, address, domain_id)) {
+            return Err(err_json(
+                "409 Conflict",
+                "exists",
+                format!("'{address}' is already a mailing list"),
+            ));
+        }
     }
     match engine.domain_get_catchall(domain_id) {
         Ok(Some(dest)) if dest.eq_ignore_ascii_case(address) => {
@@ -181,25 +220,14 @@ fn collision_engine(
 }
 
 fn find_list(engine: &StalwartClient, address: &str) -> Result<jmap::MailingListInfo, CliResponse> {
-    let ids = engine
-        .mailing_list_query(serde_json::json!({ "emailAddress": address }))
-        .map_err(|e| err_json("502 Bad Gateway", "engine", e))?;
+    let (local, domain) = split_list_addr(address)?;
+    let (_domain, domain_id) = hosted_domain(&domain)?;
+    let ids = query_list_ids(engine, &local, &domain_id)?;
     let rows = engine
         .mailing_list_get(&ids)
         .map_err(|e| err_json("502 Bad Gateway", "engine", e))?;
     rows.into_iter()
-        .find(|r| {
-            r.email_address
-                .as_deref()
-                .is_some_and(|e| e.eq_ignore_ascii_case(address))
-                || format!("{}@", r.name)
-                    .eq_ignore_ascii_case(&format!("{}@", address.split('@').next().unwrap_or("")))
-                    && !r.name.is_empty()
-        })
-        .or_else(|| {
-            // name+domain match when emailAddress is server-set later
-            None
-        })
+        .find(|r| row_matches_address(r, address, &domain_id))
         .ok_or_else(|| {
             err_json(
                 "404 Not Found",

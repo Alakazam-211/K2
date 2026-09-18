@@ -4192,7 +4192,7 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
 // ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::{Read, Write};
 
@@ -4381,7 +4381,7 @@ mod tests {
     // ── Loopback mock-server helpers (ephemeral port; the one allowed
     //    form of network in tests) ───────────────────────────────────
 
-    pub(super) fn spawn_mock_server(
+    pub(crate) fn spawn_mock_server(
         replies: Vec<String>,
     ) -> (u16, std::sync::mpsc::Receiver<String>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
@@ -4428,7 +4428,7 @@ mod tests {
         (port, rx)
     }
 
-    pub(super) fn body_json(req: &str) -> serde_json::Value {
+    pub(crate) fn body_json(req: &str) -> serde_json::Value {
         let start = req.find("\r\n\r\n").expect("body") + 4;
         serde_json::from_str(&req[start..]).expect("JSON body")
     }

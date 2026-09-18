@@ -129,8 +129,9 @@ pub fn compose(s: &UserSieve) -> Option<String> {
     }
     if s.ooo.as_ref().is_some_and(|o| o.until.is_some()) {
         req.push("date");
+        req.push("relational");
     }
-    if s.forward.is_some() {
+    if s.forward.as_ref().is_some_and(|f| f.keep) {
         req.push("copy");
     }
     let mut out = String::new();
@@ -167,8 +168,10 @@ pub fn compose(s: &UserSieve) -> Option<String> {
 
 fn compose_ooo(ooo: &OooBlock) -> String {
     let from = sieve_quoted(&ooo.from);
+    // RFC 5228: `text:` ends at a lone `.` line; the command still needs `;`.
+    // Without it Stalwart compiles `Expected ';' but found "redirect"`.
     let mut vac = format!(
-        "vacation :days {} :from {} :addresses [{}] text:\n{}\n.\n",
+        "vacation :days {} :from {} :addresses [{}] text:\n{}\n.\n;\n",
         ooo.days,
         from,
         from,
@@ -378,23 +381,29 @@ pub fn save_user_sieve(
         .collect();
     match compose(sieve) {
         None => {
-            let mut destroy: Vec<String> = Vec::new();
-            if let Some(s) = k2 {
-                destroy.push(s.id.clone());
-            }
-            for s in legacy {
-                destroy.push(s.id.clone());
-            }
-            if !destroy.is_empty() {
-                client.sieve_scripts_destroy(account_id, &destroy)?;
+            // RFC 9661 / Stalwart: destroy of an *active* script is
+            // `scriptIsActive` ("Deactivate Sieve script before deletion").
+            // `onSuccessActivateScript: null` means "leave current active",
+            // so empty remainder replaces `k2` with a no-op `keep;` (still
+            // the active script) then destroys leftover `k2-forward`.
+            let blob_id = client.blob_upload(account_id, b"keep;\n")?;
+            let existing_id = k2.map(|s| s.id.as_str());
+            client.sieve_script_put_k2(account_id, existing_id, &blob_id, &[])?;
+            let destroy_ids: Vec<String> = legacy.iter().map(|s| s.id.clone()).collect();
+            if !destroy_ids.is_empty() {
+                client.sieve_scripts_destroy(account_id, &destroy_ids)?;
             }
             Ok(())
         }
         Some(source) => {
             let blob_id = client.blob_upload(account_id, source.as_bytes())?;
             let existing_id = k2.map(|s| s.id.as_str());
+            client.sieve_script_put_k2(account_id, existing_id, &blob_id, &[])?;
             let destroy_ids: Vec<String> = legacy.iter().map(|s| s.id.clone()).collect();
-            client.sieve_script_put_k2(account_id, existing_id, &blob_id, &destroy_ids)
+            if !destroy_ids.is_empty() {
+                client.sieve_scripts_destroy(account_id, &destroy_ids)?;
+            }
+            Ok(())
         }
     }
 }
@@ -438,7 +447,13 @@ mod tests {
         assert!(vac < redir, "vacation then redirect:\n{src}");
         assert!(src.contains(OOO_MARK), "{src}");
         assert!(src.contains(FORWARD_MARK), "{src}");
-        assert!(src.contains("require [\"vacation\", \"copy\"]"), "{src}");
+        assert!(src.contains("require [\"vacation\"]"), "{src}");
+        assert!(
+            src.contains(".\n;"),
+            "vacation text: needs a command semicolon before redirect:\n{src}"
+        );
+        let semi = src.find(".\n;").expect("semi");
+        assert!(semi < redir, "semicolon before redirect:\n{src}");
         assert!(src.contains(":from \"user@domain.test\""), "{src}");
         assert!(src.contains(":addresses [\"user@domain.test\"]"), "{src}");
         assert!(!src.contains("VacationResponse"), "{src}");
@@ -459,6 +474,7 @@ mod tests {
             src.contains("redirect :copy \"dest@domain.test\";"),
             "{src}"
         );
+        assert!(src.contains("require [\"copy\"]"), "{src}");
         let round = parse(&src);
         assert_eq!(round.forward.as_ref().map(|f| f.keep), Some(true));
         assert!(round.ooo.is_none());
@@ -549,7 +565,10 @@ mod tests {
             forward: None,
         })
         .expect("script");
-        assert!(src.contains("require [\"vacation\", \"date\"]"), "{src}");
+        assert!(
+            src.contains("require [\"vacation\", \"date\", \"relational\"]"),
+            "{src}"
+        );
         assert!(
             src.contains("currentdate :zone \"+0000\" :value \"le\" \"date\" \"2026-12-31\""),
             "{src}"

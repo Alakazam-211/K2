@@ -1349,11 +1349,19 @@ impl StalwartClient {
     }
 
     /// `x:MailingList/query`. Empty ids is not an error.
-    pub fn mailing_list_query(&self, filter: serde_json::Value) -> Result<Vec<String>, String> {
-        let resp = self.registry_call(
-            "x:MailingList/query",
-            serde_json::json!({ "filter": filter }),
-        )?;
+    ///
+    /// 0.16 docs: filter is **free text or tenant**, not `emailAddress` /
+    /// `domainId` (those 502 `unsupportedFilter` on lztek). Omit `filter`
+    /// to enumerate.
+    pub fn mailing_list_query(
+        &self,
+        filter: Option<serde_json::Value>,
+    ) -> Result<Vec<String>, String> {
+        let args = match filter {
+            Some(f) => serde_json::json!({ "filter": f }),
+            None => serde_json::json!({}),
+        };
+        let resp = self.registry_call("x:MailingList/query", args)?;
         Ok(parse_query_ids(&resp))
     }
 

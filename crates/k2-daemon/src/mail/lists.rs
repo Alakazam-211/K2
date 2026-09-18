@@ -128,22 +128,20 @@ fn collision_user(address: &str) -> Result<(), CliResponse> {
     Ok(())
 }
 
-/// Stalwart 0.16 `x:MailingList/query` rejects `emailAddress`
-/// (`unsupportedFilter`). Filter by `name` + `domainId` (N9: name is
-/// the local-part; emailAddress is server-set). Fall back to
-/// `domainId` then match locally.
+/// Stalwart 0.16 `x:MailingList/query` filter is **text or tenant**
+/// (N9). `emailAddress` and `domainId` both 502 `unsupportedFilter`
+/// on lztek. Prefer `text` = local-part; on that fail, enumerate with
+/// no filter and match locally.
 fn query_list_ids(
     engine: &StalwartClient,
     local: &str,
-    domain_id: &str,
+    _domain_id: &str,
 ) -> Result<Vec<String>, CliResponse> {
-    match engine.mailing_list_query(serde_json::json!({
-        "name": local,
-        "domainId": domain_id,
-    })) {
+    let unsupported = |e: &str| e.to_ascii_lowercase().contains("unsupportedfilter");
+    match engine.mailing_list_query(Some(serde_json::json!({ "text": local }))) {
         Ok(ids) => Ok(ids),
-        Err(e) if e.to_ascii_lowercase().contains("unsupportedfilter") => engine
-            .mailing_list_query(serde_json::json!({ "domainId": domain_id }))
+        Err(e) if unsupported(&e) => engine
+            .mailing_list_query(None)
             .map_err(|e2| err_json("502 Bad Gateway", "engine", e2)),
         Err(e) => Err(err_json("502 Bad Gateway", "engine", e)),
     }

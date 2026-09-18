@@ -260,8 +260,11 @@ pub fn run_checks(
         },
     });
 
-    // PTR + FCrDNS.
-    checks.extend(ptr_checks(resolver, &ctx.hostname, ip.as_deref()));
+    // PTR + FCrDNS — 8.8.8.8 / 1.1.1.1, not the box stub cache.
+    checks.extend(match dns_verify::SystemResolver::public() {
+        Ok(pub_r) => ptr_checks(&pub_r, &ctx.hostname, ip.as_deref()),
+        Err(_) => ptr_checks(resolver, &ctx.hostname, ip.as_deref()),
+    });
 
     // SMTP banner vs hostname (loopback EHLO — also feeds STARTTLS).
     let ehlo25 = env.smtp_ehlo("127.0.0.1", 25);

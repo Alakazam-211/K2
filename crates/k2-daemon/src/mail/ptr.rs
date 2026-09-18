@@ -304,13 +304,13 @@ pub(crate) fn ptr_show_json(
 /// GET|POST `/cli/mail/ptr` — show alignment (no OVH).
 pub fn handle_ptr_show(_params: &HashMap<String, String>) -> CliResponse {
     let env = RealPreflightEnv;
-    let resolver = match SystemResolver::new() {
+    let resolver = match SystemResolver::public().or_else(|_| SystemResolver::new()) {
         Ok(r) => r,
         Err(e) => {
             return err_json(
                 "502 Bad Gateway",
                 "dns",
-                format!("system DNS resolver unavailable: {e}"),
+                format!("DNS resolver unavailable: {e}"),
             )
         }
     };
@@ -373,13 +373,13 @@ impl PtrSetDeps for LivePtrSetDeps {
 /// POST `/cli/mail/ptr/set` `{hostname}`.
 pub fn handle_ptr_set(body: &[u8]) -> CliResponse {
     let env = RealPreflightEnv;
-    let resolver = match SystemResolver::new() {
+    let resolver = match SystemResolver::public().or_else(|_| SystemResolver::new()) {
         Ok(r) => r,
         Err(e) => {
             return err_json(
                 "502 Bad Gateway",
                 "dns",
-                format!("system DNS resolver unavailable: {e}"),
+                format!("DNS resolver unavailable: {e}"),
             )
         }
     };

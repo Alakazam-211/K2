@@ -77,6 +77,10 @@ pub trait DnsResolver: Send + Sync {
 /// Production resolver: hickory (system configuration — the same
 /// resolvers the box itself uses, so "valid here" means "propagated to
 /// where this server sits"). Blocking; callers run in spawn_blocking.
+///
+/// [`Self::public`] talks to 8.8.8.8 / 1.1.1.1 instead — use that for
+/// PTR/FCrDNS so a local stub cache cannot fail doctor after the
+/// internet already agrees (lztek 2026-09-18).
 pub struct SystemResolver {
     inner: hickory_resolver::Resolver,
 }
@@ -86,6 +90,18 @@ impl SystemResolver {
         hickory_resolver::Resolver::from_system_conf()
             .map(|inner| Self { inner })
             .map_err(|e| format!("system DNS resolver unavailable: {e}"))
+    }
+
+    /// Google + Cloudflare. PTR/FCrDNS and `k2 hostmail ptr show`.
+    pub fn public() -> Result<Self, String> {
+        use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+        let mut config = ResolverConfig::google();
+        for ns in ResolverConfig::cloudflare().name_servers() {
+            config.add_name_server(ns.clone());
+        }
+        hickory_resolver::Resolver::new(config, ResolverOpts::default())
+            .map(|inner| Self { inner })
+            .map_err(|e| format!("public DNS resolver unavailable: {e}"))
     }
 }
 

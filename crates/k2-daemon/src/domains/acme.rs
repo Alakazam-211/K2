@@ -121,10 +121,6 @@ pub fn issue_attached(hostname: &str) -> Result<InstalledPem, String> {
     issue_with_challenge(hostname, &binding, &name, kind)
 }
 
-pub fn renew_attached(hostname: &str) -> Result<InstalledPem, String> {
-    issue_attached(hostname)
-}
-
 fn reusable_inventory(hostname: &str) -> Option<InstalledPem> {
     let installed = store::load(hostname)?;
     if crate::domains::status::is_reusable_lets_encrypt(hostname, &installed.chain_pem) {

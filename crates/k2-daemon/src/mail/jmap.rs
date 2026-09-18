@@ -2050,6 +2050,7 @@ impl StalwartClient {
     }
 
     /// RFC 9661 `SieveScript/query` for the K2 forward script name.
+    #[cfg(test)]
     pub fn sieve_script_query_id(
         &self,
         account_id: &str,
@@ -2065,6 +2066,7 @@ impl StalwartClient {
 
     /// Install/replace the `k2-forward` Sieve on this mailbox.
     /// `--keep` → `require ["copy"]; redirect :copy`. Else `redirect`.
+    #[cfg(test)]
     pub fn sieve_k2_forward_set(
         &self,
         account_id: &str,
@@ -2095,6 +2097,7 @@ impl StalwartClient {
     }
 
     /// Destroy **only** the `k2-forward` script. Idempotent if absent.
+    #[cfg(test)]
     pub fn sieve_k2_forward_destroy(&self, account_id: &str) -> Result<(), String> {
         let Some(id) = self.sieve_script_query_id(account_id, K2_FORWARD_SCRIPT)? else {
             return Ok(());
@@ -2105,28 +2108,6 @@ impl StalwartClient {
             serde_json::json!({ "destroy": [id] }),
         )?;
         parse_set_destroyed("SieveScript/set", &id, &resp)
-    }
-
-    /// Read dest + keep from the active `k2-forward` blob, if any.
-    pub fn sieve_k2_forward_get(
-        &self,
-        account_id: &str,
-    ) -> Result<Option<(String, bool)>, String> {
-        let Some(id) = self.sieve_script_query_id(account_id, K2_FORWARD_SCRIPT)? else {
-            return Ok(None);
-        };
-        let args = self.sieve_call(
-            account_id,
-            "SieveScript/get",
-            serde_json::json!({
-                "ids": [id],
-                "properties": ["name", "blobId"],
-            }),
-        )?;
-        let blob_id = parse_sieve_blob_id(&id, &args)?;
-        let bytes = self.blob_download(account_id, &blob_id, K2_FORWARD_SCRIPT, "application/sieve")?;
-        let src = String::from_utf8_lossy(&bytes);
-        Ok(parse_k2_forward_script(&src))
     }
 
     /// RFC 8621 `Email/import` of a previously uploaded blob into Inbox.
@@ -3263,6 +3244,7 @@ fn parse_domain_get_catchall(
 }
 
 /// Sieve body for `k2-forward`. Dest is quoted; keep uses `:copy`.
+#[cfg(test)]
 pub fn k2_forward_script(dest: &str, keep: bool) -> String {
     let quoted = sieve_quote(dest);
     if keep {
@@ -3272,11 +3254,13 @@ pub fn k2_forward_script(dest: &str, keep: bool) -> String {
     }
 }
 
+#[cfg(test)]
 fn sieve_quote(addr: &str) -> String {
     let escaped = addr.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
 }
 
+#[cfg(test)]
 fn sieve_unquote(s: &str) -> Option<String> {
     let s = s.trim();
     if let Some(inner) = s.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
@@ -3288,6 +3272,7 @@ fn sieve_unquote(s: &str) -> Option<String> {
     None
 }
 
+#[cfg(test)]
 pub fn parse_k2_forward_script(src: &str) -> Option<(String, bool)> {
     let mut dest = None;
     let mut keep = false;
@@ -3304,23 +3289,6 @@ pub fn parse_k2_forward_script(src: &str) -> Option<(String, bool)> {
         }
     }
     dest.map(|d| (d, keep))
-}
-
-fn parse_sieve_blob_id(id: &str, args: &serde_json::Value) -> Result<String, String> {
-    let entry = args
-        .get("list")
-        .and_then(|v| v.as_array())
-        .and_then(|a| a.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id)));
-    let Some(entry) = entry else {
-        return Err(format!("SieveScript/get: '{id}' not in the reply list"));
-    };
-    entry
-        .get("blobId")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .ok_or_else(|| format!("SieveScript/get: '{id}' has no blobId"))
 }
 
 fn parse_account_get_aliases(
@@ -3599,6 +3567,7 @@ pub fn rewrite_route_expression(
 const JMAP_MAIL_USING: [&str; 2] = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"];
 
 /// Hostmail forward script name. Unset destroys this name only.
+#[cfg(test)]
 pub const K2_FORWARD_SCRIPT: &str = "k2-forward";
 
 /// Per-part body cap on `Email/get` (`maxBodyValueBytes`): 256 KiB of

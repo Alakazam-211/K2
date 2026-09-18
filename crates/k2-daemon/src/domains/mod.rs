@@ -7,5 +7,3 @@ pub mod bind;
 pub mod routes;
 pub mod status;
 pub mod store;
-
-pub use bind::{classify_bind_response, BindOutcome};

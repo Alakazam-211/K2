@@ -83,6 +83,7 @@ fn write_tmp_rename(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> 
     Ok(())
 }
 
+#[cfg(test)]
 pub fn key_mode_is_0600(hostname: &str) -> bool {
     #[cfg(unix)]
     {

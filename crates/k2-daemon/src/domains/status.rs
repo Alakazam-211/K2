@@ -45,6 +45,13 @@ impl ProbeResult {
 
 /// Combine 443 and (optional) 465. Worst-of: missing < self-signed < expired < issued.
 pub fn probe_hostname(hostname: &str, role_mail: bool) -> ProbeResult {
+    #[cfg(test)]
+    {
+        if let Some(p) = TEST_PROBE.with(|c| c.borrow().clone()) {
+            let _ = (hostname, role_mail);
+            return p;
+        }
+    }
     let p443 = probe_port(hostname, 443);
     if !role_mail {
         return classify(hostname, p443, None);
@@ -122,6 +129,70 @@ fn rank(p: &ProbeResult) -> u8 {
 fn looks_rcgen(issuer: &str, subject: &str) -> bool {
     let hay = format!("{issuer} {subject}").to_ascii_lowercase();
     hay.contains("rcgen") || hay.contains("self signed") || hay.contains("self-signed")
+}
+
+/// Inventory PEM is a live Let's Encrypt leaf for `hostname` (not Fake
+/// CA, not rcgen, not expired, SAN includes the name).
+pub(crate) fn is_reusable_lets_encrypt(hostname: &str, chain_pem: &str) -> bool {
+    let Some(der) = pem_first_cert_der(chain_pem) else {
+        return false;
+    };
+    let Some((issuer, subject, not_after, sans)) = parse_leaf(&der) else {
+        return false;
+    };
+    if looks_rcgen(&issuer, &subject) {
+        return false;
+    }
+    let hay = issuer.to_ascii_lowercase();
+    if hay.contains("fake") {
+        return false;
+    }
+    if !(hay.contains("let's encrypt") || hay.contains("letsencrypt")) {
+        return false;
+    }
+    let now = chrono::Utc::now().timestamp();
+    if not_after <= now {
+        return false;
+    }
+    sans.iter().any(|n| n.eq_ignore_ascii_case(hostname))
+}
+
+/// After planting into Stalwart, 443/465 must not still look rcgen.
+pub fn reject_if_self_signed(probe: &ProbeResult) -> Result<(), String> {
+    if probe.self_signed || probe.state == "self-signed" {
+        return Err(format!(
+            "mail TLS still self-signed after plant (state={}, issuer={:?}) — \
+Stalwart 443/465 did not pick up the Let's Encrypt PEM",
+            probe.state, probe.issuer
+        ));
+    }
+    Ok(())
+}
+
+pub fn reject_live_self_signed(hostname: &str) -> Result<(), String> {
+    reject_if_self_signed(&probe_hostname(hostname, true))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PROBE: std::cell::RefCell<Option<ProbeResult>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct ProbeGuard;
+
+#[cfg(test)]
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        TEST_PROBE.with(|c| *c.borrow_mut() = None);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_probe(probe: Option<ProbeResult>) -> ProbeGuard {
+    TEST_PROBE.with(|c| *c.borrow_mut() = probe);
+    ProbeGuard
 }
 
 fn parse_leaf(der: &[u8]) -> Option<(String, String, i64, Vec<String>)> {

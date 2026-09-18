@@ -98,10 +98,17 @@ pub fn key_mode_is_0600(hostname: &str) -> bool {
     }
 }
 
-/// Copy PEMs onto Stalwart's certs dir when present (role=mail, 465).
+/// Plant PEMs into Stalwart so 443/465 serve them (role=mail).
+///
+/// v0.16.10 keeps TLS material in RocksDB, not a certs directory, and
+/// systemd `ProtectHome=yes` cannot read `~/.k2/certs`. The real plant
+/// is JMAP `x:Certificate/set` + `defaultCertificateId`. Copying into
+/// `/var/lib/stalwart/certs` (or `/etc/stalwart/certs`) is extra when
+/// those dirs exist — missing dirs must not look like success.
 pub fn plant_mail_pem(hostname: &str, chain_pem: &str, key_pem: &str) -> Result<(), String> {
-    let mut last_err = None;
-    let mut planted = false;
+    if chain_pem.trim().is_empty() || key_pem.trim().is_empty() {
+        return Err("plant mail PEM: empty chain or private key".into());
+    }
     for dir in ["/var/lib/stalwart/certs", "/etc/stalwart/certs"] {
         let p = Path::new(dir);
         if !p.is_dir() {
@@ -109,20 +116,74 @@ pub fn plant_mail_pem(hostname: &str, chain_pem: &str, key_pem: &str) -> Result<
         }
         let crt = p.join(format!("{hostname}.crt"));
         let key = p.join(format!("{hostname}.key"));
-        match write_tmp_rename(&crt, chain_pem.as_bytes(), 0o644)
-            .and_then(|_| write_tmp_rename(&key, key_pem.as_bytes(), 0o600))
-        {
-            Ok(()) => planted = true,
-            Err(e) => last_err = Some(e),
+        let _ = write_tmp_rename(&crt, chain_pem.as_bytes(), 0o644)
+            .and_then(|_| write_tmp_rename(&key, key_pem.as_bytes(), 0o600));
+    }
+    jmap_plant_certificate(chain_pem, key_pem)
+}
+
+fn jmap_plant_certificate(chain_pem: &str, key_pem: &str) -> Result<(), String> {
+    #[cfg(test)]
+    {
+        let _ = (chain_pem, key_pem);
+        TEST_JMAP_PLANT_CALLS.with(|c| *c.borrow_mut() += 1);
+        if let Some(r) = TEST_JMAP_PLANT.with(|c| c.borrow().clone()) {
+            return r;
         }
+        return Err(
+            "plant mail PEM: Stalwart JMAP required (RocksDB; no certs dir) — \
+inject TEST_JMAP_PLANT"
+                .into(),
+        );
     }
-    if planted {
-        Ok(())
-    } else if let Some(e) = last_err {
-        Err(e)
-    } else {
-        Ok(()) // no Stalwart dir — inventory still holds the PEM
+    #[cfg(not(test))]
+    jmap_plant_via_engine(chain_pem, key_pem)
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn jmap_plant_via_engine(chain_pem: &str, key_pem: &str) -> Result<(), String> {
+    let (client, _) = crate::mail::domains::engine_from_db().map_err(|e| {
+        format!(
+            "plant mail PEM into Stalwart via JMAP (certs live in RocksDB, not a files dir): {e}"
+        )
+    })?;
+    client
+        .certificate_plant(chain_pem, key_pem)
+        .map(|_| ())
+        .map_err(|e| format!("plant mail PEM via x:Certificate/set: {e}"))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_JMAP_PLANT: std::cell::RefCell<Option<Result<(), String>>> =
+        const { std::cell::RefCell::new(None) };
+    static TEST_JMAP_PLANT_CALLS: std::cell::RefCell<usize> =
+        const { std::cell::RefCell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) struct JmapPlantGuard;
+
+#[cfg(test)]
+impl Drop for JmapPlantGuard {
+    fn drop(&mut self) {
+        TEST_JMAP_PLANT.with(|c| *c.borrow_mut() = None);
+        TEST_JMAP_PLANT_CALLS.with(|c| *c.borrow_mut() = 0);
     }
+}
+
+/// Test seam: skip the live Stalwart client. `None` fails loud (the
+/// production "no certs dir" path must never look like Ok).
+#[cfg(test)]
+pub(crate) fn set_test_jmap_plant(result: Option<Result<(), String>>) -> JmapPlantGuard {
+    TEST_JMAP_PLANT.with(|c| *c.borrow_mut() = result);
+    TEST_JMAP_PLANT_CALLS.with(|c| *c.borrow_mut() = 0);
+    JmapPlantGuard
+}
+
+#[cfg(test)]
+pub(crate) fn test_jmap_plant_calls() -> usize {
+    TEST_JMAP_PLANT_CALLS.with(|c| *c.borrow())
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -152,25 +213,39 @@ mod tests {
 
     #[test]
     fn install_key_is_0600() {
-        let root = std::env::temp_dir().join(format!(
-            "k2-certs-mode-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let prev = std::env::var_os("HOME");
-        std::env::set_var("HOME", &root);
+        let _home = crate::test_support::TempHome::new();
         let chain = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
         let key = "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n";
         install("mail.example.com", chain, key).expect("install");
         assert!(key_mode_is_0600("mail.example.com"));
         assert!(load("mail.example.com").is_some());
-        match prev {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plant_mail_pem_without_certs_dir_is_not_ok() {
+        let _g = set_test_jmap_plant(None);
+        let err = plant_mail_pem(
+            "mail.example.com",
+            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+            "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n",
+        )
+        .expect_err("missing certs dir must not look like success");
+        assert!(
+            err.contains("JMAP") || err.contains("certs dir") || err.contains("RocksDB"),
+            "{err}"
+        );
+        assert!(test_jmap_plant_calls() >= 1, "JMAP plant must be attempted");
+    }
+
+    #[test]
+    fn plant_mail_pem_ok_when_jmap_injected() {
+        let _g = set_test_jmap_plant(Some(Ok(())));
+        plant_mail_pem(
+            "mail.example.com",
+            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+            "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n",
+        )
+        .expect("injected JMAP plant");
+        assert_eq!(test_jmap_plant_calls(), 1);
     }
 }

@@ -113,12 +113,37 @@ fn port_seems_free(port: u16) -> bool {
 pub fn issue_attached(hostname: &str) -> Result<InstalledPem, String> {
     reject_k2_dev(hostname)?;
     let (binding, name) = lookup_attached(hostname)?;
+    if let Some(pem) = reusable_inventory(hostname) {
+        plant_mail_if_needed(hostname, &name, &pem)?;
+        return Ok(pem);
+    }
     let kind = select_challenge(&binding)?;
     issue_with_challenge(hostname, &binding, &name, kind)
 }
 
 pub fn renew_attached(hostname: &str) -> Result<InstalledPem, String> {
     issue_attached(hostname)
+}
+
+fn reusable_inventory(hostname: &str) -> Option<InstalledPem> {
+    let installed = store::load(hostname)?;
+    if crate::domains::status::is_reusable_lets_encrypt(hostname, &installed.chain_pem) {
+        Some(installed)
+    } else {
+        None
+    }
+}
+
+fn plant_mail_if_needed(
+    hostname: &str,
+    name: &DomainName,
+    pem: &InstalledPem,
+) -> Result<(), String> {
+    if name.role != k2_core::domains::ROLE_MAIL {
+        return Ok(());
+    }
+    store::plant_mail_pem(hostname, &pem.chain_pem, &pem.key_pem)?;
+    crate::domains::status::reject_live_self_signed(hostname)
 }
 
 fn lookup_attached(hostname: &str) -> Result<(DomainBinding, DomainName), String> {
@@ -148,16 +173,12 @@ fn issue_with_challenge(
     if fake_enabled() {
         let pem = fake_issue(hostname, binding, kind)?;
         store::install(hostname, &pem.chain_pem, &pem.key_pem)?;
-        if name.role == k2_core::domains::ROLE_MAIL {
-            let _ = store::plant_mail_pem(hostname, &pem.chain_pem, &pem.key_pem);
-        }
+        plant_mail_if_needed(hostname, name, &pem)?;
         return Ok(pem);
     }
     let pem = live_issue(hostname, binding, kind)?;
     store::install(hostname, &pem.chain_pem, &pem.key_pem)?;
-    if name.role == k2_core::domains::ROLE_MAIL {
-        let _ = store::plant_mail_pem(hostname, &pem.chain_pem, &pem.key_pem);
-    }
+    plant_mail_if_needed(hostname, name, &pem)?;
     Ok(pem)
 }
 
@@ -503,5 +524,162 @@ mod tests {
             !pem.chain_pem.to_ascii_lowercase().contains("rcgen"),
             "fake leaf must not look like rcgen"
         );
+    }
+
+    fn mint_le_like(hostname: &str) -> InstalledPem {
+        let mut ca_params =
+            CertificateParams::new(vec!["Let's Encrypt Authority X3".to_string()]).expect("ca params");
+        let mut ca_dn = DistinguishedName::new();
+        ca_dn.push(DnType::OrganizationName, "Let's Encrypt");
+        ca_dn.push(DnType::CommonName, "Let's Encrypt Authority X3");
+        ca_params.distinguished_name = ca_dn;
+        ca_params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca_key = KeyPair::generate().expect("ca key");
+        let ca = ca_params.self_signed(&ca_key).expect("ca");
+
+        let mut leaf = CertificateParams::new(vec![hostname.to_string()]).expect("leaf params");
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, hostname.to_string());
+        leaf.distinguished_name = dn;
+        let leaf_key = KeyPair::generate().expect("leaf key");
+        let cert = leaf
+            .signed_by(&leaf_key, &ca, &ca_key)
+            .expect("sign");
+        InstalledPem {
+            hostname: hostname.to_string(),
+            chain_pem: format!("{}{}", cert.pem(), ca.pem()),
+            key_pem: leaf_key.serialize_pem(),
+        }
+    }
+
+    fn attach_mail(apex: &str, hostname: &str) {
+        let _ = k2_core::db::init_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::upsert_binding(&conn, apex, None, false).unwrap();
+        k2_core::domains::upsert_name(&conn, hostname, apex, k2_core::domains::ROLE_MAIL).unwrap();
+    }
+
+    #[test]
+    fn inventory_le_pem_is_reusable_fake_ca_is_not() {
+        let le = mint_le_like("mail.example.com");
+        assert!(
+            crate::domains::status::is_reusable_lets_encrypt("mail.example.com", &le.chain_pem),
+            "LE-like leaf must skip ACME: issuer parse failed?"
+        );
+        assert!(
+            !crate::domains::status::is_reusable_lets_encrypt("other.example.com", &le.chain_pem),
+            "SAN mismatch must not skip ACME"
+        );
+        let fake = mint_fake_le("mail.example.com").expect("fake");
+        assert!(
+            !crate::domains::status::is_reusable_lets_encrypt("mail.example.com", &fake.chain_pem),
+            "Let's Encrypt Fake CA must not skip ACME"
+        );
+    }
+
+    #[test]
+    fn issue_skips_acme_when_inventory_is_lets_encrypt() {
+        let _home = crate::test_support::TempHome::new();
+        attach_mail("skip-acme.test", "mail.skip-acme.test");
+        let le = mint_le_like("mail.skip-acme.test");
+        store::install("mail.skip-acme.test", &le.chain_pem, &le.key_pem).expect("install");
+        let _j = store::set_test_jmap_plant(Some(Ok(())));
+        let _p = crate::domains::status::set_test_probe(Some(crate::domains::status::ProbeResult {
+            state: "issued".into(),
+            self_signed: false,
+            names: vec!["mail.skip-acme.test".into()],
+            expires_at: Some(chrono::Utc::now().timestamp() + 86_400),
+            issuer: Some("CN=R3, O=Let's Encrypt".into()),
+        }));
+        let pem = issue_attached("mail.skip-acme.test").expect("skip ACME");
+        assert!(
+            crate::domains::status::is_reusable_lets_encrypt("mail.skip-acme.test", &pem.chain_pem),
+            "must keep inventory LE PEM, not mint Fake CA"
+        );
+        assert!(
+            !pem.chain_pem.to_ascii_lowercase().contains("fake"),
+            "skip-ACME must not replace LE with Fake CA"
+        );
+        assert_eq!(
+            store::test_jmap_plant_calls(),
+            1,
+            "skip-ACME still plants into Stalwart"
+        );
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = k2_core::domains::remove_binding(&conn, "skip-acme.test");
+    }
+
+    #[test]
+    fn mail_issue_fails_loud_if_jmap_plant_fails() {
+        let _home = crate::test_support::TempHome::new();
+        attach_mail("plant-fail.test", "mail.plant-fail.test");
+        std::env::set_var("K2_ACME_FAKE", "1");
+        std::env::set_var("K2_ACME_HTTP01", "1");
+        std::env::set_var("K2_ACME_DNS_WAIT_SECS", "0");
+        let _j = store::set_test_jmap_plant(Some(Err(
+            "x:Certificate/set: JMAP error 'invalidProperties': bad PEM".into(),
+        )));
+        let err = issue_attached("mail.plant-fail.test").expect_err("plant must fail loud");
+        assert!(
+            err.contains("invalidProperties") || err.contains("x:Certificate/set") || err.contains("bad PEM"),
+            "{err}"
+        );
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = k2_core::domains::remove_binding(&conn, "plant-fail.test");
+        std::env::remove_var("K2_ACME_HTTP01");
+    }
+
+    #[test]
+    fn mail_issue_fails_if_probe_still_self_signed() {
+        let _home = crate::test_support::TempHome::new();
+        attach_mail("rcgen-probe.test", "mail.rcgen-probe.test");
+        std::env::set_var("K2_ACME_FAKE", "1");
+        std::env::set_var("K2_ACME_HTTP01", "1");
+        std::env::set_var("K2_ACME_DNS_WAIT_SECS", "0");
+        let _j = store::set_test_jmap_plant(Some(Ok(())));
+        let _p = crate::domains::status::set_test_probe(Some(crate::domains::status::ProbeResult {
+            state: "self-signed".into(),
+            self_signed: true,
+            names: vec!["localhost".into()],
+            expires_at: Some(chrono::Utc::now().timestamp() + 86_400),
+            issuer: Some("CN=rcgen self signed".into()),
+        }));
+        let err = issue_attached("mail.rcgen-probe.test").expect_err("rcgen probe must fail loud");
+        assert!(
+            err.contains("self-signed") || err.to_ascii_lowercase().contains("rcgen"),
+            "{err}"
+        );
+        assert!(
+            err.contains("did not pick up") || err.contains("plant"),
+            "{err}"
+        );
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = k2_core::domains::remove_binding(&conn, "rcgen-probe.test");
+        std::env::remove_var("K2_ACME_HTTP01");
+    }
+
+    #[test]
+    fn reject_if_self_signed_is_loud() {
+        let rcgen = crate::domains::status::ProbeResult {
+            state: "self-signed".into(),
+            self_signed: true,
+            names: vec!["mail.example.com".into()],
+            expires_at: None,
+            issuer: Some("CN=rcgen self signed".into()),
+        };
+        let err = crate::domains::status::reject_if_self_signed(&rcgen).expect_err("rcgen");
+        assert!(err.contains("self-signed"), "{err}");
+        let issued = crate::domains::status::ProbeResult {
+            state: "issued".into(),
+            self_signed: false,
+            names: vec!["mail.example.com".into()],
+            expires_at: None,
+            issuer: Some("CN=R3, O=Let's Encrypt".into()),
+        };
+        crate::domains::status::reject_if_self_signed(&issued).expect("issued");
     }
 }

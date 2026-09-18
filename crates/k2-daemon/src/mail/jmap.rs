@@ -77,6 +77,13 @@
 //!      `x:MtaOutboundStrategy` SINGLETON's `route` expression
 //!      (`{match: {"0": {if, then}, …}, else: "'mx'"}`) — K2 inserts
 //!      `sender_domain == '<domain>'` → `'<route name>'`.
+//!   8. `x:Certificate/set` create — PEM as PublicText/SecretText
+//!      (`certificate: {"@type":"Text","value"}`, `privateKey:
+//!      {"@type":"Text","secret"}`) then `x:SystemSettings/set`
+//!      singleton `defaultCertificateId` (same id as
+//!      `defaultHostname`). Stalwart 0.16.10 stores TLS in RocksDB
+//!      (ProtectHome=yes cannot read `~/.k2/certs`). Field name from
+//!      Stalwart 0.16 docs; method errors are not swallowed.
 //!
 //! ── ⚠ STILL LIVE-BOX (not yet verified) ────────────────────────────
 //!   a. `x:Account/set update {name}` length limit: the retire rename
@@ -344,6 +351,30 @@ impl StalwartClient {
             SYSTEM_SETTINGS_SINGLETON_ID,
             &resp,
         )
+    }
+
+    /// Plant a PEM chain + key as a Stalwart `Certificate` and point
+    /// `SystemSettings.defaultCertificateId` at it so 443/465 SNI (and
+    /// no-SNI) pick it up. Does not SIGTERM, wipe, or hostmail
+    /// disable+enable. Errors include the JMAP method body.
+    pub fn certificate_plant(&self, chain_pem: &str, key_pem: &str) -> Result<String, String> {
+        let chain = chain_pem.trim();
+        let key = key_pem.trim();
+        if chain.is_empty() || key.is_empty() {
+            return Err("certificate_plant: empty chain or private key".to_string());
+        }
+        let resp = self.registry_call("x:Certificate/set", certificate_create_args(chain, key))?;
+        let id = parse_set_created_id("x:Certificate/set", &resp)?;
+        let resp = self.registry_call(
+            "x:SystemSettings/set",
+            default_certificate_id_args(&id),
+        )?;
+        parse_set_updated(
+            "x:SystemSettings/set",
+            SYSTEM_SETTINGS_SINGLETON_ID,
+            &resp,
+        )?;
+        Ok(id)
     }
 
     /// Retry ACME for the **mail hostname only** (C8/C24 — no extra
@@ -1437,6 +1468,29 @@ const BOOTSTRAP_SINGLETON_ID: &str = "singleton";
 /// `x:SystemSettings` singleton — live `defaultHostname` (SMTP banner)
 /// after bootstrap. Same literal id as Bootstrap / MtaOutboundStrategy.
 const SYSTEM_SETTINGS_SINGLETON_ID: &str = "singleton";
+
+/// Stalwart 0.16 `x:Certificate/set` create: PEM as Text value +
+/// SecretText secret (not File paths — ProtectHome cannot read
+/// `~/.k2/certs`).
+fn certificate_create_args(chain_pem: &str, key_pem: &str) -> serde_json::Value {
+    serde_json::json!({
+        "create": {
+            CREATE_TAG: {
+                "certificate": { "@type": "Text", "value": chain_pem },
+                "privateKey": { "@type": "Text", "secret": key_pem },
+            }
+        }
+    })
+}
+
+/// Point the SystemSettings singleton at a planted Certificate id.
+fn default_certificate_id_args(cert_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "update": {
+            SYSTEM_SETTINGS_SINGLETON_ID: { "defaultCertificateId": cert_id }
+        }
+    })
+}
 
 /// ✔ LIVE-VERIFIED: the MtaOutboundStrategy singleton uses the same
 /// literal id.
@@ -2980,6 +3034,121 @@ mod tests {
             .set_server_hostname("  ")
             .expect_err("empty hostname must fail loud");
         assert!(err.contains("empty hostname"), "{err}");
+    }
+
+    /// Plant envelope: `x:Certificate/set` create uses Text/value +
+    /// Text/secret (not File paths), then SystemSettings
+    /// `defaultCertificateId`.
+    #[test]
+    fn certificate_create_envelope_is_text_pem_and_secret_key() {
+        let chain = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+        let key = "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n";
+        let args = certificate_create_args(chain, key);
+        let create = &args["create"]["k2"];
+        assert_eq!(create["certificate"]["@type"], "Text");
+        assert_eq!(create["certificate"]["value"], chain);
+        assert!(
+            create["certificate"].get("secret").is_none(),
+            "certificate PEM is PublicText value, not secret: {create}"
+        );
+        assert_eq!(create["privateKey"]["@type"], "Text");
+        assert_eq!(create["privateKey"]["secret"], key);
+        assert!(
+            create["privateKey"].get("value").is_none(),
+            "privateKey is SecretText secret, not value: {create}"
+        );
+        assert!(
+            create.get("filePath").is_none()
+                && create["certificate"].get("filePath").is_none()
+                && create["privateKey"].get("filePath").is_none(),
+            "ProtectHome=yes: never File paths into ~/.k2/certs: {create}"
+        );
+        let env = registry_envelope("x:Certificate/set", args);
+        assert_eq!(env["methodCalls"][0][0], "x:Certificate/set");
+        assert_eq!(env["using"][1], "urn:stalwart:jmap");
+
+        let patch = default_certificate_id_args("cert-plant-1");
+        assert_eq!(
+            patch["update"]["singleton"]["defaultCertificateId"],
+            "cert-plant-1"
+        );
+    }
+
+    #[test]
+    fn certificate_plant_sets_default_certificate_id() {
+        let cert_reply = serde_json::json!({
+            "methodResponses": [["x:Certificate/set", {
+                "accountId": "b",
+                "created": { "k2": { "id": "cert-plant-1" } },
+            }, "0"]],
+        })
+        .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:SystemSettings/set", {
+                "accountId": "b",
+                "updated": { "singleton": null },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            cert_reply,
+            set_reply,
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let id = client
+            .certificate_plant(
+                "-----BEGIN CERTIFICATE-----\nLEAF\n-----END CERTIFICATE-----\n",
+                "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n",
+            )
+            .expect("plant");
+        assert_eq!(id, "cert-plant-1");
+        let _sess = rx.recv().expect("session");
+        let c = body_json(&rx.recv().expect("certificate/set"));
+        assert_eq!(c["methodCalls"][0][0], "x:Certificate/set");
+        let create = &c["methodCalls"][0][1]["create"]["k2"];
+        assert_eq!(create["certificate"]["@type"], "Text");
+        assert_eq!(create["privateKey"]["@type"], "Text");
+        assert!(
+            create["privateKey"]["secret"].as_str().unwrap().contains("PRIVATE KEY"),
+            "{create}"
+        );
+        let s = body_json(&rx.recv().expect("systemsettings/set"));
+        assert_eq!(s["methodCalls"][0][0], "x:SystemSettings/set");
+        assert_eq!(
+            s["methodCalls"][0][1]["update"]["singleton"]["defaultCertificateId"],
+            "cert-plant-1"
+        );
+    }
+
+    #[test]
+    fn certificate_plant_surfaces_system_settings_method_error() {
+        let cert_reply = serde_json::json!({
+            "methodResponses": [["x:Certificate/set", {
+                "created": { "k2": { "id": "cert-x" } },
+            }, "0"]],
+        })
+        .to_string();
+        let set_reply = serde_json::json!({
+            "methodResponses": [["x:SystemSettings/set", {
+                "notUpdated": { "singleton": {
+                    "type": "invalidPatch",
+                    "description": "Failed to parse Id from string | Properties: defaultCertificateId",
+                } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, _rx) = spawn_mock_server(vec![
+            NORMAL_SESSION_FIXTURE.to_string(),
+            cert_reply,
+            set_reply,
+        ]);
+        let client = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        let err = client
+            .certificate_plant("-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n", "-----BEGIN PRIVATE KEY-----\nY\n-----END PRIVATE KEY-----\n")
+            .expect_err("must fail loud");
+        assert!(err.contains("invalidPatch"), "{err}");
+        assert!(err.contains("defaultCertificateId"), "{err}");
     }
 
     /// Cert renew: `x:Task/set` create AcmeRenewal for the mail

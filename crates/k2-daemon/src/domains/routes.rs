@@ -456,7 +456,12 @@ pub fn handle_upload(params: &HashMap<String, String>) -> CliResponse {
     match crate::domains::store::install(&hostname, cert_pem, key_pem) {
         Ok(_) => {
             if name.role == k2_core::domains::ROLE_MAIL {
-                let _ = crate::domains::store::plant_mail_pem(&hostname, cert_pem, key_pem);
+                if let Err(e) = crate::domains::store::plant_mail_pem(&hostname, cert_pem, key_pem) {
+                    return error_response("400 Bad Request", "plant", &e);
+                }
+                if let Err(e) = crate::domains::status::reject_live_self_signed(&hostname) {
+                    return error_response("400 Bad Request", "plant", &e);
+                }
             }
             CliResponse::ok_json(
                 serde_json::json!({
@@ -645,19 +650,9 @@ mod tests {
     #[test]
     fn issue_attached_fake_writes_0600_not_rcgen() {
         init();
+        let _home = crate::test_support::TempHome::new();
         std::env::set_var("K2_ACME_FAKE", "1");
         std::env::set_var("K2_ACME_DNS_WAIT_SECS", "0");
-        let home = std::env::temp_dir().join(format!(
-            "k2-issue-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::create_dir_all(&home);
-        let prev = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -676,14 +671,9 @@ mod tests {
         let body = resp.body.to_ascii_lowercase();
         assert!(!body.contains("rcgen"), "{body}");
         assert!(body.contains("issued") || body.contains("let's encrypt"), "{body}");
-        match prev {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = remove_binding(&conn, "example.com");
-        let _ = std::fs::remove_dir_all(home);
         std::env::remove_var("K2_ACME_HTTP01");
     }
 

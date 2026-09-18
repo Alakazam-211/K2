@@ -26071,8 +26071,287 @@ cmd_hostmail_catchall() {
         --help|-h) cmd_help_hostmail_catchall; exit 0 ;;
         *)
             _mail_err "usage" "unknown catchall command '$sub' — usage: k2 hostmail catchall <set|unset|show>"
-# --text is literal; @path reads a file; - reads stdin. Never "if the
-# arg exists as a path".
+            exit 2 ;;
+    esac
+}
+
+
+cmd_hostmail_catchall_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_catchall_set; exit 0; fi
+    local domain="" address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a minted mailbox"; exit 2; }
+                address="$2"; shift 2 ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail catchall set <domain> --address <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail catchall set <domain> --address <addr>"; exit 2; }
+    [ -n "$address" ] || { _mail_err "usage" "catchall set requires --address <minted mailbox on that domain>"; exit 2; }
+    local M_VERB="catchall_set" M_JSON="$as_json" M_DOMAIN="$domain" M_ADDRESS="$address"
+    _mail_py
+}
+
+
+cmd_hostmail_catchall_unset() {
+    if _wants_help "$@"; then cmd_help_hostmail_catchall_unset; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail catchall unset <domain> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail catchall unset <domain>"; exit 2; }
+    local M_VERB="catchall_set" M_JSON="$as_json" M_DOMAIN="$domain" M_ADDRESS=""
+    _mail_py
+}
+
+
+cmd_hostmail_catchall_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_catchall_show; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail catchall show <domain> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$domain" ]; then domain="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail catchall show <domain>"; exit 2; }
+    local M_VERB="catchall_get" M_JSON="$as_json" M_DOMAIN="$domain"
+    _mail_py
+}
+
+
+cmd_hostmail_alias() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_alias; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        add) cmd_hostmail_alias_add "$@" ;;
+        remove) cmd_hostmail_alias_remove "$@" ;;
+        list) cmd_hostmail_alias_list "$@" ;;
+        --help|-h) cmd_help_hostmail_alias; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown alias command '$sub' — usage: k2 hostmail alias <add|remove|list>"
+            exit 2 ;;
+    esac
+}
+
+
+cmd_hostmail_alias_add() {
+    if _wants_help "$@"; then cmd_help_hostmail_alias_add; exit 0; fi
+    local mailbox="" alias="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias add <mailbox> <alias> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$mailbox" ]; then mailbox="$1"
+                elif [ -z "$alias" ]; then alias="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$mailbox" ] && [ -n "$alias" ] || {
+        _mail_err "usage" "k2 hostmail alias add <mailbox> <alias> — extra address on an existing mailbox (not a mint; k2 hostmail create mints)"
+        exit 2
+    }
+    local M_VERB="alias_add" M_JSON="$as_json" M_MAILBOX="$mailbox" M_ALIAS="$alias"
+    _mail_py
+}
+
+
+cmd_hostmail_alias_remove() {
+    if _wants_help "$@"; then cmd_help_hostmail_alias_remove; exit 0; fi
+    local mailbox="" alias="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias remove <mailbox> <alias> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$mailbox" ]; then mailbox="$1"
+                elif [ -z "$alias" ]; then alias="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$mailbox" ] && [ -n "$alias" ] || {
+        _mail_err "usage" "k2 hostmail alias remove <mailbox> <alias>"
+        exit 2
+    }
+    local M_VERB="alias_remove" M_JSON="$as_json" M_MAILBOX="$mailbox" M_ALIAS="$alias"
+    _mail_py
+}
+
+
+cmd_hostmail_alias_list() {
+    if _wants_help "$@"; then cmd_help_hostmail_alias_list; exit 0; fi
+    local mailbox="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias list <mailbox> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$mailbox" ]; then mailbox="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$mailbox" ] || { _mail_err "usage" "k2 hostmail alias list <mailbox>"; exit 2; }
+    local M_VERB="alias_list" M_JSON="$as_json" M_MAILBOX="$mailbox"
+    _mail_py
+}
+
+
+cmd_hostmail_forward() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_forward; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        set) cmd_hostmail_forward_set "$@" ;;
+        unset) cmd_hostmail_forward_unset "$@" ;;
+        show) cmd_hostmail_forward_show "$@" ;;
+        --help|-h) cmd_help_hostmail_forward; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown forward command '$sub' — usage: k2 hostmail forward <set|unset|show>"
+            exit 2 ;;
+    esac
+}
+
+
+cmd_hostmail_forward_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_forward_set; exit 0; fi
+    local address="" to="" keep=false as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --keep) keep=true; shift ;;
+            --to)
+                [ $# -ge 2 ] || { _mail_err "usage" "--to requires a minted mailbox"; exit 2; }
+                to="$2"; shift 2 ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward set <addr> --to <dest> [--keep] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward set <addr> --to <dest> [--keep]"; exit 2; }
+    [ -n "$to" ] || { _mail_err "usage" "forward set requires --to <minted mailbox on this host>"; exit 2; }
+    local M_VERB="forward_set" M_JSON="$as_json" M_ADDRESS="$address" M_TO="$to" M_KEEP="$keep"
+    _mail_py
+}
+
+
+cmd_hostmail_forward_unset() {
+    if _wants_help "$@"; then cmd_help_hostmail_forward_unset; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward unset <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward unset <addr>"; exit 2; }
+    local M_VERB="forward_unset" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+
+cmd_hostmail_forward_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_forward_show; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward show <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward show <addr>"; exit 2; }
+    local M_VERB="forward_get" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+# ── k2 mail help text ─────────────────────────────────────────────────
+
+
 _hostmail_read_text() {
     local raw="$1"
     if [ "$raw" = "-" ]; then
@@ -26103,7 +26382,195 @@ cmd_hostmail_ooo() {
         --help|-h) cmd_help_hostmail_ooo; exit 0 ;;
         *)
             _mail_err "usage" "unknown ooo command '$sub' — usage: k2 hostmail ooo <set|unset|show>"
-# Bare `k2 hostmail list` is usage (mailing lists), not inbox catalog.
+            exit 2 ;;
+    esac
+}
+
+
+cmd_hostmail_ooo_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_ooo_set; exit 0; fi
+    local address="" text="" days="" until="" as_json=false text_set=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --text)
+                [ $# -ge 2 ] || { _mail_err "usage" "--text requires a value (literal, @path, or -)"; exit 2; }
+                if ! text="$(_hostmail_read_text "$2")"; then exit 2; fi
+                text_set=true; shift 2 ;;
+            --days)
+                [ $# -ge 2 ] || { _mail_err "usage" "--days requires 1-31"; exit 2; }
+                days="$2"; shift 2 ;;
+            --until)
+                [ $# -ge 2 ] || { _mail_err "usage" "--until requires UTC YYYY-MM-DD"; exit 2; }
+                until="$2"; shift 2 ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE]"; exit 2; }
+    $text_set || { _mail_err "usage" "ooo set needs --text (literal, @path, or -)"; exit 2; }
+    if [ -n "$days" ]; then
+        if ! _mail_is_uint "$days" || [ "$days" -lt 1 ] || [ "$days" -gt 31 ]; then
+            _mail_err "usage" "--days must be 1-31"
+            exit 2
+        fi
+    fi
+    local M_VERB="ooo_set" M_JSON="$as_json" M_ADDRESS="$address" \
+          M_TEXT="$text" M_DAYS="$days" M_UNTIL="$until"
+    _mail_py
+}
+
+
+cmd_hostmail_ooo_unset() {
+    if _wants_help "$@"; then cmd_help_hostmail_ooo_unset; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ooo unset <addr>"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo unset <addr>"; exit 2; }
+    local M_VERB="ooo_unset" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+
+cmd_hostmail_ooo_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_ooo_show; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ooo show <addr>"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo show <addr>"; exit 2; }
+    local M_VERB="ooo_get" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+
+cmd_hostmail_footer() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_footer; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        set) cmd_hostmail_footer_set "$@" ;;
+        unset) cmd_hostmail_footer_unset "$@" ;;
+        show) cmd_hostmail_footer_show "$@" ;;
+        --help|-h) cmd_help_hostmail_footer; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown footer command '$sub' — usage: k2 hostmail footer <set|unset|show>"
+            exit 2 ;;
+    esac
+}
+
+
+cmd_hostmail_footer_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_footer_set; exit 0; fi
+    local text="" domain="" as_json=false text_set=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --text)
+                [ $# -ge 2 ] || { _mail_err "usage" "--text requires a value (literal, @path, or -)"; exit 2; }
+                if ! text="$(_hostmail_read_text "$2")"; then exit 2; fi
+                text_set=true; shift 2 ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain is reserved (footer is host-wide)"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail footer set --text FILE_OR_STRING"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail footer set --text FILE_OR_STRING"
+                exit 2 ;;
+        esac
+    done
+    $text_set || { _mail_err "usage" "footer set needs --text (literal, @path, or -)"; exit 2; }
+    local M_VERB="footer_set" M_JSON="$as_json" M_TEXT="$text" M_DOMAIN="$domain"
+    _mail_py
+}
+
+
+cmd_hostmail_footer_unset() {
+    if _wants_help "$@"; then cmd_help_hostmail_footer_unset; exit 0; fi
+    local domain="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain is reserved (footer is host-wide)"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail footer unset"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail footer unset"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="footer_unset" M_JSON="$as_json" M_DOMAIN="$domain"
+    _mail_py
+}
+
+
+cmd_hostmail_footer_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_footer_show; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --domain)
+                _mail_err "usage" "--domain is reserved — footer is host-wide this cut"
+                exit 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail footer show"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail footer show"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="footer_get" M_JSON="$as_json"
+    _mail_py
+}
+
+# ── k2 mail help text ─────────────────────────────────────────────────
+
+
 cmd_hostmail_list() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_list; exit 2; fi
     local sub="$1"; shift
@@ -26119,9 +26586,7 @@ cmd_hostmail_list() {
     esac
 }
 
-cmd_hostmail_catchall_set() {
-    if _wants_help "$@"; then cmd_help_hostmail_catchall_set; exit 0; fi
-    local domain="" address="" as_json=false
+
 cmd_hostmail_list_create() {
     if _wants_help "$@"; then cmd_help_hostmail_list_create; exit 0; fi
     local address="" members="" as_json=false
@@ -26149,6 +26614,7 @@ $2"; else members="$2"; fi
     _mail_py
 }
 
+
 cmd_hostmail_list_show() {
     if _wants_help "$@"; then cmd_help_hostmail_list_show; exit 0; fi
     local address="" as_json=false
@@ -26171,6 +26637,7 @@ cmd_hostmail_list_show() {
     _mail_py
 }
 
+
 cmd_hostmail_list_members() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_list_members; exit 0; fi
     local sub="$1"
@@ -26183,6 +26650,7 @@ cmd_hostmail_list_members() {
             cmd_hostmail_list_show "$@" ;;
     esac
 }
+
 
 cmd_hostmail_list_members_mutate() {
     local op="$1"; shift
@@ -26213,6 +26681,7 @@ $2"; else members="$2"; fi
     _mail_py
 }
 
+
 cmd_hostmail_list_delete() {
     if _wants_help "$@"; then cmd_help_hostmail_list_delete; exit 0; fi
     local address="" as_json=false
@@ -26235,6 +26704,7 @@ cmd_hostmail_list_delete() {
     _mail_py
 }
 
+
 cmd_hostmail_spam() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_spam; exit 0; fi
     local sub="$1"; shift
@@ -26249,6 +26719,7 @@ cmd_hostmail_spam() {
     esac
 }
 
+
 cmd_hostmail_spam_train() {
     local class="$1"; shift
     if _wants_help "$@"; then cmd_help_hostmail_spam_train; exit 0; fi
@@ -26257,16 +26728,6 @@ cmd_hostmail_spam_train() {
         case "$1" in
             --json) as_json=true; shift ;;
             --address)
-                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a minted mailbox"; exit 2; }
-                address="$2"; shift 2 ;;
-            --domain)
-                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
-                domain="$2"; shift 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail catchall set <domain> --address <addr> [--json]"
-                exit 2 ;;
-            *)
-                if [ -z "$domain" ]; then domain="$1"; else
                 [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
                 address="$2"; shift 2 ;;
             -*)
@@ -26280,31 +26741,12 @@ cmd_hostmail_spam_train() {
                 shift ;;
         esac
     done
-    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail catchall set <domain> --address <addr>"; exit 2; }
-    [ -n "$address" ] || { _mail_err "usage" "catchall set requires --address <minted mailbox on that domain>"; exit 2; }
-    local M_VERB="catchall_set" M_JSON="$as_json" M_DOMAIN="$domain" M_ADDRESS="$address"
-    _mail_py
-}
-
-cmd_hostmail_catchall_unset() {
-    if _wants_help "$@"; then cmd_help_hostmail_catchall_unset; exit 0; fi
-    local domain="" as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            --domain)
-                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
-                domain="$2"; shift 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail catchall unset <domain> [--json]"
-                exit 2 ;;
-            *)
-                if [ -z "$domain" ]; then domain="$1"; else
     [ -n "$msgid" ] || { _mail_err "usage" "k2 hostmail spam $class <message-id> --address <addr>"; exit 2; }
     [ -n "$address" ] || { _mail_err "usage" "--address is required (ids are per-inbox)"; exit 2; }
     local M_VERB="spam_train" M_JSON="$as_json" M_ADDRESS="$address" M_ID="$msgid" M_CLASS="$class"
     _mail_py
 }
+
 
 cmd_hostmail_spam_sender() {
     local op="$1"; shift
@@ -26324,50 +26766,11 @@ cmd_hostmail_spam_sender() {
                 shift ;;
         esac
     done
-    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail catchall unset <domain>"; exit 2; }
-    local M_VERB="catchall_set" M_JSON="$as_json" M_DOMAIN="$domain" M_ADDRESS=""
-    _mail_py
-}
-
-cmd_hostmail_catchall_show() {
-    if _wants_help "$@"; then cmd_help_hostmail_catchall_show; exit 0; fi
-    local domain="" as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            --domain)
-                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
-                domain="$2"; shift 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail catchall show <domain> [--json]"
-                exit 2 ;;
-            *)
-                if [ -z "$domain" ]; then domain="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1'"
-                    exit 2
-                fi
-                shift ;;
-        esac
-    done
-    [ -n "$domain" ] || { _mail_err "usage" "k2 hostmail catchall show <domain>"; exit 2; }
-    local M_VERB="catchall_get" M_JSON="$as_json" M_DOMAIN="$domain"
-    _mail_py
-}
-
-cmd_hostmail_alias() {
-    if [ $# -eq 0 ]; then cmd_help_hostmail_alias; exit 0; fi
-    local sub="$1"; shift
-    case "$sub" in
-        add) cmd_hostmail_alias_add "$@" ;;
-        remove) cmd_hostmail_alias_remove "$@" ;;
-        list) cmd_hostmail_alias_list "$@" ;;
-        --help|-h) cmd_help_hostmail_alias; exit 0 ;;
-        *)
-            _mail_err "usage" "unknown alias command '$sub' — usage: k2 hostmail alias <add|remove|list>"
     [ -n "$sender" ] || { _mail_err "usage" "k2 hostmail spam $op <sender>"; exit 2; }
     local M_VERB="spam_sender" M_JSON="$as_json" M_SENDER="$sender" M_LIST_OP="$op"
     _mail_py
 }
+
 
 cmd_hostmail_spam_quarantine() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_spam_quarantine; exit 0; fi
@@ -26382,19 +26785,7 @@ cmd_hostmail_spam_quarantine() {
     esac
 }
 
-cmd_hostmail_alias_add() {
-    if _wants_help "$@"; then cmd_help_hostmail_alias_add; exit 0; fi
-    local mailbox="" alias="" as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias add <mailbox> <alias> [--json]"
-                exit 2 ;;
-            *)
-                if [ -z "$mailbox" ]; then mailbox="$1"
-                elif [ -z "$alias" ]; then alias="$1"
-                else
+
 cmd_hostmail_spam_quarantine_list() {
     if _wants_help "$@"; then cmd_help_hostmail_spam_quarantine; exit 0; fi
     local address="" as_json=false
@@ -26415,31 +26806,11 @@ cmd_hostmail_spam_quarantine_list() {
                 shift ;;
         esac
     done
-    [ -n "$mailbox" ] && [ -n "$alias" ] || {
-        _mail_err "usage" "k2 hostmail alias add <mailbox> <alias> — extra address on an existing mailbox (not a mint; k2 hostmail create mints)"
-        exit 2
-    }
-    local M_VERB="alias_add" M_JSON="$as_json" M_MAILBOX="$mailbox" M_ALIAS="$alias"
-    _mail_py
-}
-
-cmd_hostmail_alias_remove() {
-    if _wants_help "$@"; then cmd_help_hostmail_alias_remove; exit 0; fi
-    local mailbox="" alias="" as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias remove <mailbox> <alias> [--json]"
-                exit 2 ;;
-            *)
-                if [ -z "$mailbox" ]; then mailbox="$1"
-                elif [ -z "$alias" ]; then alias="$1"
-                else
     [ -n "$address" ] || { _mail_err "usage" "k2 hostmail spam quarantine list --address <addr>"; exit 2; }
     local M_VERB="spam_quarantine_list" M_JSON="$as_json" M_ADDRESS="$address"
     _mail_py
 }
+
 
 cmd_hostmail_spam_quarantine_id() {
     local op="$1"; shift
@@ -26462,22 +26833,12 @@ cmd_hostmail_spam_quarantine_id() {
                 shift ;;
         esac
     done
-    [ -n "$mailbox" ] && [ -n "$alias" ] || {
-        _mail_err "usage" "k2 hostmail alias remove <mailbox> <alias>"
-        exit 2
-    }
-    local M_VERB="alias_remove" M_JSON="$as_json" M_MAILBOX="$mailbox" M_ALIAS="$alias"
-    _mail_py
-}
-
-cmd_hostmail_alias_list() {
-    if _wants_help "$@"; then cmd_help_hostmail_alias_list; exit 0; fi
-    local mailbox="" as_json=false
     [ -n "$msgid" ] || { _mail_err "usage" "k2 hostmail spam quarantine $op <id> --address <addr>"; exit 2; }
     [ -n "$address" ] || { _mail_err "usage" "--address is required"; exit 2; }
     local M_VERB="spam_quarantine_id" M_JSON="$as_json" M_ADDRESS="$address" M_ID="$msgid" M_LIST_OP="$op"
     _mail_py
 }
+
 
 cmd_hostmail_queue() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_queue; exit 0; fi
@@ -26493,6 +26854,7 @@ cmd_hostmail_queue() {
     esac
 }
 
+
 cmd_hostmail_queue_list() {
     if _wants_help "$@"; then cmd_help_hostmail_queue; exit 0; fi
     local as_json=false
@@ -26506,6 +26868,7 @@ cmd_hostmail_queue_list() {
     _mail_py
 }
 
+
 cmd_hostmail_queue_retry() {
     if _wants_help "$@"; then cmd_help_hostmail_queue; exit 0; fi
     local id="" as_json=false
@@ -26513,7 +26876,6 @@ cmd_hostmail_queue_retry() {
         case "$1" in
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail alias list <mailbox> [--json]"
                 _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail queue retry <id> [--json]"
                 exit 2 ;;
             *)
@@ -26528,6 +26890,7 @@ cmd_hostmail_queue_retry() {
     local M_VERB="queue_retry" M_JSON="$as_json" M_ID="$id"
     _mail_py
 }
+
 
 cmd_hostmail_queue_drop() {
     if _wants_help "$@"; then cmd_help_hostmail_queue; exit 0; fi
@@ -26551,6 +26914,7 @@ cmd_hostmail_queue_drop() {
     _mail_py
 }
 
+
 cmd_hostmail_acl() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_acl; exit 0; fi
     local sub="$1"; shift
@@ -26564,6 +26928,7 @@ cmd_hostmail_acl() {
             exit 2 ;;
     esac
 }
+
 
 cmd_hostmail_acl_grant() {
     if _wants_help "$@"; then cmd_help_hostmail_acl; exit 0; fi
@@ -26592,27 +26957,13 @@ cmd_hostmail_acl_grant() {
                 shift ;;
         esac
     done
-    [ -n "$mailbox" ] || { _mail_err "usage" "k2 hostmail alias list <mailbox>"; exit 2; }
-    local M_VERB="alias_list" M_JSON="$as_json" M_MAILBOX="$mailbox"
-    _mail_py
-}
-
-cmd_hostmail_forward() {
-    if [ $# -eq 0 ]; then cmd_help_hostmail_forward; exit 0; fi
-    local sub="$1"; shift
-    case "$sub" in
-        set) cmd_hostmail_forward_set "$@" ;;
-        unset) cmd_hostmail_forward_unset "$@" ;;
-        show) cmd_hostmail_forward_show "$@" ;;
-        --help|-h) cmd_help_hostmail_forward; exit 0 ;;
-        *)
-            _mail_err "usage" "unknown forward command '$sub' — usage: k2 hostmail forward <set|unset|show>"
     [ -n "$mailbox" ] || { _mail_err "usage" "k2 hostmail acl grant <mailbox> --user <addr> …"; exit 2; }
     [ -n "$user" ] || { _mail_err "usage" "--user is required"; exit 2; }
     local M_VERB="acl_grant" M_JSON="$as_json" M_MAILBOX="$mailbox" M_USER="$user" \
           M_RIGHTS="$rights" M_ACL_READ="$readf" M_ACL_WRITE="$writef" M_ACL_POST="$postf" M_ACL_ADMIN="$adminf"
     _mail_py
 }
+
 
 cmd_hostmail_acl_revoke() {
     if _wants_help "$@"; then cmd_help_hostmail_acl; exit 0; fi
@@ -26640,6 +26991,7 @@ cmd_hostmail_acl_revoke() {
     _mail_py
 }
 
+
 cmd_hostmail_acl_show() {
     if _wants_help "$@"; then cmd_help_hostmail_acl; exit 0; fi
     local mailbox="" as_json=false
@@ -26662,6 +27014,7 @@ cmd_hostmail_acl_show() {
     _mail_py
 }
 
+
 cmd_hostmail_autoconfig() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_autoconfig; exit 0; fi
     local sub="$1"; shift
@@ -26675,222 +27028,13 @@ cmd_hostmail_autoconfig() {
     esac
 }
 
-cmd_hostmail_forward_set() {
-    if _wants_help "$@"; then cmd_help_hostmail_forward_set; exit 0; fi
-    local address="" to="" keep=false as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            --keep) keep=true; shift ;;
-            --to)
-                [ $# -ge 2 ] || { _mail_err "usage" "--to requires a minted mailbox"; exit 2; }
-                to="$2"; shift 2 ;;
-cmd_hostmail_ooo_set() {
-    if _wants_help "$@"; then cmd_help_hostmail_ooo_set; exit 0; fi
-    local address="" text="" days="" until="" as_json=false text_set=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            --text)
-                [ $# -ge 2 ] || { _mail_err "usage" "--text requires a value (literal, @path, or -)"; exit 2; }
-                if ! text="$(_hostmail_read_text "$2")"; then exit 2; fi
-                text_set=true; shift 2 ;;
-            --days)
-                [ $# -ge 2 ] || { _mail_err "usage" "--days requires 1-31"; exit 2; }
-                days="$2"; shift 2 ;;
-            --until)
-                [ $# -ge 2 ] || { _mail_err "usage" "--until requires UTC YYYY-MM-DD"; exit 2; }
-                until="$2"; shift 2 ;;
-            --address)
-                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
-                address="$2"; shift 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward set <addr> --to <dest> [--keep] [--json]"
-                exit 2 ;;
-            *)
-                if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1'"
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE]"
-                exit 2 ;;
-            *)
-                if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
-                    exit 2
-                fi
-                shift ;;
-        esac
-    done
-    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward set <addr> --to <dest> [--keep]"; exit 2; }
-    [ -n "$to" ] || { _mail_err "usage" "forward set requires --to <minted mailbox on this host>"; exit 2; }
-    local M_VERB="forward_set" M_JSON="$as_json" M_ADDRESS="$address" M_TO="$to" M_KEEP="$keep"
-    _mail_py
-}
 
-cmd_hostmail_forward_unset() {
-    if _wants_help "$@"; then cmd_help_hostmail_forward_unset; exit 0; fi
-    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE]"; exit 2; }
-    $text_set || { _mail_err "usage" "ooo set needs --text (literal, @path, or -)"; exit 2; }
-    if [ -n "$days" ]; then
-        if ! _mail_is_uint "$days" || [ "$days" -lt 1 ] || [ "$days" -gt 31 ]; then
-            _mail_err "usage" "--days must be 1-31"
-            exit 2
-        fi
-    fi
-    local M_VERB="ooo_set" M_JSON="$as_json" M_ADDRESS="$address" \
-          M_TEXT="$text" M_DAYS="$days" M_UNTIL="$until"
-    _mail_py
-}
-
-cmd_hostmail_ooo_unset() {
-    if _wants_help "$@"; then cmd_help_hostmail_ooo_unset; exit 0; fi
-    local address="" as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            --address)
-                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
-                address="$2"; shift 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward unset <addr> [--json]"
-                exit 2 ;;
-            *)
-                if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1'"
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ooo unset <addr>"
-                exit 2 ;;
-            *)
-                if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
-                    exit 2
-                fi
-                shift ;;
-        esac
-    done
-    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward unset <addr>"; exit 2; }
-    local M_VERB="forward_unset" M_JSON="$as_json" M_ADDRESS="$address"
-    _mail_py
-}
-
-cmd_hostmail_forward_show() {
-    if _wants_help "$@"; then cmd_help_hostmail_forward_show; exit 0; fi
-    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo unset <addr>"; exit 2; }
-    local M_VERB="ooo_unset" M_JSON="$as_json" M_ADDRESS="$address"
-    _mail_py
-}
-
-cmd_hostmail_ooo_show() {
-    if _wants_help "$@"; then cmd_help_hostmail_ooo_show; exit 0; fi
-    local address="" as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            --address)
-                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
-                address="$2"; shift 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward show <addr> [--json]"
-                exit 2 ;;
-            *)
-                if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1'"
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ooo show <addr>"
-                exit 2 ;;
-            *)
-                if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1' — one address only"
-                    exit 2
-                fi
-                shift ;;
-        esac
-    done
-    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward show <addr>"; exit 2; }
-    local M_VERB="forward_get" M_JSON="$as_json" M_ADDRESS="$address"
-    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail ooo show <addr>"; exit 2; }
-    local M_VERB="ooo_get" M_JSON="$as_json" M_ADDRESS="$address"
-    _mail_py
-}
-
-cmd_hostmail_footer() {
-    if [ $# -eq 0 ]; then cmd_help_hostmail_footer; exit 0; fi
-    local sub="$1"; shift
-    case "$sub" in
-        set) cmd_hostmail_footer_set "$@" ;;
-        unset) cmd_hostmail_footer_unset "$@" ;;
-        show) cmd_hostmail_footer_show "$@" ;;
-        --help|-h) cmd_help_hostmail_footer; exit 0 ;;
-        *)
-            _mail_err "usage" "unknown footer command '$sub' — usage: k2 hostmail footer <set|unset|show>"
-            exit 2 ;;
-    esac
-}
-
-cmd_hostmail_footer_set() {
-    if _wants_help "$@"; then cmd_help_hostmail_footer_set; exit 0; fi
-    local text="" domain="" as_json=false text_set=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            --text)
-                [ $# -ge 2 ] || { _mail_err "usage" "--text requires a value (literal, @path, or -)"; exit 2; }
-                if ! text="$(_hostmail_read_text "$2")"; then exit 2; fi
-                text_set=true; shift 2 ;;
-            --domain)
-                [ $# -ge 2 ] || { _mail_err "usage" "--domain is reserved (footer is host-wide)"; exit 2; }
-                domain="$2"; shift 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail footer set --text FILE_OR_STRING"
-                exit 2 ;;
-            *)
-                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail footer set --text FILE_OR_STRING"
-                exit 2 ;;
-        esac
-    done
-    $text_set || { _mail_err "usage" "footer set needs --text (literal, @path, or -)"; exit 2; }
-    local M_VERB="footer_set" M_JSON="$as_json" M_TEXT="$text" M_DOMAIN="$domain"
-    _mail_py
-}
-
-cmd_hostmail_footer_unset() {
-    if _wants_help "$@"; then cmd_help_hostmail_footer_unset; exit 0; fi
 cmd_hostmail_autoconfig_show() {
     if _wants_help "$@"; then cmd_help_hostmail_autoconfig; exit 0; fi
     local domain="" as_json=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
-            --domain)
-                [ $# -ge 2 ] || { _mail_err "usage" "--domain is reserved (footer is host-wide)"; exit 2; }
-                domain="$2"; shift 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail footer unset"
-                exit 2 ;;
-            *)
-                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail footer unset"
-                exit 2 ;;
-        esac
-    done
-    local M_VERB="footer_unset" M_JSON="$as_json" M_DOMAIN="$domain"
-    _mail_py
-}
-
-cmd_hostmail_footer_show() {
-    if _wants_help "$@"; then cmd_help_hostmail_footer_show; exit 0; fi
-    local as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            --domain)
-                _mail_err "usage" "--domain is reserved — footer is host-wide this cut"
-                exit 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail footer show"
-                exit 2 ;;
-            *)
-                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail footer show"
-                exit 2 ;;
-        esac
-    done
-    local M_VERB="footer_get" M_JSON="$as_json"
             -*)
                 _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail autoconfig show <domain> [--json]"
                 exit 2 ;;
@@ -26906,6 +27050,7 @@ cmd_hostmail_footer_show() {
     local M_VERB="autoconfig_show" M_JSON="$as_json" M_DOMAIN="$domain"
     _mail_py
 }
+
 
 cmd_hostmail_autoconfig_apply() {
     if _wants_help "$@"; then cmd_help_hostmail_autoconfig; exit 0; fi
@@ -26929,6 +27074,9 @@ cmd_hostmail_autoconfig_apply() {
     _mail_py
 }
 
+# ── k2 mail help text ─────────────────────────────────────────────────
+
+
 cmd_hostmail_dkim() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_dkim; exit 0; fi
     local sub="$1"; shift
@@ -26942,6 +27090,7 @@ cmd_hostmail_dkim() {
             exit 2 ;;
     esac
 }
+
 
 cmd_hostmail_dkim_show() {
     if _wants_help "$@"; then cmd_help_hostmail_dkim_show; exit 0; fi
@@ -26968,6 +27117,7 @@ cmd_hostmail_dkim_show() {
     _mail_py
 }
 
+
 cmd_hostmail_dkim_rotate() {
     if _wants_help "$@"; then cmd_help_hostmail_dkim_rotate; exit 0; fi
     local domain="" as_json=false
@@ -26992,6 +27142,7 @@ cmd_hostmail_dkim_rotate() {
     local M_VERB="dkim_rotate" M_JSON="$as_json" M_DOMAIN="$domain"
     _mail_py
 }
+
 
 cmd_hostmail_dkim_retire() {
     if _wants_help "$@"; then cmd_help_hostmail_dkim_retire; exit 0; fi
@@ -27023,6 +27174,7 @@ cmd_hostmail_dkim_retire() {
     _mail_py
 }
 
+
 cmd_hostmail_dmarc() {
     if [ $# -eq 0 ]; then cmd_help_hostmail_dmarc; exit 0; fi
     local sub="$1"; shift
@@ -27035,6 +27187,7 @@ cmd_hostmail_dmarc() {
             exit 2 ;;
     esac
 }
+
 
 cmd_hostmail_dmarc_show() {
     if _wants_help "$@"; then cmd_help_hostmail_dmarc_show; exit 0; fi
@@ -27060,6 +27213,7 @@ cmd_hostmail_dmarc_show() {
     local M_VERB="dmarc_show" M_JSON="$as_json" M_DOMAIN="$domain"
     _mail_py
 }
+
 
 cmd_hostmail_dmarc_report_to() {
     if _wants_help "$@"; then cmd_help_hostmail_dmarc_report_to; exit 0; fi
@@ -27091,6 +27245,8 @@ cmd_hostmail_dmarc_report_to() {
 }
 
 # ── k2 mail help text ─────────────────────────────────────────────────
+
+
 
 cmd_help_mail() {
     cat <<'EOF'
@@ -28289,6 +28445,9 @@ Print dest + keep, or none.
 
 USAGE
   k2 hostmail forward show <addr> [--json]
+EOF
+}
+
 cmd_help_hostmail_ooo() {
     cat <<'EOF'
 Out-of-office auto-reply on a minted mailbox (Stalwart vacation).
@@ -28372,6 +28531,9 @@ Show the current host-wide outbound footer or none.
 
 USAGE
   k2 hostmail footer show [--json]
+EOF
+}
+
 cmd_help_hostmail_list() {
     cat <<'EOF'
 Mailing lists (Stalwart x:MailingList). Members are minted inboxes

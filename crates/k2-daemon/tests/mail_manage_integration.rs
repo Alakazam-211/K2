@@ -656,6 +656,7 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             catchall_get.status, 405,
             "GET /cli/mail/catchall is show; {}",
             catchall_get.body
+        );
         let ooo_get = http(port, "GET", &format!("/cli/mail/ooo?token={hook_a}"), None);
         assert_ne!(
             ooo_get.status, 405,

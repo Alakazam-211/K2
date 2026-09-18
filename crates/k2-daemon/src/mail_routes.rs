@@ -1072,6 +1072,7 @@ mod tests {
             footer_post.status, "400 Bad Request",
             "{}",
             footer_post.body
+        );
         for route in [
             "/cli/mail/list",
             "/cli/mail/list/members",
@@ -1117,6 +1118,7 @@ mod tests {
             !is_mail_manage_surface("/cli/mail/access/acl")
                 && is_owner_level_mutation("/cli/mail/access/grant"),
             "do not hang ACL under /cli/mail/access/"
+        );
         let ap_get = dispatch("/cli/mail/app-password", &params).expect("app-password GET claimed");
         assert_ne!(
             ap_get.status, "405 Method Not Allowed",

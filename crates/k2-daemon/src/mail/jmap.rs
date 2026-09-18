@@ -1320,21 +1320,6 @@ impl StalwartClient {
 
     // ── Next hostmail CLI (prd-hostmail-next-cli-v1) ─────────────────
 
-    /// `x:Domain/get` `catchAllAddress` (full addr or JSON null).
-    pub fn domain_get_catchall(
-        &self,
-        stalwart_domain_id: &str,
-    ) -> Result<Option<String>, String> {
-        let resp = self.registry_call(
-            "x:Domain/get",
-            serde_json::json!({
-                "ids": [stalwart_domain_id],
-                "properties": ["catchAllAddress"],
-            }),
-        )?;
-        parse_domain_get_catchall(stalwart_domain_id, &resp)
-    }
-
     /// `x:Account/get` aliases list for collision checks.
     pub fn account_get_aliases(
         &self,
@@ -2204,18 +2189,6 @@ impl StalwartClient {
     }
 
     // ── RFC 9661 SieveScript (user scripts) + trusted DATA footer ──
-
-    fn sieve_call(
-        &self,
-        account_id: &str,
-        method: &str,
-        mut args: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        args["accountId"] = serde_json::Value::String(account_id.to_string());
-        let api_url = self.discover_api_url()?;
-        let resp = self.post_json_url(&api_url, &sieve_envelope(method, args))?;
-        parse_method_response(method, &resp)
-    }
 
     /// List the mailbox's RFC 9661 Sieve scripts (`SieveScript/query` +
     /// `SieveScript/get`). Not `x:SieveScript`. Not VacationResponse.
@@ -3232,6 +3205,8 @@ fn parse_account_get_users(args: &serde_json::Value) -> Result<Vec<AccountUser>,
         .and_then(|v| v.as_array())
         .ok_or_else(|| "x:Account/get: reply has no list".to_string())?;
     Ok(list.iter().filter_map(parse_account_user_entry).collect())
+}
+
 /// `x:MailingList/get` row. Recipients is a set object on the wire.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MailingListInfo {
@@ -3615,13 +3590,6 @@ pub fn rewrite_route_expression(
 /// registry envelope's Stalwart capability.
 const JMAP_MAIL_USING: [&str; 2] = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"];
 
-/// RFC 9661 Sieve — required on `SieveScript/*` or the call is
-/// `notRequest` / `unknownMethod`. Not `x:SieveUserScript`.
-const JMAP_SIEVE_USING: [&str; 2] = [
-    "urn:ietf:params:jmap:core",
-    "urn:ietf:params:jmap:sieve",
-];
-
 /// Hostmail forward script name. Unset destroys this name only.
 pub const K2_FORWARD_SCRIPT: &str = "k2-forward";
 
@@ -3699,13 +3667,6 @@ const FULL_PROPERTIES: [&str; 15] = [
 fn mail_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "using": JMAP_MAIL_USING,
-        "methodCalls": [[method, args, "0"]],
-    })
-}
-
-fn sieve_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
-    serde_json::json!({
-        "using": JMAP_SIEVE_USING,
         "methodCalls": [[method, args, "0"]],
     })
 }
@@ -6304,6 +6265,11 @@ mod sieve_jmap_tests {
         assert!(
             create["contents"].as_str().unwrap().contains("require"),
             "{create}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod next_cli_jmap_tests {
     use super::tests::{body_json, spawn_mock_server};
     use super::*;
@@ -6401,6 +6367,9 @@ mod next_cli_jmap_tests {
         let args = &set["methodCalls"][0][1];
         assert_eq!(args["destroy"][0], "s1");
         assert!(args["onSuccessActivateScript"].is_null(), "{args}");
+    }
+
+    #[test]
     fn mailing_list_destroy_is_set_destroy() {
         let destroyed = method_ok(
             "x:MailingList/set",

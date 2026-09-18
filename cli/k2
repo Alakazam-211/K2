@@ -13389,8 +13389,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -13583,6 +13583,20 @@ cmd_schema() {
         {"name": "--address", "arg": "minted", "description": "Minted inbox on that domain."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
+    },
+    {
+      "name": "hostmail ptr show",
+      "usage": "k2 hostmail ptr show [--json]",
+      "description": "Show origin IPv4, live rDNS, Stalwart HELO (mail_server.hostname), A records, and alignment flags. GET|POST /cli/mail/ptr. mail_manage. No OVH on the box.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail ptr set",
+      "usage": "k2 hostmail ptr set <hostname> [--json]",
+      "description": "Set Stalwart HELO + mail_server.hostname, then ask CP POST /api/dns/ptr (Bearer k2c_). Refuses unless public A(hostname) includes origin IPv4. Not auto on enable. mail_manage.",
+      "args": [{"name": "hostname", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "dns access",
@@ -24342,6 +24356,32 @@ elif verb == "dmarc_report_to":
             d.get("reportAddressUri") or env("M_ADDRESS") or "?"))
         print("plant DNS: %s" % (d.get("suggestedRua") or ""))
 
+elif verb == "ptr_show":
+    d = call("GET", "/cli/mail/ptr")
+    if as_json:
+        print(dumps(d))
+    else:
+        print("origin : %s" % (d.get("originIpv4") or "?"))
+        print("ptr    : %s" % (d.get("ptr") or "(none)"))
+        print("helo   : %s" % (d.get("helo") or d.get("hostname") or "(none)"))
+        a = d.get("aRecords") or []
+        print("A      : %s" % (", ".join(a) if a else "(none)"))
+        print("match  : ptr==helo=%s  A==origin=%s  aligned=%s" % (
+            d.get("ptrMatchesHelo"), d.get("aMatchesOrigin"), d.get("aligned")))
+
+elif verb == "ptr_set":
+    d = call("POST", "/cli/mail/ptr/set", body={"hostname": env("M_HOSTNAME")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("ptr set  hostname=%s  helo=%s  origin=%s  aligned=%s" % (
+            d.get("hostname") or env("M_HOSTNAME") or "?",
+            d.get("helo") or "?",
+            d.get("originIpv4") or "?",
+            d.get("aligned")))
+        if d.get("ptr"):
+            print("live ptr: %s" % d.get("ptr"))
+
 elif verb == "list_create":
     body = {"address": env("M_ADDRESS"), "members": env_list("M_MEMBERS")}
     d = call("POST", "/cli/mail/list", body=body)
@@ -25717,9 +25757,10 @@ cmd_hostmail() {
         autoconfig) cmd_hostmail_autoconfig "$@" ;;
         dkim)    cmd_hostmail_dkim "$@" ;;
         dmarc)   cmd_hostmail_dmarc "$@" ;;
+        ptr)     cmd_hostmail_ptr "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr>"
             exit 2 ;;
     esac
 }
@@ -27189,6 +27230,65 @@ cmd_hostmail_dmarc() {
 }
 
 
+cmd_hostmail_ptr() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_ptr; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        show) cmd_hostmail_ptr_show "$@" ;;
+        set) cmd_hostmail_ptr_set "$@" ;;
+        --help|-h) cmd_help_hostmail_ptr; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown ptr command '$sub' — usage: k2 hostmail ptr <show|set>"
+            exit 2 ;;
+    esac
+}
+
+
+cmd_hostmail_ptr_show() {
+    if _wants_help "$@"; then cmd_help_hostmail_ptr_show; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ptr show [--json]"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail ptr show [--json]"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="ptr_show" M_JSON="$as_json"
+    _mail_py
+}
+
+
+cmd_hostmail_ptr_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_ptr_set; exit 0; fi
+    local hostname="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --hostname)
+                [ $# -ge 2 ] || { _mail_err "usage" "--hostname requires a value"; exit 2; }
+                hostname="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail ptr set <hostname> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$hostname" ]; then hostname="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one hostname only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$hostname" ] || { _mail_err "usage" "k2 hostmail ptr set <hostname>"; exit 2; }
+    local M_VERB="ptr_set" M_JSON="$as_json" M_HOSTNAME="$hostname"
+    _mail_py
+}
+
+
 cmd_hostmail_dmarc_show() {
     if _wants_help "$@"; then cmd_help_hostmail_dmarc_show; exit 0; fi
     local domain="" as_json=false
@@ -28023,6 +28123,9 @@ COMMANDS
                               `k2 mail access grant` (agent layer).
   autoconfig show|apply       dnsZoneFile advanced rows. apply plants via k2 dns
                               if we host NS; BYO prints. Not A8 bind.
+  ptr show|set <hostname>     HELO + reverse DNS. show = origin/rDNS/alignment;
+                              set = Stalwart HELO then CP POST /api/dns/ptr
+                              (Bearer k2c_). mail_manage. Not auto on enable.
 
 Run 'k2 hostmail <command> --help' for details.
 EOF
@@ -28320,6 +28423,42 @@ not mint and does not rewrite _dmarc TXT.
 
 USAGE
   k2 hostmail dmarc report-to <domain> --address <minted> [--json]
+EOF
+}
+
+cmd_help_hostmail_ptr() {
+    cat <<'EOF'
+SMTP HELO + reverse DNS for this box's origin IPv4. One PTR equals
+the HELO hostname (not per mailbox / not per later mail.<apex>).
+show reads live rDNS + mail_server.hostname. set updates Stalwart
+HELO then asks CP POST /api/dns/ptr (Bearer k2c_ from tunnel.json).
+No OVH key on the box. Not auto on enable. mail_manage.
+
+USAGE
+  k2 hostmail ptr show [--json]
+  k2 hostmail ptr set <hostname> [--json]
+EOF
+}
+
+cmd_help_hostmail_ptr_show() {
+    cat <<'EOF'
+Show origin IPv4, live PTR, HELO/hostname, A records, and alignment
+flags (ptrMatchesHelo / aMatchesOrigin / aligned). GET /cli/mail/ptr.
+
+USAGE
+  k2 hostmail ptr show [--json]
+EOF
+}
+
+cmd_help_hostmail_ptr_set() {
+    cat <<'EOF'
+Normalize hostname, require public A(hostname) includes origin IPv4,
+set Stalwart HELO + mail_server.hostname, then CP POST /api/dns/ptr
+{hostname, helo}. HELO failure skips CP. Unpaired k2c_ fails loud.
+POST /cli/mail/ptr/set. mail_manage.
+
+USAGE
+  k2 hostmail ptr set <hostname> [--json]
 EOF
 }
 
@@ -31037,7 +31176,7 @@ case "${1:-help}" in
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)
-            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|dkim|dmarc)
+            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

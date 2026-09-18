@@ -1180,7 +1180,7 @@ function AddressesPanel({
     const confirmed = await useConfirmDialogStore.getState().confirm({
       title: `Rotate IMAP/SMTP password for ${row.address}?`,
       message:
-        'Mail.app and other IMAP/SMTP sessions will die. The new password is shown once and cannot be retrieved again.',
+        'IMAP/SMTP sessions on the mailbox password die; app passwords do not. The new password is shown once and cannot be retrieved again.',
       confirmLabel: 'Rotate password',
       destructive: true,
     })
@@ -1241,7 +1241,7 @@ function AddressesPanel({
           </p>
           <p className="text-[10px] text-[var(--color-text-muted)]">
             {onceCreds.note ??
-              'This invalidates the mint-time secret. Mail.app sessions must use the new password.'}
+              'IMAP/SMTP sessions on the mailbox password die; app passwords do not.'}
           </p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-primary)]">
             <dt className="text-[var(--color-text-muted)]">Host</dt>

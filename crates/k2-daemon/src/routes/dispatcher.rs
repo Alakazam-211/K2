@@ -821,6 +821,8 @@ async fn handle_one_request(
             | "/cli/mail/ooo/unset"
             | "/cli/mail/footer"
             | "/cli/mail/footer/unset"
+            | "/cli/mail/app-password"
+            | "/cli/mail/app-password/revoke"
             | "/cli/mail/cert/renew"
             | "/cli/mail/server/rotate-admin"
             // Next hostmail CLI (prd-hostmail-next-cli-v1 N7/N16).

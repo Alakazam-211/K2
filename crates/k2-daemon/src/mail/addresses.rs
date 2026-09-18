@@ -492,7 +492,7 @@ fn client_block(hostname: &str, username: &str, password: &str) -> serde_json::V
 }
 
 const ROTATE_NOTE: &str =
-    "this invalidates the mint-time secret — Mail.app and other IMAP/SMTP clients must use the new password";
+    "IMAP/SMTP sessions on the mailbox password die; app passwords do not.";
 
 // ── Operations ──────────────────────────────────────────────────────────
 
@@ -1795,7 +1795,11 @@ pub(crate) mod tests {
         assert_eq!(v["submission"]["port"], 465);
         assert_eq!(v["jmap"]["port"], 443);
         let note = v["note"].as_str().unwrap_or("");
-        assert!(note.contains("invalidates the mint-time secret"), "{note}");
+        assert!(
+            note.contains("IMAP/SMTP sessions on the mailbox password die"),
+            "{note}"
+        );
+        assert!(note.contains("app passwords do not"), "{note}");
 
         assert_eq!(
             engine.passwords_set.lock().unwrap().as_slice(),

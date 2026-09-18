@@ -13389,12 +13389,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|cert> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), catchall set|unset|show (Domain.catchAllAddress; mail_manage), alias add|remove|list (Account.aliases EmailAlias; not a mint; mail_manage), forward set|unset|show (SieveScript k2-forward; --keep copies locally; mail_manage), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|ooo|footer|cert> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|cert|list|spam|queue|acl|autoconfig> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage), doctor (deliverability grade), config (send mode, relay creds, agent-send gating off|approval|on, address caps, mailbox quota defaults), quota get|set (per-address disk/message caps; mail_manage; 0 unlimited; default 1GB/10k; existing boxes need quota set), list (mailing lists; not k2 mail list inboxes), spam (train/allow/block/quarantine), queue (outbound x:QueuedMessage), acl (IMAP/JMAP sharing; not k2 mail access), autoconfig (dnsZoneFile plant via k2 dns, not A8 bind), approvals list|approve|deny (deny requires --note). A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -13455,6 +13451,10 @@ cmd_schema() {
       "args": [{"name": "domain", "required": true}],
       "flags": [
         {"name": "--address", "arg": "addr", "description": "Minted mailbox on that domain (set)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "hostmail ooo set",
       "usage": "k2 hostmail ooo set <addr> --text FILE_OR_STRING [--days N] [--until DATE] [--json]",
       "description": "Set out-of-office auto-reply (Stalwart vacation) on a minted mailbox. POST /cli/mail/ooo. mail_manage. --text is literal; @path reads a file; - reads stdin. --days 1-31 (default 7). --until UTC YYYY-MM-DD. Unminted address is 404.",
@@ -13481,6 +13481,10 @@ cmd_schema() {
       "flags": [
         {"name": "--to", "arg": "dest", "description": "Minted dest mailbox on this host."},
         {"name": "--keep", "arg": null, "description": "Keep a local copy (redirect :copy)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "hostmail ooo unset",
       "usage": "k2 hostmail ooo unset <addr> [--json]",
       "description": "Remove vacation from that mailbox's user Sieve (leaves forward if present). POST /cli/mail/ooo/unset. GET is 405.",
@@ -13516,6 +13520,30 @@ cmd_schema() {
       "usage": "k2 hostmail footer show [--json]",
       "description": "Show the current host-wide outbound footer or none. GET /cli/mail/footer. mail_manage.",
       "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail app-password add",
+      "usage": "k2 hostmail app-password add <addr> [--label <s>] [--json]",
+      "description": "Create an extra labeled secret on a hosted mailbox (Stalwart AppPassword). POST /cli/mail/app-password {address, label?}. mail_manage. Secret shown once. Default label k2. Not nested under password. Not k2 mail link.",
+      "args": [{"name": "addr", "required": true}],
+      "flags": [
+        {"name": "--label", "arg": "s", "description": "Description (default k2)."},
+        {"name": "--json", "arg": null, "description": "JSON output (once secret + id)."}
+      ]
+    },
+    {
+      "name": "hostmail app-password list",
+      "usage": "k2 hostmail app-password list <addr> [--json]",
+      "description": "List app passwords on a hosted mailbox (id, label, createdAt — never the secret). GET /cli/mail/app-password?address=. mail_manage.",
+      "args": [{"name": "addr", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail app-password revoke",
+      "usage": "k2 hostmail app-password revoke <addr> <id> [--json]",
+      "description": "Revoke one app password on a hosted mailbox. POST /cli/mail/app-password/revoke {address, id}. mail_manage. Unknown id is 404. GET is 405.",
+      "args": [{"name": "addr", "required": true}, {"name": "id", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
@@ -24175,6 +24203,41 @@ elif verb == "footer_unset":
         print(dumps(d))
     else:
         print("footer unset")
+
+elif verb == "app_password_list":
+    d = call("GET", "/cli/mail/app-password", params={"address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        rows = d.get("appPasswords") or []
+        if not rows:
+            print("no app passwords for %s" % (d.get("address") or env("M_ADDRESS") or "?"))
+        else:
+            print("%s app password(s) for %s:" % (len(rows), d.get("address") or env("M_ADDRESS") or "?"))
+            for r in rows:
+                print("  %s  %s  %s" % (r.get("id") or "?", r.get("label") or "", r.get("createdAt") or ""))
+
+elif verb == "app_password_add":
+    body = {"address": env("M_ADDRESS")}
+    if env("M_LABEL") != "":
+        body["label"] = env("M_LABEL")
+    d = call("POST", "/cli/mail/app-password", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("created app password for %s" % (d.get("address") or env("M_ADDRESS") or "?"))
+        print("id     : %s" % (d.get("id") or "?"))
+        print("label  : %s" % (d.get("label") or "k2"))
+        if d.get("secret"):
+            print("secret : %s  (shown once — save it for Mail.app / IMAP)" % d["secret"])
+
+elif verb == "app_password_revoke":
+    d = call("POST", "/cli/mail/app-password/revoke", body={"address": env("M_ADDRESS"), "id": env("M_ID")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("revoked %s on %s" % (d.get("id") or env("M_ID") or "?", d.get("address") or env("M_ADDRESS") or "?"))
+
 elif verb == "list_create":
     body = {"address": env("M_ADDRESS"), "members": env_list("M_MEMBERS")}
     d = call("POST", "/cli/mail/list", body=body)
@@ -25528,6 +25591,7 @@ cmd_hostmail() {
         disable) cmd_hostmail_disable "$@" ;;
         rotate-admin) cmd_hostmail_rotate_admin "$@" ;;
         password) cmd_hostmail_password "$@" ;;
+        app-password) cmd_hostmail_app_password "$@" ;;
         domain)  cmd_mail_domain "$@" ;;
         create)  cmd_mail_create "$@" ;;
         delete)  cmd_hostmail_delete "$@" ;;
@@ -25539,6 +25603,8 @@ cmd_hostmail() {
         catchall) cmd_hostmail_catchall "$@" ;;
         alias)   cmd_hostmail_alias "$@" ;;
         forward) cmd_hostmail_forward "$@" ;;
+        ooo)     cmd_hostmail_ooo "$@" ;;
+        footer)  cmd_hostmail_footer "$@" ;;
         cert)    cmd_hostmail_cert "$@" ;;
         list)    cmd_hostmail_list "$@" ;;
         spam)    cmd_hostmail_spam "$@" ;;
@@ -25547,14 +25613,7 @@ cmd_hostmail() {
         autoconfig) cmd_hostmail_autoconfig "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|cert>"
-        ooo)     cmd_hostmail_ooo "$@" ;;
-        footer)  cmd_hostmail_footer "$@" ;;
-        cert)    cmd_hostmail_cert "$@" ;;
-        --help|-h) cmd_help_hostmail; exit 0 ;;
-        *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|ooo|footer|cert>"
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|cert|list|spam|queue|acl|autoconfig>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig>"
             exit 2 ;;
     esac
 }
@@ -25636,6 +25695,94 @@ cmd_hostmail_password_rotate() {
         exit 2
     fi
     local M_VERB="password_rotate" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_app_password() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_app_password; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        add) cmd_hostmail_app_password_add "$@" ;;
+        list) cmd_hostmail_app_password_list "$@" ;;
+        revoke) cmd_hostmail_app_password_revoke "$@" ;;
+        --help|-h) cmd_help_hostmail_app_password; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown app-password command '$sub' — usage: k2 hostmail app-password <add|list|revoke>"
+            exit 2 ;;
+    esac
+}
+
+cmd_hostmail_app_password_add() {
+    if _wants_help "$@"; then cmd_help_hostmail_app_password_add; exit 0; fi
+    local address="" label="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --label)
+                [ $# -ge 2 ] || { _mail_err "usage" "--label requires a value"; exit 2; }
+                label="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail app-password add <addr> [--label <s>] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one <addr> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail app-password add <addr> [--label <s>] [--json]"; exit 2; }
+    local M_VERB="app_password_add" M_JSON="$as_json" M_ADDRESS="$address" M_LABEL="$label"
+    _mail_py
+}
+
+cmd_hostmail_app_password_list() {
+    if _wants_help "$@"; then cmd_help_hostmail_app_password_list; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail app-password list <addr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one <addr> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail app-password list <addr> [--json]"; exit 2; }
+    local M_VERB="app_password_list" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+cmd_hostmail_app_password_revoke() {
+    if _wants_help "$@"; then cmd_help_hostmail_app_password_revoke; exit 0; fi
+    local address="" id="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail app-password revoke <addr> <id> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"
+                elif [ -z "$id" ]; then id="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1' — <addr> <id> only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$address" ] || [ -z "$id" ]; then
+        _mail_err "usage" "k2 hostmail app-password revoke <addr> <id> [--json]"
+        exit 2
+    fi
+    local M_VERB="app_password_revoke" M_JSON="$as_json" M_ADDRESS="$address" M_ID="$id"
     _mail_py
 }
 
@@ -27627,6 +27774,54 @@ mint constants do not retrofit. Give --bytes or --gb (not both) and/or
 
 USAGE
   k2 hostmail quota set <addr> --bytes N|--gb N [--messages N] [--json]
+EOF
+}
+
+cmd_help_hostmail_app_password() {
+    cat <<'EOF'
+Extra labeled secrets on a minted inbox (Stalwart AppPassword).
+mail_manage or owner/admin. Secret shown once; list never returns it.
+Rotating the mailbox password does not kill app-password sessions.
+Not nested under `k2 hostmail password`. Not `k2 mail link`.
+
+USAGE
+  k2 hostmail app-password add <addr> [--label <s>] [--json]
+  k2 hostmail app-password list <addr> [--json]
+  k2 hostmail app-password revoke <addr> <id> [--json]
+EOF
+}
+
+cmd_help_hostmail_app_password_add() {
+    cat <<'EOF'
+Create an app password on a hosted mailbox. Secret is server-set and
+printed once. Default --label is k2. POST /cli/mail/app-password.
+
+USAGE
+  k2 hostmail app-password add <addr> [--label <s>] [--json]
+
+FLAGS
+  --label <s>            Description (default k2)
+  --json                 JSON output (once secret + id)
+EOF
+}
+
+cmd_help_hostmail_app_password_list() {
+    cat <<'EOF'
+List app passwords on a hosted mailbox (id, label, createdAt — never
+the secret). GET /cli/mail/app-password?address=.
+
+USAGE
+  k2 hostmail app-password list <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_app_password_revoke() {
+    cat <<'EOF'
+Revoke one app password on a hosted mailbox. POST
+/cli/mail/app-password/revoke {address, id}. Unknown id is 404.
+
+USAGE
+  k2 hostmail app-password revoke <addr> <id> [--json]
 EOF
 }
 
@@ -30338,11 +30533,7 @@ case "${1:-help}" in
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)
-            create|status|domain|doctor|config|approvals|catchall|alias|forward)
-            create|status|domain|doctor|config|approvals|ooo|footer)
-                _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
-                exit 2 ;;
-            spam|queue|acl|autoconfig)
+            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

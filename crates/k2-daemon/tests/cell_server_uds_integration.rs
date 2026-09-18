@@ -770,6 +770,30 @@ async fn mail_manage_toggle_gates_cell_uds_m5() {
         uds(&sock, &get("/cli/mail/footer/unset", Some(&token))).await;
     assert_eq!(ftu_status, 405, "UDS GET footer/unset 405; {ftu_body}");
 
+    let (ap_status, ap_body) = uds(&sock, &get("/cli/mail/app-password", Some(&token))).await;
+    assert_ne!(
+        ap_status, 405,
+        "UDS GET app-password is the list read; {ap_body}"
+    );
+    assert_ne!(ap_status, 403, "UDS flag ON app-password GET; {ap_body}");
+    assert!(
+        !ap_body.contains("owner_only"),
+        "C5b UDS app-password GET: {ap_body}"
+    );
+    let (ap_post_status, ap_post_body) = uds(
+        &sock,
+        &post_json("/cli/mail/app-password", &token, "{}"),
+    )
+    .await;
+    assert_ne!(ap_post_status, 403, "UDS flag ON app-password POST; {ap_post_body}");
+    assert!(
+        !ap_post_body.contains("owner_only"),
+        "C5b UDS app-password POST: {ap_post_body}"
+    );
+    let (ap_rev_status, ap_rev_body) =
+        uds(&sock, &get("/cli/mail/app-password/revoke", Some(&token))).await;
+    assert_eq!(ap_rev_status, 405, "UDS GET app-password/revoke 405; {ap_rev_body}");
+
     let (cr_status, cr_body) = uds(&sock, &get("/cli/mail/cert/renew", Some(&token))).await;
     assert_eq!(cr_status, 405, "UDS GET cert/renew 405; {cr_body}");
 

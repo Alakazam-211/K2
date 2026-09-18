@@ -541,6 +541,9 @@ async fn mail_manage_toggle_gates_m5_not_m6() {
             ("POST", "/cli/mail/footer", Some("{}")),
             ("GET", "/cli/mail/footer", None),
             ("POST", "/cli/mail/footer/unset", Some("{}")),
+            ("POST", "/cli/mail/app-password", Some("{}")),
+            ("GET", "/cli/mail/app-password", None),
+            ("POST", "/cli/mail/app-password/revoke", Some("{}")),
             ("POST", "/cli/mail/cert/renew", Some("{}")),
             ("POST", "/cli/mail/server/rotate-admin", Some("{}")),
         ] {
@@ -895,5 +898,129 @@ async fn mail_ooo_footer_auth_unminted_and_get_405() {
             None,
         );
         assert_eq!(owner_ft.status, 405, "GET footer/unset; {}", owner_ft.body);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mail_app_password_auth_lookup_and_methods() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let a_handle = format!("apa{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (a_id, _a_path) = seed_ws(&a_handle);
+        let hook_a = mint_scoped_hook_for(&a_id);
+
+        let addr = format!("precut@{a_handle}.example");
+        let no_engine_addr = format!("noid@{a_handle}.example");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_domains (id, domain, stalwart_domain_id, status, send_mode, created_at) \
+                 VALUES (?1, ?2, 'stw-p', 'pending', 'receive-only', 100)",
+                params![uuid::Uuid::new_v4().to_string(), format!("{a_handle}.example")],
+            )
+            .expect("seed pending domain");
+            conn.execute(
+                "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, \
+                 owner_project_id, status, created_at, primary_can_manage, primary_can_delete) \
+                 VALUES (?1, ?2, 'dom-x', 'acc-p', ?3, 'active', 100, 1, 1)",
+                params![uuid::Uuid::new_v4().to_string(), addr, a_id],
+            )
+            .expect("seed pending active row");
+            conn.execute(
+                "INSERT INTO mail_addresses (id, address, domain_id, stalwart_account_id, \
+                 owner_project_id, status, created_at, primary_can_manage, primary_can_delete) \
+                 VALUES (?1, ?2, 'dom-x', NULL, ?3, 'active', 100, 1, 1)",
+                params![uuid::Uuid::new_v4().to_string(), no_engine_addr, a_id],
+            )
+            .expect("seed row without stalwart_account_id");
+        }
+
+        let owner_revoke_get = http(
+            port,
+            "GET",
+            &format!("/cli/mail/app-password/revoke?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(
+            owner_revoke_get.status, 405,
+            "GET revoke 405; {}",
+            owner_revoke_get.body
+        );
+
+        let off = http(
+            port,
+            "POST",
+            &format!("/cli/mail/app-password?token={hook_a}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_owner_only(&off, "M5 off app-password add");
+
+        let off_list = http(
+            port,
+            "GET",
+            &format!("/cli/mail/app-password?token={hook_a}&address={addr}"),
+            None,
+        );
+        assert_owner_only(&off_list, "M5 off app-password list");
+
+        let on = set_mail_manage(port, &a_id, 1);
+        assert_eq!(on.status, 200, "{}", on.body);
+
+        let list_on = http(
+            port,
+            "GET",
+            &format!("/cli/mail/app-password?token={hook_a}&address={addr}"),
+            None,
+        );
+        assert_not_owner_only(&list_on, "mail_manage GET list");
+        assert_ne!(list_on.status, 405, "{}", list_on.body);
+        assert_ne!(list_on.status, 403, "{}", list_on.body);
+        assert_ne!(
+            list_on.status, 404,
+            "pending active row is hosted: {}",
+            list_on.body
+        );
+
+        let noid = http(
+            port,
+            "GET",
+            &format!("/cli/mail/app-password?token={hook_a}&address={no_engine_addr}"),
+            None,
+        );
+        assert_eq!(noid.status, 502, "missing stalwart_account_id: {}", noid.body);
+        assert!(
+            noid.body.contains("engine"),
+            "502 engine not quota not_ready: {}",
+            noid.body
+        );
+
+        let ghost = http(
+            port,
+            "GET",
+            &format!("/cli/mail/app-password?token={hook_a}&address=ghost@{a_handle}.example"),
+            None,
+        );
+        assert_eq!(ghost.status, 404, "{}", ghost.body);
+
+        let add_on = http(
+            port,
+            "POST",
+            &format!("/cli/mail/app-password?token={hook_a}"),
+            Some(&format!(r#"{{"address":"{addr}"}}"#)),
+        );
+        assert_not_owner_only(&add_on, "mail_manage POST add");
+        assert_ne!(add_on.status, 404, "{}", add_on.body);
+
+        let owner_list = http(
+            port,
+            "GET",
+            &format!("/cli/mail/app-password?token={OWNER_TOKEN}&address={addr}"),
+            None,
+        );
+        assert_not_owner_only(&owner_list, "owner lists app passwords");
+        assert_ne!(owner_list.status, 403, "{}", owner_list.body);
     });
 }

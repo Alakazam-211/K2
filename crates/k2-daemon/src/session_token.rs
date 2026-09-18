@@ -1419,6 +1419,8 @@ mod tests {
             "/cli/mail/acl",
             "/cli/mail/acl/revoke",
             "/cli/mail/autoconfig",
+            "/cli/mail/app-password",
+            "/cli/mail/app-password/revoke",
         ] {
             assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
         }

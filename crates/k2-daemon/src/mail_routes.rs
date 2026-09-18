@@ -75,6 +75,9 @@
 //! | GET  /cli/mail/footer             | mail/footer.rs         |
 //! | POST /cli/mail/footer             | mail/footer.rs         |
 //! | POST /cli/mail/footer/unset       | mail/footer.rs         |
+//! | GET  /cli/mail/app-password       | mail/app_password.rs   |
+//! | POST /cli/mail/app-password       | mail/app_password.rs   |
+//! | POST /cli/mail/app-password/revoke| mail/app_password.rs   |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -179,6 +182,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/queue" => crate::mail::queue::handle_queue_get(params),
         "/cli/mail/acl" => crate::mail::acl::handle_acl_get(params),
         "/cli/mail/autoconfig" => crate::mail::autoconfig::handle_autoconfig_get(params),
+        "/cli/mail/app-password" => crate::mail::app_password::handle_app_password_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -236,7 +240,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/spam/quarantine/discard"
         | "/cli/mail/queue/retry"
         | "/cli/mail/queue/drop"
-        | "/cli/mail/acl/revoke" => CliResponse::method_not_allowed(),
+        | "/cli/mail/acl/revoke"
+        | "/cli/mail/app-password/revoke" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -314,6 +319,10 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/ooo/unset" => crate::mail::ooo::handle_ooo_unset(body),
         "/cli/mail/footer" => crate::mail::footer::handle_footer_set(body),
         "/cli/mail/footer/unset" => crate::mail::footer::handle_footer_unset(body),
+        "/cli/mail/app-password" => crate::mail::app_password::handle_app_password_add(body),
+        "/cli/mail/app-password/revoke" => {
+            crate::mail::app_password::handle_app_password_revoke(body)
+        }
         "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
         "/cli/mail/list" => crate::mail::lists::handle_list_create(body),
         "/cli/mail/list/members" => crate::mail::lists::handle_members_post(body),
@@ -476,6 +485,8 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/acl"
             | "/cli/mail/acl/revoke"
             | "/cli/mail/autoconfig"
+            | "/cli/mail/app-password"
+            | "/cli/mail/app-password/revoke"
     )
 }
 
@@ -768,6 +779,8 @@ mod tests {
             "/cli/mail/acl",
             "/cli/mail/acl/revoke",
             "/cli/mail/autoconfig",
+            "/cli/mail/app-password",
+            "/cli/mail/app-password/revoke",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }
@@ -862,6 +875,21 @@ mod tests {
         );
         let footer_off = mail_manage_authorized("/cli/mail/footer", false, Some(&p));
         assert!(footer_off.is_err(), "M5 off footer is owner_only");
+        let ap = mail_manage_authorized("/cli/mail/app-password", false, Some(&p));
+        assert!(ap.is_err(), "M5 off app-password is owner_only");
+        assert!(
+            mail_manage_authorized("/cli/mail/app-password", true, None).is_ok(),
+            "owner/admin lists/adds app passwords"
+        );
+        assert!(
+            mail_manage_authorized("/cli/mail/app-password/revoke", true, None).is_ok(),
+            "owner/admin revokes app passwords"
+        );
+        assert!(
+            !is_owner_level_mutation("/cli/mail/app-password"),
+            "app-password is mail_manage, not leftover M6"
+        );
+        assert!(!is_owner_level_mutation("/cli/mail/app-password/revoke"));
     }
 
     /// GET on every POST-only mutation answers an explicit 405 through
@@ -1049,6 +1077,35 @@ mod tests {
             !is_mail_manage_surface("/cli/mail/access/acl")
                 && is_owner_level_mutation("/cli/mail/access/grant"),
             "do not hang ACL under /cli/mail/access/"
+        let ap_get = dispatch("/cli/mail/app-password", &params).expect("app-password GET claimed");
+        assert_ne!(
+            ap_get.status, "405 Method Not Allowed",
+            "GET /cli/mail/app-password is list, not POST-only: {}",
+            ap_get.body
+        );
+        assert_eq!(ap_get.status, "400 Bad Request", "{}", ap_get.body);
+        let ap_post = dispatch_post("/cli/mail/app-password", b"{}");
+        assert_ne!(
+            ap_post.status, "404 Not Found",
+            "app-password POST must be wired"
+        );
+        assert_eq!(ap_post.status, "400 Bad Request", "{}", ap_post.body);
+        let ap_revoke_get =
+            dispatch("/cli/mail/app-password/revoke", &params).expect("revoke GET claimed");
+        assert_eq!(
+            ap_revoke_get.status, "405 Method Not Allowed",
+            "GET /cli/mail/app-password/revoke is POST-only: {}",
+            ap_revoke_get.body
+        );
+        let ap_revoke_post = dispatch_post("/cli/mail/app-password/revoke", b"{}");
+        assert_ne!(
+            ap_revoke_post.status, "404 Not Found",
+            "app-password/revoke POST must be wired"
+        );
+        assert_eq!(
+            ap_revoke_post.status, "400 Bad Request",
+            "{}",
+            ap_revoke_post.body
         );
         assert_eq!(
             dispatch_post("/cli/mail/unknown", b"{}").status,

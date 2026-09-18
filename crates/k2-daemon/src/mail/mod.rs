@@ -47,6 +47,9 @@
 //! - [`domains`] — S2 domain onboarding: zone-file parsing, the DNS
 //!   record table, SPF split-config, add/remove/list/show ops (behind
 //!   the `DomainEngine` trait so tests never touch a network).
+//! - [`app_password`] — extra labeled secrets on a minted User
+//!   (`x:AppPassword`); mail_manage extra-gate like quota; lookup is
+//!   password-rotate (any active hosted row).
 //! - [`addresses`] — S3 agent address minting: local-part rule, caps
 //!   (ACTIVE-counted, §11.1.5), idempotent `--id`, retire-with-
 //!   retention, Stalwart account lifecycle behind the `AddressEngine`
@@ -102,6 +105,7 @@ pub mod access;
 pub mod acl;
 pub mod addresses;
 pub mod alias;
+pub mod app_password;
 pub mod catchall;
 pub mod autoconfig;
 pub mod config;

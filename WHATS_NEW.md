@@ -3,6 +3,22 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.147 — Custom domains, IMAP 993, and hosted-mail operator tools
+
+Attach a real domain to **this** server — Settings → K2 Server → **Domains**, or `k2 domain add <apex>` then `k2 domain name add mail.example.com --role mail`. That does not move nameservers and is not a K2 edge. Hostnames on this box get a Let's Encrypt certificate here (`k2 cert issue` / `renew`); `cert.k2.dev` still only covers `*.k2.dev`. After issue, the mail server reloads the new PEM (no `hostmail disable`).
+
+Hosted mail now listens for IMAP on **143** (STARTTLS) and **993** (IMAPS) as well as the existing submission ports. Mail.app can use 993; 443 ALPN is no longer the only IMAP door.
+
+Mail-manage operators get the rest of the hosted-mail CLI (e2e'd on lztek.io). `k2 mail …` for these verbs still exits 2 and points at `k2 hostmail`.
+
+- **Catch-all, alias, forward.** `k2 hostmail catchall|alias|forward`. An alias is an extra address on an existing mailbox, not a new mint. Plus-tags (`user+tag@`) already work and are not aliases. Forward dest must be minted on this host; `--keep` leaves a local copy. Out of office and forward share one Sieve script — unset one leaves the other.
+- **Out of office and company footer.** `k2 hostmail ooo` (vacation auto-reply on that mailbox) and `k2 hostmail footer` (one host-wide outbound plain-text footer). `--domain` on footer is reserved.
+- **Lists, spam, queue, ACL, autoconfig.** `k2 hostmail list` (mailing lists — not `k2 mail list`), `spam` (train Junk, allow/block sender, quarantine), `queue` (outbound only), `acl` (IMAP/JMAP share between minted users — not `k2 mail access grant`), `autoconfig show|apply` (print or plant client-config DNS).
+- **App passwords.** `k2 hostmail app-password add|list|revoke` — extra labeled secrets. Shown once. Rotating the mailbox IMAP/SMTP password does not kill them.
+- **DKIM / DMARC.** `k2 hostmail dkim show|rotate|retire` and `dmarc show|report-to`. Rotate keeps the previous selector until you retire it. `report-to` sets Stalwart's report URI on a minted inbox and prints `rua=` to plant; it does not rewrite `_dmarc`.
+
+Not in this build: People hub, hide compose unless an LLM pane, skin self-serve password reset, Omarchy pacman package (`release.sh` still does not build one), autoconfig apply rewriting names off `*.k2.dev`, swapping live MX off cPanel.
+
 ## 0.40.146 — Hosted mail cutover tools, and the extra-window crash
 
 Hosted mail is ready to hold mailboxes **before** you point DNS at the box. Mail-manage agents can mint on a pending receive-only domain, import cPanel Maildirs (including Sent/Archive folders, not only Inbox), raise per-inbox quota, and rotate the **one** IMAP+SMTP password (`k2 hostmail password rotate`, and Settings → Email Hosting → Rotate next to Retire). Import waits up to two hours so large inboxes do not look failed at 30 seconds. Doctor `<domain>` no longer returns a fake empty success. Cert status stops lying about self-signed certificates. `k2 hostmail cert renew` retries ACME without a second `enable`. Extra LLM-tab / named-chat typecheck leftovers from 145 ship here if your 145 build missed them.

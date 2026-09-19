@@ -371,8 +371,11 @@ async fn live_issue_async(
             ChallengeKind::Dns01 => {
                 let txt = challenge.key_authorization().dns_value();
                 let rec = plant_txt(binding, hostname, &txt)?;
-                planted = Some(rec);
-                std::thread::sleep(Duration::from_secs(dns_wait_secs()));
+                planted = Some(rec.clone());
+                if let Err(e) = wait_acme_txt_visible(binding, hostname, &txt) {
+                    let _ = delete_txt(&rec);
+                    return Err(e);
+                }
             }
             ChallengeKind::Http01 => {
                 let token = challenge.token.clone();
@@ -428,6 +431,49 @@ use DNS-01 (attach a K2-hosted zone) or HTTP-01 on :80"
         chain_pem: chain,
         key_pem: key.serialize_pem(),
     })
+}
+
+fn acme_txt_fqdn(hostname: &str, apex: &str) -> String {
+    let rel = acme_txt_relative_name(hostname, apex);
+    if hostname == apex {
+        format!("_acme-challenge.{apex}")
+    } else {
+        format!("{rel}.{apex}")
+    }
+}
+
+/// Public DNS must see the planted TXT before we tell Let's Encrypt
+/// ready. lztek 2026-09-19: CP returned an id but ns1 NXDOMAIN and
+/// SOA serial did not move — ACME Invalid is the wrong error for that.
+fn wait_acme_txt_visible(binding: &DomainBinding, hostname: &str, value: &str) -> Result<(), String> {
+    let fqdn = acme_txt_fqdn(hostname, &binding.apex);
+    let budget = dns_wait_secs().max(20);
+    let deadline = std::time::Instant::now() + Duration::from_secs(budget);
+    while std::time::Instant::now() < deadline {
+        if txt_has(&fqdn, value) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    Err(format!(
+        "planted _acme-challenge TXT via k2.dev but public DNS still has no record for {fqdn} \
+(zone {} serial not moving?). Do not retry HTTP-01 — this is the DNS API/PowerDNS path",
+        binding.zone_id.as_deref().unwrap_or("?")
+    ))
+}
+
+fn txt_has(fqdn: &str, want: &str) -> bool {
+    use crate::mail::dns_verify::{DnsResolver, SystemResolver};
+    let Ok(resolver) = SystemResolver::public().or_else(|_| SystemResolver::new()) else {
+        return false;
+    };
+    match resolver.txt(fqdn) {
+        Ok(recs) => recs.iter().any(|chunks| {
+            let s = chunks.concat();
+            s == want || s.trim_matches('"') == want
+        }),
+        Err(_) => false,
+    }
 }
 
 fn plant_txt(binding: &DomainBinding, hostname: &str, value: &str) -> Result<String, String> {
@@ -546,6 +592,14 @@ mod tests {
         assert_eq!(
             acme_txt_relative_name("a.b.lztek.io", "lztek.io"),
             "_acme-challenge.a.b"
+        );
+        assert_eq!(
+            acme_txt_fqdn("scratch-acme.discover-nocode.com", "discover-nocode.com"),
+            "_acme-challenge.scratch-acme.discover-nocode.com"
+        );
+        assert_eq!(
+            acme_txt_fqdn("lztek.io", "lztek.io"),
+            "_acme-challenge.lztek.io"
         );
     }
 

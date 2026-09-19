@@ -992,6 +992,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0120_domain_bindings",
             include_str!("../../drizzle_sql/0120_domain_bindings.sql"),
         ),
+        // 0121 — hostmail bans migrate window snapshot (authBanRate +
+        // restoreAt). Additive; do not reuse enable_progress_json.
+        (
+            "0121_mail_bans_migrate",
+            include_str!("../../drizzle_sql/0121_mail_bans_migrate.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1595,7 +1601,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0117_subdomain_workspaces_target",
+            last_name, "0121_mail_bans_migrate",
             "unexpected last migration name: {last_name}"
         );
     }

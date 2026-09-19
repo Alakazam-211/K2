@@ -850,6 +850,16 @@ async fn handle_one_request(
             // dual GET+POST show on /cli/mail/ptr; set is POST-only.
             | "/cli/mail/ptr"
             | "/cli/mail/ptr/set"
+            // Hostmail bans/allowlist/migrate (prd-hostmail-bans-v1).
+            // Exact paths — dual GET+POST on list/status; clear/add/
+            // remove/restore are POST-only (GET → 405).
+            | "/cli/mail/bans"
+            | "/cli/mail/bans/clear"
+            | "/cli/mail/allowlist"
+            | "/cli/mail/allowlist/add"
+            | "/cli/mail/allowlist/remove"
+            | "/cli/mail/bans/migrate"
+            | "/cli/mail/bans/migrate/restore"
             // Per-workspace hosted-mail manage toggle. Dedicated POST
             // (not workspace/set, not GET /cli/dns-manage). GET → 405.
             | "/cli/mail-manage"

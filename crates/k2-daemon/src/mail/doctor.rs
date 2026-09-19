@@ -1079,7 +1079,15 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
         Some((id, d)) => (Some(id), Some(d)),
         None => (None, None),
     };
-    let report = run_checks(&resolver, &env, &ctx, dctx.as_mut(), now);
+    let mut report = run_checks(&resolver, &env, &ctx, dctx.as_mut(), now);
+    // Auth-ban + migrate-overdue (prd-hostmail-bans-v1 B7/B17/B29).
+    // Soft only — never gates_direct.
+    report
+        .checks
+        .extend(super::bans::doctor_ban_checks());
+    let (grade, direct_blockers) = grade_of(&report.checks);
+    report.grade = grade;
+    report.direct_blockers = direct_blockers;
     persist_run(domain_id.as_deref(), &report).map_err(DocError::Engine)
 }
 

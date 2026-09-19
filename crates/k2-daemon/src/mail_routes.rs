@@ -88,6 +88,16 @@
 //! | GET  /cli/mail/ptr                | mail/ptr.rs            |
 //! | POST /cli/mail/ptr                | mail/ptr.rs (show)     |
 //! | POST /cli/mail/ptr/set            | mail/ptr.rs            |
+//! | GET  /cli/mail/bans               | mail/bans.rs           |
+//! | POST /cli/mail/bans               | mail/bans.rs (list)    |
+//! | POST /cli/mail/bans/clear         | mail/bans.rs           |
+//! | GET  /cli/mail/allowlist          | mail/bans.rs           |
+//! | POST /cli/mail/allowlist          | mail/bans.rs (list)    |
+//! | POST /cli/mail/allowlist/add      | mail/bans.rs           |
+//! | POST /cli/mail/allowlist/remove   | mail/bans.rs           |
+//! | GET  /cli/mail/bans/migrate       | mail/bans.rs (status)  |
+//! | POST /cli/mail/bans/migrate       | mail/bans.rs           |
+//! | POST /cli/mail/bans/migrate/restore | mail/bans.rs         |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -196,6 +206,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/dkim" => crate::mail::dkim::handle_dkim_get(params),
         "/cli/mail/dmarc" => crate::mail::dmarc::handle_dmarc_get(params),
         "/cli/mail/ptr" => crate::mail::ptr::handle_ptr_show(params),
+        "/cli/mail/bans" => crate::mail::bans::handle_bans_list(params),
+        "/cli/mail/allowlist" => crate::mail::bans::handle_allowlist_list(params),
+        "/cli/mail/bans/migrate" => crate::mail::bans::handle_migrate_status(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -258,7 +271,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/dkim/rotate"
         | "/cli/mail/dkim/retire"
         | "/cli/mail/dmarc/report-to"
-        | "/cli/mail/ptr/set" => CliResponse::method_not_allowed(),
+        | "/cli/mail/ptr/set"
+        | "/cli/mail/bans/clear"
+        | "/cli/mail/allowlist/add"
+        | "/cli/mail/allowlist/remove"
+        | "/cli/mail/bans/migrate/restore" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -362,6 +379,13 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         // Dual GET+POST show; set is a separate path.
         "/cli/mail/ptr" => crate::mail::ptr::handle_ptr_show_post(body),
         "/cli/mail/ptr/set" => crate::mail::ptr::handle_ptr_set(body),
+        "/cli/mail/bans" => crate::mail::bans::handle_bans_list_post(body),
+        "/cli/mail/bans/clear" => crate::mail::bans::handle_bans_clear(body),
+        "/cli/mail/allowlist" => crate::mail::bans::handle_allowlist_list_post(body),
+        "/cli/mail/allowlist/add" => crate::mail::bans::handle_allowlist_add(body),
+        "/cli/mail/allowlist/remove" => crate::mail::bans::handle_allowlist_remove(body),
+        "/cli/mail/bans/migrate" => crate::mail::bans::handle_migrate_post(body),
+        "/cli/mail/bans/migrate/restore" => crate::mail::bans::handle_migrate_restore(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -519,6 +543,13 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/dmarc/report-to"
             | "/cli/mail/ptr"
             | "/cli/mail/ptr/set"
+            | "/cli/mail/bans"
+            | "/cli/mail/bans/clear"
+            | "/cli/mail/allowlist"
+            | "/cli/mail/allowlist/add"
+            | "/cli/mail/allowlist/remove"
+            | "/cli/mail/bans/migrate"
+            | "/cli/mail/bans/migrate/restore"
     )
 }
 
@@ -820,6 +851,13 @@ mod tests {
             "/cli/mail/dmarc/report-to",
             "/cli/mail/ptr",
             "/cli/mail/ptr/set",
+            "/cli/mail/bans",
+            "/cli/mail/bans/clear",
+            "/cli/mail/allowlist",
+            "/cli/mail/allowlist/add",
+            "/cli/mail/allowlist/remove",
+            "/cli/mail/bans/migrate",
+            "/cli/mail/bans/migrate/restore",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }
@@ -1012,6 +1050,10 @@ mod tests {
             "/cli/mail/queue/drop",
             "/cli/mail/acl/revoke",
             "/cli/mail/ptr/set",
+            "/cli/mail/bans/clear",
+            "/cli/mail/allowlist/add",
+            "/cli/mail/allowlist/remove",
+            "/cli/mail/bans/migrate/restore",
         ] {
             let resp = dispatch(route, &params).expect("route claimed by GET chain");
             assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
@@ -1034,6 +1076,34 @@ mod tests {
             ptr_set.status, "400 Bad Request",
             "missing hostname is usage (before network): {}",
             ptr_set.body
+        );
+        // Bans/allowlist/migrate exact M5 + POST wired (no live Stalwart).
+        for p in [
+            "/cli/mail/bans",
+            "/cli/mail/bans/clear",
+            "/cli/mail/allowlist",
+            "/cli/mail/allowlist/add",
+            "/cli/mail/allowlist/remove",
+            "/cli/mail/bans/migrate",
+            "/cli/mail/bans/migrate/restore",
+        ] {
+            assert!(is_mail_manage_surface(p), "bans M5: {p}");
+        }
+        let bans_clear = dispatch_post("/cli/mail/bans/clear", b"{}");
+        assert_ne!(
+            bans_clear.status, "404 Not Found",
+            "POST /cli/mail/bans/clear must be wired"
+        );
+        assert_eq!(
+            bans_clear.status, "400 Bad Request",
+            "missing ip is usage (before network): {}",
+            bans_clear.body
+        );
+        let migrate_restore_get =
+            dispatch("/cli/mail/bans/migrate/restore", &params).expect("claimed");
+        assert_eq!(
+            migrate_restore_get.status, "405 Method Not Allowed",
+            "GET restore must 405"
         );
         let quota_get = dispatch("/cli/mail/quota", &params).expect("quota GET claimed");
         assert_ne!(

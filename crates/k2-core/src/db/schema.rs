@@ -3486,6 +3486,10 @@ pub struct MailServer {
     /// S1 (0073): most recent supervisor error (enable-step failure /
     /// health degradation detail), surfaced verbatim in status.
     pub last_error: Option<String>,
+    /// 0121: auth-ban migrate window (`authBanRate` snapshot +
+    /// `restoreAt`). Daemon health loop auto-restores; do not reuse
+    /// `enable_progress_json`.
+    pub bans_migrate_json: Option<String>,
 }
 
 /// One `mail_domains` row. `domain` is ALWAYS the normalized form

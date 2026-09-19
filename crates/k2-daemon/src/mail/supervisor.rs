@@ -1627,6 +1627,8 @@ pub fn spawn_health_loop() {
             }
             let _ = std::panic::catch_unwind(|| {
                 let _ = refresh_health();
+                // Auth-ban migrate window auto-restore (prd-hostmail-bans-v1 B26).
+                super::bans::tick_bans_migrate_restore();
             });
         });
 }

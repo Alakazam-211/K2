@@ -106,6 +106,7 @@ pub mod acl;
 pub mod addresses;
 pub mod alias;
 pub mod app_password;
+pub mod bans;
 pub mod catchall;
 pub mod autoconfig;
 pub mod config;

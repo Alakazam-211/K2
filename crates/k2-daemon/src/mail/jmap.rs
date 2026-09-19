@@ -173,6 +173,29 @@ pub struct AppPasswordInfo {
     pub created_at: serde_json::Value,
 }
 
+/// One `x:BlockedIp` / `x:AllowedIp` row (prd-hostmail-bans-v1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IpListEntry {
+    pub id: String,
+    pub address: String,
+    pub reason: Option<String>,
+    pub created_at: serde_json::Value,
+    pub expires_at: serde_json::Value,
+}
+
+/// `x:Security` singleton `authBanRate` — `{count, period}` or null.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthBanRate {
+    pub count: u64,
+    pub period: u64,
+}
+
+/// Parsed `x:Security/get` singleton slice we care about.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SecuritySettings {
+    pub auth_ban_rate: Option<AuthBanRate>,
+}
+
 /// One `x:DkimSignature` object. `privateKey` is never requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DkimSignature {
@@ -1462,6 +1485,150 @@ impl StalwartClient {
             }),
         )?;
         parse_set_created_id("x:Action/set", &resp).map(|_| ())
+    }
+
+    /// Reload blocked-IP set after destroy. Not `InvalidateCaches`.
+    pub fn action_reload_blocked_ips(&self) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Action/set",
+            serde_json::json!({
+                "create": { CREATE_TAG: { "@type": "ReloadBlockedIps" } }
+            }),
+        )?;
+        parse_set_created_id("x:Action/set", &resp).map(|_| ())
+    }
+
+    /// Reload settings after allowlist / Security patch. Not
+    /// `ReloadBlockedIps` / `InvalidateCaches`.
+    pub fn action_reload_settings(&self) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Action/set",
+            serde_json::json!({
+                "create": { CREATE_TAG: { "@type": "ReloadSettings" } }
+            }),
+        )?;
+        parse_set_created_id("x:Action/set", &resp).map(|_| ())
+    }
+
+    pub fn blocked_ip_query(&self) -> Result<Vec<String>, String> {
+        let resp = self.registry_call("x:BlockedIp/query", serde_json::json!({}))?;
+        Ok(parse_query_ids(&resp))
+    }
+
+    pub fn blocked_ip_get(&self, ids: &[String]) -> Result<Vec<IpListEntry>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:BlockedIp/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": ["id", "address", "reason", "createdAt", "expiresAt"],
+            }),
+        )?;
+        Ok(parse_ip_list_get(&resp))
+    }
+
+    pub fn blocked_ip_destroy(&self, ids: &[String]) -> Result<Vec<String>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:BlockedIp/set",
+            serde_json::json!({ "destroy": ids }),
+        )?;
+        parse_set_destroyed_many("x:BlockedIp/set", ids, &resp)
+    }
+
+    pub fn allowed_ip_query(&self) -> Result<Vec<String>, String> {
+        let resp = self.registry_call("x:AllowedIp/query", serde_json::json!({}))?;
+        Ok(parse_query_ids(&resp))
+    }
+
+    pub fn allowed_ip_get(&self, ids: &[String]) -> Result<Vec<IpListEntry>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:AllowedIp/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": ["id", "address", "reason", "createdAt", "expiresAt"],
+            }),
+        )?;
+        Ok(parse_ip_list_get(&resp))
+    }
+
+    pub fn allowed_ip_create(
+        &self,
+        address: &str,
+        reason: Option<&str>,
+        expires_at: Option<&str>,
+    ) -> Result<String, String> {
+        let addr = address.trim();
+        if addr.is_empty() {
+            return Err("allowed_ip_create: empty address".to_string());
+        }
+        let mut body = serde_json::json!({ "address": addr });
+        if let Some(r) = reason.map(str::trim).filter(|s| !s.is_empty()) {
+            body["reason"] = serde_json::json!(r);
+        }
+        body["expiresAt"] = match expires_at.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(e) => serde_json::json!(e),
+            None => serde_json::Value::Null,
+        };
+        let resp = self.registry_call(
+            "x:AllowedIp/set",
+            serde_json::json!({
+                "create": { CREATE_TAG: body }
+            }),
+        )?;
+        parse_set_created_id("x:AllowedIp/set", &resp)
+    }
+
+    pub fn allowed_ip_destroy(&self, ids: &[String]) -> Result<Vec<String>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:AllowedIp/set",
+            serde_json::json!({ "destroy": ids }),
+        )?;
+        parse_set_destroyed_many("x:AllowedIp/set", ids, &resp)
+    }
+
+    /// `x:Security/get` singleton — authBanRate only (never write
+    /// authBanPeriod from hostmail).
+    pub fn security_get(&self) -> Result<SecuritySettings, String> {
+        let resp = self.registry_call(
+            "x:Security/get",
+            serde_json::json!({
+                "ids": [SYSTEM_SETTINGS_SINGLETON_ID],
+                "properties": ["authBanRate"],
+            }),
+        )?;
+        parse_security_get(&resp)
+    }
+
+    /// Patch `authBanRate` only (object or null). Never `authBanPeriod`.
+    pub fn security_set_auth_ban_rate(&self, rate: Option<&AuthBanRate>) -> Result<(), String> {
+        let rate_v = match rate {
+            None => serde_json::Value::Null,
+            Some(r) => serde_json::json!({ "count": r.count, "period": r.period }),
+        };
+        let resp = self.registry_call(
+            "x:Security/set",
+            serde_json::json!({
+                "update": {
+                    SYSTEM_SETTINGS_SINGLETON_ID: { "authBanRate": rate_v }
+                }
+            }),
+        )?;
+        parse_set_updated(
+            "x:Security/set",
+            SYSTEM_SETTINGS_SINGLETON_ID,
+            &resp,
+        )
     }
 
     pub fn queued_message_query(&self) -> Result<Vec<String>, String> {
@@ -2865,6 +3032,89 @@ fn parse_set_destroyed(method: &str, id: &str, args: &serde_json::Value) -> Resu
         return Err(format!("{method} destroy rejected — {}", set_error_line(err)));
     }
     Err(format!("{method} destroy: '{id}' not in the destroyed list"))
+}
+
+/// Batch destroy: every requested id must land in `destroyed`.
+fn parse_set_destroyed_many(
+    method: &str,
+    ids: &[String],
+    args: &serde_json::Value,
+) -> Result<Vec<String>, String> {
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        parse_set_destroyed(method, id, args)?;
+        out.push(id.clone());
+    }
+    Ok(out)
+}
+
+/// Pure `x:BlockedIp/get` / `x:AllowedIp/get` list parser.
+fn parse_ip_list_get(args: &serde_json::Value) -> Vec<IpListEntry> {
+    args.get("list")
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|e| {
+                    let id = e
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())?;
+                    let address = e
+                        .get("address")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())?;
+                    Some(IpListEntry {
+                        id: id.to_string(),
+                        address: address.to_string(),
+                        reason: e
+                            .get("reason")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(String::from),
+                        created_at: e
+                            .get("createdAt")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                        expires_at: e
+                            .get("expiresAt")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pure `x:Security/get` singleton parser for `authBanRate`.
+fn parse_security_get(args: &serde_json::Value) -> Result<SecuritySettings, String> {
+    let entry = args
+        .get("list")
+        .and_then(|v| v.as_array())
+        .and_then(|a| {
+            a.iter().find(|e| {
+                e.get("id").and_then(|v| v.as_str()) == Some(SYSTEM_SETTINGS_SINGLETON_ID)
+            })
+        });
+    let Some(entry) = entry else {
+        return Err("x:Security/get: singleton not in the reply list".to_string());
+    };
+    let auth_ban_rate = match entry.get("authBanRate") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => {
+            let count = v
+                .get("count")
+                .and_then(|c| c.as_u64())
+                .ok_or_else(|| "x:Security/get: authBanRate missing count".to_string())?;
+            let period = v
+                .get("period")
+                .and_then(|p| p.as_u64())
+                .ok_or_else(|| "x:Security/get: authBanRate missing period".to_string())?;
+            Some(AuthBanRate { count, period })
+        }
+    };
+    Ok(SecuritySettings { auth_ban_rate })
 }
 
 fn parse_domain_get_report_address(
@@ -6445,6 +6695,104 @@ mod next_cli_jmap_tests {
         let v = recipients_set_object(&["A@B.test".into()]);
         assert_eq!(v["A@B.test"], true);
         assert_eq!(recipients_addrs(&serde_json::json!({"x@y.z": true})), vec!["x@y.z"]);
+    }
+
+    #[test]
+    fn parse_blocked_ip_get_fixture() {
+        let args = serde_json::json!({
+            "list": [{
+                "id": "bip1",
+                "address": "65.130.10.89",
+                "reason": "authFailure",
+                "createdAt": "2026-09-18T12:00:00Z",
+                "expiresAt": null,
+            }]
+        });
+        let rows = parse_ip_list_get(&args);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "bip1");
+        assert_eq!(rows[0].address, "65.130.10.89");
+        assert_eq!(rows[0].reason.as_deref(), Some("authFailure"));
+        assert!(rows[0].expires_at.is_null());
+    }
+
+    #[test]
+    fn parse_security_get_object_and_null() {
+        let with_rate = serde_json::json!({
+            "list": [{
+                "id": "singleton",
+                "authBanRate": { "count": 100, "period": 86400000 },
+            }]
+        });
+        let s = parse_security_get(&with_rate).expect("object");
+        assert_eq!(
+            s.auth_ban_rate,
+            Some(AuthBanRate {
+                count: 100,
+                period: 86400000
+            })
+        );
+        let nulled = serde_json::json!({
+            "list": [{ "id": "singleton", "authBanRate": null }]
+        });
+        let s = parse_security_get(&nulled).expect("null");
+        assert_eq!(s.auth_ban_rate, None);
+    }
+
+    #[test]
+    fn reload_actions_are_typed_not_invalidate() {
+        let action = method_ok(
+            "x:Action/set",
+            serde_json::json!({ "created": { "k2": { "id": "act1" } } }),
+        );
+        let (port, rx) = spawn_mock_server(vec![session(), action.clone(), action]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.action_reload_blocked_ips().expect("reload blocked");
+        c.action_reload_settings().expect("reload settings");
+        let _s = rx.recv().expect("session");
+        let blocked = body_json(&rx.recv().expect("blocked"));
+        assert_eq!(
+            blocked["methodCalls"][0][1]["create"]["k2"]["@type"],
+            "ReloadBlockedIps"
+        );
+        assert_ne!(
+            blocked["methodCalls"][0][1]["create"]["k2"]["@type"],
+            "InvalidateCaches"
+        );
+        let settings = body_json(&rx.recv().expect("settings"));
+        assert_eq!(
+            settings["methodCalls"][0][1]["create"]["k2"]["@type"],
+            "ReloadSettings"
+        );
+    }
+
+    #[test]
+    fn security_set_auth_ban_rate_never_touches_period() {
+        let set_reply = method_ok(
+            "x:Security/set",
+            serde_json::json!({ "updated": { "singleton": null } }),
+        );
+        let (port, rx) = spawn_mock_server(vec![session(), set_reply.clone(), set_reply]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        c.security_set_auth_ban_rate(None).expect("null rate");
+        let rate = AuthBanRate {
+            count: 100,
+            period: 86400000,
+        };
+        c.security_set_auth_ban_rate(Some(&rate)).expect("restore");
+        let _s = rx.recv().expect("session");
+        let null_body = body_json(&rx.recv().expect("null set"));
+        let update = &null_body["methodCalls"][0][1]["update"]["singleton"];
+        assert!(update.get("authBanRate").unwrap().is_null());
+        assert!(
+            update.get("authBanPeriod").is_none(),
+            "never write authBanPeriod: {update}"
+        );
+        let restore = body_json(&rx.recv().expect("restore set"));
+        let update = &restore["methodCalls"][0][1]["update"]["singleton"];
+        assert_eq!(update["authBanRate"]["count"], 100);
+        assert_eq!(update["authBanRate"]["period"], 86400000);
+        assert!(update.get("authBanPeriod").is_none());
     }
 }
 

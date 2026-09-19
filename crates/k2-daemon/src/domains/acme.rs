@@ -372,7 +372,19 @@ async fn live_issue_async(
                 let txt = challenge.key_authorization().dns_value();
                 let rec = plant_txt(binding, hostname, &txt)?;
                 planted = Some(rec.clone());
-                if let Err(e) = wait_acme_txt_visible(binding, hostname, &txt) {
+                // Hickory's default Resolver starts a tokio runtime.
+                // live_issue already block_on's one — nested Runtime::new
+                // panics "Cannot start a runtime from within a runtime"
+                // (lztek scratch-le1). Wait on a blocking thread.
+                let binding_c = binding.clone();
+                let hostname_c = hostname.to_string();
+                let txt_c = txt.clone();
+                let vis = tokio::task::spawn_blocking(move || {
+                    wait_acme_txt_visible(&binding_c, &hostname_c, &txt_c)
+                })
+                .await
+                .map_err(|e| format!("txt wait worker: {e}"))?;
+                if let Err(e) = vis {
                     let _ = delete_txt(&rec);
                     return Err(e);
                 }

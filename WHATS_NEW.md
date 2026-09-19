@@ -3,6 +3,19 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.148 — Hosted-mail PTR and bans, skin files, server switcher hotkey
+
+Hosted-mail operators can set this box’s SMTP reverse DNS and unban Mail.app users after a migration. Skin guests can move PDFs and images without an owner token. ⌘L opens the server switcher.
+
+- **PTR / HELO.** `k2 hostmail ptr show|set <hostname>` writes the SMTP banner name and asks k2.dev to set the OVH reverse for this box’s origin IP. Doctor PTR/FCrDNS now queries 8.8.8.8 and 1.1.1.1, not the box’s own stub cache. One IPv4, one PTR — not one per hosted domain.
+- **Mint quota and autoconfig.** New mailboxes default to unlimited quota (0 = unlimited). Mail-manage still sets a cap per inbox. Autoconfig DNS uses the attached `mail.` hostname (`mail.lztek.io`), not `mail.<connect>.k2.dev`.
+- **Auth bans.** `k2 hostmail bans list|clear|migrate` and `k2 hostmail allowlist list|add|remove`. Default `bans list` shows reason counts and real-user (`authFailure`) rows first; scanner IPs are a summary (full list: `--json`).
+- **Skin guest files.** Guest `k2skn_` can `read-binary` / `upload-binary` / `create` / `copy` / `move` in rooms with `files:read` / `files:write`. Pin lookup is find-only (200 if Chat is live, 404 if not — it does not start the agent). Thread posts still wake a sleeping Chat the same way `k2 msg` does. Admin Skin Access stays owner.
+- **⌘L / ⇧⌘L.** ⌘L opens the server switcher (search focused). ⇧⌘L is the local LLM helper (was ⌘L).
+- **Hire color and focus group.** `k2 agent hire <dir> --focus-group Ops --color "#22c55e"` (also `rgb(r,g,b)`). Settings → workspace → Agent tab has a hex/rgb field next to the swatches.
+
+Not in this build: People hub, hide XOAUTH2 when no IdP, `k2 hostmail reload`, guest spawn of a pinned Chat, Omarchy pacman package (`release.sh` still does not build one).
+
 ## 0.40.147 — Custom domains, IMAP 993, and hosted-mail operator tools
 
 Attach a real domain to **this** server — Settings → K2 Server → **Domains**, or `k2 domain add <apex>` then `k2 domain name add mail.example.com --role mail`. That does not move nameservers and is not a K2 edge. Hostnames on this box get a Let's Encrypt certificate here (`k2 cert issue` / `renew`); `cert.k2.dev` still only covers `*.k2.dev`. After issue, the mail server reloads the new PEM (no `hostmail disable`).

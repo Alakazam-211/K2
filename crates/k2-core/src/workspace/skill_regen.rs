@@ -104,7 +104,7 @@ skill (`.k2/skills/k2-cli/SKILL.md`) for the full command reference \
 (`msg`, `inbox`, `activity`, `connections`, `heartbeat`, `thread` for the overlay \
 side channel with your human (`k2 thread <addr> \"...\"` / `ask` / `secret` — not \
 PTY inject; a message prefixed `[thread:<addr>]` is from the Thread tab — reply \
-with `k2 thread <addr> \"...\"`, do not answer in this terminal), `feedback` to \
+with `k2 thread <addr> \"...\"`, do not answer in this terminal; Thread text is markdown), `feedback` to \
 ask your human a durable question, `project` for your project group's shared \
 chat — reply to a `[project:<name>]`-prefixed message with \
 `k2 project msg <name> \"...\"`, never `k2 msg` — and `mail` for your agent email: \
@@ -368,6 +368,8 @@ k2 thread <addr>                                # read / tail
 k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
 k2 thread secret <addr> --name NAME             # secret field; you never see the value
 ```
+
+Text and ask prompts render markdown (**bold**, lists, `code`, fences, links).
 
 `sales` is whoever is pinned Chat *now*. `sales/reviewer` is durable.
 Post and continue. The human may tap later or just chat; the card marks or voids; you get a later turn.
@@ -1819,8 +1821,13 @@ mod tests {
             "k2-cli skill must teach the `[thread:<addr>]` reply rule (not TUI)"
         );
         assert!(
+            body.contains("render markdown"),
+            "k2-cli skill must say Thread text renders markdown"
+        );
+        assert!(
             AGENTS_MD_TOOLING_SECTION.contains("[thread:<addr>]")
-                && AGENTS_MD_TOOLING_SECTION.contains("k2 thread <addr>"),
+                && AGENTS_MD_TOOLING_SECTION.contains("k2 thread <addr>")
+                && AGENTS_MD_TOOLING_SECTION.contains("Thread text is markdown"),
             "always-on AGENTS.md Tooling must teach [thread:] → k2 thread (new agents may not load k2-cli)"
         );
         assert!(

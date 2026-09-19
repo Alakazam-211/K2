@@ -47,6 +47,7 @@ AGENTS.md
 .k2/migration/
 .k2/logs/
 .k2/.last-skill-regen
+.k2/.thread-md-nudge
 
 # 0.37.12 — runtime workspace state K2SO writes at runtime; not source.
 # Heartbeats / sessions / agent-templates / scratch state regenerate

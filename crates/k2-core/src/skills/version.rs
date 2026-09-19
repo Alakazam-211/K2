@@ -119,7 +119,8 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// Bumped to 25: `db_agent_access` is create-only; list/dsn/store use
 /// ownership or sql_grants.
 /// Bumped to 26: hire `--focus-group` / `--color` (hex or rgb).
-pub const SKILL_VERSION_WORKSPACE: u32 = 26;
+/// Bumped to 27: thread bodies render markdown (CLI nudge + skill).
+pub const SKILL_VERSION_WORKSPACE: u32 = 27;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

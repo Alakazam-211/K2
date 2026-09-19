@@ -73,6 +73,29 @@ _ws_dot_dir() {
     if [ -d "$1/.k2" ]; then echo "$1/.k2"; else echo "$1/.k2so"; fi
 }
 
+# After a successful overlay write (not --json): first post, then every
+# 10th. Agents forget Thread is markdown; help is not re-read. stderr
+# so stdout stays the id/seq line. Best-effort — missing .k2 is a no-op.
+_thread_md_nudge() {
+    local root="${K2_PROJECT_PATH:-${K2SO_PROJECT_PATH:-${PROJECT:-$PWD}}}"
+    local dot
+    dot=$(_ws_dot_dir "$root")
+    [ -d "$dot" ] || return 0
+    local file="$dot/.thread-md-nudge"
+    local n=0
+    if [ -f "$file" ]; then
+        n=$(tr -d '[:space:]' < "$file" 2>/dev/null || true)
+    fi
+    case "$n" in
+        ''|*[!0-9]*) n=0 ;;
+    esac
+    n=$((n + 1))
+    printf '%s\n' "$n" > "$file" 2>/dev/null || return 0
+    if [ "$n" -eq 1 ] || [ $((n % 10)) -eq 0 ]; then
+        echo "hint: Thread renders markdown — **bold**, lists, \`code\`, fences, links." >&2
+    fi
+}
+
 # Same policy as k2_core::db::resolve_home_db_path.
 # Stage A: prefer k2.db if it exists, else k2so.db.
 # Both real files: pick the one with more live workspaces so a stub k2.db
@@ -7310,6 +7333,9 @@ if d.get("ok") is not True:
 print("%s  seq=%s  from=%s" % (d.get("id",""), d.get("seq",""), d.get("from","")))
 '
             rc=$?
+            if [[ $rc -eq 0 ]]; then
+                _thread_md_nudge
+            fi
         fi
         return $rc
     fi
@@ -7450,6 +7476,11 @@ if d.get("ok") is not True:
     sys.exit(2)
 print(d.get("id",""))
 '
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        _thread_md_nudge
+    fi
+    return $rc
 }
 
 cmd_thread_secret() {
@@ -7551,6 +7582,8 @@ sales = live alias for pinned Chat now. sales/reviewer is durable.
 
 Post and continue. The human may tap later or just chat; the card marks or voids;
 you get a later turn. Do not --wait. Do not emit widget JSON.
+
+Text (and ask prompts) render markdown: **bold**, lists, `code`, fences, links.
 
 --json on any verb. Ask --option repeatable; --allow-custom; mix with --options is 400.
 EOF
@@ -12610,7 +12643,7 @@ cmd_schema() {
     {
       "name": "thread",
       "usage": "k2 thread <addr> [\"text\"] [--json] [--limit N|--all] [--before-seq N] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME",
-      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
+      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). Text and ask prompts render markdown. Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output (ask: {id,prompt,options}; secret never includes the value)."},

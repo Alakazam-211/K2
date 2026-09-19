@@ -54,6 +54,7 @@ import { initProjectGroupEvents } from './stores/project-groups'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
+import { useServerSwitcherStore } from './stores/server-switcher'
 import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs } from './stores/tabs'
 import { useSidebarStore } from './stores/sidebar'
 import { useActiveAgentsStore, startAgentPolling, stopAgentPolling, type ActiveAgent } from './stores/active-agents'
@@ -418,7 +419,8 @@ function AppRoot(): React.JSX.Element {
   // deps produced N copies of one drop). See external-drop-router.ts.
   useEffect(() => mountExternalDropRouter(), [])
 
-  // Cmd+, settings, Cmd+K command palette, Cmd+L assistant, Cmd+J running agents
+  // Cmd+, settings, Cmd+K command palette, Cmd+L server switcher,
+  // Cmd+Shift+L assistant, Cmd+J running agents
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.metaKey && e.key === ',') {
@@ -429,9 +431,10 @@ function AppRoot(): React.JSX.Element {
         e.preventDefault()
         toggleCommandPalette()
       }
-      if (e.metaKey && e.key === 'l') {
+      if (e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault()
-        toggleAssistant()
+        if (e.shiftKey) toggleAssistant()
+        else useServerSwitcherStore.getState().toggle()
       }
       if (e.metaKey && e.key === 'j') {
         e.preventDefault()
@@ -734,6 +737,9 @@ function AppRoot(): React.JSX.Element {
       }).then(track)
       listen('menu:toggle-assistant', () => {
         toggleAssistant()
+      }).then(track)
+      listen('menu:server-switcher', () => {
+        useServerSwitcherStore.getState().toggle()
       }).then(track)
       listen('menu:focus-window', () => {
         const projectId = useProjectsStore.getState().activeProjectId

@@ -5412,7 +5412,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       data-k2-exclude-app-zoom=""
       // App.tsx's global click + refocus-poll use these two data
       // attributes to find the active terminal and keep it focused
-      // after (a) clicks on blank canvas, (b) Cmd+K / Cmd+L
+      // after (a) clicks on blank canvas, (b) Cmd+K / Cmd+Shift+L
       // palette close, (c) any overlay Esc-out. Matches v1.
       data-terminal-container=""
       data-terminal-visible="true"

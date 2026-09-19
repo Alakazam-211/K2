@@ -66,7 +66,7 @@ export function LocalLLMSettings(): React.JSX.Element {
     <div>
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">AI Workspace Assistant</h2>
       <p className="text-xs text-[var(--color-text-muted)] mb-4">
-        A local LLM that translates natural language into workspace operations. Press <kbd className="px-1 py-0.5 bg-white/[0.06] text-[var(--color-text-secondary)] font-mono text-[10px]">&#8984;L</kbd> to open.
+        A local LLM that translates natural language into workspace operations. Press <kbd className="px-1 py-0.5 bg-white/[0.06] text-[var(--color-text-secondary)] font-mono text-[10px]">&#8679;&#8984;L</kbd> to open.
         Runs entirely on your machine — no data is sent to external servers.
       </p>
       <div className="border border-[var(--color-border)]">

@@ -73,7 +73,8 @@ export const HOTKEYS: HotkeyDefinition[] = [
   { id: 'newDocument', label: 'New Document', defaultKey: 'Meta+N', category: 'App' },
   { id: 'openWorkspace', label: 'Open Workspace', defaultKey: 'Meta+O', category: 'App' },
   { id: 'focusWindow', label: 'Open in Focus Window', defaultKey: 'Meta+Shift+F', category: 'App' },
-  { id: 'toggleAssistant', label: 'Toggle Assistant', defaultKey: 'Meta+L', category: 'App' },
+  { id: 'toggleServerSwitcher', label: 'Switch Server', defaultKey: 'Meta+L', category: 'App' },
+  { id: 'toggleAssistant', label: 'Toggle Assistant', defaultKey: 'Meta+Shift+L', category: 'App' },
   { id: 'openProjects', label: 'Open Projects', defaultKey: 'Meta+P', category: 'App' }
 ]
 

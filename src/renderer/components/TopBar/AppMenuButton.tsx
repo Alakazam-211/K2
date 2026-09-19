@@ -41,6 +41,7 @@ const MENU_SECTIONS: { title: string; items: MenuEntry[] }[] = [
       { kind: 'item', id: 'running-agents', label: 'Running Agents' },
       { kind: 'item', id: 'projects', label: 'Projects' },
       { kind: 'item', id: 'toggle-sidebar', label: 'Toggle Sidebar' },
+      { kind: 'item', id: 'server-switcher', label: 'Switch Server' },
       { kind: 'item', id: 'toggle-assistant', label: 'Toggle Assistant' },
       { kind: 'item', id: 'focus-window', label: 'Open in Focus Window' },
     ],

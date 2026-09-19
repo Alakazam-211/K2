@@ -28,6 +28,7 @@ import {
 } from '@/stores/connect-host'
 import { useSettingsStore } from '@/stores/settings'
 import { useAddServerFocusStore } from '@/stores/add-server-focus'
+import { useServerSwitcherStore } from '@/stores/server-switcher'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import { webFeatures } from '@/web/features'
@@ -144,8 +145,10 @@ export default function ServerSwitcher(): React.JSX.Element {
   const pickHost = useConnectHostStore((s) => s.pickHost)
   const openSettings = useSettingsStore((s) => s.openSettings)
   const requestAddServerFocus = useAddServerFocusStore((s) => s.requestAddServerFocus)
+  const open = useServerSwitcherStore((s) => s.open)
+  const setOpen = useServerSwitcherStore((s) => s.setOpen)
+  const toggle = useServerSwitcherStore((s) => s.toggle)
 
-  const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [highlighted, setHighlighted] = useState(0)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -350,9 +353,10 @@ export default function ServerSwitcher(): React.JSX.Element {
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => toggle()}
         className="flex items-center gap-1.5 h-6 px-2 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors rounded no-drag"
-        title={hostIndicator(connectionStatus, recovery, activeHost !== 'local').title}
+        title={`${hostIndicator(connectionStatus, recovery, activeHost !== 'local').title} (⌘L)`}
+        aria-keyshortcuts="Meta+L"
       >
         {/* Recovery-aware dot: amber while restarting/re-authenticating,
             red when sign-in is required (the only user-action state). */}

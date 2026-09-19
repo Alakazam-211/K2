@@ -898,8 +898,8 @@ async fn handle_one_request(
             | "/cli/dns/zones/create"
             | "/cli/dns/zones/delete"
             // Custom domains (prd-custom-domains A2/A14). Dual GET+POST
-            // on exact `/cli/domains` is list vs attach. Attach/remove/
-            // names are owner/admin (not is_agent_verb).
+            // on exact `/cli/domains` is list vs attach. Apex attach/remove
+            // stay owner/admin; hostname add/remove is dns_manage.
             | "/cli/domains"
             | "/cli/domains/remove"
             | "/cli/domains/names"
@@ -5220,12 +5220,15 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
-        // Custom domains — owner/admin attach/remove/names. Agents get
-        // owner_only (exit 3), not opaque invalid-token. GET list is the
-        // dual-auth arm below.
+        // Custom domains — cert issue/renew + hostname add/remove are
+        // dual-auth (owner or dns_manage scoped). Apex attach/remove
+        // stay owner-only below. GET list is the dual-auth arm later.
         p if is_post
             && post_allowed
-            && (p == "/cli/certs/issue" || p == "/cli/certs/renew") =>
+            && (p == "/cli/certs/issue"
+                || p == "/cli/certs/renew"
+                || p == "/cli/domains/names"
+                || p == "/cli/domains/names/remove") =>
         {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -5259,8 +5262,6 @@ async fn handle_one_request(
             && post_allowed
             && (p == "/cli/domains"
                 || p == "/cli/domains/remove"
-                || p == "/cli/domains/names"
-                || p == "/cli/domains/names/remove"
                 || p == "/cli/certs/upload"
                 || p == "/cli/certs/config") =>
         {
@@ -9129,7 +9130,7 @@ fn auth_scope_failure(
                     "ok": false,
                     "error": {
                         "code": "owner_only",
-                        "hint": "requires owner/admin — agents cannot attach or remove domains (k2 domain add/remove / k2 domain name). Use k2 domain list and k2 dns on attached zones.",
+                        "hint": "requires owner/admin — agents cannot attach or remove an apex (k2 domain add/remove). Hostname add/remove is k2 domain name (dns_manage). Use k2 domain list and k2 dns on attached zones.",
                     },
                 })
                 .to_string(),

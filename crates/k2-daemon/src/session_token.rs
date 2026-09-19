@@ -563,10 +563,13 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/whoami",
         "/cli/chatter",
         "/cli/chatterlog",
-        // Custom domains / certs (prd-custom-domains A9). Exact paths
-        // only — never prefix `/cli/domains/` or `/cli/certs/` (attach
-        // + PEM upload stay owner/admin).
+        // Custom domains / certs (prd-custom-domains A9 + name-add fold).
+        // Exact paths only — never prefix `/cli/domains/` or `/cli/certs/`
+        // (apex attach/remove + PEM upload stay owner/admin). Hostname
+        // add/remove is dns_manage (handler-gated), same as cert issue.
         "/cli/domains",
+        "/cli/domains/names",
+        "/cli/domains/names/remove",
         "/cli/certs",
         "/cli/certs/issue",
         "/cli/certs/renew",
@@ -1243,18 +1246,18 @@ mod tests {
         assert!(is_agent_verb("/cli/dns/records/add"));
         assert!(is_agent_verb("/cli/dns/records/remove"));
         assert!(is_agent_verb("/cli/dns/verify"));
-        // Custom domains: list + cert issue/renew are agent verbs;
-        // attach/remove/names/upload are owner-only (no prefix).
+        // Custom domains: list + hostname add/remove + cert issue/renew
+        // are agent verbs; apex attach/remove + PEM upload stay owner-only.
         assert!(is_agent_verb("/cli/domains"));
         assert!(is_agent_verb("/cli/certs"));
         assert!(is_agent_verb("/cli/certs/issue"));
         assert!(is_agent_verb("/cli/certs/renew"));
         assert!(
             !is_agent_verb("/cli/domains/remove"),
-            "attach/remove is owner/admin — not an agent verb"
+            "apex attach/remove is owner/admin — not an agent verb"
         );
-        assert!(!is_agent_verb("/cli/domains/names"));
-        assert!(!is_agent_verb("/cli/domains/names/remove"));
+        assert!(is_agent_verb("/cli/domains/names"));
+        assert!(is_agent_verb("/cli/domains/names/remove"));
         assert!(
             !is_agent_verb("/cli/certs/upload"),
             "PEM upload is owner-only"
@@ -1494,10 +1497,12 @@ mod tests {
             !is_agent_verb("/cli/dns/zones/delete"),
             "scoped token must NOT delete zones"
         );
-        // A9: no prefix `/cli/domains/` or `/cli/certs/`.
+        // A9: no prefix `/cli/domains/` or `/cli/certs/`. Apex remove
+        // stays owner; hostname add/remove is dns_manage (exact paths).
         assert!(is_agent_verb("/cli/domains"));
         assert!(!is_agent_verb("/cli/domains/remove"));
-        assert!(!is_agent_verb("/cli/domains/names"));
+        assert!(is_agent_verb("/cli/domains/names"));
+        assert!(is_agent_verb("/cli/domains/names/remove"));
         assert!(is_agent_verb("/cli/certs"));
         assert!(is_agent_verb("/cli/certs/issue"));
         assert!(is_agent_verb("/cli/certs/renew"));

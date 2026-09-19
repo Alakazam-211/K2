@@ -1,7 +1,8 @@
 //! `/cli/domains` + `/cli/certs` handlers (prd-custom-domains A2/A14).
 //!
-//! GET `/cli/domains` is the list (200). POST attach/remove/names are
-//! owner/admin (dispatcher). GET of mutating paths → 405.
+//! GET `/cli/domains` is the list (200). POST apex attach/remove are
+//! owner/admin (dispatcher). POST names add/remove is dns_manage.
+//! GET of mutating paths → 405.
 
 use std::collections::HashMap;
 
@@ -251,6 +252,9 @@ pub fn handle_remove(params: &HashMap<String, String>) -> CliResponse {
 
 /// POST `/cli/domains/names` `{hostname, role?}`.
 pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
+    if let Err(r) = gate_agent_list() {
+        return r;
+    }
     let Some(raw_host) = body_str(params, &["hostname", "name"]) else {
         return error_response("400 Bad Request", "usage", "missing 'hostname'");
     };
@@ -332,6 +336,9 @@ fn infer_apex(conn: &rusqlite::Connection, hostname: &str) -> Result<String, Cli
 
 /// POST `/cli/domains/names/remove` `{hostname}`.
 pub fn handle_names_remove(params: &HashMap<String, String>) -> CliResponse {
+    if let Err(r) = gate_agent_list() {
+        return r;
+    }
     let Some(raw_host) = body_str(params, &["hostname", "name"]) else {
         return error_response("400 Bad Request", "usage", "missing 'hostname'");
     };

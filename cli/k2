@@ -581,9 +581,9 @@ _uds_eligible() {
         /cli/inbox/*|/cli/review-checklist/*) return 0 ;;
         # DNS K1 — cell_server serves /cli/dns/* POSTs + is_agent_verb GETs.
         /cli/dns/*) return 0 ;;
-        # Custom domains: GET list is an agent verb. Attach POSTs are
-        # owner-only and fall through to TCP after UDS 404.
-        /cli/domains|/cli/certs|/cli/certs/*) return 0 ;;
+        # Custom domains: GET list + hostname add/remove + certs are
+        # agent verbs (dns_manage). Apex attach/remove stay TCP owner.
+        /cli/domains|/cli/domains/names|/cli/domains/names/remove|/cli/certs|/cli/certs/*) return 0 ;;
         # Publish hosted services — /cli/publish/* (agent verb, not /cli/tunnel/).
         /cli/publish/*) return 0 ;;
         # C1 — connections list/add/remove (mutate toggle-gated server-side).
@@ -13783,7 +13783,7 @@ cmd_schema() {
     {
       "name": "domain name add",
       "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]",
-      "description": "Add a hostname under an attached apex. Owner/admin; agents exit 3.",
+      "description": "Add a hostname under an attached apex. dns_manage (same as k2 cert issue). Apex add stays owner.",
       "args": [{"name": "hostname", "required": true}],
       "flags": [
         {"name": "--role", "arg": "mail|publish|direct|other", "description": "Informational role (default other)."},
@@ -13793,14 +13793,14 @@ cmd_schema() {
     {
       "name": "domain name remove",
       "usage": "k2 domain name remove <hostname> [--json]",
-      "description": "Remove a hostname from this server's inventory. Owner/admin; agents exit 3.",
+      "description": "Remove a hostname from this server's inventory. dns_manage.",
       "args": [{"name": "hostname", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
     },
     {
       "name": "domain",
       "usage": "k2 domain <list|add|remove|name> ...",
-      "description": "Attach custom domains to THIS server (owner). Not k2 hostmail domain. Not a nameserver cutover. Locked dns tool.",
+      "description": "Attach custom domains to THIS server. Apex add/remove is owner; hostname add/remove is dns_manage. Not k2 hostmail domain. Not a nameserver cutover. Locked dns tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -30467,11 +30467,12 @@ cmd_cert() {
 
 cmd_help_domain() {
     cat <<'EOF'
-k2 domain — attach custom domains to THIS server (owner)
+k2 domain — attach custom domains to THIS server
 
 This is box inventory: apex + hostnames this machine may terminate.
 It is NOT `k2 hostmail domain` (mail MX recipe) and NOT a nameserver
-cutover. Agents get 403 exit 3 on add/remove.
+cutover. Apex add/remove is owner (exit 3). Hostname add/remove is
+dns_manage (same grant as k2 dns / k2 cert).
 
 USAGE
   k2 domain list [--json]
@@ -30524,7 +30525,8 @@ EOF
 
 cmd_help_domain_name_add() {
     cat <<'EOF'
-Add a hostname under an attached apex.
+Add a hostname under an attached apex (dns_manage). Apex must already
+be on this server (`k2 domain add` is owner). Then `k2 cert issue`.
 
 USAGE
   k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]

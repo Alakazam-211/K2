@@ -370,6 +370,7 @@ async fn live_issue_async(
         match kind {
             ChallengeKind::Dns01 => {
                 let txt = challenge.key_authorization().dns_value();
+                purge_existing_acme_txt(binding, hostname);
                 let rec = plant_txt(binding, hostname, &txt)?;
                 planted = Some(rec.clone());
                 // Hickory's default Resolver starts a tokio runtime.
@@ -454,39 +455,106 @@ fn acme_txt_fqdn(hostname: &str, apex: &str) -> String {
     }
 }
 
-/// Public DNS must see the planted TXT before we tell Let's Encrypt
-/// ready. lztek 2026-09-19: CP returned an id but ns1 NXDOMAIN and
-/// SOA serial did not move — ACME Invalid is the wrong error for that.
+/// Both 8.8.8.8 and 1.1.1.1 must serve the *new* TXT, then settle.
+/// lztek scratch-le2: combined resolver said yes at ~17s; LE Invalid;
+/// TXT appeared after. Retry with leftover TXT still public also Invalid.
 fn wait_acme_txt_visible(binding: &DomainBinding, hostname: &str, value: &str) -> Result<(), String> {
     let fqdn = acme_txt_fqdn(hostname, &binding.apex);
     let budget = dns_wait_secs().max(90);
     let deadline = std::time::Instant::now() + Duration::from_secs(budget);
     while std::time::Instant::now() < deadline {
-        if txt_has(&fqdn, value) {
-            return Ok(());
+        let g = txt_has_google(&fqdn, value);
+        let c = txt_has_cloudflare(&fqdn, value);
+        if g && c {
+            std::thread::sleep(Duration::from_secs(20));
+            if txt_has_google(&fqdn, value) && txt_has_cloudflare(&fqdn, value) {
+                return Ok(());
+            }
         }
         std::thread::sleep(Duration::from_secs(3));
     }
     Err(format!(
-        "planted _acme-challenge TXT via k2.dev but 8.8.8.8/1.1.1.1 still have no record for {fqdn} \
-after {budget}s (zone {}). ns1 can be ahead of public resolvers — wait and retry a fresh hostname \
-(NXDOMAIN cache). Do not retry HTTP-01",
+        "planted _acme-challenge TXT via k2.dev but 8.8.8.8 and 1.1.1.1 do not both have {fqdn}={value:.8}… \
+after {budget}s (zone {}). Fresh hostname if NXDOMAIN-cached. Do not retry HTTP-01",
         binding.zone_id.as_deref().unwrap_or("?")
     ))
 }
 
-fn txt_has(fqdn: &str, want: &str) -> bool {
+fn txt_matches(recs: &[Vec<String>], want: &str) -> bool {
+    recs.iter().any(|chunks| {
+        let s = chunks.concat();
+        s == want || s.trim_matches('"') == want
+    })
+}
+
+fn txt_has_google(fqdn: &str, want: &str) -> bool {
     use crate::mail::dns_verify::{DnsResolver, SystemResolver};
-    let Ok(resolver) = SystemResolver::public().or_else(|_| SystemResolver::new()) else {
+    let Ok(r) = SystemResolver::google_nocache() else {
         return false;
     };
-    match resolver.txt(fqdn) {
-        Ok(recs) => recs.iter().any(|chunks| {
-            let s = chunks.concat();
-            s == want || s.trim_matches('"') == want
-        }),
-        Err(_) => false,
+    r.txt(fqdn).ok().is_some_and(|recs| txt_matches(&recs, want))
+}
+
+fn txt_has_cloudflare(fqdn: &str, want: &str) -> bool {
+    use crate::mail::dns_verify::{DnsResolver, SystemResolver};
+    let Ok(r) = SystemResolver::cloudflare_nocache() else {
+        return false;
+    };
+    r.txt(fqdn).ok().is_some_and(|recs| txt_matches(&recs, want))
+}
+
+fn purge_existing_acme_txt(binding: &DomainBinding, hostname: &str) {
+    let Some(zone_id) = binding.zone_id.as_deref().filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let rel = acme_txt_relative_name(hostname, &binding.apex);
+    let path = format!("/api/dns/zones/{zone_id}");
+    let Ok(resp) = proxy_request("GET", &path, Some("k2-acme"), None) else {
+        return;
+    };
+    for id in acme_txt_record_ids(&resp.body, &rel) {
+        let _ = delete_txt(&id);
     }
+}
+
+fn acme_txt_record_ids(body: &str, rel: &str) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
+    let mut ids = Vec::new();
+    let mut arrays: Vec<&Vec<serde_json::Value>> = Vec::new();
+    if let Some(a) = v.get("records").and_then(|x| x.as_array()) {
+        arrays.push(a);
+    }
+    if let Some(a) = v.pointer("/zone/records").and_then(|x| x.as_array()) {
+        arrays.push(a);
+    }
+    if let Some(a) = v.as_array() {
+        arrays.push(a);
+    }
+    let rel_l = rel.to_ascii_lowercase();
+    for arr in arrays {
+        for rec in arr {
+            let ty = rec
+                .get("type")
+                .or_else(|| rec.get("record_type"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            if !ty.eq_ignore_ascii_case("TXT") {
+                continue;
+            }
+            let name = rec
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            if name == rel_l || name.starts_with(&format!("{rel_l}.")) || name.ends_with(&rel_l) {
+                if let Some(id) = rec.get("id").and_then(|x| x.as_str()) {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+    }
+    ids
 }
 
 fn plant_txt(binding: &DomainBinding, hostname: &str, value: &str) -> Result<String, String> {
@@ -613,6 +681,19 @@ mod tests {
         assert_eq!(
             acme_txt_fqdn("lztek.io", "lztek.io"),
             "_acme-challenge.lztek.io"
+        );
+    }
+
+    #[test]
+    fn acme_txt_record_ids_picks_txt_for_relative_name() {
+        let body = r#"{"records":[
+            {"id":"a","type":"CNAME","name":"scratch-le2"},
+            {"id":"b","type":"TXT","name":"_acme-challenge.scratch-le2"},
+            {"id":"c","type":"TXT","name":"_acme-challenge.other"}
+        ]}"#;
+        assert_eq!(
+            acme_txt_record_ids(body, "_acme-challenge.scratch-le2"),
+            vec!["b".to_string()]
         );
     }
 

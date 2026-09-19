@@ -103,6 +103,26 @@ impl SystemResolver {
             .map(|inner| Self { inner })
             .map_err(|e| format!("public DNS resolver unavailable: {e}"))
     }
+
+    /// Google only, no cache — ACME wait must re-query each poll.
+    pub fn google_nocache() -> Result<Self, String> {
+        use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+        let mut opts = ResolverOpts::default();
+        opts.cache_size = 0;
+        hickory_resolver::Resolver::new(ResolverConfig::google(), opts)
+            .map(|inner| Self { inner })
+            .map_err(|e| format!("google DNS resolver unavailable: {e}"))
+    }
+
+    /// Cloudflare only, no cache — ACME wait must re-query each poll.
+    pub fn cloudflare_nocache() -> Result<Self, String> {
+        use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+        let mut opts = ResolverOpts::default();
+        opts.cache_size = 0;
+        hickory_resolver::Resolver::new(ResolverConfig::cloudflare(), opts)
+            .map(|inner| Self { inner })
+            .map_err(|e| format!("cloudflare DNS resolver unavailable: {e}"))
+    }
 }
 
 /// Absolute query name (trailing dot) so search-domain suffixing can

@@ -12752,8 +12752,8 @@ cmd_schema() {
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": true}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
@@ -12764,6 +12764,8 @@ cmd_schema() {
         {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
         {"name": "--connect", "arg": "name", "description": "Wire a connection to another agent (repeatable). Connections are always mutual (bidirectional)."},
         {"name": "--project", "arg": "project", "description": "Add the new agent to a project (name or id, repeatable; see k2 project list). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
+        {"name": "--focus-group", "arg": "group", "description": "Assign the workspace to a Focus Group (name or id). none/off clears. Unknown group = exit 4."},
+        {"name": "--color", "arg": "hex|rgb", "description": "Workspace color as #rrggbb, #rgb, rgb(r,g,b), or r,g,b. Not limited to the GUI swatches."},
         {"name": "--context", "arg": "path|catalog-id", "description": "Seed an always-on context layer after open (repeatable). Path must exist; catalog ids from `k2 agent context catalog` (wiki:index|home|hygiene, subagents:pack, manager:pack, k2:pack, connections|heartbeats|skills|users:roster, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Create-only passport for k2 db create (default off). List/dsn/store work when this workspace owns a DB or has a grant. Does not mint a database — hire calls k2 db create separately."},
         {"name": "--no-wiki", "arg": null, "description": "Skip seeding .k2/wiki/Home.md + _Index.md on first register (wiki is seeded by default)."},
@@ -17014,6 +17016,10 @@ FLAGS
                           see `k2 project list`). Already a member = reported
                           no-op. The FIRST member of an empty project becomes
                           its Point of Contact.
+  --focus-group <g>       Assign a Focus Group (name or id). `none` / `off`
+                          clears. Unknown group = exit 4.
+  --color <hex|rgb>       Workspace color: #rrggbb, #rgb, rgb(r,g,b), or r,g,b.
+                          Not limited to the GUI swatches.
   --context <path|catalog-id>
                           Seed an always-on AGENTS.md layer after open (repeatable).
                           Explicit paths must exist or hire fails. Catalog ids from
@@ -17046,6 +17052,7 @@ EXAMPLES
   k2 agent hire ~/agents/mgr --template manager --context manager:pack --context wiki:index
   k2 agent hire ~/agents/ops --context wiki:hygiene --context connections:roster \
       --context skills:roster
+  k2 agent hire ~/agents/ops --focus-group Ops --color "#22c55e"
 EOF
 }
 
@@ -17336,7 +17343,7 @@ cmd_agent_hire() {
     if _wants_help "$@"; then cmd_help_agent_hire; exit 0; fi
     local dir="" name="" template="" persona="" mode="" enabled="" onboard="" agent_preset=""
     local launch=false dry_run=false as_json=false no_wiki=false
-    local no_agents_md=false fanout=false db_access=""
+    local no_agents_md=false fanout=false db_access="" color="" focus_group=""
     local connects=() projects=() contexts=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -17364,6 +17371,12 @@ cmd_agent_hire() {
             --project)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--project requires a project name or id (see: k2 project list)"; exit 2; }
                 projects+=("$2"); shift 2 ;;
+            --focus-group)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--focus-group requires a group name or id (or none)"; exit 2; }
+                focus_group="$2"; shift 2 ;;
+            --color)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--color requires a hex or rgb value"; exit 2; }
+                color="$2"; shift 2 ;;
             --context)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--context requires a path or catalog id (see: k2 agent context catalog)"; exit 2; }
                 contexts+=("$2"); shift 2 ;;
@@ -17443,7 +17456,7 @@ cmd_agent_hire() {
     PROJECTS="$projects_json" CONTEXTS="$contexts_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
     NO_WIKI="$no_wiki" NO_AGENTS_MD="$no_agents_md" FANOUT="$fanout" \
-    DB_ACCESS="$db_access" \
+    DB_ACCESS="$db_access" COLOR="$color" FOCUS_GROUP="$focus_group" \
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
@@ -17467,6 +17480,8 @@ no_wiki = os.environ.get("NO_WIKI") == "true"
 no_agents_md = os.environ.get("NO_AGENTS_MD") == "true"
 fanout = os.environ.get("FANOUT") == "true"
 db_access = os.environ.get("DB_ACCESS", "")
+color_arg = os.environ.get("COLOR", "")
+focus_group_arg = os.environ.get("FOCUS_GROUP", "")
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
 
@@ -17506,6 +17521,31 @@ def http_post_json(route, body, timeout=30):
             return {"error": "HTTP %s on %s" % (e.code, route)}
     except Exception as e:
         return {"error": "%s: %s" % (route, e)}
+
+def normalize_color(raw):
+    s = (raw or "").strip()
+    if not s:
+        return None
+    hexpart = s[1:] if s.startswith("#") else s
+    hexpart = hexpart.lower()
+    if re.fullmatch(r"[0-9a-f]{6}", hexpart):
+        return "#" + hexpart
+    if re.fullmatch(r"[0-9a-f]{3}", hexpart):
+        return "#" + "".join(c * 2 for c in hexpart)
+    m = re.fullmatch(
+        r"rgba?\(\s*([0-9]{1,3})\s*[, ]\s*([0-9]{1,3})\s*[, ]\s*([0-9]{1,3})(?:\s*[,/]\s*[0-9.]+\s*)?\)",
+        s, re.I)
+    if not m:
+        m = re.fullmatch(r"([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})", s)
+    if m:
+        parts = []
+        for g in m.groups():
+            n = int(g)
+            if n > 255:
+                return None
+            parts.append("%02x" % n)
+        return "#" + "".join(parts)
+    return None
 
 # ── Resolve --agent against the preset roster (fail fast) ────────
 # Stored value = the matched preset's canonical ID (the resolver's
@@ -17566,6 +17606,44 @@ for sel in wanted_projects:
     if all(p["id"] != d["id"] for p in resolved_projects):
         resolved_projects.append({"id": d["id"], "name": d.get("name") or sel,
                                   "memberless": not d.get("members")})
+
+wanted_color = None
+if color_arg:
+    wanted_color = normalize_color(color_arg)
+    if wanted_color is None:
+        fail("bad_usage",
+             "invalid --color '%s' — use #rrggbb, #rgb, rgb(r,g,b), or r,g,b" % color_arg, 2)
+
+wanted_focus_id = None  # None = not requested; "" = clear; uuid = assign
+wanted_focus_label = None
+if focus_group_arg:
+    sel = focus_group_arg.strip()
+    if sel.lower() in ("none", "off", "-"):
+        wanted_focus_id = ""
+        wanted_focus_label = "none"
+    else:
+        groups = http_get("/cli/focus-groups/list", {})
+        if not isinstance(groups, list):
+            err = groups.get("error") if isinstance(groups, dict) else None
+            fail("daemon_error", "cannot list focus groups: %s" % (err or "unexpected response"))
+        def group_matches(g):
+            return (g.get("id") == sel
+                    or (g.get("name") or "").lower() == sel.lower())
+        hits = [g for g in groups if group_matches(g)]
+        if not hits:
+            prefixes = [g for g in groups
+                        if (g.get("name") or "").lower().startswith(sel.lower())]
+            if len(prefixes) == 1:
+                hits = prefixes
+        if not hits:
+            fail("not_found",
+                 "no focus group matches '%s' — create one in Settings → Workspaces" % sel, 4)
+        if len(hits) > 1:
+            fail("ambiguous",
+                 "'%s' matches multiple focus groups: %s — pass the id" %
+                 (sel, ", ".join(sorted((g.get("name") or g.get("id") or "?") for g in hits))), 4)
+        wanted_focus_id = hits[0].get("id") or ""
+        wanted_focus_label = hits[0].get("name") or sel
 
 # ── Probe current state (this is what makes hire idempotent) ─────
 conf = http_get("/cli/agent/conf", {"q": path})
@@ -17755,6 +17833,27 @@ for p in resolved_projects:
             a["becamePoc"] = True
     actions.append(a)
 
+if wanted_color is not None:
+    current_color = (conf.get("color") or "").lower() if registered else ""
+    a = {"step": "set-color", "color": wanted_color}
+    if registered and current_color == wanted_color:
+        a.update(status="skipped", reason="already %s" % wanted_color)
+    else:
+        a["status"] = "pending"
+    actions.append(a)
+
+if wanted_focus_id is not None:
+    current_fg = conf.get("focusGroupId") if registered else None
+    if current_fg is None:
+        current_fg = ""
+    a = {"step": "assign-focus-group", "group": wanted_focus_label,
+         "focusGroupId": wanted_focus_id or None}
+    if registered and current_fg == (wanted_focus_id or ""):
+        a.update(status="skipped", reason="already %s" % (wanted_focus_label or "none"))
+    else:
+        a["status"] = "pending"
+    actions.append(a)
+
 # Context seeds (after open). Explicit path missing → fail now.
 # Presets missing on disk → still planned; apply warns and continues.
 for ctx in wanted_contexts:
@@ -17894,6 +17993,10 @@ def emit(ok, changed):
             line = "join-project: %s" % a["project"]
             if a.get("becamePoc"):
                 line += " (first member — Point of Contact)"
+        elif step == "set-color":
+            line = "color: %s" % a["color"]
+        elif step == "assign-focus-group":
+            line = "focus-group: %s" % (a.get("group") or "none")
         elif step == "seed-context":
             if a.get("kind") == "catalog":
                 line = "context: catalog %s" % a.get("catalog", a.get("context"))
@@ -18076,6 +18179,48 @@ if a and a["status"] == "pending":
     if resp.get("error") or not resp.get("success"):
         step_failed(a, "daemon_error",
                     "rename failed: %s" % resp.get("error", json.dumps(resp)[:300]))
+    a["status"] = "done"
+    changed = True
+
+# 5b. color + focus group (need workspace id after register).
+ca = one("set-color")
+fa = one("assign-focus-group")
+need_id = (ca and ca["status"] == "pending") or (fa and fa["status"] == "pending")
+workspace_id = conf.get("id") if registered else None
+if need_id and not workspace_id:
+    conf2 = http_get("/cli/agent/conf", {"q": path})
+    if conf2.get("ok") and conf2.get("id"):
+        workspace_id = conf2.get("id")
+        conf = conf2
+if need_id and not workspace_id:
+    listing = http_get("/cli/projects/list", {})
+    rows = listing if isinstance(listing, list) else []
+    for p in rows:
+        if isinstance(p, dict) and p.get("path") == path and p.get("id"):
+            workspace_id = p.get("id")
+            break
+if need_id and not workspace_id:
+    bad = ca if (ca and ca["status"] == "pending") else fa
+    step_failed(bad, "daemon_error", "cannot resolve workspace id after register")
+
+a = one("set-color")
+if a and a["status"] == "pending":
+    resp = http_post_json("/cli/projects/update", {"id": workspace_id, "color": a["color"]})
+    if resp.get("error"):
+        err = resp.get("error")
+        hint = err if isinstance(err, str) else (err or {}).get("hint") or json.dumps(resp)[:300]
+        step_failed(a, "daemon_error", "color write failed: %s" % hint)
+    a["status"] = "done"
+    changed = True
+
+a = one("assign-focus-group")
+if a and a["status"] == "pending":
+    body = {"projectId": workspace_id, "focusGroupId": a.get("focusGroupId")}
+    resp = http_post_json("/cli/focus-groups/assign", body)
+    if resp.get("error"):
+        err = resp.get("error")
+        hint = err if isinstance(err, str) else (err or {}).get("hint") or json.dumps(resp)[:300]
+        step_failed(a, "daemon_error", "focus-group assign failed: %s" % hint)
     a["status"] = "done"
     changed = True
 

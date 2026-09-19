@@ -51,6 +51,8 @@ import { WorkspaceApiKeysPanel } from './ApiTokensSection'
 import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessionsToggle'
 import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
 import { workspaceGrantSlug } from './api-keys-api'
+import { GROUP_AVATAR_COLORS } from '@/components/Projects/ProjectGroupAvatar'
+import { normalizeHexColor } from '@/components/Projects/projects-api'
 import { setSqlDbAgentAccess } from './data-api'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 
@@ -1050,6 +1052,8 @@ function ProjectDetail({
   const [canonicalModalMode, setCanonicalModalMode] = useState<'setup' | 'manage' | null>(null)
   const [canonicalProbes, setCanonicalProbes] = useState<HarnessProbe[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [customHex, setCustomHex] = useState('')
+  const [hexError, setHexError] = useState(false)
   // Consume the deep-link on first paint so manage → Heartbeats does not
   // flash Agent, and so a remount still sees the requested tab.
   const initialWorkspaceTab = useSettingsStore((s) => s.initialWorkspaceTab)
@@ -1074,6 +1078,8 @@ function ProjectDetail({
     setWakeupEditingHb(null)
     setCanonicalModalMode(null)
     setHistoryEmpty(false)
+    setCustomHex('')
+    setHexError(false)
   }, [project.id])
 
   const openContextEdit = useCallback((target: ContextEditTarget) => {
@@ -1452,16 +1458,16 @@ function ProjectDetail({
                 </div>
               </div>
 
-              {/* Color */}
-              <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">
+              {/* Color — palette + free hex/rgb (same contract as project-group color). */}
+              <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)] gap-3">
                 <span className="text-xs text-[var(--color-text-secondary)]">Color</span>
-                <div className="flex items-center gap-1.5">
-                  {['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#a855f7', '#ec4899', '#06b6d4', '#64748b'].map((color) => (
+                <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
+                  {GROUP_AVATAR_COLORS.map((color) => (
                     <button
                       key={color}
+                      type="button"
+                      title={color}
                       onClick={() => {
-                        // Optimistic store path: paints immediately, POSTs color,
-                        // rolls back on failure — no success-path N+1 refetch.
                         void useProjectsStore.getState().setProjectColor(project.id, color)
                       }}
                       className={`w-4 h-4 flex-shrink-0 no-drag cursor-pointer transition-transform ${
@@ -1470,6 +1476,49 @@ function ProjectDetail({
                       style={{ backgroundColor: color }}
                     />
                   ))}
+                  <input
+                    type="text"
+                    value={customHex}
+                    onChange={(e) => {
+                      setCustomHex(e.target.value)
+                      setHexError(false)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const normalized = normalizeHexColor(customHex)
+                        if (normalized === null) {
+                          setHexError(customHex.trim().length > 0)
+                          return
+                        }
+                        setHexError(false)
+                        setCustomHex('')
+                        void useProjectsStore.getState().setProjectColor(project.id, normalized)
+                      } else if (e.key === 'Escape') {
+                        e.stopPropagation()
+                        setCustomHex('')
+                        setHexError(false)
+                      }
+                    }}
+                    onBlur={() => {
+                      if (!customHex.trim()) return
+                      const normalized = normalizeHexColor(customHex)
+                      if (normalized === null) {
+                        setHexError(true)
+                        return
+                      }
+                      setHexError(false)
+                      setCustomHex('')
+                      void useProjectsStore.getState().setProjectColor(project.id, normalized)
+                    }}
+                    placeholder={project.color || '#rrggbb'}
+                    spellCheck={false}
+                    aria-label="Custom color (hex or rgb)"
+                    className={`w-[7.5rem] px-1.5 py-0.5 text-[11px] font-mono bg-[var(--color-bg)] border text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none no-drag ${
+                      hexError
+                        ? 'border-[color-mix(in_srgb,var(--color-status-error-soft)_60%,transparent)]'
+                        : 'border-[var(--color-border)] focus:border-[var(--color-accent)]'
+                    }`}
+                  />
                 </div>
               </div>
 

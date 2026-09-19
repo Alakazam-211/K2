@@ -393,16 +393,35 @@ export function createErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** Normalize a user-typed hex color to the daemon's `#rrggbb` contract
- *  (§6.7.7 set-color): optional leading `#`, 3-digit shorthand expands,
- *  case folds to lower. null = not a hex color (the custom-hex input
- *  shows the inline error instead of posting). */
+function byteToHex(n: number): string | null {
+  if (!Number.isFinite(n) || n < 0 || n > 255) return null
+  return Math.round(n).toString(16).padStart(2, '0')
+}
+
+function rgbToHex(r: string, g: string, b: string): string | null {
+  const rh = byteToHex(Number(r))
+  const gh = byteToHex(Number(g))
+  const bh = byteToHex(Number(b))
+  if (rh === null || gh === null || bh === null) return null
+  return `#${rh}${gh}${bh}`
+}
+
+/** Normalize a user-typed color to the daemon's `#rrggbb` contract:
+ *  hex (`#rrggbb` / `#rgb` / no hash), `rgb()` / `rgba()`, or `r,g,b`.
+ *  Case folds. null = not a color (the custom input shows an error). */
 export function normalizeHexColor(input: string): string | null {
-  const raw = input.trim().replace(/^#/, '').toLowerCase()
-  if (/^[0-9a-f]{6}$/.test(raw)) return `#${raw}`
-  if (/^[0-9a-f]{3}$/.test(raw)) {
-    return `#${raw[0]}${raw[0]}${raw[1]}${raw[1]}${raw[2]}${raw[2]}`
+  const trimmed = input.trim()
+  const hex = trimmed.replace(/^#/, '').toLowerCase()
+  if (/^[0-9a-f]{6}$/.test(hex)) return `#${hex}`
+  if (/^[0-9a-f]{3}$/.test(hex)) {
+    return `#${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`
   }
+  const rgbFn = trimmed.match(
+    /^rgba?\(\s*([0-9]{1,3})\s*[, ]\s*([0-9]{1,3})\s*[, ]\s*([0-9]{1,3})(?:\s*[,/]\s*[0-9.]+\s*)?\)$/i,
+  )
+  if (rgbFn) return rgbToHex(rgbFn[1], rgbFn[2], rgbFn[3])
+  const csv = trimmed.match(/^([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})$/)
+  if (csv) return rgbToHex(csv[1], csv[2], csv[3])
   return null
 }
 

@@ -894,19 +894,21 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
         return crate::workspace_routes::workspace_not_found_response(q);
     };
 
-    // projects row: id (for the membership lookup) + raw mode +
+    // projects row: id (membership + color/focus-group hire) + raw mode +
     // enabled bit.
-    let (workspace_id, mode_raw, enabled) = {
+    let (workspace_id, mode_raw, enabled, color, focus_group_id) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         match conn.query_row(
-            "SELECT id, agent_mode, agent_enabled FROM projects WHERE path = ?1",
+            "SELECT id, agent_mode, agent_enabled, color, focus_group_id FROM projects WHERE path = ?1",
             rusqlite::params![path],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, Option<String>>(1)?.unwrap_or_else(|| "off".to_string()),
                     r.get::<_, Option<i64>>(2)?.unwrap_or(0) == 1,
+                    r.get::<_, Option<String>>(3)?.unwrap_or_else(|| "#3b82f6".to_string()),
+                    r.get::<_, Option<String>>(4)?,
                 ))
             },
         ) {
@@ -971,10 +973,13 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
+            "id": workspace_id,
             "name": name,
             "path": path,
             "mode": k2_core::workspace::settings::display_agent_mode(&mode_raw),
             "enabled": enabled,
+            "color": color,
+            "focusGroupId": focus_group_id,
             "personaPath": persona_path,
             "connections": connections,
             "projects": projects,

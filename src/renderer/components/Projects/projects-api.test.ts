@@ -141,12 +141,20 @@ describe('normalizeHexColor', () => {
     expect(normalizeHexColor('F0a')).toBe('#ff00aa')
   })
 
+  it('accepts rgb() / rgba() and r,g,b', () => {
+    expect(normalizeHexColor('rgb(59, 130, 246)')).toBe('#3b82f6')
+    expect(normalizeHexColor('rgb(59 130 246)')).toBe('#3b82f6')
+    expect(normalizeHexColor('rgba(239,68,68,1)')).toBe('#ef4444')
+    expect(normalizeHexColor('34, 197, 94')).toBe('#22c55e')
+  })
+
   it('rejects everything else', () => {
     expect(normalizeHexColor('')).toBeNull()
     expect(normalizeHexColor('#12345')).toBeNull()
     expect(normalizeHexColor('#1234567')).toBeNull()
     expect(normalizeHexColor('red')).toBeNull()
     expect(normalizeHexColor('#gggggg')).toBeNull()
+    expect(normalizeHexColor('rgb(300, 0, 0)')).toBeNull()
   })
 })
 

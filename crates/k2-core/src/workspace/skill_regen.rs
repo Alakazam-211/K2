@@ -426,6 +426,7 @@ shared chat — reply with `k2 project msg <name> "your reply"`. Never use
 Membership rides the agent-management plane too:
 ```
 k2 agent hire <dir> --project <p>          # hire straight into a project (repeatable)
+k2 agent hire <dir> --focus-group Ops --color "#22c55e"
 k2 agent set <ws> --add-project <p>        # add an existing agent to a project
 k2 agent set <ws> --remove-project <p>     # remove a membership (PoC refused until
                                            #   `k2 project poc` names a successor)
@@ -1862,6 +1863,10 @@ mod tests {
         assert!(
             body.contains("--context"),
             "k2-cli skill must mention hire --context seed",
+        );
+        assert!(
+            body.contains("--focus-group") && body.contains("--color"),
+            "k2-cli skill must mention hire --focus-group and --color",
         );
         // K2 Mail S8: the `k2 mail` surface + its guardrails
         // (SKILL_VERSION_WORKSPACE bumped 9→11 for this section; 10 taken on main).

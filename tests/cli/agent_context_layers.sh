@@ -124,6 +124,8 @@ assert_contains "hire help has --no-wiki" "$help_hire" "--no-wiki"
 assert_contains "hire help says wiki seeded by default" "$help_hire" "seeded by default"
 assert_contains "hire help has --no-agents-md" "$help_hire" "--no-agents-md"
 assert_contains "hire help has --fanout" "$help_hire" "--fanout"
+assert_contains "hire help has --color" "$help_hire" "--color"
+assert_contains "hire help has --focus-group" "$help_hire" "--focus-group"
 
 help_ws_create="$(PORT=1 TOKEN=fake "$K2_CLI" workspace create --help 2>&1)" || true
 if ! printf '%s' "$help_ws_create" | grep -q -- "--no-agents-md"; then
@@ -145,6 +147,12 @@ echo "== hire --context usage =="
 # Missing value after --context
 assert_exit "hire --context missing value → 2" 2 \
     env PORT=1 TOKEN=fake "$K2_CLI" agent hire /tmp/k2-ctx-hire-x --context
+assert_exit "hire --color missing value → 2" 2 \
+    env PORT=1 TOKEN=fake "$K2_CLI" agent hire /tmp/k2-ctx-hire-x --color
+assert_exit "hire --focus-group missing value → 2" 2 \
+    env PORT=1 TOKEN=fake "$K2_CLI" agent hire /tmp/k2-ctx-hire-x --focus-group
+assert_exit "hire --color garbage → 2" 2 \
+    env PORT=1 TOKEN=fake "$K2_CLI" agent hire /tmp/k2-ctx-hire-x --color notacolor --dry-run
 err="$(cat /tmp/_k2_ctx_err.$$ 2>/dev/null || true)"
 assert_contains "hire --context missing → bad_usage" "$err" 'bad_usage'
 

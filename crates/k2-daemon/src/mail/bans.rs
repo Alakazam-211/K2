@@ -479,6 +479,7 @@ pub fn parse_bans_migrate_json(raw: &str) -> Result<BansMigrateState, String> {
     serde_json::from_str(raw).map_err(|e| format!("bans_migrate_json: {e}"))
 }
 
+#[cfg(test)]
 pub fn bans_migrate_json_roundtrip(state: &BansMigrateState) -> Result<BansMigrateState, String> {
     let s = serde_json::to_string(state).map_err(|e| e.to_string())?;
     parse_bans_migrate_json(&s)

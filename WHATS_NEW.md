@@ -3,6 +3,17 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.149 — Agents can attach hostnames; doctor refreshes; certs over CNAME
+
+Mail-manage / DNS-manage agents can add `mail.<apex>` themselves once the apex is on the box. Thread posts from `k2 thread` remind agents the overlay paints markdown.
+
+- **Hostname add/remove is dns_manage.** `k2 domain name add <hostname> [--role mail|publish|direct|other]` and `name remove` use the same grant as `k2 dns` / `k2 cert issue`. Apex `k2 domain add|remove` stays owner (exit 3). e2e on lztek: idempotent add of `mail.discover-nocode.com`, scratch add+remove, apex still owner_only.
+- **Thread markdown nudge.** After a successful `k2 thread` write (not `--json`), a stderr hint on the first post and every 10th: Thread renders markdown (`**bold**`, lists, `code`, fences, links). Help and AGENTS.md Tooling say the same.
+- **Doctor refreshes.** `k2 hostmail doctor` POSTs `/cli/mail/doctor` (runs probes now). It no longer GETs the last stored run, which stayed stale after PTR/DNS already moved.
+- **Cert issue vs CNAME.** If the apex is `dns_write`, `k2 cert issue` uses DNS-01 on `_acme-challenge.<host>` (that name is not the `mail` CNAME). If the hostname is a CNAME and the zone is not `dns_write`, it fails loud instead of HTTP-01 following the CNAME onto a closed :80.
+
+Not in this build: People hub, hide XOAUTH2 when no IdP, Omarchy pacman package.
+
 ## 0.40.148 — Hosted-mail PTR and bans, skin files, server switcher hotkey
 
 Hosted-mail operators can set this box’s SMTP reverse DNS and unban Mail.app users after a migration. Skin guests can move PDFs and images without an owner token. ⌘L opens the server switcher.

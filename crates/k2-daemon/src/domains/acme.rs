@@ -1,9 +1,10 @@
 //! On-box ACME for custom-domain hostnames (C6/C17/C18).
 //!
-//! Proof order: DNS-01 if `dns_write`; else HTTP-01 on :80; else TLS-ALPN
-//! if this box can bind :443. DNS-01 plants relative TXT via existing
-//! `/cli/dns/records/add` (`managed_by=user`), waits syncd, deletes after.
-//! Never cert.k2.dev. Never silent rcgen.
+//! Proof order: DNS-01 if `dns_write`; else HTTP-01 on :80 **unless the
+//! hostname is a CNAME** (LE follows it; `mail` → `mail.lztek.io:80` is
+//! often closed / tls-alpn); else TLS-ALPN if this box can bind :443.
+//! DNS-01 plants `_acme-challenge.<host>` TXT (a different owner name
+//! than the `mail` CNAME). Never cert.k2.dev. Never silent rcgen.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -78,7 +79,7 @@ fn reject_k2_dev(hostname: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn select_challenge(binding: &DomainBinding) -> Result<ChallengeKind, String> {
+pub fn select_challenge(binding: &DomainBinding, hostname: &str) -> Result<ChallengeKind, String> {
     if binding.dns_write {
         if crate::dns::proxy::tunnel_bearer_token().is_err() {
             return Err(
@@ -88,6 +89,13 @@ pair K2 Connect, or point the name here and use HTTP-01/:80 or TLS-ALPN/:443"
             );
         }
         return Ok(ChallengeKind::Dns01);
+    }
+    if hostname_is_cname(hostname) {
+        return Err(format!(
+            "{hostname} is a CNAME — HTTP-01 follows it (often to a host with :80 closed). \
+Attach this apex with dns_write so we DNS-01 _acme-challenge (the CNAME at the mail \
+label is fine), or point an A at this box"
+        ));
     }
     if std::env::var("K2_ACME_HTTP01")
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
@@ -106,6 +114,42 @@ and :443 is not free (TLS-ALPN). Attach a K2-hosted zone or open :80"
     )
 }
 
+/// True if `hostname` itself is a CNAME. `_acme-challenge.<host>` is a
+/// different owner name — DNS-01 still works while `mail` is a CNAME.
+fn hostname_is_cname(hostname: &str) -> bool {
+    if std::env::var("K2_ACME_HOSTNAME_IS_CNAME")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if cfg!(test) {
+        return false;
+    }
+    lookup_cname(hostname)
+}
+
+fn lookup_cname(hostname: &str) -> bool {
+    use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+    use hickory_resolver::proto::rr::RecordType;
+    let mut config = ResolverConfig::google();
+    for ns in ResolverConfig::cloudflare().name_servers() {
+        config.add_name_server(ns.clone());
+    }
+    let Ok(resolver) = hickory_resolver::Resolver::new(config, ResolverOpts::default()) else {
+        return false;
+    };
+    let q = if hostname.ends_with('.') {
+        hostname.to_string()
+    } else {
+        format!("{hostname}.")
+    };
+    match resolver.lookup(q, RecordType::CNAME) {
+        Ok(lookup) => lookup.iter().next().is_some(),
+        Err(_) => false,
+    }
+}
+
 fn port_seems_free(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
@@ -117,7 +161,7 @@ pub fn issue_attached(hostname: &str) -> Result<InstalledPem, String> {
         plant_mail_if_needed(hostname, &name, &pem)?;
         return Ok(pem);
     }
-    let kind = select_challenge(&binding)?;
+    let kind = select_challenge(&binding, hostname)?;
     issue_with_challenge(hostname, &binding, &name, kind)
 }
 
@@ -677,5 +721,48 @@ mod tests {
             issuer: Some("CN=R3, O=Let's Encrypt".into()),
         };
         crate::domains::status::reject_if_self_signed(&issued).expect("issued");
+    }
+
+    fn byo_binding() -> DomainBinding {
+        DomainBinding {
+            apex: "discover-nocode.com".into(),
+            zone_id: None,
+            dns_write: false,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn cname_hostname_refuses_http01_without_dns_write() {
+        std::env::set_var("K2_ACME_HOSTNAME_IS_CNAME", "1");
+        let err = select_challenge(&byo_binding(), "mail.discover-nocode.com")
+            .expect_err("CNAME must not HTTP-01");
+        std::env::remove_var("K2_ACME_HOSTNAME_IS_CNAME");
+        assert!(err.contains("CNAME"), "{err}");
+        assert!(err.contains("dns_write") || err.contains("DNS-01"), "{err}");
+    }
+
+    #[test]
+    fn dns_write_still_picks_dns01_when_hostname_is_cname() {
+        std::env::set_var("K2_ACME_HOSTNAME_IS_CNAME", "1");
+        let binding = DomainBinding {
+            apex: "discover-nocode.com".into(),
+            zone_id: Some("z1".into()),
+            dns_write: true,
+            created_at: 0,
+        };
+        let kind = match select_challenge(&binding, "mail.discover-nocode.com") {
+            Ok(k) => k,
+            Err(e) => {
+                std::env::remove_var("K2_ACME_HOSTNAME_IS_CNAME");
+                assert!(
+                    e.contains("tunnel token") || e.contains("DNS-01"),
+                    "dns_write must attempt DNS-01, not HTTP-01: {e}"
+                );
+                return;
+            }
+        };
+        std::env::remove_var("K2_ACME_HOSTNAME_IS_CNAME");
+        assert_eq!(kind, ChallengeKind::Dns01);
     }
 }

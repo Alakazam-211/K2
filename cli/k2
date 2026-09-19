@@ -23898,12 +23898,12 @@ elif verb == "domain_remove":
             print("mail data purge requested.")
 
 elif verb == "doctor":
-    params = {}
+    # POST runs probes now. GET is the last stored run and will lie
+    # after PTR/DNS already moved (it-email 2026-09-19).
+    body = {}
     if env("M_DOMAIN"):
-        params["domain"] = env("M_DOMAIN")
-    d = call("GET", "/cli/mail/doctor", params=params)
-    # Shape finalizes with the doctor slice (S6) — surface it raw until
-    # then rather than guessing a pretty format.
+        body["domain"] = env("M_DOMAIN")
+    d = call("POST", "/cli/mail/doctor", body=body)
     print(dumps(d))
 
 elif verb == "config_get":
@@ -28377,19 +28377,17 @@ EOF
 
 cmd_help_mail_doctor() {
     cat <<'EOF'
-Deliverability doctor. The engine is live. GET returns the latest persisted
-run (no probes). POST /cli/mail/doctor runs the probes (outbound port 25,
-rDNS/PTR, FCrDNS, MX/SPF/DKIM/DMARC, blocklists, TLS, open-relay self-test,
-direct-send grade). mail_manage agents may call it. Passing <domain> on GET
-is not a run — it reads that domain's last POST.
+Deliverability doctor. This CLI POSTs /cli/mail/doctor (runs probes now:
+outbound port 25, rDNS/PTR, FCrDNS, MX/SPF/DKIM/DMARC, blocklists, TLS,
+open-relay self-test, direct-send grade). It does not GET the last stored
+run — that stays stale after PTR/DNS already moved. mail_manage agents
+may call it.
 
 USAGE
   k2 hostmail doctor [<domain>] [--json]
 
 NOTES
-  Bare GET (no domain) prints run: null if this box has never POSTed.
-  GET with a hosted domain and no per-domain run is no_run — POST
-  /cli/mail/doctor with that domain to run probes.
+  Passing <domain> grades that hosted domain. Bare doctor is server-level.
   Direct send mode stays locked until a non-failing server-level grade.
 
 FLAGS

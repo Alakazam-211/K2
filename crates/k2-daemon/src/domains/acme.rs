@@ -44,7 +44,7 @@ fn dns_wait_secs() -> u64 {
     std::env::var("K2_ACME_DNS_WAIT_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(10)
+        .unwrap_or(90)
 }
 
 fn acme_directory(cfg: &AcmeConfig) -> String {
@@ -447,17 +447,18 @@ fn acme_txt_fqdn(hostname: &str, apex: &str) -> String {
 /// SOA serial did not move — ACME Invalid is the wrong error for that.
 fn wait_acme_txt_visible(binding: &DomainBinding, hostname: &str, value: &str) -> Result<(), String> {
     let fqdn = acme_txt_fqdn(hostname, &binding.apex);
-    let budget = dns_wait_secs().max(20);
+    let budget = dns_wait_secs().max(90);
     let deadline = std::time::Instant::now() + Duration::from_secs(budget);
     while std::time::Instant::now() < deadline {
         if txt_has(&fqdn, value) {
             return Ok(());
         }
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::sleep(Duration::from_secs(3));
     }
     Err(format!(
-        "planted _acme-challenge TXT via k2.dev but public DNS still has no record for {fqdn} \
-(zone {} serial not moving?). Do not retry HTTP-01 — this is the DNS API/PowerDNS path",
+        "planted _acme-challenge TXT via k2.dev but 8.8.8.8/1.1.1.1 still have no record for {fqdn} \
+after {budget}s (zone {}). ns1 can be ahead of public resolvers — wait and retry a fresh hostname \
+(NXDOMAIN cache). Do not retry HTTP-01",
         binding.zone_id.as_deref().unwrap_or("?")
     ))
 }

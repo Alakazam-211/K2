@@ -24457,14 +24457,30 @@ elif verb == "bans_list":
         print(dumps(d))
     else:
         bans = d.get("bans") or []
+        counts = d.get("counts") or {}
         if not bans:
             print("no blocked IPs")
-        for b in bans:
-            print("%s  reason=%s  id=%s  expires=%s" % (
-                b.get("address") or "?",
-                b.get("reason") or "?",
-                b.get("id") or "?",
-                b.get("expiresAt") if b.get("expiresAt") is not None else "null"))
+        else:
+            bits = ["%s=%s" % (k, counts[k]) for k in sorted(counts, key=lambda r: (0 if r == "authFailure" else 1, r))]
+            print("%s blocked  %s" % (d.get("count") if d.get("count") is not None else len(bans), "  ".join(bits)))
+            auth = [b for b in bans if (b.get("reason") or "") == "authFailure"]
+            other = [b for b in bans if (b.get("reason") or "") != "authFailure"]
+            if auth:
+                print("authFailure:")
+                for b in auth:
+                    print("  %s  id=%s  expires=%s" % (
+                        b.get("address") or "?",
+                        b.get("id") or "?",
+                        b.get("expiresAt") if b.get("expiresAt") is not None else "null"))
+            nscan = sum(1 for b in other if (b.get("reason") or "") == "portScanning")
+            nrest = len(other) - nscan
+            if nscan or nrest:
+                extra = []
+                if nscan:
+                    extra.append("%s portScanning" % nscan)
+                if nrest:
+                    extra.append("%s other" % nrest)
+                print("scanners: %s  (full list: k2 hostmail bans list --json)" % ", ".join(extra))
 
 elif verb == "bans_clear":
     body = {"ip": env("M_IP"), "all": env("M_ALL") == "true"}
@@ -28888,8 +28904,9 @@ EOF
 
 cmd_help_hostmail_bans_list() {
     cat <<'EOF'
-List BlockedIp (address, reason, createdAt, expiresAt, id).
-GET|POST /cli/mail/bans. mail_manage.
+List BlockedIp. Human: counts by reason, authFailure rows first,
+scanners summarized (full list --json). GET|POST /cli/mail/bans.
+mail_manage.
 
 USAGE
   k2 hostmail bans list [--json]

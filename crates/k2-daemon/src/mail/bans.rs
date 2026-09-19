@@ -104,9 +104,50 @@ fn list_allowed(engine: &StalwartClient) -> Result<Vec<IpListEntry>, String> {
     engine.allowed_ip_get(&ids)
 }
 
+fn reason_of(e: &IpListEntry) -> &str {
+    e.reason.as_deref().filter(|s| !s.is_empty()).unwrap_or("other")
+}
+
+fn reason_rank(reason: &str) -> u8 {
+    match reason {
+        "authFailure" => 0,
+        "rcptToFailure" => 1,
+        "loitering" => 2,
+        "manual" => 3,
+        "other" => 4,
+        "portScanning" => 5,
+        _ => 4,
+    }
+}
+
+fn sorted_bans(mut rows: Vec<IpListEntry>) -> Vec<IpListEntry> {
+    rows.sort_by(|a, b| {
+        reason_rank(reason_of(a))
+            .cmp(&reason_rank(reason_of(b)))
+            .then_with(|| a.address.cmp(&b.address))
+    });
+    rows
+}
+
+fn reason_counts(rows: &[IpListEntry]) -> serde_json::Map<String, serde_json::Value> {
+    let mut m = serde_json::Map::new();
+    for r in rows {
+        let slot = m
+            .entry(reason_of(r).to_string())
+            .or_insert(serde_json::json!(0));
+        if let Some(n) = slot.as_u64() {
+            *slot = serde_json::json!(n + 1);
+        }
+    }
+    m
+}
+
 fn bans_list_json(rows: &[IpListEntry]) -> serde_json::Value {
+    let rows = sorted_bans(rows.to_vec());
     serde_json::json!({
         "ok": true,
+        "count": rows.len(),
+        "counts": reason_counts(&rows),
         "bans": rows.iter().map(entry_json).collect::<Vec<_>>(),
     })
 }

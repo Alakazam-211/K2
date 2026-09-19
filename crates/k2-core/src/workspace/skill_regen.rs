@@ -426,7 +426,7 @@ shared chat — reply with `k2 project msg <name> "your reply"`. Never use
 Membership rides the agent-management plane too:
 ```
 k2 agent hire <dir> --project <p>          # hire straight into a project (repeatable)
-k2 agent hire <dir> --focus-group Ops --color "#22c55e"
+k2 agent hire <dir> --focus-group Ops --color #22c55e
 k2 agent set <ws> --add-project <p>        # add an existing agent to a project
 k2 agent set <ws> --remove-project <p>     # remove a membership (PoC refused until
                                            #   `k2 project poc` names a successor)

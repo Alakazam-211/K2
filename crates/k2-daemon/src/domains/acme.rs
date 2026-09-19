@@ -455,27 +455,32 @@ fn acme_txt_fqdn(hostname: &str, apex: &str) -> String {
     }
 }
 
-/// Both 8.8.8.8 and 1.1.1.1 must serve the *new* TXT, then settle.
-/// lztek scratch-le2: combined resolver said yes at ~17s; LE Invalid;
-/// TXT appeared after. Retry with leftover TXT still public also Invalid.
+/// Wait on **authoritative** ns1+ns2 first. Querying 8.8.8.8 before ns2
+/// has the name caches NXDOMAIN for SOA minimum (3600s) — scratch-le2
+/// Google served ns2 SOA 2026091922. Dual-syncd CAS can skip ns2.
 fn wait_acme_txt_visible(binding: &DomainBinding, hostname: &str, value: &str) -> Result<(), String> {
     let fqdn = acme_txt_fqdn(hostname, &binding.apex);
     let budget = dns_wait_secs().max(90);
     let deadline = std::time::Instant::now() + Duration::from_secs(budget);
     while std::time::Instant::now() < deadline {
-        let g = txt_has_google(&fqdn, value);
-        let c = txt_has_cloudflare(&fqdn, value);
-        if g && c {
-            std::thread::sleep(Duration::from_secs(20));
-            if txt_has_google(&fqdn, value) && txt_has_cloudflare(&fqdn, value) {
-                return Ok(());
+        let n1 = txt_has_at_ns("ns1.k2.dev", &fqdn, value);
+        let n2 = txt_has_at_ns("ns2.k2.dev", &fqdn, value);
+        if n1 && n2 {
+            let g = txt_has_google(&fqdn, value);
+            let c = txt_has_cloudflare(&fqdn, value);
+            if g && c {
+                std::thread::sleep(Duration::from_secs(15));
+                if txt_has_google(&fqdn, value) && txt_has_cloudflare(&fqdn, value) {
+                    return Ok(());
+                }
             }
         }
         std::thread::sleep(Duration::from_secs(3));
     }
     Err(format!(
-        "planted _acme-challenge TXT via k2.dev but 8.8.8.8 and 1.1.1.1 do not both have {fqdn}={value:.8}… \
-after {budget}s (zone {}). Fresh hostname if NXDOMAIN-cached. Do not retry HTTP-01",
+        "planted _acme-challenge TXT but ns1.k2.dev and ns2.k2.dev do not both have {fqdn} \
+(then 8.8.8.8+1.1.1.1) after {budget}s (zone {}). Dual-syncd lag — do not query public DNS \
+until both NS have it (NXDOMAIN cache). Fresh hostname. Do not retry HTTP-01",
         binding.zone_id.as_deref().unwrap_or("?")
     ))
 }
@@ -501,6 +506,44 @@ fn txt_has_cloudflare(fqdn: &str, want: &str) -> bool {
         return false;
     };
     r.txt(fqdn).ok().is_some_and(|recs| txt_matches(&recs, want))
+}
+
+fn txt_has_at_ns(ns_host: &str, fqdn: &str, want: &str) -> bool {
+    use crate::mail::dns_verify::{DnsResolver, SystemResolver};
+    use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts};
+    use std::net::SocketAddr;
+    let Ok(boot) = SystemResolver::google_nocache() else {
+        return false;
+    };
+    let Ok(ips) = boot.a(ns_host) else {
+        return false;
+    };
+    if ips.is_empty() {
+        return false;
+    }
+    let mut config = ResolverConfig::new();
+    for ip in ips {
+        config.add_name_server(NameServerConfig::new(
+            SocketAddr::from((ip, 53)),
+            Protocol::Udp,
+        ));
+    }
+    let mut opts = ResolverOpts::default();
+    opts.cache_size = 0;
+    let Ok(resolver) = hickory_resolver::Resolver::new(config, opts) else {
+        return false;
+    };
+    match resolver.txt_lookup(if fqdn.ends_with('.') {
+        fqdn.to_string()
+    } else {
+        format!("{fqdn}.")
+    }) {
+        Ok(lookup) => lookup.iter().any(|rdata| {
+            let s = rdata.txt_data().iter().map(|b| String::from_utf8_lossy(b).into_owned()).collect::<Vec<_>>().concat();
+            s == want || s.trim_matches('"') == want
+        }),
+        Err(_) => false,
+    }
 }
 
 fn purge_existing_acme_txt(binding: &DomainBinding, hostname: &str) {

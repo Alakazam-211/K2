@@ -418,9 +418,6 @@ use DNS-01 (attach a K2-hosted zone) or HTTP-01 on :80"
         let _ = delete_txt(&id);
     }
     drop(http_guard);
-    if status != OrderStatus::Ready {
-        return Err(format!("acme order not ready: {status:?}"));
-    }
 
     let mut params =
         CertificateParams::new(vec![hostname.to_string()]).map_err(|e| e.to_string())?;
@@ -431,10 +428,24 @@ use DNS-01 (attach a K2-hosted zone) or HTTP-01 on :80"
     let csr = params
         .serialize_request(&key)
         .map_err(|e| format!("csr: {e}"))?;
-    order
-        .finalize_csr(csr.der())
-        .await
-        .map_err(|e| format!("acme finalize: {e}"))?;
+
+    // Ready → finalize. Valid → cert already issued (scratch-le3: finalize
+    // returned orderNotReady status=valid). Invalid stays an error.
+    match status {
+        OrderStatus::Ready => {
+            if let Err(e) = order.finalize_csr(csr.der()).await {
+                let msg = e.to_string().to_ascii_lowercase();
+                if !(msg.contains("valid") && msg.contains("notready")
+                    || msg.contains("order's status (\"valid\")")
+                    || msg.contains("status (\"valid\")"))
+                {
+                    return Err(format!("acme finalize: {e}"));
+                }
+            }
+        }
+        OrderStatus::Valid => {}
+        other => return Err(format!("acme order not ready: {other:?}")),
+    }
     let chain = order
         .poll_certificate(&RetryPolicy::default())
         .await

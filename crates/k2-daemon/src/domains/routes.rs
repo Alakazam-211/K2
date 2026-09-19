@@ -411,11 +411,16 @@ pub fn handle_issue(params: &HashMap<String, String>) -> CliResponse {
                 .flatten()
                 .map(|n| n.role)
                 .unwrap_or_else(|| "other".into());
+            // Inventory PEM, not live TLS — a CNAME to mail.lztek.io
+            // presents mail.discover-nocode.com (scratch-le3 false reuse).
+            let cert = crate::domains::status::from_pem_file(&hostname)
+                .map(|p| p.to_json())
+                .unwrap_or_else(|| crate::domains::status::cert_json_for(&hostname, &role));
             CliResponse::ok_json(
                 serde_json::json!({
                     "ok": true,
                     "hostname": pem.hostname,
-                    "cert": crate::domains::status::cert_json_for(&hostname, &role),
+                    "cert": cert,
                 })
                 .to_string(),
             )

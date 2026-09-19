@@ -5415,8 +5415,10 @@ HOST THE UI WITH k2 publish (k2 publish --help / k2 study skins)
   k2 publish run <label> --skin --port N
   Custom files: --skin <dir>. k2 skin does not serve software.
 
-Caps: thread:read (GET /cli/thread + overlay WS), thread:post (POST /cli/thread/post),
-files:read (GET /cli/fs/read-dir|read-file + WS /cli/fs/events), files:write (POST /cli/fs/write-file).
+Caps: thread:read (GET /cli/thread + overlay WS + find-only ensure-pinned-chat),
+thread:post (POST /cli/thread/post),
+files:read (GET /cli/fs/read-dir|read-file|read-binary|read-range + WS /cli/fs/events),
+files:write (POST /cli/fs/write-file|upload-binary|create|copy|move).
 Rooms: workspace handles. Empty = Thread dark.
 Grid/PTY is never a skin room. Capability check paths (full):
   GET /cli/sessions/grid  and  GET /cli/sessions/bytes
@@ -15414,14 +15416,22 @@ FILES
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):
     GET|HEAD /cli/fs/read-dir?workspace=<handle>&path=.
     GET|HEAD /cli/fs/read-file?workspace=<handle>&path=README.md
+    GET|HEAD /cli/fs/read-binary?workspace=<handle>&path=doc.pdf
+    GET|HEAD /cli/fs/read-range?workspace=<handle>&path=doc.pdf&offset=0&len=…
     POST     /cli/fs/write-file  {"workspace":"<handle>","path":"notes.md","content":"…"}
+    POST     /cli/fs/upload-binary  {"workspace":"<handle>","dir":".","filename":"a.pdf","base64":"…"}
+    POST     /cli/fs/create  {"workspace":"<handle>","path":"folder","is_directory":true}
+    POST     /cli/fs/copy  {"workspace":"<handle>","sources":["a.pdf"],"destination":"inbox/"}
+    POST     /cli/fs/move  {"workspace":"<handle>","sources":["a.pdf"],"destination":"inbox/"}
+    POST     /cli/workspace/ensure-pinned-chat  {"workspace":"<handle>"}  (find-only; 200 live / 404 none)
     WS GET   /cli/fs/events?workspace=<handle>
   One socket per workspace. Do not omit workspace= and fan in every agent.
   Doors are has_cap_in_room: files on Documents does not grant files on Sales.
   Jail is that room's workspace root. Relative path= only — never host-wide
-  path=/etc/passwd or path=../. info / read-binary / delete and the rest of
-  the fs family stay 404 not found. Never /cli/sessions/events for files.
-  Do not build a hybrid BFF. Token never in the browser.
+  path=/etc/passwd or path=../. info / delete / upload-chunk / search-tree and
+  the rest of the fs family stay 404 not found. Never /cli/fs/*. Never owner BFF.
+  Never /cli/sessions/events for files. Token never in the browser.
+  ensure-pinned-chat is thread:read find-only (never spawn, never forceRespawn).
 
 TICKETS
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):

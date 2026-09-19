@@ -26,9 +26,12 @@ use futures_util::StreamExt;
 use k2_core::db::schema::WorkspaceSession;
 use k2_core::overlay::OverlayDoc;
 use k2_core::session::SessionId;
+use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession};
+use k2_daemon::canonical_session::canonical_key_for;
 use k2_daemon::overlay_ws::{self, OverlayFrame};
 use k2_daemon::session_token::{CredMode, HookPrincipal, Provider};
 use k2_daemon::test_harness;
+use k2_daemon::v2_session_map;
 use rusqlite::{params, OptionalExtension};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
@@ -3778,5 +3781,290 @@ async fn skin_loopback_sixth_login_without_forwarded_header_is_not_429() {
                 r.body
             );
         }
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_guest_binary_create_copy_move_and_pin_find_only() {
+    let _g = lock();
+    with_temp_home(|| {
+        v2_session_map::clear_for_tests();
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (docs_id, docs_dir) = seed_files_workspace(&docs);
+        let (_anna_id, anna_dir) = seed_files_workspace(&anna);
+        std::fs::write(docs_dir.join("doc.pdf"), b"%PDF-1.4 skin-bin\n").expect("pdf");
+        add_user(port, "bob");
+
+        let (_id, rw_tok) = mint(
+            port,
+            "guest-bin",
+            &["files:read", "files:write", "thread:read"],
+            &[&docs],
+        );
+        let (_id, read_tok) = mint(port, "guest-read-only", &["files:read"], &[&docs]);
+
+        let bin_docs = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-binary?token={rw_tok}&workspace={docs}&path=doc.pdf"),
+            None,
+        );
+        assert_eq!(bin_docs.status, 200, "binary docs; {}", bin_docs.body);
+        let b64 = json(&bin_docs.body)["base64"]
+            .as_str()
+            .expect("base64")
+            .to_string();
+        assert!(!b64.is_empty(), "{}", bin_docs.body);
+
+        let range = http(
+            port,
+            "GET",
+            &format!(
+                "/cli/fs/read-range?token={rw_tok}&workspace={docs}&path=doc.pdf&offset=0&len=8"
+            ),
+            None,
+        );
+        assert_eq!(range.status, 200, "range docs; {}", range.body);
+        let rv = json(&range.body);
+        assert!(rv["base64"].as_str().is_some(), "{}", range.body);
+        assert_eq!(rv["len"].as_u64(), Some(8), "{}", range.body);
+        assert!(rv["size"].as_u64().unwrap_or(0) >= 8, "{}", range.body);
+        assert_eq!(rv["eof"].as_bool(), Some(false), "{}", range.body);
+
+        let bin_anna = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-binary?token={rw_tok}&workspace={anna}&path=README.md"),
+            None,
+        );
+        assert_skin_room(&bin_anna);
+
+        let no_read = http(
+            port,
+            "GET",
+            &format!("/cli/fs/read-binary?token={read_tok}&workspace={docs}&path=doc.pdf"),
+            None,
+        );
+        assert_eq!(no_read.status, 200, "read-only still reads; {}", no_read.body);
+
+        let upload_denied = http(
+            port,
+            "POST",
+            &format!("/cli/fs/upload-binary?token={read_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","dir":".","filename":"x.bin","base64":"{b64}"}}"#
+            )),
+        );
+        assert_missing_cap(&upload_denied, "files:write");
+
+        let upload = http(
+            port,
+            "POST",
+            &format!("/cli/fs/upload-binary?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","dir":".","filename":"up.pdf","base64":"{b64}"}}"#
+            )),
+        );
+        assert_eq!(upload.status, 200, "upload; {}", upload.body);
+        let upload_json = json(&upload.body);
+        let up_path = upload_json["path"].as_str().expect("path").to_string();
+        assert!(
+            !up_path.starts_with('/'),
+            "skin upload path must be relative; {}",
+            upload.body
+        );
+        assert!(docs_dir.join(&up_path).is_file(), "uploaded on disk");
+
+        let jail_up = http(
+            port,
+            "POST",
+            &format!("/cli/fs/upload-binary?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","dir":"../","filename":"x.bin","base64":"{b64}"}}"#
+            )),
+        );
+        assert!(
+            jail_up.status == 400 || jail_up.status == 403,
+            "jail upload dir; {}",
+            jail_up.body
+        );
+
+        let create = http(
+            port,
+            "POST",
+            &format!("/cli/fs/create?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","path":"inbox","is_directory":true}}"#
+            )),
+        );
+        assert_eq!(create.status, 200, "create; {}", create.body);
+        assert!(docs_dir.join("inbox").is_dir());
+
+        let copy = http(
+            port,
+            "POST",
+            &format!("/cli/fs/copy?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","sources":["doc.pdf"],"destination":"inbox"}}"#
+            )),
+        );
+        assert_eq!(copy.status, 200, "copy; {}", copy.body);
+        assert!(docs_dir.join("inbox/doc.pdf").is_file());
+
+        let mov = http(
+            port,
+            "POST",
+            &format!("/cli/fs/move?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","sources":["{up_path}"],"destination":"inbox"}}"#
+            )),
+        );
+        assert_eq!(mov.status, 200, "move; {}", mov.body);
+        assert!(docs_dir.join(format!("inbox/{up_path}")).is_file());
+        assert!(!docs_dir.join(&up_path).exists());
+
+        let outside = std::env::temp_dir().join(format!(
+            "k2-skin-bin-outside-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&outside, b"untouched\n").expect("outside");
+        std::os::unix::fs::symlink(&outside, docs_dir.join("link.bin")).expect("symlink");
+        let f23 = http(
+            port,
+            "POST",
+            &format!("/cli/fs/upload-binary?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","dir":".","filename":"link.bin","base64":"{b64}"}}"#
+            )),
+        );
+        // collision-free rename may sidestep the symlink leaf; create into the
+        // symlink path via write-shaped create/copy destination is the F23 door.
+        let f23_create = http(
+            port,
+            "POST",
+            &format!("/cli/fs/create?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","path":"link.bin","is_directory":false}}"#
+            )),
+        );
+        assert_eq!(
+            f23_create.status, 400,
+            "F23 symlink create; {}",
+            f23_create.body
+        );
+        assert_eq!(
+            std::fs::read_to_string(&outside).expect("outside intact"),
+            "untouched\n"
+        );
+        let _ = f23;
+
+        let anna_write = http(
+            port,
+            "POST",
+            &format!("/cli/fs/create?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{anna}","path":"nope.txt","is_directory":false}}"#
+            )),
+        );
+        assert_skin_room(&anna_write);
+
+        let pin_none = http(
+            port,
+            "POST",
+            &format!("/cli/workspace/ensure-pinned-chat?token={rw_tok}"),
+            Some(&format!(r#"{{"workspace":"{docs}"}}"#)),
+        );
+        assert_eq!(pin_none.status, 404, "find-only none; {}", pin_none.body);
+        assert!(
+            pin_none.body.contains("no live pinned chat"),
+            "{}",
+            pin_none.body
+        );
+
+        let force = http(
+            port,
+            "POST",
+            &format!("/cli/workspace/ensure-pinned-chat?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","forceRespawn":true}}"#
+            )),
+        );
+        assert_eq!(force.status, 400, "forceRespawn; {}", force.body);
+
+        let abs_project = http(
+            port,
+            "POST",
+            &format!("/cli/workspace/ensure-pinned-chat?token={rw_tok}"),
+            Some(&format!(
+                r#"{{"project":"{}"}}"#,
+                docs_dir.display()
+            )),
+        );
+        assert_eq!(
+            abs_project.status, 400,
+            "skin must not take abs project; {}",
+            abs_project.body
+        );
+
+        let key = canonical_key_for(&docs_id);
+        let cfg = DaemonPtyConfig {
+            cols: 80,
+            rows: 24,
+            cwd: Some(docs_dir.clone()),
+            program: None,
+            ..DaemonPtyConfig::default()
+        };
+        let live = DaemonPtySession::spawn(cfg).expect("plant live PTY");
+        v2_session_map::register(key.clone(), std::sync::Arc::clone(&live));
+
+        let pin_live = http(
+            port,
+            "POST",
+            &format!("/cli/workspace/ensure-pinned-chat?token={rw_tok}"),
+            Some(&format!(r#"{{"workspace":"{docs}"}}"#)),
+        );
+        assert_eq!(pin_live.status, 200, "find-only live; {}", pin_live.body);
+        let pv = json(&pin_live.body);
+        let expected_sid = live.session_id.to_string();
+        assert_eq!(
+            pv["sessionId"].as_str(),
+            Some(expected_sid.as_str()),
+            "{}",
+            pin_live.body
+        );
+        assert_eq!(pv["reused"].as_bool(), Some(true), "{}", pin_live.body);
+
+        let pin_anna = http(
+            port,
+            "POST",
+            &format!("/cli/workspace/ensure-pinned-chat?token={rw_tok}"),
+            Some(&format!(r#"{{"workspace":"{anna}"}}"#)),
+        );
+        assert_skin_room(&pin_anna);
+
+        let info = http(port, "GET", &format!("/cli/fs/info?token={rw_tok}"), None);
+        assert_eq!(info.status, 403, "info still closed on daemon; {}", info.body);
+        let delete = http(
+            port,
+            "POST",
+            &format!("/cli/fs/delete?token={rw_tok}"),
+            Some(&format!(r#"{{"paths":["doc.pdf"]}}"#)),
+        );
+        assert_eq!(
+            delete.status, 403,
+            "delete still closed for skin; {}",
+            delete.body
+        );
+
+        v2_session_map::unregister(&key);
+        live.kill();
+        v2_session_map::clear_for_tests();
+        let _ = std::fs::remove_file(&outside);
+        let _ = std::fs::remove_dir_all(&docs_dir);
+        let _ = std::fs::remove_dir_all(&anna_dir);
     });
 }

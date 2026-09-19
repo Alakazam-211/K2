@@ -435,6 +435,106 @@ pub fn handle_ensure_pinned_chat(body: &[u8]) -> HandlerResult {
     }
 }
 
+/// Skin find-only ensure-pinned-chat (S6). Never spawns. Body uses
+/// `workspace` handle (not abs `project`). `forceRespawn` is refused.
+pub fn handle_ensure_pinned_chat_gated(
+    body: &[u8],
+    skin: Option<k2_core::skin::SkinPass>,
+) -> crate::cli_response::CliResponse {
+    match skin {
+        Some(pass) => handle_skin_ensure_pinned_chat_find_only(body, &pass),
+        None => {
+            let r = handle_ensure_pinned_chat(body);
+            crate::cli_response::CliResponse {
+                status: r.status,
+                content_type: "application/json",
+                body: r.body,
+            }
+        }
+    }
+}
+
+fn handle_skin_ensure_pinned_chat_find_only(
+    body: &[u8],
+    pass: &k2_core::skin::SkinPass,
+) -> crate::cli_response::CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return crate::cli_response::CliResponse::bad_request(format!(
+                "parse ensure-pinned-chat request: {}",
+                e.to_string().replace('"', "'")
+            ));
+        }
+    };
+    if v.get("forceRespawn").and_then(|x| x.as_bool()) == Some(true)
+        || v.get("force_respawn").and_then(|x| x.as_bool()) == Some(true)
+    {
+        return crate::cli_response::CliResponse::bad_request(
+            "forceRespawn is not allowed for skin guests",
+        );
+    }
+    let workspace = v
+        .get("workspace")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if workspace.is_empty() {
+        return crate::cli_response::CliResponse::bad_request("missing workspace");
+    }
+    // Skin path is handle-only. Abs `project` stays owner/Connect.
+    if v.get("project").and_then(|x| x.as_str()).is_some_and(|p| !p.trim().is_empty()) {
+        return crate::cli_response::CliResponse::bad_request(
+            "skin ensure-pinned-chat uses workspace handle, not project path",
+        );
+    }
+    let resolved = match crate::fs_routes::resolve_skin_workspace(pass, &workspace) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::THREAD_READ) {
+        return crate::skin_routes::missing_cap_response(crate::skin_routes::THREAD_READ);
+    }
+    let canonical_key = canonical_key_for(&resolved.project_id);
+    let Some(live) = crate::v2_session_map::lookup_by_agent_name(&canonical_key) else {
+        return crate::cli_response::CliResponse {
+            status: "404 Not Found",
+            content_type: "application/json",
+            body: r#"{"error":"no live pinned chat"}"#.to_string(),
+        };
+    };
+    if !live.is_child_alive() {
+        return crate::cli_response::CliResponse {
+            status: "404 Not Found",
+            content_type: "application/json",
+            body: r#"{"error":"no live pinned chat"}"#.to_string(),
+        };
+    }
+    let (cols, rows) = session_fit_or_default(&live);
+    let (claude_session_id, provider) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match k2_core::db::schema::WorkspaceSession::get(&conn, &resolved.project_id) {
+            Ok(Some(row)) => (row.session_id.unwrap_or_default(), row.harness),
+            _ => (String::new(), String::new()),
+        }
+    };
+    let out = EnsurePinnedChatOutcome {
+        session_id: live.session_id.to_string(),
+        claude_session_id,
+        resumed_existing: true,
+        command: String::new(),
+        args: Vec::new(),
+        cols,
+        rows,
+        reused: true,
+        provider,
+        pending_session_discovery: false,
+    };
+    crate::cli_response::CliResponse::ok_json(out.to_json().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

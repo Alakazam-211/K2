@@ -217,6 +217,11 @@ pub fn jail_rel_path(ws_root: &str, rel: &str, for_write: bool) -> Result<PathBu
     let root = Path::new(ws_root)
         .canonicalize()
         .map_err(|e| format!("workspace root unavailable: {e}"))?;
+    // `root.join(".")` collapses: components equal root, so `.parent()` is
+    // the host parent (escapes). Treat CurDir-only as the workspace root.
+    if p.components().all(|c| matches!(c, Component::CurDir)) {
+        return Ok(root);
+    }
     let target = root.join(p);
     if for_write {
         let parent = target
@@ -373,6 +378,54 @@ pub fn handle_write_file_gated(body: &[u8], skin: Option<SkinPass>) -> CliRespon
     }
 }
 
+pub fn handle_read_binary_gated(
+    params: &HashMap<String, String>,
+    skin: Option<SkinPass>,
+) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_read_binary(params, &pass),
+        None => handle_read_binary(params),
+    }
+}
+
+pub fn handle_read_range_gated(
+    params: &HashMap<String, String>,
+    skin: Option<SkinPass>,
+) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_read_range(params, &pass),
+        None => handle_read_range(params),
+    }
+}
+
+pub fn handle_upload_binary_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_upload_binary(body, &pass),
+        None => handle_upload_binary(body),
+    }
+}
+
+pub fn handle_create_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_create(body, &pass),
+        None => handle_create(body),
+    }
+}
+
+pub fn handle_copy_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_copy(body, &pass),
+        None => handle_copy(body),
+    }
+}
+
+pub fn handle_move_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_move(body, &pass),
+        None => handle_move(body),
+    }
+}
+
 fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
     let ws = match need_workspace(params) {
         Ok(w) => w,
@@ -492,6 +545,281 @@ fn handle_skin_write_file(body: &[u8], pass: &SkinPass) -> CliResponse {
         }
         Err(e) => CliResponse::bad_request(e),
     }
+}
+
+fn skin_resolve_write(
+    pass: &SkinPass,
+    workspace: &str,
+) -> Result<SkinWorkspace, CliResponse> {
+    let resolved = resolve_skin_workspace(pass, workspace)?;
+    if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_WRITE) {
+        return Err(crate::skin_routes::missing_cap_response(
+            crate::skin_routes::FILES_WRITE,
+        ));
+    }
+    Ok(resolved)
+}
+
+fn skin_json_workspace(v: &serde_json::Value) -> Result<String, CliResponse> {
+    let workspace = v
+        .get("workspace")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if workspace.is_empty() {
+        Err(CliResponse::bad_request("missing workspace"))
+    } else {
+        Ok(workspace)
+    }
+}
+
+fn handle_skin_read_binary(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let ws = match need_workspace(params) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let resolved = match resolve_skin_workspace(pass, &ws) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_READ) {
+        return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_READ);
+    }
+    let rel = match need_rel_path(params) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let abs = jailed.to_string_lossy().to_string();
+    match fsc::read_binary_file(&abs) {
+        Ok(bytes) => {
+            let b64 = B64.encode(&bytes);
+            CliResponse::ok_json(serde_json::json!({ "base64": b64 }).to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn handle_skin_read_range(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let ws = match need_workspace(params) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let resolved = match resolve_skin_workspace(pass, &ws) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_READ) {
+        return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_READ);
+    }
+    let rel = match need_rel_path(params) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let abs = jailed.to_string_lossy().to_string();
+    let offset: u64 = match params.get("offset").map(|v| v.parse()) {
+        Some(Ok(v)) => v,
+        Some(Err(_)) => return CliResponse::bad_request("invalid 'offset' parameter"),
+        None => 0,
+    };
+    let len: u64 = match params.get("len").map(|v| v.parse()) {
+        Some(Ok(v)) => v,
+        Some(Err(_)) => return CliResponse::bad_request("invalid 'len' parameter"),
+        None => 8 * 1024 * 1024,
+    };
+    match fsc::read_file_range(&abs, offset, len) {
+        Ok((bytes, size)) => {
+            let eof = offset.saturating_add(bytes.len() as u64) >= size;
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "base64": B64.encode(&bytes),
+                    "len": bytes.len() as u64,
+                    "size": size,
+                    "eof": eof,
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let workspace = match skin_json_workspace(&v) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let dir = v
+        .get("dir")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if dir.is_empty() {
+        return CliResponse::bad_request("Destination directory is empty");
+    }
+    let filename = v
+        .get("filename")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if filename.is_empty() {
+        return CliResponse::bad_request("Missing 'filename' parameter");
+    }
+    let b64 = match v.get("base64").and_then(|x| x.as_str()) {
+        Some(s) => s,
+        None => return CliResponse::bad_request("Missing 'base64' parameter"),
+    };
+    let bytes = match B64.decode(b64.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => return CliResponse::bad_request(format!("invalid base64: {e}")),
+    };
+    let resolved = match skin_resolve_write(pass, &workspace) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let jailed_dir = match jail_rel_path(&resolved.path, &dir, true) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let abs_dir = jailed_dir.to_string_lossy().to_string();
+    match fsc::write_upload(&abs_dir, &filename, &bytes) {
+        Ok(path) => {
+            let root = Path::new(&resolved.path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&resolved.path));
+            let abs = path.to_string_lossy().to_string();
+            crate::session_events::emit_fs_changed_for_paths([abs.clone()]);
+            let rel = relative_under(&root, &abs);
+            CliResponse::ok_json(serde_json::json!({ "path": rel }).to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn handle_skin_create(body: &[u8], pass: &SkinPass) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let workspace = match skin_json_workspace(&v) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let rel = v
+        .get("path")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if rel.is_empty() {
+        return CliResponse::bad_request("Missing 'path' parameter");
+    }
+    let is_directory = v
+        .get("is_directory")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let resolved = match skin_resolve_write(pass, &workspace) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let jailed = match jail_rel_path(&resolved.path, &rel, true) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let abs = jailed.to_string_lossy().to_string();
+    match fsc::create_entry(&abs, is_directory) {
+        Ok(()) => {
+            crate::session_events::emit_fs_changed_for_paths([abs]);
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let workspace = match skin_json_workspace(&v) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let sources: Vec<String> = match v.get("sources").and_then(|x| x.as_array()) {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect(),
+        None => return CliResponse::bad_request("Missing 'sources' parameter"),
+    };
+    if sources.is_empty() {
+        return CliResponse::bad_request("Missing 'sources' parameter");
+    }
+    let dest = v
+        .get("destination")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if dest.is_empty() {
+        return CliResponse::bad_request("Missing 'destination' parameter");
+    }
+    let resolved = match skin_resolve_write(pass, &workspace) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let mut abs_sources = Vec::with_capacity(sources.len());
+    for rel in &sources {
+        match jail_rel_path(&resolved.path, rel, false) {
+            Ok(p) => abs_sources.push(p.to_string_lossy().to_string()),
+            Err(e) => return CliResponse::bad_request(e),
+        }
+    }
+    let abs_dest = match jail_rel_path(&resolved.path, &dest, true) {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let result = if is_move {
+        fsc::move_files(&abs_sources, &abs_dest)
+    } else {
+        fsc::copy_files(&abs_sources, &abs_dest)
+    };
+    match result {
+        Ok(()) => {
+            if is_move {
+                let mut paths = abs_sources;
+                paths.push(abs_dest);
+                crate::session_events::emit_fs_changed_for_paths(paths);
+            } else {
+                crate::session_events::emit_fs_changed_for_paths([abs_dest]);
+            }
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn handle_skin_copy(body: &[u8], pass: &SkinPass) -> CliResponse {
+    handle_skin_copy_or_move(body, pass, false)
+}
+
+fn handle_skin_move(body: &[u8], pass: &SkinPass) -> CliResponse {
+    handle_skin_copy_or_move(body, pass, true)
 }
 
 #[derive(Deserialize)]

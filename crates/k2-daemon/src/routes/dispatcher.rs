@@ -2017,16 +2017,55 @@ async fn handle_one_request(
         // set-chat-session — none of those are removed (the renderer
         // keeps its current path until a later capability-gated cutover).
         //
-        // Auth: owner OR connect-user session (token_ok) — same gate as
-        // set-chat-session / resume-chat-args which reach the /cli/*
-        // catchall. Method gate: explicit require_post (the top-level
+        // Auth: owner OR connect-user session (token_ok), OR skin
+        // `thread:read` find-only (workspace handle; never spawn).
+        // Method gate: explicit require_post (the top-level
         // dispatch lets a GET through on POST-allowlisted routes; see
         // feedback_post_only_route_guards).
         "/cli/workspace/ensure-pinned-chat" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    None => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) =>
+                    {
+                        Some(pass)
+                    }
+                    Some(_) => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::THREAD_READ,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -2036,17 +2075,16 @@ async fn handle_one_request(
                 )
                 .await;
                 return DispatchOutcome::Done;
-            }
+            };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result = tokio::task::spawn_blocking(move || {
-                crate::pinned_chat::handle_ensure_pinned_chat(&body_bytes)
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::pinned_chat::handle_ensure_pinned_chat_gated(&body_bytes, skin_pass)
             })
             .await
-            .unwrap_or_else(|e| crate::awareness_ws::HandlerResult {
-                status: "500 Internal Server Error",
-                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
             });
-            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
         // POST /cli/companion/set-password — Phase 2 Unit 1.
@@ -4485,17 +4523,55 @@ async fn handle_one_request(
         // Writes an uploaded file's bytes onto the daemon's disk
         // (`<workspace>/.k2so/downloads` for the terminal-drop case).
         //
-        // SANDBOX/AUTH DECISION: gated by `token_ok` (any authed user —
-        // owner token OR a connect-user session), matching every other
-        // `/cli/fs/*` data route. This arm is split out from the shared
-        // `/cli/fs/` arm below SO THE GATE IS ISOLATED: tightening upload
-        // to `require_manage`/`require_owner` later is a ONE-LINE swap
-        // here, with no effect on the read/edit fs routes. `post_allowed`
-        // + this explicit arm form the method gate (a GET falls through to
+        // Owner/Connect: token_ok + abs `dir=` (unchanged). Skin: dedicated
+        // gated handler (workspace + relative dir; files:write in-room).
+        // Do not hang skin off the owner abs-path arm. `post_allowed` +
+        // this explicit arm form the method gate (a GET falls through to
         // the catchall → 404).
         p if is_post && post_allowed && p == "/cli/fs/upload-binary" => {
-            // ── isolated upload auth gate (swap this one line) ──
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    None => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::FILES_WRITE) =>
+                    {
+                        Some(pass)
+                    }
+                    Some(_) => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::FILES_WRITE,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -4505,10 +4581,16 @@ async fn handle_one_request(
                 )
                 .await;
                 return DispatchOutcome::Done;
-            }
+            };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result = crate::fs_routes::handle_upload_binary(&body_bytes);
-            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::fs_routes::handle_upload_binary_gated(&body_bytes, skin_pass)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
         // K2 Connect "Clone to" — POST /cli/fs/upload-chunk. Streaming upload
@@ -4655,6 +4737,79 @@ async fn handle_one_request(
                 crate::clone_routes::handle_clone_unpack(&body_bytes)
             };
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+                .await;
+        }
+        // Skin create/copy/move — dedicated gated arms BEFORE the unit6
+        // abs-path catchall. Owner/Connect abs path= unchanged.
+        p if is_post
+            && post_allowed
+            && (p == "/cli/fs/create" || p == "/cli/fs/copy" || p == "/cli/fs/move") =>
+        {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let skin_pass = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    None => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::revoked_skin_response();
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                    Some(pass)
+                        if pass.dispatcher_admits_cap(crate::skin_routes::FILES_WRITE) =>
+                    {
+                        Some(pass)
+                    }
+                    Some(_) => {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::FILES_WRITE,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let path_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || match path_owned.as_str() {
+                "/cli/fs/create" => crate::fs_routes::handle_create_gated(&body_bytes, skin_pass),
+                "/cli/fs/copy" => crate::fs_routes::handle_copy_gated(&body_bytes, skin_pass),
+                _ => crate::fs_routes::handle_move_gated(&body_bytes, skin_pass),
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
         // Phase 2 Unit 6 — POST routes for filesystem / chat /
@@ -8380,7 +8535,11 @@ async fn handle_one_request(
         // Skin files GET — dedicated arms before the catchall. Do not fall
         // through to host-wide `validate_path`. Owner/Connect unchanged
         // (no `workspace=` required).
-        p if p == "/cli/fs/read-dir" || p == "/cli/fs/read-file" => {
+        p if p == "/cli/fs/read-dir"
+            || p == "/cli/fs/read-file"
+            || p == "/cli/fs/read-binary"
+            || p == "/cli/fs/read-range" =>
+        {
             let _ = stream.read(&mut buf).await;
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
@@ -8425,13 +8584,18 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             };
             let params = super::http::parse_params(&path, &query);
-            let is_dir = p == "/cli/fs/read-dir";
-            let resp = tokio::task::spawn_blocking(move || {
-                if is_dir {
+            let path_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || match path_owned.as_str() {
+                "/cli/fs/read-dir" => {
                     crate::fs_routes::handle_read_dir_gated(&params, skin_pass)
-                } else {
+                }
+                "/cli/fs/read-file" => {
                     crate::fs_routes::handle_read_file_gated(&params, skin_pass)
                 }
+                "/cli/fs/read-binary" => {
+                    crate::fs_routes::handle_read_binary_gated(&params, skin_pass)
+                }
+                _ => crate::fs_routes::handle_read_range_gated(&params, skin_pass),
             })
             .await
             .unwrap_or_else(|e| {

@@ -230,11 +230,18 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     push_handle(out, "/cli/overlay/events*", daemon);
     push_handle(out, "/cli/skin/agents", daemon);
     // Files cut: exact matchers only. Never `/cli/fs/*` (would punch
-    // open-finder / upload / info through Direct).
+    // open-finder / upload-chunk / info through Direct).
     push_handle(out, "/cli/fs/events*", daemon);
     push_handle(out, "/cli/fs/read-dir*", daemon);
     push_handle(out, "/cli/fs/read-file*", daemon);
+    push_handle(out, "/cli/fs/read-binary*", daemon);
+    push_handle(out, "/cli/fs/read-range*", daemon);
     push_handle(out, "/cli/fs/write-file*", daemon);
+    push_handle(out, "/cli/fs/upload-binary*", daemon);
+    push_handle(out, "/cli/fs/create*", daemon);
+    push_handle(out, "/cli/fs/copy*", daemon);
+    push_handle(out, "/cli/fs/move*", daemon);
+    push_handle(out, "/cli/workspace/ensure-pinned-chat*", daemon);
     if let Some(ui) = ui_port {
         // Exact `/` plus SPA prefixes. Never `/*` — catch-all stays 403.
         // Grid / login / `/v1` are not in this matcher.
@@ -978,7 +985,14 @@ mod tests {
         assert!(file.contains("/cli/fs/events"), "{file}");
         assert!(file.contains("/cli/fs/read-dir"), "{file}");
         assert!(file.contains("/cli/fs/read-file"), "{file}");
+        assert!(file.contains("/cli/fs/read-binary"), "{file}");
+        assert!(file.contains("/cli/fs/read-range"), "{file}");
         assert!(file.contains("/cli/fs/write-file"), "{file}");
+        assert!(file.contains("/cli/fs/upload-binary"), "{file}");
+        assert!(file.contains("/cli/fs/create"), "{file}");
+        assert!(file.contains("/cli/fs/copy"), "{file}");
+        assert!(file.contains("/cli/fs/move"), "{file}");
+        assert!(file.contains("/cli/workspace/ensure-pinned-chat"), "{file}");
         assert!(
             !file.contains("handle /cli/fs/*"),
             "must not glob all fs: {file}"
@@ -986,6 +1000,14 @@ mod tests {
         assert!(
             !file.contains("/cli/fs/info"),
             "info stays closed at the door: {file}"
+        );
+        assert!(
+            !file.contains("/cli/fs/upload-chunk"),
+            "upload-chunk stays closed at the door: {file}"
+        );
+        assert!(
+            !file.contains("/cli/fs/delete"),
+            "delete stays closed at the door: {file}"
         );
         assert!(file.contains("/boot-status"), "{file}");
         assert!(

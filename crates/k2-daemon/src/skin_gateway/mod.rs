@@ -238,7 +238,16 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
             | ("HEAD", "/cli/fs/read-dir")
             | ("GET", "/cli/fs/read-file")
             | ("HEAD", "/cli/fs/read-file")
+            | ("GET", "/cli/fs/read-binary")
+            | ("HEAD", "/cli/fs/read-binary")
+            | ("GET", "/cli/fs/read-range")
+            | ("HEAD", "/cli/fs/read-range")
             | ("POST", "/cli/fs/write-file")
+            | ("POST", "/cli/fs/upload-binary")
+            | ("POST", "/cli/fs/create")
+            | ("POST", "/cli/fs/copy")
+            | ("POST", "/cli/fs/move")
+            | ("POST", "/cli/workspace/ensure-pinned-chat")
             | ("GET", "/cli/feedback/list")
             | ("HEAD", "/cli/feedback/list")
             | ("GET", "/cli/feedback/show")
@@ -1159,14 +1168,26 @@ mod tests {
         assert!(allowlisted_http("GET", "/cli/fs/read-file"));
         assert!(allowlisted_http("HEAD", "/cli/fs/read-file"));
         assert!(allowlisted_http("POST", "/cli/fs/write-file"));
+        assert!(allowlisted_http("GET", "/cli/fs/read-binary"));
+        assert!(allowlisted_http("HEAD", "/cli/fs/read-binary"));
+        assert!(allowlisted_http("GET", "/cli/fs/read-range"));
+        assert!(allowlisted_http("HEAD", "/cli/fs/read-range"));
+        assert!(allowlisted_http("POST", "/cli/fs/upload-binary"));
+        assert!(allowlisted_http("POST", "/cli/fs/create"));
+        assert!(allowlisted_http("POST", "/cli/fs/copy"));
+        assert!(allowlisted_http("POST", "/cli/fs/move"));
+        assert!(allowlisted_http("POST", "/cli/workspace/ensure-pinned-chat"));
         assert!(!allowlisted_ws("/cli/sessions/events"));
         assert!(!allowlisted_http("GET", "/cli/fs/info"));
-        assert!(!allowlisted_http("GET", "/cli/fs/read-binary"));
         assert!(!allowlisted_http("POST", "/cli/fs/delete"));
+        assert!(!allowlisted_http("POST", "/cli/fs/upload-chunk"));
         assert!(!allowlisted_http("GET", "/cli/fs/events"));
         assert!(!allowlisted_http("POST", "/cli/fs/read-dir"));
+        assert!(!allowlisted_http("GET", "/cli/fs/search-tree"));
         assert!(!never_proxy("/cli/fs/events"));
         assert!(!never_proxy("/cli/fs/read-dir"));
+        assert!(!never_proxy("/cli/fs/read-binary"));
+        assert!(!never_proxy("/cli/workspace/ensure-pinned-chat"));
         assert!(allowlisted_http("GET", "/cli/feedback/list"));
         assert!(allowlisted_http("HEAD", "/cli/feedback/list"));
         assert!(allowlisted_http("GET", "/cli/feedback/show"));

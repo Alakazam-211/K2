@@ -1502,9 +1502,90 @@ async fn publish_run_skin_gateway_files_rooms_jail_and_ws() {
             "new-leaf"
         );
 
+        std::fs::write(format!("{docs_path}/doc.pdf"), b"%PDF-1.4 gateway\n").expect("pdf");
+        let bin_docs = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/fs/read-binary?workspace={docs}&path=doc.pdf"),
+            None,
+            &cookie,
+        );
+        assert_eq!(bin_docs.status, 200, "binary docs; {}", bin_docs.body);
+        assert!(
+            json(&bin_docs.body)["base64"].as_str().is_some(),
+            "{}",
+            bin_docs.body
+        );
+        let bin_anna = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/fs/read-binary?workspace={anna}&path=README.md"),
+            None,
+            &cookie,
+        );
+        assert_eq!(bin_anna.status, 403, "binary anna; {}", bin_anna.body);
+        assert!(
+            bin_anna.body.contains("missing capability files:read"),
+            "anna binary must be missing cap: {}",
+            bin_anna.body
+        );
+
+        let upload = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/upload-binary",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","dir":".","filename":"up.pdf","base64":"{}"}}"#,
+                json(&bin_docs.body)["base64"].as_str().unwrap()
+            )),
+            &cookie,
+        );
+        assert_eq!(upload.status, 200, "upload docs; {}", upload.body);
+
+        let create = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/create",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","path":"inbox","is_directory":true}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(create.status, 200, "create docs; {}", create.body);
+
+        let pin_none = http_ex(
+            gport,
+            "POST",
+            "/cli/workspace/ensure-pinned-chat",
+            Some(&format!(r#"{{"workspace":"{docs}"}}"#)),
+            &cookie,
+        );
+        assert_eq!(
+            pin_none.status, 404,
+            "pin find-only none; {}",
+            pin_none.body
+        );
+
         let info = http_ex(gport, "GET", "/cli/fs/info", None, &cookie);
         assert_eq!(info.status, 404, "info; {}", info.body);
         assert!(info.body.contains("not found"), "{}", info.body);
+        let delete = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/delete",
+            Some(r#"{"paths":["doc.pdf"]}"#),
+            &cookie,
+        );
+        assert_eq!(delete.status, 404, "delete; {}", delete.body);
+        assert!(delete.body.contains("not found"), "{}", delete.body);
+        let chunk = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/upload-chunk",
+            Some(r#"{"upload_id":"x","dir":"/tmp","filename":"a","offset":0,"base64":"YQ==","is_last":true}"#),
+            &cookie,
+        );
+        assert_eq!(chunk.status, 404, "upload-chunk; {}", chunk.body);
         let ask = http_ex(
             gport,
             "POST",

@@ -13389,8 +13389,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -13596,6 +13596,72 @@ cmd_schema() {
       "usage": "k2 hostmail ptr set <hostname> [--json]",
       "description": "Set Stalwart HELO + mail_server.hostname, then ask CP POST /api/dns/ptr (Bearer k2c_). Refuses unless public A(hostname) includes origin IPv4. Not auto on enable. mail_manage.",
       "args": [{"name": "hostname", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail bans list",
+      "usage": "k2 hostmail bans list [--json]",
+      "description": "List Stalwart BlockedIp (address, reason, createdAt, expiresAt, id). GET|POST /cli/mail/bans. mail_manage.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail bans clear",
+      "usage": "k2 hostmail bans clear <ip> [--all] [--json]",
+      "description": "Destroy BlockedIp for <ip> then ReloadBlockedIps. Default authFailure only; --all includes portScanning. Pair with allowlist — unban does not reset fail counters. mail_manage.",
+      "args": [{"name": "ip", "required": true}],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Also destroy non-authFailure bans for this IP."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail bans migrate",
+      "usage": "k2 hostmail bans migrate --hours N [--json]",
+      "description": "Snapshot authBanRate, set null (auth-ban only), persist restoreAt; daemon auto-restores. Never authBanPeriod. mail_manage.",
+      "args": [],
+      "flags": [
+        {"name": "--hours", "arg": "N", "description": "Hours until auto-restore."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail bans migrate restore",
+      "usage": "k2 hostmail bans migrate restore [--json]",
+      "description": "Restore snapshotted authBanRate early. Missing snapshot screams. POST /cli/mail/bans/migrate/restore. GET → 405.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail bans migrate status",
+      "usage": "k2 hostmail bans migrate status [--json]",
+      "description": "Show active bans migrate window / remaining. GET|POST /cli/mail/bans/migrate.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail allowlist list",
+      "usage": "k2 hostmail allowlist list [--json]",
+      "description": "List AllowedIp. GET|POST /cli/mail/allowlist. mail_manage.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail allowlist add",
+      "usage": "k2 hostmail allowlist add <ip|cidr> [--reason migration] [--expires <rfc3339>] [--json]",
+      "description": "AllowedIp + ReloadSettings. Standing IPs in --help only (65.130.10.89, 65.130.229.9) — never auto-insert. No 172.56.0.0/16. mail_manage.",
+      "args": [{"name": "address", "required": true}],
+      "flags": [
+        {"name": "--reason", "arg": "text", "description": "Default migration."},
+        {"name": "--expires", "arg": "rfc3339", "description": "Temporary allowlist expiry."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail allowlist remove",
+      "usage": "k2 hostmail allowlist remove <ip|cidr> [--json]",
+      "description": "Destroy AllowedIp then ReloadSettings. POST /cli/mail/allowlist/remove. mail_manage.",
+      "args": [{"name": "address", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
@@ -22893,6 +22959,9 @@ _mail_py() {
     M_PROVIDER="${M_PROVIDER:-}" \
     M_SMTP_HOST="${M_SMTP_HOST:-}" M_SMTP_PORT="${M_SMTP_PORT:-}" M_SMTP_TLS="${M_SMTP_TLS:-}" \
     M_HOSTNAME="${M_HOSTNAME:-}" \
+    M_IP="${M_IP:-}" M_ALL="${M_ALL:-false}" \
+    M_REASON="${M_REASON:-}" M_EXPIRES="${M_EXPIRES:-}" \
+    M_HOURS="${M_HOURS:-}" \
     M_MAILDIR="${M_MAILDIR:-}" M_IMAPSYNC_HOST="${M_IMAPSYNC_HOST:-}" \
     M_IMAPSYNC_USER="${M_IMAPSYNC_USER:-}" M_IMAPSYNC_PASS="${M_IMAPSYNC_PASS:-}" \
     M_IMAPSYNC_PORT="${M_IMAPSYNC_PORT:-}" M_SKIP_INBOX="${M_SKIP_INBOX:-false}" \
@@ -24382,6 +24451,107 @@ elif verb == "ptr_set":
         if d.get("ptr"):
             print("live ptr: %s" % d.get("ptr"))
 
+elif verb == "bans_list":
+    d = call("GET", "/cli/mail/bans")
+    if as_json:
+        print(dumps(d))
+    else:
+        bans = d.get("bans") or []
+        if not bans:
+            print("no blocked IPs")
+        for b in bans:
+            print("%s  reason=%s  id=%s  expires=%s" % (
+                b.get("address") or "?",
+                b.get("reason") or "?",
+                b.get("id") or "?",
+                b.get("expiresAt") if b.get("expiresAt") is not None else "null"))
+
+elif verb == "bans_clear":
+    body = {"ip": env("M_IP"), "all": env("M_ALL") == "true"}
+    d = call("POST", "/cli/mail/bans/clear", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("cleared ip=%s destroyed=%s all=%s" % (
+            d.get("ip") or env("M_IP"),
+            ",".join(d.get("destroyed") or []) or "(none)",
+            d.get("all")))
+        for w in (d.get("warnings") or []):
+            print("warn: %s" % w)
+        print("note: unban does not reset fail counters — pair with allowlist add")
+
+elif verb == "bans_migrate":
+    hours = env("M_HOURS")
+    body = {"hours": int(hours)} if hours else {}
+    d = call("POST", "/cli/mail/bans/migrate", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        if d.get("active") and hours:
+            print("migrate active hours=%s restoreAt=%s authBanRate=null" % (
+                d.get("hours") or hours, d.get("restoreAt")))
+            print("snapshot=%s" % dumps(d.get("authBanRateSnapshot")))
+        else:
+            print("migrate active=%s remaining=%ss restoreAt=%s" % (
+                d.get("active"), d.get("remainingSeconds"), d.get("restoreAt")))
+
+elif verb == "bans_migrate_restore":
+    d = call("POST", "/cli/mail/bans/migrate/restore", body={})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("migrate restore restored=%s authBanRate=%s" % (
+            d.get("restored"), dumps(d.get("authBanRate"))))
+
+elif verb == "bans_migrate_status":
+    d = call("GET", "/cli/mail/bans/migrate")
+    if as_json:
+        print(dumps(d))
+    else:
+        print("migrate active=%s remaining=%ss restoreAt=%s overdue=%s" % (
+            d.get("active"), d.get("remainingSeconds"),
+            d.get("restoreAt"), d.get("overdue")))
+
+elif verb == "allowlist_list":
+    d = call("GET", "/cli/mail/allowlist")
+    if as_json:
+        print(dumps(d))
+    else:
+        rows = d.get("allowlist") or []
+        if not rows:
+            print("allowlist empty")
+        for b in rows:
+            print("%s  reason=%s  id=%s  expires=%s" % (
+                b.get("address") or "?",
+                b.get("reason") or "?",
+                b.get("id") or "?",
+                b.get("expiresAt") if b.get("expiresAt") is not None else "null"))
+
+elif verb == "allowlist_add":
+    body = {"address": env("M_ADDRESS")}
+    if env("M_REASON"):
+        body["reason"] = env("M_REASON")
+    if env("M_EXPIRES"):
+        body["expiresAt"] = env("M_EXPIRES")
+    d = call("POST", "/cli/mail/allowlist/add", body=body)
+    if as_json:
+        print(dumps(d))
+    else:
+        print("allowlist add %s id=%s reason=%s expires=%s" % (
+            d.get("address") or env("M_ADDRESS"),
+            d.get("id") or "?",
+            d.get("reason") or "?",
+            d.get("expiresAt") if d.get("expiresAt") is not None else "null"))
+
+elif verb == "allowlist_remove":
+    d = call("POST", "/cli/mail/allowlist/remove", body={"address": env("M_ADDRESS")})
+    if as_json:
+        print(dumps(d))
+    else:
+        print("allowlist remove %s destroyed=%s" % (
+            d.get("address") or env("M_ADDRESS"),
+            ",".join(d.get("destroyed") or []) or "(none)"))
+
 elif verb == "list_create":
     body = {"address": env("M_ADDRESS"), "members": env_list("M_MEMBERS")}
     d = call("POST", "/cli/mail/list", body=body)
@@ -25758,9 +25928,11 @@ cmd_hostmail() {
         dkim)    cmd_hostmail_dkim "$@" ;;
         dmarc)   cmd_hostmail_dmarc "$@" ;;
         ptr)     cmd_hostmail_ptr "$@" ;;
+        bans)    cmd_hostmail_bans "$@" ;;
+        allowlist) cmd_hostmail_allowlist "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist>"
             exit 2 ;;
     esac
 }
@@ -27289,6 +27461,236 @@ cmd_hostmail_ptr_set() {
 }
 
 
+cmd_hostmail_bans() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_bans; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        list) cmd_hostmail_bans_list "$@" ;;
+        clear) cmd_hostmail_bans_clear "$@" ;;
+        migrate) cmd_hostmail_bans_migrate "$@" ;;
+        --help|-h) cmd_help_hostmail_bans; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown bans command '$sub' — usage: k2 hostmail bans <list|clear|migrate>"
+            exit 2 ;;
+    esac
+}
+
+
+cmd_hostmail_bans_list() {
+    if _wants_help "$@"; then cmd_help_hostmail_bans_list; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail bans list [--json]"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail bans list [--json]"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="bans_list" M_JSON="$as_json"
+    _mail_py
+}
+
+
+cmd_hostmail_bans_clear() {
+    if _wants_help "$@"; then cmd_help_hostmail_bans_clear; exit 0; fi
+    local ip="" as_json=false all=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --all) all=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail bans clear <ip> [--all] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$ip" ]; then ip="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — one IP only"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$ip" ] || { _mail_err "usage" "k2 hostmail bans clear <ip> [--all]"; exit 2; }
+    local M_VERB="bans_clear" M_JSON="$as_json" M_IP="$ip" M_ALL="$all"
+    _mail_py
+}
+
+
+cmd_hostmail_bans_migrate() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_bans_migrate; exit 0; fi
+    local sub="$1"
+    case "$sub" in
+        restore)
+            shift
+            cmd_hostmail_bans_migrate_restore "$@"
+            ;;
+        status)
+            shift
+            cmd_hostmail_bans_migrate_status "$@"
+            ;;
+        --help|-h) cmd_help_hostmail_bans_migrate; exit 0 ;;
+        *)
+            # `migrate --hours N` or `migrate status`-style flags
+            cmd_hostmail_bans_migrate_start "$@"
+            ;;
+    esac
+}
+
+
+cmd_hostmail_bans_migrate_start() {
+    if _wants_help "$@"; then cmd_help_hostmail_bans_migrate; exit 0; fi
+    local hours="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --hours)
+                [ $# -ge 2 ] || { _mail_err "usage" "--hours requires N"; exit 2; }
+                hours="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail bans migrate --hours N [--json]"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail bans migrate --hours N"
+                exit 2 ;;
+        esac
+    done
+    [ -n "$hours" ] || { _mail_err "usage" "k2 hostmail bans migrate --hours N"; exit 2; }
+    case "$hours" in
+        ''|*[!0-9]*) _mail_err "usage" "--hours must be a positive integer"; exit 2 ;;
+        0) _mail_err "usage" "--hours must be >= 1"; exit 2 ;;
+    esac
+    local M_VERB="bans_migrate" M_JSON="$as_json" M_HOURS="$hours"
+    _mail_py
+}
+
+
+cmd_hostmail_bans_migrate_restore() {
+    if _wants_help "$@"; then cmd_help_hostmail_bans_migrate_restore; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail bans migrate restore [--json]"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1'"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="bans_migrate_restore" M_JSON="$as_json"
+    _mail_py
+}
+
+
+cmd_hostmail_bans_migrate_status() {
+    if _wants_help "$@"; then cmd_help_hostmail_bans_migrate_status; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail bans migrate status [--json]"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1'"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="bans_migrate_status" M_JSON="$as_json"
+    _mail_py
+}
+
+
+cmd_hostmail_allowlist() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_allowlist; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        list) cmd_hostmail_allowlist_list "$@" ;;
+        add) cmd_hostmail_allowlist_add "$@" ;;
+        remove) cmd_hostmail_allowlist_remove "$@" ;;
+        --help|-h) cmd_help_hostmail_allowlist; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown allowlist command '$sub' — usage: k2 hostmail allowlist <list|add|remove>"
+            exit 2 ;;
+    esac
+}
+
+
+cmd_hostmail_allowlist_list() {
+    if _wants_help "$@"; then cmd_help_hostmail_allowlist_list; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail allowlist list [--json]"
+                exit 2 ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1'"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="allowlist_list" M_JSON="$as_json"
+    _mail_py
+}
+
+
+cmd_hostmail_allowlist_add() {
+    if _wants_help "$@"; then cmd_help_hostmail_allowlist_add; exit 0; fi
+    local address="" reason="" expires="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --reason)
+                [ $# -ge 2 ] || { _mail_err "usage" "--reason requires a value"; exit 2; }
+                reason="$2"; shift 2 ;;
+            --expires)
+                [ $# -ge 2 ] || { _mail_err "usage" "--expires requires RFC3339"; exit 2; }
+                expires="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail allowlist add <ip|cidr> [--reason migration] [--expires <rfc3339>] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail allowlist add <ip|cidr>"; exit 2; }
+    local M_VERB="allowlist_add" M_JSON="$as_json" M_ADDRESS="$address" M_REASON="$reason" M_EXPIRES="$expires"
+    _mail_py
+}
+
+
+cmd_hostmail_allowlist_remove() {
+    if _wants_help "$@"; then cmd_help_hostmail_allowlist_remove; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail allowlist remove <ip|cidr> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail allowlist remove <ip|cidr>"; exit 2; }
+    local M_VERB="allowlist_remove" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+
 cmd_hostmail_dmarc_show() {
     if _wants_help "$@"; then cmd_help_hostmail_dmarc_show; exit 0; fi
     local domain="" as_json=false
@@ -28126,6 +28528,11 @@ COMMANDS
   ptr show|set <hostname>     HELO + reverse DNS. show = origin/rDNS/alignment;
                               set = Stalwart HELO then CP POST /api/dns/ptr
                               (Bearer k2c_). mail_manage. Not auto on enable.
+  bans list|clear|migrate     BlockedIp list/clear + auth-ban migrate window.
+                              clear default = authFailure only (--all for scan).
+                              Pair clear with allowlist (fail counters survive).
+  allowlist list|add|remove   AllowedIp (beats blocked; ReloadSettings).
+                              Standing IPs in add --help only — never auto-insert.
 
 Run 'k2 hostmail <command> --help' for details.
 EOF
@@ -28459,6 +28866,129 @@ POST /cli/mail/ptr/set. mail_manage.
 
 USAGE
   k2 hostmail ptr set <hostname> [--json]
+EOF
+}
+
+cmd_help_hostmail_bans() {
+    cat <<'EOF'
+Stalwart BlockedIp list/clear and auth-ban migrate window.
+clear destroys matching bans then ReloadBlockedIps (required).
+Default clear = authFailure only; --all also portScanning.
+Unban does NOT reset in-memory fail counters — pair with allowlist.
+mail_manage. Not hostmail disable. Scan-ban stays.
+
+USAGE
+  k2 hostmail bans list [--json]
+  k2 hostmail bans clear <ip> [--all] [--json]
+  k2 hostmail bans migrate --hours N [--json]
+  k2 hostmail bans migrate restore [--json]
+  k2 hostmail bans migrate status [--json]
+EOF
+}
+
+cmd_help_hostmail_bans_list() {
+    cat <<'EOF'
+List BlockedIp (address, reason, createdAt, expiresAt, id).
+GET|POST /cli/mail/bans. mail_manage.
+
+USAGE
+  k2 hostmail bans list [--json]
+EOF
+}
+
+cmd_help_hostmail_bans_clear() {
+    cat <<'EOF'
+Destroy BlockedIp rows for <ip> then ReloadBlockedIps.
+Default: authFailure only. --all also destroys portScanning/etc.
+Unknown IP → ok destroyed:[]. Warns if standing IPs
+65.130.10.89 / 65.130.229.9 are missing from the allowlist.
+Unban does not reset fail counters — pair with allowlist add.
+POST /cli/mail/bans/clear. GET → 405. mail_manage.
+
+USAGE
+  k2 hostmail bans clear <ip> [--all] [--json]
+EOF
+}
+
+cmd_help_hostmail_bans_migrate() {
+    cat <<'EOF'
+Snapshot authBanRate, set authBanRate null (auth-ban only; scan-ban
+stays), persist restoreAt. Daemon health loop auto-restores.
+Never authBanPeriod. Standing IPs are NOT auto-inserted — add them
+via allowlist. POST /cli/mail/bans/migrate. mail_manage.
+
+USAGE
+  k2 hostmail bans migrate --hours N [--json]
+  k2 hostmail bans migrate restore [--json]
+  k2 hostmail bans migrate status [--json]
+EOF
+}
+
+cmd_help_hostmail_bans_migrate_restore() {
+    cat <<'EOF'
+Restore snapshotted authBanRate early and clear the migrate window.
+Missing snapshot screams (does not invent stock 100/day).
+POST /cli/mail/bans/migrate/restore. GET → 405. mail_manage.
+
+USAGE
+  k2 hostmail bans migrate restore [--json]
+EOF
+}
+
+cmd_help_hostmail_bans_migrate_status() {
+    cat <<'EOF'
+Show active migrate window, remaining seconds, restoreAt.
+GET|POST /cli/mail/bans/migrate. mail_manage.
+
+USAGE
+  k2 hostmail bans migrate status [--json]
+EOF
+}
+
+cmd_help_hostmail_allowlist() {
+    cat <<'EOF'
+Stalwart AllowedIp — allowed beats blocked and skips fail2ban.
+add/remove use ReloadSettings (not ReloadBlockedIps).
+mail_manage. Do not allowlist 172.56.0.0/16.
+
+USAGE
+  k2 hostmail allowlist list [--json]
+  k2 hostmail allowlist add <ip|cidr> [--reason migration] [--expires <rfc3339>] [--json]
+  k2 hostmail allowlist remove <ip|cidr> [--json]
+EOF
+}
+
+cmd_help_hostmail_allowlist_list() {
+    cat <<'EOF'
+List AllowedIp entries. GET|POST /cli/mail/allowlist. mail_manage.
+
+USAGE
+  k2 hostmail allowlist list [--json]
+EOF
+}
+
+cmd_help_hostmail_allowlist_add() {
+    cat <<'EOF'
+Create AllowedIp then ReloadSettings. Default reason=migration.
+--expires RFC3339 for a temporary cut window; omit for permanent.
+Standing every-cut IPs (document only — never auto-inserted):
+  65.130.10.89   (Rosson home Wi-Fi)
+  65.130.229.9   (office)
+Do not allowlist 172.56.0.0/16 (T-Mobile CGNAT).
+POST /cli/mail/allowlist/add. GET → 405. mail_manage.
+
+USAGE
+  k2 hostmail allowlist add <ip|cidr> [--reason migration] [--expires <rfc3339>] [--json]
+EOF
+}
+
+cmd_help_hostmail_allowlist_remove() {
+    cat <<'EOF'
+Destroy AllowedIp for address then ReloadSettings.
+POST /cli/mail/allowlist/remove. GET → 405. mail_manage.
+
+USAGE
+  k2 hostmail allowlist remove <ip|cidr> [--json]
 EOF
 }
 
@@ -31176,7 +31706,7 @@ case "${1:-help}" in
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)
-            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr)
+            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

@@ -1319,24 +1319,7 @@ pub fn run_enable(
         } else {
             "hostname"
         };
-        let username = progress_extra("adminUsername")
-            .unwrap_or_else(|| format!("admin@{default_domain}"));
-        let sref = row_field("admin_secret_ref").ok_or_else(|| {
-            fail(
-                auth_step,
-                "admin secret ref missing — re-run enable".to_string(),
-            )
-        })?;
-        let admin_pw = secrets
-            .resolve(&sref)
-            .map_err(|e| fail(auth_step, e))?
-            .ok_or_else(|| {
-                fail(
-                    auth_step,
-                    format!("secret ref {sref} missing from the mail secret store"),
-                )
-            })?;
-        authenticate_either(ops, api, &username, &admin_pw)
+        authenticate_saved_admin(ops, api, secrets, &default_domain)
             .map_err(|e| fail(auth_step, e))?;
     }
 
@@ -1354,15 +1337,7 @@ pub fn run_enable(
             // bind is live before the port-plan retargets to :8180.
             api.bind_setup_http_loopback()?;
             ops.systemctl(&["restart", STALWART_UNIT])?;
-            let username = progress_extra("adminUsername")
-                .unwrap_or_else(|| format!("admin@{default_domain}"));
-            let sref = row_field("admin_secret_ref").ok_or_else(|| {
-                "admin secret ref missing — re-run enable".to_string()
-            })?;
-            let admin_pw = secrets.resolve(&sref)?.ok_or_else(|| {
-                format!("secret ref {sref} missing from the mail secret store")
-            })?;
-            authenticate_either(ops, api, &username, &admin_pw)?;
+            authenticate_saved_admin(ops, api, secrets, &default_domain)?;
             api.configure_listeners(port_plan)
         })()
         .map_err(|e| fail("server-config", e))?;
@@ -1401,18 +1376,12 @@ pub fn run_enable(
     if !step_is_done("recovery-off") {
         set_current("recovery-off");
         (|| -> Result<(), String> {
-            // iascm: stripping recovery env + daemon-reload first
-            // dropped the :8080 session → 401 POST /jmap/. Re-auth as
-            // the provisioned admin, rotate leftovers, THEN strip.
-            let username = progress_extra("adminUsername")
-                .unwrap_or_else(|| format!("admin@{default_domain}"));
-            let sref = row_field("admin_secret_ref").ok_or_else(|| {
-                "admin secret ref missing — cannot rotate leftover admins".to_string()
-            })?;
-            let admin_pw = secrets.resolve(&sref)?.ok_or_else(|| {
-                format!("secret ref {sref} missing from the mail secret store")
-            })?;
-            authenticate_either(ops, api, &username, &admin_pw)?;
+            // iascm 2026-09-22: server-config auth.success for
+            // admin@domain at 18:03:02, no rotation in the log,
+            // recoveryAdminRef still present, same vaulted secret
+            // 401s later. Log in as recovery `admin` on that 401.
+            // A hard 401 is not "still starting" — do not retry it.
+            authenticate_saved_admin(ops, api, secrets, &default_domain)?;
             rotate_leftover_admins(api, secrets, &default_domain)?;
             ops.write_file(STALWART_UNIT_PATH, systemd_unit(None).as_bytes(), 0o600)?;
             ops.systemctl(&["daemon-reload"])?;
@@ -1466,6 +1435,9 @@ fn authenticate_with_retry(
     for attempt in 0..AUTH_RETRIES {
         match api.authenticate(base_url, username, password) {
             Ok(()) => return Ok(()),
+            Err(e) if is_auth_rejected(&e) => {
+                return Err(format!("management API rejected credentials at {base_url}: {e}"));
+            }
             Err(e) => last_err = e,
         }
         if attempt + 1 < AUTH_RETRIES {
@@ -1579,6 +1551,58 @@ pub fn rotate_leftover_admins_live() -> Result<RotateAdminReport, String> {
 /// Authenticate against the pre-plan (:8080) listener, falling back to
 /// the post-plan mgmt listener (:8180) — a resume after the final
 /// restart finds the mgmt API there instead.
+/// HTTP 401 is a credential reject. Retrying it looks like a brute
+/// force and will not make a wrong password right.
+fn is_auth_rejected(err: &str) -> bool {
+    err.contains("401")
+}
+
+/// Provisioned `admin@domain`, then leftover recovery principal `admin`.
+/// iascm: the provisioned secret 401s after a successful login on the
+/// same process, and `recoveryAdminRef` is still in progress.
+fn authenticate_saved_admin(
+    ops: &dyn SystemOps,
+    api: &mut dyn BootstrapApi,
+    secrets: &dyn SecretStore,
+    default_domain: &str,
+) -> Result<(), String> {
+    let username = progress_extra("adminUsername")
+        .unwrap_or_else(|| format!("admin@{default_domain}"));
+    let mut errors = Vec::new();
+    if let Some(sref) = row_field("admin_secret_ref") {
+        match secrets.resolve(&sref) {
+            Ok(Some(pw)) => match authenticate_either(ops, api, &username, &pw) {
+                Ok(()) => return Ok(()),
+                Err(e) => errors.push(format!("{username}: {e}")),
+            },
+            Ok(None) => errors.push(format!(
+                "{username}: secret ref {sref} missing from the mail secret store"
+            )),
+            Err(e) => errors.push(format!("{username}: {e}")),
+        }
+    } else {
+        errors.push("admin secret ref missing".to_string());
+    }
+    if username != "admin" {
+        if let Some(sref) = progress_extra("recoveryAdminRef") {
+            match secrets.resolve(&sref) {
+                Ok(Some(pw)) => match authenticate_either(ops, api, "admin", &pw) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => errors.push(format!("admin: {e}")),
+                },
+                Ok(None) => errors.push(format!(
+                    "admin: secret ref {sref} missing from the mail secret store"
+                )),
+                Err(e) => errors.push(format!("admin: {e}")),
+            }
+        }
+    }
+    if errors.is_empty() {
+        return Err("admin secret ref missing — cannot authenticate".to_string());
+    }
+    Err(format!("admin authentication failed — {}", errors.join(" | ")))
+}
+
 fn authenticate_either(
     ops: &dyn SystemOps,
     api: &mut dyn BootstrapApi,
@@ -1586,9 +1610,18 @@ fn authenticate_either(
     password: &str,
 ) -> Result<(), String> {
     // One quick probe first (no retry storm when the other URL is the
-    // live one).
-    if api.authenticate(STALWART_SETUP_URL, username, password).is_ok() {
-        return Ok(());
+    // live one). A 401 on :8080 is final for that password — try :8180
+    // once, then stop.
+    match api.authenticate(STALWART_SETUP_URL, username, password) {
+        Ok(()) => return Ok(()),
+        Err(e) if is_auth_rejected(&e) => {
+            return api
+                .authenticate(STALWART_MGMT_URL, username, password)
+                .map_err(|second| {
+                    format!("admin authentication failed on both listeners — {e}; {second}")
+                });
+        }
+        Err(_) => {}
     }
     if api.authenticate(STALWART_MGMT_URL, username, password).is_ok() {
         return Ok(());
@@ -1894,6 +1927,8 @@ mod tests {
         fail_on: Option<&'static str>,
         /// URLs authenticate() must refuse (post-restart resume story).
         refuse_urls: Vec<&'static str>,
+        /// Usernames that answer HTTP 401 (iascm provisioned-admin reject).
+        refuse_users: Vec<&'static str>,
     }
 
     impl FakeApi {
@@ -1911,6 +1946,10 @@ mod tests {
             if self.refuse_urls.contains(&base) {
                 self.calls.push(format!("authenticate-refused {base} {user}"));
                 return Err(format!("connection refused: {base}"));
+            }
+            if self.refuse_users.contains(&user) {
+                self.calls.push(format!("authenticate-rejected {base} {user}"));
+                return Err("GET /jmap/session: HTTP 401 Unauthorized".to_string());
             }
             self.check(&format!("authenticate {base} {user}"))
         }
@@ -2047,6 +2086,14 @@ mod tests {
                 ),
                 "systemctl daemon-reload".to_string(),
                 "systemctl enable --now stalwart".to_string(),
+                // Bootstrap rewrites the unit with the vaulted recovery
+                // env and restarts before restart-normal / server-config.
+                format!(
+                    "write /etc/systemd/system/stalwart.service ({} bytes, mode 600)",
+                    systemd_unit(Some(&secrets_stored_secret(&secrets, "recovery-admin"))).len()
+                ),
+                "systemctl daemon-reload".to_string(),
+                "systemctl restart stalwart".to_string(),
                 "systemctl restart stalwart".to_string(),
                 "systemctl restart stalwart".to_string(),
                 format!(
@@ -2071,6 +2118,7 @@ mod tests {
                 "configure_listeners tls-alpn",
                 "create_service_account acme.dev",
                 "mint_api_key acct-k2",
+                "authenticate http://127.0.0.1:8080 admin@acme.dev",
                 "rotate_admin_secret admin 64",
                 "rotate_admin_secret admin@acme.dev 64",
             ]
@@ -2195,7 +2243,7 @@ mod tests {
         // re-authenticate as the PROVISIONED admin, and must finish.
         let ops2 = FakeSystemOps {
             download_body: FAKE_BINARY.to_vec(),
-            existing_paths: vec![STALWART_BIN.to_string()],
+            existing_paths: vec![STALWART_BIN.to_string(), STALWART_CONFIG.to_string()],
             ..FakeSystemOps::default()
         };
         let mut api2 = FakeApi::default();
@@ -2219,6 +2267,7 @@ mod tests {
                 "authenticate http://127.0.0.1:8080 admin@acme.dev",
                 "create_service_account acme.dev",
                 "mint_api_key acct-k2",
+                "authenticate http://127.0.0.1:8080 admin@acme.dev",
                 "rotate_admin_secret admin 64",
                 "rotate_admin_secret admin@acme.dev 64",
             ]
@@ -2246,7 +2295,7 @@ mod tests {
             .expect_err("injected failure");
 
         let ops2 = FakeSystemOps {
-            existing_paths: vec![STALWART_BIN.to_string()],
+            existing_paths: vec![STALWART_BIN.to_string(), STALWART_CONFIG.to_string()],
             ..FakeSystemOps::default()
         };
         let mut api2 = FakeApi { refuse_urls: vec![STALWART_SETUP_URL], ..FakeApi::default() };
@@ -2258,6 +2307,91 @@ mod tests {
             "{:?}",
             api2.calls
         );
+        assert_eq!(current_status().as_deref(), Some("running"));
+        clean_row();
+    }
+
+    /// iascm: server-config already logged in as admin@domain, then the
+    /// same vaulted secret 401s. recoveryAdminRef is still present and
+    /// Stalwart did not rotate. Resume must log in as recovery `admin`
+    /// and must not hammer the 401.
+    #[test]
+    fn recovery_off_uses_recovery_admin_when_provisioned_admin_401s() {
+        let _g = db_guard();
+        clean_row();
+        let secrets = FakeSecrets::default();
+        secrets
+            .store("recovery-admin", "recovery-pw")
+            .expect("vault recovery");
+        secrets.store("admin", "provisioned").expect("vault admin");
+        let mut steps = serde_json::Map::new();
+        for s in ENABLE_STEPS {
+            if *s != "recovery-off" && *s != "restart" {
+                steps.insert((*s).to_string(), serde_json::json!({ "at": 1 }));
+            }
+        }
+        let progress = serde_json::json!({
+            "steps": steps,
+            "adminUsername": "admin@acme.dev",
+            "recoveryAdminRef": "mailsec_recovery-admin_test",
+        })
+        .to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, \
+                 admin_secret_ref, enable_progress_json, port_plan, updated_at) \
+                 VALUES (1, 'error', ?1, 'mail.acme.dev', 'mailsec_admin_test', ?2, \
+                 'tls-alpn', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION, progress],
+            )
+            .expect("seed row");
+        }
+        let ops = FakeSystemOps {
+            existing_paths: vec![STALWART_BIN.to_string(), STALWART_CONFIG.to_string()],
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi {
+            refuse_users: vec!["admin@acme.dev"],
+            ..FakeApi::default()
+        };
+        let art = fake_artifact();
+        run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
+            .expect("recovery admin fallback finishes enable");
+        let rejected = api
+            .calls
+            .iter()
+            .filter(|c| c.contains("authenticate-rejected"))
+            .count();
+        assert!(
+            rejected <= 4,
+            "a 401 must not be retried like a down listener: {:?}",
+            api.calls
+        );
+        assert!(
+            api.calls
+                .iter()
+                .any(|c| c == "authenticate http://127.0.0.1:8080 admin"),
+            "must log in as recovery admin: {:?}",
+            api.calls
+        );
+        assert!(
+            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            "must not re-bootstrap: {:?}",
+            api.calls
+        );
+        assert_eq!(
+            ops.recorded()
+                .iter()
+                .filter(|l| *l == "systemctl restart stalwart")
+                .count(),
+            1,
+            "only the final restart: {:?}",
+            ops.recorded()
+        );
+        assert!(step_is_done("recovery-off"));
+        assert!(step_is_done("restart"));
         assert_eq!(current_status().as_deref(), Some("running"));
         clean_row();
     }
@@ -2521,6 +2655,16 @@ mod tests {
     fn already_enabled_healthy_store_is_noop_when_unit_active() {
         let _g = db_guard();
         clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, updated_at) \
+                 VALUES (1, 'running', ?1, 1)",
+                rusqlite::params![STALWART_PINNED_VERSION],
+            )
+            .expect("seed row");
+        }
         set_test_store_ready(Some(true));
         mark_step("restart");
         let _unit = with_test_unit_state("active");
@@ -2685,8 +2829,8 @@ mod tests {
             .expect("unit written");
         let text = String::from_utf8_lossy(&unit);
         assert!(
-            !text.contains("STALWART_RECOVERY_ADMIN"),
-            "C20: failed enable after unit must strip recovery admin: {text}"
+            text.contains("STALWART_RECOVERY_ADMIN"),
+            "C20: bootstrap failed before config.json — keep the vaulted recovery env: {text}"
         );
         clean_row();
     }

@@ -398,7 +398,7 @@ pub fn handle_server_rotate_admin(_body: &[u8]) -> CliResponse {
                 "ok": true,
                 "recoveryPrincipal": report.recovery_principal,
                 "provisionedAdmin": report.provisioned_admin,
-                "hint": "rotated leftover recovery principal and provisioned admin password — store kept",
+                "hint": "rotated leftover recovery principal `admin` when present; provisioned adminUsername is skipped if that Stalwart account does not exist — store kept",
             })
             .to_string(),
         ),

@@ -1460,7 +1460,11 @@ pub fn rotate_leftover_admins(
 
 /// Live entry for POST `/cli/mail/server/rotate-admin`: talk to the
 /// running server over the loopback ApiKey (same as doctor/domains).
-/// Does not wipe the store. Fails loud if principal `admin` is missing.
+/// Does not wipe the store. Rotates leftover principal `admin` when
+/// present. Stored `adminUsername` (`admin@domain`) is rotated only if
+/// that account exists — noir 0.40.149 stored the name from Bootstrap
+/// but Stalwart only has `admin` + `k2-daemon`. Missing provisioned
+/// name is a skip, not 502 after already rotating `admin`.
 pub fn rotate_leftover_admins_live() -> Result<RotateAdminReport, String> {
     if !mail_supported() {
         return Err(
@@ -1471,20 +1475,42 @@ pub fn rotate_leftover_admins_live() -> Result<RotateAdminReport, String> {
     let (client, hostname) = super::domains::engine_from_db()?;
     let default_domain = default_domain_for(hostname.as_deref().unwrap_or(""));
     let secrets = FileSecretStore::default();
-    let recovery_new = generate_secret()?;
-    client.rotate_account_secret("admin", &recovery_new)?;
-    if let Some(sref) = progress_extra("recoveryAdminRef") {
-        let _ = secrets.delete(&sref);
-    }
+
+    let recovery_principal = if client.account_query_id("admin")?.is_some() {
+        let recovery_new = generate_secret()?;
+        client.rotate_account_secret("admin", &recovery_new)?;
+        if let Some(sref) = progress_extra("recoveryAdminRef") {
+            let _ = secrets.delete(&sref);
+        }
+        "admin".to_string()
+    } else {
+        "admin (not in Stalwart — skipped)".to_string()
+    };
+
     let username = progress_extra("adminUsername")
         .unwrap_or_else(|| format!("admin@{default_domain}"));
-    let new_pw = generate_secret()?;
-    client.rotate_account_secret(&username, &new_pw)?;
-    let new_ref = secrets.store("admin", &new_pw)?;
-    set_row_field("admin_secret_ref", &new_ref);
+    let provisioned_admin = if username != "admin" && client.account_query_id(&username)?.is_some()
+    {
+        let new_pw = generate_secret()?;
+        client.rotate_account_secret(&username, &new_pw)?;
+        let new_ref = secrets.store("admin", &new_pw)?;
+        set_row_field("admin_secret_ref", &new_ref);
+        username
+    } else if username == "admin" {
+        username
+    } else {
+        format!("{username} (not in Stalwart — skipped)")
+    };
+
+    if recovery_principal.contains("skipped") && provisioned_admin.contains("skipped") {
+        return Err(
+            "neither leftover principal 'admin' nor stored adminUsername exist in Stalwart"
+                .to_string(),
+        );
+    }
     Ok(RotateAdminReport {
-        recovery_principal: "admin".to_string(),
-        provisioned_admin: username,
+        recovery_principal,
+        provisioned_admin,
     })
 }
 

@@ -6,13 +6,15 @@
 //! with ZERO side effects (house rule: no real systemd/fs writes in
 //! tests, nothing below port 1024, no network).
 //!
-//! The real implementation shells out for the Linux-only pieces
-//! (`useradd`, `systemctl`, `journalctl`, `tar`, `chown`) — all
-//! guaranteed present on any systemd box, and it keeps k2-daemon free
-//! of tar/gzip deps. It is only ever invoked behind
-//! [`super::supervisor::mail_supported`].
+//! [`RealSystemOps`] sends privileged effects through
+//! `sudo -n /usr/local/libexec/k2-mail-helper` ([`super::helper`]).
+//! There is no raw `useradd` / `chown` / `systemctl` fallback.
+//! `systemctl_query` (`is-active`) stays a direct non-root `systemctl`.
+//! It is only ever invoked behind [`super::supervisor::mail_supported`].
 
 use std::path::Path;
+
+use super::helper;
 
 pub trait SystemOps: Send + Sync {
     /// Download `url` fully into memory (the pinned tarball is ~40 MB;
@@ -27,8 +29,10 @@ pub trait SystemOps: Send + Sync {
     /// Recursive, missing-is-ok removal.
     fn remove_path(&self, path: &str) -> Result<(), String>;
     fn path_exists(&self, path: &str) -> bool;
-    /// Extract the single archive member `member` from the in-memory
-    /// gzipped tarball to `dest` with `mode`.
+    /// Extract archive member `member` to `dest` with `mode`.
+    /// Production accepts only member `stalwart`, dest
+    /// `/usr/local/bin/stalwart`, mode `0o755`, and pipes the original
+    /// tarball bytes to the mail helper. It does not stage under `/tmp`.
     fn extract_tar_gz_member(
         &self,
         archive: &[u8],
@@ -63,19 +67,60 @@ impl RealSystemOps {
             .map_err(|e| format!("{cmd} {}: {e}", args.join(" ")))
     }
 
-    fn run_ok(cmd: &str, args: &[&str]) -> Result<String, String> {
-        let out = Self::run(cmd, args)?;
+    /// `sudo -n` the mail helper. Stdin is not copied into the error.
+    fn run_mail_helper(args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut cmd = Command::new(helper::SUDO_PATH);
+        cmd.arg("-n").arg(helper::HELPER_PATH).args(args);
+        let out = if let Some(bytes) = stdin {
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut child = cmd.spawn().map_err(|e| helper_spawn_error(&e))?;
+            {
+                let mut sin = child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| "mail helper: stdin".to_string())?;
+                sin.write_all(bytes)
+                    .map_err(|_| "mail helper: stdin write failed".to_string())?;
+            }
+            child
+                .wait_with_output()
+                .map_err(|e| helper_spawn_error(&e))?
+        } else {
+            cmd.stdin(Stdio::null())
+                .output()
+                .map_err(|e| helper_spawn_error(&e))?
+        };
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
+            if let Some(mapped) = helper::map_helper_failure(None, &err) {
+                return Err(mapped);
+            }
+            let trimmed = err.trim();
+            let mut end = trimmed.len().min(400);
+            while end > 0 && !trimmed.is_char_boundary(end) {
+                end -= 1;
+            }
             return Err(format!(
-                "{cmd} {}: exit {:?}: {}",
+                "mail helper {}: exit {:?}: {}",
                 args.join(" "),
                 out.status.code(),
-                err.trim()
+                &trimmed[..end]
             ));
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
+}
+
+fn helper_spawn_error(err: &std::io::Error) -> String {
+    helper::map_helper_failure(Some(err), "").unwrap_or_else(|| format!("mail helper: {err}"))
+}
+
+fn helper_argv(args: &[&str]) -> Result<Vec<&'static str>, String> {
+    Ok(helper::parse_argv(args)?.argv())
 }
 
 impl SystemOps for RealSystemOps {
@@ -95,34 +140,25 @@ impl SystemOps for RealSystemOps {
             .map_err(|e| format!("GET {url}: read body: {e}"))
     }
 
-    fn write_file(&self, path: &str, contents: &[u8], mode: u32) -> Result<(), String> {
-        std::fs::write(path, contents).map_err(|e| format!("write {path}: {e}"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-                .map_err(|e| format!("chmod {path}: {e}"))?;
+    fn write_file(&self, path: &str, contents: &[u8], _mode: u32) -> Result<(), String> {
+        let argv = helper_argv(&["write", path])?;
+        // The helper forces mode and refuses bytes that are not a canned
+        // unit or drop-in. Check here too so a mismatch never reaches sudo
+        // and the secret stays out of this error.
+        if let helper::HelperCommand::Write(canon) = helper::parse_argv(&argv)? {
+            helper::write_bytes_accepted(canon, contents)?;
         }
-        #[cfg(not(unix))]
-        let _ = mode;
-        Ok(())
+        Self::run_mail_helper(&argv, Some(contents)).map(|_| ())
     }
 
     fn create_dir_all(&self, path: &str) -> Result<(), String> {
-        std::fs::create_dir_all(path).map_err(|e| format!("mkdir -p {path}: {e}"))
+        let argv = helper_argv(&["mkdir", path])?;
+        Self::run_mail_helper(&argv, None).map(|_| ())
     }
 
     fn remove_path(&self, path: &str) -> Result<(), String> {
-        let p = Path::new(path);
-        if !p.exists() {
-            return Ok(());
-        }
-        let res = if p.is_dir() {
-            std::fs::remove_dir_all(p)
-        } else {
-            std::fs::remove_file(p)
-        };
-        res.map_err(|e| format!("remove {path}: {e}"))
+        let argv = helper_argv(&["remove", path])?;
+        Self::run_mail_helper(&argv, None).map(|_| ())
     }
 
     fn path_exists(&self, path: &str) -> bool {
@@ -136,54 +172,31 @@ impl SystemOps for RealSystemOps {
         dest: &str,
         mode: u32,
     ) -> Result<(), String> {
-        // Stage the verified bytes, extract the one member with the
-        // system tar (always present on a systemd box), move into
-        // place. All under a private staging dir.
-        let staging = format!("/tmp/k2-mail-extract-{}", std::process::id());
-        self.create_dir_all(&staging)?;
-        let result = (|| {
-            let tarball = format!("{staging}/archive.tar.gz");
-            std::fs::write(&tarball, archive).map_err(|e| format!("write {tarball}: {e}"))?;
-            Self::run_ok("tar", &["-xzf", &tarball, "-C", &staging, member])?;
-            let extracted = format!("{staging}/{member}");
-            std::fs::rename(&extracted, dest).or_else(|_| {
-                // Cross-device fallback: copy + remove.
-                std::fs::copy(&extracted, dest)
-                    .map(|_| ())
-                    .map_err(|e| format!("install {member} -> {dest}: {e}"))
-            })?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(dest, std::fs::Permissions::from_mode(mode))
-                    .map_err(|e| format!("chmod {dest}: {e}"))?;
-            }
-            #[cfg(not(unix))]
-            let _ = mode;
-            Ok(())
-        })();
-        let _ = std::fs::remove_dir_all(&staging);
-        result
+        // The daemon already verified the tarball. Pipe those bytes.
+        // Do not stage under /tmp and do not call create_dir_all for it.
+        helper::extract_request_allowed(member, dest, mode)?;
+        let argv = helper_argv(&["install-bin"])?;
+        Self::run_mail_helper(&argv, Some(archive)).map(|_| ())
     }
 
     fn ensure_system_user(&self, user: &str) -> Result<(), String> {
-        // Exists already? fine (idempotent/resumable install).
-        if Self::run_ok("id", &["-u", user]).is_ok() {
-            return Ok(());
-        }
-        Self::run_ok(
-            "useradd",
-            &["--system", "--no-create-home", "--shell", "/usr/sbin/nologin", user],
-        )
-        .map(|_| ())
+        helper::require_stalwart_user(user)?;
+        let argv = helper_argv(&["ensure-user"])?;
+        Self::run_mail_helper(&argv, None).map(|_| ())
     }
 
     fn chown_recursive(&self, path: &str, user: &str) -> Result<(), String> {
-        Self::run_ok("chown", &["-R", &format!("{user}:{user}"), path]).map(|_| ())
+        helper::require_stalwart_user(user)?;
+        let argv = helper_argv(&["chown", path])?;
+        Self::run_mail_helper(&argv, None).map(|_| ())
     }
 
     fn systemctl(&self, args: &[&str]) -> Result<String, String> {
-        Self::run_ok("systemctl", args)
+        let mut argv = Vec::with_capacity(1 + args.len());
+        argv.push("systemctl");
+        argv.extend_from_slice(args);
+        let canon = helper_argv(&argv)?;
+        Self::run_mail_helper(&canon, None)
     }
 
     fn systemctl_query(&self, args: &[&str]) -> String {
@@ -237,7 +250,10 @@ pub(crate) mod fake {
 
     impl FakeSystemOps {
         pub fn record(&self, line: String) {
-            self.ops.lock().unwrap_or_else(|p| p.into_inner()).push(line);
+            self.ops
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(line);
         }
         pub fn recorded(&self) -> Vec<String> {
             self.ops.lock().unwrap_or_else(|p| p.into_inner()).clone()
@@ -253,7 +269,10 @@ pub(crate) mod fake {
             }
         }
         fn write_file(&self, path: &str, contents: &[u8], mode: u32) -> Result<(), String> {
-            self.record(format!("write {path} ({} bytes, mode {mode:o})", contents.len()));
+            self.record(format!(
+                "write {path} ({} bytes, mode {mode:o})",
+                contents.len()
+            ));
             self.written
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())

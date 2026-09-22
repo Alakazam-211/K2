@@ -266,8 +266,12 @@ pub struct AdminCredentials {
 pub trait BootstrapApi: Send {
     /// Basic-auth session against `base_url` (+ session-document
     /// discovery — the probe doubles as the credential check).
-    fn authenticate(&mut self, base_url: &str, username: &str, password: &str)
-        -> Result<(), String>;
+    fn authenticate(
+        &mut self,
+        base_url: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<(), String>;
     /// Bearer session with the minted ApiKey. iascm: basic auth can
     /// be gone (provisioned admin missing, recovery secret deleted)
     /// while the api-key from setup still opens :8080.
@@ -913,7 +917,6 @@ fn with_test_tls_cert(probe: TlsProbe, certs_dir: bool) -> TestTlsCertGuard {
     TestTlsCertGuard
 }
 
-
 /// RAII reset for [`set_test_unit_state`].
 #[cfg(test)]
 pub(crate) struct TestUnitStateGuard;
@@ -1250,50 +1253,53 @@ pub fn run_enable(
             // `{data}/data` alone is bootstrap ephemeral — keep going.
             mark_step("bootstrap");
         } else {
-        set_current("bootstrap");
-        let sref = progress_extra("recoveryAdminRef").ok_or_else(|| {
-            fail("bootstrap", "recovery admin ref missing from progress state".to_string())
-        })?;
-        let recovery_pw = secrets
-            .resolve(&sref)
-            .map_err(|e| fail("bootstrap", e))?
-            .ok_or_else(|| {
+            set_current("bootstrap");
+            let sref = progress_extra("recoveryAdminRef").ok_or_else(|| {
                 fail(
                     "bootstrap",
-                    format!("secret ref {sref} missing from the mail secret store"),
+                    "recovery admin ref missing from progress state".to_string(),
                 )
             })?;
-        // iascm: unit started without STALWART_RECOVERY_ADMIN so
-        // Stalwart minted its own bootstrap password. Resume had
-        // unit+start marked and did not restart. Rewrite + restart
-        // with the vaulted secret, then auth.
-        (|| -> Result<(), String> {
-            ops.write_file(
-                STALWART_UNIT_PATH,
-                systemd_unit(Some(&recovery_pw)).as_bytes(),
-                0o600,
-            )?;
-            ops.systemctl(&["daemon-reload"])?;
-            ops.systemctl(&["restart", STALWART_UNIT])?;
-            Ok(())
-        })()
-        .map_err(|e| fail("bootstrap", e))?;
-        // The service may still be coming up — poll the listener.
-        authenticate_with_retry(ops, api, STALWART_SETUP_URL, "admin", &recovery_pw)
+            let recovery_pw = secrets
+                .resolve(&sref)
+                .map_err(|e| fail("bootstrap", e))?
+                .ok_or_else(|| {
+                    fail(
+                        "bootstrap",
+                        format!("secret ref {sref} missing from the mail secret store"),
+                    )
+                })?;
+            // iascm: unit started without STALWART_RECOVERY_ADMIN so
+            // Stalwart minted its own bootstrap password. Resume had
+            // unit+start marked and did not restart. Rewrite + restart
+            // with the vaulted secret, then auth.
+            (|| -> Result<(), String> {
+                ops.write_file(
+                    STALWART_UNIT_PATH,
+                    systemd_unit(Some(&recovery_pw)).as_bytes(),
+                    0o600,
+                )?;
+                ops.systemctl(&["daemon-reload"])?;
+                ops.systemctl(&["restart", STALWART_UNIT])?;
+                Ok(())
+            })()
             .map_err(|e| fail("bootstrap", e))?;
-        let creds = api
-            .complete_bootstrap(
-                hostname,
-                &default_domain,
-                super::preflight::request_tls_certificate(port_plan),
-            )
-            .map_err(|e| fail("bootstrap", e))?;
-        let sref = secrets
-            .store("admin", &creds.secret)
-            .map_err(|e| fail("bootstrap", e))?;
-        set_row_field("admin_secret_ref", &sref);
-        progress_extra_set("adminUsername", &creds.username);
-        mark_step("bootstrap");
+            // The service may still be coming up — poll the listener.
+            authenticate_with_retry(ops, api, STALWART_SETUP_URL, "admin", &recovery_pw)
+                .map_err(|e| fail("bootstrap", e))?;
+            let creds = api
+                .complete_bootstrap(
+                    hostname,
+                    &default_domain,
+                    super::preflight::request_tls_certificate(port_plan),
+                )
+                .map_err(|e| fail("bootstrap", e))?;
+            let sref = secrets
+                .store("admin", &creds.secret)
+                .map_err(|e| fail("bootstrap", e))?;
+            set_row_field("admin_secret_ref", &sref);
+            progress_extra_set("adminUsername", &creds.username);
+            mark_step("bootstrap");
         }
     }
 
@@ -1319,8 +1325,9 @@ pub fn run_enable(
         && previous_hostname
             .as_deref()
             .is_some_and(|old| old != hostname);
-    let api_steps_remain =
-        !(step_is_done("server-config") && step_is_done("service-account") && step_is_done("api-key"));
+    let api_steps_remain = !(step_is_done("server-config")
+        && step_is_done("service-account")
+        && step_is_done("api-key"));
     if api_steps_remain || hostname_retarget {
         let auth_step = if api_steps_remain {
             "server-config"
@@ -1364,7 +1371,10 @@ pub fn run_enable(
     if !step_is_done("api-key") {
         set_current("api-key");
         let account_id = progress_extra("serviceAccountId").ok_or_else(|| {
-            fail("api-key", "service account id missing from progress state".to_string())
+            fail(
+                "api-key",
+                "service account id missing from progress state".to_string(),
+            )
         })?;
         let secret = api
             .mint_api_key(&account_id)
@@ -1444,7 +1454,9 @@ fn authenticate_with_retry(
         match api.authenticate(base_url, username, password) {
             Ok(()) => return Ok(()),
             Err(e) if is_auth_rejected(&e) => {
-                return Err(format!("management API rejected credentials at {base_url}: {e}"));
+                return Err(format!(
+                    "management API rejected credentials at {base_url}: {e}"
+                ));
             }
             Err(e) => last_err = e,
         }
@@ -1452,7 +1464,9 @@ fn authenticate_with_retry(
             ops.sleep_ms(1000);
         }
     }
-    Err(format!("management API not reachable at {base_url}: {last_err}"))
+    Err(format!(
+        "management API not reachable at {base_url}: {last_err}"
+    ))
 }
 
 /// Result of rotating leftover recovery + provisioned admin secrets.
@@ -1486,8 +1500,8 @@ pub fn rotate_leftover_admins(
     let held = secrets.store("recovery-admin", &recovery_new)?;
     progress_extra_set("recoveryAdminRef", &held);
 
-    let username = progress_extra("adminUsername")
-        .unwrap_or_else(|| format!("admin@{default_domain}"));
+    let username =
+        progress_extra("adminUsername").unwrap_or_else(|| format!("admin@{default_domain}"));
     let provisioned_admin = if username == "admin" {
         set_row_field("admin_secret_ref", &held);
         username
@@ -1495,9 +1509,9 @@ pub fn rotate_leftover_admins(
         let sref = row_field("admin_secret_ref").ok_or_else(|| {
             "admin secret ref missing — cannot rotate the provisioned admin".to_string()
         })?;
-        let current = secrets.resolve(&sref)?.ok_or_else(|| {
-            format!("secret ref {sref} missing from the mail secret store")
-        })?;
+        let current = secrets
+            .resolve(&sref)?
+            .ok_or_else(|| format!("secret ref {sref} missing from the mail secret store"))?;
         let new_pw = generate_secret()?;
         match api.rotate_admin_secret(&username, &current, &new_pw) {
             Ok(()) => {
@@ -1562,8 +1576,8 @@ pub fn rotate_leftover_admins_live() -> Result<RotateAdminReport, String> {
         "admin (not in Stalwart — skipped)".to_string()
     };
 
-    let username = progress_extra("adminUsername")
-        .unwrap_or_else(|| format!("admin@{default_domain}"));
+    let username =
+        progress_extra("adminUsername").unwrap_or_else(|| format!("admin@{default_domain}"));
     let provisioned_admin = if username != "admin" && client.account_query_id(&username)?.is_some()
     {
         let new_pw = generate_secret()?;
@@ -1607,8 +1621,8 @@ fn authenticate_saved_admin(
     secrets: &dyn SecretStore,
     default_domain: &str,
 ) -> Result<(), String> {
-    let username = progress_extra("adminUsername")
-        .unwrap_or_else(|| format!("admin@{default_domain}"));
+    let username =
+        progress_extra("adminUsername").unwrap_or_else(|| format!("admin@{default_domain}"));
     let mut errors = Vec::new();
     if let Some(sref) = row_field("admin_secret_ref") {
         match secrets.resolve(&sref) {
@@ -1657,7 +1671,10 @@ fn authenticate_saved_admin(
     if errors.is_empty() {
         return Err("admin secret ref missing — cannot authenticate".to_string());
     }
-    Err(format!("admin authentication failed — {}", errors.join(" | ")))
+    Err(format!(
+        "admin authentication failed — {}",
+        errors.join(" | ")
+    ))
 }
 
 fn authenticate_either(
@@ -1680,7 +1697,10 @@ fn authenticate_either(
         }
         Err(_) => {}
     }
-    if api.authenticate(STALWART_MGMT_URL, username, password).is_ok() {
+    if api
+        .authenticate(STALWART_MGMT_URL, username, password)
+        .is_ok()
+    {
         return Ok(());
     }
     // Neither answered instantly — the service may be restarting; give
@@ -1725,10 +1745,7 @@ impl Health {
 
 /// Pure verdict logic over injected observations: binary present →
 /// unit active → authed API ping.
-pub fn health_check_with(
-    ops: &dyn SystemOps,
-    api_ping: &dyn Fn() -> Result<(), String>,
-) -> Health {
+pub fn health_check_with(ops: &dyn SystemOps, api_ping: &dyn Fn() -> Result<(), String>) -> Health {
     if !ops.path_exists(STALWART_BIN) {
         return Health::NotInstalled;
     }
@@ -1736,12 +1753,18 @@ pub fn health_check_with(
     if active != "active" {
         return Health::Stopped(format!(
             "systemd reports the stalwart unit is '{}'",
-            if active.is_empty() { "unknown" } else { &active }
+            if active.is_empty() {
+                "unknown"
+            } else {
+                &active
+            }
         ));
     }
     match api_ping() {
         Ok(()) => Health::Running,
-        Err(e) => Health::Degraded(format!("unit is active but the management API ping failed: {e}")),
+        Err(e) => Health::Degraded(format!(
+            "unit is active but the management API ping failed: {e}"
+        )),
     }
 }
 
@@ -1890,6 +1913,7 @@ pub fn upgrade(to_version: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mail::helper;
     use crate::mail::sysops::fake::FakeSystemOps;
     use sha2::{Digest, Sha256};
     use std::sync::Mutex;
@@ -1959,7 +1983,9 @@ mod tests {
             assert!(d.contains(directive), "missing {directive}");
         }
         let unit = systemd_unit(Some("recovery-pw"));
-        assert!(unit.contains("ExecStart=/usr/local/bin/stalwart --config /etc/stalwart/config.json"));
+        assert!(
+            unit.contains("ExecStart=/usr/local/bin/stalwart --config /etc/stalwart/config.json")
+        );
         assert!(unit.contains("User=stalwart"));
         assert!(unit.contains("Environment=STALWART_RECOVERY_ADMIN=admin:recovery-pw"));
         // The recovery-off rewrite drops the credential entirely.
@@ -2003,18 +2029,21 @@ mod tests {
     impl BootstrapApi for FakeApi {
         fn authenticate(&mut self, base: &str, user: &str, _pw: &str) -> Result<(), String> {
             if self.refuse_urls.contains(&base) {
-                self.calls.push(format!("authenticate-refused {base} {user}"));
+                self.calls
+                    .push(format!("authenticate-refused {base} {user}"));
                 return Err(format!("connection refused: {base}"));
             }
             if self.refuse_users.contains(&user) {
-                self.calls.push(format!("authenticate-rejected {base} {user}"));
+                self.calls
+                    .push(format!("authenticate-rejected {base} {user}"));
                 return Err("GET /jmap/session: HTTP 401 Unauthorized".to_string());
             }
             self.check(&format!("authenticate {base} {user}"))
         }
         fn authenticate_bearer(&mut self, base: &str, _api_key: &str) -> Result<(), String> {
             if self.refuse_urls.contains(&base) {
-                self.calls.push(format!("authenticate-bearer-refused {base}"));
+                self.calls
+                    .push(format!("authenticate-bearer-refused {base}"));
                 return Err(format!("connection refused: {base}"));
             }
             self.check(&format!("authenticate-bearer {base}"))
@@ -2060,7 +2089,10 @@ mod tests {
                 self.calls.push(format!("rotate-missing {username}"));
                 return Err(format!("admin account '{username}' not found"));
             }
-            self.check(&format!("rotate_admin_secret {username} {}", new_secret.len()))
+            self.check(&format!(
+                "rotate_admin_secret {username} {}",
+                new_secret.len()
+            ))
         }
     }
 
@@ -2207,10 +2239,17 @@ mod tests {
             assert_eq!(stored[2].0, "api-key");
             assert_eq!(stored[2].1, "API_minted-key-secret");
             assert_eq!(stored[3].0, "recovery-admin");
-            assert_eq!(stored[3].1.len(), 64, "rotated principal password saved before the next step");
+            assert_eq!(
+                stored[3].1.len(),
+                64,
+                "rotated principal password saved before the next step"
+            );
             assert_eq!(stored[4].0, "admin");
             assert_eq!(stored[4].1.len(), 64, "rotated admin password");
-            assert_ne!(stored[4].1, stored[1].1, "C20 recovery-off rotates the admin secret");
+            assert_ne!(
+                stored[4].1, stored[1].1,
+                "C20 recovery-off rotates the admin secret"
+            );
             assert_eq!(
                 *secrets.deleted.lock().unwrap(),
                 vec!["mailsec_recovery-admin_test".to_string()],
@@ -2220,9 +2259,18 @@ mod tests {
         // Row landed running with refs + urls + version.
         assert_eq!(current_status().as_deref(), Some("running"));
         assert_eq!(row_field("api_url").as_deref(), Some(STALWART_MGMT_URL));
-        assert_eq!(row_field("api_key_ref").as_deref(), Some("mailsec_api-key_test"));
-        assert_eq!(row_field("admin_secret_ref").as_deref(), Some("mailsec_admin_test"));
-        assert_eq!(row_field("installed_version").as_deref(), Some(STALWART_PINNED_VERSION));
+        assert_eq!(
+            row_field("api_key_ref").as_deref(),
+            Some("mailsec_api-key_test")
+        );
+        assert_eq!(
+            row_field("admin_secret_ref").as_deref(),
+            Some("mailsec_admin_test")
+        );
+        assert_eq!(
+            row_field("installed_version").as_deref(),
+            Some(STALWART_PINNED_VERSION)
+        );
         assert_eq!(row_field("last_error"), None);
         // Every step marked done.
         for step in ENABLE_STEPS {
@@ -2273,7 +2321,10 @@ mod tests {
             .expect_err("rotate of admin must fail loud");
         assert!(err.contains("injected"), "{err}");
         assert!(
-            fail_api.calls.iter().any(|c| c.starts_with("rotate_admin_secret admin ")),
+            fail_api
+                .calls
+                .iter()
+                .any(|c| c.starts_with("rotate_admin_secret admin ")),
             "failure is on principal admin: {:?}",
             fail_api.calls
         );
@@ -2304,13 +2355,18 @@ mod tests {
             download_body: FAKE_BINARY.to_vec(),
             ..FakeSystemOps::default()
         };
-        let mut api = FakeApi { fail_on: Some("create_service_account"), ..FakeApi::default() };
+        let mut api = FakeApi {
+            fail_on: Some("create_service_account"),
+            ..FakeApi::default()
+        };
         let secrets = FakeSecrets::default();
         let err = run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "http-01")
             .expect_err("injected failure");
         assert!(err.starts_with("service-account:"), "{err}");
         assert_eq!(current_status().as_deref(), Some("error"));
-        assert!(row_field("last_error").expect("recorded").contains("injected"));
+        assert!(row_field("last_error")
+            .expect("recorded")
+            .contains("injected"));
 
         // Second run: binary already on disk + steps marked — resume
         // must NOT re-download/extract/start/re-bootstrap, must
@@ -2363,7 +2419,10 @@ mod tests {
         };
         // First run fails at api-key (after server-config +
         // service-account) — the retry lands post-restart in spirit.
-        let mut api = FakeApi { fail_on: Some("mint_api_key"), ..FakeApi::default() };
+        let mut api = FakeApi {
+            fail_on: Some("mint_api_key"),
+            ..FakeApi::default()
+        };
         let secrets = FakeSecrets::default();
         let _ = run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "http-01")
             .expect_err("injected failure");
@@ -2372,7 +2431,10 @@ mod tests {
             existing_paths: vec![STALWART_BIN.to_string(), STALWART_CONFIG.to_string()],
             ..FakeSystemOps::default()
         };
-        let mut api2 = FakeApi { refuse_urls: vec![STALWART_SETUP_URL], ..FakeApi::default() };
+        let mut api2 = FakeApi {
+            refuse_urls: vec![STALWART_SETUP_URL],
+            ..FakeApi::default()
+        };
         run_enable(&ops2, &mut api2, &secrets, &art, "mail.acme.dev", "http-01")
             .expect("resume succeeds via mgmt listener");
         assert!(
@@ -2451,7 +2513,9 @@ mod tests {
             api.calls
         );
         assert!(
-            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            !api.calls
+                .iter()
+                .any(|c| c.starts_with("complete_bootstrap")),
             "must not re-bootstrap: {:?}",
             api.calls
         );
@@ -2480,7 +2544,9 @@ mod tests {
         clean_row();
         let secrets = FakeSecrets::default();
         secrets.store("admin", "short-admin").expect("vault admin");
-        secrets.store("api-key", "minted-key").expect("vault api key");
+        secrets
+            .store("api-key", "minted-key")
+            .expect("vault api key");
         let mut steps = serde_json::Map::new();
         for s in ENABLE_STEPS {
             if *s != "recovery-off" && *s != "restart" {
@@ -2518,22 +2584,30 @@ mod tests {
         run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
             .expect("api-key fallback finishes enable");
         assert!(
-            api.calls.iter().any(|c| c == "authenticate-bearer http://127.0.0.1:8080"),
+            api.calls
+                .iter()
+                .any(|c| c == "authenticate-bearer http://127.0.0.1:8080"),
             "must log in with the api key: {:?}",
             api.calls
         );
         assert!(
-            api.calls.iter().any(|c| c == "rotate_admin_secret admin 64"),
+            api.calls
+                .iter()
+                .any(|c| c == "rotate_admin_secret admin 64"),
             "must rotate principal admin and keep that password: {:?}",
             api.calls
         );
         assert!(
-            api.calls.iter().any(|c| c == "rotate-missing admin@acme.dev"),
+            api.calls
+                .iter()
+                .any(|c| c == "rotate-missing admin@acme.dev"),
             "missing admin@domain is a skip: {:?}",
             api.calls
         );
         assert!(
-            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            !api.calls
+                .iter()
+                .any(|c| c.starts_with("complete_bootstrap")),
             "must not re-bootstrap: {:?}",
             api.calls
         );
@@ -2564,10 +2638,16 @@ mod tests {
         assert!(err.contains("sha256 mismatch"), "{err}");
         assert!(err.contains("NOT installing"), "{err}");
         let lines = ops.recorded();
-        assert_eq!(lines.len(), 1, "download only — nothing extracted/installed: {lines:?}");
+        assert_eq!(
+            lines.len(),
+            1,
+            "download only — nothing extracted/installed: {lines:?}"
+        );
         assert!(api.calls.is_empty());
         assert_eq!(current_status().as_deref(), Some("error"));
-        assert!(row_field("last_error").expect("recorded").contains("sha256"));
+        assert!(row_field("last_error")
+            .expect("recorded")
+            .contains("sha256"));
         clean_row();
     }
 
@@ -2593,7 +2673,10 @@ mod tests {
             .expect_err("must refuse");
         assert!(err.contains("0.17.0"), "{err}");
         assert!(err.contains("refusing"), "{err}");
-        assert!(ops.recorded().is_empty(), "no writes when refusing (PRD §4)");
+        assert!(
+            ops.recorded().is_empty(),
+            "no writes when refusing (PRD §4)"
+        );
         clean_row();
     }
 
@@ -2611,12 +2694,16 @@ mod tests {
         let art = fake_artifact();
         let _ = run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "http-01");
         assert!(
-            !ops.recorded().iter().any(|l| l.contains(&format!("rm {STALWART_CONFIG}"))),
+            !ops.recorded()
+                .iter()
+                .any(|l| l.contains(&format!("rm {STALWART_CONFIG}"))),
             "C19: never wipe an existing config.json: {:?}",
             ops.recorded()
         );
         assert!(
-            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            !api.calls
+                .iter()
+                .any(|c| c.starts_with("complete_bootstrap")),
             "C19: never re-bootstrap an initialized store: {:?}",
             api.calls
         );
@@ -2661,7 +2748,10 @@ mod tests {
     fn reconcile_status_never_running_unless_unit_active() {
         let running_inactive = reconcile_reported_status("running", None, "inactive");
         assert_eq!(running_inactive.state, "stopped");
-        assert!(!running_inactive.consistent, "H2: running row + inactive unit disagree");
+        assert!(
+            !running_inactive.consistent,
+            "H2: running row + inactive unit disagree"
+        );
         assert_eq!(
             running_inactive.last_error.as_deref(),
             Some("systemd reports the stalwart unit is 'inactive'")
@@ -2691,7 +2781,11 @@ mod tests {
         let running_active = reconcile_reported_status("running", None, "active");
         assert_eq!(
             running_active,
-            ReconciledStatus { state: "running".into(), consistent: true, last_error: None }
+            ReconciledStatus {
+                state: "running".into(),
+                consistent: true,
+                last_error: None
+            }
         );
 
         let degraded_active =
@@ -2711,7 +2805,11 @@ mod tests {
         let disabled_inactive = reconcile_reported_status("disabled", None, "inactive");
         assert_eq!(
             disabled_inactive,
-            ReconciledStatus { state: "disabled".into(), consistent: true, last_error: None },
+            ReconciledStatus {
+                state: "disabled".into(),
+                consistent: true,
+                last_error: None
+            },
             "disabled + inactive is agreement, not an error"
         );
 
@@ -2723,7 +2821,10 @@ mod tests {
 
         let disabled_active = reconcile_reported_status("disabled", None, "active");
         assert_eq!(disabled_active.state, "disabled");
-        assert!(!disabled_active.consistent, "unit running while disabled disagrees");
+        assert!(
+            !disabled_active.consistent,
+            "unit running while disabled disagrees"
+        );
         assert_eq!(
             disabled_active.last_error.as_deref(),
             Some("systemd reports the stalwart unit is 'active' while hostmail is disabled")
@@ -2769,7 +2870,9 @@ mod tests {
         assert!(!stopped_active.consistent);
         assert_eq!(
             stopped_active.last_error.as_deref(),
-            Some("systemd reports the stalwart unit is 'active' while hostmail status is 'stopped'")
+            Some(
+                "systemd reports the stalwart unit is 'active' while hostmail status is 'stopped'"
+            )
         );
     }
 
@@ -2888,10 +2991,7 @@ mod tests {
         }
         let ops = FakeSystemOps {
             download_body: FAKE_BINARY.to_vec(),
-            existing_paths: vec![
-                STALWART_BIN.to_string(),
-                STALWART_CONFIG.to_string(),
-            ],
+            existing_paths: vec![STALWART_BIN.to_string(), STALWART_CONFIG.to_string()],
             ..FakeSystemOps::default()
         };
         let mut api = FakeApi::default();
@@ -2899,12 +2999,16 @@ mod tests {
         run_enable(&ops, &mut api, &secrets, &art, "mail.new.dev", "tls-alpn")
             .expect("retarget enable");
         assert!(
-            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            !api.calls
+                .iter()
+                .any(|c| c.starts_with("complete_bootstrap")),
             "L2 must not re-bootstrap: {:?}",
             api.calls
         );
         assert!(
-            api.calls.iter().any(|c| c == "set_server_hostname mail.new.dev"),
+            api.calls
+                .iter()
+                .any(|c| c == "set_server_hostname mail.new.dev"),
             "L2 must patch server hostname via registry: {:?}",
             api.calls
         );
@@ -2932,10 +3036,7 @@ mod tests {
         }
         let ops = FakeSystemOps {
             download_body: FAKE_BINARY.to_vec(),
-            existing_paths: vec![
-                STALWART_BIN.to_string(),
-                STALWART_CONFIG.to_string(),
-            ],
+            existing_paths: vec![STALWART_BIN.to_string(), STALWART_CONFIG.to_string()],
             ..FakeSystemOps::default()
         };
         let mut api = FakeApi::default();
@@ -2943,12 +3044,16 @@ mod tests {
         run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
             .expect("re-enable same hostname");
         assert!(
-            !api.calls.iter().any(|c| c.starts_with("set_server_hostname")),
+            !api.calls
+                .iter()
+                .any(|c| c.starts_with("set_server_hostname")),
             "same hostname is not a retarget: {:?}",
             api.calls
         );
         assert!(
-            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            !api.calls
+                .iter()
+                .any(|c| c.starts_with("complete_bootstrap")),
             "must not re-bootstrap: {:?}",
             api.calls
         );
@@ -3027,7 +3132,10 @@ mod tests {
         );
         assert_eq!(
             *secrets.deleted.lock().unwrap(),
-            vec!["mailsec_admin_x".to_string(), "mailsec_api-key_y".to_string()]
+            vec![
+                "mailsec_admin_x".to_string(),
+                "mailsec_api-key_y".to_string()
+            ]
         );
         assert_eq!(current_status(), None, "row deleted → not-installed");
 
@@ -3046,8 +3154,103 @@ mod tests {
         let ops = FakeSystemOps::default();
         uninstall_with(&ops, &FakeSecrets::default(), false).expect("uninstall no purge");
         let lines = ops.recorded();
-        assert!(!lines.iter().any(|l| l.contains("/var/lib/stalwart")), "{lines:?}");
-        assert!(!lines.iter().any(|l| l.contains("rm /etc/stalwart")), "{lines:?}");
+        assert!(
+            !lines.iter().any(|l| l.contains("/var/lib/stalwart")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("rm /etc/stalwart")),
+            "{lines:?}"
+        );
+        clean_row();
+    }
+
+    /// Every mkdir/chown/write/rm/systemctl line the fake machine records
+    /// is one of the helper vectors. The expected sequences above stay
+    /// free of `sudo`. `systemctl? is-active` is a health query, not a verb.
+    #[test]
+    fn helper_allowlist_covers_fake_enable_and_purge() {
+        let _g = db_guard();
+        clean_row();
+        let ops = FakeSystemOps {
+            download_body: FAKE_BINARY.to_vec(),
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi::default();
+        let secrets = FakeSecrets::default();
+        let art = fake_artifact();
+        run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
+            .expect("full enable succeeds");
+        let lines = ops.recorded();
+        assert!(lines.iter().any(|l| l.starts_with("mkdir ")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.starts_with("chown ")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.starts_with("write ")), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l.starts_with("systemctl ")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("rm ")),
+            "enable must not remove: {lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.contains("rm /etc/stalwart/config.json")),
+            "C19: enable must not rm config.json: {lines:?}"
+        );
+        for line in &lines {
+            if helper::is_privileged_recording(line) {
+                helper::recorded_line_allowlisted(line).unwrap_or_else(|e| panic!("{line}: {e}"));
+            }
+        }
+
+        clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, updated_at) \
+                 VALUES (1, 'running', ?1, 'mail.acme.dev', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION],
+            )
+            .expect("seed row");
+        }
+        let ops = FakeSystemOps::default();
+        uninstall_with(&ops, &FakeSecrets::default(), true).expect("purge");
+        let lines = ops.recorded();
+        assert!(lines.iter().any(|l| l.starts_with("rm ")), "{lines:?}");
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.contains("/etc/stalwart/config.json")),
+            "{lines:?}"
+        );
+        for line in &lines {
+            if helper::is_privileged_recording(line) {
+                helper::recorded_line_allowlisted(line).unwrap_or_else(|e| panic!("{line}: {e}"));
+            }
+        }
+
+        let ops = FakeSystemOps {
+            existing_paths: vec![STALWART_BIN.to_string()],
+            query_answers: [("is-active stalwart".to_string(), "active".to_string())]
+                .into_iter()
+                .collect(),
+            ..FakeSystemOps::default()
+        };
+        let _ = health_check_with(&ops, &|| Ok(()));
+        let lines = ops.recorded();
+        assert!(
+            lines.iter().any(|l| l == "systemctl? is-active stalwart"),
+            "{lines:?}"
+        );
+        assert!(helper::parse_argv(&["systemctl", "is-active", "stalwart"]).is_err());
+        for line in &lines {
+            if line.starts_with("systemctl?") {
+                assert!(helper::recorded_line_allowlisted(line).is_err(), "{line}");
+            }
+        }
         clean_row();
     }
 
@@ -3062,8 +3265,15 @@ mod tests {
         };
         let mut api = FakeApi::default();
         let secrets = FakeSecrets::default();
-        run_enable(&ops, &mut api, &secrets, &art, "mail.lztek.k2.dev", "http-01")
-            .expect("first enable");
+        run_enable(
+            &ops,
+            &mut api,
+            &secrets,
+            &art,
+            "mail.lztek.k2.dev",
+            "http-01",
+        )
+        .expect("first enable");
         assert!(step_is_done("start"), "start marked after first enable");
 
         let ops_dis = FakeSystemOps::default();
@@ -3081,15 +3291,8 @@ mod tests {
             ..FakeSystemOps::default()
         };
         let mut api2 = FakeApi::default();
-        run_enable(
-            &ops2,
-            &mut api2,
-            &secrets,
-            &art,
-            "mail.lztek.io",
-            "http-01",
-        )
-        .expect("re-enable after disable");
+        run_enable(&ops2, &mut api2, &secrets, &art, "mail.lztek.io", "http-01")
+            .expect("re-enable after disable");
         let lines = ops2.recorded();
         assert!(
             lines.iter().any(|l| l == "systemctl daemon-reload"),
@@ -3147,16 +3350,8 @@ mod tests {
         let der = mint_leaf_der("rcgen self signed cert", None);
         let _g = with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, false);
         let v = tls_cert_status(Some("mail.acme.dev"));
-        assert_eq!(
-            v["state"].as_str().expect("state"),
-            "self-signed",
-            "{v}"
-        );
-        assert_eq!(
-            v["selfSigned"].as_bool().expect("selfSigned"),
-            true,
-            "{v}"
-        );
+        assert_eq!(v["state"].as_str().expect("state"), "self-signed", "{v}");
+        assert_eq!(v["selfSigned"].as_bool().expect("selfSigned"), true, "{v}");
         assert!(
             v["expiresAt"].as_i64().expect("expiresAt") > 0,
             "expiresAt parsed: {v}"
@@ -3178,11 +3373,7 @@ mod tests {
         let _g = with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, false);
         let v = tls_cert_status(Some("mail.acme.dev"));
         assert_eq!(v["state"].as_str().expect("state"), "issued", "{v}");
-        assert_eq!(
-            v["selfSigned"].as_bool().expect("selfSigned"),
-            false,
-            "{v}"
-        );
+        assert_eq!(v["selfSigned"].as_bool().expect("selfSigned"), false, "{v}");
         assert!(
             v["expiresAt"].as_i64().expect("expiresAt") > 0,
             "expiresAt parsed: {v}"
@@ -3195,11 +3386,7 @@ mod tests {
         let _g = with_test_tls_cert(TlsProbe::Missing, true);
         let v = tls_cert_status(Some("mail.acme.dev"));
         assert_eq!(v["state"].as_str().expect("state"), "missing", "{v}");
-        assert_eq!(
-            v["selfSigned"].as_bool().expect("selfSigned"),
-            false,
-            "{v}"
-        );
+        assert_eq!(v["selfSigned"].as_bool().expect("selfSigned"), false, "{v}");
         assert!(v["expiresAt"].is_null(), "{v}");
     }
 
@@ -3211,15 +3398,10 @@ mod tests {
         let _g = with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, true);
         let v = tls_cert_status(Some("mail.acme.dev"));
         assert_eq!(v["state"].as_str().expect("state"), "issued", "{v}");
-        assert_eq!(
-            v["selfSigned"].as_bool().expect("selfSigned"),
-            false,
-            "{v}"
-        );
+        assert_eq!(v["selfSigned"].as_bool().expect("selfSigned"), false, "{v}");
         assert!(
             v["expiresAt"].as_i64().expect("expiresAt") > 0,
             "expiresAt parsed: {v}"
         );
     }
-
 }

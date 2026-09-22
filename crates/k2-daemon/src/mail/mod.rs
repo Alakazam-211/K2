@@ -149,6 +149,7 @@ pub mod secrets;
 pub mod send;
 pub mod sieve_user;
 pub mod spam;
+pub mod helper;
 pub mod supervisor;
 pub mod sysops;
 

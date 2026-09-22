@@ -13453,7 +13453,7 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist> ... (server admin)",
+      "usage": "k2 hostmail <status|enable|disable|uninstall|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|dkim|dmarc|ptr|bans|allowlist> ... (server admin)",
       "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate (IMAP/SMTP once secret; mail_manage; mailbox-password sessions die, app passwords do not), app-password add|list|revoke (extra labeled secrets; mail_manage; secret once), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
@@ -13465,6 +13465,17 @@ cmd_schema() {
       "args": [],
       "flags": [
         {"name": "--hostname", "arg": "name", "description": "Mail hostname (e.g. mail.acme.dev). Required."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail uninstall",
+      "usage": "k2 hostmail uninstall --purge --confirm-hostname <host> [--json]",
+      "description": "Owner-only wipe of the hosted mail server and its data. POSTs {\"purgeData\":true,\"confirmHostname\":\"<host>\"} to /cli/mail/server/uninstall. --purge without --confirm-hostname exits 2 and does not POST. Not a mail_manage verb.",
+      "args": [],
+      "flags": [
+        {"name": "--purge", "arg": null, "description": "Required. Delete mail data with the server."},
+        {"name": "--confirm-hostname", "arg": "host", "description": "Mail hostname, must match the server. Required with --purge."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -24645,6 +24656,14 @@ elif verb == "server_disable":
     d = call("POST", "/cli/mail/server/disable", body={})
     print(dumps(d) if as_json else (d.get("hint") or "mail server disabled."))
 
+elif verb == "server_uninstall":
+    hostname = env("M_HOSTNAME")
+    if not hostname:
+        die({"code": "usage", "hint": "k2 hostmail uninstall --purge --confirm-hostname <host>"}, 2)
+    d = call("POST", "/cli/mail/server/uninstall",
+             body={"purgeData": True, "confirmHostname": hostname})
+    print(dumps(d) if as_json else (d.get("hint") or "mail server uninstalled."))
+
 elif verb == "cert_renew":
     d = call("POST", "/cli/mail/cert/renew", body={})
     if as_json:
@@ -26342,6 +26361,7 @@ cmd_hostmail() {
         status)  cmd_mail_status "$@" ;;
         enable)  cmd_hostmail_enable "$@" ;;
         disable) cmd_hostmail_disable "$@" ;;
+        uninstall) cmd_hostmail_uninstall "$@" ;;
         rotate-admin) cmd_hostmail_rotate_admin "$@" ;;
         password) cmd_hostmail_password "$@" ;;
         app-password) cmd_hostmail_app_password "$@" ;;
@@ -26371,7 +26391,7 @@ cmd_hostmail() {
         allowlist) cmd_hostmail_allowlist "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|rotate-admin|password|app-password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist>"
             exit 2 ;;
     esac
 }
@@ -26403,6 +26423,27 @@ cmd_hostmail_disable() {
         esac
     done
     local M_VERB="server_disable" M_JSON="$as_json"
+    _mail_py
+}
+
+cmd_hostmail_uninstall() {
+    if _wants_help "$@"; then cmd_help_hostmail_uninstall; exit 0; fi
+    local as_json=false purge=false hostname=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --purge) purge=true; shift ;;
+            --confirm-hostname)
+                [ $# -ge 2 ] || { _mail_err "usage" "--confirm-hostname requires a value — usage: k2 hostmail uninstall --purge --confirm-hostname <host>"; exit 2; }
+                hostname="$2"; shift 2 ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail uninstall --purge --confirm-hostname <host> [--json]"; exit 2 ;;
+        esac
+    done
+    if [ "$purge" != true ] || [ -z "$hostname" ]; then
+        _mail_err "usage" "k2 hostmail uninstall --purge --confirm-hostname <host> (both flags required; nothing was sent)"
+        exit 2
+    fi
+    local M_VERB="server_uninstall" M_JSON="$as_json" M_HOSTNAME="$hostname"
     _mail_py
 }
 
@@ -28919,6 +28960,10 @@ COMMANDS
                               enable actually restarts the unit (data kept;
                               MX still points here). disable is not a wipe.
                               Re-enable with --hostname.
+  uninstall --purge --confirm-hostname <host>
+                              Owner-only wipe of the server and its data.
+                              --purge without --confirm-hostname exits 2
+                              and does not POST. Not mail_manage.
   rotate-admin                Rotate leftover recovery principal `admin` and
                               the provisioned admin password. Does not wipe
                               the store. enable no-op is not rotate.
@@ -28993,6 +29038,25 @@ USAGE
 FLAGS
   --hostname <name>      Mail hostname (e.g. mail.acme.dev). Required.
   --json                 JSON output ({ok,state,alreadyEnabled?})
+EOF
+}
+
+cmd_help_hostmail_uninstall() {
+    cat <<'EOF'
+Owner-only wipe of the hosted mail server and its on-disk data.
+POSTs {"purgeData":true,"confirmHostname":"<host>"} to
+/cli/mail/server/uninstall. Both flags are required. --purge without
+--confirm-hostname exits 2 and does not POST. Not a mail_manage verb.
+disable is not this wipe.
+
+USAGE
+  k2 hostmail uninstall --purge --confirm-hostname <host> [--json]
+
+FLAGS
+  --purge                Required. Delete mail data with the server.
+  --confirm-hostname <host>
+                         Mail hostname. Must match the server. Required.
+  --json                 JSON output
 EOF
 }
 

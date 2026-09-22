@@ -9,6 +9,12 @@ description = "K2 persistent-agent daemon: launchd-managed device-local process 
 name = "k2-daemon"
 path = "src/main.rs"
 
+# Hostmail root door. Not setuid. User k2 runs it only via sudo -n.
+# Not feature-gated: provision installs the release bin beside the daemon.
+[[bin]]
+name = "k2-mail-helper"
+path = "src/bin/k2-mail-helper.rs"
+
 # Sandbox P2b — the privilege-dropped libkrun VMM jail. The real body is
 # linux+sandbox-microvm only and links libkrun (see build.rs); on every other
 # build it is the stub `main` that exits 1. `required-features` keeps it out of
@@ -168,6 +174,10 @@ notify = { version = "7", features = ["macos_fsevent"] }
 # signing keys ever live in the daemon — verify only.
 sha2 = "0.10"
 minisign-verify = "0.2"
+# Hostmail root helper extracts the pinned stalwart tarball in-process.
+# No shell `tar`. Both crates are already in Cargo.lock.
+flate2 = "1.1.9"
+tar = "0.4.45"
 
 # K2 Mail S2 — DNS verification for domain onboarding (prd-email-server-v1
 # §6.3). hickory-resolver (the maintained trust-dns successor; nothing else

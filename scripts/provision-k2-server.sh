@@ -36,6 +36,11 @@
 #   K2_CALLBACK_TOKEN  bearer for the callback (optional)
 #   K2_VERSION         pin a daemon release (default: latest)
 #   K2_RUN_USER        service account (default: k2)
+#   K2_MAIL_HELPER_BIN absolute path to the built k2-mail-helper binary.
+#                      Else beside this script (scripts/k2-mail-helper), else
+#                      ../target/release/k2-mail-helper from a
+#                      `cargo build -p k2-daemon --release --bin k2-mail-helper`.
+#                      Missing is a hard failure — the step is not skipped.
 #   FRP_VERSION        frpc version (default 0.61.1 — MUST match the relay)
 #
 # Idempotent: re-running converges; existing users/units are updated,
@@ -219,6 +224,36 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 systemctl enable "$K2_UNIT_NAME" >/dev/null 2>&1
+
+# ── 7a. mail root helper (always, not only --with-db) ───────────────
+# User k2 enable-from-zero calls `sudo -n /usr/local/libexec/k2-mail-helper`.
+# The binary is not inside the GitHub daemon tarball. Do not skip when it
+# is missing, and do not widen /etc/sudoers.d/k2-pg-helper.
+log "installing /usr/local/libexec/k2-mail-helper"
+MAIL_HELPER_SRC=""
+if [ -n "${K2_MAIL_HELPER_BIN:-}" ]; then
+	if [ ! -f "$K2_MAIL_HELPER_BIN" ]; then
+		die "K2_MAIL_HELPER_BIN is set but missing: $K2_MAIL_HELPER_BIN"
+	fi
+	MAIL_HELPER_SRC="$K2_MAIL_HELPER_BIN"
+elif [ -f "$SCRIPT_DIR/k2-mail-helper" ]; then
+	MAIL_HELPER_SRC="$SCRIPT_DIR/k2-mail-helper"
+elif [ -f "$SCRIPT_DIR/../target/release/k2-mail-helper" ]; then
+	MAIL_HELPER_SRC="$SCRIPT_DIR/../target/release/k2-mail-helper"
+fi
+if [ -z "$MAIL_HELPER_SRC" ]; then
+	die "k2-mail-helper binary missing. Looked beside this script ($SCRIPT_DIR/k2-mail-helper) and at $SCRIPT_DIR/../target/release/k2-mail-helper. Build it with: cargo build -p k2-daemon --release --bin k2-mail-helper — or set K2_MAIL_HELPER_BIN. This step is not skipped."
+fi
+install -d -m 0755 /usr/local/libexec
+install -m 0755 -o root -g root "$MAIL_HELPER_SRC" /usr/local/libexec/k2-mail-helper
+cat > /etc/sudoers.d/k2-mail-helper <<'SUDO'
+k2 ALL=(root) NOPASSWD: /usr/local/libexec/k2-mail-helper
+Defaults:k2 !requiretty
+SUDO
+chmod 0440 /etc/sudoers.d/k2-mail-helper
+if command -v visudo >/dev/null 2>&1; then
+	visudo -cf /etc/sudoers.d/k2-mail-helper
+fi
 
 # ── 7b. optional Postgres sidecar bake (`--with-db` / K2_BAKE_DB=1) ──
 # Distro packages (postgresql + postgresql-client), NOT postgresql-16

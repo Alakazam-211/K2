@@ -476,16 +476,16 @@ export const DEFAULT_CATALOG_ENTRIES: ContextCatalogEntry[] = [
     tags: ['live', 'roster', 'users'],
   },
   {
-    id: 'skin:roster',
+    id: 'apps:roster',
     path: '.k2/context/catalog/skin-roster.md',
-    label: 'Skin user roster',
+    label: 'App guest roster',
     source: 'catalog:skin-roster',
     kind: 'live',
     recommended: false,
     description:
-      'Live list of Skin Access guests (username, live keys, scopes). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.',
+      'Live list of app guests (username, live keys, scopes). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names. Leftover catalog id: skin:roster.',
     author: 'K2',
-    tags: ['live', 'roster', 'skin'],
+    tags: ['live', 'roster', 'app', 'skin'],
   },
 ]
 

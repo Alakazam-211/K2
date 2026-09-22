@@ -179,6 +179,9 @@ pub const USERS_ROSTER_ID: &str = "users:roster";
 
 pub const SKIN_ROSTER_PATH: &str = ".k2/context/catalog/skin-roster.md";
 pub const SKIN_ROSTER_SOURCE: &str = "catalog:skin-roster";
+/// Canonical catalog id. Leftover alias [`SKIN_ROSTER_ID`] still resolves.
+pub const APPS_ROSTER_ID: &str = "apps:roster";
+/// Leftover alias of [`APPS_ROSTER_ID`]. Path stays `skin-roster.md`.
 pub const SKIN_ROSTER_ID: &str = "skin:roster";
 
 pub const WIKI_HYGIENE_PATH: &str = ".k2/context/catalog/wiki-hygiene.md";
@@ -343,15 +346,15 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             &["live", "roster", "users"],
         ),
         builtin_catalog_entry(
-            SKIN_ROSTER_ID,
+            APPS_ROSTER_ID,
             SKIN_ROSTER_PATH,
-            "Skin user roster",
+            "App guest roster",
             SKIN_ROSTER_SOURCE,
             "live",
-            "Live list of Skin Access guests (username, role, password, default rooms). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.",
+            "Live list of app guests (username, role, password, default rooms). Not Connect / Server Access. Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names. Leftover catalog id: skin:roster.",
             None,
             false,
-            &["live", "roster", "skin"],
+            &["live", "roster", "app", "skin"],
         ),
     ]
 }
@@ -382,6 +385,7 @@ const RESERVED_ID_PREFIXES: &[&str] = &[
     "heartbeats:",
     "skills:",
     "users:",
+    "apps:",
     "skin:",
     "subagents:",
     "catalog:",
@@ -411,9 +415,13 @@ const RESERVED_ALIASES: &[&str] = &[
     "users-roster",
     "people-roster",
     "user-roster",
+    "apps",
+    "apps:roster",
+    "apps-roster",
     "skin-roster",
     "skins-roster",
     "skin-users",
+    "skin:roster",
     "wiki-hygiene",
     "always-use-subagents",
     "use-subagents",
@@ -1126,26 +1134,28 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
     out
 }
 
-/// Live list of Skin Access guests (not Connect / Server Access).
+/// Live list of app guests (not Connect / Server Access).
 ///
 /// Username + role + has_password + default rooms. Never platform-token
-/// counts, never the raw `k2skn_` secret. Same people as `k2 skin user list`.
+/// counts, never the raw `k2skn_` secret. Same people as `k2 app user list`.
 pub fn render_skin_roster_body(_project_path: &str) -> String {
     let users = crate::skin::list_principals().unwrap_or_default();
 
     let mut out = String::new();
     out.push_str(
-        "These are **Skin Access** guests (K2-login sessions for custom UIs) — \
+        "These are **app** guests (K2-login sessions for custom UIs) — \
          not Connect / Server Access operators, and not workspace-agents.\n\
-         Do **not** `k2 msg` these names. CLI lookup: `k2 skin user list`. \
-         Platform tokens: `k2 skin-token create --name <label> --agent sales`. \
+         Do **not** `k2 msg` these names. CLI lookup: `k2 app user list` \
+         (leftover: `k2 skin user list`). \
+         Platform tokens: `k2 app token create --name <label> --agent sales` \
+         (leftover: `k2 skin-token create --name`). \
          Regenerated whenever K2 rewrites AGENTS.md.\n\n",
     );
     if users.is_empty() {
-        out.push_str("### No skin users yet\n\n");
-        out.push_str("Add a guest in Settings → Skin Access, or:\n\n");
-        out.push_str("    k2 skin user add <username>\n");
-        out.push_str("    k2 skin-token create --name vercel --agent sales\n");
+        out.push_str("### No app users yet\n\n");
+        out.push_str("Add a guest in Settings → Apps, or:\n\n");
+        out.push_str("    k2 app user add <username>\n");
+        out.push_str("    k2 app token create --name vercel --agent sales\n");
         return out;
     }
     out.push_str("| USERNAME | ROLE | PASSWORD | DEFAULT ROOMS |\n");
@@ -1227,7 +1237,7 @@ fn live_kind_meta(kind: LiveKind) -> (&'static str, &'static str, &'static str) 
         ),
         LiveKind::Skills => (SKILLS_ROSTER_PATH, "Skills roster", SKILLS_ROSTER_SOURCE),
         LiveKind::Users => (USERS_ROSTER_PATH, "User roster", USERS_ROSTER_SOURCE),
-        LiveKind::Skin => (SKIN_ROSTER_PATH, "Skin user roster", SKIN_ROSTER_SOURCE),
+        LiveKind::Skin => (SKIN_ROSTER_PATH, "App guest roster", SKIN_ROSTER_SOURCE),
     }
 }
 
@@ -1521,11 +1531,14 @@ fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextEr
         | "people-roster"
         | "user-roster"
         | "catalog:users-roster" => USERS_ROSTER_ID,
-        "skin:roster"
+        "apps:roster"
+        | "apps-roster"
+        | "apps"
+        | "skin:roster"
         | "skin-roster"
         | "skins-roster"
         | "skin-users"
-        | "catalog:skin-roster" => SKIN_ROSTER_ID,
+        | "catalog:skin-roster" => APPS_ROSTER_ID,
         "wiki-hygiene" | "hygiene" | "catalog:wiki-hygiene" => WIKI_HYGIENE_ID,
         "subagents"
         | "subagents:pack"
@@ -2719,13 +2732,17 @@ mod tests {
         assert_eq!(users.path, USERS_ROSTER_PATH);
         let skin = catalog
             .iter()
-            .find(|p| p.id == SKIN_ROSTER_ID)
-            .expect("skin:roster catalog entry");
+            .find(|p| p.id == APPS_ROSTER_ID)
+            .expect("apps:roster catalog entry");
         assert_eq!(skin.kind, "live");
-        assert!(!skin.recommended, "skin:roster is opt-in");
-        assert_eq!(skin.label, "Skin user roster");
+        assert!(!skin.recommended, "apps:roster is opt-in");
+        assert_eq!(skin.label, "App guest roster");
         assert_eq!(skin.source, SKIN_ROSTER_SOURCE);
         assert_eq!(skin.path, SKIN_ROSTER_PATH);
+        assert!(
+            catalog.iter().all(|p| p.id != SKIN_ROSTER_ID),
+            "leftover skin:roster is an alias, not a second catalog row"
+        );
         for p in &catalog {
             assert!(
                 matches!(p.kind.as_str(), "live" | "static" | "path"),
@@ -2776,7 +2793,9 @@ mod tests {
         assert!(!recommended.contains(&"skills:roster"));
         assert!(!recommended.contains(&USERS_ROSTER_ID));
         assert!(!recommended.contains(&"users:roster"));
+        assert!(!recommended.contains(&APPS_ROSTER_ID));
         assert!(!recommended.contains(&SKIN_ROSTER_ID));
+        assert!(!recommended.contains(&"apps:roster"));
         assert!(!recommended.contains(&"skin:roster"));
         assert!(!recommended.contains(&"manager:pack"));
         });
@@ -2916,11 +2935,11 @@ mod tests {
             let catalog = list_catalog();
             let skin = catalog
                 .iter()
-                .find(|p| p.id == SKIN_ROSTER_ID)
-                .expect("skin:roster");
+                .find(|p| p.id == APPS_ROSTER_ID)
+                .expect("apps:roster");
             assert_eq!(skin.kind, "live");
             assert!(!skin.recommended);
-            assert_eq!(skin.label, "Skin user roster");
+            assert_eq!(skin.label, "App guest roster");
 
             let root = unique_root("skin-roster-alias");
             let path = root.to_str().unwrap();
@@ -2929,6 +2948,24 @@ mod tests {
             assert_eq!(layer.source, SKIN_ROSTER_SOURCE);
             assert_eq!(layer.path, SKIN_ROSTER_PATH);
             cleanup_project(path, &pid);
+
+            let root_left = unique_root("skin-roster-leftover");
+            let path_left = root_left.to_str().unwrap();
+            let pid_left = register_project(path_left);
+            let leftover =
+                add_layer(path_left, None, Some("skin:roster"), None).expect("skin:roster leftover");
+            assert_eq!(leftover.source, SKIN_ROSTER_SOURCE);
+            assert_eq!(leftover.path, SKIN_ROSTER_PATH);
+            cleanup_project(path_left, &pid_left);
+
+            let root_canon = unique_root("apps-roster-canonical");
+            let path_canon = root_canon.to_str().unwrap();
+            let pid_canon = register_project(path_canon);
+            let canonical =
+                add_layer(path_canon, None, Some("apps:roster"), None).expect("apps:roster");
+            assert_eq!(canonical.source, SKIN_ROSTER_SOURCE);
+            assert_eq!(canonical.path, SKIN_ROSTER_PATH);
+            cleanup_project(path_canon, &pid_canon);
         });
     }
 
@@ -2939,7 +2976,7 @@ mod tests {
             let path = root.to_str().unwrap();
             let pid = register_project(path);
 
-            let layer = add_layer(path, None, Some("skin:roster"), None).expect("skin roster");
+            let layer = add_layer(path, None, Some("skin:roster"), None).expect("skin roster leftover");
             assert_eq!(layer.source, SKIN_ROSTER_SOURCE);
             assert_eq!(layer.path, SKIN_ROSTER_PATH);
             assert!(layer.exists);
@@ -2947,7 +2984,7 @@ mod tests {
             assert!(abs.is_file(), "skin roster file must materialize");
             let file_body = fs::read_to_string(&abs).unwrap();
             assert!(
-                file_body.contains("No skin users yet") && file_body.contains("k2 skin user add"),
+                file_body.contains("No app users yet") && file_body.contains("k2 app user add"),
                 "empty roster should teach add; first 400:\n{}",
                 &file_body[..file_body.len().min(400)]
             );
@@ -2962,7 +2999,7 @@ mod tests {
             fs::remove_file(&abs).ok();
             let composed = show_composed(path).expect("compose");
             assert!(
-                composed.contains("Skin user roster")
+                composed.contains("App guest roster")
                     && composed.contains("ghostbird")
                     && composed.contains("USERNAME")
                     && composed.contains("ROLE")
@@ -2976,10 +3013,18 @@ mod tests {
                 "must not leak the raw secret; first 600:\n{}",
                 &composed[..composed.len().min(600)]
             );
+            let roster_start = composed
+                .find("## App guest roster")
+                .expect("roster heading");
+            let roster_rest = &composed[roster_start..];
+            let roster_end = roster_rest[2..]
+                .find("\n## ")
+                .map(|i| i + 2)
+                .unwrap_or(roster_rest.len());
+            let roster = &roster_rest[..roster_end];
             assert!(
-                !composed.contains("k2skn_"),
-                "roster table must not show key prefix; first 600:\n{}",
-                &composed[..composed.len().min(600)]
+                !roster.contains("k2skn_"),
+                "roster table must not show key prefix; roster:\n{roster}"
             );
 
             cleanup_project(path, &pid);
@@ -2995,19 +3040,27 @@ mod tests {
                 "must say do not k2 msg skin guests; body:\n{body}"
             );
             assert!(
+                body.contains("k2 app user list"),
+                "must teach k2 app user list; body:\n{body}"
+            );
+            assert!(
                 body.contains("k2 skin user list"),
-                "must teach k2 skin user list; body:\n{body}"
+                "must keep leftover k2 skin user list; body:\n{body}"
+            );
+            assert!(
+                body.contains("k2 app token create --name"),
+                "must teach platform mint --name, not <username>; body:\n{body}"
             );
             assert!(
                 body.contains("k2 skin-token create --name"),
-                "must teach platform mint --name, not <username>; body:\n{body}"
+                "must keep leftover k2 skin-token create --name; body:\n{body}"
             );
             assert!(
                 !body.contains("k2 skin-token create <username>"),
                 "must not teach mint-for-user; body:\n{body}"
             );
             assert!(
-                body.contains("Skin Access") || body.contains("not Connect"),
+                body.contains("not Connect"),
                 "must distinguish from Connect users; body:\n{body}"
             );
         });
@@ -3027,8 +3080,8 @@ mod tests {
         );
         let composed = show_composed(path).expect("compose");
         assert!(
-            !composed.contains("## Skin user roster"),
-            "default compose must not inline Skin user roster; first 400:\n{}",
+            !composed.contains("## App guest roster"),
+            "default compose must not inline App guest roster; first 400:\n{}",
             &composed[..composed.len().min(400)]
         );
 
@@ -3427,6 +3480,7 @@ mod tests {
                 "k2-agent",
                 "wiki-hygiene",
                 "users-roster",
+                "apps:roster",
                 "skin:roster",
                 "skin-users",
             ] {

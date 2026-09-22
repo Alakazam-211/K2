@@ -109,6 +109,9 @@ ask your human a durable question, `project` for your project group's shared \
 chat — reply to a `[project:<name>]`-prefixed message with \
 `k2 project msg <name> \"...\"`, never `k2 msg` — and `mail` for your agent email: \
 mint/read/wait, send under your human's governance). \
+`k2 app` manages guests/roles/tokens for apps on this box (Thread from an app; \
+pass prefix still `k2skn_`; leftover `k2 skin` / `k2 skin-token`). Not Connect. \
+Desktop binary updates are `k2 update --app`. \
 `k2 study` prints bounded pages (Fair Source, people lists, errors) — not `--help`.\n";
 
 pub fn compose_agents_md_public(project_path: &str) -> String {
@@ -541,7 +544,8 @@ k2 agent hire <dir> --context wiki:hygiene --context connections:roster
 k2 agent context catalog                                    # local context catalog
 k2 agent context add manager:pack                           # day-2 stack
 k2 agent context add users:roster                           # humans on this box; do not k2 msg
-k2 agent context add skin:roster                            # Skin Access guests; do not k2 msg
+k2 agent context add apps:roster                            # app guests; do not k2 msg
+k2 agent context add skin:roster                            # leftover alias of apps:roster
 ```
 Optional path layers compose into `.k2/AGENTS.md` with Agent / Project /
 Tooling. Prefer short standing orders; load skills for depth.
@@ -551,11 +555,13 @@ Tooling. Prefer short standing orders; load skills for depth.
 not a crawl of wiki or PRDs. `k2 study <topic>` prints one page. Daemon-optional.
 
 Topics: what, source, map, identity, send, human, people, auth, errors, context,
-db, mail, connect-boundary, skins, feedback-loop.
+db, mail, connect-boundary, apps, skins, feedback-loop.
+`k2 study apps` is canonical; `k2 study skins` is a leftover alias.
+Guests/roles/tokens: `k2 app` (leftover `k2 skin` / `k2 skin-token`). Pass prefix `k2skn_`.
 
 K2 is source-available Fair Source (FSL-1.1-Apache-2.0), not MIT. Connect is a
-separate product. Four people lists: connections (agents), Connect users, skin guests,
-`k2 connections list --users` humans. Never `k2 msg` usernames.
+separate product. Four people lists: connections (agents), Connect users, app guests
+(leftover: skin guests), `k2 connections list --users` humans. Never `k2 msg` usernames.
 
 To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
 "#
@@ -1944,8 +1950,20 @@ mod tests {
             "k2-cli skill must mention `k2 agent context add users:roster`"
         );
         assert!(
+            body.contains("k2 agent context add apps:roster"),
+            "k2-cli skill must mention `k2 agent context add apps:roster`"
+        );
+        assert!(
             body.contains("k2 agent context add skin:roster"),
-            "k2-cli skill must mention `k2 agent context add skin:roster`"
+            "k2-cli skill must keep leftover `k2 agent context add skin:roster`"
+        );
+        assert!(
+            body.contains("k2 app") && body.contains("k2skn_"),
+            "k2-cli skill must teach k2 app and keep k2skn_"
+        );
+        assert!(
+            body.contains("k2 skin") && body.contains("k2 skin-token"),
+            "k2-cli skill must keep leftover k2 skin / k2 skin-token"
         );
         // File send is `k2 msg --inbox-wake`, not `k2 inbox` / `k2 mail`.
         assert!(
@@ -2005,8 +2023,12 @@ mod tests {
             "k2-cli skill must mention Connect users"
         );
         assert!(
+            body.contains("app guests"),
+            "k2-cli skill must mention app guests"
+        );
+        assert!(
             body.contains("skin guests"),
-            "k2-cli skill must mention skin guests"
+            "k2-cli skill must keep leftover skin guests"
         );
         assert!(
             body.contains("--users"),
@@ -2019,6 +2041,12 @@ mod tests {
         assert!(
             AGENTS_MD_TOOLING_SECTION.contains("k2 study"),
             "always-on AGENTS.md Tooling must mention k2 study"
+        );
+        assert!(
+            AGENTS_MD_TOOLING_SECTION.contains("k2 app")
+                && AGENTS_MD_TOOLING_SECTION.contains("k2skn_")
+                && AGENTS_MD_TOOLING_SECTION.contains("k2 skin"),
+            "always-on AGENTS.md Tooling must teach k2 app and keep leftover k2 skin / k2skn_"
         );
     }
 

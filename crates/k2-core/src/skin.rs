@@ -567,7 +567,7 @@ pub fn is_reserved_nested_label(name: &str) -> bool {
 pub fn reserved_nested_label_error(label: &str) -> String {
     let label = label.trim().to_ascii_lowercase();
     format!(
-        "reserved_label: '{label}' is reserved. Pick another nested label for your UI (k2 study skins)."
+        "reserved_label: '{label}' is reserved. Pick another nested label for your UI (k2 study apps; leftover: k2 study skins)."
     )
 }
 

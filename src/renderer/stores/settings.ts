@@ -70,7 +70,7 @@ export type SettingsSection =
   | 'email-hosting'
   | 'email-link'
   | 'data'
-  /** Settings → Sidecars → Skin Access (skin users / keys / front door). */
+  /** Settings → Sidecars → Apps (route id skin-access; guests / keys / front door). */
   | 'skin-access'
 
 export interface TerminalSettings {

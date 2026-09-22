@@ -751,7 +751,9 @@ async fn reserved_nested_label_skin_is_400_loud() {
             r.body
         );
         assert!(
-            r.body.contains("Pick another nested label") || r.body.contains("k2 study skins"),
+            r.body.contains("Pick another nested label")
+                || r.body.contains("k2 study apps")
+                || r.body.contains("k2 study skins"),
             "must point at another label, not a Caddy hostname: {}",
             r.body
         );
@@ -2672,7 +2674,7 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
         assert!(
             mutate_off
                 .body
-                .contains("Allow this agent to manage Skin Access"),
+                .contains("Allow this agent to manage Apps"),
             "manage OFF hint must name the Agent-tab toggle: {}",
             mutate_off.body
         );
@@ -2855,7 +2857,8 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
         );
         assert_owner_only(&door, "front-door still owner-only with toggle ON");
         assert!(
-            !door.body.contains("Allow this agent to manage Skin Access"),
+            !door.body.contains("Allow this agent to manage Apps")
+                && !door.body.contains("Allow this agent to manage Skin Access"),
             "leftover keeps today's hint: {}",
             door.body
         );
@@ -2867,9 +2870,10 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
         );
         assert_owner_only(&hydra, "hydra still owner-only with toggle ON");
         assert!(
-            !hydra
-                .body
-                .contains("Allow this agent to manage Skin Access"),
+            !hydra.body.contains("Allow this agent to manage Apps")
+                && !hydra
+                    .body
+                    .contains("Allow this agent to manage Skin Access"),
             "leftover hydra keeps today's hint: {}",
             hydra.body
         );

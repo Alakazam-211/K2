@@ -120,7 +120,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// ownership or sql_grants.
 /// Bumped to 26: hire `--focus-group` / `--color` (hex or rgb).
 /// Bumped to 27: thread bodies render markdown (CLI nudge + skill).
-pub const SKILL_VERSION_WORKSPACE: u32 = 27;
+/// Bumped to 28: human word app (`k2 app` / `k2 study apps` / `apps:roster`);
+/// leftover `k2 skin` / `k2 skin-token` / `skin:roster`; pass prefix still `k2skn_`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 28;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

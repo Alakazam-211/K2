@@ -8,12 +8,13 @@ const src = readFileSync(
   'utf8',
 )
 
-describe('Agent-tab Skin Access toggle', () => {
+describe('Agent-tab Apps toggle', () => {
   it('has manifest id, dedicated POST, optimistic patch, never GET /cli/users', () => {
     expect(src).toContain("id: 'projects.agents-can-manage-skin'")
     expect(src).toContain("data-settings-id=\"projects.agents-can-manage-skin\"")
-    expect(src).toContain('<SettingsGroup title="Skin Access">')
-    expect(src).toContain('Allow this agent to manage Skin Access.')
+    expect(src).toContain('<SettingsGroup title="Apps">')
+    expect(src).toContain('Allow this agent to manage Apps.')
+    expect(src).not.toContain('<SettingsGroup title="Skin Access">')
     const toggleStart = src.indexOf('function AgentsManageSkinToggle')
     expect(toggleStart).toBeGreaterThan(0)
     const toggle = src.slice(toggleStart, src.indexOf('function AgentsCreateConnectionsToggle', toggleStart))

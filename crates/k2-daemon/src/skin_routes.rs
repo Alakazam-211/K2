@@ -801,9 +801,9 @@ pub const WIKI_READ: &str = CAP_WIKI_READ;
 pub const STORE_READ: &str = CAP_STORE_READ;
 pub const STORE_WRITE: &str = CAP_STORE_WRITE;
 
-const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 skin user add/remove/password, k2 skin role create/update/remove, k2 skin user role/unassign, skin-token create/revoke/rooms; use k2 skin user list / k2 skin role list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin.";
+const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 app user add/remove/password, k2 app role create/update/remove, k2 app user role/unassign, k2 app token create/revoke/rooms; leftover k2 skin / k2 skin-token; use k2 app user list / k2 app role list / k2 app token list to read the roster). Host the UI with k2 publish, not k2 app.";
 
-const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 skin user add/remove/password, k2 skin role create/update/remove, k2 skin user role/unassign, skin-token create/revoke/rooms; use k2 skin user list / k2 skin role list / k2 skin-token list to read the roster). Host the UI with k2 publish, not k2 skin. To let this workspace's agent manage Skin Access, Settings → Workspaces → (this workspace) → Agent → Allow this agent to manage Skin Access.";
+const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 app user add/remove/password, k2 app role create/update/remove, k2 app user role/unassign, k2 app token create/revoke/rooms; leftover k2 skin / k2 skin-token; use k2 app user list / k2 app role list / k2 app token list to read the roster). Host the UI with k2 publish, not k2 app. To let this workspace's agent manage Apps, Settings → Workspaces → (this workspace) → Agent → Allow this agent to manage Apps.";
 
 fn owner_only_with_hint(hint: &str) -> CliResponse {
     CliResponse {
@@ -1384,7 +1384,8 @@ mod tests {
             "hint should teach owner/human: {hint}"
         );
         assert!(
-            !hint.contains("Allow this agent to manage Skin Access"),
+            !hint.contains("Allow this agent to manage Apps")
+                && !hint.contains("Allow this agent to manage Skin Access"),
             "leftover/hydra keep today's hint without the Agent-tab sentence: {hint}"
         );
         assert!(
@@ -1402,7 +1403,7 @@ mod tests {
         assert_eq!(v["error"]["code"], "owner_only");
         let hint = v["error"]["hint"].as_str().expect("hint");
         assert!(
-            hint.contains("Allow this agent to manage Skin Access"),
+            hint.contains("Allow this agent to manage Apps"),
             "manage OFF must teach the Agent-tab toggle: {hint}"
         );
         assert!(

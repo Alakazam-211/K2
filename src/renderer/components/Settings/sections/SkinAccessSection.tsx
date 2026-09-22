@@ -14,7 +14,7 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
     id: 'skin-access.front-door',
     section: 'skin-access',
     label: 'Leftover Caddy (optional)',
-    description: 'Leftover optional Caddy. Host skins with k2 publish — not required.',
+    description: 'Leftover optional Caddy. Host apps with k2 publish — not required.',
     keywords: [
       'front door',
       'connect',
@@ -25,6 +25,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
       'tunnel',
       'ui port',
       'listen',
+      'skin',
+      'app',
     ],
     group: 'Leftover Caddy (optional)',
   },
@@ -32,7 +34,7 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
     id: 'skin-access.users',
     section: 'skin-access',
     label: 'Guests',
-    description: 'Guest list for skins — passwords, email, and default rooms; not platform tokens',
+    description: 'Guest list for apps — passwords, email, and default rooms; not platform tokens',
     keywords: [
       'skin users',
       'roster',
@@ -44,6 +46,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
       'password',
       'email',
       'login',
+      'skin',
+      'app',
     ],
     group: 'Guests',
   },
@@ -60,6 +64,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
       'assign',
       'dentist',
       'bundle',
+      'skin',
+      'app',
     ],
     group: 'Roles',
   },
@@ -80,6 +86,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
       'mint',
       'platform',
       'name',
+      'skin',
+      'app',
     ],
     group: 'Platform tokens',
   },
@@ -87,8 +95,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
     id: 'skin-access.hydra',
     section: 'skin-access',
     label: 'OIDC issuer (Hydra)',
-    description: 'Opt-in Hydra sidecar — Linux loopback 4444/4445; enabling skins does not start Hydra',
-    keywords: ['oidc', 'hydra', 'issuer', 'openid'],
+    description: 'Opt-in Hydra sidecar — Linux loopback 4444/4445; enabling apps does not start Hydra',
+    keywords: ['oidc', 'hydra', 'issuer', 'openid', 'skin', 'app'],
     group: 'OIDC issuer (Hydra)',
   },
 ]
@@ -924,9 +932,9 @@ export function SkinAccessSection(): React.JSX.Element {
     <div className="h-full min-h-0 overflow-y-auto p-6">
       <div className="max-w-2xl space-y-8">
         <div>
-          <h2 className="text-base font-medium text-[var(--color-text-primary)]">Skin Access</h2>
+          <h2 className="text-base font-medium text-[var(--color-text-primary)]">Apps</h2>
           <p className="text-[11px] text-[var(--color-text-muted)] mt-1 max-w-2xl">
-            Guests (login sessions) and platform tokens (caps + rooms) — not Server Access.
+            Guests of apps on this box (login sessions) and platform tokens (caps + rooms) — not Server Access.
             Do not mint a key for a user. Host the UI with k2 publish, not this page.
             Overlay Thread rooms only; never grid / PTY.
           </p>
@@ -1032,8 +1040,8 @@ export function SkinAccessSection(): React.JSX.Element {
         <SettingsGroup title="Guests">
           <div data-settings-id="skin-access.users" className="space-y-3">
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              Guest list for skins. Not the Server Access / Connect operator roster. Set a
-              password so the skin can POST /cli/skin/login (the skin owns the login UI).
+              Guest list for apps. Not the Server Access / Connect operator roster. Set a
+              password so the app can POST /cli/skin/login (the app owns the login UI).
               Email is optional — needed to mint a password-reset token. K2 never emails
               guests. Guests never see a secret. No public register. Do not mint a key for
               this user.

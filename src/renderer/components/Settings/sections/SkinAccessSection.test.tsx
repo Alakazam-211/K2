@@ -30,6 +30,7 @@ import {
   mintSecretFrom,
   prefixLabel,
 } from './SkinAccessSection'
+import { searchManifest, SECTION_LABELS } from '../searchManifest'
 
 const USER_ALICE = { username: 'alice', createdAt: '2026-08-01T00:00:00Z' }
 const USER_BOB = { username: 'bob' }
@@ -239,7 +240,7 @@ describe('parsers', () => {
 })
 
 describe('SKIN_ACCESS_MANIFEST', () => {
-  it('is the Skin Access section, not Server Access', () => {
+  it('is the Apps section (route id skin-access), not Server Access', () => {
     expect(SKIN_ACCESS_MANIFEST.every((e) => e.section === 'skin-access')).toBe(true)
     expect(SKIN_ACCESS_MANIFEST.map((e) => e.id)).toEqual([
       'skin-access.front-door',
@@ -251,10 +252,33 @@ describe('SKIN_ACCESS_MANIFEST', () => {
     expect(SKIN_ACCESS_MANIFEST.map((e) => e.id).join(' ')).not.toContain(
       'agents-can-manage-skin',
     )
+    for (const e of SKIN_ACCESS_MANIFEST) {
+      expect(e.keywords ?? []).toEqual(expect.arrayContaining(['skin', 'app']))
+    }
   })
 })
 
 describe('SkinAccessSection', () => {
+  it('nav/h2 is Apps, not Skin Access or Server Access', async () => {
+    expect(SECTION_LABELS['skin-access']).toBe('Apps')
+    expect(SECTION_LABELS['skin-access']).not.toBe('Skin Access')
+    expect(SECTION_LABELS['k2-access']).toBe('Server Access')
+    render(<SkinAccessSection />)
+    await loaded()
+    expect(screen.getByRole('heading', { level: 2, name: 'Apps' })).not.toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Skin Access' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Server Access' })).toBeNull()
+  })
+
+  it('search skin and app both hit the Apps page', () => {
+    const skinHits = searchManifest(SKIN_ACCESS_MANIFEST, 'skin')
+    const appHits = searchManifest(SKIN_ACCESS_MANIFEST, 'app')
+    expect(skinHits.length).toBeGreaterThan(0)
+    expect(appHits.length).toBeGreaterThan(0)
+    expect(skinHits.every((e) => e.section === 'skin-access')).toBe(true)
+    expect(appHits.every((e) => e.section === 'skin-access')).toBe(true)
+  })
+
   it('loads front-door, skin users, and tokens — never /cli/users', async () => {
     render(<SkinAccessSection />)
     await loaded()

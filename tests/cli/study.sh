@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary skins feedback-loop"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps skins feedback-loop"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -86,7 +86,8 @@ assert_contains "never fs glob" "$skins_out" "Never /cli/fs/*"
 assert_contains "never owner BFF" "$skins_out" "Never owner BFF"
 assert_contains "has_cap_in_room doors" "$skins_out" "has_cap_in_room"
 assert_contains "static dir is public" "$skins_out" "GET / and /assets/* are PUBLIC"
-assert_contains "platform mint --name" "$skins_out" "k2 skin-token create --name"
+assert_contains "platform mint --name" "$skins_out" "k2 app token create --name"
+assert_contains "leftover mint --name" "$skins_out" "k2 skin-token create --name"
 assert_contains "two credentials" "$skins_out" "TWO CREDENTIALS"
 assert_contains "byo bff heading" "$skins_out" "BYO BFF (not --skin)"
 assert_contains "byo same session" "$skins_out" "same session k2skn_"
@@ -98,7 +99,7 @@ assert_contains "platform token is not a role" "$skins_out" "it is not a role"
 assert_contains "empty rooms dark" "$skins_out" "Empty rooms on a role = Thread dark"
 assert_contains "find the room" "$skins_out" "FIND THE ROOM, THEN THE FUNCTIONS"
 assert_contains "files on docs not sales" "$skins_out" "Files on Documents does not grant files on Sales"
-assert_contains "role room example" "$skins_out" "k2 skin role room dentist sales"
+assert_contains "role room example" "$skins_out" "k2 app role room dentist sales"
 assert_absent "no leftover cartesian create" "$skins_out" "k2 skin role create dentist --caps"
 assert_absent "files later cut" "$skins_out" "later gateway cut"
 assert_absent "no mint-for-user" "$skins_out" "skin-token create <username>"
@@ -143,7 +144,7 @@ assert_contains "agents ask from PTY" "$skins_out" "k2 thread ask"
 assert_contains "agents secret from PTY" "$skins_out" "k2 thread secret"
 assert_contains "owner vs agent heading" "$skins_out" "OWNER VS AGENT"
 assert_contains "list always" "$skins_out" "workspace agent always"
-assert_contains "agent tab toggle" "$skins_out" "Allow this agent to manage Skin Access"
+assert_contains "agent tab toggle" "$skins_out" "Allow this agent to manage Apps"
 assert_contains "leftover front-door owner" "$skins_out" "front-door"
 assert_contains "leftover hydra owner" "$skins_out" "hydra"
 assert_contains "do not sudo" "$skins_out" "Do not sudo"
@@ -168,11 +169,43 @@ assert_contains "rp google at idp" "$skins_out" "RP/Google reset at the IdP"
 assert_absent "no teammate names in skins" "$skins_out" "Dannon"
 assert_absent "no resend product in skins" "$skins_out" "Resend"
 
+echo "== k2 study apps is canonical; skins is leftover alias =="
+"$K2" study apps >"$SANDBOX/apps.txt"
+"$K2" study skins >"$SANDBOX/skins.txt"
+apps_out="$(cat "$SANDBOX/apps.txt")"
+skins_alias_out="$(cat "$SANDBOX/skins.txt")"
+assert_contains "apps page title" "$apps_out" "k2 study apps — Apps"
+assert_absent "apps has no leftover alias line" "$apps_out" "k2 study skins is now k2 study apps"
+assert_contains "skins leftover alias line" "$skins_alias_out" "k2 study skins is now k2 study apps — this page still works."
+if python3 - "$SANDBOX/apps.txt" "$SANDBOX/skins.txt" <<'PY'
+import pathlib, sys
+apps = pathlib.Path(sys.argv[1]).read_text()
+skins = pathlib.Path(sys.argv[2]).read_text()
+lines = skins.splitlines()
+while lines and (lines[0].startswith("k2 study skins is now") or lines[0] == ""):
+    lines.pop(0)
+skins_body = "\n".join(lines)
+if skins_body.endswith("\n") is False and apps.endswith("\n"):
+    skins_body += "\n"
+if apps.rstrip("\n") != skins_body.rstrip("\n"):
+    sys.exit(1)
+PY
+then
+    echo "  PASS: skins body matches apps after alias line"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: skins body matches apps after alias line" >&2
+    fail=$((fail + 1))
+fi
+assert_contains "apps keeps k2skn_" "$apps_out" "k2skn_"
+assert_contains "apps keeps /cli/skin/login" "$apps_out" "/cli/skin/login"
+
 echo "== k2 study people =="
 people_out="$("$K2" study people)"
 assert_contains "connections (agents)" "$people_out" "CONNECTIONS (AGENTS)"
 assert_contains "Connect users" "$people_out" "CONNECT USERS"
-assert_contains "skin guests" "$people_out" "SKIN GUESTS"
+assert_contains "app guests" "$people_out" "APP GUESTS"
+assert_contains "leftover skin user list" "$people_out" "k2 skin user list"
 assert_contains "--users humans" "$people_out" "--users"
 assert_contains "never k2 msg" "$people_out" "never"
 assert_contains "k2 msg names" "$people_out" "k2 msg"

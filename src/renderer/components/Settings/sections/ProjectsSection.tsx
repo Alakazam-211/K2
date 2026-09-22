@@ -83,7 +83,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'Per-workspace default LLM model for new sessions', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
   { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Pass workspace default model when resuming a session', keywords: ['resume', 'model', 'force'] },
   { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Per-workspace passport for k2 db create (create-only; existing DBs stay usable)', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
-  { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Allow this agent to manage Skin Access', description: 'Per-workspace passport for k2 skin / k2 skin-token mutations (guests, roles, platform tokens for this box)', keywords: ['agents_can_manage_skin', 'skin', 'passport', 'agent', 'guests', 'roles', 'skin-token'] },
+  { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Allow this agent to manage Apps', description: 'Per-workspace passport for k2 app / leftover k2 skin / k2 skin-token mutations (guests, roles, platform tokens for this box)', keywords: ['agents_can_manage_skin', 'skin', 'app', 'passport', 'agent', 'guests', 'roles', 'skin-token'] },
   { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this host', description: 'Per-workspace passport for k2 hostmail enable/disable and domain list/add/check (uninstall, domain remove, OAuth, access stay owner)', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
@@ -1570,7 +1570,7 @@ function ProjectDetail({
             <SettingsGroup title="Database">
               <DbAgentCreateToggle project={project} />
             </SettingsGroup>
-            <SettingsGroup title="Skin Access">
+            <SettingsGroup title="Apps">
               <AgentsManageSkinToggle project={project} />
             </SettingsGroup>
 
@@ -2268,8 +2268,8 @@ function AgentsManageSkinToggle({
           }`}
           title={
             enabled
-              ? 'This agent may manage Skin Access for this box'
-              : 'This agent cannot manage Skin Access'
+              ? 'This agent may manage Apps for this box'
+              : 'This agent cannot manage Apps'
           }
         >
           <span
@@ -2280,12 +2280,12 @@ function AgentsManageSkinToggle({
         </button>
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
-            Allow this agent to manage Skin Access.
+            Allow this agent to manage Apps.
           </div>
           <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
             {enabled
-              ? 'This agent may add guests, roles, and platform tokens for this box. You (the owner) can always manage Skin Access.'
-              : 'Off (recommended): guests, roles, and platform tokens for this box stay owner-managed. Turn on to let this workspace\'s agent drive existing k2 skin / k2 skin-token mutations. You (the owner) can always manage Skin Access.'}
+              ? 'This agent may add guests, roles, and platform tokens for this box. You (the owner) can always manage Apps.'
+              : 'Off (recommended): guests, roles, and platform tokens for this box stay owner-managed. Turn on to let this workspace\'s agent drive existing k2 app / leftover k2 skin / k2 skin-token mutations. You (the owner) can always manage Apps.'}
           </div>
         </div>
       </div>

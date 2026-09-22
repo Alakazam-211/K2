@@ -530,8 +530,8 @@ mod tests {
             "users:roster catalog listed"
         );
         assert!(
-            presets.iter().any(|p| p["id"] == "skin:roster"),
-            "skin:roster catalog listed"
+            presets.iter().any(|p| p["id"] == "apps:roster"),
+            "apps:roster catalog listed"
         );
         let users = presets
             .iter()
@@ -541,10 +541,14 @@ mod tests {
         assert_eq!(users["recommended"], false);
         let skin = presets
             .iter()
-            .find(|p| p["id"] == "skin:roster")
-            .expect("skin:roster");
+            .find(|p| p["id"] == "apps:roster")
+            .expect("apps:roster");
         assert_eq!(skin["kind"], "live");
         assert_eq!(skin["recommended"], false);
+        assert!(
+            presets.iter().all(|p| p["id"] != "skin:roster"),
+            "leftover skin:roster is an alias, not a second catalog row"
+        );
 
         cleanup(&path, &pid);
     }

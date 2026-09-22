@@ -114,7 +114,7 @@ function settingsNav(): NavBlock[] {
       items: [
         { id: 'email-hosting', label: 'Email Hosting' },
         { id: 'data', label: 'Database' },
-        { id: 'skin-access', label: 'Skin Access' },
+        { id: 'skin-access', label: 'Apps' },
       ],
     },
   ]

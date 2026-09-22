@@ -248,7 +248,7 @@ _cli_tool_id_for_verb() {
         daemon) echo "daemon-admin" ;;
         users) echo "users-admin" ;;
         api-key) echo "api-key" ;;
-        skin|skin-token) echo "skin" ;;
+        app|skin|skin-token) echo "skin" ;;
         # Remote Session owner/admin surface (Layer 0 + grants + shell PTY).
         # Locked id: cannot Open; needs owner/admin or grant token server-side.
         remote-session) echo "remote-session" ;;
@@ -5394,64 +5394,90 @@ sys.exit(1)
 '
 }
 
+_teach_skin_now_app() {
+    echo "k2 skin is now k2 app — this command still works." >&2
+}
+
+_teach_skin_token_now_app_token() {
+    echo "k2 skin-token is now k2 app token — this command still works." >&2
+}
+
 _skin_usage() {
     cat >&2 <<'EOF'
-Usage: k2 skin <user|role|hydra> ...
-       k2 skin-token <create|list|revoke|rooms> ...
+Usage: k2 app <user|role|token|hydra|front-door> ...
+       k2 app token <create|list|revoke|rooms> ...
 
-  Hosting a skin UI is k2 publish, not this command. See k2 study skins.
+  Guests, roles, and tokens for apps on this box. Desktop binary updates
+  are k2 update --app. Hosting a UI is k2 publish, not this command.
+  See k2 study apps (leftover: k2 study skins).
 
-  k2 skin user add <username> [--email e] [--password-stdin]
-                                        Add a skin principal (not a Connect user)
-  k2 skin user email <username> [--email e]
+  Leftover aliases (still work): k2 skin …    k2 skin-token …
+
+  k2 app user add <username> [--email e] [--password-stdin]
+                                        Add an app principal (not a Connect user)
+  k2 app user email <username> [--email e]
                                         Set/clear guest email (omit/empty clears)
-  k2 skin user password <username> --password-stdin
+  k2 app user password <username> --password-stdin
                                         Set/reset K2-login password (empty stdin clears)
-  k2 skin user list                     Roster (username  role|—  rooms|—  email|—; no secrets)
-  k2 skin user remove <username>        Drop principal + login sessions (platform tokens survive)
-  k2 skin user rooms <username> --agent sales [--apply-tokens]
+  k2 app user list                     Roster (username  role|—  rooms|—  email|—; no secrets)
+  k2 app user remove <username>        Drop principal + login sessions (platform tokens survive)
+  k2 app user rooms <username> --agent sales [--apply-tokens]
                                         Set default rooms (unassigned guests only)
-  k2 skin user role <username> <role>   Assign a skin role (not Connect owner/admin/member/viewer)
-  k2 skin user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
-  k2 skin role create <name> [--agent sales]
+  k2 app user role <username> <role>   Assign an app role (not Connect owner/admin/member/viewer)
+  k2 app user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
+  k2 app role create <name> [--agent sales]
                                         Named bundle. No --agent = Thread dark. --agent without --caps = Thread-only on that room.
-  k2 skin role room <role> <handle> [--caps thread:read,thread:post,files:read]
+  k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read]
                                         Add/replace functions on one room. Omit --caps = Thread-only. Not --caps with --agent.
-  k2 skin role room <role> <handle> --clear
+  k2 app role room <role> <handle> --clear
                                         Drop that room from the role
-  k2 skin role list                     Roles (per-room lines; no secrets)
-  k2 skin role update <name> [--agent … | --clear]
+  k2 app role list                     Roles (per-room lines; no secrets)
+  k2 app role update <name> [--agent … | --clear]
                                         --clear empties the whole map. Always rewrites live sessions.
-  k2 skin role remove <name>            Drop an unassigned role
-  k2 skin hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
-  k2 skin-token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
+  k2 app role remove <name>            Drop an unassigned role
+  k2 app hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
+  k2 app token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
                                         Mint platform k2skn_ pass (secret once; ≥1 --agent; no user)
-  k2 skin-token list                    Platform tokens only (prefix + caps + rooms; hide sessions)
-  k2 skin-token rooms <id> --agent sales
-  k2 skin-token rooms <id> --clear      Empty rooms (Thread dark, keep secret)
-  k2 skin-token revoke <id>
+  k2 app token list                    Platform tokens only (prefix + caps + rooms; hide sessions)
+  k2 app token rooms <id> --agent sales
+  k2 app token rooms <id> --clear      Empty rooms (Thread dark, keep secret)
+  k2 app token revoke <id>
 
 WHAT THIS IS
   Users + roles + tokens + scopes (caps + rooms). Never a host. Never grid.
 
-HOST THE UI WITH k2 publish (k2 publish --help / k2 study skins)
+HOST THE UI WITH k2 publish (k2 publish --help / k2 study apps)
   k2 publish run <label> --skin --port N
-  Custom files: --skin <dir>. k2 skin does not serve software.
+  Custom files: --skin <dir>. k2 app does not serve software.
 
 Caps: thread:read (GET /cli/thread + overlay WS + find-only ensure-pinned-chat),
 thread:post (POST /cli/thread/post),
 files:read (GET /cli/fs/read-dir|read-file|read-binary|read-range + WS /cli/fs/events),
 files:write (POST /cli/fs/write-file|upload-binary|create|copy|move).
 Rooms: workspace handles. Empty = Thread dark.
-Grid/PTY is never a skin room. Capability check paths (full):
+Grid/PTY is never an app room. Capability check paths (full):
   GET /cli/sessions/grid  and  GET /cli/sessions/bytes
   → 403 {"error":"skin tokens cannot use the terminal"}
   Do not probe /cli/grid or /cli/pty for that string.
 
-LEFTOVER (not how you host a skin)
-  k2 skin front-door [connect|direct] [--ui-port N] [--url URL] [--hint TEXT] [--json]
+LEFTOVER (not how you host an app)
+  k2 app front-door [connect|direct] [--ui-port N] [--url URL] [--hint TEXT] [--json]
                                         Optional Caddy path-filter (owner). Not required.
 EOF
+}
+
+# Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
+# k2 app update is unknown (usage), not the desktop updater (k2 update --app).
+cmd_app() {
+    case "${1:-}" in
+        token|tokens)
+            shift || true
+            cmd_skin_token "$@"
+            ;;
+        *)
+            cmd_skin "$@"
+            ;;
+    esac
 }
 
 cmd_skin() {
@@ -5462,7 +5488,7 @@ cmd_skin() {
             local _a
             for _a in "$@"; do
                 if [[ "$_a" == "--role" ]]; then
-                    echo "Error: Connect --role is not a skin command. Use k2 skin user role <username> <role> or k2 skin role create." >&2
+                    echo "Error: Connect --role is not a skin command. Use k2 app user role <username> <role> or k2 app role create." >&2
                     exit 2
                 fi
             done
@@ -5476,12 +5502,12 @@ cmd_skin() {
                             --password-stdin) password_stdin=1; shift ;;
                             --email) email="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --email=*) email="${1#--email=}"; shift ;;
-                            --help|-h) echo "Usage: k2 skin user add <username> [--email e] [--password-stdin]" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app user add <username> [--email e] [--password-stdin]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$username" ]] && username="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$username" ]] && { echo "Usage: k2 skin user add <username> [--email e] [--password-stdin]" >&2; exit 1; }
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user add <username> [--email e] [--password-stdin]" >&2; exit 1; }
                     local pw=""
                     if [[ "$password_stdin" -eq 1 ]]; then
                         pw=$(cat)
@@ -5509,12 +5535,12 @@ print("Skin user added: %s" % d.get("username",""))'
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --password-stdin) password_stdin=1; shift ;;
-                            --help|-h) echo "Usage: k2 skin user password <username> --password-stdin" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app user password <username> --password-stdin" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$username" ]] && username="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$username" || "$password_stdin" -ne 1 ]] && { echo "Usage: k2 skin user password <username> --password-stdin" >&2; exit 1; }
+                    [[ -z "$username" || "$password_stdin" -ne 1 ]] && { echo "Usage: k2 app user password <username> --password-stdin" >&2; exit 1; }
                     local pw
                     pw=$(cat)
                     local body raw
@@ -5534,12 +5560,12 @@ print("Skin password %s for %s" % ("set" if d.get("hasPassword") else "cleared",
                         case "$1" in
                             --email) email="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --email=*) email="${1#--email=}"; shift ;;
-                            --help|-h) echo "Usage: k2 skin user email <username> [--email e]" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app user email <username> [--email e]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$username" ]] && username="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$username" ]] && { echo "Usage: k2 skin user email <username> [--email e]" >&2; exit 1; }
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user email <username> [--email e]" >&2; exit 1; }
                     local body raw
                     body=$(K2_SKIN_USER="$username" K2_SKIN_EMAIL="$email" python3 -c '
 import json,os
@@ -5578,7 +5604,7 @@ for u in users:
                     ;;
                 remove|rm)
                     local username="${1:-}"
-                    [[ -z "$username" ]] && { echo "Usage: k2 skin user remove <username>" >&2; exit 1; }
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user remove <username>" >&2; exit 1; }
                     local body raw
                     body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
                     raw=$(cli_post_json "/cli/skin/users/remove" "$body")
@@ -5594,12 +5620,12 @@ print("Skin user removed." if d.get("success") else "No matching skin user.")'
                         case "$1" in
                             --agent|--agents) agents+=("${2:-}"); shift 2 ;;
                             --apply-tokens|--applyTokens) apply_tokens=1; shift ;;
-                            --help|-h) echo "Usage: k2 skin user rooms <username> --agent sales [--apply-tokens]" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app user rooms <username> --agent sales [--apply-tokens]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$username" ]] && username="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$username" ]] && { echo "Usage: k2 skin user rooms <username> --agent sales [--apply-tokens]" >&2; exit 1; }
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user rooms <username> --agent sales [--apply-tokens]" >&2; exit 1; }
                     local agents_nl="" a
                     if [ ${#agents[@]} -gt 0 ]; then
                         for a in "${agents[@]}"; do
@@ -5624,7 +5650,7 @@ print("Skin user %s default rooms: %s" % (d.get("username",""), ", ".join(handle
                     ;;
                 role)
                     local username="${1:-}" role="${2:-}"
-                    [[ -z "$username" || -z "$role" ]] && { echo "Usage: k2 skin user role <username> <role>" >&2; exit 1; }
+                    [[ -z "$username" || -z "$role" ]] && { echo "Usage: k2 app user role <username> <role>" >&2; exit 1; }
                     local body raw
                     body=$(K2_SKIN_USER="$username" K2_SKIN_ROLE="$role" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"], "role": os.environ["K2_SKIN_ROLE"]}))')
                     raw=$(cli_post_json "/cli/skin/roles/assign" "$body")
@@ -5636,7 +5662,7 @@ print("Skin user %s role: %s" % (d.get("username",""), d.get("roleName") or d.ge
                     ;;
                 unassign)
                     local username="${1:-}"
-                    [[ -z "$username" ]] && { echo "Usage: k2 skin user unassign <username>" >&2; exit 1; }
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user unassign <username>" >&2; exit 1; }
                     local body raw
                     body=$(K2_SKIN_USER="$username" python3 -c 'import json,os; print(json.dumps({"username": os.environ["K2_SKIN_USER"]}))')
                     raw=$(cli_post_json "/cli/skin/roles/unassign" "$body")
@@ -5647,7 +5673,7 @@ d=json.load(sys.stdin)
 print("Skin user %s unassigned." % d.get("username",""))'
                     ;;
                 *)
-                    echo "Usage: k2 skin user <add|list|remove|rooms|password|email|role|unassign>" >&2
+                    echo "Usage: k2 app user <add|list|remove|rooms|password|email|role|unassign>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -5655,7 +5681,7 @@ print("Skin user %s unassigned." % d.get("username",""))'
             local _a
             for _a in "$@"; do
                 if [[ "$_a" == "--user" || "$_a" == "--username" ]]; then
-                    echo "Error: use k2 skin user role <username> <role>, not k2 skin role --user" >&2
+                    echo "Error: use k2 app user role <username> <role>, not k2 app role --user" >&2
                     exit 2
                 fi
             done
@@ -5668,14 +5694,14 @@ print("Skin user %s unassigned." % d.get("username",""))'
                         case "$1" in
                             --caps|--cap) caps="${2:-}"; shift 2 ;;
                             --agent|--agents) agents+=("${2:-}"); shift 2 ;;
-                            --help|-h) echo "Usage: k2 skin role create <name> [--agent sales]" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app role create <name> [--agent sales]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$name" ]] && name="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$name" ]] && { echo "Usage: k2 skin role create <name> [--agent sales]" >&2; exit 1; }
+                    [[ -z "$name" ]] && { echo "Usage: k2 app role create <name> [--agent sales]" >&2; exit 1; }
                     if [[ -n "$caps" ]]; then
-                        echo "Error: use k2 skin role room <role> <handle> [--caps …], not --caps with --agent" >&2
+                        echo "Error: use k2 app role room <role> <handle> [--caps …], not --caps with --agent" >&2
                         exit 2
                     fi
                     local agents_nl="" a
@@ -5732,7 +5758,7 @@ for r in roles:
                         case "$1" in
                             --caps|--cap) caps="${2:-}"; shift 2 ;;
                             --clear) clear=1; shift ;;
-                            --help|-h) echo "Usage: k2 skin role room <role> <handle> [--caps thread:read,thread:post,files:read] | --clear" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read] | --clear" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *)
                                 if [[ -z "$role" ]]; then role="$1"
@@ -5741,7 +5767,7 @@ for r in roles:
                                 shift ;;
                         esac
                     done
-                    [[ -z "$role" || -z "$handle" ]] && { echo "Usage: k2 skin role room <role> <handle> [--caps …] | --clear" >&2; exit 1; }
+                    [[ -z "$role" || -z "$handle" ]] && { echo "Usage: k2 app role room <role> <handle> [--caps …] | --clear" >&2; exit 1; }
                     local body raw
                     body=$(K2_SKIN_ROLE="$role" K2_SKIN_HANDLE="$handle" K2_SKIN_CAPS="$caps" K2_SKIN_CLEAR="$clear" python3 -c '
 import json,os
@@ -5774,14 +5800,14 @@ for a in access:
                             --caps|--cap) caps="${2:-}"; shift 2 ;;
                             --agent|--agents) agents+=("${2:-}"); shift 2 ;;
                             --clear) clear=1; shift ;;
-                            --help|-h) echo "Usage: k2 skin role update <name> [--agent … | --clear]" >&2; exit 0 ;;
+                            --help|-h) echo "Usage: k2 app role update <name> [--agent … | --clear]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$name" ]] && name="$1"; shift ;;
                         esac
                     done
-                    [[ -z "$name" ]] && { echo "Usage: k2 skin role update <name> [--agent … | --clear]" >&2; exit 1; }
+                    [[ -z "$name" ]] && { echo "Usage: k2 app role update <name> [--agent … | --clear]" >&2; exit 1; }
                     if [[ -n "$caps" ]]; then
-                        echo "Error: use k2 skin role room <role> <handle> [--caps …], not --caps with --agent" >&2
+                        echo "Error: use k2 app role room <role> <handle> [--caps …], not --caps with --agent" >&2
                         exit 2
                     fi
                     local agents_nl="" a
@@ -5815,7 +5841,7 @@ for a in access:
                     ;;
                 remove|rm)
                     local name="${1:-}"
-                    [[ -z "$name" ]] && { echo "Usage: k2 skin role remove <name>" >&2; exit 1; }
+                    [[ -z "$name" ]] && { echo "Usage: k2 app role remove <name>" >&2; exit 1; }
                     local body raw
                     body=$(K2_SKIN_NAME="$name" python3 -c 'import json,os; print(json.dumps({"name": os.environ["K2_SKIN_NAME"]}))')
                     raw=$(cli_post_json "/cli/skin/roles/remove" "$body")
@@ -5826,11 +5852,11 @@ d=json.load(sys.stdin)
 print("Skin role removed." if d.get("success") else "No matching skin role.")'
                     ;;
                 --help|-h)
-                    echo "Usage: k2 skin role <create|list|room|update|remove>" >&2
+                    echo "Usage: k2 app role <create|list|room|update|remove>" >&2
                     exit 0
                     ;;
                 *)
-                    echo "Usage: k2 skin role <create|list|room|update|remove>" >&2
+                    echo "Usage: k2 app role <create|list|room|update|remove>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -5844,12 +5870,12 @@ print("Skin role removed." if d.get("success") else "No matching skin role.")'
                     --ui-port|--uiPort) ui_port="${2:-}"; shift 2 ;;
                     connect|direct)
                         if [ -n "$mode" ]; then
-                            echo "Usage: k2 skin front-door [connect|direct] [--json]" >&2
+                            echo "Usage: k2 app front-door [connect|direct] [--json]" >&2
                             exit 1
                         fi
                         mode="$1"; shift ;;
                     --help|-h)
-                        echo "Usage: k2 skin front-door [connect|direct] [--url URL] [--hint TEXT] [--ui-port N] [--json]" >&2
+                        echo "Usage: k2 app front-door [connect|direct] [--url URL] [--hint TEXT] [--ui-port N] [--json]" >&2
                         exit 0 ;;
                     *) echo "Unknown flag: $1" >&2; exit 1 ;;
                 esac
@@ -5955,16 +5981,16 @@ if isinstance(err,str) and err.strip():
                 case "$1" in
                     --json) json_out=1; shift ;;
                     --help|-h)
-                        echo "Usage: k2 skin hydra [on|off] [--json]" >&2
+                        echo "Usage: k2 app hydra [on|off] [--json]" >&2
                         exit 0 ;;
                     on|off)
                         if [ -n "$action" ]; then
-                            echo "Usage: k2 skin hydra [on|off] [--json]" >&2
+                            echo "Usage: k2 app hydra [on|off] [--json]" >&2
                             exit 2
                         fi
                         action="$1"; shift ;;
                     *)
-                        echo "Usage: k2 skin hydra [on|off] [--json]" >&2
+                        echo "Usage: k2 app hydra [on|off] [--json]" >&2
                         exit 2 ;;
                 esac
             done
@@ -6021,18 +6047,18 @@ cmd_skin_token() {
                     --agent|--agents) agents+=("${2:-}"); shift 2 ;;
                     --user|--username)
                         echo "Error: use --name (platform label), not --user/--username" >&2
-                        echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2
+                        echo "Usage: k2 app token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2
                         exit 2 ;;
-                    --help|-h) echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2; exit 0 ;;
+                    --help|-h) echo "Usage: k2 app token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2; exit 0 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                     *)
                         echo "Error: use --name (platform label), not a positional username" >&2
-                        echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2
+                        echo "Usage: k2 app token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2
                         exit 2 ;;
                 esac
             done
-            [[ -z "$name" ]] && { echo "Error: use --name (platform label), not a positional username" >&2; echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2; exit 2; }
-            [[ ${#agents[@]} -eq 0 ]] && { echo "Error: k2 skin-token create needs ≥1 --agent <handle> (rooms). Empty rooms = Thread dark." >&2; echo "Usage: k2 skin-token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2; exit 2; }
+            [[ -z "$name" ]] && { echo "Error: use --name (platform label), not a positional username" >&2; echo "Usage: k2 app token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2; exit 2; }
+            [[ ${#agents[@]} -eq 0 ]] && { echo "Error: k2 app token create needs ≥1 --agent <handle> (rooms). Empty rooms = Thread dark." >&2; echo "Usage: k2 app token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2; exit 2; }
             local agents_nl="" a
             for a in "${agents[@]}"; do
                 agents_nl="${agents_nl}${a}"$'\n'
@@ -6084,12 +6110,12 @@ for t in tokens:
                 case "$1" in
                     --agent|--agents) agents+=("${2:-}"); shift 2 ;;
                     --clear) clear=1; shift ;;
-                    --help|-h) echo "Usage: k2 skin-token rooms <id> --agent sales  |  --clear" >&2; exit 0 ;;
+                    --help|-h) echo "Usage: k2 app token rooms <id> --agent sales  |  --clear" >&2; exit 0 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                     *) [[ -z "$id" ]] && id="$1"; shift ;;
                 esac
             done
-            [[ -z "$id" ]] && { echo "Usage: k2 skin-token rooms <id> --agent sales  |  --clear" >&2; exit 1; }
+            [[ -z "$id" ]] && { echo "Usage: k2 app token rooms <id> --agent sales  |  --clear" >&2; exit 1; }
             if [ "$clear" = 1 ]; then
                 agents=()
             fi
@@ -6115,7 +6141,7 @@ print("Skin token %s rooms: %s" % (d.get("id",""), ", ".join(handles) if handles
             ;;
         revoke)
             local id="${1:-}"
-            [[ -z "$id" ]] && { echo "Usage: k2 skin-token revoke <id>" >&2; exit 1; }
+            [[ -z "$id" ]] && { echo "Usage: k2 app token revoke <id>" >&2; exit 1; }
             local body raw
             body=$(K2_SKIN_ID="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["K2_SKIN_ID"]}))')
             raw=$(cli_post_json "/cli/skin-tokens/revoke" "$body")
@@ -6126,7 +6152,7 @@ d=json.load(sys.stdin)
 print("Skin token revoked." if d.get("success") else "No matching active token (unknown or already revoked).")'
             ;;
         --help|-h|"")
-            echo "Usage: k2 skin-token <create|list|revoke|rooms>" >&2
+            echo "Usage: k2 app token <create|list|revoke|rooms>" >&2
             echo "  create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]" >&2
             echo "  list" >&2
             echo "  rooms <id> --agent sales" >&2
@@ -6136,7 +6162,7 @@ print("Skin token revoked." if d.get("success") else "No matching active token (
             exit 0
             ;;
         *)
-            echo "Usage: k2 skin-token <create|list|revoke|rooms>" >&2
+            echo "Usage: k2 app token <create|list|revoke|rooms>" >&2
             exit 1 ;;
     esac
 }
@@ -8889,7 +8915,7 @@ run
   Same <name> already running: error — stop first. Does not overwrite.
   --cmd and --skin are mutually exclusive. --cwd is for --cmd only.
 
-  --skin [<dir>]   Official skin site (login + Thread proxy). Not k2 skin.
+  --skin [<dir>]   Static HTML host (an app). Prefer Next in cwd for new apps.
                    No dir = bundled UI. Dir = your static files + same BFF.
 
 start / stop
@@ -8914,12 +8940,13 @@ subdomain  (Pro) hostname for a port that is ALREADY listening.
   claim / unclaim <label>                    show or hide that name on THIS
                                              workspace's Published list
 
-  Skins: official gateway is `k2 publish run <label> --skin --port N`.
+  Apps: official static host is `k2 publish run <label> --skin --port N`.
     k2 publish run agents --skin --port 8788
   → https://agents.<host>.k2.dev  (login + Thread; no grid)
   Custom static files: --skin <dir> (workspace-relative). Label `skin`
   is reserved. Off-platform custom domains are not created here.
-  k2 skin is users/tokens/scopes — it does not serve software.
+  k2 app is guests/roles/tokens — it does not serve software.
+  Leftover: k2 skin.
 
 logs <name> [--tail]   dump the log file; --tail follows
 
@@ -9631,7 +9658,7 @@ _refuse_reserved_nested_label() {
     local label
     label=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
     if [ "$label" = "skin" ]; then
-        echo "Error: reserved_label: 'skin' is reserved. Pick another nested label for your UI (k2 study skins)." >&2
+        echo "Error: reserved_label: 'skin' is reserved. Pick another nested label for your UI (k2 study apps; leftover: k2 study skins)." >&2
         exit 1
     fi
 }
@@ -13984,11 +14011,11 @@ cmd_schema() {
     {
       "name": "publish run",
       "usage": "k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--json]",
-      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --skin is the official login+Thread gateway (not k2 skin). --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
+      "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --skin is a static HTML host (an app); prefer Next in cwd for new apps. Not k2 app (guests/roles/tokens). --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--cmd", "arg": "shell", "description": "Shell command to run (sh -c / cmd.exe /c). Mutually exclusive with --skin."},
-        {"name": "--skin", "arg": "dir", "description": "Official skin site (login + Thread proxy). Optional dir = static files + same BFF; omit = bundled UI. Mutually exclusive with --cmd/--cwd."},
+        {"name": "--skin", "arg": "dir", "description": "Static HTML host (an app). Prefer Next in cwd for new apps. Optional dir = static files + same BFF; omit = bundled UI. Mutually exclusive with --cmd/--cwd. Not k2 app (guests/roles/tokens)."},
         {"name": "--port", "arg": "n", "description": "Required listen port."},
         {"name": "--no-tunnel", "arg": null, "description": "Do not create/point a nested hostname (local only)."},
         {"name": "--cwd", "arg": "path", "description": "Working directory (default: this workspace). For --cmd only."},
@@ -14090,16 +14117,208 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app",
+      "usage": "k2 app <user|role|token|hydra|front-door> ...",
+      "description": "Guests, roles, and tokens for apps on this box (caps + rooms). Not a host — use k2 publish. Not desktop updates (k2 update --app). Separate from Connect users. Leftover: k2 skin.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app user add",
+      "usage": "k2 app user add <username> [--email e] [--password-stdin]",
+      "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--email", "arg": "e", "description": "Optional guest email (password-reset plumbing; K2 never mails guests)."},
+        {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."}
+      ]
+    },
+    {
+      "name": "app user email",
+      "usage": "k2 app user email <username> [--email e]",
+      "description": "Set or clear an app guest email. Omit or empty --email clears. Needed to mint a password-reset token.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--email", "arg": "e", "description": "Guest email. Omit or empty clears."}
+      ]
+    },
+    {
+      "name": "app user password",
+      "usage": "k2 app user password <username> --password-stdin",
+      "description": "Set or clear an app K2-login password. Empty stdin clears (cannot K2-login; static k2skn_ still works).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--password-stdin", "arg": null, "description": "Read password from stdin."}
+      ]
+    },
+    {
+      "name": "app user list",
+      "usage": "k2 app user list",
+      "description": "List app principals as username  role|—  rooms|—  email|— (no secrets).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app user remove",
+      "usage": "k2 app user remove <username>",
+      "description": "Remove an app principal and their login sessions. Platform tokens survive.",
+      "args": [{"name": "username", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "app user rooms",
+      "usage": "k2 app user rooms <username> --agent sales [--apply-tokens]",
+      "description": "Set default rooms for an unassigned guest. Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens).",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
+        {"name": "--apply-tokens", "arg": null, "description": "Copy onto live login sessions."}
+      ]
+    },
+    {
+      "name": "app user role",
+      "usage": "k2 app user role <username> <role>",
+      "description": "Assign an app role to a guest. Not Connect owner/admin/member/viewer. Re-assign replaces. Live sessions rewrite immediately.",
+      "args": [
+        {"name": "username", "required": true},
+        {"name": "role", "required": true}
+      ],
+      "flags": []
+    },
+    {
+      "name": "app user unassign",
+      "usage": "k2 app user unassign <username>",
+      "description": "Clear the assigned app role. Restores Thread-only + current default rooms on live sessions.",
+      "args": [{"name": "username", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "app role",
+      "usage": "k2 app role <create|list|room|update|remove> ...",
+      "description": "Named bundles of scopes + agents for app guests. Not Connect roles. Not a platform-token role.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app role create",
+      "usage": "k2 app role create <name> [--agent sales]",
+      "description": "Create an app role. --agent optional (0 = Thread dark). Name charset is the same as usernames; Connect owner/admin/member/viewer are rejected.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable; 0 allowed)."}
+      ]
+    },
+    {
+      "name": "app role list",
+      "usage": "k2 app role list",
+      "description": "List app roles (name + caps + rooms; no secrets).",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app role room",
+      "usage": "k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read] | --clear",
+      "description": "Add/replace functions on one room. Omit --caps = Thread-only. --clear drops that room.",
+      "args": [
+        {"name": "role", "required": true},
+        {"name": "handle", "required": true}
+      ],
+      "flags": [
+        {"name": "--caps", "arg": "list", "description": "Comma-separated verbs (thread:read, thread:post, files:read, files:write)."},
+        {"name": "--clear", "arg": null, "description": "Drop that room from the role."}
+      ]
+    },
+    {
+      "name": "app role update",
+      "usage": "k2 app role update <name> [--agent … | --clear]",
+      "description": "Update a role. --clear empties rooms. Always rewrites live sessions of assigned guests (never platform tokens).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
+        {"name": "--clear", "arg": null, "description": "Empty rooms (Thread dark)."}
+      ]
+    },
+    {
+      "name": "app role remove",
+      "usage": "k2 app role remove <name>",
+      "description": "Remove an unassigned app role. Assigned roles 400 until guests are unassigned.",
+      "args": [{"name": "name", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "app hydra",
+      "usage": "k2 app hydra [on|off] [--json]",
+      "description": "OIDC issuer sidecar (Linux leftover). Still owner even when Agent-tab Apps is on.",
+      "args": [{"name": "action", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "app front-door",
+      "usage": "k2 app front-door [connect|direct] [--url URL] [--hint TEXT] [--ui-port N] [--json]",
+      "description": "Optional Caddy path-filter (not required to host an app). Host the UI with k2 publish on any nested label; see k2 study apps.",
+      "args": [{"name": "mode", "required": false}],
+      "flags": [
+        {"name": "--url", "arg": "URL", "description": "Optional public URL."},
+        {"name": "--hint", "arg": "TEXT", "description": "Optional operator hint."},
+        {"name": "--ui-port", "arg": "N", "description": "Optional same-origin UI reverse-proxy port."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "app token",
+      "usage": "k2 app token <create|list|revoke|rooms> ...",
+      "description": "Mint/list/revoke platform k2skn_ capability passes (thread:read / thread:post / files:read / files:write). Secret shown once. List is platform-only (hides login sessions). Leftover: k2 skin-token.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app token create",
+      "usage": "k2 app token create --name <label> --agent sales [--caps thread:read,thread:post,files:read,files:write]",
+      "description": "Mint a platform k2skn_ pass. Name is a label (vercel), not a guest. Raw secret printed once. Default caps: thread:read + thread:post (never silent-add files).",
+      "args": [],
+      "flags": [
+        {"name": "--name", "arg": "label", "description": "Platform label (^[a-z0-9_-]{2,}$; not owner). Unique among live platform tokens."},
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle to grant (repeatable; ≥1 required)."},
+        {"name": "--caps", "arg": "list", "description": "Comma-separated verbs (thread:read, thread:post, files:read, files:write)."}
+      ]
+    },
+    {
+      "name": "app token list",
+      "usage": "k2 app token list",
+      "description": "List platform k2skn_ tokens (name + prefix + caps, never the secret). Hides login sessions.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app token rooms",
+      "usage": "k2 app token rooms <id> --agent sales | --clear",
+      "description": "Set rooms on a platform token. --clear empties rooms (Thread dark, keep secret).",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
+        {"name": "--clear", "arg": null, "description": "Empty rooms (Thread dark)."}
+      ]
+    },
+    {
+      "name": "app token revoke",
+      "usage": "k2 app token revoke <id>",
+      "description": "Revoke a platform app pass. Next GET / overlay is 401.",
+      "args": [{"name": "id", "required": true}],
+      "flags": []
+    },
+    {
       "name": "skin",
       "usage": "k2 skin <user|role|front-door> ...",
-      "description": "Skin Access: guests, roles, tokens, scopes (caps + rooms). Not a host — use k2 publish. Separate from Connect users.",
+      "description": "Leftover alias of k2 app: guests, roles, tokens, scopes (caps + rooms). Not a host — use k2 publish. Separate from Connect users.",
       "args": [],
       "flags": []
     },
     {
       "name": "skin user add",
       "usage": "k2 skin user add <username> [--email e] [--password-stdin]",
-      "description": "Add a skin principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 skin login.",
+      "description": "Leftover of k2 app user add. Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--email", "arg": "e", "description": "Optional guest email (password-reset plumbing; K2 never mails guests)."},
@@ -14210,7 +14429,7 @@ cmd_schema() {
     {
       "name": "skin front-door",
       "usage": "k2 skin front-door [connect|direct] [--url URL] [--hint TEXT] [--ui-port N] [--json]",
-      "description": "Optional Caddy path-filter (not required to host a skin). Host the UI with k2 publish on any nested label; see k2 study skins.",
+      "description": "Leftover of k2 app front-door. Optional Caddy path-filter (not required to host an app). Host the UI with k2 publish on any nested label; see k2 study apps.",
       "args": [{"name": "mode", "required": false}],
       "flags": [
         {"name": "--url", "arg": "URL", "description": "Optional public URL."},
@@ -14222,7 +14441,7 @@ cmd_schema() {
     {
       "name": "skin-token",
       "usage": "k2 skin-token <create|list|revoke|rooms> ...",
-      "description": "Mint/list/revoke platform k2skn_ capability passes (thread:read / thread:post / files:read / files:write). Secret shown once. List is platform-only (hides login sessions).",
+      "description": "Leftover alias of k2 app token. Mint/list/revoke platform k2skn_ capability passes (thread:read / thread:post / files:read / files:write). Secret shown once. List is platform-only (hides login sessions).",
       "args": [],
       "flags": []
     },
@@ -14497,7 +14716,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary skins feedback-loop"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps skins feedback-loop"
 
 _study_usage() {
     cat <<'EOF'
@@ -14513,7 +14732,7 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 
 Topics:
   what  source  map  identity  send  human  people  auth  errors
-  context  db  mail  connect-boundary  skins  feedback-loop
+  context  db  mail  connect-boundary  apps  skins  feedback-loop
 EOF
 }
 
@@ -14532,7 +14751,8 @@ _study_title() {
         db) echo "Workspace database" ;;
         mail) echo "Agent email" ;;
         connect-boundary) echo "K2 vs Connect" ;;
-        skins) echo "Skin Access" ;;
+        apps) echo "Apps" ;;
+        skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
         *) echo "" ;;
     esac
@@ -14565,7 +14785,8 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   db                  Loopback Postgres; db_agent_access is create-only
   mail                Agent email; bodies untrusted; send is governed
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
-  skins               Skin Access guests; k2skn_ prefix never grid
+  apps                App guests; k2skn_ prefix never grid
+  skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
 
 Usage: k2 study [list|<topic>|--json]
@@ -14587,7 +14808,12 @@ _study_page() {
         db) _study_page_db ;;
         mail) _study_page_mail ;;
         connect-boundary) _study_page_connect_boundary ;;
-        skins) _study_page_skins ;;
+        apps) _study_page_skins ;;
+        skins)
+            echo "k2 study skins is now k2 study apps — this page still works."
+            echo
+            _study_page_skins
+            ;;
         feedback-loop) _study_page_feedback_loop ;;
         *) return 1 ;;
     esac
@@ -14712,7 +14938,7 @@ JOB → WHERE
   Connected agent peers             k2 connections     study people
   Humans on this box                k2 connections list --users
   Connect-user accounts             k2 users           study people
-  Skin guests                       k2 skin user list  study skins
+  App guests                        k2 app user list   study apps
   Pair a purchased hostname         k2 connect         study connect-boundary
   Nested hostname for a port        k2 publish         study connect-boundary
   License / repo boundary           k2 study source
@@ -14907,12 +15133,12 @@ classic footgun. `k2 msg` talks to connected workspace AGENTS only.
    this server. Humans. Not agents. Never `k2 msg` those names.
    Mutations are owner-tier.
 
-3. SKIN GUESTS
-   `k2 skin user list`
-   Skin Access principals — guests for custom UIs that talk to agents
+3. APP GUESTS
+   `k2 app user list` (leftover: `k2 skin user list`)
+   App principals — guests for custom UIs that talk to agents
    without a terminal. Capability passes use a k2skn_ prefix and never
    open the grid. Not Connect users. Never `k2 msg` those names.
-   See `k2 study skins`.
+   See `k2 study apps` (leftover: `k2 study skins`).
 
 4. --users HUMANS
    `k2 connections list --users`
@@ -14920,10 +15146,10 @@ classic footgun. `k2 msg` talks to connected workspace AGENTS only.
    users:roster`). Roster for awareness. Never `k2 msg` those names.
 
 RULE
-  If it is a username, Connect user, skin guest, or `--users` row:
+  If it is a username, Connect user, app guest, or `--users` row:
   never `k2 msg` it. Msg handles come from connections (agents).
-  Optional context packs: `users:roster`, `skin:roster`,
-  `connections:roster` — still do not msg humans.
+  Optional context packs: `users:roster`, `apps:roster` (leftover
+  `skin:roster`), `connections:roster` — still do not msg humans.
 
 PROJECT NAMES
   A Project is a group of workspaces, not a person and not a
@@ -14972,9 +15198,9 @@ SETTINGS
   of a gate from inside a refused verb.
 
 PASSPORTS
-  Skin passes (k2skn_ prefix) are Thread caps, never grid. API keys
+  App passes (k2skn_ prefix) are Thread caps, never grid. API keys
   are a different surface (`/v1`). Remote-session grants are another.
-  Do not mix them. Do not print secrets. See `k2 study skins`.
+  Do not mix them. Do not print secrets. See `k2 study apps`.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask`. To talk in this chat, `k2 thread`.
 EOF
@@ -15052,10 +15278,10 @@ KEEP IT LEAN
 LAYERS
   `k2 agent context list|add|on|off|move|regen`
   `k2 agent context catalog` — local ids (wiki, connections:roster,
-  users:roster, skin:roster, manager:pack, …).
+  users:roster, apps:roster, leftover skin:roster, manager:pack, …).
   Hire can seed: `k2 agent hire <dir> --context connections:roster`
 
-  Live-generated rosters (connections / users / skin) are awareness.
+  Live-generated rosters (connections / users / apps) are awareness.
   They do not make those names `k2 msg` targets. See `k2 study people`.
 
 WHAT STUDY IS NOT
@@ -15255,8 +15481,8 @@ WHAT THE CLI TOUCHES
 
 WHAT NOT TO CONFUSE
   Connect users (`k2 users`) are humans on this daemon — study people.
-  Skin Access is guests+passes+websocket rooms. Host the UI with
-  k2 publish on any nested label. See `k2 study skins`.
+  Apps are guests+passes+websocket rooms. Host the UI with
+  k2 publish on any nested label. See `k2 study apps`.
   Federation (`agent::host`) is peer messaging, not Connect login.
 
 WHAT THIS PAGE WILL NOT DO
@@ -15298,7 +15524,7 @@ EOF
 
 _study_page_skins() {
     cat <<'EOF'
-k2 study skins — Skin Access
+k2 study apps — Apps
 
 FIND THE ROOM, THEN THE FUNCTIONS
   Guests think “this user, this room, these functions in that room.”
@@ -15306,18 +15532,19 @@ FIND THE ROOM, THEN THE FUNCTIONS
   does not grant tickets on Sales. Wiki on Documents does not grant wiki
   on Sales. Store on Documents does not grant store on Sales. One login.
   Unassigned guests stay Thread-only. Want files, tickets, wiki, or store
-  (store:read / store:write) on one room → `k2 skin role room`. Platform
-  tokens (`k2 skin-token create --name`) stay flat.
+  (store:read / store:write) on one room → `k2 app role room`. Platform
+  tokens (`k2 app token create --name`; leftover `k2 skin-token`) stay flat.
 
 LANES (read this first)
-  Hosting the UI  = k2 publish. Always. Not k2 skin.
-  k2 skin         = guests + roles + passwords + platform k2skn_ tokens +
+  Hosting the UI  = k2 publish. Always. Not k2 app (leftover: not k2 skin).
+  k2 app          = guests + roles + passwords + platform k2skn_ tokens +
                     per-room functions. It does not serve software.
+                    Leftover: k2 skin / k2 skin-token.
   If this page on your box still talks about two veins, Caddy,
-  or k2 skin front-door as how you serve a UI, that copy is stale.
+  or k2 app front-door as how you serve a UI, that copy is stale.
   The recipe below is still the product.
 
-A skin is a custom UI that talks to agents WITHOUT a terminal.
+An app is a custom UI that talks to agents WITHOUT a terminal.
 Not Connect users, not /v1 API keys, not a grid login, not a
 special hostname.
 
@@ -15329,12 +15556,13 @@ HOW TO MAKE ONE (copy this)
      → https://<label>.<your-sub>.k2.dev  (Pro parent)
      Local only: add --no-tunnel.
   2. Owner adds guests and passwords (Settings → Sidecars →
-     Skin Access, or `k2 skin user add` / `password` / `email`).
+     Apps, or `k2 app user add` / `password` / `email`; leftover
+     `k2 skin user …`).
      Email is optional. Guests log in; they never copy a key.
-     Platform tokens (BYO servers) are separate: `k2 skin-token
-     create --name vercel --agent sales`. Agents: exit 3. Do not
-     sudo k2 — that is not an owner passport. Do not mint a key
-     for this user.
+     Platform tokens (BYO servers) are separate: `k2 app token
+     create --name vercel --agent sales` (leftover `k2 skin-token`).
+     Agents: exit 3. Do not sudo k2 — that is not an owner passport.
+     Do not mint a key for this user.
   3. Browser logs in on THIS origin:
        POST /login   {"username":"…","password":"…"}
      200 body (no token):
@@ -15356,7 +15584,7 @@ HOW TO MAKE ONE (copy this)
      token on the SERVER so the browser never holds the pass.
 
 BYO BFF (not --skin)
-  Same permission system as official --skin. Same Skin Access roster,
+  Same permission system as official --skin. Same Apps roster,
   same POST /cli/skin/login, same session k2skn_ (session=1), same
   has_cap_in_room, same HTTP and WS doors (Thread, overlay, files,
   tickets, wiki, store). Attach Authorization: Bearer <session> on
@@ -15402,15 +15630,16 @@ TWO CREDENTIALS (same prefix k2skn_)
   Login session  = password → create_session_token on that guest.
                    Official --skin: browser JSON has no token; gateway holds it.
                    BYO BFF: step 4 JSON includes token; hold it on the server.
-  Platform token = `k2 skin-token create --name vercel --agent sales`.
+  Platform token = `k2 app token create --name vercel --agent sales`
+                   (leftover: `k2 skin-token create --name`).
                    User-agnostic site key. Not a guest. Secret shown once.
   Do not mint a copyable key per person.
 
 ROLES (named bundles for guests — not Connect, not a platform token)
-  k2 skin role create dentist
-  k2 skin role room dentist sales --caps thread:read,thread:post
-  k2 skin role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post,wiki:read,store:read,store:write
-  k2 skin user role bob dentist
+  k2 app role create dentist
+  k2 app role room dentist sales --caps thread:read,thread:post
+  k2 app role room dentist docs --caps thread:read,thread:post,files:read,tickets:read,tickets:post,wiki:read,store:read,store:write
+  k2 app user role bob dentist
   Session inherits the role at login (and live sessions rewrite on
   change). Platform token keeps its own caps+rooms — it is not a role.
   Empty rooms on a role = Thread dark, not omnipotent.
@@ -15522,25 +15751,26 @@ STATIC DIR (--skin <dir>)
   gateway; custom HTML must POST to /login on this origin.
 
 NOT THIS
-  Do not require Caddy, `k2 skin front-door`, or port 38472.
+  Do not require Caddy, `k2 app front-door`, or port 38472.
   Nested label `skin` is reserved — pick any other name.
   Do not CNAME a customer domain here (no Connect cert).
-  Do not apt install caddy for a skin. If a leftover install
+  Do not apt install caddy for an app. If a leftover install
   already happened: stop AND disable the systemd unit
   (it binds *:80 on all interfaces). Binary-on-PATH is enough
-  for leftover apply; new skins do not need it.
-  Do not k2 msg skin usernames. See `k2 study people`.
+  for leftover apply; new apps do not need it.
+  Do not k2 msg app usernames. See `k2 study people`.
 
 ROSTER
-  Skin guests are people-list 3. Never `k2 msg` those names.
-  Opt-in: `k2 agent context add skin:roster`. See `k2 study people`.
+  App guests are people-list 3. Never `k2 msg` those names.
+  Opt-in: `k2 agent context add apps:roster` (leftover: `skin:roster`).
+  See `k2 study people`.
 
 OWNER VS AGENT
   List roster / list tokens: workspace agent always (no secrets).
   Toggle off does not hide the roster.
   Mutations (user add/password/remove/rooms, role create/update/remove/assign/unassign,
-  skin-token create/rooms/revoke): if this workspace's Agent-tab toggle is on
-  (Settings → Workspaces → Agent → Allow this agent to manage Skin Access).
+  k2 app token create/rooms/revoke): if this workspace's Agent-tab toggle is on
+  (Settings → Workspaces → Agent → Allow this agent to manage Apps).
   Leftover front-door / hydra: still owner, even when the toggle is on.
   Do not sudo. Exit 3 `owner_only` if the toggle is off — ask `k2 feedback ask`,
   do not retry.
@@ -15585,7 +15815,7 @@ WHEN TO ASK (NOT RETRY)
   db_agent_access will not let you create
   owner_only / gated / forbidden (exit 3)
   You want a license, hosting, or Connect change
-  You want a setting flipped (CLI Tools, DNS, connections, skins)
+  You want a setting flipped (CLI Tools, DNS, connections, apps)
 
 WHEN NOT TO
   Do not --wait on `k2 thread ask` (cards are fire-and-continue).
@@ -19994,10 +20224,15 @@ TUNNEL (device → primary *.k2.dev; not custom DNS zones)
   tunnel subdomains [--json]                    Daemon-cached nested map (label -> target + workspace)
   tunnel --help                                 Product boundary vs publish/dns
 
+APPS (guests / roles / tokens for apps on this box; not desktop updates)
+  app user|role|token|hydra|front-door ...      Canonical family. See `k2 app --help`.
+  leftover: k2 skin … and k2 skin-token …       Same argv; teach line on stderr.
+  Desktop binary updates are `k2 update --app`, not `k2 app update`.
+
 PUBLISH (host a process on this machine, optionally a nested URL)
   publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]
                                                 Daemon-owned process; default nested URL (Pro)
-  publish run <name> --skin [<dir>] --port <n>  Official skin site (login + Thread). Not k2 skin.
+  publish run <name> --skin [<dir>] --port <n>  Static HTML host (an app). Prefer Next in cwd for new apps.
   publish start|stop <name>                     Start/stop a saved service
   publish rm <name> [--keep-hostname]           Stop + forget (not: subdomain rm)
   publish ps [--json]                           Hosted processes for THIS workspace
@@ -32424,7 +32659,16 @@ EOF
         # P3a (sandbox) — owner-only API-key auth-tier management for /v1/*.
         shift; cmd_api_key "$@"
         ;;
+    app)
+        # Exact match only. Does not steal app-update or update --app.
+        if _wants_help "${@:2}"; then
+            _skin_usage
+            exit 0
+        fi
+        shift; cmd_app "$@"
+        ;;
     skin)
+        _teach_skin_now_app
         if _wants_help "${@:2}"; then
             _skin_usage
             exit 0
@@ -32432,6 +32676,7 @@ EOF
         shift; cmd_skin "$@"
         ;;
     skin-token)
+        _teach_skin_token_now_app_token
         if _wants_help "${@:2}"; then
             cmd_skin_token --help
             exit 0

@@ -541,12 +541,15 @@ pub fn is_already_enabled() -> bool {
     if is_already_enabled_with(current_status().as_deref(), &unit) {
         return true;
     }
-    // C19: unit active + initialized store is a healthy no-op even when
-    // sqlite is not `running` (do not re-bootstrap / wipe config).
+    // C19: unit active + **normal-mode** config.json is a healthy no-op.
+    // Bootstrap ephemeral `{data}/data` must NOT count — iascm 0.40.149
+    // started the unit on :8080, Stalwart created data/, second enable
+    // alreadyEnabled with no config and no :25.
     unit.trim() == "active" && is_store_initialized()
 }
 
-/// True when config.json or the RocksDB data dir already exists.
+/// True when guided setup has written config.json (normal mode).
+/// Bootstrap's ephemeral `{STALWART_DATA_DIR}/data` is not enough.
 pub fn is_store_initialized() -> bool {
     #[cfg(test)]
     {
@@ -555,7 +558,6 @@ pub fn is_store_initialized() -> bool {
         }
     }
     std::path::Path::new(STALWART_CONFIG).is_file()
-        || std::path::Path::new(&format!("{STALWART_DATA_DIR}/data")).exists()
 }
 
 /// C29: stamp a fresh lastNoopAt so later enables aren't frozen unix `at`s.
@@ -1199,11 +1201,11 @@ pub fn run_enable(
 
     // ── Guided setup over the bootstrap listener ────────────────────
     if !step_is_done("bootstrap") {
-        let store_ready = ops.path_exists(STALWART_CONFIG)
-            || ops.path_exists(&format!("{STALWART_DATA_DIR}/data"));
+        let store_ready = ops.path_exists(STALWART_CONFIG);
         if store_ready {
-            // C19: initialized store — never re-bootstrap (Stalwart
-            // would move the data directory).
+            // C19: config.json means guided setup already ran — never
+            // re-bootstrap (Stalwart would move the data directory).
+            // `{data}/data` alone is bootstrap ephemeral — keep going.
             mark_step("bootstrap");
         } else {
         set_current("bootstrap");
@@ -1253,8 +1255,7 @@ pub fn run_enable(
     // secret. The default :8080 http listener answers until the final
     // restart applies the port plan; a post-final-restart RESUME finds
     // it on :8180 instead — try both.
-    let store_ready = ops.path_exists(STALWART_CONFIG)
-        || ops.path_exists(&format!("{STALWART_DATA_DIR}/data"));
+    let store_ready = ops.path_exists(STALWART_CONFIG);
     // L2: disable then enable with a **new** name — not the healthy
     // alreadyEnabled no-op (that never reaches run_enable).
     let hostname_retarget = store_ready
@@ -2462,7 +2463,7 @@ mod tests {
         let _unit = with_test_unit_state("active");
         assert!(
             is_already_enabled(),
-            "C19: unit active + store ready is alreadyEnabled even if sqlite is empty"
+            "C19: unit active + config.json is alreadyEnabled even if sqlite is empty"
         );
         set_test_store_ready(None);
         clean_row();

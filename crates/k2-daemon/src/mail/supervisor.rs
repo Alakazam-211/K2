@@ -463,9 +463,9 @@ pub fn reconcile_reported_status(
             return ReconciledStatus {
                 state: sqlite_state.to_string(),
                 consistent: false,
-                last_error: Some(format!(
+                last_error: keep_err.or(Some(format!(
                     "systemd reports the stalwart unit is 'active' while hostmail status is '{sqlite_state}'"
-                )),
+                ))),
             };
         }
         return ReconciledStatus {
@@ -1101,9 +1101,12 @@ pub fn run_enable(
         set_status("error");
         set_last_error(Some(&msg));
         emit_state_change("installing", "error", Some(&msg));
-        // C20: after `unit` is written, any failure rewrites the unit
-        // without STALWART_RECOVERY_ADMIN.
-        if step_is_done("unit") || ops.path_exists(STALWART_UNIT_PATH) {
+        // C20: strip STALWART_RECOVERY_ADMIN only after guided setup
+        // wrote config.json. During bootstrap a fail rewrite was
+        // leaving Stalwart on a self-minted password (iascm 401).
+        if ops.path_exists(STALWART_CONFIG)
+            && (step_is_done("unit") || ops.path_exists(STALWART_UNIT_PATH))
+        {
             let _ = ops.write_file(STALWART_UNIT_PATH, systemd_unit(None).as_bytes(), 0o600);
             let _ = ops.systemctl(&["daemon-reload"]);
         }
@@ -1236,6 +1239,21 @@ pub fn run_enable(
                     format!("secret ref {sref} missing from the mail secret store"),
                 )
             })?;
+        // iascm: unit started without STALWART_RECOVERY_ADMIN so
+        // Stalwart minted its own bootstrap password. Resume had
+        // unit+start marked and did not restart. Rewrite + restart
+        // with the vaulted secret, then auth.
+        (|| -> Result<(), String> {
+            ops.write_file(
+                STALWART_UNIT_PATH,
+                systemd_unit(Some(&recovery_pw)).as_bytes(),
+                0o600,
+            )?;
+            ops.systemctl(&["daemon-reload"])?;
+            ops.systemctl(&["restart", STALWART_UNIT])?;
+            Ok(())
+        })()
+        .map_err(|e| fail("bootstrap", e))?;
         // The service may still be coming up — poll the listener.
         authenticate_with_retry(ops, api, STALWART_SETUP_URL, "admin", &recovery_pw)
             .map_err(|e| fail("bootstrap", e))?;

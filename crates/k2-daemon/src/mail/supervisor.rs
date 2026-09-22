@@ -2439,7 +2439,8 @@ mod tests {
         assert!(!error_active.consistent);
         assert_eq!(
             error_active.last_error.as_deref(),
-            Some("systemd reports the stalwart unit is 'active' while hostmail status is 'error'")
+            Some("bootstrap failed"),
+            "iascm: keep the bootstrap: 401, do not overlay systemd mismatch"
         );
 
         let stopped_inactive = reconcile_reported_status("stopped", None, "inactive");

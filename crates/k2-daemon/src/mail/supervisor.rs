@@ -319,6 +319,11 @@ pub trait BootstrapApi: Send {
         current: &str,
         new_secret: &str,
     ) -> Result<(), String>;
+    /// True when this process already has a management session from
+    /// an earlier enable step. recovery-off must not replace it.
+    fn has_session(&self) -> bool {
+        false
+    }
 }
 
 // ── mail_server row helpers ─────────────────────────────────────────────
@@ -1399,8 +1404,28 @@ pub fn run_enable(
             // recoveryAdminRef still present, same vaulted secret
             // 401s later. Log in as recovery `admin` on that 401.
             // A hard 401 is not "still starting" — do not retry it.
-            authenticate_saved_admin(ops, api, secrets, &default_domain)?;
-            rotate_leftover_admins(api, secrets, &default_domain)?;
+            // The steps just above already POSTed as this client.
+            // Replacing it with a fresh GET /jmap/session can 401 the
+            // next management call (iascm from-zero, 20:46Z).
+            if !api.has_session() {
+                authenticate_saved_admin(ops, api, secrets, &default_domain)?;
+            }
+            if let Err(e) = rotate_leftover_admins(api, secrets, &default_domain) {
+                if !is_auth_rejected(&e) {
+                    return Err(e);
+                }
+                let sref = row_field("api_key_ref").ok_or_else(|| {
+                    format!("{e} (no api-key to retry)")
+                })?;
+                let key = secrets.resolve(&sref)?.ok_or_else(|| {
+                    format!("{e} (api-key ref {sref} missing)")
+                })?;
+                if api.authenticate_bearer(STALWART_SETUP_URL, &key).is_err() {
+                    api.authenticate_bearer(STALWART_MGMT_URL, &key)
+                        .map_err(|b| format!("{e} | api-key: {b}"))?;
+                }
+                rotate_leftover_admins(api, secrets, &default_domain)?;
+            }
             ops.write_file(STALWART_UNIT_PATH, systemd_unit(None).as_bytes(), 0o600)?;
             ops.systemctl(&["daemon-reload"])?;
             Ok(())
@@ -2014,6 +2039,9 @@ mod tests {
         refuse_users: Vec<&'static str>,
         /// Usernames Stalwart does not have (iascm: no admin@domain).
         missing_accounts: Vec<&'static str>,
+        /// First rotate returns 401 until authenticate_bearer succeeds.
+        fail_rotate_until_bearer: bool,
+        bearer_ok: bool,
     }
 
     impl FakeApi {
@@ -2046,6 +2074,7 @@ mod tests {
                     .push(format!("authenticate-bearer-refused {base}"));
                 return Err(format!("connection refused: {base}"));
             }
+            self.bearer_ok = true;
             self.check(&format!("authenticate-bearer {base}"))
         }
         fn complete_bootstrap(
@@ -2088,6 +2117,12 @@ mod tests {
             if self.missing_accounts.contains(&username) {
                 self.calls.push(format!("rotate-missing {username}"));
                 return Err(format!("admin account '{username}' not found"));
+            }
+            if self.fail_rotate_until_bearer && !self.bearer_ok {
+                self.calls.push(format!("rotate-401 {username}"));
+                return Err(
+                    "POST http://127.0.0.1:8080/jmap/ HTTP 401 Unauthorized".to_string(),
+                );
             }
             self.check(&format!(
                 "rotate_admin_secret {username} {}",
@@ -2615,6 +2650,78 @@ mod tests {
             row_field("admin_secret_ref").as_deref(),
             Some("mailsec_recovery-admin_test"),
             "kept principal password becomes the admin secret"
+        );
+        assert!(step_is_done("recovery-off"));
+        assert!(step_is_done("restart"));
+        assert_eq!(current_status().as_deref(), Some("running"));
+        clean_row();
+    }
+
+    /// iascm from-zero 20:46Z: api-key was minted, then recovery-off's
+    /// first management POST 401'd. Retry that rotate with the api-key.
+    #[test]
+    fn recovery_off_retries_rotate_with_api_key_after_post_401() {
+        let _g = db_guard();
+        clean_row();
+        let secrets = FakeSecrets::default();
+        secrets
+            .store("recovery-admin", "recovery-pw")
+            .expect("vault recovery");
+        secrets.store("admin", "provisioned").expect("vault admin");
+        secrets.store("api-key", "minted-key").expect("vault api key");
+        let mut steps = serde_json::Map::new();
+        for s in ENABLE_STEPS {
+            if *s != "recovery-off" && *s != "restart" {
+                steps.insert((*s).to_string(), serde_json::json!({ "at": 1 }));
+            }
+        }
+        let progress = serde_json::json!({
+            "steps": steps,
+            "adminUsername": "admin@acme.dev",
+            "recoveryAdminRef": "mailsec_recovery-admin_test",
+        })
+        .to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, \
+                 admin_secret_ref, api_key_ref, enable_progress_json, port_plan, updated_at) \
+                 VALUES (1, 'error', ?1, 'mail.acme.dev', 'mailsec_admin_test', \
+                 'mailsec_api-key_test', ?2, 'tls-alpn', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION, progress],
+            )
+            .expect("seed row");
+        }
+        let ops = FakeSystemOps {
+            existing_paths: vec![STALWART_BIN.to_string(), STALWART_CONFIG.to_string()],
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi {
+            fail_rotate_until_bearer: true,
+            ..FakeApi::default()
+        };
+        let art = fake_artifact();
+        run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
+            .expect("401 retry with api-key finishes enable");
+        assert!(
+            api.calls.iter().any(|c| c == "rotate-401 admin"),
+            "first rotate must 401: {:?}",
+            api.calls
+        );
+        assert!(
+            api.calls
+                .iter()
+                .any(|c| c == "authenticate-bearer http://127.0.0.1:8080"),
+            "must retry as the api-key: {:?}",
+            api.calls
+        );
+        assert!(
+            api.calls
+                .iter()
+                .any(|c| c == "rotate_admin_secret admin 64"),
+            "retry must rotate: {:?}",
+            api.calls
         );
         assert!(step_is_done("recovery-off"));
         assert!(step_is_done("restart"));

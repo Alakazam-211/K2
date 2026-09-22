@@ -4368,6 +4368,10 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
         Ok(())
     }
 
+    fn has_session(&self) -> bool {
+        self.client.is_some()
+    }
+
     fn complete_bootstrap(
         &mut self,
         hostname: &str,

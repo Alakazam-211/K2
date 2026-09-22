@@ -4361,6 +4361,13 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
         Ok(())
     }
 
+    fn authenticate_bearer(&mut self, base_url: &str, api_key: &str) -> Result<(), String> {
+        let client = StalwartClient::new(base_url, api_key);
+        client.discover_session()?;
+        self.client = Some(client);
+        Ok(())
+    }
+
     fn complete_bootstrap(
         &mut self,
         hostname: &str,

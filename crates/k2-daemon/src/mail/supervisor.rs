@@ -268,6 +268,10 @@ pub trait BootstrapApi: Send {
     /// discovery — the probe doubles as the credential check).
     fn authenticate(&mut self, base_url: &str, username: &str, password: &str)
         -> Result<(), String>;
+    /// Bearer session with the minted ApiKey. iascm: basic auth can
+    /// be gone (provisioned admin missing, recovery secret deleted)
+    /// while the api-key from setup still opens :8080.
+    fn authenticate_bearer(&mut self, base_url: &str, api_key: &str) -> Result<(), String>;
     /// Complete Stalwart's guided setup (bootstrap mode only): ONE
     /// `x:Bootstrap/set` carrying hostname, default domain, the
     /// RocksDB DataStore, DKIM generation on, and the ACME choice
@@ -1120,7 +1124,11 @@ pub fn run_enable(
         // C20: strip STALWART_RECOVERY_ADMIN only after guided setup
         // wrote config.json. During bootstrap a fail rewrite was
         // leaving Stalwart on a self-minted password (iascm 401).
-        if ops.path_exists(STALWART_CONFIG)
+        // A failed recovery-off must not strip either: the success
+        // path strips after auth. Stripping here drops the env from
+        // the unit while the process still has it.
+        if step != "recovery-off"
+            && ops.path_exists(STALWART_CONFIG)
             && (step_is_done("unit") || ops.path_exists(STALWART_UNIT_PATH))
         {
             let _ = ops.write_file(STALWART_UNIT_PATH, systemd_unit(None).as_bytes(), 0o600);
@@ -1465,30 +1473,63 @@ pub fn rotate_leftover_admins(
 ) -> Result<RotateAdminReport, String> {
     // Bootstrap principal (not admin@domain). Fail loud if Stalwart
     // has no such account — leftover boxes still have it.
-    let recovery_current = progress_extra("recoveryAdminRef")
-        .and_then(|sref| secrets.resolve(&sref).ok().flatten())
+    // iascm 19:06:26: this rotate succeeded, the old vault key was
+    // deleted, admin@domain was not an account, and the new password
+    // was never stored. Save the new principal password first.
+    let old_recovery_ref = progress_extra("recoveryAdminRef");
+    let recovery_current = old_recovery_ref
+        .as_ref()
+        .and_then(|sref| secrets.resolve(sref).ok().flatten())
         .unwrap_or_default();
     let recovery_new = generate_secret()?;
     api.rotate_admin_secret("admin", &recovery_current, &recovery_new)?;
-    if let Some(sref) = progress_extra("recoveryAdminRef") {
-        let _ = secrets.delete(&sref);
-    }
+    let held = secrets.store("recovery-admin", &recovery_new)?;
+    progress_extra_set("recoveryAdminRef", &held);
 
     let username = progress_extra("adminUsername")
         .unwrap_or_else(|| format!("admin@{default_domain}"));
-    let sref = row_field("admin_secret_ref").ok_or_else(|| {
-        "admin secret ref missing — cannot rotate the provisioned admin".to_string()
-    })?;
-    let current = secrets.resolve(&sref)?.ok_or_else(|| {
-        format!("secret ref {sref} missing from the mail secret store")
-    })?;
-    let new_pw = generate_secret()?;
-    api.rotate_admin_secret(&username, &current, &new_pw)?;
-    let new_ref = secrets.store("admin", &new_pw)?;
-    set_row_field("admin_secret_ref", &new_ref);
+    let provisioned_admin = if username == "admin" {
+        set_row_field("admin_secret_ref", &held);
+        username
+    } else {
+        let sref = row_field("admin_secret_ref").ok_or_else(|| {
+            "admin secret ref missing — cannot rotate the provisioned admin".to_string()
+        })?;
+        let current = secrets.resolve(&sref)?.ok_or_else(|| {
+            format!("secret ref {sref} missing from the mail secret store")
+        })?;
+        let new_pw = generate_secret()?;
+        match api.rotate_admin_secret(&username, &current, &new_pw) {
+            Ok(()) => {
+                let new_ref = secrets.store("admin", &new_pw)?;
+                set_row_field("admin_secret_ref", &new_ref);
+                // Provisioned admin is the login. Drop the recovery
+                // secret now that a failure cannot strand us.
+                if let Some(old) = &old_recovery_ref {
+                    let _ = secrets.delete(old);
+                }
+                if old_recovery_ref.as_ref() != Some(&held) {
+                    let _ = secrets.delete(&held);
+                }
+                username
+            }
+            Err(e) if e.contains("not found") => {
+                // noir/iascm: Bootstrap stored admin@domain; Stalwart
+                // only has principal `admin`. Keep that password.
+                set_row_field("admin_secret_ref", &held);
+                if let Some(old) = &old_recovery_ref {
+                    if old != &held {
+                        let _ = secrets.delete(old);
+                    }
+                }
+                format!("{username} (not in Stalwart — skipped)")
+            }
+            Err(e) => return Err(e),
+        }
+    };
     Ok(RotateAdminReport {
         recovery_principal: "admin".to_string(),
-        provisioned_admin: username,
+        provisioned_admin,
     })
 }
 
@@ -1595,6 +1636,22 @@ fn authenticate_saved_admin(
                 )),
                 Err(e) => errors.push(format!("admin: {e}")),
             }
+        }
+    }
+    if let Some(sref) = row_field("api_key_ref") {
+        match secrets.resolve(&sref) {
+            Ok(Some(key)) => {
+                if api.authenticate_bearer(STALWART_SETUP_URL, &key).is_ok()
+                    || api.authenticate_bearer(STALWART_MGMT_URL, &key).is_ok()
+                {
+                    return Ok(());
+                }
+                errors.push("api-key: rejected on :8080 and :8180".to_string());
+            }
+            Ok(None) => errors.push(format!(
+                "api-key: secret ref {sref} missing from the mail secret store"
+            )),
+            Err(e) => errors.push(format!("api-key: {e}")),
         }
     }
     if errors.is_empty() {
@@ -1929,6 +1986,8 @@ mod tests {
         refuse_urls: Vec<&'static str>,
         /// Usernames that answer HTTP 401 (iascm provisioned-admin reject).
         refuse_users: Vec<&'static str>,
+        /// Usernames Stalwart does not have (iascm: no admin@domain).
+        missing_accounts: Vec<&'static str>,
     }
 
     impl FakeApi {
@@ -1952,6 +2011,13 @@ mod tests {
                 return Err("GET /jmap/session: HTTP 401 Unauthorized".to_string());
             }
             self.check(&format!("authenticate {base} {user}"))
+        }
+        fn authenticate_bearer(&mut self, base: &str, _api_key: &str) -> Result<(), String> {
+            if self.refuse_urls.contains(&base) {
+                self.calls.push(format!("authenticate-bearer-refused {base}"));
+                return Err(format!("connection refused: {base}"));
+            }
+            self.check(&format!("authenticate-bearer {base}"))
         }
         fn complete_bootstrap(
             &mut self,
@@ -1990,6 +2056,10 @@ mod tests {
             _current: &str,
             new_secret: &str,
         ) -> Result<(), String> {
+            if self.missing_accounts.contains(&username) {
+                self.calls.push(format!("rotate-missing {username}"));
+                return Err(format!("admin account '{username}' not found"));
+            }
             self.check(&format!("rotate_admin_secret {username} {}", new_secret.len()))
         }
     }
@@ -2123,20 +2193,24 @@ mod tests {
                 "rotate_admin_secret admin@acme.dev 64",
             ]
         );
-        // Secrets: recovery admin + provisioned admin + api key + rotated
-        // admin; recovery deleted by recovery-off.
+        // Secrets: recovery admin + provisioned admin + api key +
+        // the new principal password (saved before the provisioned
+        // rotate) + rotated provisioned admin. Recovery ref deleted
+        // only after that provisioned rotate succeeds.
         {
             let stored = secrets.stored.lock().unwrap();
-            assert_eq!(stored.len(), 4);
+            assert_eq!(stored.len(), 5, "{stored:?}");
             assert_eq!(stored[0].0, "recovery-admin");
             assert_eq!(stored[0].1.len(), 64, "generated recovery password");
             assert_eq!(stored[1].0, "admin");
             assert_eq!(stored[1].1, "provisioned-admin-secret");
             assert_eq!(stored[2].0, "api-key");
             assert_eq!(stored[2].1, "API_minted-key-secret");
-            assert_eq!(stored[3].0, "admin");
-            assert_eq!(stored[3].1.len(), 64, "rotated admin password");
-            assert_ne!(stored[3].1, stored[1].1, "C20 recovery-off rotates the admin secret");
+            assert_eq!(stored[3].0, "recovery-admin");
+            assert_eq!(stored[3].1.len(), 64, "rotated principal password saved before the next step");
+            assert_eq!(stored[4].0, "admin");
+            assert_eq!(stored[4].1.len(), 64, "rotated admin password");
+            assert_ne!(stored[4].1, stored[1].1, "C20 recovery-off rotates the admin secret");
             assert_eq!(
                 *secrets.deleted.lock().unwrap(),
                 vec!["mailsec_recovery-admin_test".to_string()],
@@ -2389,6 +2463,84 @@ mod tests {
             1,
             "only the final restart: {:?}",
             ops.recorded()
+        );
+        assert!(step_is_done("recovery-off"));
+        assert!(step_is_done("restart"));
+        assert_eq!(current_status().as_deref(), Some("running"));
+        clean_row();
+    }
+
+    /// iascm 19:06: principal `admin` was rotated and the vault key
+    /// deleted; `admin@domain` is not an account; the minted api-key
+    /// still opens :8080. Finish recovery-off on that key, keep the
+    /// new principal password, and do not fail the step.
+    #[test]
+    fn recovery_off_uses_api_key_when_provisioned_admin_is_missing() {
+        let _g = db_guard();
+        clean_row();
+        let secrets = FakeSecrets::default();
+        secrets.store("admin", "short-admin").expect("vault admin");
+        secrets.store("api-key", "minted-key").expect("vault api key");
+        let mut steps = serde_json::Map::new();
+        for s in ENABLE_STEPS {
+            if *s != "recovery-off" && *s != "restart" {
+                steps.insert((*s).to_string(), serde_json::json!({ "at": 1 }));
+            }
+        }
+        let progress = serde_json::json!({
+            "steps": steps,
+            "adminUsername": "admin@acme.dev",
+            "recoveryAdminRef": "mailsec_gone_b58a6a09a542",
+        })
+        .to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, \
+                 admin_secret_ref, api_key_ref, enable_progress_json, port_plan, updated_at) \
+                 VALUES (1, 'error', ?1, 'mail.acme.dev', 'mailsec_admin_test', \
+                 'mailsec_api-key_test', ?2, 'tls-alpn', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION, progress],
+            )
+            .expect("seed row");
+        }
+        let ops = FakeSystemOps {
+            existing_paths: vec![STALWART_BIN.to_string(), STALWART_CONFIG.to_string()],
+            ..FakeSystemOps::default()
+        };
+        let mut api = FakeApi {
+            refuse_users: vec!["admin@acme.dev"],
+            missing_accounts: vec!["admin@acme.dev"],
+            ..FakeApi::default()
+        };
+        let art = fake_artifact();
+        run_enable(&ops, &mut api, &secrets, &art, "mail.acme.dev", "tls-alpn")
+            .expect("api-key fallback finishes enable");
+        assert!(
+            api.calls.iter().any(|c| c == "authenticate-bearer http://127.0.0.1:8080"),
+            "must log in with the api key: {:?}",
+            api.calls
+        );
+        assert!(
+            api.calls.iter().any(|c| c == "rotate_admin_secret admin 64"),
+            "must rotate principal admin and keep that password: {:?}",
+            api.calls
+        );
+        assert!(
+            api.calls.iter().any(|c| c == "rotate-missing admin@acme.dev"),
+            "missing admin@domain is a skip: {:?}",
+            api.calls
+        );
+        assert!(
+            !api.calls.iter().any(|c| c.starts_with("complete_bootstrap")),
+            "must not re-bootstrap: {:?}",
+            api.calls
+        );
+        assert_eq!(
+            row_field("admin_secret_ref").as_deref(),
+            Some("mailsec_recovery-admin_test"),
+            "kept principal password becomes the admin secret"
         );
         assert!(step_is_done("recovery-off"));
         assert!(step_is_done("restart"));

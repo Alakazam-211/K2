@@ -547,6 +547,18 @@ pub fn is_already_enabled() -> bool {
     is_store_initialized() && step_is_done("restart")
 }
 
+/// Guided setup wrote config.json but the final restart step is not
+/// done (iascm: recovery-off 401, ports already up). Resume must skip
+/// preflight — "no MTA on :25" would hard-stop our own listeners.
+pub fn is_enable_resume() -> bool {
+    is_store_initialized() && !step_is_done("restart")
+}
+
+/// Port plan from the singleton row (resume without a fresh preflight).
+pub fn stored_port_plan() -> Option<String> {
+    row_field("port_plan")
+}
+
 /// True when guided setup has written config.json (normal mode).
 /// Bootstrap's ephemeral `{STALWART_DATA_DIR}/data` is not enough.
 pub fn is_store_initialized() -> bool {

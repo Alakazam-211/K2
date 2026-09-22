@@ -297,23 +297,31 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
     }
 
     // Fresh preflight, synchronously: failures return the report and
-    // nothing installs (§5.1 hard stops).
-    let report =
-        crate::mail::preflight::run_preflight(&crate::mail::preflight::RealPreflightEnv);
-    if !report.ok {
-        supervisor::end_enable();
-        return CliResponse {
-            status: "200 OK",
-            content_type: "application/json",
-            body: serde_json::json!({
-                "ok": false,
-                "error": { "code": "preflight_failed", "hint": "preflight found hard stops — fix them and re-enable" },
-                "report": report.to_json(),
-            })
-            .to_string(),
-        };
-    }
-    let port_plan = report.port_plan.unwrap_or("http-01").to_string();
+    // nothing installs (§5.1 hard stops). Resume after a partial
+    // enable (config.json, ports already ours) skips this — :25 in
+    // use is our Stalwart, not a foreign MTA (iascm fcc320d9).
+    let (port_plan, preflight_json) = if supervisor::is_enable_resume() {
+        let plan = supervisor::stored_port_plan().unwrap_or_else(|| "tls-alpn".to_string());
+        (plan, serde_json::json!({ "ok": true, "resumed": true }))
+    } else {
+        let report =
+            crate::mail::preflight::run_preflight(&crate::mail::preflight::RealPreflightEnv);
+        if !report.ok {
+            supervisor::end_enable();
+            return CliResponse {
+                status: "200 OK",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "ok": false,
+                    "error": { "code": "preflight_failed", "hint": "preflight found hard stops — fix them and re-enable" },
+                    "report": report.to_json(),
+                })
+                .to_string(),
+            };
+        }
+        let plan = report.port_plan.unwrap_or("http-01").to_string();
+        (plan, report.to_json())
+    };
     let artifact = match supervisor::artifact_for_arch(std::env::consts::ARCH) {
         Ok(a) => a,
         Err(e) => {
@@ -322,7 +330,6 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
         }
     };
 
-    let preflight_json = report.to_json();
     std::thread::spawn(move || {
         let ops = crate::mail::sysops::RealSystemOps;
         let secrets = crate::mail::secrets::FileSecretStore::default();

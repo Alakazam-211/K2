@@ -538,14 +538,14 @@ pub fn restart_stalwart_to_reload_tls() -> Result<(), String> {
 
 pub fn is_already_enabled() -> bool {
     let unit = stalwart_unit_state();
-    if is_already_enabled_with(current_status().as_deref(), &unit) {
-        return true;
+    if unit.trim() != "active" {
+        return false;
     }
-    // C19: unit active + **normal-mode** config.json is a healthy no-op.
-    // Bootstrap ephemeral `{data}/data` must NOT count — iascm 0.40.149
-    // started the unit on :8080, Stalwart created data/, second enable
-    // alreadyEnabled with no config and no :25.
-    unit.trim() == "active" && is_store_initialized()
+    // C19 + iascm 9be03d18: sqlite `running` + unit active is NOT
+    // enough — that is bootstrap :8080 with no config.json. Require
+    // guided-setup config.json. H3 (inactive unit) is the unit check
+    // above.
+    is_store_initialized()
 }
 
 /// True when guided setup has written config.json (normal mode).
@@ -1080,6 +1080,21 @@ pub fn run_enable(
     );
     ensure_installing_row(hostname, port_plan)?;
     let default_domain = default_domain_for(hostname);
+
+    // iascm: bootstrap/:8080 left sqlite running and progress.steps
+    // marked bootstrap/server-config without writing config.json.
+    // Resume must re-run guided setup. Keep dirs/unit/start.
+    if !ops.path_exists(STALWART_CONFIG) {
+        unmark_steps(&[
+            "bootstrap",
+            "restart-normal",
+            "server-config",
+            "service-account",
+            "api-key",
+            "recovery-off",
+            "restart",
+        ]);
+    }
 
     let fail = |step: &str, err: String| -> String {
         let msg = format!("{step}: {err}");
@@ -2464,6 +2479,30 @@ mod tests {
         assert!(
             is_already_enabled(),
             "C19: unit active + config.json is alreadyEnabled even if sqlite is empty"
+        );
+        set_test_store_ready(None);
+        clean_row();
+    }
+
+    #[test]
+    fn sqlite_running_without_config_json_is_not_already_enabled() {
+        let _g = db_guard();
+        clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, hostname, updated_at) \
+                 VALUES (1, 'running', 'test', 'mail.iascm.com', 1)",
+                [],
+            )
+            .expect("seed running row");
+        }
+        set_test_store_ready(Some(false));
+        let _unit = with_test_unit_state("active");
+        assert!(
+            !is_already_enabled(),
+            "iascm: sqlite running + unit active + no config.json must resume enable"
         );
         set_test_store_ready(None);
         clean_row();

@@ -963,6 +963,7 @@ mod tests {
     fn enable_is_idempotent_when_already_running() {
         let _g = crate::mail::mail_server_test_lock();
         let _unit = supervisor::with_test_unit_state("active");
+        supervisor::set_test_store_ready(Some(true));
         clean_row();
         {
             let db = k2_core::db::shared();
@@ -987,6 +988,7 @@ mod tests {
         );
         // Caddy apply must not swallow Enable success (ok stays true).
         assert_ne!(v["ok"], false);
+        supervisor::set_test_store_ready(None);
         clean_row();
     }
 
@@ -996,6 +998,7 @@ mod tests {
     fn enable_already_enabled_does_not_retarget_hostname() {
         let _g = crate::mail::mail_server_test_lock();
         let _unit = supervisor::with_test_unit_state("active");
+        supervisor::set_test_store_ready(Some(true));
         clean_row();
         {
             let db = k2_core::db::shared();
@@ -1020,6 +1023,7 @@ mod tests {
             .expect("hostname")
         };
         assert_eq!(still, "mail.old.dev", "alreadyEnabled must not rewrite sqlite hostname");
+        supervisor::set_test_store_ready(None);
         clean_row();
     }
 

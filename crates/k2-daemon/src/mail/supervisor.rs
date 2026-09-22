@@ -541,11 +541,10 @@ pub fn is_already_enabled() -> bool {
     if unit.trim() != "active" {
         return false;
     }
-    // C19 + iascm 9be03d18: sqlite `running` + unit active is NOT
-    // enough — that is bootstrap :8080 with no config.json. Require
-    // guided-setup config.json. H3 (inactive unit) is the unit check
-    // above.
-    is_store_initialized()
+    // C19 + iascm: sqlite running / config.json is NOT enough —
+    // recovery-off can still be pending (401 on :8080) with ports up.
+    // Healthy no-op only after the final restart step.
+    is_store_initialized() && step_is_done("restart")
 }
 
 /// True when guided setup has written config.json (normal mode).
@@ -851,6 +850,11 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn set_test_store_ready(ready: Option<bool>) {
     TEST_STORE_READY.with(|c| *c.borrow_mut() = ready);
+}
+
+#[cfg(test)]
+pub(crate) fn mark_step_for_test(step: &str) {
+    mark_step(step);
 }
 
 #[cfg(test)]
@@ -1385,9 +1389,21 @@ pub fn run_enable(
     if !step_is_done("recovery-off") {
         set_current("recovery-off");
         (|| -> Result<(), String> {
+            // iascm: stripping recovery env + daemon-reload first
+            // dropped the :8080 session → 401 POST /jmap/. Re-auth as
+            // the provisioned admin, rotate leftovers, THEN strip.
+            let username = progress_extra("adminUsername")
+                .unwrap_or_else(|| format!("admin@{default_domain}"));
+            let sref = row_field("admin_secret_ref").ok_or_else(|| {
+                "admin secret ref missing — cannot rotate leftover admins".to_string()
+            })?;
+            let admin_pw = secrets.resolve(&sref)?.ok_or_else(|| {
+                format!("secret ref {sref} missing from the mail secret store")
+            })?;
+            authenticate_either(ops, api, &username, &admin_pw)?;
+            rotate_leftover_admins(api, secrets, &default_domain)?;
             ops.write_file(STALWART_UNIT_PATH, systemd_unit(None).as_bytes(), 0o600)?;
             ops.systemctl(&["daemon-reload"])?;
-            rotate_leftover_admins(api, secrets, &default_domain)?;
             Ok(())
         })()
         .map_err(|e| fail("recovery-off", e))?;
@@ -2494,10 +2510,11 @@ mod tests {
         let _g = db_guard();
         clean_row();
         set_test_store_ready(Some(true));
+        mark_step("restart");
         let _unit = with_test_unit_state("active");
         assert!(
             is_already_enabled(),
-            "C19: unit active + config.json is alreadyEnabled even if sqlite is empty"
+            "C19: unit active + config.json + restart step is alreadyEnabled"
         );
         set_test_store_ready(None);
         clean_row();

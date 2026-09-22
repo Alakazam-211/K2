@@ -965,6 +965,7 @@ mod tests {
         let _unit = supervisor::with_test_unit_state("active");
         supervisor::set_test_store_ready(Some(true));
         clean_row();
+        supervisor::mark_step_for_test("restart");
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -1000,6 +1001,7 @@ mod tests {
         let _unit = supervisor::with_test_unit_state("active");
         supervisor::set_test_store_ready(Some(true));
         clean_row();
+        supervisor::mark_step_for_test("restart");
         {
             let db = k2_core::db::shared();
             let conn = db.lock();

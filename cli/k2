@@ -13444,7 +13444,7 @@ cmd_schema() {
     {
       "name": "hostmail cert renew",
       "usage": "k2 hostmail cert renew [--json]",
-      "description": "Retry ACME for the mail hostname only. POST /cli/mail/cert/renew. Does not SIGTERM, wipe, or re-enable. disable is not a retry.",
+      "description": "Retry ACME for the mail hostname. POST /cli/mail/cert/renew. Does not SIGTERM, wipe, or re-enable. If DNS is not ns1/ns2.k2.dev, add mail.<apex> (and autoconfig/autodiscover/mta-sts/ua-auto-config) on that platform pointing at origin, then renew.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -28714,7 +28714,10 @@ COMMANDS
   footer set|unset|show       Host-wide outbound company footer (plain text).
                               mail_manage. --domain is 400 this cut.
   cert renew                  Retry ACME for the mail hostname (enable is
-                              not the retry path; disable is not a retry)
+                              not the retry path; disable is not a retry).
+                              If DNS is not ns1/ns2.k2.dev, add mail.<apex>
+                              (and autoconfig/autodiscover/mta-sts) on that
+                              platform pointing at origin, then renew.
   list create|members|delete|show
                               Mailing lists (x:MailingList). Members minted-only.
                               Bare `k2 hostmail list` is usage — not inbox catalog
@@ -28762,8 +28765,7 @@ cmd_help_hostmail_disable() {
     cat <<'EOF'
 Host-wide inbound down for EVERY hosted domain until
 `k2 hostmail enable` actually restarts the unit. Data is kept —
-disable is not a wipe. MX still points here. disable is not an
-ACME retry — use `k2 hostmail cert renew`. disable is not
+disable is not a wipe. MX still points here. disable is not an ACME retry — use `k2 hostmail cert renew`. disable is not
 rotate-admin — use `k2 hostmail rotate-admin` for leftover
 recovery admin.
 
@@ -28822,17 +28824,33 @@ path; disable is not a retry.
 
 USAGE
   k2 hostmail cert renew [--json]
+
+DNS
+  If this zone is on ns1/ns2.k2.dev (K2-hosted), ACME can plant records.
+  If DNS is elsewhere (Vercel, Cloudflare, cPanel, …), K2 cannot plant.
+  On THAT platform add: mail.<apex> A to this box's origin
+  (`k2 hostmail ptr show`). Also autoconfig, autodiscover, mta-sts,
+  ua-auto-config (A or CNAME to mail.<apex> / origin) — if those stay
+  on an apex wildcard the order stays self-signed. Then cert renew.
 EOF
 }
 
 cmd_help_hostmail_cert_renew() {
     cat <<'EOF'
-Retry ACME for the mail hostname only (no extra names). Does not
-SIGTERM, wipe /etc/stalwart, or re-bootstrap. Second enable on a
-healthy install is a no-op — this is the retry path.
+Retry ACME for the mail hostname. Does not SIGTERM, wipe /etc/stalwart,
+or re-bootstrap. Second enable on a healthy install is a no-op — this
+is the retry path.
 
 USAGE
   k2 hostmail cert renew [--json]
+
+DNS
+  ns1/ns2.k2.dev (K2-hosted): records can be planted here.
+  Any other DNS platform: you (or whoever has that panel) must add
+  mail.<apex> A → origin (`k2 hostmail ptr show`) and the extra names
+  Stalwart orders (autoconfig, autodiscover, mta-sts, ua-auto-config)
+  pointing at mail.<apex> / origin — not the apex wildcard. Then rerun
+  this command. K2 cannot plant on Vercel/Cloudflare/cPanel.
 
 FLAGS
   --json                 JSON output
@@ -30560,6 +30578,13 @@ Issue a Let's Encrypt cert for an attached hostname (on-box ACME).
 
 USAGE
   k2 cert issue <hostname> [--json]
+
+DNS
+  K2-hosted zone (ns1/ns2.k2.dev, dns_write): DNS-01 plants
+  _acme-challenge here.
+  Any other DNS: you must add the hostname (and _acme-challenge if
+  using DNS-01) on THAT platform pointing at this box. HTTP-01 follows
+  a CNAME (often onto a closed :80). K2 cannot plant on Vercel/etc.
 EOF
 }
 
@@ -30569,6 +30594,11 @@ Renew the cert for an attached hostname. Never hostmail disable/enable.
 
 USAGE
   k2 cert renew <hostname> [--json]
+
+DNS
+  Same as issue: if the zone is not on ns1/ns2.k2.dev, add records on
+  the platform that actually serves DNS, then rerun. K2 cannot plant
+  there.
 EOF
 }
 

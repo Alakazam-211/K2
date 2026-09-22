@@ -50,6 +50,12 @@ fi
 if ! "$K2" hostmail cert renew --help | grep -q 'ACME'; then
     fail "k2 hostmail cert renew --help must describe ACME retry"
 fi
+if ! "$K2" hostmail cert renew --help | grep -q 'ns1/ns2.k2.dev'; then
+    fail "k2 hostmail cert renew --help must mention ns1/ns2.k2.dev vs BYO DNS"
+fi
+if ! "$K2" hostmail cert renew --help | grep -q 'Vercel'; then
+    fail "k2 hostmail cert renew --help must tell agents BYO platforms plant records"
+fi
 if ! "$K2" hostmail disable --help | grep -q 'not an ACME retry'; then
     fail "k2 hostmail disable --help must say disable is not an ACME retry"
 fi

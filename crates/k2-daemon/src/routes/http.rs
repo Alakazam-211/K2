@@ -1746,6 +1746,28 @@ mod tests {
             "users/full-name is roster mutate; CSRF required"
         );
         assert_eq!(users_full_name.unwrap().status, "403 Forbidden");
+        let grants = cookie_csrf_gate(
+            "POST",
+            "/cli/skin/grants",
+            true,
+            "POST /cli/skin/grants HTTP/1.1\r\n",
+        );
+        assert!(
+            grants.is_some(),
+            "grants create is owner mutate; CSRF required"
+        );
+        assert_eq!(grants.unwrap().status, "403 Forbidden");
+        let grants_delete = cookie_csrf_gate(
+            "POST",
+            "/cli/skin/grants/delete",
+            true,
+            "POST /cli/skin/grants/delete HTTP/1.1\r\n",
+        );
+        assert!(
+            grants_delete.is_some(),
+            "grants delete is owner mutate; CSRF required"
+        );
+        assert_eq!(grants_delete.unwrap().status, "403 Forbidden");
     }
 
     #[test]

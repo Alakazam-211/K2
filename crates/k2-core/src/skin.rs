@@ -8,8 +8,9 @@
 //! (`POST /cli/skin/login`); NULL = cannot K2-login.
 //!
 //! ## Store (`~/.k2/skin.db`, WAL, own Mutex)
-//! Three tables: `principals` (guest roster), `roles` (named caps+rooms
-//! bundles), and `tokens` (hashed passes). The raw secret is returned
+//! Tables: `principals` (guest roster), `roles` (named caps+rooms bundles;
+//! nullable `app_id`, NULL = host-wide), `grants` (subject × kind × target),
+//! and `tokens` (hashed passes). The raw secret is returned
 //! **once** at mint and never stored. Lookup is hex SHA-256 of the
 //! presented key (same construction as API keys / connect-user session
 //! tokens — high-entropy CSPRNG, not argon2).
@@ -644,6 +645,9 @@ pub struct SkinRole {
     #[serde(default)]
     pub room_access: Vec<SkinRoomAccess>,
     pub created_at: i64,
+    /// App this role belongs to. `None` = host-wide (every existing row).
+    #[serde(default)]
+    pub app_id: Option<String>,
     /// SSOT map `project_id → caps[]`. Not on the wire.
     #[serde(skip)]
     pub room_policy: RoomPolicy,
@@ -924,6 +928,23 @@ fn open_db(path: &Path) -> Result<Connection, String> {
         "ALTER TABLE roles ADD COLUMN room_policy TEXT NOT NULL DEFAULT '{}'",
         [],
     );
+    // Nullable app scope. Existing rows stay NULL (host-wide). Ignore
+    // duplicate ALTER. Not a daemon migration.
+    let _ = conn.execute("ALTER TABLE roles ADD COLUMN app_id TEXT", []);
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS grants (
+            id TEXT PRIMARY KEY,
+            subject_kind TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            role_id TEXT,
+            scope TEXT,
+            created_at INTEGER NOT NULL,
+            UNIQUE(subject_kind, subject_id, kind, target_id)
+         );",
+    )
+    .map_err(|e| format!("skin.db schema: {e}"))?;
     rebuild_tokens_table_if_needed(&mut conn)?;
     let _ = conn.execute("ALTER TABLE tokens ADD COLUMN room_policy TEXT", []);
     ensure_platform_name_index(&conn)?;
@@ -2229,12 +2250,17 @@ pub fn set_principal_default_rooms(
 // ── Roles ────────────────────────────────────────────────────────────
 
 const ROLE_SELECT: &str =
-    "SELECT id, name, caps, rooms, created_at, COALESCE(room_policy, '{}') FROM roles";
+    "SELECT id, name, caps, rooms, created_at, COALESCE(room_policy, '{}'), app_id FROM roles";
+
+fn blank_to_none(raw: Option<String>) -> Option<String> {
+    raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
 
 fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
     let caps_raw: String = r.get(2)?;
     let rooms_raw: String = r.get(3)?;
     let policy_raw: String = r.get(5)?;
+    let app_id: Option<String> = r.get(6)?;
     let caps = caps_from_json(&caps_raw);
     let rooms = rooms_from_json(&rooms_raw);
     let room_policy = policy_or_cartesian(&caps, &rooms, Some(&policy_raw))
@@ -2247,6 +2273,7 @@ fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
         room_handles: Vec::new(),
         room_access: Vec::new(),
         created_at: r.get(4)?,
+        app_id: blank_to_none(app_id),
         room_policy,
     })
 }
@@ -2286,6 +2313,7 @@ fn role_from_policy(id: String, name: String, created_at: i64, policy: RoomPolic
         room_handles: Vec::new(),
         room_access: Vec::new(),
         created_at,
+        app_id: None,
         room_policy: policy,
     }
 }
@@ -2614,6 +2642,247 @@ pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
     Ok(attach_principal_handles(p))
+}
+
+// ── Grants ───────────────────────────────────────────────────────────
+// kind=app is membership (role_id set, scope null). Other kinds hold a
+// scope and a null role. Login does not read this table.
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkinGrant {
+    pub id: String,
+    pub subject_kind: String,
+    pub subject_id: String,
+    pub kind: String,
+    pub target_id: String,
+    pub role_id: Option<String>,
+    pub scope: Option<String>,
+    pub created_at: i64,
+}
+
+/// Inputs for one grant. `role` is a role id or name (kind=app only).
+#[derive(Debug, Clone)]
+pub struct SkinGrantWrite {
+    pub subject_kind: String,
+    pub subject_id: String,
+    pub kind: String,
+    pub target_id: String,
+    pub role: Option<String>,
+    pub scope: Option<String>,
+}
+
+fn grant_subject_kind(raw: &str) -> Result<String, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "principal" => Ok("principal".to_string()),
+        "workspace" => Ok("workspace".to_string()),
+        _ => Err("subjectKind must be principal or workspace".to_string()),
+    }
+}
+
+fn grant_kind(raw: &str) -> Result<String, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "app" => Ok("app".to_string()),
+        "mailbox" => Ok("mailbox".to_string()),
+        "database" => Ok("database".to_string()),
+        "cli" => Ok("cli".to_string()),
+        _ => Err("kind must be app, mailbox, database, or cli".to_string()),
+    }
+}
+
+fn map_grant_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinGrant> {
+    let role_id: Option<String> = r.get(5)?;
+    let scope: Option<String> = r.get(6)?;
+    Ok(SkinGrant {
+        id: r.get(0)?,
+        subject_kind: r.get(1)?,
+        subject_id: r.get(2)?,
+        kind: r.get(3)?,
+        target_id: r.get(4)?,
+        role_id: blank_to_none(role_id),
+        scope: blank_to_none(scope),
+        created_at: r.get(7)?,
+    })
+}
+
+const GRANT_SELECT: &str =
+    "SELECT id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at FROM grants";
+
+fn principal_id_exists(conn: &Connection, id: &str) -> Result<bool, String> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM principals WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("skin grant principal lookup: {e}"))?;
+    Ok(n > 0)
+}
+
+/// Insert one grant. Does not mint a principal and does not rewrite sessions.
+pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
+    let subject_kind = grant_subject_kind(&write.subject_kind)?;
+    let subject_id = write.subject_id.trim().to_string();
+    if subject_id.is_empty() {
+        return Err("missing subject id".to_string());
+    }
+    let kind = grant_kind(&write.kind)?;
+    let target_id = write.target_id.trim().to_string();
+    if target_id.is_empty() {
+        return Err("missing target id".to_string());
+    }
+    let role_token = write
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let scope = write
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    with_conn(|conn| {
+        if subject_kind == "principal" && !principal_id_exists(conn, &subject_id)? {
+            return Err(format!("unknown principal id '{subject_id}'"));
+        }
+        let (role_id, stored_scope) = if kind == "app" {
+            if scope.is_some() {
+                return Err("scope is only set when there is no role".to_string());
+            }
+            let Some(token) = role_token else {
+                return Err("kind=app requires roleId".to_string());
+            };
+            let Some(role) = role_by_id_or_name(conn, token)? else {
+                return Err(format!("unknown skin role '{token}'"));
+            };
+            if let Some(app_id) = role.app_id.as_deref() {
+                if app_id != target_id {
+                    return Err(format!(
+                        "role '{}' is for app '{app_id}', not '{target_id}'",
+                        role.name
+                    ));
+                }
+            }
+            (Some(role.id), None)
+        } else {
+            if role_token.is_some() {
+                return Err("roleId is only set for kind=app".to_string());
+            }
+            let Some(scope) = scope.clone() else {
+                return Err(format!("kind={kind} requires scope"));
+            };
+            (None, Some(scope))
+        };
+
+        let taken: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM grants
+                 WHERE subject_kind = ?1 AND subject_id = ?2 AND kind = ?3 AND target_id = ?4",
+                params![subject_kind, subject_id, kind, target_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("skin grant lookup: {e}"))?;
+        if taken > 0 {
+            return Err("grant already exists for this subject, kind, and target".to_string());
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = now_secs();
+        conn.execute(
+            "INSERT INTO grants
+             (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                subject_kind,
+                subject_id,
+                kind,
+                target_id,
+                role_id,
+                stored_scope,
+                created_at
+            ],
+        )
+        .map_err(|e| {
+            let s = e.to_string();
+            if s.contains("UNIQUE") {
+                "grant already exists for this subject, kind, and target".to_string()
+            } else {
+                format!("skin grant insert: {e}")
+            }
+        })?;
+        Ok(SkinGrant {
+            id,
+            subject_kind,
+            subject_id,
+            kind,
+            target_id,
+            role_id,
+            scope: stored_scope,
+            created_at,
+        })
+    })
+}
+
+pub fn list_grants() -> Result<Vec<SkinGrant>, String> {
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare(&format!("{GRANT_SELECT} ORDER BY created_at, id"))
+            .map_err(|e| format!("skin grant list: {e}"))?;
+        let rows = stmt
+            .query_map([], map_grant_row)
+            .map_err(|e| format!("skin grant list: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("skin grant row: {e}"))?);
+        }
+        Ok(out)
+    })
+}
+
+/// Delete the grant row. The role bundle stays. Sessions are not rewritten.
+pub fn delete_grant_by_id(id: &str) -> Result<bool, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("missing grant id".to_string());
+    }
+    with_conn(|conn| {
+        let n = conn
+            .execute("DELETE FROM grants WHERE id = ?1", params![id])
+            .map_err(|e| format!("skin grant delete: {e}"))?;
+        Ok(n > 0)
+    })
+}
+
+/// Delete by the unique (subject, kind, target) key. The role stays.
+pub fn delete_grant_by_key(
+    subject_kind: &str,
+    subject_id: &str,
+    kind: &str,
+    target_id: &str,
+) -> Result<bool, String> {
+    let subject_kind = grant_subject_kind(subject_kind)?;
+    let subject_id = subject_id.trim();
+    if subject_id.is_empty() {
+        return Err("missing subject id".to_string());
+    }
+    let kind = grant_kind(kind)?;
+    let target_id = target_id.trim();
+    if target_id.is_empty() {
+        return Err("missing target id".to_string());
+    }
+    with_conn(|conn| {
+        let n = conn
+            .execute(
+                "DELETE FROM grants
+                 WHERE subject_kind = ?1 AND subject_id = ?2 AND kind = ?3 AND target_id = ?4",
+                params![subject_kind, subject_id, kind, target_id],
+            )
+            .map_err(|e| format!("skin grant delete: {e}"))?;
+        Ok(n > 0)
+    })
 }
 
 /// Handle + `project_handle_aliases` + project_id UUID only.
@@ -4067,6 +4336,344 @@ mod tests {
                 list_principals().unwrap()[0].full_name.as_deref(),
                 Some("Bob")
             );
+        });
+    }
+
+    fn table_columns(conn: &Connection, table: &str) -> String {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .expect("pragma");
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .expect("cols")
+            .map(|c| c.expect("col"))
+            .collect();
+        cols.join(",")
+    }
+
+    fn table_exists(conn: &Connection, name: &str) -> bool {
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![name],
+                |r| r.get(0),
+            )
+            .expect("sqlite_master");
+        n > 0
+    }
+
+    #[test]
+    fn grants_table_and_role_app_id_on_new_and_old_db() {
+        with_temp_home(|| {
+            add_principal("ada").expect("add");
+            create_role("guest", &RoomPolicy::new()).expect("role");
+            let (cols, grants, app_id) = with_conn(|conn| {
+                let app_id: Option<String> = conn
+                    .query_row("SELECT app_id FROM roles WHERE name = 'guest'", [], |r| {
+                        r.get(0)
+                    })
+                    .map_err(|e| e.to_string())?;
+                Ok((
+                    table_columns(conn, "roles"),
+                    table_exists(conn, "grants"),
+                    app_id,
+                ))
+            })
+            .unwrap();
+            assert!(
+                cols.split(',').any(|c| c == "app_id"),
+                "new db missing roles.app_id: {cols}"
+            );
+            assert!(grants, "new db missing grants");
+            assert!(app_id.is_none(), "new role stays host-wide: {app_id:?}");
+            assert!(list_grants().unwrap().is_empty());
+            let listed = list_roles().unwrap();
+            assert_eq!(listed.len(), 1);
+            assert!(listed[0].app_id.is_none(), "{listed:?}");
+            let again = list_grants().expect("second open ignores duplicate ALTER");
+            assert!(again.is_empty());
+        });
+
+        with_temp_home(|| {
+            let path = crate::paths::k2_home().join("skin.db");
+            std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
+            let conn = Connection::open(&path).expect("open old skin.db");
+            conn.execute_batch(
+                "CREATE TABLE principals (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    default_rooms TEXT NOT NULL DEFAULT '[]',
+                    password_hash TEXT,
+                    role_id TEXT,
+                    email TEXT,
+                    full_name TEXT
+                 );
+                 CREATE TABLE roles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    caps TEXT NOT NULL,
+                    rooms TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL,
+                    room_policy TEXT NOT NULL DEFAULT '{}'
+                 );",
+            )
+            .expect("pre-grant schema");
+            conn.execute(
+                "INSERT INTO roles (id, name, caps, rooms, created_at, room_policy)
+                 VALUES ('r1', 'guest', '[]', '[]', 1, '{}')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at, full_name)
+                 VALUES ('p1', 'bob', 1, 'Bob')",
+                [],
+            )
+            .unwrap();
+            let before_roles = table_columns(&conn, "roles");
+            assert!(
+                !before_roles.split(',').any(|c| c == "app_id"),
+                "fixture must lack app_id: {before_roles}"
+            );
+            assert!(!table_exists(&conn, "grants"), "fixture must lack grants");
+            drop(conn);
+
+            let roles = list_roles().expect("open_db adds app_id and grants");
+            assert_eq!(roles.len(), 1);
+            assert_eq!(roles[0].name, "guest");
+            assert!(roles[0].app_id.is_none(), "{roles:?}");
+            let (cols, grants) =
+                with_conn(|conn| Ok((table_columns(conn, "roles"), table_exists(conn, "grants"))))
+                    .unwrap();
+            assert!(
+                cols.split(',').any(|c| c == "app_id"),
+                "old db must gain roles.app_id: {cols}"
+            );
+            assert!(grants, "old db must gain grants");
+            assert!(list_grants().unwrap().is_empty());
+            let bob = list_principals().unwrap();
+            assert_eq!(bob[0].full_name.as_deref(), Some("Bob"));
+            let again = list_roles().expect("second open ignores duplicate ALTER");
+            assert_eq!(again[0].name, "guest");
+            assert!(again[0].app_id.is_none(), "{again:?}");
+        });
+    }
+
+    #[test]
+    fn grant_create_list_delete_validates_and_keeps_role() {
+        with_temp_home(|| {
+            let ada = add_principal("ada").unwrap();
+            let role = create_role("guest", &RoomPolicy::new()).unwrap();
+            assert!(role.app_id.is_none(), "create_role must not require app_id");
+
+            let missing_role = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "app".into(),
+                target_id: "booking".into(),
+                role: None,
+                scope: None,
+            })
+            .unwrap_err();
+            assert!(missing_role.contains("roleId"), "{missing_role}");
+
+            let with_scope = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "app".into(),
+                target_id: "booking".into(),
+                role: Some("guest".into()),
+                scope: Some("owner".into()),
+            })
+            .unwrap_err();
+            assert!(with_scope.contains("scope"), "{with_scope}");
+
+            let mailbox_role = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "mailbox".into(),
+                target_id: "box".into(),
+                role: Some(role.id.clone()),
+                scope: Some("may-read".into()),
+            })
+            .unwrap_err();
+            assert!(mailbox_role.contains("kind=app"), "{mailbox_role}");
+
+            let mailbox_no_scope = create_grant(&SkinGrantWrite {
+                subject_kind: "workspace".into(),
+                subject_id: "ws-1".into(),
+                kind: "database".into(),
+                target_id: "db-1".into(),
+                role: None,
+                scope: None,
+            })
+            .unwrap_err();
+            assert!(mailbox_no_scope.contains("scope"), "{mailbox_no_scope}");
+
+            let unknown = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: "no-such-principal".into(),
+                kind: "app".into(),
+                target_id: "booking".into(),
+                role: Some("guest".into()),
+                scope: None,
+            })
+            .unwrap_err();
+            assert!(unknown.contains("unknown principal"), "{unknown}");
+
+            let empty_ws = create_grant(&SkinGrantWrite {
+                subject_kind: "workspace".into(),
+                subject_id: "  ".into(),
+                kind: "cli".into(),
+                target_id: "tool".into(),
+                role: None,
+                scope: Some("run".into()),
+            })
+            .unwrap_err();
+            assert!(empty_ws.contains("subject"), "{empty_ws}");
+
+            let bad_kind = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "people".into(),
+                target_id: "x".into(),
+                role: None,
+                scope: Some("x".into()),
+            })
+            .unwrap_err();
+            assert!(bad_kind.contains("kind"), "{bad_kind}");
+
+            let created = create_grant(&SkinGrantWrite {
+                subject_kind: "Principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "app".into(),
+                target_id: "booking".into(),
+                role: Some("guest".into()),
+                scope: None,
+            })
+            .unwrap();
+            assert_eq!(created.subject_kind, "principal");
+            assert_eq!(created.kind, "app");
+            assert_eq!(created.target_id, "booking");
+            assert_eq!(created.role_id.as_deref(), Some(role.id.as_str()));
+            assert!(created.scope.is_none(), "{created:?}");
+
+            let ws = create_grant(&SkinGrantWrite {
+                subject_kind: "workspace".into(),
+                subject_id: "not-a-real-workspace".into(),
+                kind: "mailbox".into(),
+                target_id: "inbox".into(),
+                role: None,
+                scope: Some("may-read".into()),
+            })
+            .unwrap();
+            assert_eq!(ws.subject_kind, "workspace");
+            assert!(ws.role_id.is_none(), "{ws:?}");
+            assert_eq!(ws.scope.as_deref(), Some("may-read"));
+
+            let dup = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "app".into(),
+                target_id: "booking".into(),
+                role: Some(role.id.clone()),
+                scope: None,
+            })
+            .unwrap_err();
+            assert!(dup.contains("already exists"), "{dup}");
+
+            let listed = list_grants().unwrap();
+            assert_eq!(listed.len(), 2, "{listed:?}");
+            assert!(
+                listed.iter().any(|g| g.id == created.id),
+                "created grant missing: {listed:?}"
+            );
+            assert!(
+                listed.iter().any(|g| g.id == ws.id),
+                "workspace grant missing: {listed:?}"
+            );
+
+            with_conn(|conn| {
+                conn.execute(
+                    "UPDATE roles SET app_id = 'crm' WHERE id = ?1",
+                    params![role.id],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+            let mismatch = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "app".into(),
+                target_id: "booking-other".into(),
+                role: Some("guest".into()),
+                scope: None,
+            })
+            .unwrap_err();
+            assert!(
+                mismatch.contains("crm") && mismatch.contains("booking-other"),
+                "{mismatch}"
+            );
+            let matched = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "app".into(),
+                target_id: "crm".into(),
+                role: Some("guest".into()),
+                scope: None,
+            })
+            .unwrap();
+            assert_eq!(matched.target_id, "crm");
+            let scoped = list_roles().unwrap();
+            assert_eq!(scoped[0].app_id.as_deref(), Some("crm"));
+
+            assert!(delete_grant_by_id(&created.id).unwrap());
+            assert!(!delete_grant_by_id(&created.id).unwrap());
+            assert!(
+                delete_grant_by_key("workspace", "not-a-real-workspace", "mailbox", "inbox")
+                    .unwrap()
+            );
+            let left = list_grants().unwrap();
+            assert_eq!(left.len(), 1, "{left:?}");
+            assert_eq!(left[0].id, matched.id);
+            let roles = list_roles().unwrap();
+            assert_eq!(roles.len(), 1, "revoke must keep the role");
+            assert_eq!(roles[0].name, "guest");
+
+            set_principal_password("ada", Some("s3cret-horse")).unwrap();
+            match check_and_record_login("ada", "s3cret-horse") {
+                SkinLoginOutcome::Ok(p) => assert_eq!(p.username, "ada"),
+                other => panic!("login with a grant still works, got {other:?}"),
+            }
+            let (_meta, raw) = create_session_token("ada").expect("session mint unchanged");
+            assert!(resolve_skin_token(&raw).is_some());
+            assert!(delete_grant_by_id(&matched.id).unwrap());
+            assert!(
+                resolve_skin_token(&raw).is_some(),
+                "revoke must not rewrite or drop the live session"
+            );
+        });
+    }
+
+    #[test]
+    fn principal_without_grant_can_still_log_in() {
+        with_temp_home(|| {
+            add_principal("ada").unwrap();
+            set_principal_password("ada", Some("s3cret-horse")).unwrap();
+            assert!(
+                list_grants().unwrap().is_empty(),
+                "fixture must have no grant"
+            );
+            match check_and_record_login("ada", "s3cret-horse") {
+                SkinLoginOutcome::Ok(p) => assert_eq!(p.username, "ada"),
+                other => panic!("no grant must not deny login, got {other:?}"),
+            }
+            let (_meta, raw) = create_session_token("ada").expect("session mint");
+            let pass = resolve_skin_token(&raw).expect("session still resolves");
+            assert_eq!(pass.username, "ada");
+            assert!(pass.session);
         });
     }
 

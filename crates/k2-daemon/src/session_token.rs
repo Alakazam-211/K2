@@ -548,6 +548,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/skin/roles/assign",
         "/cli/skin/roles/unassign",
         "/cli/skin/roles/room",
+        // `/cli/skin/grants` and `/cli/skin/grants/delete` stay off this list
+        // (owner-only). Do not add `/cli/people`.
         "/cli/skin-tokens",
         "/cli/skin-tokens/revoke",
         "/cli/skin-tokens/rooms",
@@ -1326,6 +1328,18 @@ mod tests {
         assert!(is_agent_verb("/cli/skin/roles/assign"));
         assert!(is_agent_verb("/cli/skin/roles/unassign"));
         assert!(is_agent_verb("/cli/skin/roles/room"));
+        assert!(
+            !is_agent_verb("/cli/skin/grants"),
+            "grants are owner-only, not an agent verb"
+        );
+        assert!(
+            !is_agent_verb("/cli/skin/grants/delete"),
+            "grant revoke is owner-only, not an agent verb"
+        );
+        assert!(
+            !is_agent_verb("/cli/people"),
+            "do not add /cli/people as an agent verb"
+        );
         assert!(is_agent_verb("/cli/skin-tokens"));
         assert!(is_agent_verb("/cli/skin-tokens/revoke"));
         assert!(is_agent_verb("/cli/skin-tokens/rooms"));

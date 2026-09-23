@@ -1275,6 +1275,12 @@ mod tests {
             !allowlisted_http("POST", "/cli/skin/users/full-name"),
             "users/full-name is owner roster mutate, not --skin"
         );
+        assert!(
+            !allowlisted_http("GET", "/cli/skin/grants"),
+            "grants are owner-only, not --skin"
+        );
+        assert!(!allowlisted_http("POST", "/cli/skin/grants"));
+        assert!(!allowlisted_http("POST", "/cli/skin/grants/delete"));
     }
 
     #[test]

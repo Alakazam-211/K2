@@ -1067,6 +1067,9 @@ async fn handle_one_request(
             | "/cli/skin/users/email"
             // Full name is owner-only (not an agent verb, stricter than role edits).
             | "/cli/skin/users/full-name"
+            // Grants are owner-only POSTs (list is GET). Not an agent verb.
+            | "/cli/skin/grants"
+            | "/cli/skin/grants/delete"
             | "/cli/skin/roles"
             | "/cli/skin/roles/update"
             | "/cli/skin/roles/remove"
@@ -6361,8 +6364,9 @@ async fn handle_one_request(
         // hook (workspace agent passport). Admin/Member connect sessions stay
         // 403. Manage mutations: owner_or_skin_manage_hook (owner OR hook +
         // this workspace's Agent-tab column ON). GET/POST front-door + hydra
-        // stay owner_role_identity even when the toggle is ON. Skin tokens
-        // themselves never manage the roster. Mutations POST-only; GET twins 405.
+        // and `/cli/skin/grants*` stay owner_role_identity even when the
+        // toggle is ON. Skin tokens themselves never manage the roster.
+        // Mutations POST-only; GET twins 405. Grants do not change login.
         p if p.starts_with("/cli/skin") => {
             let r = match p {
                 "/cli/skin/agents" => {
@@ -6808,6 +6812,74 @@ async fn handle_one_request(
                     tokio::task::spawn_blocking(move || {
                         crate::skin_routes::stamp_actor(
                             crate::skin_routes::handle_roles_room(&body, &actor),
+                            &actor,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/grants" if is_post => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(
+                            crate::skin_routes::handle_grants_post(&body, &actor),
+                            &actor,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/skin/grants" => {
+                    let _ = stream.read(&mut buf).await;
+                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+                        skin_dual_auth_failure(&query, bearer_token.as_deref())
+                    } else {
+                        tokio::task::spawn_blocking(crate::skin_routes::handle_grants_get)
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                    }
+                }
+                "/cli/skin/grants/delete" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(
+                            crate::skin_routes::handle_grants_delete(&body, &actor),
                             &actor,
                         )
                     })

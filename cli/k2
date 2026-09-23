@@ -5404,7 +5404,7 @@ _teach_skin_token_now_app_token() {
 
 _skin_usage() {
     cat >&2 <<'EOF'
-Usage: k2 app <user|role|token|hydra|front-door> ...
+Usage: k2 app <user|role|grant|token|hydra|front-door> ...
        k2 app token <create|list|revoke|rooms> ...
 
   Guests, roles, and tokens for apps on this box. Desktop binary updates
@@ -5437,6 +5437,11 @@ Usage: k2 app <user|role|token|hydra|front-door> ...
   k2 app role update <name> [--agent … | --clear]
                                         --clear empties the whole map. Always rewrites live sessions.
   k2 app role remove <name>            Drop an unassigned role
+  k2 app grant list                    Grants (subject, kind, target, role|scope)
+  k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role>] [--scope <text>]
+                                        Owner only. kind=app needs --role. Other kinds need --scope and no --role.
+  k2 app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>
+  k2 app grant rm --id <id>            Revoke the grant. The role stays. Login is unchanged.
   k2 app hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
   k2 app token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
                                         Mint platform k2skn_ pass (secret once; ≥1 --agent; no user)
@@ -5884,6 +5889,146 @@ print("Skin role removed." if d.get("success") else "No matching skin role.")'
                     ;;
                 *)
                     echo "Usage: k2 app role <create|list|room|update|remove>" >&2
+                    exit 1 ;;
+            esac
+            ;;
+        grant|grants)
+            local action="${1:-list}"
+            shift || true
+            case "$action" in
+                list|"")
+                    local raw
+                    raw=$(cli_request "/cli/skin/grants")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+grants=d.get("grants") or []
+if not grants:
+    print("No grants.")
+    sys.exit(0)
+for g in grants:
+    role=g.get("roleId") or g.get("role_id") or ""
+    scope=g.get("scope") or ""
+    extra=("role "+role) if role else (("scope "+scope) if scope else "")
+    print("%s  %s %s  %s %s  %s" % (
+        g.get("id") or "",
+        g.get("subjectKind") or g.get("subject_kind") or "",
+        g.get("subjectId") or g.get("subject_id") or "",
+        g.get("kind") or "",
+        g.get("targetId") or g.get("target_id") or "",
+        extra,
+    ))'
+                    ;;
+                add|create)
+                    local subject_kind="" subject="" kind="" target="" role="" scope=""
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --subject-kind) subject_kind="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --subject-kind=*) subject_kind="${1#--subject-kind=}"; shift ;;
+                            --subject) subject="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --subject=*) subject="${1#--subject=}"; shift ;;
+                            --kind) kind="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --kind=*) kind="${1#--kind=}"; shift ;;
+                            --target) target="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --target=*) target="${1#--target=}"; shift ;;
+                            --role) role="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --role=*) role="${1#--role=}"; shift ;;
+                            --scope) scope="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --scope=*) scope="${1#--scope=}"; shift ;;
+                            --help|-h)
+                                echo "Usage: k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role>] [--scope <text>]" >&2
+                                exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) echo "Unknown argument: $1" >&2; exit 1 ;;
+                        esac
+                    done
+                    if [[ -z "$subject_kind" || -z "$subject" || -z "$kind" || -z "$target" ]]; then
+                        echo "Usage: k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role>] [--scope <text>]" >&2
+                        exit 1
+                    fi
+                    local body raw
+                    body=$(K2_GRANT_SUBJECT_KIND="$subject_kind" K2_GRANT_SUBJECT="$subject" K2_GRANT_KIND="$kind" K2_GRANT_TARGET="$target" K2_GRANT_ROLE="$role" K2_GRANT_SCOPE="$scope" python3 -c '
+import json,os
+b={
+  "subjectKind": os.environ.get("K2_GRANT_SUBJECT_KIND",""),
+  "subjectId": os.environ.get("K2_GRANT_SUBJECT",""),
+  "kind": os.environ.get("K2_GRANT_KIND",""),
+  "targetId": os.environ.get("K2_GRANT_TARGET",""),
+}
+role=os.environ.get("K2_GRANT_ROLE","").strip()
+scope=os.environ.get("K2_GRANT_SCOPE","").strip()
+if role:
+    b["roleId"]=role
+if scope:
+    b["scope"]=scope
+print(json.dumps(b))')
+                    raw=$(cli_post_json "/cli/skin/grants" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print("Grant %s  %s %s  %s %s" % (
+    d.get("id") or "",
+    d.get("subjectKind") or "",
+    d.get("subjectId") or "",
+    d.get("kind") or "",
+    d.get("targetId") or "",
+))'
+                    ;;
+                rm|remove|delete|revoke)
+                    local subject_kind="" subject="" kind="" target="" gid=""
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --id) gid="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --id=*) gid="${1#--id=}"; shift ;;
+                            --subject-kind) subject_kind="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --subject-kind=*) subject_kind="${1#--subject-kind=}"; shift ;;
+                            --subject) subject="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --subject=*) subject="${1#--subject=}"; shift ;;
+                            --kind) kind="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --kind=*) kind="${1#--kind=}"; shift ;;
+                            --target) target="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --target=*) target="${1#--target=}"; shift ;;
+                            --help|-h)
+                                echo "Usage: k2 app grant rm --id <id>" >&2
+                                echo "       k2 app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>" >&2
+                                exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) echo "Unknown argument: $1" >&2; exit 1 ;;
+                        esac
+                    done
+                    if [[ -z "$gid" && ( -z "$subject_kind" || -z "$subject" || -z "$kind" || -z "$target" ) ]]; then
+                        echo "Usage: k2 app grant rm --id <id>" >&2
+                        echo "       k2 app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>" >&2
+                        exit 1
+                    fi
+                    local body raw
+                    body=$(K2_GRANT_ID="$gid" K2_GRANT_SUBJECT_KIND="$subject_kind" K2_GRANT_SUBJECT="$subject" K2_GRANT_KIND="$kind" K2_GRANT_TARGET="$target" python3 -c '
+import json,os
+gid=os.environ.get("K2_GRANT_ID","").strip()
+if gid:
+    print(json.dumps({"id": gid}))
+else:
+    print(json.dumps({
+        "subjectKind": os.environ.get("K2_GRANT_SUBJECT_KIND",""),
+        "subjectId": os.environ.get("K2_GRANT_SUBJECT",""),
+        "kind": os.environ.get("K2_GRANT_KIND",""),
+        "targetId": os.environ.get("K2_GRANT_TARGET",""),
+    }))')
+                    raw=$(cli_post_json "/cli/skin/grants/delete" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print("Grant removed." if d.get("success") else "No matching grant.")'
+                    ;;
+                --help|-h)
+                    echo "Usage: k2 app grant <list|add|rm>" >&2
+                    exit 0
+                    ;;
+                *)
+                    echo "Usage: k2 app grant <list|add|rm>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -14156,8 +14301,8 @@ cmd_schema() {
     },
     {
       "name": "app",
-      "usage": "k2 app <user|role|token|hydra|front-door> ...",
-      "description": "Guests, roles, and tokens for apps on this box (caps + rooms). Not a host — use k2 publish. Not desktop updates (k2 update --app). Separate from Connect users. Leftover: k2 skin.",
+      "usage": "k2 app <user|role|grant|token|hydra|front-door> ...",
+      "description": "Guests, roles, grants, and tokens for apps on this box (caps + rooms). Not a host — use k2 publish. Not desktop updates (k2 update --app). Separate from Connect users. Leftover: k2 skin.",
       "args": [],
       "flags": []
     },
@@ -14291,6 +14436,47 @@ cmd_schema() {
       "description": "Remove an unassigned app role. Assigned roles 400 until guests are unassigned.",
       "args": [{"name": "name", "required": true}],
       "flags": []
+    },
+    {
+      "name": "app grant",
+      "usage": "k2 app grant <list|add|rm> ...",
+      "description": "Owner-only grants. kind=app is membership (a role on one app). Other kinds store a scope and no role. Revoke deletes the grant and keeps the role. Login is unchanged.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app grant list",
+      "usage": "k2 app grant list",
+      "description": "List grants (subject, kind, target, role or scope). Owner only.",
+      "args": [],
+      "flags": []
+    },
+    {
+      "name": "app grant add",
+      "usage": "k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role>] [--scope <text>]",
+      "description": "Create a grant. kind=app requires --role (role id or name) and no --scope. Other kinds require --scope and no --role. Principal subject is a principals.id. Workspace subject is a non-empty id (not looked up). Owner only.",
+      "args": [],
+      "flags": [
+        {"name": "--subject-kind", "arg": "principal|workspace", "description": "Who the grant is for."},
+        {"name": "--subject", "arg": "id", "description": "Principal id or workspace id."},
+        {"name": "--kind", "arg": "app|mailbox|database|cli", "description": "What is granted. app is membership."},
+        {"name": "--target", "arg": "id", "description": "App, mailbox, database, or cli target id."},
+        {"name": "--role", "arg": "role", "description": "Role id or name. Required for kind=app."},
+        {"name": "--scope", "arg": "text", "description": "Scope string. Required when kind is not app."}
+      ]
+    },
+    {
+      "name": "app grant rm",
+      "usage": "k2 app grant rm --id <id> | --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>",
+      "description": "Revoke a grant. The role stays. Does not change login.",
+      "args": [],
+      "flags": [
+        {"name": "--id", "arg": "id", "description": "Grant id."},
+        {"name": "--subject-kind", "arg": "principal|workspace", "description": "Who the grant is for."},
+        {"name": "--subject", "arg": "id", "description": "Principal id or workspace id."},
+        {"name": "--kind", "arg": "kind", "description": "Grant kind."},
+        {"name": "--target", "arg": "id", "description": "Target id."}
+      ]
     },
     {
       "name": "app hydra",

@@ -4,7 +4,8 @@
 //! (`owner_role_identity`) **or** a workspace-agent scoped hook. Manage
 //! mutations admit owner-tier **or** a scoped hook when that workspace's
 //! Agent-tab `agents_can_manage_skin` column is ON. Leftover front-door /
-//! Hydra stay owner-only. Mutations are POST-only (GET twins 405). Raw
+//! Hydra stay owner-only. Grants (`/cli/skin/grants`) are owner-only and
+//! are not agent verbs. Mutations are POST-only (GET twins 405). Raw
 //! `k2skn_…` secret is returned once on create.
 
 use std::collections::HashSet;
@@ -459,6 +460,90 @@ pub fn handle_tokens_rooms(body: &[u8], actor: &str) -> CliResponse {
             );
             CliResponse::ok_json(serde_json::to_string(&meta).unwrap_or_else(|_| "{}".into()))
         }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_grants_get() -> CliResponse {
+    match skin::list_grants() {
+        Ok(grants) => CliResponse::ok_json(serde_json::json!({ "grants": grants }).to_string()),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+fn opt_text_field<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    str_field(v, keys)
+}
+
+pub fn handle_grants_post(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(subject_kind) = str_field(&v, &["subjectKind", "subject_kind"]) else {
+        return CliResponse::bad_request("missing subjectKind");
+    };
+    let Some(subject_id) = str_field(&v, &["subjectId", "subject_id", "subject"]) else {
+        return CliResponse::bad_request("missing subject id");
+    };
+    let Some(kind) = str_field(&v, &["kind"]) else {
+        return CliResponse::bad_request("missing kind");
+    };
+    let Some(target_id) = str_field(&v, &["targetId", "target_id", "target"]) else {
+        return CliResponse::bad_request("missing target id");
+    };
+    let write = skin::SkinGrantWrite {
+        subject_kind: subject_kind.to_string(),
+        subject_id: subject_id.to_string(),
+        kind: kind.to_string(),
+        target_id: target_id.to_string(),
+        role: opt_text_field(&v, &["roleId", "role_id", "role"]).map(str::to_string),
+        scope: opt_text_field(&v, &["scope"]).map(str::to_string),
+    };
+    match skin::create_grant(&write) {
+        Ok(grant) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} grant {} kind={} target={} subject={} {}",
+                grant.id,
+                grant.kind,
+                grant.target_id,
+                grant.subject_kind,
+                grant.subject_id
+            );
+            CliResponse::ok_json(serde_json::to_string(&grant).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+pub fn handle_grants_delete(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let deleted = if let Some(id) = str_field(&v, &["id"]) {
+        skin::delete_grant_by_id(id)
+    } else {
+        let Some(subject_kind) = str_field(&v, &["subjectKind", "subject_kind"]) else {
+            return CliResponse::bad_request("missing grant id or subjectKind");
+        };
+        let Some(subject_id) = str_field(&v, &["subjectId", "subject_id", "subject"]) else {
+            return CliResponse::bad_request("missing subject id");
+        };
+        let Some(kind) = str_field(&v, &["kind"]) else {
+            return CliResponse::bad_request("missing kind");
+        };
+        let Some(target_id) = str_field(&v, &["targetId", "target_id", "target"]) else {
+            return CliResponse::bad_request("missing target id");
+        };
+        skin::delete_grant_by_key(subject_kind, subject_id, kind, target_id)
+    };
+    match deleted {
+        Ok(true) => {
+            k2_core::log_debug!("[skin] actor={actor} revoked grant");
+            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        }
+        Ok(false) => CliResponse::bad_request("unknown grant"),
         Err(e) => CliResponse::bad_request(e),
     }
 }

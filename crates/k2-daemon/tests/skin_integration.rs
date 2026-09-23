@@ -3945,6 +3945,312 @@ async fn skin_guest_full_name_owner_set_clear_and_list() {
 }
 
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("skingrant{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (sales_id, _) = seed_thread_addr(&handle);
+        add_user(port, "ada");
+        add_user(port, "bob");
+        set_password(port, "ada", "s3cret-horse");
+        set_password(port, "bob", "s3cret-horse");
+
+        let users = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(users.status, 200, "{}", users.body);
+        let users_v = json(&users.body);
+        let ada_id = users_v["users"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|u| u["username"] == "ada"))
+            .and_then(|u| u["id"].as_str())
+            .expect("ada id")
+            .to_string();
+
+        let role = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"guest","rooms":[]}"#),
+        );
+        assert_eq!(role.status, 200, "role create without appId; {}", role.body);
+        let role_v = json(&role.body);
+        assert!(
+            role_v.get("appId").is_some() && role_v["appId"].is_null(),
+            "new role stays host-wide: {}",
+            role.body
+        );
+        let role_id = role_v["id"].as_str().expect("role id").to_string();
+
+        let get_del = http(
+            port,
+            "GET",
+            &format!("/cli/skin/grants/delete?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(get_del.status, 405, "GET grants/delete; {}", get_del.body);
+        assert!(get_del.body.contains("POST required"), "{}", get_del.body);
+
+        let no_role = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+            Some(
+                &serde_json::json!({
+                    "subjectKind": "principal",
+                    "subjectId": ada_id,
+                    "kind": "app",
+                    "targetId": "booking",
+                })
+                .to_string(),
+            ),
+        );
+        assert_eq!(no_role.status, 400, "{}", no_role.body);
+        assert!(no_role.body.contains("roleId"), "{}", no_role.body);
+
+        let mailbox_role = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+            Some(
+                &serde_json::json!({
+                    "subjectKind": "principal",
+                    "subjectId": ada_id,
+                    "kind": "mailbox",
+                    "targetId": "box",
+                    "roleId": role_id,
+                    "scope": "may-read",
+                })
+                .to_string(),
+            ),
+        );
+        assert_eq!(mailbox_role.status, 400, "{}", mailbox_role.body);
+        assert!(
+            mailbox_role.body.contains("kind=app"),
+            "{}",
+            mailbox_role.body
+        );
+
+        let created = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+            Some(
+                &serde_json::json!({
+                    "subjectKind": "principal",
+                    "subjectId": ada_id,
+                    "kind": "app",
+                    "targetId": "booking",
+                    "roleId": role_id,
+                })
+                .to_string(),
+            ),
+        );
+        assert_eq!(created.status, 200, "{}", created.body);
+        let created_v = json(&created.body);
+        let grant_id = created_v["id"].as_str().expect("grant id").to_string();
+        assert_eq!(created_v["kind"], "app", "{}", created.body);
+        assert_eq!(created_v["roleId"], role_id, "{}", created.body);
+        assert!(created_v["scope"].is_null(), "{}", created.body);
+
+        let dup = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+            Some(
+                &serde_json::json!({
+                    "subjectKind": "principal",
+                    "subjectId": ada_id,
+                    "kind": "app",
+                    "targetId": "booking",
+                    "role": "guest",
+                })
+                .to_string(),
+            ),
+        );
+        assert_eq!(dup.status, 400, "{}", dup.body);
+        assert!(dup.body.contains("already exists"), "{}", dup.body);
+
+        let listed = http(
+            port,
+            "GET",
+            &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(listed.status, 200, "{}", listed.body);
+        let listed_v = json(&listed.body);
+        let rows = listed_v["grants"].as_array().expect("grants");
+        assert!(rows.iter().any(|g| g["id"] == grant_id), "{}", listed.body);
+
+        let missing = http(
+            port,
+            "POST",
+            "/cli/skin/grants",
+            Some(
+                &serde_json::json!({
+                    "subjectKind": "principal",
+                    "subjectId": ada_id,
+                    "kind": "app",
+                    "targetId": "other",
+                    "roleId": role_id,
+                })
+                .to_string(),
+            ),
+        );
+        assert_eq!(missing.status, 403, "missing token; {}", missing.body);
+
+        let member = provision_role(port, "grantmember", "hunter2-strong-9", "member");
+        let member_add = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants?token={member}"),
+            Some(
+                &serde_json::json!({
+                    "subjectKind": "principal",
+                    "subjectId": ada_id,
+                    "kind": "app",
+                    "targetId": "other",
+                    "roleId": role_id,
+                })
+                .to_string(),
+            ),
+        );
+        assert_eq!(
+            member_add.status, 403,
+            "member rejected; {}",
+            member_add.body
+        );
+        let member_list = http(
+            port,
+            "GET",
+            &format!("/cli/skin/grants?token={member}"),
+            None,
+        );
+        assert_eq!(
+            member_list.status, 403,
+            "member list rejected; {}",
+            member_list.body
+        );
+
+        let hook = mint_scoped_hook_for(&sales_id);
+        let on = set_agents_manage_skin(port, &sales_id, 1);
+        assert_eq!(on.status, 200, "owner enable manage; {}", on.body);
+        let agent_role = http(
+            port,
+            "POST",
+            &format!("/cli/skin/roles?token={hook}"),
+            Some(r#"{"name":"fromagent","rooms":[]}"#),
+        );
+        assert_eq!(
+            agent_role.status, 200,
+            "role routes stay agent verbs; {}",
+            agent_role.body
+        );
+        let agent_grant = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants?token={hook}"),
+            Some(
+                &serde_json::json!({
+                    "subjectKind": "principal",
+                    "subjectId": ada_id,
+                    "kind": "app",
+                    "targetId": "other",
+                    "roleId": role_id,
+                })
+                .to_string(),
+            ),
+        );
+        assert_eq!(
+            agent_grant.status, 403,
+            "agent rejected even with manage ON; {}",
+            agent_grant.body
+        );
+        assert!(
+            agent_grant.body.contains("owner_only"),
+            "valid hook on grants teaches owner_only: {}",
+            agent_grant.body
+        );
+
+        let bob_login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"bob","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(
+            bob_login.status, 200,
+            "principal with no grant still logs in; {}",
+            bob_login.body
+        );
+        assert!(
+            json(&bob_login.body).get("token").is_some(),
+            "{}",
+            bob_login.body
+        );
+
+        let removed = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants/delete?token={OWNER_TOKEN}"),
+            Some(&serde_json::json!({ "id": grant_id }).to_string()),
+        );
+        assert_eq!(removed.status, 200, "{}", removed.body);
+        assert_eq!(json(&removed.body)["success"], true, "{}", removed.body);
+
+        let after = http(
+            port,
+            "GET",
+            &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(after.status, 200, "{}", after.body);
+        let after_rows = json(&after.body)["grants"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !after_rows.iter().any(|g| g["id"] == grant_id),
+            "revoked grant must be gone: {}",
+            after.body
+        );
+        let roles = http(
+            port,
+            "GET",
+            &format!("/cli/skin/roles?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(roles.status, 200, "{}", roles.body);
+        let roles_v = json(&roles.body);
+        assert!(
+            roles_v["roles"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|r| r["name"] == "guest")),
+            "revoke keeps the role: {}",
+            roles.body
+        );
+
+        let ada_login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"ada","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(
+            ada_login.status, 200,
+            "login after revoke still works; {}",
+            ada_login.body
+        );
+    });
+}
+
+
 fn assert_skin_rate_limited(r: &Resp, what: &str) {
     assert_eq!(r.status, 429, "{what} must 429; headers={} body={}", r.headers, r.body);
     assert_eq!(r.body, r#"{"error":"rate_limited"}"#, "{what}");

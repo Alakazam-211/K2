@@ -50,6 +50,9 @@ jobs:
           K2_MICROSOFT_CLIENT_ID: ${{ secrets.K2_MICROSOFT_CLIENT_ID }}
         run: |
           set -euo pipefail
+          # makepkg is a bash script. This step's nounset is exported via
+          # SHELLOPTS and breaks it. The build script also strips SHELLOPTS.
+          export SHELLOPTS="${SHELLOPTS//nounset/}"
           command -v pacman
           command -v makepkg
           TAG="${{ github.event.inputs.tag || github.ref_name }}"

@@ -123,7 +123,9 @@ k2_arch_build_release_pkg() {
         return 1
     fi
 
-    pkg_paths="$(cd "$arch_dir" && makepkg --packagelist)" || {
+    # GitHub Actions exports SHELLOPTS=nounset. makepkg's own bash then
+    # dies on $RED and $logpipe. Strip it for every makepkg invocation.
+    pkg_paths="$(cd "$arch_dir" && env -u SHELLOPTS makepkg --packagelist)" || {
         echo "FATAL: makepkg --packagelist failed" >&2
         return 1
     }
@@ -146,7 +148,7 @@ EOF
     esac
 
     # -f overwrites a previous package. Do not pass -i/--install. Do not pacman -U.
-    (cd "$arch_dir" && makepkg -f)
+    (cd "$arch_dir" && env -u SHELLOPTS makepkg -f)
 
     if [ ! -s "$pkg_path" ]; then
         echo "FATAL: makepkg did not write ${pkg_path}" >&2

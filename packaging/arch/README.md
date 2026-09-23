@@ -57,6 +57,7 @@ sudo pacman -R k2
 | `/usr/lib/k2/frpc` | Connect sidecar next to the GUI (not `/usr/bin/frpc`) |
 | `/usr/bin/k2-daemon` | daemon |
 | `/usr/lib/systemd/user/k2-daemon.service` | **user** unit, `ExecStart=/usr/bin/k2-daemon`. Not auto-enabled. Not `k2so-daemon`. Not a system unit. |
+| `/usr/lib/systemd/user/k2-daemon-home.service` | oneshot that creates `~/.k2` before the daemon unit opens its log files. |
 
 ## Depends (until a real Omarchy `ldd`)
 

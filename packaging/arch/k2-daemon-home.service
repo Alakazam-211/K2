@@ -1,0 +1,11 @@
+# Creates ~/.k2 before k2-daemon opens its log files.
+# The daemon unit uses StandardOutput=append:%h/.k2/..., and systemd
+# opens that path before it runs any command in that unit.
+[Unit]
+Description=Create ~/.k2 for the K2 daemon logs
+Before=k2-daemon.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/mkdir -p %h/.k2
+RemainAfterExit=yes

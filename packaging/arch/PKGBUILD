@@ -45,11 +45,13 @@ install=k2.install
 options=('!lto' '!debug')
 source=(
     'k2-daemon.service'
+    'k2-daemon-home.service'
     'k2.desktop'
     'k2.install'
 )
 sha256sums=(
-    'c11a5f099965cfcf4b151872daa8947f0f778b92179413b024667802a74b4d67'
+    '6bb7459f3123a86e64a2ece31c99cc20381312c97e463c8de500e5425fd207a3'
+    'b6e50bb9e9a3c06f05876082cbf6971bb0a80c714f52946eba3f3fcd78f2cb4e'
     '2c4f8a6482a31e0f40f9b2834e43eafdec731157b63e9609447687c8fe12ad3d'
     '3e1a30b4ab3213338c652242e9e5da0acecb704e0f08d17c4082044d1ecf51d3'
 )
@@ -159,6 +161,8 @@ package() {
 
     install -Dm644 "${srcdir}/k2-daemon.service" \
         "${pkgdir}/usr/lib/systemd/user/k2-daemon.service"
+    install -Dm644 "${srcdir}/k2-daemon-home.service" \
+        "${pkgdir}/usr/lib/systemd/user/k2-daemon-home.service"
     install -Dm644 "${srcdir}/k2.desktop" \
         "${pkgdir}/usr/share/applications/k2.desktop"
 

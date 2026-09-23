@@ -6,12 +6,15 @@
 # Layout:
 #   /usr/bin/k2-daemon                          — the daemon binary
 #   /usr/lib/systemd/user/k2-daemon.service     — systemd USER unit
+#   /usr/lib/systemd/user/k2-daemon-home.service — creates ~/.k2 first
 #
 # The unit mirrors the macOS launchd agent (dev.k2.daemon, see
 # crates/k2-core/src/wake.rs `DaemonPlist::canonical`): plain
 # `k2-daemon` with no args, start on login (WantedBy=default.target ≙
 # RunAtLoad), restart on crash (Restart=always ≙ KeepAlive), stdout /
 # stderr appended to ~/.k2/daemon.stdout.log / daemon.stderr.log.
+# k2-daemon-home.service creates ~/.k2 first: systemd opens those log
+# files before any command in the daemon unit.
 #
 # Deliberately NOT auto-enabled on install — the user (or provisioning
 # script) opts in:
@@ -82,6 +85,9 @@ cat > "$PKGROOT/usr/lib/systemd/user/k2-daemon.service" <<'UNIT'
 # k2-daemon systemd USER unit — Linux twin of the macOS launchd agent
 # dev.k2.daemon (RunAtLoad=true, KeepAlive=true, logs under ~/.k2/).
 #
+# systemd opens StandardOutput= before any command in this unit, so the
+# log directory has to exist already. k2-daemon-home.service creates it.
+#
 # Enable per-user, after installing the k2-daemon package:
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now k2-daemon
@@ -90,11 +96,11 @@ cat > "$PKGROOT/usr/lib/systemd/user/k2-daemon.service" <<'UNIT'
 [Unit]
 Description=K2 daemon — AI workspace orchestration backend
 Documentation=https://k2.dev
-After=network.target
+After=network.target k2-daemon-home.service
+Requires=k2-daemon-home.service
 
 [Service]
 Type=simple
-ExecStartPre=/bin/sh -c 'mkdir -p "%h/.k2"'
 ExecStart=/usr/bin/k2-daemon
 Restart=always
 RestartSec=2
@@ -105,6 +111,20 @@ StandardError=append:%h/.k2/daemon.stderr.log
 WantedBy=default.target
 UNIT
 chmod 0644 "$PKGROOT/usr/lib/systemd/user/k2-daemon.service"
+cat > "$PKGROOT/usr/lib/systemd/user/k2-daemon-home.service" <<'HOME'
+# Creates ~/.k2 before k2-daemon opens its log files.
+# The daemon unit uses StandardOutput=append:%h/.k2/..., and systemd
+# opens that path before it runs any command in that unit.
+[Unit]
+Description=Create ~/.k2 for the K2 daemon logs
+Before=k2-daemon.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/mkdir -p %h/.k2
+RemainAfterExit=yes
+HOME
+chmod 0644 "$PKGROOT/usr/lib/systemd/user/k2-daemon-home.service"
 
 INSTALLED_SIZE=$(( ($(du -sb "$PKGROOT" | cut -f1) + 1023) / 1024 ))
 install -d "$PKGROOT/DEBIAN"

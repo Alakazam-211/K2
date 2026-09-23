@@ -121,6 +121,9 @@ contains "unit ExecStart=/usr/bin/k2-daemon" "$ARCH/k2-daemon.service" "ExecStar
 contains "unit WantedBy=default.target" "$ARCH/k2-daemon.service" "WantedBy=default.target"
 contains "unit Restart=always" "$ARCH/k2-daemon.service" "Restart=always"
 contains "PKGBUILD installs user unit path" "$ARCH/PKGBUILD" '/usr/lib/systemd/user/k2-daemon.service'
+contains "PKGBUILD installs home unit" "$ARCH/PKGBUILD" '/usr/lib/systemd/user/k2-daemon-home.service'
+contains "unit requires home service" "$ARCH/k2-daemon.service" "Requires=k2-daemon-home.service"
+contains "home unit creates ~/.k2" "$ARCH/k2-daemon-home.service" "ExecStart=/bin/mkdir -p %h/.k2"
 absent "unit is not k2so-daemon" "$ARCH/k2-daemon.service" "k2so-daemon"
 absent "PKGBUILD does not install a system unit" "$ARCH/PKGBUILD" "/usr/lib/systemd/system"
 absent "PKGBUILD does not mention k2so-daemon as a unit" "$ARCH/PKGBUILD" "k2so-daemon.service"

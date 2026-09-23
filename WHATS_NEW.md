@@ -3,6 +3,19 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.40.150 — People, grants, and mail an agent can stand up
+
+A skin user can have a full name, and Settings shows that list as People. Who may open an app is a grant. An agent on the box can bring hosted mail up with the CLI.
+
+- **People.** Optional full name on the skin user (64 characters). Settings → People is that list. It is not Server Access. `k2 app user full-name` sets or clears it.
+- **Grants.** A role is the rooms and caps for one app. A grant says who has that role. The subject is a skin user or a workspace. `k2 app grant list|add|rm` is owner-only. There is no separate people table.
+- **Host login.** The first boot copies every existing guest onto a host grant and keeps an assigned role. A new guest gets a host grant. A missing host grant fails login the same way a bad password does. Deleting that grant stays deleted.
+- **`k2 app`.** The human-facing command is `k2 app`. `k2 skin` still runs and points at it.
+- **Mail from the box.** User `k2` can run `k2 hostmail enable` from zero. A root helper does the system steps, so enable does not need a second admin at the keyboard. A partial enable resumes instead of stopping because this box is already listening on port 25.
+- **Arch and Omarchy.** A release tag builds `k2-<version>-x86_64.pkg.tar.zst` on the Arch runner and attaches it to the GitHub release. One package for both. `pacman -R k2` leaves `~/.k2` in place.
+
+Not in this build: a Windows runner, a grant required per app address, mailbox and database grants applied to mail or Postgres.
+
 ## 0.40.149 — Agents can attach hostnames; doctor refreshes; certs over CNAME
 
 Mail-manage / DNS-manage agents can add `mail.<apex>` themselves once the apex is on the box. Thread posts from `k2 thread` remind agents the overlay paints markdown.

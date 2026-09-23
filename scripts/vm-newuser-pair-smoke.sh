@@ -96,14 +96,35 @@ HOST_REPORT="/tmp/k2-newuser-pair-host-${LABEL}-$$.txt"
 : > "$HOST_REPORT"
 
 ssh_opts=(
+  -F /dev/null
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
   -o IdentitiesOnly=yes
   -o PreferredAuthentications=keyboard-interactive,password
+  -o PasswordAuthentication=yes
+  -o KbdInteractiveAuthentication=yes
+  -o GSSAPIAuthentication=no
   -o PubkeyAuthentication=no
+  # OpenSSH 9.5+ hides keystroke timing by default. sshpass then loses
+  # the password on some attempts: "SSH ready" and the next login is
+  # Permission denied. z3mbpZ is OpenSSH 10.3.
+  -o ObscureKeystrokeTiming=no
   -o NumberOfPasswordPrompts=1
   -o ConnectTimeout=10
 )
+
+# The ready loop can succeed and the very next login still be refused.
+ssh_retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if ssh_to "$@"; then
+      return 0
+    fi
+    echo "  guest ssh attempt ${attempt} failed; retrying" >&2
+    sleep 3
+  done
+  return 1
+}
 
 ssh_to() {
   sshpass -p "$SSH_PASS" ssh "${ssh_opts[@]}" "${SSH_USER}@${IP}" "$@"
@@ -117,16 +138,31 @@ ssh_to() {
 put_guest() {
   local src="$1"
   local dest_dir="$2"
-  local base
+  local base attempt
   base="$(basename "$src")"
-  sshpass -p "$SSH_PASS" ssh "${ssh_opts[@]}" "${SSH_USER}@${IP}" \
-    "mkdir -p ${dest_dir} && cat > ${dest_dir}/${base}" <"$src"
+  for attempt in 1 2 3 4 5; do
+    if sshpass -p "$SSH_PASS" ssh "${ssh_opts[@]}" "${SSH_USER}@${IP}" \
+      "mkdir -p ${dest_dir} && cat > ${dest_dir}/${base}" <"$src"; then
+      return 0
+    fi
+    echo "  guest upload attempt ${attempt} failed; retrying" >&2
+    sleep 3
+  done
+  return 1
 }
 get_guest() {
   local remote_path="$1"
   local dest="$2"
-  sshpass -p "$SSH_PASS" ssh "${ssh_opts[@]}" "${SSH_USER}@${IP}" \
-    "cat ${remote_path}" >"$dest"
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if sshpass -p "$SSH_PASS" ssh "${ssh_opts[@]}" "${SSH_USER}@${IP}" \
+      "cat ${remote_path}" >"$dest"; then
+      return 0
+    fi
+    echo "  guest download attempt ${attempt} failed; retrying" >&2
+    sleep 3
+  done
+  return 1
 }
 
 cleanup() {
@@ -235,8 +271,8 @@ fi
 rm -f "$SSH_ERR_LOG"
 
 # Clean slate on guest
-ssh_to 'rm -rf ~/k2-gk-testdata ~/.k2 ~/.k2so 2>/dev/null; mkdir -p ~/k2-gk-testdata; true'
-ssh_to 'test ! -e /Applications/K2.app || (sudo -n rm -rf /Applications/K2.app 2>/dev/null; rm -rf /Applications/K2.app 2>/dev/null); true'
+ssh_retry 'rm -rf ~/k2-gk-testdata ~/.k2 ~/.k2so 2>/dev/null; mkdir -p ~/k2-gk-testdata; true'
+ssh_retry 'test ! -e /Applications/K2.app || (sudo -n rm -rf /Applications/K2.app 2>/dev/null; rm -rf /Applications/K2.app 2>/dev/null); true'
 
 echo "  copying DMG + guest script (via ssh, not scp) ..."
 put_guest "$GUEST_SCRIPT" '$HOME/k2-gk-testdata'

@@ -283,6 +283,53 @@ pub fn handle_users_email(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+fn full_name_field(v: &serde_json::Value) -> Result<Option<&str>, CliResponse> {
+    match v
+        .get("fullName")
+        .or_else(|| v.get("full_name"))
+        .or_else(|| v.get("name"))
+    {
+        None => Ok(None),
+        Some(x) if x.is_null() => Ok(None),
+        Some(x) => match x.as_str() {
+            Some(s) => Ok(Some(s)),
+            None => Err(CliResponse::bad_request("invalid full name")),
+        },
+    }
+}
+
+/// Cap 64, strip ESC, drop controls, trim. Empty after sanitize → clear.
+fn cleaned_full_name(raw: Option<&str>) -> Option<String> {
+    raw.and_then(crate::workspace_msg::sanitize_owner_display_name)
+}
+
+/// Owner-only. Empty / omitted / controls-only clears. Does not rewrite sessions.
+pub fn handle_users_full_name(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = str_field(&v, &["username"]) else {
+        return CliResponse::bad_request("missing username");
+    };
+    let full_name = match full_name_field(&v) {
+        Ok(n) => n,
+        Err(r) => return r,
+    };
+    let cleaned = cleaned_full_name(full_name);
+    match skin::set_principal_full_name(username, cleaned.as_deref()) {
+        Ok(p) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} set full name for {} has_full_name={}",
+                p.username,
+                p.full_name.is_some()
+            );
+            CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 pub fn handle_users_password(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
@@ -1338,6 +1385,29 @@ pub fn handle_password_change(body: &[u8], presented: Option<&str>) -> CliRespon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_name_sanitizer_caps_at_64_and_strips_controls() {
+        let dirty = format!("A\u{1b}\n{}", "x".repeat(80));
+        let clean = cleaned_full_name(Some(&dirty)).expect("usable name remains");
+        assert!(!clean.contains('\u{1b}'), "ESC must not survive: {clean:?}");
+        assert!(!clean.contains('\n'), "newline must not survive: {clean:?}");
+        assert!(
+            !clean.chars().any(|c| c.is_control()),
+            "controls must not survive: {clean:?}"
+        );
+        assert_eq!(clean.chars().count(), 64, "{clean:?}");
+        assert!(clean.starts_with("Ax"), "{clean:?}");
+        assert_eq!(
+            cleaned_full_name(Some("Ada/Lovelace: MD")).as_deref(),
+            Some("Ada/Lovelace: MD"),
+            "slash and colon stay (not validate_display_name)"
+        );
+        assert_eq!(cleaned_full_name(Some("  Ada  ")).as_deref(), Some("Ada"));
+        assert!(cleaned_full_name(Some("\u{1b}\n\t")).is_none());
+        assert!(cleaned_full_name(Some("   ")).is_none());
+        assert!(cleaned_full_name(None).is_none());
+    }
 
     #[test]
     fn safe_next_rejects_open_redirects() {

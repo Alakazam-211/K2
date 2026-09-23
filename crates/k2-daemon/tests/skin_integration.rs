@@ -3674,6 +3674,277 @@ async fn skin_guest_email_create_login_forgot_matrix() {
     });
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_guest_full_name_owner_set_clear_and_list() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("skinfull{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (sales_id, _) = seed_thread_addr(&handle);
+        add_user(port, "ada");
+
+        let listed = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(listed.status, 200, "{}", listed.body);
+        let listed_v = json(&listed.body);
+        let users = listed_v["users"].as_array().cloned().unwrap_or_default();
+        let ada = users
+            .iter()
+            .find(|u| u["username"] == "ada")
+            .expect("ada on the list");
+        assert!(
+            ada.get("fullName").is_some(),
+            "user list must include fullName: {}",
+            listed.body
+        );
+        assert!(ada["fullName"].is_null(), "{}", listed.body);
+        assert!(
+            !listed.body.contains("password_hash") && !listed.body.contains("passwordHash"),
+            "list must not include secrets: {}",
+            listed.body
+        );
+
+        let get_name = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users/full-name?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(
+            get_name.status, 405,
+            "GET users/full-name; {}",
+            get_name.body
+        );
+
+        let slash = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"ada","fullName":"Ada/Lovelace: MD"}"#),
+        );
+        assert_eq!(slash.status, 200, "{}", slash.body);
+        assert_eq!(
+            json(&slash.body)["fullName"],
+            "Ada/Lovelace: MD",
+            "{}",
+            slash.body
+        );
+        assert_eq!(json(&slash.body)["username"], "ada", "{}", slash.body);
+
+        let dirty = format!("A\u{1b}\n{}", "x".repeat(80));
+        let body = serde_json::json!({"username": "ada", "fullName": dirty}).to_string();
+        let sanitized = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={OWNER_TOKEN}"),
+            Some(&body),
+        );
+        assert_eq!(sanitized.status, 200, "{}", sanitized.body);
+        let sanitized_v = json(&sanitized.body);
+        let name = sanitized_v["fullName"]
+            .as_str()
+            .expect("fullName string")
+            .to_string();
+        assert!(!name.contains('\u{1b}'), "{name:?}");
+        assert!(!name.contains('\n'), "{name:?}");
+        assert!(!name.chars().any(|c| c.is_control()), "{name:?}");
+        assert_eq!(name.chars().count(), 64, "{name:?}");
+        assert!(name.starts_with("Ax"), "{name:?}");
+
+        let after = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(after.status, 200, "{}", after.body);
+        let after_v = json(&after.body);
+        let ada_after = after_v["users"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|u| u["username"] == "ada"))
+            .expect("ada");
+        assert_eq!(
+            ada_after["fullName"].as_str(),
+            Some(name.as_str()),
+            "{}",
+            after.body
+        );
+
+        let trimmed = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"ada","fullName":"  Ada  "}"#),
+        );
+        assert_eq!(trimmed.status, 200, "{}", trimmed.body);
+        assert_eq!(json(&trimmed.body)["fullName"], "Ada", "{}", trimmed.body);
+
+        let cleared = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"ada","fullName":""}"#),
+        );
+        assert_eq!(cleared.status, 200, "{}", cleared.body);
+        assert!(
+            json(&cleared.body)["fullName"].is_null(),
+            "{}",
+            cleared.body
+        );
+
+        let set_again = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"ada","fullName":"Ada"}"#),
+        );
+        assert_eq!(set_again.status, 200, "{}", set_again.body);
+        let omitted = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"ada"}"#),
+        );
+        assert_eq!(omitted.status, 200, "{}", omitted.body);
+        assert!(
+            json(&omitted.body)["fullName"].is_null(),
+            "{}",
+            omitted.body
+        );
+
+        let controls = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={OWNER_TOKEN}"),
+            Some("{\"username\":\"ada\",\"fullName\":\"\\u001b\\n\\t\"}"),
+        );
+        assert_eq!(controls.status, 200, "{}", controls.body);
+        assert!(
+            json(&controls.body)["fullName"].is_null(),
+            "{}",
+            controls.body
+        );
+
+        let unknown = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"ghost","fullName":"Nope"}"#),
+        );
+        assert_eq!(unknown.status, 400, "{}", unknown.body);
+
+        let missing = http(
+            port,
+            "POST",
+            "/cli/skin/users/full-name",
+            Some(r#"{"username":"ada","fullName":"Nope"}"#),
+        );
+        assert_eq!(missing.status, 403, "missing token; {}", missing.body);
+
+        let member = provision_role(port, "fullmember", "hunter2-strong-9", "member");
+        let member_set = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={member}"),
+            Some(r#"{"username":"ada","fullName":"Member"}"#),
+        );
+        assert_eq!(
+            member_set.status, 403,
+            "member rejected; {}",
+            member_set.body
+        );
+
+        set_password(port, "ada", "s3cret-horse");
+        let login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"ada","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "{}", login.body);
+        let sess = json(&login.body)["token"]
+            .as_str()
+            .expect("session")
+            .to_string();
+        let guest = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={sess}"),
+            Some(r#"{"username":"ada","fullName":"Guest"}"#),
+        );
+        assert_eq!(guest.status, 403, "session rejected; {}", guest.body);
+
+        let (_plat_id, plat_tok) = mint(port, "ops", &["thread:read"], &[&handle]);
+        let plat = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={plat_tok}"),
+            Some(r#"{"username":"ada","fullName":"Plat"}"#),
+        );
+        assert_eq!(plat.status, 403, "platform rejected; {}", plat.body);
+
+        let hook = mint_scoped_hook_for(&sales_id);
+        let on = set_agents_manage_skin(port, &sales_id, 1);
+        assert_eq!(on.status, 200, "owner enable manage; {}", on.body);
+        let agent_add = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={hook}"),
+            Some(r#"{"username":"fromagent"}"#),
+        );
+        assert_eq!(
+            agent_add.status, 200,
+            "toggle ON still adds users; {}",
+            agent_add.body
+        );
+        let agent_name = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/full-name?token={hook}"),
+            Some(r#"{"username":"ada","fullName":"Agent"}"#),
+        );
+        assert_eq!(
+            agent_name.status, 403,
+            "agent rejected even with manage ON; {}",
+            agent_name.body
+        );
+        assert!(
+            agent_name.body.contains("owner_only"),
+            "valid hook on full-name teaches owner_only: {}",
+            agent_name.body
+        );
+        assert!(
+            !agent_name.body.contains("Allow this agent to manage Apps"),
+            "full-name must not ride the manage-skin toggle: {}",
+            agent_name.body
+        );
+
+        let final_list = http(
+            port,
+            "GET",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(final_list.status, 200, "{}", final_list.body);
+        let final_v = json(&final_list.body);
+        let ada_final = final_v["users"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|u| u["username"] == "ada"))
+            .expect("ada");
+        assert!(
+            ada_final["fullName"].is_null(),
+            "non-owner writes must not stick: {}",
+            final_list.body
+        );
+    });
+}
+
+
 fn assert_skin_rate_limited(r: &Resp, what: &str) {
     assert_eq!(r.status, 429, "{what} must 429; headers={} body={}", r.headers, r.body);
     assert_eq!(r.body, r#"{"error":"rate_limited"}"#, "{what}");

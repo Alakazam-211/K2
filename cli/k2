@@ -5417,9 +5417,11 @@ Usage: k2 app <user|role|token|hydra|front-door> ...
                                         Add an app principal (not a Connect user)
   k2 app user email <username> [--email e]
                                         Set/clear guest email (omit/empty clears)
+  k2 app user full-name <username> [--name <text>]
+                                        Set/clear full name (omit/empty clears)
   k2 app user password <username> --password-stdin
                                         Set/reset K2-login password (empty stdin clears)
-  k2 app user list                     Roster (username  role|—  rooms|—  email|—; no secrets)
+  k2 app user list                     Roster (username  full name|—  role|—  rooms|—  email|—; no secrets)
   k2 app user remove <username>        Drop principal + login sessions (platform tokens survive)
   k2 app user rooms <username> --agent sales [--apply-tokens]
                                         Set default rooms (unassigned guests only)
@@ -5578,6 +5580,30 @@ d=json.load(sys.stdin)
 em=d.get("email") or ""
 print("Skin email %s for %s" % (("set to %s" % em) if em else "cleared", d.get("username","")))'
                     ;;
+                full-name|fullname)
+                    local username="" name=""
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --name) name="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --name=*) name="${1#--name=}"; shift ;;
+                            --help|-h) echo "Usage: k2 app user full-name <username> [--name <text>]" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$username" ]] && username="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user full-name <username> [--name <text>]" >&2; exit 1; }
+                    local body raw
+                    body=$(K2_SKIN_USER="$username" K2_SKIN_FULL_NAME="$name" python3 -c '
+import json,os
+print(json.dumps({"username": os.environ["K2_SKIN_USER"], "fullName": os.environ.get("K2_SKIN_FULL_NAME","")}))')
+                    raw=$(cli_post_json "/cli/skin/users/full-name" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+full=d.get("fullName") or d.get("full_name") or ""
+print("Skin full name %s for %s" % (("set to %s" % full) if full else "cleared", d.get("username","")))'
+                    ;;
                 list|"")
                     local raw roles_raw
                     raw=$(cli_request "/cli/skin/users")
@@ -5600,7 +5626,8 @@ for u in users:
         handles=u.get("defaultRoomHandles") or u.get("default_room_handles") or []
     rooms=", ".join(handles) if handles else "—"
     email=u.get("email") or "—"
-    print("%s  %s  %s  %s" % (name, role, rooms, email))'
+    full=u.get("fullName") or u.get("full_name") or "—"
+    print("%s  %s  %s  %s  %s" % (name, full, role, rooms, email))'
                     ;;
                 remove|rm)
                     local username="${1:-}"
@@ -5673,7 +5700,7 @@ d=json.load(sys.stdin)
 print("Skin user %s unassigned." % d.get("username",""))'
                     ;;
                 *)
-                    echo "Usage: k2 app user <add|list|remove|rooms|password|email|role|unassign>" >&2
+                    echo "Usage: k2 app user <add|list|remove|rooms|password|email|full-name|role|unassign>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -14154,6 +14181,15 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app user full-name",
+      "usage": "k2 app user full-name <username> [--name <text>]",
+      "description": "Set or clear an app guest full name. Omit or empty --name clears. Not a secret.",
+      "args": [{"name": "username", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "text", "description": "Full name. Omit or empty clears."}
+      ]
+    },
+    {
       "name": "app user password",
       "usage": "k2 app user password <username> --password-stdin",
       "description": "Set or clear an app K2-login password. Empty stdin clears (cannot K2-login; static k2skn_ still works).",
@@ -14165,7 +14201,7 @@ cmd_schema() {
     {
       "name": "app user list",
       "usage": "k2 app user list",
-      "description": "List app principals as username  role|—  rooms|—  email|— (no secrets).",
+      "description": "List app principals as username  full name|—  role|—  rooms|—  email|— (no secrets).",
       "args": [],
       "flags": []
     },

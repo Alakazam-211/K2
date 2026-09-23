@@ -1315,6 +1315,10 @@ mod tests {
         assert!(is_agent_verb("/cli/skin/users/remove"));
         assert!(is_agent_verb("/cli/skin/users/password"));
         assert!(is_agent_verb("/cli/skin/users/email"));
+        assert!(
+            !is_agent_verb("/cli/skin/users/full-name"),
+            "full name write is owner-only, not an agent verb"
+        );
         assert!(is_agent_verb("/cli/skin/users/rooms"));
         assert!(is_agent_verb("/cli/skin/roles"));
         assert!(is_agent_verb("/cli/skin/roles/update"));

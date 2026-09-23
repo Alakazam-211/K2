@@ -1735,6 +1735,17 @@ mod tests {
             "users/email is roster mutate; CSRF required"
         );
         assert_eq!(users_email.unwrap().status, "403 Forbidden");
+        let users_full_name = cookie_csrf_gate(
+            "POST",
+            "/cli/skin/users/full-name",
+            true,
+            "POST /cli/skin/users/full-name HTTP/1.1\r\n",
+        );
+        assert!(
+            users_full_name.is_some(),
+            "users/full-name is roster mutate; CSRF required"
+        );
+        assert_eq!(users_full_name.unwrap().status, "403 Forbidden");
     }
 
     #[test]

@@ -66,6 +66,8 @@ export type SettingsSection =
   | 'domains'
   /** Settings → K2 Server → Server Access (K2 Connect people/roles). */
   | 'k2-access'
+  /** Settings → K2 Server → People (skin principals: username + full name). Not Connect users. */
+  | 'people'
   | 'api-tokens'
   | 'email-hosting'
   | 'email-link'

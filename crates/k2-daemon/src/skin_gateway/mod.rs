@@ -1271,6 +1271,10 @@ mod tests {
             !allowlisted_http("POST", "/cli/skin/users/email"),
             "users/email is roster mutate, not --skin"
         );
+        assert!(
+            !allowlisted_http("POST", "/cli/skin/users/full-name"),
+            "users/full-name is owner roster mutate, not --skin"
+        );
     }
 
     #[test]

@@ -612,6 +612,10 @@ pub struct SkinPrincipal {
     /// Optional guest email. Serialized `null` when unset. Not a username.
     #[serde(default)]
     pub email: Option<String>,
+    /// Optional guest full name. Serialized `null` when unset. Not a username.
+    /// Owner-only writes sanitize via `sanitize_owner_display_name` (cap 64).
+    #[serde(default)]
+    pub full_name: Option<String>,
 }
 
 /// Per-room functions on the wire: `{handle, caps}`.
@@ -908,6 +912,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
         [],
     );
     let _ = conn.execute("ALTER TABLE principals ADD COLUMN email TEXT", []);
+    // G10: full name on the guest. Ignore duplicate ALTER like `email`.
+    let _ = conn.execute("ALTER TABLE principals ADD COLUMN full_name TEXT", []);
     conn.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS principals_email
          ON principals(email COLLATE NOCASE)
@@ -1288,6 +1294,7 @@ pub fn add_principal_with_email(
             role_id: None,
             role_name: None,
             email,
+            full_name: None,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -1295,7 +1302,7 @@ pub fn add_principal_with_email(
 }
 
 const PRINCIPAL_SELECT: &str = "SELECT p.id, p.username, p.created_at, p.default_rooms,
-                p.password_hash, p.role_id, r.name, p.email
+                p.password_hash, p.role_id, r.name, p.email, p.full_name
          FROM principals p
          LEFT JOIN roles r ON r.id = p.role_id";
 
@@ -1309,6 +1316,7 @@ fn map_principal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinPrincipal> {
     let role_id: Option<String> = r.get(5)?;
     let role_name: Option<String> = r.get(6)?;
     let email: Option<String> = r.get(7)?;
+    let full_name: Option<String> = r.get(8)?;
     Ok(SkinPrincipal {
         id: r.get(0)?,
         username: r.get(1)?,
@@ -1323,6 +1331,9 @@ fn map_principal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinPrincipal> {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         email: email_from_stored(email),
+        full_name: full_name
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
     })
 }
 
@@ -1624,6 +1635,7 @@ pub fn set_principal_password(
             role_id: p.role_id,
             role_name: p.role_name,
             email: p.email,
+            full_name: p.full_name,
         })
     })
     .map(attach_principal_handles)
@@ -1658,6 +1670,44 @@ pub fn set_principal_email(username: &str, email: Option<&str>) -> Result<SkinPr
             role_id: p.role_id,
             role_name: p.role_name,
             email,
+            full_name: p.full_name,
+        })
+    })
+    .map(attach_principal_handles)
+}
+
+/// Set or clear the guest full name. Empty/`None` → NULL.
+/// Does not rewrite live sessions. The HTTP writer sanitizes first
+/// (`sanitize_owner_display_name`: cap 64, strip ESC, drop controls, trim).
+pub fn set_principal_full_name(
+    username: &str,
+    full_name: Option<&str>,
+) -> Result<SkinPrincipal, String> {
+    let username = normalize_username(username)?;
+    let full_name = full_name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    with_conn(|conn| {
+        let Some(p) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        conn.execute(
+            "UPDATE principals SET full_name = ?1 WHERE id = ?2",
+            params![full_name, p.id],
+        )
+        .map_err(|e| format!("skin full name update: {e}"))?;
+        Ok(SkinPrincipal {
+            id: p.id,
+            username: p.username,
+            created_at: p.created_at,
+            default_rooms: p.default_rooms,
+            default_room_handles: Vec::new(),
+            has_password: p.has_password,
+            role_id: p.role_id,
+            role_name: p.role_name,
+            email: p.email,
+            full_name,
         })
     })
     .map(attach_principal_handles)
@@ -2170,6 +2220,7 @@ pub fn set_principal_default_rooms(
             role_id: p.role_id,
             role_name: p.role_name,
             email: p.email,
+            full_name: p.full_name,
         })
     })
     .map(attach_principal_handles)
@@ -2529,6 +2580,7 @@ pub fn assign_role(username: &str, role: &str) -> Result<SkinPrincipal, String> 
             role_id: Some(role.id),
             role_name: Some(role.name),
             email: p.email,
+            full_name: p.full_name,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -2557,6 +2609,7 @@ pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
             role_id: None,
             role_name: None,
             email: p.email,
+            full_name: p.full_name,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -3911,6 +3964,109 @@ mod tests {
                 Ok(None) => {}
                 other => panic!("cleared email must not mint, got {other:?}"),
             }
+        });
+    }
+
+    fn principal_columns(conn: &Connection) -> String {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(principals)")
+            .expect("pragma");
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .expect("cols")
+            .map(|c| c.expect("col"))
+            .collect();
+        cols.join(",")
+    }
+
+    #[test]
+    fn principal_full_name_column_on_new_and_old_db_round_trips() {
+        with_temp_home(|| {
+            add_principal("ada").expect("add");
+            let cols = with_conn(|conn| Ok(principal_columns(conn))).unwrap();
+            assert!(
+                cols.contains("full_name"),
+                "new db missing full_name: {cols}"
+            );
+            assert!(cols.contains("email"), "must not drop email: {cols}");
+            assert!(cols.contains("role_id"), "must not drop role_id: {cols}");
+            assert!(
+                cols.contains("default_rooms"),
+                "must not drop default_rooms: {cols}"
+            );
+            let fresh = list_principals().unwrap();
+            assert_eq!(fresh.len(), 1);
+            assert!(fresh[0].full_name.is_none(), "{fresh:?}");
+            let wire = serde_json::to_value(&fresh[0]).unwrap();
+            assert!(
+                wire.get("fullName").is_some(),
+                "list JSON must include fullName: {wire}"
+            );
+            assert!(wire["fullName"].is_null(), "{wire}");
+            assert!(wire.get("passwordHash").is_none() && wire.get("password_hash").is_none());
+
+            let set = set_principal_full_name("ada", Some("Ada/Lovelace: MD")).unwrap();
+            assert_eq!(set.full_name.as_deref(), Some("Ada/Lovelace: MD"));
+            let listed = list_principals().unwrap();
+            assert_eq!(listed[0].full_name.as_deref(), Some("Ada/Lovelace: MD"));
+            let cleared = set_principal_full_name("ada", Some("   ")).unwrap();
+            assert!(cleared.full_name.is_none(), "{cleared:?}");
+            let none = set_principal_full_name("ada", None).unwrap();
+            assert!(none.full_name.is_none(), "{none:?}");
+            let missing = set_principal_full_name("ghost", Some("Nope")).unwrap_err();
+            assert!(missing.contains("unknown skin user"), "{missing}");
+        });
+
+        with_temp_home(|| {
+            let path = crate::paths::k2_home().join("skin.db");
+            std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
+            let conn = Connection::open(&path).expect("open old skin.db");
+            conn.execute_batch(
+                "CREATE TABLE principals (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    default_rooms TEXT NOT NULL DEFAULT '[]',
+                    password_hash TEXT,
+                    role_id TEXT,
+                    email TEXT
+                 );",
+            )
+            .expect("pre-full_name schema");
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at, email)
+                 VALUES ('p1', 'bob', 1, 'bob@clinic.com')",
+                [],
+            )
+            .unwrap();
+            let before = principal_columns(&conn);
+            assert!(
+                !before.split(',').any(|c| c == "full_name"),
+                "fixture must lack full_name: {before}"
+            );
+            drop(conn);
+
+            let listed = list_principals().expect("open_db adds full_name");
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].username, "bob");
+            assert!(listed[0].full_name.is_none(), "{listed:?}");
+            assert_eq!(listed[0].email.as_deref(), Some("bob@clinic.com"));
+            let cols = with_conn(|conn| Ok(principal_columns(conn))).unwrap();
+            assert!(
+                cols.contains("full_name"),
+                "old db must gain full_name: {cols}"
+            );
+            assert!(cols.contains("email"), "{cols}");
+            assert!(cols.contains("role_id"), "{cols}");
+            assert!(cols.contains("default_rooms"), "{cols}");
+            let again = list_principals().expect("second open ignores duplicate ALTER");
+            assert_eq!(again[0].username, "bob");
+            let set = set_principal_full_name("bob", Some("Bob")).unwrap();
+            assert_eq!(set.full_name.as_deref(), Some("Bob"));
+            assert_eq!(
+                list_principals().unwrap()[0].full_name.as_deref(),
+                Some("Bob")
+            );
         });
     }
 

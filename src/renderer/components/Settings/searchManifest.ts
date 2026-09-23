@@ -119,6 +119,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'k2-connect': 'Tunnel',
   domains: 'Domains',
   'k2-access': 'Server Access',
+  people: 'People',
   'api-tokens': 'API Keys',
   'email-hosting': 'Email Hosting',
   'email-link': 'Email Link',

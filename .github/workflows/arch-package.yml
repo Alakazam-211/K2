@@ -20,8 +20,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build + attach the pacman package to (e.g. v0.40.150)"
+        description: "GitHub release to upload to (e.g. v0.40.150 or v0.40.150a)"
         required: true
+      ref:
+        description: "Git ref to build. Empty uses the tag. Use main for a follow-up release."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -39,7 +43,7 @@ jobs:
       - name: Checkout (at the release tag)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.ref || github.event.inputs.tag || github.ref }}
 
       - uses: oven-sh/setup-bun@v2
 
@@ -56,9 +60,16 @@ jobs:
           command -v pacman
           command -v makepkg
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          VER="${TAG#v}"
-          packaging/arch/build-release-pkg.sh "$VER"
-          test -s "dist/k2-${VER}-x86_64.pkg.tar.zst"
+          REF="${{ github.event.inputs.ref }}"
+          if [ -n "$REF" ]; then
+            packaging/arch/build-release-pkg.sh
+          else
+            VER="${TAG#v}"
+            packaging/arch/build-release-pkg.sh "$VER"
+          fi
+          pkg="$(find dist -maxdepth 1 -name 'k2-*-x86_64.pkg.tar.zst' -size +0c | head -1)"
+          test -n "$pkg"
+          echo "PKG_PATH=$pkg" >> "$GITHUB_ENV"
 
       - name: Upload to release
         env:
@@ -66,5 +77,4 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          VER="${TAG#v}"
-          gh release upload "$TAG" "dist/k2-${VER}-x86_64.pkg.tar.zst" --clobber
+          gh release upload "$TAG" "$PKG_PATH" --clobber

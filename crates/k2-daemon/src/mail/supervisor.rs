@@ -507,6 +507,8 @@ pub fn reconcile_reported_status(
 
 /// True only when the row says running AND systemd says the unit is active.
 /// SQLite `running` with an inactive unit is a stale cache — not alreadyEnabled (H3).
+/// Test predicate. Production enable uses [`is_already_enabled`].
+#[cfg(test)]
 pub fn is_already_enabled_with(sqlite_status: Option<&str>, unit_state: &str) -> bool {
     sqlite_status == Some("running") && unit_state.trim() == "active"
 }

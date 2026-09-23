@@ -1,0 +1,67 @@
+# Arch / Omarchy pacman package.
+#
+# The Mac release.sh does not compile this GUI. On a pushed release tag
+# the k2-arch runner (Arch, not the Ubuntu k2-linux box) runs
+# packaging/arch/build-release-pkg.sh and uploads
+# k2-<version>-x86_64.pkg.tar.zst onto that GitHub release.
+#
+# runs-on includes k2-arch and must not include k2-linux. The Ubuntu ship
+# runner also has self-hosted + Linux + X64. The extra label is what keeps
+# makepkg off that box and apt jobs off this one.
+#
+# No .sig. Do not pacman -U. Do not add a Linux GUI key to latest.json.
+
+name: arch-package
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build + attach the pacman package to (e.g. v0.40.150)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: k2-arch-ship
+  cancel-in-progress: false
+
+jobs:
+  build-arch-pkg:
+    name: Build Arch package (x86_64)
+    runs-on: [self-hosted, linux, k2-arch]
+    timeout-minutes: 180
+    steps:
+      - name: Checkout (at the release tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build k2-<version>-x86_64.pkg.tar.zst
+        env:
+          K2_GMAIL_CLIENT_ID: ${{ secrets.K2_GMAIL_CLIENT_ID }}
+          K2_GMAIL_CLIENT_SECRET: ${{ secrets.K2_GMAIL_CLIENT_SECRET }}
+          K2_MICROSOFT_CLIENT_ID: ${{ secrets.K2_MICROSOFT_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          command -v pacman
+          command -v makepkg
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VER="${TAG#v}"
+          packaging/arch/build-release-pkg.sh "$VER"
+          test -s "dist/k2-${VER}-x86_64.pkg.tar.zst"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VER="${TAG#v}"
+          gh release upload "$TAG" "dist/k2-${VER}-x86_64.pkg.tar.zst" --clobber

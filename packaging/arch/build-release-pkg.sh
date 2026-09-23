@@ -2,9 +2,9 @@
 # Build the Arch/Omarchy pacman package on an Arch host and write
 # dist/k2-$VERSION-x86_64.pkg.tar.zst.
 #
-# Build on the Arch host, copy dist/k2-$VERSION-x86_64.pkg.tar.zst to the
-# Mac's $DIST_DIR (target/release/daemon-dist) before release.sh. The Mac
-# does not compile the GUI. AUR and pkgs.omarchy.org are out of scope.
+# Build on the Arch host. The tag workflow uploads
+# dist/k2-$VERSION-x86_64.pkg.tar.zst. The Mac does not compile the GUI.
+# AUR and pkgs.omarchy.org are out of scope.
 #
 # Does not install (no pacman -U, no makepkg -i). Smoke install is a
 # separate human step (`makepkg -si`). No .sig — pacman is the install path.
@@ -156,7 +156,7 @@ EOF
     mkdir -p "${root}/dist"
     cp -f "$pkg_path" "${root}/dist/k2-${version}-x86_64.pkg.tar.zst"
     echo "Wrote dist/k2-${version}-x86_64.pkg.tar.zst"
-    echo "Copy dist/k2-${version}-x86_64.pkg.tar.zst to the Mac \$DIST_DIR (target/release/daemon-dist) before release.sh."
+    echo "The k2-arch tag job uploads dist/k2-${version}-x86_64.pkg.tar.zst."
     echo "The Mac does not compile the GUI."
 }
 

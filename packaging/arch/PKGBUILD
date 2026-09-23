@@ -5,8 +5,8 @@
 #   cd packaging/arch && makepkg -si
 #
 # Release asset: packaging/arch/build-release-pkg.sh writes
-# dist/k2-<version>-x86_64.pkg.tar.zst. release.sh uploads it from
-# $DIST_DIR and FATALs if it is missing. This PKGBUILD does not call
+# dist/k2-<version>-x86_64.pkg.tar.zst. The k2-arch tag job uploads it.
+# This PKGBUILD does not call
 # release.sh. O17: do not debtap the GH deb/rpm/AppImage.
 # O12: this is NOT the air-gap SKU — never `--features airgap`.
 # O25: source build bakes Gmail OAuth via require-mail-oauth-build-env.sh

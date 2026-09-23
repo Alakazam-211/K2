@@ -75,21 +75,27 @@ else
     fail "v prefix is FATAL" "rc=${rc}"
 fi
 
-# release.sh wires the gate before gh release create. No skip, no .sig, no gh here.
+# release.sh attaches a staged package and does not stop the tag when it
+# is absent. arch-package.yml uploads after the tag. No .sig, no gh here.
 rel="$ROOT/scripts/release.sh"
-call_line="$(grep -n 'k2_require_arch_pkg_asset' "$rel" | head -1 | cut -d: -f1 || true)"
+call_line="$(grep -n 'ARCH_PKG_NAME=' "$rel" | head -1 | cut -d: -f1 || true)"
 gh_line="$(grep -nE '^gh release create ' "$rel" | head -1 | cut -d: -f1 || true)"
-asset_line="$(grep -n 'ASSETS+=("\$ARCH_PKG_PATH")' "$rel" | head -1 | cut -d: -f1 || true)"
+asset_line="$(grep -n 'ASSETS+=("\$DIST_DIR/\$ARCH_PKG_NAME")' "$rel" | head -1 | cut -d: -f1 || true)"
 if [ -n "$call_line" ] && [ -n "$gh_line" ] && [ -n "$asset_line" ] \
     && [ "$call_line" -lt "$asset_line" ] && [ "$asset_line" -lt "$gh_line" ]; then
-    pass "release.sh attaches the Arch package before gh release create"
+    pass "release.sh attaches a staged Arch package before gh release create"
 else
-    fail "release.sh attaches the Arch package before gh release create" "call=${call_line:-none} asset=${asset_line:-none} gh=${gh_line:-none}"
+    fail "release.sh attaches a staged Arch package before gh release create" "call=${call_line:-none} asset=${asset_line:-none} gh=${gh_line:-none}"
 fi
 if grep -F -q 'k2_require_arch_pkg_asset "$DIST_DIR" "$VERSION")" || exit 1' "$rel"; then
-    pass "release.sh exits if the Arch package check fails"
+    fail "release.sh does not fatal when the Arch package is absent" "still exits on k2_require_arch_pkg_asset"
 else
-    fail "release.sh exits if the Arch package check fails" "missing || exit 1 on the require call"
+    pass "release.sh does not fatal when the Arch package is absent"
+fi
+if grep -F -q 'arch-package.yml on the k2-arch runner uploads it after the tag' "$rel"; then
+    pass "release.sh points a missing package at the k2-arch tag job"
+else
+    fail "release.sh points a missing package at the k2-arch tag job" "warning text missing"
 fi
 if grep -F -q 'k2-${VERSION}-x86_64.pkg.tar.zst' "$rel"; then
     pass "release.sh names k2-\${VERSION}-x86_64.pkg.tar.zst"
@@ -97,17 +103,16 @@ else
     fail "release.sh names k2-\${VERSION}-x86_64.pkg.tar.zst" "filename not in release.sh"
 fi
 
-# The attach block must not add a .sig and must not sit behind a file-exists skip.
-block="$(sed -n "${call_line},$((asset_line + 2))p" "$rel")"
+block="$(sed -n "${call_line},$((asset_line + 6))p" "$rel")"
 if printf '%s\n' "$block" | grep -F -q '.sig'; then
     fail "Arch asset attach does not require a .sig" "sig mentioned in attach block"
 else
     pass "Arch asset attach does not require a .sig"
 fi
-if printf '%s\n' "$block" | grep -E -q 'if \[ -f'; then
-    fail "Arch asset attach is not skip-if-missing" "if [ -f in attach block"
+if printf '%s\n' "$block" | grep -F -q 'if [ -s "$DIST_DIR/$ARCH_PKG_NAME" ]'; then
+    pass "Arch asset attach skips a missing file"
 else
-    pass "Arch asset attach is not skip-if-missing"
+    fail "Arch asset attach skips a missing file" "size check not in attach block"
 fi
 if grep -F -q 'pkg.tar.zst' "$rel" && grep -n 'pkg.tar.zst' "$rel" | grep -E -q 'latest\.json|daemon-latest'; then
     fail "Arch package is not a latest.json key" "pkg.tar.zst shares a line with a latest.json name"

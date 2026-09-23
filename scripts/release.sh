@@ -650,14 +650,17 @@ for LX in "linux-x86_64" "linux-aarch64"; do
     fi
 done
 
-# Arch/Omarchy pacman package. Not optional — unlike the linux daemon
-# tarballs above, a missing file is FATAL before gh release create.
-# No .sig (pacman is the install path). The Mac does not compile the GUI.
-# shellcheck source=scripts/arch-release-asset.sh
-source "$PROJECT_DIR/scripts/arch-release-asset.sh"
-ARCH_PKG_PATH="$(k2_require_arch_pkg_asset "$DIST_DIR" "$VERSION")" || exit 1
-ASSETS+=("$ARCH_PKG_PATH")
-echo "  Asset: k2-${VERSION}-x86_64.pkg.tar.zst"
+# Arch/Omarchy pacman package. The k2-arch runner builds this after the
+# tag and uploads it (arch-package.yml). If a file is already in DIST_DIR,
+# attach it here. A missing file does not stop the release. No .sig.
+ARCH_PKG_NAME="k2-${VERSION}-x86_64.pkg.tar.zst"
+if [ -s "$DIST_DIR/$ARCH_PKG_NAME" ]; then
+    ASSETS+=("$DIST_DIR/$ARCH_PKG_NAME")
+    echo "  Asset: ${ARCH_PKG_NAME}"
+else
+    echo "  WARNING: ${ARCH_PKG_NAME} not in ${DIST_DIR}." >&2
+    echo "  WARNING: arch-package.yml on the k2-arch runner uploads it after the tag." >&2
+fi
 
 if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
     NOTES_SRC="$NOTES_FILE"

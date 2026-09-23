@@ -837,7 +837,8 @@ const TOKENS_DDL: &str = "CREATE TABLE IF NOT EXISTS tokens (
          )";
 
 /// One `host` app row. `ON CONFLICT DO NOTHING` keeps an owner-written
-/// grant (any role or scope) and makes a second open a no-op.
+/// grant (any role or scope). Used by the one-time copy and by a new
+/// principal. A deleted row is not inserted again on a later open.
 fn insert_host_grant(
     conn: &Connection,
     principal_id: &str,
@@ -866,6 +867,9 @@ fn insert_host_grant(
 /// NULL, and the role stays host-wide (`roles.app_id` is not set).
 /// Unassigned: `role_id` NULL and `scope` = stored `default_rooms` JSON,
 /// including `[]`. A guest with no rooms still gets a row.
+///
+/// Call only from [`ensure_host_grant_backfill`]. A later open must not
+/// call this: a deleted host grant stays deleted.
 fn backfill_host_grants(conn: &Connection) -> Result<(), String> {
     let mut stmt = conn
         .prepare("SELECT id, role_id, default_rooms FROM principals")
@@ -895,6 +899,40 @@ fn backfill_host_grants(conn: &Connection) -> Result<(), String> {
             insert_host_grant(conn, &id, None, Some(scope))?;
         }
     }
+    Ok(())
+}
+
+/// Run [`backfill_host_grants`] once per database. The row in
+/// `host_grant_backfill` is the record. Later opens see that row and do
+/// not copy again, so revoking the host grant survives a restart.
+/// Principals created after the copy get their row from [`add_principal_with_email`].
+fn ensure_host_grant_backfill(conn: &mut Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS host_grant_backfill (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            done_at INTEGER NOT NULL
+         );",
+    )
+    .map_err(|e| format!("skin host grant: {e}"))?;
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| format!("skin host grant: {e}"))?;
+    let done: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM host_grant_backfill WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("skin host grant: {e}"))?;
+    if done == 0 {
+        backfill_host_grants(&tx)?;
+        tx.execute(
+            "INSERT INTO host_grant_backfill (id, done_at) VALUES (1, ?1)",
+            params![now_secs()],
+        )
+        .map_err(|e| format!("skin host grant: {e}"))?;
+    }
+    tx.commit().map_err(|e| format!("skin host grant: {e}"))?;
     Ok(())
 }
 
@@ -1030,10 +1068,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
          );",
     )
     .map_err(|e| format!("skin.db schema: {e}"))?;
-    // Every open inserts a host row for principals who lack one.
-    // ON CONFLICT does not rewrite an owner-written row. A deleted
-    // row is missing, so the next open copies it again.
-    backfill_host_grants(&conn)?;
+    // Copy existing guests once. A deleted host row stays deleted.
+    ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;
     let _ = conn.execute("ALTER TABLE tokens ADD COLUMN room_policy TEXT", []);
     ensure_platform_name_index(&conn)?;
@@ -1397,8 +1433,8 @@ pub fn add_principal_with_email(
             params![id, username, created_at, email],
         )
         .map_err(|e| unique_email_err(email.as_deref(), e, "skin principal insert"))?;
-        // Not in the file at open, so the host copy has not run for this row.
-        // Same shape as an unassigned backfill: scope is `default_rooms` (`[]`).
+        // The one-time copy already ran in open_db and did not see this row.
+        // Unassigned host grant: scope is `default_rooms` (`[]`).
         insert_host_grant(&tx, &id, None, Some("[]".to_string()))?;
         tx.commit()
             .map_err(|e| format!("skin principal commit: {e}"))?;
@@ -4834,6 +4870,13 @@ mod tests {
             assert!(!err.contains("ada"), "{err}");
             assert!(!err.contains("grant"), "{err}");
             assert!(!err.contains(HOST_APP_ID), "{err}");
+            reopen_skin_db();
+            assert!(
+                host_grants(&list_grants().unwrap(), &ada.id).is_empty(),
+                "deleted host grant must stay deleted across open"
+            );
+            let err = create_session_token("ada").expect_err("reopen must not restore the grant");
+            assert_eq!(err, HOST_LOGIN_DENIED);
         });
     }
 
@@ -5028,6 +5071,13 @@ mod tests {
             let err = create_session_token("ada").expect_err("deleted host grant denies");
             assert_eq!(err, HOST_LOGIN_DENIED);
             assert!(!err.contains("ada") && !err.contains("grant"), "{err}");
+            reopen_skin_db();
+            assert!(
+                host_grants(&list_grants().unwrap(), "p-ada").is_empty(),
+                "upgrade copy must not put a deleted host grant back"
+            );
+            let err = create_session_token("ada").expect_err("reopen must not restore the grant");
+            assert_eq!(err, HOST_LOGIN_DENIED);
             let (_again, _) = create_session_token("bob").expect("bob grant still allows login");
         });
     }

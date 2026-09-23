@@ -280,7 +280,7 @@ put_guest "$DMG_PATH" '$HOME/k2-gk-testdata'
 
 echo "  running guest pairing assertions ..."
 set +e
-ssh_to "chmod +x ~/k2-gk-testdata/vm-newuser-pair-guest.sh; \
+ssh_retry "chmod +x ~/k2-gk-testdata/vm-newuser-pair-guest.sh; \
   export K2_LABEL='$LABEL' K2_DMG_NAME='$DMG_NAME' K2_TEST_DIR=\$HOME/k2-gk-testdata; \
   bash ~/k2-gk-testdata/vm-newuser-pair-guest.sh; echo GUEST_EXIT=\$?" \
   2>&1 | tee "$HOST_REPORT"

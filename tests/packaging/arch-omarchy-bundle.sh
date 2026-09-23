@@ -157,6 +157,12 @@ contains "README stages the pacman package for release.sh" "$ARCH/README.md" "re
 contains "README upgrade via pacman/AUR" "$ARCH/README.md" "k2 update"
 contains ".install warns against k2 update" "$ARCH/k2.install" "k2 update"
 
+# makepkg writes src/ and pkg/ inside packaging/arch, which is inside the
+# tree prepare() tars. Exclude them or the tar walks into its own output.
+contains "PKGBUILD excludes makepkg src" "$ARCH/PKGBUILD" "--exclude='./packaging/arch/src'"
+contains "PKGBUILD excludes makepkg pkg" "$ARCH/PKGBUILD" "--exclude='./packaging/arch/pkg'"
+contains "PKGBUILD excludes finished package" "$ARCH/PKGBUILD" "--exclude='./packaging/arch/k2-*.pkg.tar.zst'"
+
 # O22 — packaged install is the install; pacman -R does not wipe ~/.k2
 contains ".install says do not run k2 daemon install" "$ARCH/k2.install" "k2 daemon install"
 absent ".install does not rm ~/.k2" "$ARCH/k2.install" "rm -rf"

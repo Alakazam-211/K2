@@ -68,6 +68,8 @@ prepare() {
     fi
     mkdir -p "${srcdir}/${pkgname}"
     # Do not copy .env — OAuth comes from the environment / original tree.
+    # srcdir is packaging/arch/src, inside the tree being copied. Exclude
+    # it or tar walks into its own output.
     tar -C "${tree}" \
         --exclude='./.git' \
         --exclude='./target' \
@@ -81,6 +83,10 @@ prepare() {
         --exclude='./.env.*' \
         --exclude='./.k2' \
         --exclude='./.k2so' \
+        --exclude='./packaging/arch/src' \
+        --exclude='./packaging/arch/pkg' \
+        --exclude='./packaging/arch/k2-*.pkg.tar.zst' \
+        --exclude='./packaging/arch/k2-*.pkg.tar.zst.sig' \
         -cf - . | tar -C "${srcdir}/${pkgname}" -xf -
 }
 

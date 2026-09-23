@@ -148,9 +148,10 @@ contains "README air-gap SKU is not this package" "$ARCH/README.md" "Air-gap"
 absent_code "PKGBUILD does not debtap" "$ARCH/PKGBUILD" "debtap"
 contains "README does not debtap GH deb" "$ARCH/README.md" "debtap"
 
-# O9/O27 — release.sh hands-off
+# The Arch host builds; release.sh only uploads. PKGBUILD does not call it.
 absent_code "PKGBUILD does not call release.sh" "$ARCH/PKGBUILD" "release.sh"
-contains "README release.sh hands-off until O9" "$ARCH/README.md" "release.sh"
+contains "README Mac does not compile the GUI" "$ARCH/README.md" "The Mac does not compile the GUI"
+contains "README stages the pacman package for release.sh" "$ARCH/README.md" "release.sh"
 
 # O18 — pacman owns bins; no GH swap / k2 update overwrite
 contains "README upgrade via pacman/AUR" "$ARCH/README.md" "k2 update"

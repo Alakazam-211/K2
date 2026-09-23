@@ -39,6 +39,13 @@
 #   K2_REQUIRE_WINDOWS_NSIS=1. Skip with K2_SKIP_WINDOWS_NSIS=1.
 #   See scripts/windows-nsis-build.sh + wiki "Ops - Windows Build Box".
 #
+# Arch/Omarchy pacman (Step 9) — not built on this Mac. An Arch host runs
+#   packaging/arch/build-release-pkg.sh. Copy
+#   dist/k2-<version>-x86_64.pkg.tar.zst into $DIST_DIR
+#   (target/release/daemon-dist) before this script. Missing file is FATAL
+#   (no silent skip, no .sig). Do not add a Linux GUI key to latest.json
+#   or daemon-latest.json. AUR and pkgs.omarchy.org are out of scope.
+#
 # Usage:
 #   ./scripts/release.sh <version>
 #   Example: ./scripts/release.sh 0.25.0
@@ -642,6 +649,15 @@ for LX in "linux-x86_64" "linux-aarch64"; do
         ASSETS+=("$DIST_DIR/$LX_ASSET" "$DIST_DIR/${LX_ASSET}.sig")
     fi
 done
+
+# Arch/Omarchy pacman package. Not optional — unlike the linux daemon
+# tarballs above, a missing file is FATAL before gh release create.
+# No .sig (pacman is the install path). The Mac does not compile the GUI.
+# shellcheck source=scripts/arch-release-asset.sh
+source "$PROJECT_DIR/scripts/arch-release-asset.sh"
+ARCH_PKG_PATH="$(k2_require_arch_pkg_asset "$DIST_DIR" "$VERSION")" || exit 1
+ASSETS+=("$ARCH_PKG_PATH")
+echo "  Asset: k2-${VERSION}-x86_64.pkg.tar.zst"
 
 if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
     NOTES_SRC="$NOTES_FILE"

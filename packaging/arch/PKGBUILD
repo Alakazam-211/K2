@@ -4,8 +4,10 @@
 # Build from this git tree:
 #   cd packaging/arch && makepkg -si
 #
-# O9/O27: do not fold this into scripts/release.sh until a real Omarchy
-# `makepkg -si` has smoked. O17: do not debtap the GH deb/rpm/AppImage.
+# Release asset: packaging/arch/build-release-pkg.sh writes
+# dist/k2-<version>-x86_64.pkg.tar.zst. release.sh uploads it from
+# $DIST_DIR and FATALs if it is missing. This PKGBUILD does not call
+# release.sh. O17: do not debtap the GH deb/rpm/AppImage.
 # O12: this is NOT the air-gap SKU — never `--features airgap`.
 # O25: source build bakes Gmail OAuth via require-mail-oauth-build-env.sh
 # (env or gitignored repo-root .env). No secrets in git. A later k2-bin
@@ -14,7 +16,7 @@
 # AUR pkgname is `k2` here; rename to k2-bin at submit if `k2` is taken.
 
 pkgname=k2
-pkgver=0.40.143
+pkgver=0.40.149
 pkgrel=1
 pkgdesc="AI workspace orchestration by Alakazam Labs (GUI + daemon + CLI)"
 arch=('x86_64')

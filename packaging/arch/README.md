@@ -68,10 +68,15 @@ Source PKGBUILD **must** bake Gmail via `scripts/require-mail-oauth-build-env.sh
 
 A later `k2-bin` package may consume the already-baked GitHub `k2-daemon-linux-x86_64` instead of compiling the daemon. This PKGBUILD builds from this tree.
 
+## GitHub release
+
+Build on the Arch host (`packaging/arch/build-release-pkg.sh`), copy `dist/k2-$VERSION-x86_64.pkg.tar.zst` to the Mac's `$DIST_DIR` (`target/release/daemon-dist`) before `release.sh`. The Mac does not compile the GUI. AUR and `pkgs.omarchy.org` are out of scope.
+
+That script runs `makepkg` without installing. `release.sh` uploads `k2-<version>-x86_64.pkg.tar.zst` and aborts if the file is not in `$DIST_DIR`. No `.sig` — pacman is the install path. No Linux GUI key in `latest.json`.
+
 ## Out of this package
 
 - Air-gap `--features airgap` (separate SKU, never this package).
-- Folding Omarchy into `scripts/release.sh` / GitHub Release `.pkg.tar.zst` until a real Omarchy box has `makepkg -si` (O9).
 - Linux GUI auto-update / `latest.json` linux keys.
 - `k2 daemon status|start|stop` lifecycle CLI (Darwin/`launchctl`).
 - `pkgs.omarchy.org` (later ask). aarch64 GUI (same PKGBUILD `arch=()` later).

@@ -2672,9 +2672,7 @@ async fn skin_agents_can_manage_skin_toggle_gates_mutations() {
         );
         assert_owner_only(&mutate_off, "default OFF agent mutate");
         assert!(
-            mutate_off
-                .body
-                .contains("Allow this agent to manage Apps"),
+            mutate_off.body.contains("Allow this agent to manage Apps"),
             "manage OFF hint must name the Agent-tab toggle: {}",
             mutate_off.body
         );
@@ -3944,7 +3942,6 @@ async fn skin_guest_full_name_owner_set_clear_and_list() {
     });
 }
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
     let _g = lock();
@@ -4178,6 +4175,12 @@ async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
             agent_grant.body
         );
 
+        let bob_id = users_v["users"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|u| u["username"] == "bob"))
+            .and_then(|u| u["id"].as_str())
+            .expect("bob id")
+            .to_string();
         let bob_login = http(
             port,
             "POST",
@@ -4186,7 +4189,7 @@ async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
         );
         assert_eq!(
             bob_login.status, 200,
-            "principal with no grant still logs in; {}",
+            "backfilled host grant still logs in; {}",
             bob_login.body
         );
         assert!(
@@ -4194,6 +4197,61 @@ async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
             "{}",
             bob_login.body
         );
+        let bob_grants = http(
+            port,
+            "GET",
+            &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(bob_grants.status, 200, "{}", bob_grants.body);
+        let bob_host = json(&bob_grants.body)["grants"]
+            .as_array()
+            .and_then(|rows| {
+                rows.iter().find(|g| {
+                    g["subjectId"] == bob_id
+                        && g["kind"] == "app"
+                        && g["targetId"] == k2_core::skin::HOST_APP_ID
+                })
+            })
+            .cloned()
+            .expect("bob host grant");
+        assert!(bob_host["roleId"].is_null(), "{}", bob_grants.body);
+        assert_eq!(bob_host["scope"], "[]", "{}", bob_grants.body);
+        let bob_host_id = bob_host["id"].as_str().expect("host grant id");
+        let drop_host = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants/delete?token={OWNER_TOKEN}"),
+            Some(&serde_json::json!({ "id": bob_host_id }).to_string()),
+        );
+        assert_eq!(drop_host.status, 200, "{}", drop_host.body);
+        let bob_denied = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"bob","password":"s3cret-horse"}"#),
+        );
+        let bob_wrong = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"bob","password":"nope"}"#),
+        );
+        assert_eq!(bob_denied.status, 401, "{}", bob_denied.body);
+        assert_eq!(bob_wrong.status, 401, "{}", bob_wrong.body);
+        assert_eq!(
+            bob_denied.body.trim(),
+            bob_wrong.body.trim(),
+            "missing host grant must match a bad password: denied={} wrong={}",
+            bob_denied.body,
+            bob_wrong.body
+        );
+        assert_eq!(
+            bob_denied.body.trim(),
+            r#"{"error":"invalid username or password"}"#
+        );
+        assert!(!bob_denied.body.contains("bob"), "{}", bob_denied.body);
+        assert!(!bob_denied.body.contains("grant"), "{}", bob_denied.body);
 
         let removed = http(
             port,
@@ -4250,9 +4308,12 @@ async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
     });
 }
 
-
 fn assert_skin_rate_limited(r: &Resp, what: &str) {
-    assert_eq!(r.status, 429, "{what} must 429; headers={} body={}", r.headers, r.body);
+    assert_eq!(
+        r.status, 429,
+        "{what} must 429; headers={} body={}",
+        r.headers, r.body
+    );
     assert_eq!(r.body, r#"{"error":"rate_limited"}"#, "{what}");
     assert_eq!(
         r.headers
@@ -4429,7 +4490,11 @@ async fn skin_guest_binary_create_copy_move_and_pin_find_only() {
             &format!("/cli/fs/read-binary?token={read_tok}&workspace={docs}&path=doc.pdf"),
             None,
         );
-        assert_eq!(no_read.status, 200, "read-only still reads; {}", no_read.body);
+        assert_eq!(
+            no_read.status, 200,
+            "read-only still reads; {}",
+            no_read.body
+        );
 
         let upload_denied = http(
             port,
@@ -4570,9 +4635,7 @@ async fn skin_guest_binary_create_copy_move_and_pin_find_only() {
             port,
             "POST",
             &format!("/cli/workspace/ensure-pinned-chat?token={rw_tok}"),
-            Some(&format!(
-                r#"{{"workspace":"{docs}","forceRespawn":true}}"#
-            )),
+            Some(&format!(r#"{{"workspace":"{docs}","forceRespawn":true}}"#)),
         );
         assert_eq!(force.status, 400, "forceRespawn; {}", force.body);
 
@@ -4580,10 +4643,7 @@ async fn skin_guest_binary_create_copy_move_and_pin_find_only() {
             port,
             "POST",
             &format!("/cli/workspace/ensure-pinned-chat?token={rw_tok}"),
-            Some(&format!(
-                r#"{{"project":"{}"}}"#,
-                docs_dir.display()
-            )),
+            Some(&format!(r#"{{"project":"{}"}}"#, docs_dir.display())),
         );
         assert_eq!(
             abs_project.status, 400,
@@ -4628,7 +4688,11 @@ async fn skin_guest_binary_create_copy_move_and_pin_find_only() {
         assert_skin_room(&pin_anna);
 
         let info = http(port, "GET", &format!("/cli/fs/info?token={rw_tok}"), None);
-        assert_eq!(info.status, 403, "info still closed on daemon; {}", info.body);
+        assert_eq!(
+            info.status, 403,
+            "info still closed on daemon; {}",
+            info.body
+        );
         let delete = http(
             port,
             "POST",

@@ -9,7 +9,8 @@
 //!
 //! ## Store (`~/.k2/skin.db`, WAL, own Mutex)
 //! Tables: `principals` (guest roster), `roles` (named caps+rooms bundles;
-//! nullable `app_id`, NULL = host-wide), `grants` (subject × kind × target),
+//! nullable `app_id`, NULL = host-wide), `grants` (subject × kind × target;
+//! `target_id` `host` is this box's skin login),
 //! and `tokens` (hashed passes). The raw secret is returned
 //! **once** at mint and never stored. Lookup is hex SHA-256 of the
 //! presented key (same construction as API keys / connect-user session
@@ -38,6 +39,15 @@ use sha2::{Digest, Sha256};
 
 /// Prefix every skin pass carries. Distinct from `k2sk_` (`/v1` API keys).
 pub const SKIN_KEY_PREFIX: &str = "k2skn_";
+
+/// This box's skin login. No apps registry and no per-published-app login
+/// yet. [`create_session_token`] is that login.
+pub const HOST_APP_ID: &str = "host";
+
+/// [`create_session_token`] error when the principal has no `kind=app`
+/// grant for [`HOST_APP_ID`]. The login route returns this text as the
+/// same 401 body as a bad password. No username and no grant detail.
+pub const HOST_LOGIN_DENIED: &str = "invalid username or password";
 
 /// Overlay Thread read (GET `/cli/thread`, WS `/cli/overlay/events`).
 pub const CAP_THREAD_READ: &str = "thread:read";
@@ -826,6 +836,81 @@ const TOKENS_DDL: &str = "CREATE TABLE IF NOT EXISTS tokens (
             )
          )";
 
+/// One `host` app row. `ON CONFLICT DO NOTHING` keeps an owner-written
+/// grant (any role or scope) and makes a second open a no-op.
+fn insert_host_grant(
+    conn: &Connection,
+    principal_id: &str,
+    role_id: Option<String>,
+    scope: Option<String>,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO grants
+         (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at)
+         VALUES (?1, 'principal', ?2, 'app', ?3, ?4, ?5, ?6)
+         ON CONFLICT(subject_kind, subject_id, kind, target_id) DO NOTHING",
+        params![
+            uuid::Uuid::new_v4().to_string(),
+            principal_id,
+            HOST_APP_ID,
+            role_id,
+            scope,
+            now_secs(),
+        ],
+    )
+    .map_err(|e| format!("skin host grant: {e}"))?;
+    Ok(())
+}
+
+/// Copy principals who have no host grant. Assigned: that `role_id`, scope
+/// NULL, and the role stays host-wide (`roles.app_id` is not set).
+/// Unassigned: `role_id` NULL and `scope` = stored `default_rooms` JSON,
+/// including `[]`. A guest with no rooms still gets a row.
+fn backfill_host_grants(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("SELECT id, role_id, default_rooms FROM principals")
+        .map_err(|e| format!("skin host grant: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(|e| format!("skin host grant: {e}"))?;
+    let mut pending = Vec::new();
+    for row in rows {
+        pending.push(row.map_err(|e| format!("skin host grant: {e}"))?);
+    }
+    drop(stmt);
+    for (id, role_id, rooms) in pending {
+        if let Some(role_id) = blank_to_none(role_id) {
+            insert_host_grant(conn, &id, Some(role_id), None)?;
+        } else {
+            let scope = match rooms {
+                Some(s) if !s.trim().is_empty() => s,
+                _ => "[]".to_string(),
+            };
+            insert_host_grant(conn, &id, None, Some(scope))?;
+        }
+    }
+    Ok(())
+}
+
+fn principal_has_host_grant(conn: &Connection, principal_id: &str) -> Result<bool, String> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM grants
+             WHERE subject_kind = 'principal' AND subject_id = ?1
+               AND kind = 'app' AND target_id = ?2",
+            params![principal_id, HOST_APP_ID],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("skin host grant: {e}"))?;
+    Ok(n > 0)
+}
+
 fn open_db(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
@@ -945,6 +1030,10 @@ fn open_db(path: &Path) -> Result<Connection, String> {
          );",
     )
     .map_err(|e| format!("skin.db schema: {e}"))?;
+    // Every open inserts a host row for principals who lack one.
+    // ON CONFLICT does not rewrite an owner-written row. A deleted
+    // row is missing, so the next open copies it again.
+    backfill_host_grants(&conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;
     let _ = conn.execute("ALTER TABLE tokens ADD COLUMN room_policy TEXT", []);
     ensure_platform_name_index(&conn)?;
@@ -1300,11 +1389,19 @@ pub fn add_principal_with_email(
         if let Some(ref em) = email {
             ensure_email_free(conn, em, None)?;
         }
-        conn.execute(
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin principal begin: {e}"))?;
+        tx.execute(
             "INSERT INTO principals (id, username, created_at, email) VALUES (?1, ?2, ?3, ?4)",
             params![id, username, created_at, email],
         )
         .map_err(|e| unique_email_err(email.as_deref(), e, "skin principal insert"))?;
+        // Not in the file at open, so the host copy has not run for this row.
+        // Same shape as an unassigned backfill: scope is `default_rooms` (`[]`).
+        insert_host_grant(&tx, &id, None, Some("[]".to_string()))?;
+        tx.commit()
+            .map_err(|e| format!("skin principal commit: {e}"))?;
         Ok(SkinPrincipal {
             id,
             username,
@@ -1553,10 +1650,13 @@ pub fn create_token(
     Ok((attach_token_handles(r.0), r.1))
 }
 
-/// Login session mint. Assigned guests snapshot the role (caps+rooms,
-/// including `[]`). Unassigned copies `default_rooms` **including []**
-/// (Thread `skin_room` 403) with Thread-only caps. Do **not** call
-/// [`create_token`] (empty rooms 400). `session=1`, `expires_at` =
+/// Login session mint for [`HOST_APP_ID`]. Denies with [`HOST_LOGIN_DENIED`]
+/// when that principal has no `kind=app` grant for `host` (same text as a
+/// bad password; no username). Assigned guests still snapshot the role
+/// (caps+rooms, including `[]`). Unassigned still copy `default_rooms`
+/// **including []** (Thread `skin_room` 403) with Thread-only caps. The
+/// grant is the allow bit only — rooms are not read from it. Do **not**
+/// call [`create_token`] (empty rooms 400). `session=1`, `expires_at` =
 /// now + [`crate::connect_users::session_ttl_days`].
 pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), String> {
     let username = normalize_username(username)?;
@@ -1575,6 +1675,9 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
         let Some(principal) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
+        if !principal_has_host_grant(conn, &principal.id)? {
+            return Err(HOST_LOGIN_DENIED.to_string());
+        }
         let policy = if let Some(rid) = principal.role_id.as_deref() {
             let Some(role) = role_by_id_or_name(conn, rid)? else {
                 return Err(format!("unknown skin role '{rid}'"));
@@ -3196,6 +3299,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    fn reopen_skin_db() {
+        let path = store_path();
+        {
+            let mut guard = db().lock();
+            *guard = None;
+        }
+        let conn = open_db(&path).expect("reopen skin.db");
+        *db().lock() = Some(SkinDb { path, conn });
+    }
+
+    fn host_grants<'a>(grants: &'a [SkinGrant], principal_id: &str) -> Vec<&'a SkinGrant> {
+        grants
+            .iter()
+            .filter(|g| {
+                g.subject_kind == "principal"
+                    && g.subject_id == principal_id
+                    && g.kind == "app"
+                    && g.target_id == HOST_APP_ID
+            })
+            .collect()
+    }
+
     #[test]
     fn prefix_is_k2skn_never_k2sk() {
         assert_eq!(SKIN_KEY_PREFIX, "k2skn_");
@@ -4386,12 +4511,20 @@ mod tests {
             );
             assert!(grants, "new db missing grants");
             assert!(app_id.is_none(), "new role stays host-wide: {app_id:?}");
-            assert!(list_grants().unwrap().is_empty());
+            let ada = list_principals().unwrap();
+            let grants_now = list_grants().unwrap();
+            let host = host_grants(&grants_now, &ada[0].id);
+            assert_eq!(host.len(), 1, "new guest gets one host grant");
+            assert!(host[0].role_id.is_none(), "{host:?}");
+            assert_eq!(host[0].scope.as_deref(), Some("[]"));
             let listed = list_roles().unwrap();
             assert_eq!(listed.len(), 1);
             assert!(listed[0].app_id.is_none(), "{listed:?}");
+            let host_id = host[0].id.clone();
+            reopen_skin_db();
             let again = list_grants().expect("second open ignores duplicate ALTER");
-            assert!(again.is_empty());
+            assert_eq!(host_grants(&again, &ada[0].id).len(), 1, "{again:?}");
+            assert_eq!(again.iter().filter(|g| g.id == host_id).count(), 1);
         });
 
         with_temp_home(|| {
@@ -4451,9 +4584,28 @@ mod tests {
                 "old db must gain roles.app_id: {cols}"
             );
             assert!(grants, "old db must gain grants");
-            assert!(list_grants().unwrap().is_empty());
+            let copied = list_grants().unwrap();
+            let host = host_grants(&copied, "p1");
+            assert_eq!(
+                host.len(),
+                1,
+                "unassigned bob is copied onto host: {copied:?}"
+            );
+            assert!(host[0].role_id.is_none(), "{host:?}");
+            assert_eq!(host[0].scope.as_deref(), Some("[]"));
+            assert!(roles[0].app_id.is_none(), "copy must not set roles.app_id");
             let bob = list_principals().unwrap();
             assert_eq!(bob[0].full_name.as_deref(), Some("Bob"));
+            assert!(bob[0].role_id.is_none(), "{bob:?}");
+            let host_id = host[0].id.clone();
+            reopen_skin_db();
+            let again_grants = list_grants().unwrap();
+            assert_eq!(
+                host_grants(&again_grants, "p1").len(),
+                1,
+                "{again_grants:?}"
+            );
+            assert_eq!(again_grants.iter().filter(|g| g.id == host_id).count(), 1);
             let again = list_roles().expect("second open ignores duplicate ALTER");
             assert_eq!(again[0].name, "guest");
             assert!(again[0].app_id.is_none(), "{again:?}");
@@ -4584,7 +4736,11 @@ mod tests {
             assert!(dup.contains("already exists"), "{dup}");
 
             let listed = list_grants().unwrap();
-            assert_eq!(listed.len(), 2, "{listed:?}");
+            assert_eq!(
+                listed.len(),
+                3,
+                "host grant plus the two writes: {listed:?}"
+            );
             assert!(
                 listed.iter().any(|g| g.id == created.id),
                 "created grant missing: {listed:?}"
@@ -4636,8 +4792,9 @@ mod tests {
                     .unwrap()
             );
             let left = list_grants().unwrap();
-            assert_eq!(left.len(), 1, "{left:?}");
-            assert_eq!(left[0].id, matched.id);
+            assert_eq!(left.len(), 2, "host grant stays: {left:?}");
+            assert!(left.iter().any(|g| g.id == matched.id), "{left:?}");
+            assert_eq!(host_grants(&left, &ada.id).len(), 1, "{left:?}");
             let roles = list_roles().unwrap();
             assert_eq!(roles.len(), 1, "revoke must keep the role");
             assert_eq!(roles[0].name, "guest");
@@ -4658,22 +4815,329 @@ mod tests {
     }
 
     #[test]
-    fn principal_without_grant_can_still_log_in() {
+    fn principal_without_host_grant_cannot_create_session() {
         with_temp_home(|| {
-            add_principal("ada").unwrap();
+            let ada = add_principal("ada").unwrap();
             set_principal_password("ada", Some("s3cret-horse")).unwrap();
+            assert_eq!(host_grants(&list_grants().unwrap(), &ada.id).len(), 1);
             assert!(
-                list_grants().unwrap().is_empty(),
-                "fixture must have no grant"
+                delete_grant_by_key("principal", &ada.id, "app", HOST_APP_ID).unwrap(),
+                "host grant must delete"
             );
+            assert!(host_grants(&list_grants().unwrap(), &ada.id).is_empty());
             match check_and_record_login("ada", "s3cret-horse") {
                 SkinLoginOutcome::Ok(p) => assert_eq!(p.username, "ada"),
-                other => panic!("no grant must not deny login, got {other:?}"),
+                other => panic!("password check stays separate from the grant bit, got {other:?}"),
             }
-            let (_meta, raw) = create_session_token("ada").expect("session mint");
-            let pass = resolve_skin_token(&raw).expect("session still resolves");
-            assert_eq!(pass.username, "ada");
-            assert!(pass.session);
+            let err = create_session_token("ada").expect_err("missing host grant denies");
+            assert_eq!(err, HOST_LOGIN_DENIED);
+            assert!(!err.contains("ada"), "{err}");
+            assert!(!err.contains("grant"), "{err}");
+            assert!(!err.contains(HOST_APP_ID), "{err}");
+        });
+    }
+
+    #[test]
+    fn host_grant_backfill_copies_assigned_and_empty_rooms_once() {
+        with_temp_home(|| {
+            let path = crate::paths::k2_home().join("skin.db");
+            std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
+            let conn = Connection::open(&path).expect("old skin.db");
+            conn.execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE roles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    caps TEXT NOT NULL,
+                    rooms TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL,
+                    room_policy TEXT NOT NULL DEFAULT '{}'
+                 );
+                 CREATE TABLE principals (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    default_rooms TEXT NOT NULL DEFAULT '[]',
+                    password_hash TEXT,
+                    role_id TEXT REFERENCES roles(id),
+                    email TEXT,
+                    full_name TEXT
+                 );",
+            )
+            .expect("pre-grant schema");
+            let sales = uuid::Uuid::new_v4().to_string();
+            let other = uuid::Uuid::new_v4().to_string();
+            let bob_room = uuid::Uuid::new_v4().to_string();
+            let mut policy = RoomPolicy::new();
+            policy.insert(
+                sales.clone(),
+                vec![CAP_THREAD_READ.into(), CAP_FILES_READ.into()],
+            );
+            let policy_json = room_policy_json(&policy);
+            let caps = caps_json(&union_caps(&policy));
+            let role_rooms = rooms_json(&rooms_from_policy(&policy));
+            let ada_defaults = rooms_json(std::slice::from_ref(&other));
+            let bob_defaults = rooms_json(std::slice::from_ref(&bob_room));
+            conn.execute(
+                "INSERT INTO roles (id, name, caps, rooms, created_at, room_policy)
+                 VALUES ('role-dentist', 'dentist', ?1, ?2, 1, ?3)",
+                params![caps, role_rooms, policy_json],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at, default_rooms, role_id)
+                 VALUES ('p-ada', 'ada', 1, ?1, 'role-dentist')",
+                params![ada_defaults],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at, default_rooms)
+                 VALUES ('p-bob', 'bob', 1, ?1)",
+                params![bob_defaults],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at, default_rooms)
+                 VALUES ('p-cara', 'cara', 1, '[]')",
+                [],
+            )
+            .unwrap();
+            assert!(!table_exists(&conn, "grants"), "fixture must lack grants");
+            drop(conn);
+
+            let principals = list_principals().expect("open copies host grants");
+            let ada = principals.iter().find(|p| p.username == "ada").unwrap();
+            let bob = principals.iter().find(|p| p.username == "bob").unwrap();
+            let cara = principals.iter().find(|p| p.username == "cara").unwrap();
+            assert_eq!(ada.role_id.as_deref(), Some("role-dentist"));
+            assert_eq!(ada.default_rooms, vec![other.clone()]);
+            assert!(bob.role_id.is_none(), "{bob:?}");
+            assert!(
+                cara.role_id.is_none() && cara.default_rooms.is_empty(),
+                "{cara:?}"
+            );
+            let role = list_roles().unwrap();
+            assert_eq!(role.len(), 1);
+            assert!(
+                role[0].app_id.is_none(),
+                "host role stays host-wide: {role:?}"
+            );
+            assert_eq!(role[0].room_policy.get(&sales).map(|c| c.len()), Some(2));
+
+            let grants = list_grants().unwrap();
+            assert_eq!(grants.len(), 3, "{grants:?}");
+            let ada_g = host_grants(&grants, "p-ada");
+            let bob_g = host_grants(&grants, "p-bob");
+            let cara_g = host_grants(&grants, "p-cara");
+            assert_eq!(ada_g.len(), 1, "{grants:?}");
+            assert_eq!(bob_g.len(), 1, "{grants:?}");
+            assert_eq!(cara_g.len(), 1, "{grants:?}");
+            assert_eq!(ada_g[0].role_id.as_deref(), Some("role-dentist"));
+            assert!(
+                ada_g[0].scope.is_none(),
+                "assigned scope stays NULL: {ada_g:?}"
+            );
+            assert!(bob_g[0].role_id.is_none(), "{bob_g:?}");
+            assert_eq!(bob_g[0].scope.as_deref(), Some(bob_defaults.as_str()));
+            assert!(cara_g[0].role_id.is_none(), "{cara_g:?}");
+            assert_eq!(
+                cara_g[0].scope.as_deref(),
+                Some("[]"),
+                "empty rooms still get a row"
+            );
+            let ada_grant_id = ada_g[0].id.clone();
+            let bob_grant_id = bob_g[0].id.clone();
+            let cara_grant_id = cara_g[0].id.clone();
+
+            reopen_skin_db();
+            let second = list_grants().unwrap();
+            assert_eq!(
+                second.len(),
+                3,
+                "second open must not duplicate: {second:?}"
+            );
+            assert!(second.iter().any(|g| g.id == ada_grant_id));
+            assert!(second.iter().any(|g| g.id == bob_grant_id));
+            assert!(second.iter().any(|g| g.id == cara_grant_id));
+
+            with_conn(|c| {
+                c.execute(
+                    "UPDATE grants SET role_id = NULL, scope = 'owner-keep' WHERE id = ?1",
+                    params![ada_grant_id],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+            reopen_skin_db();
+            let kept = list_grants().unwrap();
+            assert_eq!(kept.len(), 3, "{kept:?}");
+            let ada_kept = host_grants(&kept, "p-ada");
+            assert_eq!(ada_kept.len(), 1, "{kept:?}");
+            assert_eq!(ada_kept[0].id, ada_grant_id);
+            assert!(
+                ada_kept[0].role_id.is_none(),
+                "owner edit must stick: {ada_kept:?}"
+            );
+            assert_eq!(ada_kept[0].scope.as_deref(), Some("owner-keep"));
+            let bob_kept = host_grants(&kept, "p-bob");
+            assert_eq!(bob_kept[0].id, bob_grant_id);
+            assert_eq!(bob_kept[0].scope.as_deref(), Some(bob_defaults.as_str()));
+            assert_eq!(host_grants(&kept, "p-cara")[0].id, cara_grant_id);
+            assert!(list_roles().unwrap()[0].app_id.is_none());
+            assert_eq!(
+                list_principals()
+                    .unwrap()
+                    .iter()
+                    .find(|p| p.username == "ada")
+                    .unwrap()
+                    .role_id
+                    .as_deref(),
+                Some("role-dentist")
+            );
+
+            let (ada_meta, ada_raw) = create_session_token("ada").expect("backfilled ada logs in");
+            assert_eq!(ada_meta.rooms, vec![sales.clone()]);
+            assert!(
+                !ada_meta.rooms.contains(&other),
+                "session must not read default_rooms"
+            );
+            let ada_pass = resolve_skin_token(&ada_raw).expect("ada session");
+            assert!(ada_pass.has_cap(CAP_FILES_READ));
+            assert!(ada_pass.has_cap_in_room(&sales, CAP_FILES_READ));
+            assert!(!ada_pass.has_room(&other));
+
+            let (bob_meta, bob_raw) = create_session_token("bob").expect("backfilled bob logs in");
+            assert_eq!(bob_meta.rooms, vec![bob_room.clone()]);
+            let bob_pass = resolve_skin_token(&bob_raw).expect("bob session");
+            assert!(bob_pass.has_cap(CAP_THREAD_READ));
+            assert!(bob_pass.has_cap(CAP_THREAD_POST));
+            assert!(!bob_pass.has_cap(CAP_FILES_READ), "{bob_pass:?}");
+            assert!(bob_pass.has_cap_in_room(&bob_room, CAP_THREAD_READ));
+            assert!(!bob_pass.has_cap_in_room(&bob_room, CAP_FILES_READ));
+
+            let (cara_meta, cara_raw) =
+                create_session_token("cara").expect("empty rooms still log in");
+            assert!(cara_meta.rooms.is_empty(), "{cara_meta:?}");
+            let cara_pass = resolve_skin_token(&cara_raw).expect("cara session");
+            assert!(cara_pass.rooms_empty());
+            assert!(!cara_pass.has_cap(CAP_THREAD_READ), "{cara_pass:?}");
+            assert!(!cara_pass.has_cap(CAP_FILES_READ));
+
+            assert!(delete_grant_by_id(&ada_grant_id).unwrap());
+            let err = create_session_token("ada").expect_err("deleted host grant denies");
+            assert_eq!(err, HOST_LOGIN_DENIED);
+            assert!(!err.contains("ada") && !err.contains("grant"), "{err}");
+            let (_again, _) = create_session_token("bob").expect("bob grant still allows login");
+        });
+    }
+
+    #[test]
+    fn host_grant_backfill_does_not_rewrite_owner_grant() {
+        with_temp_home(|| {
+            let path = crate::paths::k2_home().join("skin.db");
+            std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
+            let conn = Connection::open(&path).expect("grants-era skin.db");
+            conn.execute_batch(
+                "CREATE TABLE principals (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    default_rooms TEXT NOT NULL DEFAULT '[]',
+                    password_hash TEXT,
+                    role_id TEXT,
+                    email TEXT,
+                    full_name TEXT
+                 );
+                 CREATE TABLE roles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    caps TEXT NOT NULL,
+                    rooms TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL,
+                    room_policy TEXT NOT NULL DEFAULT '{}'
+                 );
+                 CREATE TABLE grants (
+                    id TEXT PRIMARY KEY,
+                    subject_kind TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    role_id TEXT,
+                    scope TEXT,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(subject_kind, subject_id, kind, target_id)
+                 );",
+            )
+            .expect("grants-era schema");
+            let gia_room = uuid::Uuid::new_v4().to_string();
+            let gia_defaults = rooms_json(std::slice::from_ref(&gia_room));
+            let dan_defaults = rooms_json(&["should-not-copy".into()]);
+            conn.execute(
+                "INSERT INTO roles (id, name, caps, rooms, created_at, room_policy)
+                 VALUES ('role-assigned', 'assigned', '[]', '[]', 1, '{}'),
+                        ('role-other', 'other', '[]', '[]', 1, '{}')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at, default_rooms, role_id)
+                 VALUES ('p-dan', 'dan', 1, ?1, 'role-assigned'),
+                        ('p-ada', 'ada', 1, '[]', 'role-assigned')",
+                params![dan_defaults],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO principals (id, username, created_at, default_rooms)
+                 VALUES ('p-eve', 'eve', 1, '[]'),
+                        ('p-gia', 'gia', 1, ?1)",
+                params![gia_defaults],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO grants
+                 (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at)
+                 VALUES ('g-dan', 'principal', 'p-dan', 'app', 'host', 'role-other', 'owner-scope', 1)",
+                [],
+            )
+            .unwrap();
+            drop(conn);
+
+            let grants = list_grants().expect("open backfills missing host rows only");
+            assert_eq!(grants.len(), 4, "{grants:?}");
+            let dan = host_grants(&grants, "p-dan");
+            assert_eq!(dan.len(), 1, "{grants:?}");
+            assert_eq!(dan[0].id, "g-dan");
+            assert_eq!(
+                dan[0].created_at, 1,
+                "owner row must not be rewritten: {dan:?}"
+            );
+            assert_eq!(dan[0].role_id.as_deref(), Some("role-other"));
+            assert_eq!(dan[0].scope.as_deref(), Some("owner-scope"));
+            let ada = host_grants(&grants, "p-ada");
+            assert_eq!(ada.len(), 1, "{grants:?}");
+            assert_eq!(ada[0].role_id.as_deref(), Some("role-assigned"));
+            assert!(ada[0].scope.is_none(), "{ada:?}");
+            let eve = host_grants(&grants, "p-eve");
+            assert_eq!(eve.len(), 1, "{grants:?}");
+            assert!(eve[0].role_id.is_none(), "{eve:?}");
+            assert_eq!(eve[0].scope.as_deref(), Some("[]"));
+            let gia = host_grants(&grants, "p-gia");
+            assert_eq!(gia.len(), 1, "{grants:?}");
+            assert!(gia[0].role_id.is_none(), "{gia:?}");
+            assert_eq!(gia[0].scope.as_deref(), Some(gia_defaults.as_str()));
+            for role in list_roles().unwrap() {
+                assert!(role.app_id.is_none(), "copy must not set app_id: {role:?}");
+            }
+            let dan_id = dan[0].id.clone();
+            reopen_skin_db();
+            let again = list_grants().unwrap();
+            assert_eq!(again.len(), 4, "{again:?}");
+            let dan_again = host_grants(&again, "p-dan");
+            assert_eq!(dan_again[0].id, dan_id);
+            assert_eq!(dan_again[0].created_at, 1);
+            assert_eq!(dan_again[0].role_id.as_deref(), Some("role-other"));
+            assert_eq!(dan_again[0].scope.as_deref(), Some("owner-scope"));
         });
     }
 

@@ -1204,6 +1204,17 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
     };
     let (meta, raw) = match skin::create_session_token(&principal.username) {
         Ok(v) => v,
+        Err(e) if e == skin::HOST_LOGIN_DENIED => {
+            return SkinLoginReply {
+                response: if form {
+                    login_failed_html()
+                } else {
+                    login_failed_json()
+                },
+                token: None,
+                location: None,
+            };
+        }
         Err(e) => {
             return SkinLoginReply {
                 response: CliResponse::internal_error(e),

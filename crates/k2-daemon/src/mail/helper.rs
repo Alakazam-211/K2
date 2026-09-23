@@ -1,9 +1,14 @@
 //! Allowlist for `/usr/local/libexec/k2-mail-helper`.
 //!
 //! User `k2` may `sudo -n` that one path. This module is the allowlist:
-//! exact argv, canned unit bytes, and the tarball pin. The binary and
-//! [`super::sysops::RealSystemOps`] both call it. Tests do not exec the
-//! binary, spawn sudo, or write `/etc`.
+//! exact argv, canned unit bytes, and the tarball pin. The helper binary
+//! calls the executor through the library. `main.rs` compiles this same
+//! file into the daemon and does not call the executor, so those items
+//! are unused in that build. `release.sh` checks with `-D warnings`.
+//!
+//! [`super::sysops::RealSystemOps`] calls the path constants. Tests do
+//! not exec the binary, spawn sudo, or write `/etc`.
+#![allow(dead_code)]
 
 use std::io::Read;
 use std::path::{Component, Path};

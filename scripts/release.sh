@@ -199,7 +199,7 @@ bunx vitest run --reporter=dot
 bun run vite:build:web
 echo "  Pre-flight gates passed."
 
-# ── Step 0.6: Linux build gate (k2-sandbox-01) ──
+# ── Step 0.6: Linux build gate (k2-ci@40.160.54.133) ──
 # Shared with scripts/build-app.sh — full rationale + designated-box details
 # live in scripts/linux-build-gate.sh. Escape: K2_SKIP_LINUX_GATE=1 (loud).
 echo ""

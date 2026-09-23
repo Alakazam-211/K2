@@ -3,8 +3,10 @@
 # stack off the reference box into versioned, sha256-manifested tarballs and
 # (optionally) publish them as GitHub release assets.
 #
-# Runs ON the reference sandbox box (k2-sandbox-01, root@37.27.67.180) as
-# root. It is a READ-ONLY harvest of the live system — it never touches the
+# Runs ON the box that still holds the Dedicated sandbox fixture. That
+# fixture is still on AX41 (root@37.27.67.180) until it is moved. AX41 is
+# becoming the Windows CI machine; do not treat this harvest as the Linux
+# ship gate. It is a READ-ONLY harvest of the live system — it never touches the
 # running k2-daemon, the systemd units, or any installed file; it only READS
 # the artifact paths and WRITES tarballs into its own output directory.
 #

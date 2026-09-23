@@ -9,22 +9,21 @@
 # compiles on Linux ONLY here and at tag time. This gate caught a real break
 # on its first shakedown run (mac-only test module in secrets.rs).
 #
-# Designated box: k2-sandbox-01 (Hetzner bare metal, 12c/62GB) — see the
-# boxes-inventory memory / git log 894112a for the box prep (gtk/webkit dev
-# stack). Persistent cargo cache at ${GATE_DIR}-target keeps warm runs at a
-# few seconds of compute. We build in our own directory and touch nothing
-# else on the box (it also hosts the sandbox-engine dev env + Dedicated ref
-# fixture). NEVER point this at linux-test.k2.dev — that DNS name is the
-# LIVE K2 Connect relay.
+# Designated box: the Ubuntu ship host 40.160.54.133 (hostname k2-linux,
+# user k2-ci). AX41 is becoming the Windows CI machine and is no longer
+# this gate. Persistent cargo cache at ${GATE_DIR}-target. This directory
+# is not the GitHub runner workdir and not /opt/k2. NEVER point this at
+# linux-test.k2.dev.
 #
 # Env:
-#   K2_LINUX_GATE_HOST   override the ssh target (default root@37.27.67.180)
+#   K2_LINUX_GATE_HOST   override the ssh target (default k2-ci@40.160.54.133)
+#   K2_LINUX_GATE_DIR    override the remote tree
 #   K2_SKIP_LINUX_GATE=1 skip entirely, with a loud warning (box down etc.)
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-GATE_HOST="${K2_LINUX_GATE_HOST:-root@37.27.67.180}"
-GATE_DIR="/root/k2-release-check"
+GATE_HOST="${K2_LINUX_GATE_HOST:-k2-ci@40.160.54.133}"
+GATE_DIR="${K2_LINUX_GATE_DIR:-/home/k2-ci/k2-release-check}"
 
 if [ "${K2_SKIP_LINUX_GATE:-0}" = "1" ]; then
     echo "⚠⚠ LINUX BUILD GATE SKIPPED (K2_SKIP_LINUX_GATE=1) ⚠⚠"

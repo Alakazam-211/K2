@@ -16,6 +16,15 @@
 
 set -euo pipefail
 
+# bash exports SHELLOPTS and refuses `unset SHELLOPTS`. makepkg is bash,
+# so it inherits nounset from GitHub Actions and dies on $RED / $logpipe.
+# /bin/sh can remove the variable before a clean bash starts makepkg.
+k2_makepkg() {
+    /bin/sh -c 'unset SHELLOPTS BASHOPTS
+export ALL_OFF= BOLD= BLUE= GREEN= RED= YELLOW= logpipe=
+exec /usr/bin/bash --noprofile --norc /usr/sbin/makepkg "$@"' k2-makepkg "$@"
+}
+
 # Print a resolved x.y.z with no v prefix. Argument overrides $VERSION,
 # which overrides the repo version files release.sh writes.
 k2_arch_resolve_version() {
@@ -123,9 +132,10 @@ k2_arch_build_release_pkg() {
         return 1
     fi
 
-    # GitHub Actions exports SHELLOPTS=nounset. makepkg's own bash then
-    # dies on $RED and $logpipe. Strip it for every makepkg invocation.
-    pkg_paths="$(cd "$arch_dir" && env -u SHELLOPTS makepkg --packagelist)" || {
+    # GitHub Actions exports SHELLOPTS=nounset. bash will not let this
+    # script unset it, and a child bash turns it back on. makepkg then
+    # dies on $RED and $logpipe. /bin/sh can drop the variable.
+    pkg_paths="$(cd "$arch_dir" && k2_makepkg --packagelist)" || {
         echo "FATAL: makepkg --packagelist failed" >&2
         return 1
     }
@@ -148,7 +158,7 @@ EOF
     esac
 
     # -f overwrites a previous package. Do not pass -i/--install. Do not pacman -U.
-    (cd "$arch_dir" && env -u SHELLOPTS makepkg -f)
+    (cd "$arch_dir" && k2_makepkg -f)
 
     if [ ! -s "$pkg_path" ]; then
         echo "FATAL: makepkg did not write ${pkg_path}" >&2

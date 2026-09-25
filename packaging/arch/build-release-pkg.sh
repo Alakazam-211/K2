@@ -16,13 +16,13 @@
 
 set -euo pipefail
 
-# bash exports SHELLOPTS and refuses `unset SHELLOPTS`. makepkg is bash,
-# so it inherits nounset from GitHub Actions and dies on $RED / $logpipe.
-# /bin/sh can remove the variable before a clean bash starts makepkg.
+# bash exports SHELLOPTS and refuses `unset`. On Arch, /bin/sh is bash,
+# so a shell cannot drop the variable. /usr/bin/env can. Call the real
+# makepkg by path so a wrapper earlier in PATH is not involved.
 k2_makepkg() {
-    /bin/sh -c 'unset SHELLOPTS BASHOPTS
-export ALL_OFF= BOLD= BLUE= GREEN= RED= YELLOW= logpipe=
-exec /usr/bin/bash --noprofile --norc /usr/sbin/makepkg "$@"' k2-makepkg "$@"
+    /usr/bin/env -u SHELLOPTS -u BASHOPTS \
+        ALL_OFF= BOLD= BLUE= GREEN= RED= YELLOW= logpipe= \
+        /usr/bin/bash --noprofile --norc /usr/sbin/makepkg "$@"
 }
 
 # Print a resolved x.y.z with no v prefix. Argument overrides $VERSION,

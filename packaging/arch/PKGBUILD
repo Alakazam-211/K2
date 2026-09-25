@@ -37,6 +37,7 @@ makedepends=(
     'pkgconf'
     'git'
     'bun'
+    'nodejs'
 )
 optdepends=(
     'gnome-keyring: Secret Service provider for K2 Connect tokens'
@@ -109,6 +110,9 @@ build() {
     # shellcheck source=../../scripts/require-mail-oauth-build-env.sh
     source scripts/require-mail-oauth-build-env.sh
     require_mail_oauth_build_env
+    # That script turns on nounset. makepkg's error printer then dies on
+    # $RED and hides the real build error. Turn it back off.
+    set +u
 
     export CARGO_HOME="${srcdir}/cargo-home"
     export CARGO_TARGET_DIR="${srcdir}/cargo-target"

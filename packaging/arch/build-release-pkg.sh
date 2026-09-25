@@ -158,7 +158,7 @@ EOF
     esac
 
     # -f overwrites a previous package. Do not pass -i/--install. Do not pacman -U.
-    (cd "$arch_dir" && k2_makepkg -f)
+    (cd "$arch_dir" && k2_makepkg -fs)
 
     if [ ! -s "$pkg_path" ]; then
         echo "FATAL: makepkg did not write ${pkg_path}" >&2

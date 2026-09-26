@@ -184,6 +184,7 @@ mod workspace_routes;
 mod overlay_routes;
 mod overlay_ws;
 mod fs_events_ws;
+mod chat_overlay_ws;
 mod skin_hydra;
 mod skin_routes;
 mod skin_gateway;

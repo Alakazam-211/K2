@@ -5,6 +5,8 @@ import {
   type DaemonHandleRow,
 } from '@/lib/chat-session-tab'
 import { SessionViewTabs } from './SessionViewTabs'
+import { ChatViewControl } from './ChatViewControl'
+import { chatHarnessName, harnessFieldsKnown } from './chatHarness'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
 import type { SessionViewTab } from './sessionViewTab'
@@ -16,6 +18,11 @@ interface AgentSessionChromeProps {
   conversationId: string | null
   /** v2_session_map key for this PTY — refresh closes then remounts. */
   agentName: string
+  /** Spawn command. Restored tabs often only have `commandHint`. */
+  command?: string
+  commandHint?: string
+  /** Pinned ensure provider, when the pane has no command prop. */
+  provider?: string
   onRefresh?: () => void
   children: ReactNode
 }
@@ -29,11 +36,19 @@ export function AgentSessionChrome({
   addr,
   conversationId,
   agentName,
+  command,
+  commandHint,
+  provider,
   onRefresh,
   children,
 }: AgentSessionChromeProps): JSX.Element {
   const sessionKey = conversationId || addr || agentName
   const [viewTab, setViewTab] = useSessionViewTab(sessionKey)
+  const chatProvider = chatHarnessName({ command, commandHint, provider })
+  const harnessKnown = harnessFieldsKnown({ command, commandHint, provider })
+  useEffect(() => {
+    if (viewTab === 'chat' && harnessKnown && !chatProvider) setViewTab('terminal')
+  }, [viewTab, harnessKnown, chatProvider, setViewTab])
   const [refreshing, setRefreshing] = useState(false)
   const [nonce, setNonce] = useState(0)
 
@@ -56,13 +71,21 @@ export function AgentSessionChrome({
 
   return (
     <SessionViewChromeContext.Provider
-      value={{ viewTab, overlayAddr: addr, conversationId }}
+      value={{
+        viewTab,
+        overlayAddr: addr,
+        conversationId,
+        chatConversationId: conversationId,
+        chatProvider,
+        agentName,
+      }}
     >
       <div className="h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
         <SidecarSessionHeader
           title={title}
           viewTab={viewTab}
           onViewTabChange={setViewTab}
+          chatEligible={Boolean(chatProvider)}
           onRefresh={() => void handleRefresh()}
           refreshing={refreshing}
         />
@@ -82,12 +105,14 @@ export function SidecarSessionHeader({
   title,
   viewTab,
   onViewTabChange,
+  chatEligible = false,
   onRefresh,
   refreshing,
 }: {
   title: string
   viewTab: SessionViewTab
   onViewTabChange: (tab: SessionViewTab) => void
+  chatEligible?: boolean
   onRefresh: () => void
   refreshing: boolean
 }): JSX.Element {
@@ -97,6 +122,7 @@ export function SidecarSessionHeader({
       data-testid="sidecar-session-header"
     >
         <SessionViewTabs value={viewTab} onChange={onViewTabChange} />
+        <ChatViewControl value={viewTab} eligible={chatEligible} onChange={onViewTabChange} />
         <span
           className="py-2 text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center flex-shrink-0"
           data-testid="sidecar-session-title"
@@ -139,16 +165,29 @@ export function PinnedSessionBody({
   viewTab,
   addr,
   conversationId,
+  chatConversationId,
+  chatProvider,
+  agentName,
   children,
 }: {
   viewTab: SessionViewTab
   addr: string
   conversationId: string | null
+  chatConversationId?: string | null
+  chatProvider?: string | null
+  agentName?: string
   children: ReactNode
 }): JSX.Element {
   return (
     <SessionViewChromeContext.Provider
-      value={{ viewTab, overlayAddr: addr, conversationId }}
+      value={{
+        viewTab,
+        overlayAddr: addr,
+        conversationId,
+        chatConversationId: chatConversationId ?? conversationId,
+        chatProvider: chatProvider ?? null,
+        agentName: agentName ?? '',
+      }}
     >
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
         {children}

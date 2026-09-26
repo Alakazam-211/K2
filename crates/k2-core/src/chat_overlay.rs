@@ -1,0 +1,1014 @@
+//! Harness-agnostic turns for the session-log chat face.
+//!
+//! Claude, Codex, Grok, and Gemini each have an adapter. The wire shape
+//! is role, blocks, time, and a stable id. This is not continue-seed:
+//! that path keeps two strings, drops tool calls, and caps length.
+//! A line an adapter does not understand is skipped.
+
+use std::collections::{HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatTurn {
+    pub id: String,
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time: Option<String>,
+    pub blocks: Vec<ChatBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatBlock {
+    Text {
+        text: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        input: String,
+    },
+    ToolResult {
+        id: String,
+        content: String,
+    },
+}
+
+#[derive(Debug, Default)]
+pub struct TranscriptCursor {
+    line_no: u64,
+    turns: Vec<ChatTurn>,
+    by_id: HashMap<String, usize>,
+    /// Codex event_msg text already shown via response_item (or earlier).
+    codex_text: HashSet<(String, String)>,
+    codex_calls: HashSet<String>,
+}
+
+impl TranscriptCursor {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn turns(&self) -> &[ChatTurn] {
+        &self.turns
+    }
+
+    /// Parse one JSONL line. Each item is a new or updated turn.
+    /// A Gemini `$set` snapshot can carry more than one.
+    pub fn push_line(&mut self, provider: &str, line: &str) -> Vec<ChatTurn> {
+        self.line_no += 1;
+        let line = line.trim();
+        if line.is_empty() {
+            return Vec::new();
+        }
+        let n = self.line_no;
+        match provider.trim() {
+            "claude" => self.push_claude(n, line).into_iter().collect(),
+            "codex" => self.push_codex(n, line).into_iter().collect(),
+            "grok" => self.push_grok(n, line).into_iter().collect(),
+            "gemini" => self.push_gemini(n, line),
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// Whole-file parse. Same ids collapse into one turn.
+pub fn parse_chat_transcript(provider: &str, text: &str) -> Vec<ChatTurn> {
+    let mut cursor = TranscriptCursor::default();
+    for line in text.lines() {
+        cursor.push_line(provider, line);
+    }
+    cursor.turns
+}
+
+impl TranscriptCursor {
+    fn push_claude(&mut self, line_no: u64, line: &str) -> Option<ChatTurn> {
+        let Ok(parsed) = serde_json::from_str::<Value>(line) else {
+            return None;
+        };
+        if flag_true(&parsed, "isMeta") || flag_true(&parsed, "isCompactSummary") {
+            return None;
+        }
+        let kind = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if kind != "user" && kind != "assistant" {
+            return None;
+        }
+        let message = parsed.get("message").cloned().unwrap_or(Value::Null);
+        if flag_true(&message, "isMeta") || flag_true(&message, "isCompactSummary") {
+            return None;
+        }
+        let content = message
+            .pointer("/content")
+            .or_else(|| parsed.get("content"));
+        let blocks = claude_blocks(content);
+        if blocks.is_empty() {
+            return None;
+        }
+        let id = if kind == "assistant" {
+            message
+                .get("id")
+                .and_then(|v| v.as_str())
+                .or_else(|| parsed.get("uuid").and_then(|v| v.as_str()))
+                .map(str::to_string)
+        } else {
+            parsed
+                .get("uuid")
+                .and_then(|v| v.as_str())
+                .or_else(|| message.get("id").and_then(|v| v.as_str()))
+                .map(str::to_string)
+        }
+        .unwrap_or_else(|| format!("claude:{line_no}"));
+        let time = parsed
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        self.upsert(ChatTurn {
+            id,
+            role: kind.to_string(),
+            time,
+            blocks,
+        })
+    }
+
+    fn push_codex(&mut self, line_no: u64, line: &str) -> Option<ChatTurn> {
+        let Ok(parsed) = serde_json::from_str::<Value>(line) else {
+            return None;
+        };
+        let kind = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let time = parsed
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        match kind {
+            "response_item" => {
+                let payload = parsed.get("payload")?;
+                self.codex_response_item(line_no, payload, time)
+            }
+            "event_msg" => {
+                let payload = parsed.get("payload")?;
+                self.codex_event(line_no, payload, time)
+            }
+            _ => None,
+        }
+    }
+
+    fn codex_response_item(
+        &mut self,
+        line_no: u64,
+        payload: &Value,
+        time: Option<String>,
+    ) -> Option<ChatTurn> {
+        let ptype = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match ptype {
+            "message" => {
+                let role = payload.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                if role != "user" && role != "assistant" {
+                    return None;
+                }
+                let blocks = text_blocks(payload.get("content"));
+                if blocks.is_empty() {
+                    return None;
+                }
+                let text = joined_text(&blocks);
+                let id = payload
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("codex:{line_no}"));
+                self.codex_text.insert((role.to_string(), text));
+                self.upsert(ChatTurn {
+                    id,
+                    role: role.to_string(),
+                    time,
+                    blocks,
+                })
+            }
+            "function_call" | "custom_tool_call" => {
+                let name = payload
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                let call_id = payload
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| payload.get("id").and_then(|v| v.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                if call_id.is_empty() {
+                    return None;
+                }
+                self.codex_calls.insert(call_id.clone());
+                let input = json_text(
+                    payload
+                        .get("arguments")
+                        .or_else(|| payload.get("input"))
+                        .unwrap_or(&Value::Null),
+                );
+                self.upsert(ChatTurn {
+                    id: format!("call:{call_id}"),
+                    role: "assistant".into(),
+                    time,
+                    blocks: vec![ChatBlock::ToolCall {
+                        id: call_id,
+                        name,
+                        input,
+                    }],
+                })
+            }
+            "function_call_output" | "custom_tool_call_output" => {
+                let call_id = payload
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if call_id.is_empty() {
+                    return None;
+                }
+                let content = json_text(payload.get("output").unwrap_or(&Value::Null));
+                if content.is_empty() {
+                    return None;
+                }
+                self.upsert(ChatTurn {
+                    id: format!("out:{call_id}"),
+                    role: "tool".into(),
+                    time,
+                    blocks: vec![ChatBlock::ToolResult {
+                        id: call_id,
+                        content,
+                    }],
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn codex_event(
+        &mut self,
+        line_no: u64,
+        payload: &Value,
+        time: Option<String>,
+    ) -> Option<ChatTurn> {
+        let etype = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        // Usage ledger, not a chat message. task_* and settings are not either.
+        if etype == "token_count"
+            || etype == "task_started"
+            || etype == "task_complete"
+            || etype == "thread_settings_applied"
+        {
+            return None;
+        }
+        if etype == "user_message" || etype == "agent_message" {
+            let role = if etype == "user_message" {
+                "user"
+            } else {
+                "assistant"
+            };
+            let text = payload
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if text.is_empty() || self.codex_text.contains(&(role.to_string(), text.clone())) {
+                return None;
+            }
+            self.codex_text.insert((role.to_string(), text.clone()));
+            return self.upsert(ChatTurn {
+                id: format!("codex-event:{line_no}"),
+                role: role.into(),
+                time,
+                blocks: vec![ChatBlock::Text { text }],
+            });
+        }
+        if etype != "item_completed" {
+            return None;
+        }
+        let item = payload.get("item")?;
+        let itype = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match itype {
+            "UserMessage" | "AgentMessage" => {
+                let role = if itype == "UserMessage" {
+                    "user"
+                } else {
+                    "assistant"
+                };
+                let blocks = text_blocks(item.get("content"));
+                if blocks.is_empty() {
+                    return None;
+                }
+                let text = joined_text(&blocks);
+                if self.codex_text.contains(&(role.to_string(), text.clone())) {
+                    return None;
+                }
+                let id = item
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("codex-event:{line_no}"));
+                self.codex_text.insert((role.to_string(), text));
+                self.upsert(ChatTurn {
+                    id,
+                    role: role.into(),
+                    time,
+                    blocks,
+                })
+            }
+            "CommandExecution" => {
+                // response_item already carried the call. Don't double it.
+                if !self.codex_calls.is_empty() {
+                    return None;
+                }
+                let id = item
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("codex-exec:{line_no}"));
+                let command = item
+                    .get("command")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|p| p.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default();
+                let output = item
+                    .get("aggregated_output")
+                    .or_else(|| item.get("stdout"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if command.is_empty() && output.is_empty() {
+                    return None;
+                }
+                let mut blocks = Vec::new();
+                if !command.is_empty() {
+                    blocks.push(ChatBlock::ToolCall {
+                        id: id.clone(),
+                        name: "exec".into(),
+                        input: command,
+                    });
+                }
+                if !output.is_empty() {
+                    blocks.push(ChatBlock::ToolResult {
+                        id: id.clone(),
+                        content: output,
+                    });
+                }
+                self.upsert(ChatTurn {
+                    id,
+                    role: "assistant".into(),
+                    time,
+                    blocks,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn push_grok(&mut self, line_no: u64, line: &str) -> Option<ChatTurn> {
+        let Ok(parsed) = serde_json::from_str::<Value>(line) else {
+            return None;
+        };
+        if parsed.get("synthetic_reason").is_some() {
+            return None;
+        }
+        let kind = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let time = parsed
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        match kind {
+            "user" | "assistant" => {
+                let mut blocks = text_blocks(parsed.get("content"));
+                if kind == "assistant" {
+                    if let Some(calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
+                        for call in calls {
+                            let id = call
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let name = call
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if id.is_empty() || name.is_empty() {
+                                continue;
+                            }
+                            let input = json_text(
+                                call.get("arguments")
+                                    .or_else(|| call.get("input"))
+                                    .unwrap_or(&Value::Null),
+                            );
+                            blocks.push(ChatBlock::ToolCall { id, name, input });
+                        }
+                    }
+                }
+                if blocks.is_empty() {
+                    return None;
+                }
+                let id = parsed
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("grok:{line_no}"));
+                let role = if kind == "user" { "user" } else { "assistant" };
+                self.upsert(ChatTurn {
+                    id,
+                    role: role.into(),
+                    time,
+                    blocks,
+                })
+            }
+            "tool_result" => {
+                let id = parsed
+                    .get("tool_call_id")
+                    .or_else(|| parsed.get("id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if id.is_empty() {
+                    return None;
+                }
+                let content = json_text(parsed.get("content").unwrap_or(&Value::Null));
+                if content.is_empty() {
+                    return None;
+                }
+                self.upsert(ChatTurn {
+                    id: format!("grok-out:{id}"),
+                    role: "tool".into(),
+                    time,
+                    blocks: vec![ChatBlock::ToolResult { id, content }],
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn push_gemini(&mut self, line_no: u64, line: &str) -> Vec<ChatTurn> {
+        let Ok(parsed) = serde_json::from_str::<Value>(line) else {
+            return Vec::new();
+        };
+        if let Some(set) = parsed.get("$set") {
+            let Some(messages) = set.get("messages").and_then(|v| v.as_array()) else {
+                return Vec::new();
+            };
+            let mut out = Vec::new();
+            for (i, message) in messages.iter().enumerate() {
+                if let Some(turn) = self.gemini_message(line_no * 1000 + i as u64, message) {
+                    out.push(turn);
+                }
+            }
+            return out;
+        }
+        self.gemini_message(line_no, &parsed).into_iter().collect()
+    }
+
+    fn gemini_message(&mut self, line_no: u64, parsed: &Value) -> Option<ChatTurn> {
+        let kind = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let role = match kind {
+            "user" => "user",
+            "gemini" => "assistant",
+            _ => return None,
+        };
+        let blocks = text_blocks(parsed.get("content"));
+        if blocks.is_empty() {
+            return None;
+        }
+        let id = parsed
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("gemini:{line_no}"));
+        let time = parsed
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        self.upsert(ChatTurn {
+            id,
+            role: role.into(),
+            time,
+            blocks,
+        })
+    }
+
+    fn upsert(&mut self, turn: ChatTurn) -> Option<ChatTurn> {
+        if turn.blocks.is_empty() {
+            return None;
+        }
+        if let Some(&idx) = self.by_id.get(&turn.id) {
+            let existing = &mut self.turns[idx];
+            let mut added = false;
+            for block in turn.blocks {
+                if !existing.blocks.iter().any(|have| same_block(have, &block)) {
+                    existing.blocks.push(block);
+                    added = true;
+                }
+            }
+            if existing.time.is_none() {
+                existing.time = turn.time;
+            }
+            if !added {
+                return None;
+            }
+            return Some(existing.clone());
+        }
+        let idx = self.turns.len();
+        self.by_id.insert(turn.id.clone(), idx);
+        self.turns.push(turn.clone());
+        Some(turn)
+    }
+}
+
+fn flag_true(value: &Value, key: &str) -> bool {
+    value.get(key).and_then(|v| v.as_bool()) == Some(true)
+}
+
+fn claude_blocks(content: Option<&Value>) -> Vec<ChatBlock> {
+    let Some(content) = content else {
+        return Vec::new();
+    };
+    if let Some(text) = content.as_str() {
+        let text = text.trim();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        return vec![ChatBlock::Text {
+            text: text.to_string(),
+        }];
+    }
+    let Some(parts) = content.as_array() else {
+        return Vec::new();
+    };
+    let mut blocks = Vec::new();
+    for part in parts {
+        if let Some(text) = part.as_str() {
+            let text = text.trim();
+            if !text.is_empty() {
+                blocks.push(ChatBlock::Text {
+                    text: text.to_string(),
+                });
+            }
+            continue;
+        }
+        let kind = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if kind == "tool_use" {
+            let id = part
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = part
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if id.is_empty() || name.is_empty() {
+                continue;
+            }
+            let input = json_text(part.get("input").unwrap_or(&Value::Null));
+            blocks.push(ChatBlock::ToolCall { id, name, input });
+            continue;
+        }
+        if kind == "tool_result" {
+            let id = part
+                .get("tool_use_id")
+                .or_else(|| part.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if id.is_empty() {
+                continue;
+            }
+            let content = json_text(part.get("content").unwrap_or(&Value::Null));
+            blocks.push(ChatBlock::ToolResult { id, content });
+            continue;
+        }
+        if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+            let text = text.trim();
+            if !text.is_empty() {
+                blocks.push(ChatBlock::Text {
+                    text: text.to_string(),
+                });
+            }
+        }
+    }
+    blocks
+}
+
+fn text_blocks(content: Option<&Value>) -> Vec<ChatBlock> {
+    let Some(content) = content else {
+        return Vec::new();
+    };
+    if let Some(text) = content.as_str() {
+        let text = text.trim();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        return vec![ChatBlock::Text {
+            text: text.to_string(),
+        }];
+    }
+    let Some(parts) = content.as_array() else {
+        return Vec::new();
+    };
+    let mut blocks = Vec::new();
+    for part in parts {
+        if let Some(text) = part.as_str() {
+            let text = text.trim();
+            if !text.is_empty() {
+                blocks.push(ChatBlock::Text {
+                    text: text.to_string(),
+                });
+            }
+            continue;
+        }
+        let kind = part
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if kind == "tool_use" || kind == "function_call" {
+            continue;
+        }
+        if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+            let text = text.trim();
+            if !text.is_empty() && (kind.is_empty() || is_text_kind(&kind)) {
+                blocks.push(ChatBlock::Text {
+                    text: text.to_string(),
+                });
+            }
+        }
+    }
+    blocks
+}
+
+fn is_text_kind(kind: &str) -> bool {
+    matches!(kind, "text" | "input_text" | "output_text")
+}
+
+fn joined_text(blocks: &[ChatBlock]) -> String {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            ChatBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn json_text(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => {
+            let texts: Vec<&str> = parts
+                .iter()
+                .filter_map(|part| {
+                    part.get("text")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| part.as_str())
+                })
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .collect();
+            if texts.is_empty() {
+                value.to_string()
+            } else {
+                texts.join("\n")
+            }
+        }
+        other => other.to_string(),
+    }
+}
+
+fn same_block(a: &ChatBlock, b: &ChatBlock) -> bool {
+    match (a, b) {
+        (ChatBlock::Text { text: left }, ChatBlock::Text { text: right }) => left == right,
+        (ChatBlock::ToolCall { id: left, .. }, ChatBlock::ToolCall { id: right, .. }) => {
+            left == right
+        }
+        (ChatBlock::ToolResult { id: left, .. }, ChatBlock::ToolResult { id: right, .. }) => {
+            left == right
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat_continue::locate_continue_transcript;
+    use crate::themes::HOME_LOCK;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct HomeGuard {
+        prev: Option<std::ffi::OsString>,
+        path: PathBuf,
+        _lock: parking_lot::MutexGuard<'static, ()>,
+    }
+
+    impl HomeGuard {
+        fn new(label: &str) -> Self {
+            let lock = HOME_LOCK.lock();
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!(
+                "k2-chat-overlay-{label}-{}-{nanos}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("temp home");
+            let prev = std::env::var_os("HOME");
+            std::env::set_var("HOME", &path);
+            Self {
+                prev,
+                path,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(prev) => std::env::set_var("HOME", prev),
+                None => std::env::remove_var("HOME"),
+            }
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn text_of(turn: &ChatTurn) -> String {
+        joined_text(&turn.blocks)
+    }
+
+    #[test]
+    fn claude_fixture_merges_message_id_and_skips_injected() {
+        let body = concat!(
+            r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"id":"msg1","role":"assistant","content":[{"type":"text","text":"Hi"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"a2","timestamp":"2026-01-01T00:00:02Z","message":{"id":"msg1","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]}}"#,
+            "\n",
+            r#"{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"file.txt"}]}}"#,
+            "\n",
+            r#"{"type":"user","isMeta":true,"uuid":"u3","message":{"role":"user","content":"INJECTED_LINE"}}"#,
+            "\n",
+            r#"{"type":"user","isCompactSummary":true,"uuid":"u4","message":{"role":"user","content":"COMPACTION_SUMMARY_LINE"}}"#,
+            "\n",
+            r#"{"type":"attachment","uuid":"u5"}"#,
+            "\n",
+            "not json\n",
+        );
+        let turns = parse_chat_transcript("claude", body);
+        let msg1: Vec<&ChatTurn> = turns.iter().filter(|t| t.id == "msg1").collect();
+        assert_eq!(msg1.len(), 1, "same message id is one turn");
+        assert_eq!(msg1[0].role, "assistant");
+        assert_eq!(text_of(msg1[0]), "Hi");
+        assert!(msg1[0].blocks.iter().any(|b| matches!(
+            b,
+            ChatBlock::ToolCall { id, name, .. } if id == "toolu_1" && name == "Bash"
+        )));
+        let user = turns.iter().find(|t| t.id == "u1").expect("user turn");
+        assert_eq!(user.role, "user");
+        assert_eq!(text_of(user), "Hello");
+        assert_eq!(user.time.as_deref(), Some("2026-01-01T00:00:00Z"));
+        let result = turns
+            .iter()
+            .find(|t| t.id == "u2")
+            .expect("tool result turn");
+        assert!(result.blocks.iter().any(|b| matches!(
+            b,
+            ChatBlock::ToolResult { id, content } if id == "toolu_1" && content == "file.txt"
+        )));
+        let dumped = serde_json::to_string(&turns).expect("json");
+        assert!(!dumped.contains("INJECTED_LINE"));
+        assert!(!dumped.contains("COMPACTION_SUMMARY_LINE"));
+        assert!(!dumped.contains("This is a new chat continued"));
+    }
+
+    #[test]
+    fn codex_fixture_uses_header_id_and_skips_token_count() {
+        let home = HomeGuard::new("codex");
+        let project = home.path.join("work");
+        fs::create_dir_all(&project).expect("project");
+        let project_s = project.to_string_lossy().into_owned();
+        let day = home
+            .path
+            .join(".codex")
+            .join("sessions")
+            .join("2026")
+            .join("09")
+            .join("26");
+        fs::create_dir_all(&day).expect("day");
+        let sid = "sess-real-codex";
+        let decoy = day.join(format!("{sid}.jsonl"));
+        fs::write(
+            &decoy,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"other\",\"cwd\":{cwd}}}}}\n{{\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"DECOY_FILENAME\"}}]}}}}\n",
+                cwd = serde_json::to_string(&project_s).expect("cwd"),
+            ),
+        )
+        .expect("decoy");
+        fs::write(
+            home.path.join(".codex").join("history.jsonl"),
+            "{\"session_id\":\"sess-real-codex\",\"text\":\"HISTORY_NOT_CHAT\"}\n",
+        )
+        .expect("history");
+        let rollout = day.join("rollout-2026-09-26T00-00-00-not-the-id.jsonl");
+        let cwd_json = serde_json::to_string(&project_s).expect("cwd json");
+        let body = format!(
+            concat!(
+                r#"{{"type":"session_meta","payload":{{"id":"sess-real-codex","cwd":{cwd}}}}}"#,
+                "\n",
+                r#"{{"type":"response_item","timestamp":"2026-09-26T00:00:01Z","payload":{{"type":"message","id":"m-user","role":"user","content":[{{"type":"input_text","text":"Hi"}}]}}}}"#,
+                "\n",
+                r#"{{"type":"response_item","payload":{{"type":"message","id":"m-agent","role":"assistant","content":[{{"type":"output_text","text":"Hello"}}]}}}}"#,
+                "\n",
+                r#"{{"type":"response_item","payload":{{"type":"function_call","name":"exec_command","arguments":"{{\"cmd\":\"ls\"}}","call_id":"call_1"}}}}"#,
+                "\n",
+                r#"{{"type":"response_item","payload":{{"type":"function_call_output","call_id":"call_1","output":"listed"}}}}"#,
+                "\n",
+                r#"{{"type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":424242}}}}}}}}"#,
+                "\n",
+                r#"{{"type":"event_msg","payload":{{"type":"task_complete","last_agent_message":"Hello"}}}}"#,
+                "\n",
+            ),
+            cwd = cwd_json,
+        );
+        fs::write(&rollout, &body).expect("rollout");
+        let found = locate_continue_transcript("codex", sid, &project_s).expect("rollout path");
+        assert_eq!(found, rollout);
+        assert_ne!(found, decoy);
+        let text = fs::read_to_string(&found).expect("read rollout");
+        let turns = parse_chat_transcript("codex", &text);
+        let dumped = serde_json::to_string(&turns).expect("json");
+        assert!(dumped.contains("Hi"), "{dumped}");
+        assert!(dumped.contains("Hello"), "{dumped}");
+        assert!(!dumped.contains("424242"), "{dumped}");
+        assert!(!dumped.contains("DECOY_FILENAME"), "{dumped}");
+        assert!(!dumped.contains("HISTORY_NOT_CHAT"), "{dumped}");
+        assert!(turns.iter().any(|t| t.blocks.iter().any(|b| matches!(
+            b,
+            ChatBlock::ToolCall { name, .. } if name == "exec_command"
+        ))));
+        assert!(turns.iter().any(|t| t.blocks.iter().any(|b| matches!(
+            b,
+            ChatBlock::ToolResult { content, .. } if content == "listed"
+        ))));
+        let hellos = turns.iter().filter(|t| text_of(t) == "Hello").count();
+        assert_eq!(hellos, 1);
+    }
+
+    #[test]
+    fn grok_fixture_reads_chat_history_not_updates() {
+        let home = HomeGuard::new("grok");
+        let project = home.path.join("work");
+        fs::create_dir_all(&project).expect("project");
+        let project_s = project.to_string_lossy().into_owned();
+        let sid = "11111111-1111-1111-1111-111111111111";
+        let dir = home
+            .path
+            .join(".grok")
+            .join("sessions")
+            .join("cwd")
+            .join(sid);
+        fs::create_dir_all(&dir).expect("session dir");
+        let summary = serde_json::json!({
+            "info": {"cwd": project_s, "session_kind": "main"}
+        });
+        fs::write(
+            dir.join("summary.json"),
+            serde_json::to_string(&summary).expect("summary"),
+        )
+        .expect("summary");
+        let chat = concat!(
+            "{\"type\":\"system\",\"content\":\"SYSTEM_PROMPT\"}\n",
+            "{\"type\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Ping\"}]}\n",
+            "{\"type\":\"user\",\"synthetic_reason\":\"injected_context\",\"content\":\"SYNTHETIC_GROK\"}\n",
+            "{\"type\":\"assistant\",\"content\":\"Pong\",\"tool_calls\":[{\"id\":\"call-g1\",\"name\":\"read_file\",\"arguments\":\"{\\\"target_file\\\":\\\"a\\\"}\"}]}\n",
+            "{\"type\":\"tool_result\",\"tool_call_id\":\"call-g1\",\"content\":\"BODY\"}\n",
+            "{\"type\":\"reasoning\",\"summary\":[{\"text\":\"hidden\"}]}\n",
+        );
+        fs::write(dir.join("chat_history.jsonl"), chat).expect("chat");
+        fs::write(
+            dir.join("updates.jsonl"),
+            "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"user_message_chunk\",\"content\":\"FROM_UPDATES_LEDGER\"}}}\n",
+        )
+        .expect("updates");
+        let found = locate_continue_transcript("grok", sid, &project_s).expect("grok path");
+        assert!(found.ends_with("chat_history.jsonl"), "{}", found.display());
+        assert!(!found.ends_with("updates.jsonl"));
+        let turns = parse_chat_transcript("grok", &fs::read_to_string(&found).expect("read"));
+        let dumped = serde_json::to_string(&turns).expect("json");
+        assert!(dumped.contains("Ping"), "{dumped}");
+        assert!(dumped.contains("Pong"), "{dumped}");
+        assert!(dumped.contains("read_file"), "{dumped}");
+        assert!(dumped.contains("BODY"), "{dumped}");
+        assert!(!dumped.contains("SYNTHETIC_GROK"), "{dumped}");
+        assert!(!dumped.contains("FROM_UPDATES_LEDGER"), "{dumped}");
+        assert!(!dumped.contains("SYSTEM_PROMPT"), "{dumped}");
+        let updates = fs::read_to_string(dir.join("updates.jsonl")).expect("updates");
+        let from_ledger = parse_chat_transcript("grok", &updates);
+        assert!(from_ledger.is_empty(), "{from_ledger:?}");
+    }
+
+    #[test]
+    fn gemini_fixture_reads_user_and_gemini_not_prefix() {
+        let home = HomeGuard::new("gemini");
+        let project = home.path.join("work");
+        fs::create_dir_all(&project).expect("project");
+        let project_s = project.to_string_lossy().into_owned();
+        let slug = "slug1";
+        fs::create_dir_all(
+            home.path
+                .join(".gemini")
+                .join("tmp")
+                .join(slug)
+                .join("chats"),
+        )
+        .expect("chats");
+        fs::write(
+            home.path.join(".gemini").join("projects.json"),
+            serde_json::json!({"projects": {project_s.clone(): slug}}).to_string(),
+        )
+        .expect("projects");
+        let sid = "17526a7e-9040-43b4-8b87-e6c75a6004a0";
+        let wrong = home
+            .path
+            .join(".gemini")
+            .join("tmp")
+            .join(slug)
+            .join("chats")
+            .join("session-2026-01-01T00-00-00-17526a7e.jsonl");
+        fs::write(
+            &wrong,
+            "{\"sessionId\":\"other-session-not-this\",\"lastUpdated\":\"2026-09-01T00:00:00Z\"}\n{\"type\":\"user\",\"id\":\"nope\",\"content\":[{\"text\":\"PREFIX_ONLY\"}]}\n",
+        )
+        .expect("wrong");
+        let right = home
+            .path
+            .join(".gemini")
+            .join("tmp")
+            .join(slug)
+            .join("chats")
+            .join("session-2026-02-02T00-00-00-zzzzzzzz.jsonl");
+        fs::write(
+            &right,
+            format!(
+                concat!(
+                    r#"{{"sessionId":"{sid}","lastUpdated":"2026-02-02T00:00:00Z"}}"#,
+                    "\n",
+                    r#"{{"type":"user","id":"gu","timestamp":"2026-02-02T00:00:01Z","content":[{{"text":"Hi gem"}}]}}"#,
+                    "\n",
+                    r#"{{"type":"gemini","id":"gg","timestamp":"2026-02-02T00:00:02Z","content":"Hello gem"}}"#,
+                    "\n",
+                    r#"{{"$set":{{"lastUpdated":"2026-02-02T00:00:03Z"}}}}"#,
+                    "\n",
+                ),
+                sid = sid,
+            ),
+        )
+        .expect("right");
+        let found = locate_continue_transcript("gemini", sid, &project_s).expect("gemini path");
+        assert_eq!(found, right);
+        let turns = parse_chat_transcript("gemini", &fs::read_to_string(&found).expect("read"));
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, "user");
+        assert_eq!(text_of(&turns[0]), "Hi gem");
+        assert_eq!(turns[1].role, "assistant");
+        assert_eq!(text_of(&turns[1]), "Hello gem");
+        let dumped = serde_json::to_string(&turns).expect("json");
+        assert!(!dumped.contains("PREFIX_ONLY"), "{dumped}");
+    }
+
+    #[test]
+    fn unknown_provider_and_unknown_line_are_skipped() {
+        let turns = parse_chat_transcript("cursor", "{\"type\":\"user\",\"content\":\"x\"}\n");
+        assert!(turns.is_empty());
+        let claude = parse_chat_transcript("claude", "{\"weird\":true}\n");
+        assert!(claude.is_empty());
+    }
+
+    #[test]
+    fn locate_misses_when_session_id_empty() {
+        let found = locate_continue_transcript("claude", "  ", "/tmp");
+        assert!(found.is_none());
+    }
+}

@@ -16,6 +16,8 @@ import { useServerSupports } from '@/lib/server-capabilities'
 import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged } from '@/stores/session-events'
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { SessionViewTabs } from '@/components/SessionView/SessionViewTabs'
+import { ChatViewControl } from '@/components/SessionView/ChatViewControl'
+import { chatHarnessName } from '@/components/SessionView/chatHarness'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
@@ -172,6 +174,10 @@ interface ChatHeaderProps {
   onSwitchSession: (newSessionId: string, provider: string) => void
   viewTab: SessionViewTab
   onViewTabChange: (tab: SessionViewTab) => void
+  /** v1 harness from ensure or the launch command. Null when known but not v1. */
+  chatProvider: string | null
+  /** False until ensure/launch has named the program. Does not grey a fresh Codex. */
+  harnessReady: boolean
 }
 
 interface HistorySession {
@@ -193,7 +199,12 @@ function ChatHeader({
   onSwitchSession,
   viewTab,
   onViewTabChange,
+  chatProvider,
+  harnessReady,
 }: ChatHeaderProps): React.JSX.Element {
+  useEffect(() => {
+    if (harnessReady && viewTab === 'chat' && !chatProvider) onViewTabChange('terminal')
+  }, [harnessReady, viewTab, chatProvider, onViewTabChange])
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyEpoch, setHistoryEpoch] = useState(0)
@@ -265,6 +276,7 @@ function ChatHeader({
     >
     <div className="px-3 flex items-stretch gap-2">
       <SessionViewTabs value={viewTab} onChange={onViewTabChange} />
+      <ChatViewControl value={viewTab} eligible={Boolean(chatProvider)} onChange={onViewTabChange} />
       <span className="py-2 text-xs font-semibold text-[var(--color-text-primary)] truncate flex-shrink-0 flex items-center">
         {displayName}
       </span>
@@ -520,6 +532,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     lastOverlayConvRef.current = phase.canonicalSessionId
   }
   const [viewTab, setViewTab] = useSessionViewTab(overlayConv)
+  const [chatProvider, setChatProvider] = useState<string | null>(null)
+  const [harnessReady, setHarnessReady] = useState(false)
+  const [chatConversationId, setChatConversationId] = useState<string | null>(null)
   const [overlayAddr, setOverlayAddr] = useState('')
   useEffect(() => {
     let cancelled = false
@@ -548,6 +563,35 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const canonicalSessionId =
     phase.kind === 'ready' ? phase.canonicalSessionId : null
 
+  // Codex and Gemini mint the provider id after the first turn. Do not
+  // open the transcript socket until that id exists. This poll reads the
+  // list row; it does not spawn, close, or tail a file.
+  useEffect(() => {
+    if (viewTab !== 'chat' || !harnessReady || !chatProvider || chatConversationId) return
+    let cancelled = false
+    const tick = async (): Promise<void> => {
+      try {
+        const rows = await daemonCliGet<Array<{
+          agentName?: string
+          sessionId?: string
+          conversationId?: string
+        }>>('sessions/list-for-workspace', { path: projectPath })
+        if (cancelled || !Array.isArray(rows)) return
+        const row = rows.find((item) => item.agentName === projectId)
+        const cid = row?.conversationId?.trim()
+        if (cid && cid !== row?.sessionId) setChatConversationId(cid)
+      } catch {
+        /* keep waiting */
+      }
+    }
+    void tick()
+    const timer = setInterval(() => void tick(), 1000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [viewTab, harnessReady, chatProvider, chatConversationId, projectPath, projectId])
+
   // ── ensure() — the one daemon RPC this component leans on ────────────
   // Idempotent on the daemon side. `forceRespawn` kills + respawns. The
   // SessionAdded broadcast re-attaches; but we also adopt the ensure
@@ -570,6 +614,10 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           // daemon contract) but the state is provider-neutral.
           canonicalSessionId: res.claudeSessionId,
         })
+        setChatProvider(chatHarnessName({ provider: res.provider, command: res.command }))
+        setHarnessReady(true)
+        const providerId = res.claudeSessionId?.trim() ?? ''
+        setChatConversationId(providerId || null)
         // #689 — record which session we're now attached to so the
         // SessionAdded echo for THIS session is recognised as our own
         // side-effect and doesn't trigger a spurious remount.
@@ -708,6 +756,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       onSwitchSession={(sid, provider) => void handleSwitchSession(sid, provider)}
       viewTab={viewTab}
       onViewTabChange={setViewTab}
+      chatProvider={chatProvider}
+      harnessReady={harnessReady}
     />
   )
 
@@ -765,6 +815,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         viewTab={viewTab}
         addr={overlayAddr}
         conversationId={overlayConv}
+        chatConversationId={chatConversationId}
+        chatProvider={chatProvider}
+        agentName={projectId}
       >
         <TerminalPane
           // Remount on each daemon respawn so TerminalPane re-attaches to
@@ -1207,6 +1260,8 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       onSwitchSession={(sid, provider) => void switchToSession(sid, provider)}
       viewTab={viewTab}
       onViewTabChange={setViewTab}
+      chatProvider={launchConfig ? chatHarnessName({ command: launchConfig.command }) : null}
+      harnessReady={launchConfig != null}
     />
   )
 
@@ -1245,6 +1300,9 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         viewTab={viewTab}
         addr={overlayAddr}
         conversationId={overlayConv}
+        chatConversationId={currentSessionId}
+        chatProvider={launchConfig ? chatHarnessName({ command: launchConfig.command }) : null}
+        agentName={projectId}
       >
         <TerminalPane
           key={refreshNonce}

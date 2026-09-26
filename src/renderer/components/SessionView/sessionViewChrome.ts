@@ -6,6 +6,12 @@ export interface SessionViewChromeValue {
   viewTab: SessionViewTab
   overlayAddr: string
   conversationId: string | null
+  /** Provider conversation id for the chat face. Never the PTY uuid. */
+  chatConversationId: string | null
+  /** `claude` | `codex` | `grok` | `gemini`, or null when Chat is not v1. */
+  chatProvider: string | null
+  /** v2 agent name. The daemon resolves cwd. Not a transcript path. */
+  agentName: string
 }
 
 export const SessionViewChromeContext = createContext<SessionViewChromeValue | null>(null)

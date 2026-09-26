@@ -1876,6 +1876,35 @@ async fn handle_one_request(
             crate::fs_events_ws::serve_fs_events_connection(stream, params, skin_ws).await;
             return DispatchOutcome::Done;
         }
+        // Chat overlay (phase 1). GET websocket only — not in post_allowed.
+        // Skin tokens never see host session logs. token_ok, then serve.
+        p if p == crate::chat_overlay_ws::CHAT_TRANSCRIPT_WS_PATH => {
+            if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"skin token cannot read host session logs"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            crate::chat_overlay_ws::serve_chat_transcript_connection(stream, params).await;
+            return DispatchOutcome::Done;
+        }
         "/cli/sessions/events" => {
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let _ = stream.read(&mut buf).await;

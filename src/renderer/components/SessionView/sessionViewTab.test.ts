@@ -21,6 +21,7 @@ describe('session view tab (C3/C8)', () => {
     expect(parseSessionViewTab('thread')).toBe('thread')
     expect(parseSessionViewTab('chatter')).toBe('chatter')
     expect(parseSessionViewTab('split')).toBe('split')
+    expect(parseSessionViewTab('chat')).toBe('chat')
   })
 
   it('keys memory per host + conversation (this window)', () => {
@@ -41,6 +42,7 @@ describe('overlayViewer', () => {
     expect(overlayViewer('terminal')).toEqual({
       thread: false,
       chatter: false,
+      chat: false,
       hidePty: false,
     })
   })
@@ -49,6 +51,7 @@ describe('overlayViewer', () => {
     expect(overlayViewer('thread')).toEqual({
       thread: true,
       chatter: false,
+      chat: false,
       hidePty: true,
     })
   })
@@ -57,6 +60,7 @@ describe('overlayViewer', () => {
     expect(overlayViewer('chatter')).toEqual({
       thread: false,
       chatter: true,
+      chat: false,
       hidePty: true,
     })
   })
@@ -65,7 +69,17 @@ describe('overlayViewer', () => {
     expect(overlayViewer('split')).toEqual({
       thread: true,
       chatter: false,
+      chat: false,
       hidePty: false,
+    })
+  })
+
+  it('chat hides the PTY and does not mount Thread or Chatter', () => {
+    expect(overlayViewer('chat')).toEqual({
+      thread: false,
+      chatter: false,
+      chat: true,
+      hidePty: true,
     })
   })
 })

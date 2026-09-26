@@ -358,6 +358,56 @@ fn consider(best: &mut Option<(i64, PathBuf)>, ts: i64, path: PathBuf) {
     }
 }
 
+/// Transcript path continue-seed would open for this provider session.
+///
+/// Not `GET /cli/chat/session-path`. Codex is the rollout whose header
+/// id matches. Grok is `chat_history.jsonl`. An empty `project_path`
+/// skips the cwd filter (Gemini, Codex, Grok). Claude then scans
+/// `~/.claude/projects/*/<id>.jsonl` because the hash needs a cwd.
+pub fn locate_continue_transcript(
+    provider: &str,
+    session_id: &str,
+    project_path: &str,
+) -> Option<PathBuf> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+    match provider.trim() {
+        "claude" => find_claude(session_id, project_path).or_else(|| {
+            if project_path.is_empty() {
+                find_claude_by_id(session_id)
+            } else {
+                None
+            }
+        }),
+        "gemini" => find_gemini(session_id, project_path),
+        "grok" => find_grok(session_id, project_path),
+        "codex" => find_codex_rollout(session_id, project_path),
+        _ => None,
+    }
+}
+
+/// Newest `{id}.jsonl` under any Claude project dir. Used only when the
+/// caller has a conversation id and no workspace cwd.
+fn find_claude_by_id(session_id: &str) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let projects = home.join(".claude").join("projects");
+    let name = format!("{session_id}.jsonl");
+    let mut best: Option<(i64, PathBuf)> = None;
+    let entries = fs::read_dir(&projects).ok()?;
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let candidate = entry.path().join(&name);
+        if candidate.is_file() {
+            consider(&mut best, file_mtime_ms(&candidate), candidate);
+        }
+    }
+    best.map(|(_, path)| path)
+}
+
 fn find_claude(session_id: &str, project_path: &str) -> Option<PathBuf> {
     if let Some(live) = resolve_claude_session_file(session_id, project_path) {
         return Some(live);

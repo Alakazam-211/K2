@@ -87,6 +87,7 @@ import {
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { shouldShowTerminalComposeBar } from '@/components/Terminal/terminalCompose'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
+import { ChatOverlayColumn } from '@/components/SessionView/ChatOverlayColumn'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
 import { overlayViewer } from '@/components/SessionView/sessionViewTab'
@@ -571,7 +572,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   } = props
   const sessionChrome = useSessionViewChrome()
   const viewTab = sessionChrome?.viewTab ?? 'terminal'
-  const { thread: showThreadOverlay, chatter: showChatterOverlay, hidePty } =
+  const { thread: showThreadOverlay, chatter: showChatterOverlay, chat: showChat, hidePty } =
     overlayViewer(viewTab)
   const showThreadOnly = viewTab === 'thread'
   const showChatterOnly = viewTab === 'chatter'
@@ -5773,6 +5774,25 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           }
         />
       )}
+      {sessionChrome && showChat && (
+        <ChatOverlayColumn
+          view={viewTab}
+          visible={isTabVisible}
+          provider={sessionChrome.chatProvider}
+          conversationId={sessionChrome.chatConversationId}
+          agentName={sessionChrome.agentName}
+          composeBar={
+            showComposeBar && shouldShowTerminalComposeBar(phase) ? (
+              <TerminalComposeBar
+                sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
+                workspacePath={cwd}
+                onInjectInput={sendInput}
+                sendDestination="pty"
+              />
+            ) : null
+          }
+        />
+      )}
       {sessionChrome && showChatterOverlay && (
         <div
           className="flex-1 min-w-0 min-h-0 flex flex-col"
@@ -5793,7 +5813,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
        *  tab uses the overlay column above so DevTools/viewport shrinks
        *  chat + Message-the-agent together. Split keeps one bar per column.
        *  Chatter is mailbox-only — no compose under PTY or overlay. */}
-      {!showSplit && !showThreadOnly && !showChatterOnly && showComposeBar && shouldShowTerminalComposeBar(phase) && (
+      {!showSplit && !showThreadOnly && !showChatterOnly && !showChat && showComposeBar && shouldShowTerminalComposeBar(phase) && (
         <TerminalComposeBar
           sessionId={'sessionId' in phase && phase.sessionId ? phase.sessionId : ''}
           workspacePath={cwd}

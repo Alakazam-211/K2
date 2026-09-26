@@ -285,6 +285,8 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                     attachAgentName={(td as { attachAgentName?: string }).attachAgentName}
                     terminalId={td.terminalId}
                     conversationId={conversationIdFromTerminal(td)}
+                    command={td.command}
+                    commandHint={td.commandHint}
                     fallbackTitle={seedAndLock ? tabTitle ?? '' : ''}
                   >
                     {pane}
@@ -399,6 +401,8 @@ function SidecarAgentChrome({
   attachAgentName,
   terminalId,
   conversationId,
+  command,
+  commandHint,
   fallbackTitle,
   children,
 }: {
@@ -407,6 +411,8 @@ function SidecarAgentChrome({
   attachAgentName?: string
   terminalId: string
   conversationId: string | null
+  command?: string
+  commandHint?: string
   fallbackTitle: string
   children: React.ReactNode
 }): React.JSX.Element {
@@ -420,6 +426,8 @@ function SidecarAgentChrome({
       addr={addr}
       conversationId={conversationId}
       agentName={agentName}
+      command={command}
+      commandHint={commandHint}
     >
       {children}
     </AgentSessionChrome>

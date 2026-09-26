@@ -212,6 +212,7 @@ pub fn never_proxy(path: &str) -> bool {
             | "/cli/sessions/bytes"
             | "/cli/sessions/events"
             | "/cli/sessions/subscribe"
+            | "/cli/chat/transcript"
             | "/cli/grid"
             | "/cli/pty"
             | "/cli/auth/login"

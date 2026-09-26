@@ -52,6 +52,7 @@ pub mod agent_hooks;
 pub mod app_settings;
 pub mod chat_history;
 pub mod chat_continue;
+pub mod chat_overlay;
 /// Host token ledger (`~/.k2/usage/tokens.sqlite`). Not the app database.
 pub mod token_usage;
 pub mod chat_user_archive;

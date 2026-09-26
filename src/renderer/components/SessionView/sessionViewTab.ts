@@ -1,6 +1,6 @@
 /** Per-window remembered Thread vs Terminal tab (C8). Not daemon-canonical. */
 
-export type SessionViewTab = 'terminal' | 'thread' | 'chatter' | 'split'
+export type SessionViewTab = 'terminal' | 'thread' | 'chatter' | 'split' | 'chat'
 
 export const SESSION_VIEW_TAB_DEFAULT: SessionViewTab = 'terminal'
 
@@ -11,20 +11,22 @@ export function sessionViewTabStorageKey(hostKey: string, sessionKey: string): s
 }
 
 export function parseSessionViewTab(raw: string | null | undefined): SessionViewTab {
-  if (raw === 'thread' || raw === 'chatter' || raw === 'split') return raw
+  if (raw === 'thread' || raw === 'chatter' || raw === 'split' || raw === 'chat') return raw
   return 'terminal'
 }
 
-/** Overlay UI is a viewer. Mount Thread/Chatter only while that tab is selected. */
+/** Overlay UI is a viewer. Mount Thread/Chatter/Chat only while that tab is selected. */
 export function overlayViewer(tab: SessionViewTab): {
   thread: boolean
   chatter: boolean
+  chat: boolean
   hidePty: boolean
 } {
   return {
     thread: tab === 'thread' || tab === 'split',
     chatter: tab === 'chatter',
-    hidePty: tab === 'thread' || tab === 'chatter',
+    chat: tab === 'chat',
+    hidePty: tab === 'thread' || tab === 'chatter' || tab === 'chat',
   }
 }
 

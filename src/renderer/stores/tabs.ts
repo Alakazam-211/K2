@@ -1072,8 +1072,9 @@ interface TabsState {
    *  item (mirrors openFileInNewTab). This is the shared entry point for
    *  integrations (terminal URL clicks, daemon events, menus). Non-http(s)
    *  URLs still get a tab; the Rust side rejects them at browser_create
-   *  and BrowserPane shows the error inline. */
-  openUrlInNewTab: (url: string) => void
+   *  and BrowserPane shows the error inline.
+   *  `groupIndex` omitted or 0 appends to the primary strip. */
+  openUrlInNewTab: (url: string, groupIndex?: number) => void
   /** Browser-pane arc — open `url` in the given tab's active pane group
    *  (mirrors openFileInPane): reuse the pane group's existing unpinned
    *  browser item when present (navigate-in-place), else append a new
@@ -1083,7 +1084,8 @@ interface TabsState {
    *  onto a browser item so the next serialize captures where the user
    *  actually navigated (mirrors setFileViewerState). */
   setBrowserItemState: (tabId: string, paneGroupId: string, itemId: string, state: { url?: string; title?: string }) => void
-  openUntitledDocument: (cwd: string) => void
+  /** `groupIndex` omitted or 0 appends to the primary strip. */
+  openUntitledDocument: (cwd: string, groupIndex?: number) => void
   /** Set a tab's bar title.
    *  - USER renames (TabBar `commitRename`) pass `{ locked: true }` — that
    *    marks the tab locked locally AND in the daemon `tab_titles` store so
@@ -1827,6 +1829,29 @@ function browserTabTitle(url: string): string {
   } catch {
     return url || 'Browser'
   }
+}
+
+/** Append `tab` to column `groupIndex`. 0 is the primary strip; a missing extra column is a no-op. */
+function placedTab(
+  state: {
+    tabs: Tab[]
+    extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }>
+  },
+  groupIndex: number,
+  tab: Tab,
+): { tabs: Tab[]; activeTabId: string } | { extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }> } {
+  if (groupIndex <= 0) {
+    return { tabs: [...state.tabs, tab], activeTabId: tab.id }
+  }
+  const newGroups = [...state.extraGroups]
+  const gi = groupIndex - 1
+  if (gi >= 0 && gi < newGroups.length) {
+    newGroups[gi] = {
+      tabs: [...newGroups[gi].tabs, tab],
+      activeTabId: tab.id,
+    }
+  }
+  return { extraGroups: newGroups }
 }
 
 /** Convert a PaneData to an Item (for backward compat in addPaneToTab) */
@@ -3072,7 +3097,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     }))
   },
 
-  openUrlInNewTab: (url: string) => {
+  openUrlInNewTab: (url: string, groupIndex?: number) => {
     const paneGroupId = crypto.randomUUID()
     const tabId = crypto.randomUUID()
 
@@ -3085,10 +3110,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       paneGroups: new Map([[paneGroupId, pg]])
     }
 
-    set((state) => ({
-      tabs: [...state.tabs, tab],
-      activeTabId: tabId
-    }))
+    set((state) => placedTab(state, groupIndex ?? 0, tab))
   },
 
   openUrlInPane: (tabId: string, url: string) => {
@@ -3146,7 +3168,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     })
   },
 
-  openUntitledDocument: (cwd: string) => {
+  openUntitledDocument: (cwd: string, groupIndex?: number) => {
     // Count existing untitled docs to generate a unique name
     const state = get()
     const allTabs = [
@@ -3176,10 +3198,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       isDirty: true, // Mark as dirty since it's unsaved
     }
 
-    set((state) => ({
-      tabs: [...state.tabs, tab],
-      activeTabId: tabId
-    }))
+    set((state) => placedTab(state, groupIndex ?? 0, tab))
   },
 
   setTabTitle: (tabId: string, title: string, opts?: { locked?: boolean }) => {

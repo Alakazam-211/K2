@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { invoke } from '@tauri-apps/api/core'
 import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, type AgentItemData, type TerminalItemData, type BrowserItemData, type SerializedLayout } from './tabs'
 import {
   __resetNamedChatTitleCachesForTests,
@@ -1077,5 +1078,51 @@ describe('named chat tab title (N1–N6)', () => {
     const plainTab = plain.tabs.find((t) => t.title === 'Plain')
     expect(plainTab?.locked).toBe(false)
     expect(plainTab?.locked).not.toBeUndefined()
+  })
+})
+
+describe('plus-menu column targets', () => {
+  beforeEach(reset)
+
+  function column1(): void {
+    useTabsStore.setState({
+      splitCount: 2,
+      extraGroups: [{ tabs: [], activeTabId: null }],
+      activeGroupIndex: 0,
+    })
+  }
+
+  it('empty openUrlInNewTab titles Browser and does not call browser_create', () => {
+    vi.mocked(invoke).mockClear()
+    useTabsStore.getState().openUrlInNewTab('')
+    const tab = useTabsStore.getState().tabs[0]
+    expect(tab.title).toBe('Browser')
+    const item = Array.from(tab.paneGroups.values())[0].items[0]
+    expect(item.type).toBe('browser')
+    expect((item.data as BrowserItemData).url).toBe('')
+    expect(vi.mocked(invoke).mock.calls.map((c) => c[0])).not.toContain('browser_create')
+  })
+
+  it('openUrlInNewTab and openUntitledDocument with a group index append to that column', () => {
+    column1()
+    useTabsStore.getState().addTab('/tmp/proj', { title: 'Keep' })
+    useTabsStore.getState().openUrlInNewTab('', 1)
+    useTabsStore.getState().openUntitledDocument('/tmp/proj', 1)
+    expect(useTabsStore.getState().tabs.map((t) => t.title)).toEqual(['Keep'])
+    const extra = useTabsStore.getState().extraGroups[0].tabs
+    expect(extra.map((t) => t.title)).toEqual(['Browser', 'Untitled'])
+    const browser = extra[0]
+    expect((Array.from(browser.paneGroups.values())[0].items[0].data as BrowserItemData).url).toBe('')
+    expect(useTabsStore.getState().extraGroups[0].activeTabId).toBe(extra[1].id)
+  })
+
+  it('omitted group index stays on column 0 when another column is active', () => {
+    column1()
+    useTabsStore.setState({ activeGroupIndex: 1 })
+    useTabsStore.getState().openUntitledDocument('/tmp/proj')
+    useTabsStore.getState().openUrlInNewTab('https://example.com')
+    expect(useTabsStore.getState().tabs.map((t) => t.title)).toEqual(['Untitled', 'example.com'])
+    expect(useTabsStore.getState().extraGroups[0].tabs).toHaveLength(0)
+    expect(useTabsStore.getState().activeGroupIndex).toBe(1)
   })
 })

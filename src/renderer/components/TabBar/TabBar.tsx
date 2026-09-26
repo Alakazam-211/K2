@@ -1,5 +1,7 @@
-import { useCallback, useState, useRef, useEffect, useMemo } from 'react'
+import { useCallback, useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useTabsStore, type TerminalItemData } from '@/stores/tabs'
+import { usePresetsStore, type AgentPreset } from '@/stores/presets'
+import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-menu'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
 import { useActiveAgentsStore, mergePaneStatus, type ActiveAgent, type PaneStatus } from '@/stores/active-agents'
@@ -24,11 +26,37 @@ interface TabBarProps {
   groupIndex?: number
 }
 
+function presetMenuIcon(preset: AgentPreset): ReactNode {
+  if (preset.icon) {
+    return <span style={{ fontSize: 14, lineHeight: 1 }}>{preset.icon}</span>
+  }
+  return <AgentIcon agent={preset.label} size={14} />
+}
+
+/** Terminal, New File, Browser, then enabled presets in store order. No separator when none are enabled. */
+function buildPlusMenuItems(presets: AgentPreset[]): ContextMenuItemDef[] {
+  const enabled = presets.filter((p) => p.enabled !== 0)
+  const items: ContextMenuItemDef[] = [
+    { id: 'terminal', label: 'Terminal', shortcut: '⌘T' },
+    { id: 'new-file', label: 'New File' },
+    { id: 'browser', label: 'Browser' },
+  ]
+  if (enabled.length === 0) return items
+  items.push({ id: 'plus-presets-sep', label: '', type: 'separator' })
+  for (const preset of enabled) {
+    items.push({
+      id: `preset:${preset.id}`,
+      label: preset.label,
+      icon: presetMenuIcon(preset),
+    })
+  }
+  return items
+}
+
 export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element {
   const tabs = useTabsStore((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs ?? [])
   const activeTabId = useTabsStore((s) => groupIndex === 0 ? s.activeTabId : s.extraGroups[groupIndex - 1]?.activeTabId ?? null)
   const splitCount = useTabsStore((s) => s.splitCount)
-  const addTabToGroup = useTabsStore((s) => s.addTabToGroup)
   const removeTabFromGroup = useTabsStore((s) => s.removeTabFromGroup)
   const setActiveTabInGroup = useTabsStore((s) => s.setActiveTabInGroup)
   const splitTerminalArea = useTabsStore((s) => s.splitTerminalArea)
@@ -160,9 +188,30 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     return ids
   }, [heartbeatActiveEntries])
 
-  const handleAddTab = useCallback(() => {
-    addTabToGroup(groupIndex, cwd)
-  }, [addTabToGroup, groupIndex, cwd])
+  // Close over this bar's column when the menu opens. Do not read activeGroupIndex later.
+  const openPlusMenu = useCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
+    const group = groupIndex
+    const barCwd = cwd
+    const rect = e.currentTarget.getBoundingClientRect()
+    const items = buildPlusMenuItems(usePresetsStore.getState().presets)
+    const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
+    if (!picked) return
+    if (picked === 'terminal') {
+      useTabsStore.getState().addTabToGroup(group, barCwd)
+      return
+    }
+    if (picked === 'new-file') {
+      useTabsStore.getState().openUntitledDocument(barCwd, group)
+      return
+    }
+    if (picked === 'browser') {
+      useTabsStore.getState().openUrlInNewTab('', group)
+      return
+    }
+    if (picked.startsWith('preset:')) {
+      usePresetsStore.getState().launchPreset(picked.slice('preset:'.length), barCwd, 'tab', group)
+    }
+  }, [groupIndex, cwd])
 
   const [pendingClose, setPendingClose] = useState<{ tabId: string; agents: ActiveAgent[] } | null>(null)
 
@@ -531,7 +580,13 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       bordered={false}
       className="flex h-9 items-center border-b border-[var(--color-border)] no-drag"
     >
-      <div ref={tabBarRef} className="flex h-full flex-1 items-center overflow-x-auto tabbar-scroll">
+      {/* Grow 0 so the + sits on the last tab. Overflow stays in this node, not the + . */}
+      <div
+        ref={tabBarRef}
+        data-tab-scroller=""
+        className="flex h-full min-w-0 items-center overflow-x-auto tabbar-scroll"
+        style={{ flex: '0 1 auto' }}
+      >
         {tabs.map((tab, index) => {
           const isActive = tab.id === activeTabId
           const isDirty = tab.isDirty ?? false
@@ -911,7 +966,32 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         })}
       </div>
 
-      {/* Transient unpin-failure hint (auto-clears). */}
+      {/* + is the next sibling after the scroller, outside the overflow node. */}
+      <button
+        type="button"
+        data-tab-add=""
+        aria-haspopup="menu"
+        className="flex h-full w-9 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)]"
+        onClick={(e) => { void openPlusMenu(e) }}
+        title="New tab"
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        >
+          <line x1="6" y1="1" x2="6" y2="11" />
+          <line x1="1" y1="6" x2="11" y2="6" />
+        </svg>
+      </button>
+
+      {/* Spare width sits between + and split, not between the last tab and +. */}
+      <div className="min-w-0 flex-1" data-tab-bar-spacer="" />
+
+      {/* Transient unpin-failure hint. After the spacer so it is not in the seam before +. */}
       {pinHint && (
         <span
           className="shrink-0 px-2 truncate"
@@ -968,24 +1048,6 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         </>
       )}
 
-      {/* Add tab button */}
-      <button
-        className="flex h-full w-9 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)]"
-        onClick={handleAddTab}
-        title="New tab (Cmd+T)"
-      >
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 12 12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        >
-          <line x1="6" y1="1" x2="6" y2="11" />
-          <line x1="1" y1="6" x2="11" y2="6" />
-        </svg>
-      </button>
       {/* Pin Dimensions modal — opened from a tab's context menu */}
       {pinModalSessionId && (
         <PinDimensionsModal

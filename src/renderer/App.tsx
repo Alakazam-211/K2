@@ -56,6 +56,7 @@ import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
 import { useServerSwitcherStore } from './stores/server-switcher'
 import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs } from './stores/tabs'
+import { menuNewTab } from './lib/menu-new-tab'
 import { useSidebarStore } from './stores/sidebar'
 import { useActiveAgentsStore, startAgentPolling, stopAgentPolling, type ActiveAgent } from './stores/active-agents'
 import AgentCloseDialog from './components/AgentCloseDialog/AgentCloseDialog'
@@ -673,11 +674,7 @@ function AppRoot(): React.JSX.Element {
         useTabsStore.getState().openUntitledDocument(cwd)
       }).then(track)
       listen('menu:new-tab', () => {
-        const ps = useProjectsStore.getState()
-        const proj = ps.projects.find((p) => p.id === ps.activeProjectId)
-        const ws = proj?.workspaces?.find((w) => w.id === ps.activeWorkspaceId)
-        const cwd = ws?.worktreePath ?? proj?.path ?? '~'
-        useTabsStore.getState().addTab(cwd)
+        menuNewTab()
       }).then(track)
       listen('menu:launch-agent', async () => {
         const ps = useProjectsStore.getState()

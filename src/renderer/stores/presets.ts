@@ -8,8 +8,40 @@ import { emit } from '@tauri-apps/api/event'
 // each successful mutation (see `emitPresetsChanged`).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { parseCommand } from '@/lib/agent-resolve'
+import { activeHostKey, onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
 import { useTabsStore, registerPresetsStore } from './tabs'
 import type { TerminalPane, Tab, PaneGroup, Item } from './tabs'
+
+/** One boolean per connected host. Missing key means the launch strip is shown. */
+export const SHOW_LAUNCH_BAR_STORAGE_PREFIX = 'k2.showLaunchBar.'
+
+export function showLaunchBarStorageKey(hostKey: string): string {
+  return `${SHOW_LAUNCH_BAR_STORAGE_PREFIX}${hostKey}`
+}
+
+export function readShowLaunchBar(hostKey: string): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return true
+    const raw = localStorage.getItem(showLaunchBarStorageKey(hostKey))
+    if (raw == null) return true
+    return raw !== '0' && raw !== 'false'
+  } catch {
+    return true
+  }
+}
+
+function writeShowLaunchBar(hostKey: string, shown: boolean): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(showLaunchBarStorageKey(hostKey), shown ? '1' : '0')
+  } catch {
+    /* private mode / sandboxed storage */
+  }
+}
+
+function currentHostKey(): string {
+  return activeHostKey(useConnectHostStore.getState().activeHost)
+}
 
 /**
  * Plan B cross-window sync: the old Tauri `presets_*` mutation commands
@@ -137,7 +169,13 @@ interface PresetsState {
   showPresetsBar: boolean
   fetchPresets: () => Promise<void>
   togglePresetsBar: () => void
-  launchPreset: (presetId: string, cwd: string, mode: 'tab' | 'split') => void
+  /** Persist the launch-strip bit for the active host and update the store. */
+  setShowLaunchBar: (shown: boolean) => void
+  /**
+   * `groupIndex` aims a `'tab'` launch at that column. Omitted keeps
+   * `activeGroupIndex` (launch strip, Cmd+Shift+T).
+   */
+  launchPreset: (presetId: string, cwd: string, mode: 'tab' | 'split', groupIndex?: number) => void
   // Mutations — each posts to the daemon then emits `sync:presets` on
   // success and refreshes the local list (mirrors the old Tauri shims).
   createPreset: (input: { label: string; command: string; icon?: string }) => Promise<AgentPreset>
@@ -167,7 +205,7 @@ export { parseCommand }
 
 export const usePresetsStore = create<PresetsState>((set, get) => ({
   presets: [],
-  showPresetsBar: true,
+  showPresetsBar: readShowLaunchBar(currentHostKey()),
 
   fetchPresets: async () => {
     try {
@@ -179,7 +217,12 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
   },
 
   togglePresetsBar: () => {
-    set((state) => ({ showPresetsBar: !state.showPresetsBar }))
+    get().setShowLaunchBar(!get().showPresetsBar)
+  },
+
+  setShowLaunchBar: (shown: boolean) => {
+    writeShowLaunchBar(currentHostKey(), shown)
+    set({ showPresetsBar: shown })
   },
 
   // POST body is camelCase (the daemon's PresetsCreateBody/PresetsUpdateBody
@@ -215,7 +258,7 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
     await get().fetchPresets()
   },
 
-  launchPreset: (presetId: string, cwd: string, mode: 'tab' | 'split') => {
+  launchPreset: (presetId: string, cwd: string, mode: 'tab' | 'split', groupIndex?: number) => {
     const preset = get().presets.find((p) => p.id === presetId)
     if (!preset) {
       console.error(`[presets] Preset not found: ${presetId}`)
@@ -226,9 +269,8 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
     const tabsStore = useTabsStore.getState()
 
     if (mode === 'tab') {
-      // Use addTabToGroup which respects the active group
-      const activeGroup = tabsStore.activeGroupIndex
-      tabsStore.addTabToGroup(activeGroup, cwd, {
+      const group = groupIndex ?? tabsStore.activeGroupIndex
+      tabsStore.addTabToGroup(group, cwd, {
         title: preset.label,
         command,
         args
@@ -261,6 +303,13 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
 
 // Register with tabs store to break circular dependency
 registerPresetsStore(() => usePresetsStore.getState())
+
+// Host switch loads that host's bit. A missing key stays shown.
+// Session mint fires with the same key and must not rewrite the flag.
+onActiveHostChange((nextKey, prevKey) => {
+  if (nextKey === prevKey) return
+  usePresetsStore.setState({ showPresetsBar: readShowLaunchBar(nextKey) })
+})
 
 // ── Tree helpers ─────────────────────────────────────────────────────────
 

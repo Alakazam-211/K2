@@ -132,6 +132,7 @@ export default function ContextMenu(): React.JSX.Element | null {
     <>
       {/* Invisible backdrop — click anywhere to dismiss */}
       <div
+        data-context-backdrop=""
         style={{
           position: 'fixed',
           inset: 0,
@@ -149,6 +150,7 @@ export default function ContextMenu(): React.JSX.Element | null {
       />
       <div
         ref={menuRef}
+        data-context-menu=""
         className="no-drag"
         style={{
         position: 'fixed',
@@ -243,6 +245,21 @@ export default function ContextMenu(): React.JSX.Element | null {
                 {item.checked ? '✓' : ''}
               </span>
             )}
+            {item.icon ? (
+              <span
+                aria-hidden
+                style={{
+                  width: 14,
+                  height: 14,
+                  flexShrink: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {item.icon}
+              </span>
+            ) : null}
             <span
               style={{
                 flex: 1,
@@ -253,6 +270,18 @@ export default function ContextMenu(): React.JSX.Element | null {
             >
               {item.label}
             </span>
+            {item.shortcut ? (
+              <span
+                style={{
+                  flexShrink: 0,
+                  marginLeft: 12,
+                  color: 'var(--color-text-muted)',
+                  fontSize: '10px',
+                }}
+              >
+                {item.shortcut}
+              </span>
+            ) : null}
             {item.badge ? (
               <span
                 style={{

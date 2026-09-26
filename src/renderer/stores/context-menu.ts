@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { create } from 'zustand'
 
 export interface ContextMenuItemDef {
@@ -9,6 +10,10 @@ export interface ContextMenuItemDef {
   checked?: boolean
   /** Small pill next to the label (e.g. "coming soon" for disabled stubs). */
   badge?: string
+  /** Leading icon. Omitted rows stay text-only. */
+  icon?: ReactNode
+  /** Trailing shortcut hint (e.g. "⌘T"). Not a badge. */
+  shortcut?: string
 }
 
 /**

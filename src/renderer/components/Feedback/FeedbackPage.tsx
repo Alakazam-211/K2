@@ -26,6 +26,7 @@ import PageTabs from '@/components/TopBar/PageTabs'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import TimerButton from '@/components/Timer/TimerButton'
+import UsageButton from '@/components/Timer/UsageButton'
 import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import { Surface } from '@/components/ui'
@@ -671,6 +672,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
 
         <DesktopChromeRight>
           <div className="flex items-center gap-2 no-drag">
+            <UsageButton />
             <TimerButton />
             <K2NounsCheatSheet />
             <ModeToggle />

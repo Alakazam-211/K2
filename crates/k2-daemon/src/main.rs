@@ -55,6 +55,7 @@ mod sandbox_chat_routes;
 mod sandbox_reaper;
 mod v1_ws_message;
 mod claude_auth_host;
+mod subscription_usage;
 mod classify_routes;
 mod cli;
 mod cli_response;
@@ -1200,6 +1201,10 @@ async fn async_main() {
     // (#663 boot-survivor gap, daemon-side). Spawned after the
     // readiness gate opens so it operates against fully-migrated state.
     let _active_reaper_handle = active_reaper::spawn();
+
+    // Claude and Codex subscription windows. Headless — no webview — and
+    // not hung off the heartbeat monitor.
+    let _subscription_usage_handle = subscription_usage::spawn();
 
     // Published services: boot reattach/respawn of desired=running
     // rows. Own process group / Job Object — stop_tunnel / Active

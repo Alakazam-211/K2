@@ -580,6 +580,8 @@ async fn handle_one_request(
             | "/cli/claude-auth/refresh-now"
             | "/cli/claude-auth/install-scheduler"
             | "/cli/claude-auth/uninstall-scheduler"
+            // Subscription window probe. GET of the cache stays out of this list.
+            | "/cli/usage/subscriptions/refresh"
             // Phase 2 Unit 2 — LLM control + chat. Chat body
             // carries the user message + workspace context. Load
             // takes a path. Download-default takes no body but is
@@ -3675,6 +3677,33 @@ async fn handle_one_request(
             }
             let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
             let result = crate::claude_auth_host::handle_uninstall_scheduler();
+            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+                .await;
+        }
+        // POST /cli/usage/subscriptions/refresh — probe off this connection.
+        // A cache newer than 15 seconds is returned without a probe.
+        // GET of this path is 405 in misc_routes.
+        "/cli/usage/subscriptions/refresh" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let joined = tokio::task::spawn_blocking(crate::subscription_usage::handle_refresh).await;
+            let result = match joined {
+                Ok(response) => response,
+                Err(_) => crate::cli_response::CliResponse::internal_error(
+                    "subscription probe failed",
+                ),
+            };
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

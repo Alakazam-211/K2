@@ -34,6 +34,7 @@ import PageTabs from '@/components/TopBar/PageTabs'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import TimerButton from '@/components/Timer/TimerButton'
+import UsageButton from '@/components/Timer/UsageButton'
 import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import { Surface } from '@/components/ui'
@@ -364,6 +365,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
             the panel is closed. Window controls sit after page affordances. */}
         <DesktopChromeRight>
           <div className="flex items-center gap-1">
+            <UsageButton />
             <TimerButton />
             <K2NounsCheatSheet />
             <ModeToggle />

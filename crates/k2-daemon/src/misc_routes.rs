@@ -1253,6 +1253,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // generic GET dispatch.
         "/cli/claude-auth/status" => crate::claude_auth_host::handle_status(),
 
+        // Subscription windows. Read-only. Refresh is POST-only; a GET
+        // of that path must 405, not fall through to 404.
+        "/cli/usage/subscriptions" => crate::subscription_usage::handle_get(),
+        "/cli/usage/subscriptions/refresh" => CliResponse::method_not_allowed(),
+
         // ── Phase 2 Unit 4: workspaces / focus-groups / sections /
         //                    layouts / timer / presets / window-state /
         //                    projects / git (GET endpoints) ─────────────

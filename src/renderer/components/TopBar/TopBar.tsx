@@ -7,6 +7,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import TimerButton from '@/components/Timer/TimerButton'
+import UsageButton from '@/components/Timer/UsageButton'
 import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
@@ -196,7 +197,8 @@ export default function TopBar({
               alone or when the host predates the presence routes) */}
           <PresenceRoster />
 
-          {/* Timer */}
+          {/* Subscription allowance, then the stopwatch. */}
+          <UsageButton />
           <TimerButton />
 
           <K2NounsCheatSheet />

@@ -2,6 +2,7 @@ import { type ReactNode } from 'react'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { usePanelsStore } from '../../stores/panels'
 import TimerButton from '@/components/Timer/TimerButton'
+import UsageButton from '@/components/Timer/UsageButton'
 import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
@@ -74,6 +75,7 @@ export default function FocusLayout({
         <DesktopChromeRight>
           <div className="flex items-center gap-1">
             <PresenceRoster />
+            <UsageButton />
             <TimerButton />
             <K2NounsCheatSheet />
 

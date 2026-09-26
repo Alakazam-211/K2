@@ -81,6 +81,8 @@ pub mod dns_routes;
 pub mod domains;
 pub mod domain_routes;
 pub mod misc_routes;
+pub mod token_usage_scan;
+pub mod usage_routes;
 pub mod ops_routes;
 pub mod ops_stream_ws;
 pub mod pending_live;

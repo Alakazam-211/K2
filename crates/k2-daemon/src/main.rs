@@ -94,6 +94,8 @@ mod dns_routes;
 mod domains;
 mod domain_routes;
 mod misc_routes;
+mod token_usage_scan;
+mod usage_routes;
 mod ops_routes;
 mod ops_stream_ws;
 mod pending_live;
@@ -1162,6 +1164,11 @@ async fn async_main() {
     // correctly-paired daemon, and stops showing "Applying updates…".
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");
+
+    // Token ledger: full transcript scan on a 15-minute timer, plus a
+    // per-workspace idle scan. Headless — the renderer does not read
+    // provider JSONL. Does not walk every transcript tree on idle.
+    token_usage_scan::spawn();
 
     // P19: re-assert CLI folder trust after ready (never blocks the gate;
     // worktree cwds not in projects.path are covered by spawn P16).

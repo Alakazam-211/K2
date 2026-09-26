@@ -39,6 +39,7 @@ import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // Projects-V1 groups section (label "Projects" — Projects/ProjectSettings).
 export type SettingsSection =
   | 'general'
+  | 'token-usage'
   | 'styles'
   | 'terminal'
   | 'code-editor'

@@ -5,6 +5,7 @@ import { SectionErrorBoundary } from './SectionErrorBoundary'
 import { SettingsSearchModal } from './SettingsSearchModal'
 import type { SettingEntry } from './searchManifest'
 import { GeneralSection, GeneralRemoteHostPanel, GENERAL_MANIFEST } from './sections/GeneralSection'
+import { TokenUsageSection, TOKEN_USAGE_MANIFEST } from './sections/TokenUsageSection'
 import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
 import { useConnectHostStore } from '@/stores/connect-host'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
@@ -66,6 +67,7 @@ function settingsNav(): NavBlock[] {
   const hideTunnel = isAirgap()
   const blocks: NavBlock[] = [
     { kind: 'item', id: 'general', label: 'General' },
+    { kind: 'item', id: 'token-usage', label: 'Token usage' },
     { kind: 'item', id: 'styles', label: 'Styles' },
     { kind: 'item', id: 'agents', label: 'LLMs' },
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
@@ -143,6 +145,7 @@ export default function Settings(): React.JSX.Element {
   const allEntries = useMemo<SettingEntry[]>(
     () => [
       ...GENERAL_MANIFEST,
+      ...TOKEN_USAGE_MANIFEST,
       ...STYLES_MANIFEST,
       ...PROJECTS_MANIFEST,
       ...CONTEXT_CATALOG_MANIFEST,
@@ -382,6 +385,11 @@ export default function Settings(): React.JSX.Element {
               </div>
             )}
           </div>
+        )}
+        {activeSection === 'token-usage' && (
+          <SectionErrorBoundary>
+            <TokenUsageSection />
+          </SectionErrorBoundary>
         )}
         {activeSection === 'styles' && (
           <SectionErrorBoundary>

@@ -158,6 +158,9 @@ pub fn spawn_observer(agent_name: String, session: Arc<DaemonPtySession>) {
                     if state != Activity::Idle {
                         emit_status(&agent_name, &workspace_path, Activity::Idle);
                     }
+                    // Already-idle exits do not emit. The ledger still
+                    // needs this session, and only this workspace.
+                    crate::token_usage_scan::note_idle_workspace(&workspace_path);
                     log_debug!("[session-activity] observer exit (child) agent={agent_name}");
                     return;
                 }
@@ -167,6 +170,7 @@ pub fn spawn_observer(agent_name: String, session: Arc<DaemonPtySession>) {
                     if state != Activity::Idle {
                         emit_status(&agent_name, &workspace_path, Activity::Idle);
                     }
+                    crate::token_usage_scan::note_idle_workspace(&workspace_path);
                     log_debug!("[session-activity] observer exit (closed) agent={agent_name}");
                     return;
                 }

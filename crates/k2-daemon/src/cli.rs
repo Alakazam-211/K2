@@ -121,6 +121,11 @@ pub fn fanout_wanted(params: &HashMap<String, String>) -> bool {
 /// Route a single `/cli/*` path to its handler. Assumes the caller
 /// has already validated the bearer token.
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
+    // Token ledger. GET only — not in `post_allowed`. Auth is
+    // `owner_role_identity` inside the arm, not the catchall `token_ok`.
+    if let Some(resp) = crate::usage_routes::dispatch(path, params) {
+        return resp;
+    }
     // ── Domain dispatch (task #578: per-domain *_routes::dispatch) ───
     if let Some(resp) = crate::agents_routes::dispatch(path, params) {
         return resp;

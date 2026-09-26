@@ -51,6 +51,7 @@ pub mod agent_hooks;
 // the canonical post-relocation paths directly.
 pub mod app_settings;
 pub mod chat_history;
+pub mod chat_continue;
 pub mod chat_user_archive;
 // K2 Connect "Clone to" — the pure bundle engine (inventory the three
 // state locations, scrub secrets, exclude bulk, tar/gz a manifest-driven

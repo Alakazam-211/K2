@@ -1183,6 +1183,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/chat/discover-ide" => crate::chat_routes::handle_discover_ide(params),
         "/cli/chat/session-exists" => crate::chat_routes::handle_session_exists(params),
         "/cli/chat/session-path" => crate::chat_routes::handle_session_path(params),
+        // POST-only. A GET must 405 here — a post_allowed arm alone
+        // falls through this chain to 404 "route not found".
+        "/cli/chat/continue-seed" => CliResponse::method_not_allowed(),
 
         // ── Phase 2 Unit 6: themes (GET) ──────────────────────────
         "/cli/themes/list" => crate::themes_routes::handle_list(params),

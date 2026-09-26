@@ -4,6 +4,13 @@ import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore, openApiHostSessionTab } from '@/stores/tabs'
+import { usePinnedSizeStore } from '@/stores/pinned-size'
+import { Button, DialogFrame, DialogScrim } from '@/components/ui'
+import {
+  mapMsgResponseToStatus,
+  type ComposeStatus,
+  type MsgResponse,
+} from '@/components/Terminal/terminalCompose'
 import { useSettingsStore } from '@/stores/settings'
 import { usePresetsStore } from '@/stores/presets'
 import { resolveAgentCommand } from '@/lib/agent-resolve'
@@ -106,6 +113,56 @@ function getPresetArgsForProvider(provider: string): string[] {
     }
   } catch { /* preset store not available */ }
   return []
+}
+
+/** Same deadline TerminalPane uses for a spawn (`BOOT_DEADLINE_MS`). */
+const PTY_WAIT_MS = 10_000
+
+function readPinnedPty(paneGroupId: string): string | undefined {
+  const id = usePinnedSizeStore.getState().sessions[paneGroupId]
+  return id && id.length > 0 ? id : undefined
+}
+
+/** PTY id is the pinned-size map entry for the pane group `addTabToGroup` returns. */
+function waitForPinnedPty(paneGroupId: string): Promise<string> {
+  const existing = readPinnedPty(paneGroupId)
+  if (existing) return Promise.resolve(existing)
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout>
+    const unsub = usePinnedSizeStore.subscribe(() => {
+      const id = readPinnedPty(paneGroupId)
+      if (!id || settled) return
+      settled = true
+      clearTimeout(timer)
+      unsub()
+      resolve(id)
+    })
+    timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      unsub()
+      const late = readPinnedPty(paneGroupId)
+      if (late) resolve(late)
+      else reject(new Error('The new tab has no live terminal session.'))
+    }, PTY_WAIT_MS)
+  })
+}
+
+function continueSendError(status: ComposeStatus): string {
+  switch (status.kind) {
+    case 'pty_died':
+      return status.hint?.trim() || 'The terminal exited before the message was sent.'
+    case 'pty_stalled':
+      return status.hint?.trim() || 'The terminal stalled before the message was sent.'
+    case 'busy':
+      return [status.reason, status.hint].filter((part) => !!part).join(': ')
+        || 'The message was not delivered.'
+    case 'error':
+      return status.message
+    default:
+      return 'The message was not delivered.'
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -273,6 +330,13 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   const [showSandbox, setShowSandbox] = useState(true)
   const [reopening, setReopening] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [continueSession, setContinueSession] = useState<ChatSession | null>(null)
+  const [continueTarget, setContinueTarget] = useState('claude')
+  const [continueMode, setContinueMode] = useState<'recent' | 'full'>('recent')
+  const [continueError, setContinueError] = useState<string | null>(null)
+  const [continueSeed, setContinueSeed] = useState<string | null>(null)
+  const [continueInFlight, setContinueInFlight] = useState(false)
+  const continueGen = useRef(0)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -667,6 +731,36 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     }
   }, [pinnedKeys])
 
+  const closeContinue = useCallback(() => {
+    continueGen.current += 1
+    setContinueSession(null)
+    setContinueSeed(null)
+    setContinueError(null)
+    setContinueInFlight(false)
+  }, [])
+
+  const openContinue = useCallback((session: ChatSession) => {
+    continueGen.current += 1
+    setContinueSession(session)
+    setContinueTarget(session.provider)
+    setContinueMode('recent')
+    setContinueError(null)
+    setContinueSeed(null)
+    setContinueInFlight(false)
+  }, [])
+
+  useEffect(() => {
+    if (!continueSession) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      closeContinue()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [continueSession, closeContinue])
+
   const copyText = useCallback(async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
@@ -740,8 +834,9 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         }},
         { label: 'Copy Path', action: () => copySessionPath() },
         { label: 'Copy resume command', action: async () => { await copyText(resumeCmd) } },
+        { label: 'Continue in a new chat…', action: () => openContinue(session) },
       ]
-      // P0: physical archive is Claude-only.
+      // P0: physical archive is Claude-only. It stays after Continue.
       if (session.provider === 'claude') {
         items.push({ label: 'Archive', action: () => handleArchive(session) })
       }
@@ -784,7 +879,74 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       if (!menuDiv.contains(ev.target as Node)) closeMenu()
     }
     setTimeout(() => document.addEventListener('mousedown', dismiss), 0)
-  }, [pinnedKeys, customNames, handleTogglePin, handleArchive, handleRestore, projectPath, copyText])
+  }, [pinnedKeys, customNames, handleTogglePin, handleArchive, handleRestore, projectPath, copyText, openContinue])
+
+  const startContinue = useCallback(async () => {
+    const session = continueSession
+    if (!session || continueInFlight) return
+    const cwd = projectPath || session.project
+    if (!cwd) {
+      setContinueError('No workspace is open for this chat.')
+      return
+    }
+    const gen = continueGen.current
+    const mode = continueMode
+    const target = continueTarget
+    setContinueInFlight(true)
+    setContinueError(null)
+    try {
+      const seeded = await daemonCliPost<{ text?: unknown }>('chat/continue-seed', {
+        provider: session.provider,
+        sessionId: session.sessionId,
+        projectPath: session.project || projectPath || '',
+        mode,
+        targetProvider: target,
+      })
+      if (gen !== continueGen.current) return
+      if (!seeded || typeof seeded.text !== 'string' || seeded.text.length === 0) {
+        throw new Error('continue-seed returned no text')
+      }
+      const text = seeded.text
+      setContinueSeed(text)
+      const config = PROVIDER_CONFIG[target]
+      if (!config) throw new Error(`Unknown harness: ${target}`)
+      const args = getPresetArgsForProvider(target)
+      const tabsStore = useTabsStore.getState()
+      const targetGroup = tabsStore.splitCount > 1 ? tabsStore.splitCount - 1 : 0
+      const sourceLabel = PROVIDER_CONFIG[session.provider]?.label ?? session.provider
+      const display = chatDisplayName({
+        customName: session.customName ?? customNames[`${session.provider}:${session.sessionId}`],
+        title: session.title,
+      })
+      const paneGroupId = tabsStore.addTabToGroup(targetGroup, cwd, {
+        title: `${display} (from ${sourceLabel})`,
+        command: config.command,
+        args,
+      })
+      if (gen !== continueGen.current) return
+      const ptyId = await waitForPinnedPty(paneGroupId)
+      if (gen !== continueGen.current) return
+      const msg = await daemonCliPost<MsgResponse>('terminal/send-message', {
+        session_id: ptyId,
+        text,
+      })
+      if (gen !== continueGen.current) return
+      const status = mapMsgResponseToStatus(msg)
+      if (status.kind !== 'delivered') {
+        setContinueError(continueSendError(status))
+        setContinueInFlight(false)
+        return
+      }
+      setContinueSession(null)
+      setContinueSeed(null)
+      setContinueError(null)
+      setContinueInFlight(false)
+    } catch (err) {
+      if (gen !== continueGen.current) return
+      setContinueError(err instanceof Error ? err.message : String(err))
+      setContinueInFlight(false)
+    }
+  }, [continueSession, continueInFlight, continueMode, continueTarget, projectPath, customNames])
 
   const handleRenameStart = useCallback((_session: ChatSession, _e: React.MouseEvent) => {
     // Now handled via context menu above
@@ -1274,6 +1436,109 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
           </>
         )}
       </div>
+
+      {continueSession && (
+        <>
+          <DialogScrim
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              closeContinue()
+            }}
+          />
+          <DialogFrame
+            data-testid="continue-new-chat"
+            style={{
+              minWidth: 340,
+              maxWidth: 440,
+              padding: '20px 24px',
+              fontFamily: 'var(--font-mono, monospace)',
+            }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 8 }}>
+              Continue in a new chat
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-primary)', marginBottom: 2 }}>
+              {chatDisplayName({
+                customName: continueSession.customName ?? customNames[`${continueSession.provider}:${continueSession.sessionId}`],
+                title: continueSession.title,
+              })}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 14 }}>
+              From {PROVIDER_CONFIG[continueSession.provider]?.label ?? continueSession.provider}
+            </div>
+            <label style={{ display: 'block', fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 12 }}>
+              Harness
+              <select
+                aria-label="Harness"
+                value={continueTarget}
+                disabled={continueInFlight}
+                onChange={(e) => setContinueTarget(e.target.value)}
+                style={{ display: 'block', width: '100%', marginTop: 4, font: 'inherit' }}
+              >
+                {Object.entries(PROVIDER_CONFIG).map(([key, cfg]) => (
+                  <option key={key} value={key}>{cfg.label}</option>
+                ))}
+              </select>
+            </label>
+            <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 4 }}>Context</div>
+            <label style={{ display: 'block', fontSize: 12, color: 'var(--color-text-primary)', marginBottom: 2 }}>
+              <input
+                type="radio"
+                name="continue-context"
+                checked={continueMode === 'recent'}
+                disabled={continueInFlight}
+                onChange={() => setContinueMode('recent')}
+              />{' '}
+              Recent turns
+            </label>
+            <div style={{ fontSize: 10, color: 'var(--color-text-muted)', margin: '0 0 8px 18px' }}>
+              Last user request and last assistant reply.
+            </div>
+            <label style={{ display: 'block', fontSize: 12, color: 'var(--color-text-primary)', marginBottom: 2 }}>
+              <input
+                type="radio"
+                name="continue-context"
+                checked={continueMode === 'full'}
+                disabled={continueInFlight}
+                onChange={() => setContinueMode('full')}
+              />{' '}
+              Full history
+            </label>
+            <div style={{ fontSize: 10, color: 'var(--color-text-muted)', margin: '0 0 14px 18px' }}>
+              The saved history. It uses more context.
+            </div>
+            {continueError && (
+              <div role="alert" style={{ fontSize: 12, color: 'var(--color-danger)', marginBottom: 12, whiteSpace: 'pre-wrap' }}>
+                {continueError}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              {continueSeed !== null && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="md"
+                  onClick={() => { void copyText(continueSeed) }}
+                >
+                  Copy text
+                </Button>
+              )}
+              <Button type="button" variant="ghost" size="md" onClick={closeContinue}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="accent"
+                size="md"
+                disabled={continueInFlight}
+                onClick={() => { void startContinue() }}
+              >
+                Start
+              </Button>
+            </div>
+          </DialogFrame>
+        </>
+      )}
 
       {toast && (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[11px] font-mono text-[var(--color-text-primary)] shadow-lg pointer-events-none">

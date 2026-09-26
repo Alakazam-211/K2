@@ -319,6 +319,55 @@ pub fn handle_archive(body: &[u8]) -> CliResponse {
     }
 }
 
+/// POST chat/continue-seed — read-only seed for a new chat.
+///
+/// Body is camelCase (`sessionId`, `projectPath`, `targetProvider`).
+/// A non-POST is 405 even though the dispatcher arm is already POST.
+pub fn handle_continue_seed(is_post: bool, body: &[u8]) -> CliResponse {
+    if !is_post {
+        return CliResponse::method_not_allowed();
+    }
+    let parsed: ContinueSeedBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    if parsed.provider.trim().is_empty() {
+        return CliResponse::bad_request("provider required");
+    }
+    if parsed.session_id.trim().is_empty() {
+        return CliResponse::bad_request("sessionId required");
+    }
+    if parsed.target_provider.trim().is_empty() {
+        return CliResponse::bad_request("targetProvider required");
+    }
+    let mode = match parsed.mode.as_str() {
+        "recent" => k2_core::chat_continue::ContinueMode::Recent,
+        "full" => k2_core::chat_continue::ContinueMode::Full,
+        _ => return CliResponse::bad_request("mode must be recent or full"),
+    };
+    match k2_core::chat_continue::build_continue_seed(
+        &k2_core::chat_continue::ContinueSeedRequest {
+            provider: parsed.provider,
+            session_id: parsed.session_id,
+            project_path: parsed.project_path,
+            mode,
+        },
+    ) {
+        Ok(text) => CliResponse::ok_json(serde_json::json!({ "text": text }).to_string()),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContinueSeedBody {
+    provider: String,
+    session_id: String,
+    project_path: String,
+    mode: String,
+    target_provider: String,
+}
+
 /// POST chat/restore — move Claude session back from the user archive.
 pub fn handle_restore(body: &[u8]) -> CliResponse {
     let parsed: ArchiveBody = match serde_json::from_slice(body) {
@@ -345,5 +394,229 @@ pub fn handle_restore(body: &[u8]) -> CliResponse {
             CliResponse::ok_json(r#"{"success":true}"#.to_string())
         }
         Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k2_core::chat_history::claude_project_hash;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    fn error_of(resp: &CliResponse) -> String {
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&resp.body).expect("400 body must be JSON");
+        assert!(
+            parsed.get("text").is_none(),
+            "400 must not return a seed: {}",
+            resp.body
+        );
+        parsed
+            .get("error")
+            .and_then(|v| v.as_str())
+            .expect("error string")
+            .to_string()
+    }
+
+    fn text_of(resp: &CliResponse) -> String {
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&resp.body).expect("200 body must be JSON");
+        parsed
+            .get("text")
+            .and_then(|v| v.as_str())
+            .expect("text string")
+            .to_string()
+    }
+
+    fn post(body: serde_json::Value) -> CliResponse {
+        let bytes = serde_json::to_vec(&body).expect("body json");
+        handle_continue_seed(true, &bytes)
+    }
+
+    fn write_claude(home: &Path, project: &Path, session_id: &str, body: &str) -> PathBuf {
+        std::fs::create_dir_all(project).expect("project");
+        let hash = claude_project_hash(&project.to_string_lossy());
+        let dir = home.join(".claude").join("projects").join(hash);
+        std::fs::create_dir_all(&dir).expect("claude dir");
+        let path = dir.join(format!("{session_id}.jsonl"));
+        std::fs::write(&path, body).expect("transcript");
+        path
+    }
+
+    #[test]
+    fn get_continue_seed_is_405_from_the_get_chain() {
+        let params = HashMap::new();
+        let via_cli = crate::cli::dispatch("/cli/chat/continue-seed", &params);
+        assert_eq!(via_cli.status, "405 Method Not Allowed");
+        assert_eq!(via_cli.body, r#"{"error":"POST required"}"#);
+        let via_get = crate::misc_routes::dispatch("/cli/chat/continue-seed", &params)
+            .expect("GET dispatch must own /cli/chat/continue-seed");
+        assert_eq!(via_get.status, "405 Method Not Allowed");
+        assert_eq!(via_get.body, r#"{"error":"POST required"}"#);
+        assert!(
+            !via_cli.body.contains("route not found"),
+            "GET must not 404: {}",
+            via_cli.body
+        );
+    }
+
+    #[test]
+    fn non_post_handler_is_405() {
+        let resp = handle_continue_seed(false, br#"{"provider":"claude"}"#);
+        assert_eq!(resp.status, "405 Method Not Allowed");
+        assert_eq!(resp.body, r#"{"error":"POST required"}"#);
+    }
+
+    #[test]
+    fn snake_case_body_is_not_a_seed() {
+        let resp = handle_continue_seed(
+            true,
+            br#"{"provider":"claude","session_id":"abc","project_path":"/tmp/p","mode":"recent","target_provider":"claude"}"#,
+        );
+        let err = error_of(&resp);
+        assert!(
+            err.contains("sessionId") || err.contains("missing field"),
+            "camelCase fields must be required: {err}"
+        );
+    }
+
+    #[test]
+    fn claude_recent_skips_tool_result() {
+        let home = crate::test_support::TempHome::new();
+        let project = home.path().join("work");
+        let session_id = "sess-route-1";
+        let path = write_claude(
+            home.path(),
+            &project,
+            session_id,
+            concat!(
+                "{\"type\":\"user\",\"message\":{\"content\":\"first ask\"}}\n",
+                "{\"type\":\"assistant\",\"message\":{\"content\":\"first reply\"}}\n",
+                "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"TOOL_ONLY_SHOULD_NOT_BE_USER\"}]}}\n",
+                "{\"type\":\"user\",\"message\":{\"content\":\"REAL_LAST_USER\"}}\n",
+                "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"REAL_LAST_ASSISTANT\"}]}}\n",
+            ),
+        );
+        let before = std::fs::read(&path).expect("before");
+        let resp = post(serde_json::json!({
+            "provider": "claude",
+            "sessionId": session_id,
+            "projectPath": project.to_string_lossy(),
+            "mode": "recent",
+            "targetProvider": "grok",
+        }));
+        let text = text_of(&resp);
+        assert!(text.contains("REAL_LAST_USER"), "{text}");
+        assert!(text.contains("REAL_LAST_ASSISTANT"), "{text}");
+        assert!(!text.contains("TOOL_ONLY_SHOULD_NOT_BE_USER"), "{text}");
+        assert!(!text.contains(path.to_string_lossy().as_ref()), "{text}");
+        assert_eq!(std::fs::read(&path).expect("after"), before);
+    }
+
+    #[test]
+    fn caps_4000_and_48000_round_trip_the_handler() {
+        let home = crate::test_support::TempHome::new();
+        let project = home.path().join("work");
+        let session_id = "sess-route-cap";
+        let user = format!("{}TAILMARK", "A".repeat(4_000));
+        let assistant = format!("{}ASSISTMARK", "B".repeat(4_000));
+        write_claude(
+            home.path(),
+            &project,
+            session_id,
+            &format!(
+                "{}\n{}\n",
+                serde_json::json!({"type":"user","message":{"content": user}}),
+                serde_json::json!({"type":"assistant","message":{"content": assistant}}),
+            ),
+        );
+        let recent = text_of(&post(serde_json::json!({
+            "provider": "claude",
+            "sessionId": session_id,
+            "projectPath": project.to_string_lossy(),
+            "mode": "recent",
+            "targetProvider": "claude",
+        })));
+        assert!(recent.contains(&"A".repeat(4_000)), "user cap head missing");
+        assert!(!recent.contains("TAILMARK"), "{recent}");
+        assert!(!recent.contains("ASSISTMARK"), "{recent}");
+
+        let mut body = String::new();
+        body.push_str("{\"type\":\"user\",\"message\":{\"content\":\"short title\"}}\n");
+        body.push_str("{\"type\":\"assistant\",\"message\":{\"content\":\"done reply\"}}\n");
+        body.push_str("PREFIX_OMIT_ME");
+        body.push_str(&"x".repeat(60_000));
+        body.push_str("SUFFIX_KEEP_ME");
+        let path = write_claude(home.path(), &project, session_id, &body);
+        let omit = body.chars().count() - 48_000;
+        let full = text_of(&post(serde_json::json!({
+            "provider": "claude",
+            "sessionId": session_id,
+            "projectPath": project.to_string_lossy(),
+            "mode": "full",
+            "targetProvider": "claude",
+        })));
+        assert!(
+            full.starts_with(&format!("Earlier history omitted: {omit} characters.\n")),
+            "{full}"
+        );
+        assert!(full.contains("SUFFIX_KEEP_ME"), "{full}");
+        assert!(!full.contains("PREFIX_OMIT_ME"), "{full}");
+        assert!(!full.contains(path.to_string_lossy().as_ref()), "{full}");
+    }
+
+    #[test]
+    fn full_without_transcript_and_no_turns_and_cursor_are_400() {
+        let home = crate::test_support::TempHome::new();
+        let project = home.path().join("work");
+        std::fs::create_dir_all(&project).expect("project");
+        let missing = post(serde_json::json!({
+            "provider": "claude",
+            "sessionId": "missing-sess",
+            "projectPath": project.to_string_lossy(),
+            "mode": "full",
+            "targetProvider": "claude",
+        }));
+        assert_eq!(error_of(&missing), "no readable transcript");
+
+        write_claude(
+            home.path(),
+            &project,
+            "tool-only",
+            "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"ONLY_TOOL\"}]}}\n",
+        );
+        let no_turns = post(serde_json::json!({
+            "provider": "claude",
+            "sessionId": "tool-only",
+            "projectPath": project.to_string_lossy(),
+            "mode": "recent",
+            "targetProvider": "claude",
+        }));
+        assert_eq!(error_of(&no_turns), "no turns");
+
+        let project_str = project.to_string_lossy();
+        let root = k2_core::chat_history::resolve_root_project_path(&project_str);
+        let hash = k2_core::chat_history::md5_hex(root.as_bytes());
+        let dir = home
+            .path()
+            .join(".cursor")
+            .join("chats")
+            .join(hash)
+            .join("cursor-sess");
+        std::fs::create_dir_all(&dir).expect("cursor dir");
+        std::fs::write(dir.join("store.db"), "CURSOR_DB_BYTES_MUST_NOT_LEAK").expect("db");
+        let cursor = post(serde_json::json!({
+            "provider": "cursor",
+            "sessionId": "cursor-sess",
+            "projectPath": project.to_string_lossy(),
+            "mode": "full",
+            "targetProvider": "claude",
+        }));
+        let err = error_of(&cursor);
+        assert_eq!(err, "no readable transcript");
+        assert!(!cursor.body.contains("CURSOR_DB_BYTES_MUST_NOT_LEAK"));
     }
 }

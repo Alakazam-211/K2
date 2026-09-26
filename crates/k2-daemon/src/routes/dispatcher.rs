@@ -646,6 +646,7 @@ async fn handle_one_request(
             | "/cli/chat/archive"
             | "/cli/chat/restore"
             | "/cli/chat/migrate-ide"
+            | "/cli/chat/continue-seed"
             | "/cli/sandbox/reopen"
             | "/cli/themes/create-template"
             | "/cli/themes/delete"
@@ -8956,6 +8957,9 @@ fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
         "/cli/chat/restore" => crate::chat_routes::handle_restore(body),
         "/cli/sandbox/reopen" => crate::sandbox_chat_routes::handle_sandbox_reopen(body),
         "/cli/chat/migrate-ide" => crate::chat_routes::handle_migrate_ide(body),
+        // Read-only seed. `is_post` is true on this arm; the handler
+        // still rejects a non-POST so a stray call cannot build a seed.
+        "/cli/chat/continue-seed" => crate::chat_routes::handle_continue_seed(true, body),
         // Themes
         "/cli/themes/create-template" => crate::themes_routes::handle_create_template(body),
         "/cli/themes/delete" => crate::themes_routes::handle_delete(body),
@@ -9312,6 +9316,17 @@ mod tests {
             r.body
         );
         assert!(!r.body.contains("owner_only"));
+    }
+
+    #[test]
+    fn dispatch_unit6_post_continue_seed_is_not_a_404() {
+        let resp = dispatch_unit6_post("/cli/chat/continue-seed", b"{}");
+        assert_ne!(resp.status, "404 Not Found", "{}", resp.body);
+        assert!(
+            resp.body.contains("error"),
+            "invalid body must fail loud: {}",
+            resp.body
+        );
     }
 
     #[test]

@@ -202,9 +202,8 @@ pub fn argv_references_session(args: &[String], session_id: &str) -> bool {
 
 /// First `<subcommand> <id>` pair whose next token is not a flag.
 fn subcommand_session_id(args: &[String], sub: &str) -> Option<String> {
-    args.windows(2).find_map(|w| {
-        (w[0] == sub && !w[1].starts_with('-')).then(|| w[1].clone())
-    })
+    args.windows(2)
+        .find_map(|w| (w[0] == sub && !w[1].starts_with('-')).then(|| w[1].clone()))
 }
 
 /// First `<flag> <value>` pair whose flag satisfies `is_flag`.
@@ -582,8 +581,7 @@ pub fn adopt_discovered_session(provider: &str, project_path: &str) -> Option<St
     let adapter = provider_resume_for_provider(provider)?;
     let db = crate::db::shared();
     let conn = db.lock();
-    let project_id =
-        crate::workspace::agent_identity::resolve_project_id(&conn, project_path)?;
+    let project_id = crate::workspace::agent_identity::resolve_project_id(&conn, project_path)?;
 
     // Belt-and-suspenders: if SSOT already points at a live conversation
     // on disk, keep it. Do not stamp newest_on_disk over an intentional
@@ -633,6 +631,56 @@ pub fn adopt_discovered_session(provider: &str, project_path: &str) -> Option<St
     }
 }
 
+/// Fresh-continue adopt. Unlike [`adopt_discovered_session`], a saved id
+/// in `exclude` is not kept, and `newest_on_disk` is not stamped when it
+/// is already in `exclude` (the source chat, or any transcript that
+/// existed before this spawn). Returns the new id, or `None` when the
+/// only on-disk ids are pre-existing.
+pub fn adopt_fresh_session(
+    provider: &str,
+    project_path: &str,
+    exclude: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let adapter = provider_resume_for_provider(provider)?;
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let project_id = crate::workspace::agent_identity::resolve_project_id(&conn, project_path)?;
+
+    if let Ok(Some(row)) = crate::db::schema::WorkspaceSession::get(&conn, &project_id) {
+        if let Some(ref saved) = row.session_id {
+            if !saved.is_empty()
+                && !exclude.contains(saved)
+                && adapter.session_file_exists(saved, project_path)
+            {
+                return Some(saved.clone());
+            }
+        }
+    }
+
+    let session_id = adapter.newest_on_disk(project_path)?;
+    if session_id.is_empty() || exclude.contains(&session_id) {
+        return None;
+    }
+    match crate::db::schema::WorkspaceSession::update_session_id_and_harness(
+        &conn,
+        &project_id,
+        &session_id,
+        adapter.provider,
+    ) {
+        Ok(0) => None,
+        Ok(_) => Some(session_id),
+        Err(e) => {
+            crate::log_debug!(
+                "[core/provider-resume] fresh-adopt {} session for {} failed: {}",
+                adapter.provider,
+                project_path,
+                e
+            );
+            None
+        }
+    }
+}
+
 /// Deferred, fire-and-forget wrapper around
 /// [`adopt_discovered_session`]: sleep ~5s on a detached thread (the
 /// provider writes its session file a beat after spawn), then probe +
@@ -650,6 +698,22 @@ pub fn defer_adopt_discovered_session(provider: String, project_path: String) {
     std::thread::spawn(move || {
         std::thread::sleep(ADOPTION_PROBE_DELAY);
         let _ = adopt_discovered_session(&provider, &project_path);
+    });
+}
+
+/// Same delay as [`defer_adopt_discovered_session`], but stamps only an
+/// id that was not on disk before the fresh continue spawn.
+pub fn defer_adopt_fresh_session(
+    provider: String,
+    project_path: String,
+    exclude: std::collections::HashSet<String>,
+) {
+    if provider_resume_for_provider(&provider).is_none() {
+        return;
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(ADOPTION_PROBE_DELAY);
+        let _ = adopt_fresh_session(&provider, &project_path, &exclude);
     });
 }
 
@@ -697,8 +761,10 @@ mod tests {
         assert!(provider_resume_for_command("claudette").is_none());
         assert!(provider_resume_for_command("").is_none());
         assert!(provider_resume_for_provider("aider").is_none());
-        assert!(provider_resume_for_provider("cursor-agent").is_none(),
-            "provider lookup keys on the provider string, not the binary");
+        assert!(
+            provider_resume_for_provider("cursor-agent").is_none(),
+            "provider lookup keys on the provider string, not the binary"
+        );
         assert!(provider_resume_for_provider("").is_none());
     }
 
@@ -742,7 +808,11 @@ mod tests {
         let claude = provider_resume_for_provider("claude").unwrap();
         assert_eq!(
             claude.premint_args(&args(&["--dangerously-skip-permissions"]), "NEW"),
-            Some(args(&["--dangerously-skip-permissions", "--session-id", "NEW"]))
+            Some(args(&[
+                "--dangerously-skip-permissions",
+                "--session-id",
+                "NEW"
+            ]))
         );
         let grok = provider_resume_for_provider("grok").unwrap();
         assert_eq!(
@@ -751,7 +821,9 @@ mod tests {
         );
         for p in ["pi", "codex", "gemini", "cursor", "hermes"] {
             assert_eq!(
-                provider_resume_for_provider(p).unwrap().premint_args(&[], "NEW"),
+                provider_resume_for_provider(p)
+                    .unwrap()
+                    .premint_args(&[], "NEW"),
                 None,
                 "{p} mints its own ids — premint must be None"
             );
@@ -773,7 +845,10 @@ mod tests {
         }
         // Subcommand style (codex `resume <id>`, including after preset flags).
         assert!(argv_references_session(&args(&["resume", sid]), sid));
-        assert!(argv_references_session(&args(&["--yolo", "resume", sid]), sid));
+        assert!(argv_references_session(
+            &args(&["--yolo", "resume", sid]),
+            sid
+        ));
         // Wrong id / empty id never match.
         assert!(!argv_references_session(&args(&["--resume", "other"]), sid));
         assert!(!argv_references_session(&args(&["--resume", sid]), ""));
@@ -820,8 +895,14 @@ mod tests {
             "pi --session was the missed grammar this slice exists for"
         );
         // A trailing flag with no value never stamps.
-        assert_eq!(session_id_from_spawn_argv("pi", &args(&["--session"])), None);
-        assert_eq!(session_id_from_spawn_argv("claude", &args(&["--resume"])), None);
+        assert_eq!(
+            session_id_from_spawn_argv("pi", &args(&["--session"])),
+            None
+        );
+        assert_eq!(
+            session_id_from_spawn_argv("claude", &args(&["--resume"])),
+            None
+        );
     }
 
     #[test]
@@ -869,7 +950,10 @@ mod tests {
             session_id_from_spawn_argv("some-agent", &args(&["resume", sid])),
             None
         );
-        assert_eq!(session_id_from_spawn_argv("", &args(&["--resume", sid])).as_deref(), Some(sid));
+        assert_eq!(
+            session_id_from_spawn_argv("", &args(&["--resume", sid])).as_deref(),
+            Some(sid)
+        );
     }
 
     #[test]
@@ -904,9 +988,7 @@ mod tests {
         assert!(claude.argv_carries_session_identity(&args(&["--session-id", "X"])));
         assert!(claude.argv_carries_session_identity(&args(&["--resume", "X"])));
         assert!(claude.argv_carries_session_identity(&args(&["-r", "X"])));
-        assert!(!claude.argv_carries_session_identity(&args(&[
-            "--dangerously-skip-permissions"
-        ])));
+        assert!(!claude.argv_carries_session_identity(&args(&["--dangerously-skip-permissions"])));
 
         let pi = provider_resume_for_provider("pi").unwrap();
         assert!(pi.argv_carries_session_identity(&args(&["--session", "X"])));
@@ -923,7 +1005,9 @@ mod tests {
     #[test]
     fn premint_flag_mirrors_the_premint_column() {
         assert_eq!(
-            provider_resume_for_provider("claude").unwrap().premint_flag(),
+            provider_resume_for_provider("claude")
+                .unwrap()
+                .premint_flag(),
             Some("--session-id")
         );
         assert_eq!(
@@ -961,7 +1045,11 @@ mod tests {
             std::fs::create_dir_all(&home).unwrap();
             let original = std::env::var_os("HOME");
             std::env::set_var("HOME", &home);
-            Self { original, home, _lock: lock }
+            Self {
+                original,
+                home,
+                _lock: lock,
+            }
         }
     }
 
@@ -1008,7 +1096,13 @@ mod tests {
         let sub = "01920000-dddd-7000-8000-000000000003";
         write_grok_fixture(&guard.home, older, project, "2026-07-03T08:00:00Z", None);
         write_grok_fixture(&guard.home, newest, project, "2026-07-03T09:00:00Z", None);
-        write_grok_fixture(&guard.home, sub, project, "2026-07-03T10:00:00Z", Some("subagent"));
+        write_grok_fixture(
+            &guard.home,
+            sub,
+            project,
+            "2026-07-03T10:00:00Z",
+            Some("subagent"),
+        );
 
         let grok = provider_resume_for_provider("grok").unwrap();
         assert!(grok.session_file_exists(older, project));
@@ -1075,14 +1169,24 @@ mod tests {
         insert_hermes_row(&conn, "20260701_090000_aaaaaa", "cli", project, 1000.0, 0);
         insert_hermes_row(&conn, "20260702_100000_bbbbbb", "cli", project, 2000.0, 0);
         // Subagent + archived rows are newest — must lose newest_on_disk.
-        insert_hermes_row(&conn, "20260703_110000_cccccc", "subagent", project, 3000.0, 0);
+        insert_hermes_row(
+            &conn,
+            "20260703_110000_cccccc",
+            "subagent",
+            project,
+            3000.0,
+            0,
+        );
         insert_hermes_row(&conn, "20260703_120000_dddddd", "cli", project, 4000.0, 1);
 
         let hermes = provider_resume_for_provider("hermes").unwrap();
         assert_eq!(hermes.provider, "hermes");
         assert_eq!(hermes.command, "hermes");
         assert_eq!(hermes.grammar, ResumeGrammar::Flag("--resume"));
-        assert_eq!(hermes.premint, None, "no premint — post-hoc discovery family");
+        assert_eq!(
+            hermes.premint, None,
+            "no premint — post-hoc discovery family"
+        );
         assert_eq!(
             hermes.resume_args(&args(&["--some-flag"]), "20260701_090000_aaaaaa"),
             args(&["--some-flag", "--resume", "20260701_090000_aaaaaa"])
@@ -1143,7 +1247,13 @@ mod tests {
         crate::db::init_for_tests();
         let project_path = format!("/fixture/adopt-{}", uuid::Uuid::new_v4());
         let sid = "01920000-aaaa-7000-8000-00000000adop";
-        write_grok_fixture(&guard.home, sid, &project_path, "2026-07-03T10:00:00Z", None);
+        write_grok_fixture(
+            &guard.home,
+            sid,
+            &project_path,
+            "2026-07-03T10:00:00Z",
+            None,
+        );
 
         // Registered project + a pre-existing row with the legacy
         // 'claude' harness (what a bare-spawn row looks like before the
@@ -1178,7 +1288,10 @@ mod tests {
             .unwrap()
             .expect("row exists");
         assert_eq!(row.session_id.as_deref(), Some(sid), "session_id stamped");
-        assert_eq!(row.harness, "grok", "harness stamped truthfully alongside the id");
+        assert_eq!(
+            row.harness, "grok",
+            "harness stamped truthfully alongside the id"
+        );
     }
 
     #[test]
@@ -1292,6 +1405,122 @@ mod tests {
         assert_eq!(row.harness, "grok");
     }
 
+    #[test]
+    fn adopt_fresh_session_does_not_return_source_or_stamp_another_existing() {
+        let guard = HomeGuard::new("adopt-fresh-keep");
+        crate::db::init_for_tests();
+        let project_path = format!("/fixture/adopt-fresh-{}", uuid::Uuid::new_v4());
+        let source = "01920000-bbbb-7000-8000-00000000f001";
+        let other = "01920000-aaaa-7000-8000-00000000f002";
+        write_grok_fixture(
+            &guard.home,
+            source,
+            &project_path,
+            "2026-07-03T08:00:00Z",
+            None,
+        );
+        write_grok_fixture(
+            &guard.home,
+            other,
+            &project_path,
+            "2026-07-03T10:00:00Z",
+            None,
+        );
+
+        let project_id = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let pid = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, 'adopt-fresh', ?2)",
+                rusqlite::params![pid, project_path],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+                 VALUES (?1, ?2, NULL, 'grok', 'user', 'running', unixepoch())",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), pid],
+            )
+            .unwrap();
+            pid
+        };
+
+        let exclude: std::collections::HashSet<String> = [source.to_string(), other.to_string()]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            adopt_fresh_session("grok", &project_path, &exclude),
+            None,
+            "must not return the source or stamp the other existing transcript"
+        );
+
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let row = crate::db::schema::WorkspaceSession::get(&conn, &project_id)
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(
+            row.session_id, None,
+            "fresh adopt must not stamp the source or the other existing id"
+        );
+    }
+
+    #[test]
+    fn adopt_fresh_session_stamps_an_id_that_was_not_excluded() {
+        let guard = HomeGuard::new("adopt-fresh-new");
+        crate::db::init_for_tests();
+        let project_path = format!("/fixture/adopt-fresh-new-{}", uuid::Uuid::new_v4());
+        let source = "01920000-bbbb-7000-8000-00000000f011";
+        let born = "01920000-cccc-7000-8000-00000000f012";
+        write_grok_fixture(
+            &guard.home,
+            source,
+            &project_path,
+            "2026-07-03T08:00:00Z",
+            None,
+        );
+        write_grok_fixture(
+            &guard.home,
+            born,
+            &project_path,
+            "2026-07-03T12:00:00Z",
+            None,
+        );
+
+        let project_id = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let pid = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO projects (id, name, path) VALUES (?1, 'adopt-fresh-new', ?2)",
+                rusqlite::params![pid, project_path],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+                 VALUES (?1, ?2, ?3, 'claude', 'user', 'running', unixepoch())",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), pid, source],
+            )
+            .unwrap();
+            pid
+        };
+
+        let exclude: std::collections::HashSet<String> = [source.to_string()].into_iter().collect();
+        assert_eq!(
+            adopt_fresh_session("grok", &project_path, &exclude).as_deref(),
+            Some(born),
+            "a transcript that was not on the exclude list is the new id"
+        );
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let row = crate::db::schema::WorkspaceSession::get(&conn, &project_id)
+            .unwrap()
+            .expect("row exists");
+        assert_eq!(row.session_id.as_deref(), Some(born));
+        assert_ne!(row.session_id.as_deref(), Some(source));
+        assert_eq!(row.harness, "grok");
+    }
+
     // ── Slice 5 — injection profiles (per-provider readiness) ────────
 
     #[test]
@@ -1302,8 +1531,7 @@ mod tests {
         assert!(p.ready_via_bracketed_paste);
         assert_eq!(p.post_spawn_settle, Duration::from_millis(1500));
         assert_ne!(
-            p.post_spawn_settle,
-            DEFAULT_INJECTION_PROFILE.post_spawn_settle,
+            p.post_spawn_settle, DEFAULT_INJECTION_PROFILE.post_spawn_settle,
             "claude settle must exceed the unknown-provider default"
         );
     }
@@ -1426,7 +1654,9 @@ mod tests {
     fn resolve_profile_null_readiness_is_exactly_the_static_table() {
         // NULL metadata (the unstudied six + every legacy row) must be
         // byte-identical to the pre-W4 resolution for every provider.
-        for provider in ["claude", "grok", "cursor", "codex", "gemini", "pi", "hermes", "x"] {
+        for provider in [
+            "claude", "grok", "cursor", "codex", "gemini", "pi", "hermes", "x",
+        ] {
             assert_eq!(
                 resolve_injection_profile(None, provider),
                 injection_profile_for_provider(provider),

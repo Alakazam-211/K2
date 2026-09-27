@@ -83,6 +83,15 @@ const h = vi.hoisted(() => {
     setChatSession: vi.fn<(project: string, sessionId: string, provider?: string) => Promise<void>>(
       async () => undefined,
     ),
+    resumeChatArgs: vi.fn(async () => ({
+      command: 'claude',
+      args: ['--resume', 'claude-legacy'],
+      cwd: '/ws',
+      resumeSession: 'claude-legacy',
+      resumedExisting: true,
+    })),
+    stampAgentSessionId: vi.fn(),
+    addTabToGroup: vi.fn(() => 'pane-should-not-exist'),
   }
 })
 
@@ -146,7 +155,12 @@ vi.mock('@/stores/active', () => ({
     selector({ activeProjectIds: h.activeIds.value }),
 }))
 vi.mock('@/stores/tabs', () => ({
-  useTabsStore: { getState: () => ({ stampAgentSessionId: vi.fn() }) },
+  useTabsStore: {
+    getState: () => ({
+      stampAgentSessionId: h.stampAgentSessionId,
+      addTabToGroup: h.addTabToGroup,
+    }),
+  },
 }))
 vi.mock('@/lib/terminal-id', () => ({
   agentChatId: (pid: string, agent: string) => `agent-chat:${pid}:${agent}`,
@@ -171,7 +185,7 @@ vi.mock('@/stores/connect-host', () => ({
 vi.mock('@/lib/workspace-agent', () => ({
   agentDisplayName: vi.fn(async () => 'Agent One'),
   setChatSession: h.setChatSession,
-  resumeChatArgs: vi.fn(async () => ({ command: 'claude', args: ['--resume', 'claude-legacy'], cwd: '/ws', resumeSession: 'claude-legacy', resumedExisting: true })),
+  resumeChatArgs: h.resumeChatArgs,
   // Mirrors the Slice-4 shape: resume/fresh carry the daemon's
   // command+args verbatim (per-harness grammar).
   reconcileColdBootSession: (hint: string, c: { command?: string; resumeSession?: string; resumedExisting?: boolean; args?: string[] } | null) => {
@@ -212,6 +226,9 @@ beforeEach(() => {
   h.daemonCliPost.mockClear()
   h.daemonCliGet.mockClear()
   h.setChatSession.mockClear()
+  h.resumeChatArgs.mockClear()
+  h.stampAgentSessionId.mockClear()
+  h.addTabToGroup.mockClear()
   h.unsubscribe.mockClear()
   h.sessionHandlers.current = null
   h.terminalProps.current = null
@@ -615,5 +632,472 @@ describe('S2 overlay chrome (C3/C4/C10)', () => {
     expect(h.terminalProps.current!.showComposeBar).toBe(true)
     expect(screen.getByLabelText('Switch pinned chat session')).not.toBeNull()
     expect(screen.getByLabelText('Refresh chat session')).not.toBeNull()
+  })
+})
+
+const SOURCE = {
+  sessionId: 'claude-1',
+  title: 'Finish the editor',
+  timestamp: 9,
+  messageCount: 12,
+  provider: 'claude',
+}
+const OTHER = {
+  sessionId: 'grok-older',
+  title: 'Notes from Monday',
+  timestamp: 1,
+  messageCount: 4,
+  provider: 'grok',
+}
+const PREMINT = '11111111-2222-4333-8444-555555555555'
+
+function mountEnsure(over: Record<string, unknown> = {}) {
+  return {
+    sessionId: 'sess-1',
+    claudeSessionId: 'claude-1',
+    resumedExisting: true,
+    command: 'claude',
+    args: ['--resume', 'claude-1'],
+    cols: 80,
+    rows: 24,
+    reused: false,
+    provider: 'claude',
+    ...over,
+  }
+}
+
+function freshEnsure(over: Record<string, unknown> = {}) {
+  return {
+    sessionId: 'pty-new',
+    claudeSessionId: PREMINT,
+    resumedExisting: false,
+    command: 'claude',
+    args: ['--dangerously-skip-permissions', '--session-id', PREMINT],
+    cols: 80,
+    rows: 24,
+    reused: false,
+    provider: 'claude',
+    pendingSessionDiscovery: false,
+    freshSpawn: true,
+    ...over,
+  }
+}
+
+function delivered() {
+  return {
+    success: true,
+    target_session_id: 'pty-new',
+    attempts: 1,
+    reason: null,
+    hint: null,
+  }
+}
+
+describe('Continue in a new chat — pinned session switcher', () => {
+  function listRows(extra: Array<Record<string, unknown>> = []) {
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'chat/list') return [SOURCE, OTHER, ...extra]
+      if (route === 'chat/custom-names') return {}
+      if (route === 'workspace/handle') return { handle: 'sales' }
+      if (route === 'sessions/list-for-workspace') {
+        return [{ kind: 'canonical', handle: 'sales', agentName: 'proj-1' }]
+      }
+      return undefined
+    })
+  }
+
+  async function openSwitcher(): Promise<void> {
+    fireEvent.click(screen.getByLabelText('Switch pinned chat session'))
+    await screen.findByTestId('pinned-continue-new-chat')
+  }
+
+  function continueRow(): HTMLButtonElement {
+    return screen.getByTestId('pinned-continue-new-chat') as HTMLButtonElement
+  }
+
+  it('pins Continue in a new chat… above the rows, including when the list is empty', async () => {
+    listRows()
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    await openSwitcher()
+
+    const row = continueRow()
+    const list = screen.getByTestId('pinned-session-list')
+    expect(row.textContent).toBe('Continue in a new chat…')
+    expect(list.contains(row)).toBe(false)
+    expect(list.className).toContain('overflow-y-auto')
+    expect(list.className).toContain('border-t')
+    expect(row.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(list.textContent).toContain('Finish the editor')
+    expect(list.textContent).toContain('Notes from Monday')
+    expect(screen.getByLabelText('Refresh chat session')).not.toBeNull()
+    expect(row.parentElement?.contains(screen.getByLabelText('Refresh chat session'))).toBe(false)
+
+    cleanup()
+    listRows()
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'chat/list') return []
+      if (route === 'chat/custom-names') return {}
+      return undefined
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    await openSwitcher()
+    const emptyList = screen.getByTestId('pinned-session-list')
+    const again = continueRow()
+    expect(emptyList.textContent).toContain('No past sessions yet.')
+    expect(emptyList.contains(again)).toBe(false)
+    expect(again.compareDocumentPosition(emptyList) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+  })
+
+  it('disables a null or empty provider id, and still opens for a premint missing from the list', async () => {
+    listRows()
+    h.daemonCliPost.mockRejectedValueOnce(new Error('ensure failed'))
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByLabelText('Switch pinned chat session')
+    await openSwitcher()
+    expect(continueRow().disabled).toBe(true)
+    expect(continueRow().getAttribute('title')).toBe('No chat to continue.')
+    fireEvent.click(continueRow())
+    expect(screen.queryByTestId('continue-new-chat')).toBeNull()
+
+    cleanup()
+    listRows()
+    h.daemonCliPost.mockResolvedValueOnce(mountEnsure({ claudeSessionId: '', pendingSessionDiscovery: true, resumedExisting: false, args: [] }))
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    await openSwitcher()
+    expect(screen.getByLabelText('Switch pinned chat session').textContent).toContain('New chat')
+    expect(continueRow().disabled).toBe(true)
+    expect(continueRow().getAttribute('title')).toBe('No chat to continue.')
+    fireEvent.click(continueRow())
+    expect(screen.queryByTestId('continue-new-chat')).toBeNull()
+
+    cleanup()
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'chat/list') return [OTHER]
+      if (route === 'chat/custom-names') return {}
+      return undefined
+    })
+    h.daemonCliPost.mockResolvedValueOnce(mountEnsure({
+      claudeSessionId: PREMINT,
+      resumedExisting: false,
+      args: ['--dangerously-skip-permissions', '--session-id', PREMINT],
+    }))
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    await openSwitcher()
+    expect(screen.getByLabelText('Switch pinned chat session').textContent).toContain('New chat')
+    expect(continueRow().disabled).toBe(false)
+    expect(continueRow().getAttribute('title')).not.toBe('No chat to continue.')
+    fireEvent.click(continueRow())
+    expect(await screen.findByTestId('continue-new-chat')).toBeTruthy()
+    expect(screen.getByTestId('continue-new-chat').querySelector('select')).toBeNull()
+  })
+
+  it('opens the shared dialog without switching, seeding, or adding a tab', async () => {
+    listRows()
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.daemonCliPost.mockClear()
+    h.setChatSession.mockClear()
+    h.addTabToGroup.mockClear()
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    const dialog = await screen.findByTestId('continue-new-chat')
+    expect(dialog.textContent).toContain('Finish the editor')
+    expect(dialog.textContent).toContain('From Claude')
+    expect(dialog.querySelector('select')).toBeNull()
+    expect((screen.getByLabelText('Harness') as HTMLElement).tagName).toBe('BUTTON')
+    expect(h.setChatSession).not.toHaveBeenCalled()
+    expect(h.addTabToGroup).not.toHaveBeenCalled()
+    expect(h.daemonCliPost.mock.calls.filter((call) => call[0] === 'workspace/ensure-pinned-chat')).toHaveLength(0)
+    expect(h.daemonCliPost.mock.calls.filter((call) => call[0] === 'chat/continue-seed')).toHaveLength(0)
+  })
+
+  it('Esc, Cancel, and the scrim do not seed or send', async () => {
+    listRows()
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'chat/continue-seed') return { text: 'SEED TEXT' }
+      if (route === 'terminal/send-message') return delivered()
+      return mountEnsure()
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.daemonCliPost.mockClear()
+
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    await screen.findByTestId('continue-new-chat')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('continue-new-chat')).toBeNull())
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    await screen.findByTestId('continue-new-chat')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByTestId('continue-new-chat')).toBeNull())
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    const frame = await screen.findByTestId('continue-new-chat')
+    const scrim = frame.previousElementSibling
+    expect(scrim).toBeTruthy()
+    fireEvent.mouseDown(scrim as Element)
+    await waitFor(() => expect(screen.queryByTestId('continue-new-chat')).toBeNull())
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+    expect(h.addTabToGroup).not.toHaveBeenCalled()
+  })
+
+  it('Start seeds the pinned chat, fresh-spawns, and sends to ensure’s PTY id', async () => {
+    listRows([{ sessionId: PREMINT, title: 'Continued', timestamp: 20, messageCount: 0, provider: 'claude' }])
+    h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
+      if (route === 'chat/continue-seed') return { text: 'SEED TEXT from the daemon' }
+      if (route === 'terminal/send-message') return delivered()
+      const posted = (body ?? {}) as Record<string, unknown>
+      if (route === 'workspace/ensure-pinned-chat' && posted.freshProvider) return freshEnsure()
+      return mountEnsure()
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.daemonCliPost.mockClear()
+    h.setChatSession.mockClear()
+    h.addTabToGroup.mockClear()
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    await screen.findByTestId('continue-new-chat')
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+
+    await waitFor(() => {
+      expect(h.daemonCliPost.mock.calls.some((call) => call[0] === 'chat/continue-seed')).toBe(true)
+    })
+    const seed = h.daemonCliPost.mock.calls.find((call) => call[0] === 'chat/continue-seed')
+    expect(seed?.[1]).toEqual({
+      provider: 'claude',
+      sessionId: 'claude-1',
+      projectPath: '/ws',
+      mode: 'recent',
+      targetProvider: 'claude',
+    })
+    const ensured = h.daemonCliPost.mock.calls.find((call) => {
+      const body = call[1] as Record<string, unknown> | undefined
+      return call[0] === 'workspace/ensure-pinned-chat' && body?.freshProvider
+    })
+    expect(ensured?.[1]).toEqual({ project: '/ws', freshProvider: 'claude' })
+    expect(h.addTabToGroup).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(h.daemonCliPost.mock.calls.some((call) => call[0] === 'terminal/send-message')).toBe(true)
+    })
+    const send = h.daemonCliPost.mock.calls.find((call) => call[0] === 'terminal/send-message')
+    expect(send?.[1]).toEqual({ session_id: 'pty-new', text: 'SEED TEXT from the daemon' })
+    await waitFor(() => expect(h.setChatSession).toHaveBeenCalledWith('/ws', PREMINT, 'claude'))
+    expect(h.setChatSession.mock.calls.some((call) => call[1] === 'claude-1')).toBe(false)
+    expect(h.stampAgentSessionId).toHaveBeenCalledWith('agent', '/ws', PREMINT, 'proj-1')
+    await waitFor(() => expect(screen.queryByTestId('continue-new-chat')).toBeNull())
+
+    await openSwitcher()
+    const selected = screen.getByRole('option', { selected: true })
+    expect(selected.textContent).toContain('Continued')
+    const sourceRow = screen.getByRole('option', { name: /Finish the editor/ })
+    expect(sourceRow.getAttribute('aria-selected')).toBe('false')
+    expect(screen.getByRole('option', { name: /Notes from Monday/ })).toBeTruthy()
+  })
+
+  it('keeps the dialog mounted through ensuring, and a pty_died leaves the source selected', async () => {
+    listRows()
+    let release: (value: unknown) => void = () => {}
+    const gate = new Promise((resolve) => { release = resolve })
+    h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
+      if (route === 'chat/continue-seed') return { text: 'SEED TEXT' }
+      if (route === 'terminal/send-message') {
+        return { success: false, reason: 'pty_died', hint: 'the pty died', target_session_id: 'pty-new', attempts: 1 }
+      }
+      const posted = (body ?? {}) as Record<string, unknown>
+      if (route === 'workspace/ensure-pinned-chat' && posted.freshProvider) {
+        await gate
+        return freshEnsure()
+      }
+      return mountEnsure()
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    await screen.findByTestId('continue-new-chat')
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await screen.findByText('Loading session…')
+    expect(screen.getByTestId('continue-new-chat')).toBeTruthy()
+    h.sessionHandlers.current!.onAdded!({
+      agent_name: 'proj-1',
+      workspace_path: '/ws',
+      session_id: 'pty-uuid-not-a-chat',
+    })
+    release(undefined)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('the pty died')
+    expect(screen.getByTestId('continue-new-chat')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy text' })).toBeTruthy()
+    expect(h.setChatSession).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.getByLabelText('Switch pinned chat session').textContent).toContain('Finish the editor')
+    })
+    expect(screen.queryByText('pty-uuid-not-a-chat')).toBeNull()
+  })
+
+  it('waits to persist a self-mint id until the new transcript appears', async () => {
+    const rows: Array<Record<string, unknown>> = [SOURCE, OTHER]
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'chat/list') return rows.slice()
+      if (route === 'chat/custom-names') return {}
+      return undefined
+    })
+    h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
+      if (route === 'chat/continue-seed') return { text: 'SEED TEXT' }
+      if (route === 'terminal/send-message') return delivered()
+      const posted = (body ?? {}) as Record<string, unknown>
+      if (route === 'workspace/ensure-pinned-chat' && posted.freshProvider) {
+        return freshEnsure({
+          claudeSessionId: '',
+          pendingSessionDiscovery: true,
+          provider: 'codex',
+          command: 'codex',
+          args: ['--yolo'],
+        })
+      }
+      return mountEnsure()
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.setChatSession.mockClear()
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    await screen.findByTestId('continue-new-chat')
+    fireEvent.click(screen.getByLabelText('Harness'))
+    const codex = Array.from(document.querySelectorAll('button')).find((btn) => btn.textContent === 'Codex')
+    expect(codex).toBeTruthy()
+    fireEvent.click(codex!)
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await waitFor(() => expect(screen.queryByTestId('continue-new-chat')).toBeNull())
+    expect(h.setChatSession).not.toHaveBeenCalled()
+    expect(h.addTabToGroup).not.toHaveBeenCalled()
+    const ensured = h.daemonCliPost.mock.calls.find((call) => {
+      const body = call[1] as Record<string, unknown> | undefined
+      return call[0] === 'workspace/ensure-pinned-chat' && body?.freshProvider === 'codex'
+    })
+    expect(ensured?.[1]).toEqual({ project: '/ws', freshProvider: 'codex' })
+
+    rows.push({ sessionId: 'codex-new', title: 'Codex continued', timestamp: 30, messageCount: 1, provider: 'codex' })
+    await waitFor(() => expect(h.setChatSession).toHaveBeenCalledWith('/ws', 'codex-new', 'codex'), { timeout: 3000 })
+    expect(h.setChatSession.mock.calls.some((call) => call[1] === 'claude-1')).toBe(false)
+    await openSwitcher()
+    expect(screen.getByRole('option', { selected: true }).textContent).toContain('Codex continued')
+    expect(screen.getByRole('option', { name: /Finish the editor/ }).getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('a daemon without freshSpawn shows the error and does not send or resume', async () => {
+    listRows()
+    h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
+      if (route === 'chat/continue-seed') return { text: 'SEED TEXT' }
+      if (route === 'terminal/send-message') return delivered()
+      const posted = (body ?? {}) as Record<string, unknown>
+      if (posted.freshProvider) {
+        return mountEnsure()
+      }
+      return mountEnsure()
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.daemonCliPost.mockClear()
+    h.resumeChatArgs.mockClear()
+    h.setChatSession.mockClear()
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('cannot continue a pinned chat in place')
+    expect(screen.getByTestId('continue-new-chat')).toBeTruthy()
+    expect(h.daemonCliPost.mock.calls.some((call) => call[0] === 'terminal/send-message')).toBe(false)
+    expect(h.resumeChatArgs).not.toHaveBeenCalled()
+    expect(h.setChatSession).not.toHaveBeenCalled()
+    expect(h.addTabToGroup).not.toHaveBeenCalled()
+    const body = h.daemonCliPost.mock.calls.find((call) => call[0] === 'workspace/ensure-pinned-chat')?.[1] as Record<string, unknown>
+    expect(body.forceRespawn).toBeUndefined()
+    expect(body.explicitSelection).toBeUndefined()
+    expect(body.freshProvider).toBe('claude')
+  })
+
+  it('legacy Start does not refresh or resume, and the dialog survives Loading session…', async () => {
+    h.supported.value = false
+    let resumeCalls = 0
+    h.resumeChatArgs.mockImplementation(async () => {
+      resumeCalls += 1
+      if (resumeCalls > 1) await new Promise(() => {})
+      return {
+        command: 'claude',
+        args: ['--resume', 'claude-legacy'],
+        cwd: '/ws',
+        resumeSession: 'claude-legacy',
+        resumedExisting: true,
+      }
+    })
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'chat/continue-seed') return { text: 'SEED TEXT' }
+      if (route === 'terminal/send-message') return delivered()
+      return mountEnsure()
+    })
+    h.daemonCliGet.mockImplementation(async (route: string) => {
+      if (route === 'chat/list') return [{ ...SOURCE, sessionId: 'claude-legacy' }]
+      if (route === 'chat/custom-names') return {}
+      if (route === 'workspace/resume-chat-args') {
+        return {
+          command: 'claude',
+          args: ['--resume', 'claude-legacy'],
+          cwd: '/ws',
+          resumeSession: 'claude-legacy',
+          resumedExisting: true,
+        }
+      }
+      return undefined
+    })
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.resumeChatArgs.mockClear()
+    h.daemonCliPost.mockClear()
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    await screen.findByTestId('continue-new-chat')
+    fireEvent.click(screen.getByLabelText('Refresh chat session'))
+    await screen.findByText('Loading session…')
+    expect(screen.getByTestId('continue-new-chat')).toBeTruthy()
+
+    cleanup()
+    h.supported.value = false
+    resumeCalls = 0
+    h.resumeChatArgs.mockImplementation(async () => ({
+      command: 'claude',
+      args: ['--resume', 'claude-legacy'],
+      cwd: '/ws',
+      resumeSession: 'claude-legacy',
+      resumedExisting: true,
+    }))
+    render(<AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.resumeChatArgs.mockClear()
+    h.daemonCliPost.mockClear()
+    h.addTabToGroup.mockClear()
+    await openSwitcher()
+    fireEvent.click(continueRow())
+    await screen.findByTestId('continue-new-chat')
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('cannot continue a pinned chat in place')
+    expect(h.resumeChatArgs).not.toHaveBeenCalled()
+    expect(h.daemonCliPost.mock.calls.some((call) => call[0] === 'workspace/ensure-pinned-chat')).toBe(false)
+    expect(h.daemonCliPost.mock.calls.some((call) => call[0] === 'terminal/send-message')).toBe(false)
+    expect(h.addTabToGroup).not.toHaveBeenCalled()
+    expect(screen.getByTestId('continue-new-chat')).toBeTruthy()
   })
 })

@@ -8,6 +8,17 @@ import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { agentChatId } from '@/lib/terminal-id'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import {
+  mapMsgResponseToStatus,
+  type MsgResponse,
+} from '@/components/Terminal/terminalCompose'
+import {
+  ContinueNewChatDialog,
+  continueSendError,
+  providerKeyForCommand,
+  type ContinueNewChatSource,
+  type ContinueSpawnRequest,
+} from '@/components/ChatHistory/ContinueNewChatDialog'
 import { agentDisplayName, resumeChatArgs, setChatSession, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { useActiveAgentsStore } from '@/stores/active-agents'
@@ -182,6 +193,10 @@ interface ChatHeaderProps {
   chatProvider: string | null
   /** False until ensure/launch has named the program. Does not grey a fresh Codex. */
   harnessReady: boolean
+  /** Live pinned harness, including non-v1 (pi, cursor, hermes). */
+  pinnedProvider: string | null
+  /** Opens the shared continue dialog. Does not switch sessions. */
+  onContinueNewChat: (source: ContinueNewChatSource) => void
 }
 
 interface HistorySession {
@@ -209,6 +224,8 @@ function ChatHeader({
   onSplitRight,
   chatProvider,
   harnessReady,
+  pinnedProvider,
+  onContinueNewChat,
 }: ChatHeaderProps): React.JSX.Element {
   useEffect(() => {
     if (!harnessReady || chatProvider) return
@@ -288,6 +305,7 @@ function ChatHeader({
   const currentChatTitle = currentSession
     ? chatDisplayName(currentSession) || 'New chat'
     : 'New chat'
+  const canContinue = currentSessionId != null && currentSessionId !== ''
 
   return (
     <div
@@ -330,10 +348,39 @@ function ChatHeader({
         </svg>
       </button>
       {historyOpen && (
-        <div
-          role="listbox"
-          className="absolute right-12 top-full mt-1 z-20 w-[36ch] max-h-[60vh] overflow-y-auto bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl py-1"
-        >
+        <div className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl">
+          <button
+            type="button"
+            data-testid="pinned-continue-new-chat"
+            disabled={!canContinue}
+            title={canContinue ? undefined : 'No chat to continue.'}
+            onClick={() => {
+              if (!canContinue || !currentSessionId) return
+              setHistoryOpen(false)
+              const provider = currentSession?.provider || pinnedProvider || 'claude'
+              const displayName = currentSession
+                ? (chatDisplayName(currentSession) || 'New chat')
+                : currentChatTitle
+              onContinueNewChat({
+                provider,
+                sessionId: currentSessionId,
+                projectPath,
+                displayName,
+              })
+            }}
+            className={`w-full text-left px-3 py-1.5 text-[11px] text-[var(--color-text-primary)] no-drag ${
+              canContinue
+                ? 'hover:bg-[var(--color-bg-hover)] cursor-pointer'
+                : 'opacity-50 cursor-not-allowed'
+            }`}
+          >
+            Continue in a new chat…
+          </button>
+          <div
+            role="listbox"
+            data-testid="pinned-session-list"
+            className="max-h-[60vh] overflow-y-auto border-t border-[var(--color-border)] py-1"
+          >
           {historySessions.length === 0 ? (
             <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
               No past sessions yet.
@@ -372,6 +419,7 @@ function ChatHeader({
               )
             })
           )}
+          </div>
         </div>
       )}
       <button
@@ -454,17 +502,70 @@ interface EnsurePinnedChatResponse {
   provider?: string
   /** Slice 3 (additive) — self-minting fresh spawn; id adopted post-hoc. */
   pendingSessionDiscovery?: boolean
+  /** Fresh continue. Absent on older daemons, which must not be treated as a spawn. */
+  freshSpawn?: boolean
+}
+
+const FRESH_ARGV_REJECT = new Set(['--resume', '--fork-session', 'resume'])
+
+function freshArgvProblem(args: string[] | undefined, sourceId: string): string | null {
+  for (const arg of args ?? []) {
+    if (FRESH_ARGV_REJECT.has(arg) || (sourceId.length > 0 && arg === sourceId)) {
+      return 'The server resumed the current chat instead of starting a new one.'
+    }
+  }
+  return null
+}
+
+async function watchFreshProviderId(opts: {
+  projectPath: string
+  sourceId: string
+  targetProvider: string
+  known: Set<string>
+  cancelled: () => boolean
+}): Promise<string | null> {
+  const deadline = Date.now() + 20_000
+  while (!opts.cancelled() && Date.now() < deadline) {
+    try {
+      const rows = await daemonCliGet<Array<{ sessionId?: string; provider?: string }>>(
+        'chat/list',
+        { project_path: opts.projectPath },
+      )
+      const hit = (rows ?? []).find((row) => {
+        const id = row.sessionId?.trim() ?? ''
+        const provider = row.provider || 'claude'
+        return id.length > 0
+          && id !== opts.sourceId
+          && !opts.known.has(id)
+          && provider === opts.targetProvider
+      })
+      if (hit?.sessionId) return hit.sessionId
+    } catch {
+      /* keep waiting for the new transcript */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400))
+  }
+  return null
 }
 
 async function ensurePinnedChat(
   projectPath: string,
-  opts?: { forceRespawn?: boolean; restoredSessionId?: string; explicitSelection?: boolean },
+  opts?: { forceRespawn?: boolean; restoredSessionId?: string; explicitSelection?: boolean; freshProvider?: string },
 ): Promise<EnsurePinnedChatResponse> {
   // host-aware POST (daemonCliPost). The daemon is authoritative;
   // restoredSessionId rides along ONLY as an offline hint (PRD §4.5 / D3).
   // explicitSelection (Issue B) is set ONLY on a dropdown session switch:
   // it tells the daemon resolver to honor the just-persisted session_id
   // directly and skip the GH#24 converge fallback (no silent revert).
+  // freshProvider is its own mode: no forceRespawn and no explicitSelection,
+  // so an older daemon that ignores the field reuses the live PTY instead
+  // of resuming the source.
+  if (opts?.freshProvider) {
+    return daemonCliPost<EnsurePinnedChatResponse>('workspace/ensure-pinned-chat', {
+      project: projectPath,
+      freshProvider: opts.freshProvider,
+    })
+  }
   return daemonCliPost<EnsurePinnedChatResponse>('workspace/ensure-pinned-chat', {
     project: projectPath,
     ...(opts?.forceRespawn ? { forceRespawn: true } : {}),
@@ -517,6 +618,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     | { kind: 'idle' }
     | { kind: 'error'; message: string }
   const [phase, setPhase] = useState<Phase>({ kind: 'ensuring' })
+  const phaseRef = useRef(phase)
+  phaseRef.current = phase
   const [refreshing, setRefreshing] = useState(false)
   // Bumped to force TerminalPane to re-attach (remount) after a daemon
   // respawn (refresh / dropdown switch / SessionAdded). The daemon kills
@@ -551,6 +654,12 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // side-effect" class as #682. `ensure()` and `onAdded` both stamp this ref
   // with the session they settled on, so the echo for that session no-ops.
   const attachedSessionIdRef = useRef<string | null>(null)
+  // While a fresh continue is in flight, SessionAdded's session_id is the
+  // daemon PTY uuid. Do not store it as the dropdown's provider id.
+  const freshHoldProviderIdRef = useRef<string | null>(null)
+  const discoveryGenRef = useRef(0)
+  const [liveProvider, setLiveProvider] = useState<string | null>(null)
+  const [continueSource, setContinueSource] = useState<ContinueNewChatSource | null>(null)
 
   const lastOverlayConvRef = useRef<string | null>(restoredSessionId ?? null)
   const overlayConv =
@@ -653,6 +762,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         })
         setChatProvider(chatHarnessName({ provider: res.provider, command: res.command }))
         setHarnessReady(true)
+        const ensuredProvider = res.provider || providerKeyForCommand(res.command)
+        if (ensuredProvider) setLiveProvider(ensuredProvider)
         const providerId = res.claudeSessionId?.trim() ?? ''
         setChatConversationId(providerId || null)
         // #689 — record which session we're now attached to so the
@@ -706,10 +817,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         // id matches what we're attached to, do nothing.
         if (event.session_id === attachedSessionIdRef.current) return
         attachedSessionIdRef.current = event.session_id
+        const held = freshHoldProviderIdRef.current
         setPhase({
           kind: 'ready',
           sessionId: event.session_id,
-          canonicalSessionId: event.session_id,
+          canonicalSessionId: held ?? event.session_id,
         })
         setAttachNonce((n) => n + 1)
       },
@@ -733,6 +845,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // the ensure response AND the SessionAdded broadcast.
   const handleRefresh = useCallback(async (): Promise<void> => {
     if (refreshing) return
+    freshHoldProviderIdRef.current = null
+    discoveryGenRef.current += 1
     setRefreshing(true)
     setPhase({ kind: 'ensuring' })
     await ensure(true)
@@ -748,6 +862,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const handleSwitchSession = useCallback(
     async (newSessionId: string, provider: string): Promise<void> => {
       if (!newSessionId || newSessionId === canonicalSessionId) return
+      freshHoldProviderIdRef.current = null
+      discoveryGenRef.current += 1
       setRefreshing(true)
       setPhase({ kind: 'ensuring' })
       try {
@@ -778,6 +894,126 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     [canonicalSessionId, projectPath, ensure, agentName, projectId],
   )
 
+  const runPinnedContinue = useCallback(async (
+    source: ContinueNewChatSource,
+    req: ContinueSpawnRequest,
+    stillOpen: () => boolean,
+  ): Promise<void> => {
+    if (!stillOpen()) return
+    const previous = phaseRef.current
+    const myGen = ++discoveryGenRef.current
+    freshHoldProviderIdRef.current = source.sessionId
+    const known = new Set<string>([source.sessionId])
+    try {
+      const rows = await daemonCliGet<Array<{ sessionId?: string }>>('chat/list', {
+        project_path: projectPath,
+      })
+      for (const row of rows ?? []) {
+        if (row.sessionId) known.add(row.sessionId)
+      }
+    } catch {
+      /* source stays excluded */
+    }
+    if (!stillOpen() || myGen !== discoveryGenRef.current) {
+      freshHoldProviderIdRef.current = null
+      return
+    }
+    setRefreshing(true)
+    setPhase({ kind: 'ensuring' })
+    let spawned = false
+    try {
+      const res = await ensurePinnedChat(projectPath, { freshProvider: req.targetProvider })
+      if (!stillOpen() || myGen !== discoveryGenRef.current) {
+        freshHoldProviderIdRef.current = null
+        setPhase(previous.kind === 'ensuring'
+          ? { kind: 'error', message: 'The chat could not be continued.' }
+          : previous)
+        return
+      }
+      if (res.freshSpawn !== true) {
+        throw new Error('This server cannot continue a pinned chat in place.')
+      }
+      const argvError = freshArgvProblem(res.args, source.sessionId)
+      if (argvError) throw new Error(argvError)
+      const premint = res.claudeSessionId?.trim() ?? ''
+      if (premint && premint === source.sessionId) {
+        throw new Error('The server resumed the current chat instead of starting a new one.')
+      }
+      spawned = true
+      attachedSessionIdRef.current = res.sessionId
+      setPhase({
+        kind: 'ready',
+        sessionId: res.sessionId,
+        canonicalSessionId: source.sessionId,
+      })
+      setChatProvider(chatHarnessName({ provider: res.provider, command: res.command }))
+      setHarnessReady(true)
+      const nextProvider = res.provider || providerKeyForCommand(res.command)
+      if (nextProvider) setLiveProvider(nextProvider)
+      setChatConversationId(null)
+      setAttachNonce((n) => n + 1)
+      if (!stillOpen()) return
+      const msg = await daemonCliPost<MsgResponse>('terminal/send-message', {
+        session_id: res.sessionId,
+        text: req.text,
+      })
+      if (!stillOpen() || myGen !== discoveryGenRef.current) return
+      const status = mapMsgResponseToStatus(msg)
+      if (status.kind !== 'delivered') {
+        throw new Error(continueSendError(status))
+      }
+      const stamp = (id: string): void => {
+        try {
+          useTabsStore.getState().stampAgentSessionId(agentName, projectPath, id, projectId)
+        } catch (err) {
+          console.warn('[AgentChatPane] stampAgentSessionId failed:', err)
+        }
+      }
+      if (!res.pendingSessionDiscovery && premint) {
+        await setChatSession(projectPath, premint, req.targetProvider)
+        stamp(premint)
+        freshHoldProviderIdRef.current = null
+        setPhase({
+          kind: 'ready',
+          sessionId: res.sessionId,
+          canonicalSessionId: premint,
+        })
+        setChatConversationId(premint)
+        setLiveProvider(req.targetProvider)
+        return
+      }
+      void watchFreshProviderId({
+        projectPath,
+        sourceId: source.sessionId,
+        targetProvider: req.targetProvider,
+        known,
+        cancelled: () => myGen !== discoveryGenRef.current,
+      }).then((id) => {
+        if (!id || myGen !== discoveryGenRef.current) return
+        freshHoldProviderIdRef.current = null
+        void setChatSession(projectPath, id, req.targetProvider).then(() => {
+          stamp(id)
+          setPhase((prev) => (
+            prev.kind === 'ready' ? { ...prev, canonicalSessionId: id } : prev
+          ))
+          setChatConversationId(id)
+          setLiveProvider(req.targetProvider)
+        })
+      })
+    } catch (err) {
+      if (!spawned) {
+        freshHoldProviderIdRef.current = null
+        setPhase(previous.kind === 'ensuring'
+          ? { kind: 'error', message: 'The chat could not be continued.' }
+          : previous)
+      }
+      if (!stillOpen()) return
+      throw err instanceof Error ? err : new Error(String(err))
+    } finally {
+      setRefreshing(false)
+    }
+  }, [agentName, projectId, projectPath])
+
   // The shared header (agent name + session dropdown + refresh) is rendered
   // in EVERY non-trivial phase — including the failure states — so a session
   // that won't load never traps the user: the dropdown stays visible and
@@ -799,11 +1035,24 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       onSplitRight={setSplitRight}
       chatProvider={chatProvider}
       harnessReady={harnessReady}
+      pinnedProvider={liveProvider}
+      onContinueNewChat={setContinueSource}
     />
   )
 
+  const openContinue = continueSource
+  const continueDialog = openContinue ? (
+    <ContinueNewChatDialog
+      source={openContinue}
+      onClose={() => setContinueSource(null)}
+      onSpawn={(req, stillOpen) => runPinnedContinue(openContinue, req, stillOpen)}
+    />
+  ) : null
+
   if (phase.kind === 'error') {
     return (
+      <>
+      {continueDialog}
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
         <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
@@ -818,11 +1067,14 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         </div>
         </OverlayTabBody>
       </div>
+      </>
     )
   }
 
   if (phase.kind === 'idle') {
     return (
+      <>
+      {continueDialog}
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
         <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
@@ -837,19 +1089,25 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         </div>
         </OverlayTabBody>
       </div>
+      </>
     )
   }
 
   if (phase.kind === 'ensuring') {
     return (
+      <>
+      {continueDialog}
       <div className="flex items-center justify-center h-full text-xs text-[var(--color-text-muted)]">
         Loading session…
       </div>
+      </>
     )
   }
 
   // phase.kind === 'ready'
   return (
+    <>
+    {continueDialog}
     <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
       <PinnedSessionBody
@@ -891,6 +1149,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         />
       </PinnedSessionBody>
     </div>
+    </>
   )
 }
 
@@ -1035,6 +1294,14 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   // TerminalPane (key={refreshNonce}) and a re-run of the resolve effect.
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
+  const [continueSource, setContinueSource] = useState<ContinueNewChatSource | null>(null)
+  const runLegacyContinue = useCallback(async (
+    _req: ContinueSpawnRequest,
+    _stillOpen: () => boolean,
+  ): Promise<void> => {
+    // No fresh mode on this daemon. Do not refresh and do not resume.
+    throw new Error('This server cannot continue a pinned chat in place.')
+  }, [])
 
   // Listen for chat:refreshed broadcasts (cross-window remount).
   useEffect(() => {
@@ -1316,11 +1583,23 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       onSplitRight={setSplitRight}
       chatProvider={launchConfig ? chatHarnessName({ command: launchConfig.command }) : null}
       harnessReady={launchConfig != null}
+      pinnedProvider={providerKeyForCommand(launchConfig?.command)}
+      onContinueNewChat={setContinueSource}
     />
   )
 
+  const continueDialog = continueSource ? (
+    <ContinueNewChatDialog
+      source={continueSource}
+      onClose={() => setContinueSource(null)}
+      onSpawn={runLegacyContinue}
+    />
+  ) : null
+
   if (breakerTripped) {
     return (
+      <>
+      {continueDialog}
       <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
         <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv}>
@@ -1336,18 +1615,24 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         </div>
         </OverlayTabBody>
       </div>
+      </>
     )
   }
 
   if (!ready) {
     return (
+      <>
+      {continueDialog}
       <div className="flex items-center justify-center h-full text-xs text-[var(--color-text-muted)]">
         Loading session…
       </div>
+      </>
     )
   }
 
   return (
+    <>
+    {continueDialog}
     <div ref={containerRef} className="h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
       <PinnedSessionBody
@@ -1377,5 +1662,6 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         />
       </PinnedSessionBody>
     </div>
+    </>
   )
 }

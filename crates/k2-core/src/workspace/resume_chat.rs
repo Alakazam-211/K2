@@ -293,7 +293,9 @@ pub fn resolve_resume_chat_args_ex(
     // ── Cases 2–3: no usable saved session — the workspace default
     // agent governs.
     match provider_resume_for_command(&default_cmd.command) {
-        Some(adapter) => converge_or_mint(adapter, &default_cmd, project_id.as_deref(), project_path),
+        Some(adapter) => {
+            converge_or_mint(adapter, &default_cmd, project_id.as_deref(), project_path)
+        }
         None => {
             // Unknown provider: fresh bare spawn, no resume, no premint —
             // the Slice-2 degraded behavior, now with a truthful harness
@@ -474,9 +476,7 @@ fn spawn_command_for(
         .unwrap_or_default()
     };
     for (command_str, env_json, readiness) in roster {
-        if provider_resume_for_command(&command_str).map(|a| a.provider)
-            == Some(adapter.provider)
-        {
+        if provider_resume_for_command(&command_str).map(|a| a.provider) == Some(adapter.provider) {
             let (command, args) =
                 crate::workspace::agent_resolve::parse_command_string(&command_str);
             if !command.is_empty() {
@@ -513,6 +513,125 @@ fn claude_pinned_or(command: &str, args: &[String]) -> Vec<String> {
     }
 }
 
+/// Drop resume / premint / fork tokens and the following id. Fresh
+/// continue must not inherit a preset that already names a session.
+fn strip_session_argv(args: &[String]) -> Vec<String> {
+    const FLAGS: &[&str] = &[
+        "--resume",
+        "-r",
+        "--continue",
+        "-c",
+        "--session",
+        "--session-id",
+        "--fork-session",
+    ];
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        let tok = args[i].as_str();
+        if FLAGS.contains(&tok) || tok == "resume" {
+            i += 1;
+            if i < args.len() && !args[i].starts_with('-') {
+                i += 1;
+            }
+            continue;
+        }
+        out.push(args[i].clone());
+        i += 1;
+    }
+    out
+}
+
+/// Never-chatted argv for `target_provider`. Does not resume a saved id
+/// and does not converge to the newest file on disk.
+///
+/// Premint harnesses (claude, grok) persist a new uuid and return
+/// `--session-id <new>`. Self-minting harnesses (pi, codex, gemini,
+/// cursor, hermes) clear the saved id — [`persist_session_identity`]
+/// with `None` would keep it — and return bare preset args with
+/// `pending_session_discovery`.
+pub fn resolve_never_chatted_chat_args(
+    project_path: &str,
+    target_provider: &str,
+) -> Result<ResumeChatArgs, String> {
+    let provider = target_provider.trim();
+    if provider.is_empty() {
+        return Err("target provider required".to_string());
+    }
+    let adapter = provider_resume_for_provider(provider)
+        .ok_or_else(|| format!("unknown harness: {provider}"))?;
+
+    let (project_id, default_cmd) = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let project_id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM projects WHERE path = ?1",
+                params![project_path],
+                |row| row.get(0),
+            )
+            .ok();
+        let default_cmd = resolve_agent_command(&conn, project_path);
+        (project_id, default_cmd)
+    };
+    if project_id.is_none() {
+        return Err(format!("project not registered: {project_path}"));
+    }
+
+    let (command, base_args, env, readiness) = spawn_command_for(adapter, &default_cmd);
+    let base_args = strip_session_argv(&base_args);
+
+    match adapter.premint_args(&base_args, "") {
+        Some(_) => {
+            let new_sid = uuid::Uuid::new_v4().to_string();
+            persist_session_identity(project_id.as_deref(), Some(&new_sid), adapter.provider);
+            let args = adapter
+                .premint_args(&base_args, &new_sid)
+                .expect("premint style checked above");
+            Ok(ResumeChatArgs {
+                command,
+                args,
+                cwd: project_path.to_string(),
+                resume_session: new_sid,
+                resumed_existing: false,
+                provider: adapter.provider.to_string(),
+                pending_session_discovery: false,
+                env,
+                readiness,
+            })
+        }
+        None => {
+            clear_session_identity(project_id.as_deref(), adapter.provider);
+            Ok(ResumeChatArgs {
+                command,
+                args: base_args,
+                cwd: project_path.to_string(),
+                resume_session: String::new(),
+                resumed_existing: false,
+                provider: adapter.provider.to_string(),
+                pending_session_discovery: true,
+                env,
+                readiness,
+            })
+        }
+    }
+}
+
+/// Stamp harness and clear `session_id`. [`persist_session_identity`]
+/// with `None` keeps the previous id; fresh continue must not.
+fn clear_session_identity(project_id: Option<&str>, harness: &str) {
+    let Some(pid) = project_id else { return };
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let row_id = uuid::Uuid::new_v4().to_string();
+    let _ = conn.execute(
+        "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+         VALUES (?1, ?2, NULL, ?3, 'user', 'running', unixepoch()) \
+         ON CONFLICT(project_id) DO UPDATE SET session_id = NULL, harness = ?3, last_activity_at = unixepoch()",
+        params![row_id, pid, harness],
+    );
+}
+
 /// Best-effort identity persist (mirrors the pre-Slice-3 upserts, now
 /// with a TRUTHFUL harness instead of a hardcoded 'claude'):
 ///
@@ -524,11 +643,7 @@ fn claude_pinned_or(command: &str, args: &[String]) -> Vec<String> {
 ///
 /// A `None` project_id (unregistered workspace) no-ops, matching the
 /// old behavior.
-fn persist_session_identity(
-    project_id: Option<&str>,
-    session_id: Option<&str>,
-    harness: &str,
-) {
+fn persist_session_identity(project_id: Option<&str>, session_id: Option<&str>, harness: &str) {
     let Some(pid) = project_id else { return };
     let db = crate::db::shared();
     let conn = db.lock();
@@ -574,7 +689,11 @@ mod tests {
             std::fs::create_dir_all(&home).unwrap();
             let original = std::env::var_os("HOME");
             std::env::set_var("HOME", &home);
-            Self { original, home, _lock: lock }
+            Self {
+                original,
+                home,
+                _lock: lock,
+            }
         }
     }
 
@@ -709,7 +828,11 @@ mod tests {
         // Saved id is stale (not on disk); a real newest session exists.
         let newest = "aaaaaaaa-1111-1111-1111-111111111111";
         write_claude_session(&guard.home, &path, newest);
-        set_saved_session(&project_id, "bbbbbbbb-0000-0000-0000-000000000000", "claude");
+        set_saved_session(
+            &project_id,
+            "bbbbbbbb-0000-0000-0000-000000000000",
+            "claude",
+        );
 
         let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
         assert_eq!(out.command, "claude");
@@ -942,7 +1065,11 @@ mod tests {
 
         let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
         assert_eq!(out.command, "aider");
-        assert_eq!(out.args, vec!["--chat".to_string()], "preset args pass through verbatim");
+        assert_eq!(
+            out.args,
+            vec!["--chat".to_string()],
+            "preset args pass through verbatim"
+        );
         assert!(out.resume_session.is_empty());
         assert!(!out.resumed_existing);
         assert!(
@@ -973,6 +1100,188 @@ mod tests {
         let out = resolve_resume_chat_args_ex(&path, false).expect("auto resolve");
         assert_eq!(out.command, "claude");
         assert!(out.args.iter().any(|a| a == "--session-id"));
+    }
+
+    fn assert_never_chatted_argv(args: &[String], source: &str) {
+        for arg in args {
+            assert_ne!(
+                arg, source,
+                "fresh argv must not contain the source id: {args:?}"
+            );
+            assert_ne!(
+                arg, "--resume",
+                "fresh argv must not contain --resume: {args:?}"
+            );
+            assert_ne!(
+                arg, "resume",
+                "fresh argv must not contain a resume token: {args:?}"
+            );
+            assert_ne!(
+                arg, "--fork-session",
+                "fresh argv must not contain --fork-session: {args:?}"
+            );
+        }
+    }
+
+    // ── Fresh continue: never resume or converge ─────────────────────
+
+    #[test]
+    fn never_chatted_claude_premints_when_source_file_exists() {
+        let guard = HomeGuard::new("fresh-claude");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/fresh-claude-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let source = "11111111-2222-3333-4444-555555555555";
+        write_claude_session(&guard.home, &path, source);
+        set_saved_session(&project_id, source, "claude");
+
+        let resumed = resolve_resume_chat_args_ex(&path, false).expect("resume");
+        assert!(resumed.resumed_existing);
+        assert!(resumed.args.iter().any(|arg| arg == "--resume"));
+        assert!(resumed.args.iter().any(|arg| arg == source));
+
+        let out = resolve_never_chatted_chat_args(&path, "claude").expect("fresh");
+        assert_eq!(out.command, "claude");
+        assert!(!out.resumed_existing);
+        assert!(!out.pending_session_discovery);
+        assert_ne!(out.resume_session, source);
+        assert_eq!(
+            out.args,
+            vec![
+                "--dangerously-skip-permissions".to_string(),
+                "--session-id".to_string(),
+                out.resume_session.clone(),
+            ]
+        );
+        assert_never_chatted_argv(&out.args, source);
+        assert_eq!(
+            saved_row(&project_id),
+            Some((Some(out.resume_session.clone()), "claude".to_string()))
+        );
+    }
+
+    #[test]
+    fn never_chatted_grok_keeps_preset_and_does_not_resume_source() {
+        let guard = HomeGuard::new("fresh-grok");
+        crate::db::init_for_tests();
+        insert_preset("grok --always-approve", 960);
+        let path = format!("/fixture/fresh-grok-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let source = "01920000-eeee-7000-8000-0000000000aa";
+        write_grok_session(&guard.home, &path, source);
+        set_saved_session(&project_id, source, "grok");
+
+        let resumed = resolve_resume_chat_args_ex(&path, false).expect("resume");
+        assert_eq!(resumed.resume_session, source);
+        assert!(resumed.args.iter().any(|arg| arg == "--resume"));
+
+        let out = resolve_never_chatted_chat_args(&path, "grok").expect("fresh");
+        assert_eq!(out.command, "grok");
+        assert!(!out.resumed_existing);
+        assert!(!out.pending_session_discovery);
+        assert_ne!(out.resume_session, source);
+        assert_eq!(
+            out.args,
+            vec![
+                "--always-approve".to_string(),
+                "--session-id".to_string(),
+                out.resume_session.clone(),
+            ]
+        );
+        assert_never_chatted_argv(&out.args, source);
+        assert_eq!(
+            saved_row(&project_id),
+            Some((Some(out.resume_session.clone()), "grok".to_string()))
+        );
+    }
+
+    #[test]
+    fn never_chatted_pi_clears_source_and_strips_session_from_preset() {
+        let guard = HomeGuard::new("fresh-pi");
+        crate::db::init_for_tests();
+        let source = "01920000-abcd-7000-8000-00000000beef";
+        let preset = insert_preset(&format!("pi --no-color --session {source}"), 961);
+        let path = format!("/fixture/fresh-pi-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, Some(&preset));
+        write_claude_session(&guard.home, &path, source);
+        set_saved_session(&project_id, source, "claude");
+
+        let out = resolve_never_chatted_chat_args(&path, "pi").expect("fresh");
+        assert_eq!(out.command, "pi");
+        assert_eq!(out.args, vec!["--no-color".to_string()]);
+        assert!(out.resume_session.is_empty());
+        assert!(!out.resumed_existing);
+        assert!(out.pending_session_discovery);
+        assert_never_chatted_argv(&out.args, source);
+        assert_eq!(saved_row(&project_id), Some((None, "pi".to_string())));
+    }
+
+    #[test]
+    fn never_chatted_codex_strips_resume_subcommand_and_keeps_preset_flags() {
+        let guard = HomeGuard::new("fresh-codex");
+        crate::db::init_for_tests();
+        let source = "01920000-abcd-7000-8000-00000000c0de";
+        insert_preset(&format!("codex --yolo resume {source} --fork-session"), 962);
+        let path = format!("/fixture/fresh-codex-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        write_claude_session(&guard.home, &path, source);
+        set_saved_session(&project_id, source, "claude");
+
+        let out = resolve_never_chatted_chat_args(&path, "codex").expect("fresh");
+        assert_eq!(out.command, "codex");
+        assert_eq!(out.args, vec!["--yolo".to_string()]);
+        assert!(out.pending_session_discovery);
+        assert!(out.resume_session.is_empty());
+        assert_never_chatted_argv(&out.args, source);
+        assert_eq!(saved_row(&project_id), Some((None, "codex".to_string())));
+    }
+
+    #[test]
+    fn never_chatted_self_mint_harnesses_stay_bare() {
+        let guard = HomeGuard::new("fresh-self-mint");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/fresh-self-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let source = "01920000-abcd-7000-8000-00000000a11a";
+        write_claude_session(&guard.home, &path, source);
+        set_saved_session(&project_id, source, "claude");
+
+        for provider in ["pi", "codex", "gemini", "cursor", "hermes"] {
+            set_saved_session(&project_id, source, "claude");
+            let out = resolve_never_chatted_chat_args(&path, provider)
+                .unwrap_or_else(|err| panic!("{provider}: {err}"));
+            assert!(!out.resumed_existing, "{provider}");
+            assert!(
+                out.pending_session_discovery,
+                "{provider} must pending-discover"
+            );
+            assert!(out.resume_session.is_empty(), "{provider}");
+            assert_eq!(out.provider, provider);
+            assert_never_chatted_argv(&out.args, source);
+            assert_eq!(
+                saved_row(&project_id),
+                Some((None, provider.to_string())),
+                "{provider} must clear the source id"
+            );
+        }
+    }
+
+    #[test]
+    fn never_chatted_unknown_harness_does_not_clear_the_source() {
+        let guard = HomeGuard::new("fresh-unknown");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/fresh-unknown-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, None);
+        let source = "01920000-abcd-7000-8000-0000000000ff";
+        write_claude_session(&guard.home, &path, source);
+        set_saved_session(&project_id, source, "claude");
+
+        let err = resolve_never_chatted_chat_args(&path, "aider").expect_err("unknown");
+        assert!(err.contains("unknown harness"), "got: {err}");
+        assert_eq!(
+            saved_row(&project_id),
+            Some((Some(source.to_string()), "claude".to_string()))
+        );
     }
 
     // ── JSON wire shape stays additive ───────────────────────────────

@@ -1513,3 +1513,67 @@ async fn concurrent_empty_spawn_and_ensure_one_harness_pty() {
 
     v2_session_map::clear_for_tests();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ensure_fresh_provider_does_not_resume_source_transcript() {
+    let _g = lock();
+    init_for_tests();
+    v2_session_map::clear_for_tests();
+    let _home = HomeGuard::new("fresh-provider");
+    let _shim = install_claude_shim();
+
+    let workspace_id = "pinned-fresh-provider-ws";
+    let project = setup_project(workspace_id, "fresh-provider");
+    let project_path = project.to_string_lossy().into_owned();
+    let source = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    write_on_disk_session(&project_path, source);
+    set_saved_session_id(workspace_id, source);
+
+    let out = k2_daemon::pinned_chat::ensure_pinned_chat_fresh(&project_path, "claude")
+        .expect("fresh ensure");
+
+    assert!(out.fresh_spawn, "fresh mode must mark freshSpawn");
+    assert!(!out.resumed_existing);
+    assert!(!out.reused);
+    assert_eq!(out.command, "claude");
+    assert_eq!(out.provider, "claude");
+    assert_ne!(out.claude_session_id, source);
+    assert!(!out.claude_session_id.is_empty());
+    assert_eq!(
+        out.args,
+        vec![
+            "--dangerously-skip-permissions".to_string(),
+            "--session-id".to_string(),
+            out.claude_session_id.clone(),
+        ]
+    );
+    for arg in &out.args {
+        assert_ne!(arg, source);
+        assert_ne!(arg, "--resume");
+        assert_ne!(arg, "resume");
+        assert_ne!(arg, "--fork-session");
+    }
+    assert_eq!(
+        saved_session_id(workspace_id).as_deref(),
+        Some(out.claude_session_id.as_str()),
+        "premint id is persisted; the source id is not"
+    );
+
+    let live = v2_session_map::lookup_by_agent_name(workspace_id)
+        .expect("fresh spawn registers the canonical session");
+    // Spawn may append the cell system prompt after the resolver argv.
+    assert!(
+        live.args.windows(3).any(|w| {
+            w[0] == "--dangerously-skip-permissions"
+                && w[1] == "--session-id"
+                && w[2] == out.claude_session_id
+        }),
+        "live argv must premint, got {:?}",
+        live.args
+    );
+    assert!(!live.args.iter().any(|arg| {
+        arg == source || arg == "--resume" || arg == "resume" || arg == "--fork-session"
+    }));
+
+    v2_session_map::clear_for_tests();
+}

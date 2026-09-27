@@ -54,8 +54,13 @@ use crate::canonical_session::canonical_key_for;
 use crate::spawn::{
     canonical_spawn_lock, spawn_agent_session_v2_blocking_inner, SpawnWorkspaceSessionRequest,
 };
+use std::collections::HashSet;
+
 use k2_core::log_debug;
-use k2_core::workspace::resume_chat::resolve_resume_chat_args_ex;
+use k2_core::workspace::provider_resume::provider_resume_for_provider;
+use k2_core::workspace::resume_chat::{
+    resolve_never_chatted_chat_args, resolve_resume_chat_args_ex,
+};
 
 /// Resolved outcome of `ensure_pinned_chat`. Returned to the HTTP
 /// handler (and exercised directly by the integration tests) so
@@ -96,6 +101,9 @@ pub struct EnsurePinnedChatOutcome {
     /// spawned bare and the daemon adopts the discovered id post-hoc
     /// (`provider_resume::defer_adopt_discovered_session`, wired below).
     pub pending_session_discovery: bool,
+    /// `true` only for the fresh-continue mode (`freshProvider`). The
+    /// argv is a never-chatted spawn of that harness, not a resume.
+    pub fresh_spawn: bool,
 }
 
 impl EnsurePinnedChatOutcome {
@@ -112,8 +120,20 @@ impl EnsurePinnedChatOutcome {
             "reused": self.reused,
             "provider": self.provider,
             "pendingSessionDiscovery": self.pending_session_discovery,
+            "freshSpawn": self.fresh_spawn,
         })
     }
+}
+
+/// How to adopt a provider id after this spawn.
+enum PinnedAdopt {
+    /// Existing ensure: adopt only when the spawn did not resume.
+    Standard,
+    /// Premint fresh continue. The new uuid is already persisted.
+    /// Do not stamp newest-on-disk over it.
+    Skip,
+    /// Self-mint fresh continue. Stamp only an id outside this set.
+    Exclude(HashSet<String>),
 }
 
 /// Last-resort PTY dimensions when no live session fit and no stored
@@ -175,6 +195,32 @@ pub fn ensure_pinned_chat(
     force_respawn: bool,
     explicit_selection: bool,
 ) -> Result<EnsurePinnedChatOutcome, String> {
+    ensure_pinned_chat_inner(project_path, force_respawn, explicit_selection, None)
+}
+
+/// Force-respawn a never-chatted session of `target_provider`.
+///
+/// Claude and grok premint `--session-id <new>`. Pi, codex, gemini,
+/// cursor, and hermes get bare preset args plus pending discovery.
+/// Does not resume, does not converge to the newest file, and does not
+/// put the source id in argv. Not the same as omitting `explicit_selection`.
+pub fn ensure_pinned_chat_fresh(
+    project_path: &str,
+    target_provider: &str,
+) -> Result<EnsurePinnedChatOutcome, String> {
+    let provider = target_provider.trim();
+    if provider.is_empty() {
+        return Err("target provider required".to_string());
+    }
+    ensure_pinned_chat_inner(project_path, true, false, Some(provider))
+}
+
+fn ensure_pinned_chat_inner(
+    project_path: &str,
+    force_respawn: bool,
+    explicit_selection: bool,
+    fresh_provider: Option<&str>,
+) -> Result<EnsurePinnedChatOutcome, String> {
     // 1. Resolve project_id. The canonical key is the bare project_id
     //    (canonical_session::canonical_key_for) — the same slot the
     //    pinned chat tab, the wake provider, and ensure-canonical-session
@@ -183,12 +229,24 @@ pub fn ensure_pinned_chat(
         .ok_or_else(|| format!("project not registered: {project_path}"))?;
     let canonical_key = canonical_key_for(&project_id);
 
-    // 2. Resolve the Claude argv + the resume-vs-fresh decision. This
-    //    is the chokepoint that pre-allocates + persists a fresh
-    //    `--session-id <new>` (for a never-chatted workspace) BEFORE
-    //    we spawn, or splices `--resume <id>` for a real prior
-    //    session. DO NOT duplicate this logic.
-    let resolved = resolve_resume_chat_args_ex(project_path, explicit_selection)?;
+    // 2. Resolve argv. The normal path resumes or converges. The fresh
+    //    path (`fresh_provider`) never does: premint or bare preset args
+    //    only. Snapshot exclude ids BEFORE that resolve clears the saved
+    //    source id.
+    let (resolved, adopt, fresh_spawn) = if let Some(provider) = fresh_provider {
+        let adapter = provider_resume_for_provider(provider)
+            .ok_or_else(|| format!("unknown harness: {provider}"))?;
+        let adopt = if adapter.premint.is_none() {
+            PinnedAdopt::Exclude(fresh_exclude_ids(adapter.provider, project_path))
+        } else {
+            PinnedAdopt::Skip
+        };
+        let resolved = resolve_never_chatted_chat_args(project_path, provider)?;
+        (resolved, adopt, true)
+    } else {
+        let resolved = resolve_resume_chat_args_ex(project_path, explicit_selection)?;
+        (resolved, PinnedAdopt::Standard, false)
+    };
 
     // R17: mismatch-kill + resume (and forceRespawn) is single-flight
     // per canonical key. Held across kill + spawn so a concurrent empty
@@ -322,15 +380,32 @@ pub fn ensure_pinned_chat(
     // Only for fresh / self-minting spawns. A successful resume already has
     // workspace_sessions.session_id correct (dropdown pick or prior SSOT).
     // Running newest_on_disk adoption here clobbers intentional older picks.
-    if !spawn_outcome.reused && !resolved.resumed_existing {
-        k2_core::workspace::provider_resume::defer_adopt_discovered_session(
-            resolved.provider.clone(),
-            project_path.to_string(),
-        );
+    // Fresh continue does not use that adopt: premint ids are already
+    // persisted, and self-mint must not keep the source or stamp another
+    // transcript that was already on disk.
+    if !spawn_outcome.reused {
+        match adopt {
+            PinnedAdopt::Standard => {
+                if !resolved.resumed_existing {
+                    k2_core::workspace::provider_resume::defer_adopt_discovered_session(
+                        resolved.provider.clone(),
+                        project_path.to_string(),
+                    );
+                }
+            }
+            PinnedAdopt::Skip => {}
+            PinnedAdopt::Exclude(exclude) => {
+                k2_core::workspace::provider_resume::defer_adopt_fresh_session(
+                    resolved.provider.clone(),
+                    project_path.to_string(),
+                    exclude,
+                );
+            }
+        }
     }
 
     log_debug!(
-        "[daemon/pinned-chat] ensured session={} canonical_key={} provider={} chat_session={} resumed_existing={} pending_discovery={} reused={} force_respawn={} explicit_selection={}",
+        "[daemon/pinned-chat] ensured session={} canonical_key={} provider={} chat_session={} resumed_existing={} pending_discovery={} reused={} force_respawn={} explicit_selection={} fresh_spawn={}",
         session_id,
         canonical_key,
         resolved.provider,
@@ -340,6 +415,7 @@ pub fn ensure_pinned_chat(
         spawn_outcome.reused,
         force_respawn,
         explicit_selection,
+        fresh_spawn,
     );
 
     Ok(EnsurePinnedChatOutcome {
@@ -353,7 +429,43 @@ pub fn ensure_pinned_chat(
         reused: spawn_outcome.reused,
         provider: resolved.provider,
         pending_session_discovery: resolved.pending_session_discovery,
+        fresh_spawn,
     })
+}
+
+/// Ids a fresh self-mint adopt must not stamp: every listed transcript
+/// for this provider, the current newest file, and the saved source id.
+fn fresh_exclude_ids(provider: &str, project_path: &str) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    if let Ok(rows) = k2_core::chat_history::list_all_sessions(Some(project_path)) {
+        for row in rows {
+            if row.provider == provider && !row.session_id.is_empty() {
+                ids.insert(row.session_id);
+            }
+        }
+    }
+    if let Some(adapter) = provider_resume_for_provider(provider) {
+        if let Some(newest) = adapter.newest_on_disk(project_path) {
+            if !newest.is_empty() {
+                ids.insert(newest);
+            }
+        }
+    }
+    if let Some(saved) = saved_session_id(project_path) {
+        ids.insert(saved);
+    }
+    ids
+}
+
+fn saved_session_id(project_path: &str) -> Option<String> {
+    let project_id = lookup_project_id(project_path)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::WorkspaceSession::get(&conn, &project_id)
+        .ok()
+        .flatten()
+        .and_then(|row| row.session_id)
+        .filter(|id| !id.is_empty())
 }
 
 /// `projects.id` lookup by `projects.path`. `None` when the workspace
@@ -402,6 +514,11 @@ pub fn handle_ensure_pinned_chat(body: &[u8]) -> HandlerResult {
         /// so cold mounts / refreshes keep the auto path.
         #[serde(default)]
         explicit_selection: bool,
+        /// Fresh continue: never-chatted spawn of this harness. Implies
+        /// force-respawn inside [`ensure_pinned_chat_fresh`]. Not a
+        /// resume, and not `explicitSelection`.
+        #[serde(default)]
+        fresh_provider: Option<String>,
     }
 
     let req: Req = match serde_json::from_slice(body) {
@@ -423,7 +540,23 @@ pub fn handle_ensure_pinned_chat(body: &[u8]) -> HandlerResult {
         };
     }
 
-    match ensure_pinned_chat(&req.project, req.force_respawn, req.explicit_selection) {
+    let fresh = req
+        .fresh_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty());
+    if fresh.is_some() && req.explicit_selection {
+        return HandlerResult {
+            status: "400 Bad Request",
+            body: r#"{"error":"freshProvider cannot be combined with explicitSelection"}"#.into(),
+        };
+    }
+    let ensured = if let Some(provider) = fresh {
+        ensure_pinned_chat_fresh(&req.project, provider)
+    } else {
+        ensure_pinned_chat(&req.project, req.force_respawn, req.explicit_selection)
+    };
+    match ensured {
         Ok(out) => HandlerResult {
             status: "200 OK",
             body: out.to_json().to_string(),
@@ -474,6 +607,17 @@ fn handle_skin_ensure_pinned_chat_find_only(
             "forceRespawn is not allowed for skin guests",
         );
     }
+    let fresh_provider = v
+        .get("freshProvider")
+        .and_then(|x| x.as_str())
+        .or_else(|| v.get("fresh_provider").and_then(|x| x.as_str()))
+        .unwrap_or("")
+        .trim();
+    if !fresh_provider.is_empty() {
+        return crate::cli_response::CliResponse::bad_request(
+            "freshProvider is not allowed for skin guests",
+        );
+    }
     let workspace = v
         .get("workspace")
         .and_then(|x| x.as_str())
@@ -484,7 +628,10 @@ fn handle_skin_ensure_pinned_chat_find_only(
         return crate::cli_response::CliResponse::bad_request("missing workspace");
     }
     // Skin path is handle-only. Abs `project` stays owner/Connect.
-    if v.get("project").and_then(|x| x.as_str()).is_some_and(|p| !p.trim().is_empty()) {
+    if v.get("project")
+        .and_then(|x| x.as_str())
+        .is_some_and(|p| !p.trim().is_empty())
+    {
         return crate::cli_response::CliResponse::bad_request(
             "skin ensure-pinned-chat uses workspace handle, not project path",
         );
@@ -531,6 +678,7 @@ fn handle_skin_ensure_pinned_chat_find_only(
         reused: true,
         provider,
         pending_session_discovery: false,
+        fresh_spawn: false,
     };
     crate::cli_response::CliResponse::ok_json(out.to_json().to_string())
 }
@@ -553,6 +701,31 @@ mod tests {
         let result = handle_ensure_pinned_chat(body);
         assert_eq!(result.status, "400 Bad Request");
         assert!(result.body.contains("parse ensure-pinned-chat request"));
+    }
+
+    #[test]
+    fn fresh_provider_rejects_explicit_selection() {
+        let body = br#"{"project":"/tmp/x","freshProvider":"claude","explicitSelection":true}"#;
+        let result = handle_ensure_pinned_chat(body);
+        assert_eq!(result.status, "400 Bad Request");
+        assert!(
+            result.body.contains("explicitSelection"),
+            "got: {}",
+            result.body
+        );
+    }
+
+    #[test]
+    fn fresh_provider_on_unknown_project_is_not_a_resume() {
+        let body = br#"{"project":"/nonexistent/k2-fresh-pin","freshProvider":"claude"}"#;
+        let result = handle_ensure_pinned_chat(body);
+        assert_eq!(result.status, "400 Bad Request");
+        assert!(
+            result.body.contains("project not registered"),
+            "got: {}",
+            result.body
+        );
+        assert!(!result.body.contains("--resume"), "got: {}", result.body);
     }
 
     #[test]

@@ -215,7 +215,7 @@ describe('subscription window math', () => {
 })
 
 describe('UsageButton mounts', () => {
-  it('sits immediately left of TimerButton on each of the six bars', () => {
+  it('sits left of TimerButton on each of the six bars', () => {
     for (const rel of MOUNTS) {
       const text = readFileSync(resolve(root, rel), 'utf8')
       const usageCount = text.split('<UsageButton />').length - 1
@@ -226,7 +226,10 @@ describe('UsageButton mounts', () => {
       const timer = text.indexOf('<TimerButton />')
       expect(usage, rel).toBeGreaterThanOrEqual(0)
       expect(timer, rel).toBeGreaterThan(usage)
-      expect(text.slice(usage, timer).replace(/\s+/g, ''), rel).toBe('<UsageButton/>')
+      const between = text.slice(usage, timer).replace(/\s+/g, '')
+      expect(between, rel).toMatch(
+        /^<UsageButton\/>(<divclassName="w-pxh-4bg-\[var\(--color-border\)\]mx-1"\/>)?$/,
+      )
     }
   })
 

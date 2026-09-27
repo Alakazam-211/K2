@@ -609,7 +609,7 @@ describe('S2 overlay chrome (C3/C4/C10)', () => {
     expect(screen.getByTestId('pinned-chat-header')).not.toBeNull()
     const header = screen.getByTestId('pinned-chat-header')
     const menu = screen.getByTestId('session-view-menu')
-    expect(menu.parentElement?.parentElement).toBe(header)
+    expect(menu.parentElement?.parentElement?.parentElement).toBe(header)
     const rowKids = Array.from(menu.parentElement!.children)
     expect(rowKids.indexOf(menu)).toBe(0)
 

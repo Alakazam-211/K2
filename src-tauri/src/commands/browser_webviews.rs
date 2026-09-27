@@ -1037,7 +1037,9 @@ pub use stub::*;
 /// Keep each engine's own agent. Apple WebKit omits a browser product, so
 /// add Safari using the WebKit version already in the string and the
 /// running OS for `Version/`. An agent that already names Safari, Edge,
-/// or Chrome is left alone.
+/// or Chrome is left alone. macOS calls this. Other platforms only compile
+/// it for the unit tests.
+#[cfg(any(target_os = "macos", test))]
 fn declare_browser_engine(default_ua: &str, os_major: i64, os_minor: i64) -> String {
     if default_ua.contains("Safari/")
         || default_ua.contains("Edg/")

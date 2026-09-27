@@ -38,7 +38,7 @@ function buildPlusMenuItems(presets: AgentPreset[]): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
   const items: ContextMenuItemDef[] = [
     { id: 'terminal', label: 'Terminal', shortcut: '⌘T' },
-    { id: 'new-file', label: 'New File' },
+    { id: 'new-file', label: 'New File', shortcut: '⌘N' },
     { id: 'browser', label: 'Browser' },
   ]
   if (enabled.length === 0) return items

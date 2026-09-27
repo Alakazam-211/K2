@@ -267,9 +267,11 @@ describe('tab bar plus menu', () => {
     expect(add.title).not.toMatch(/cmd\+t/i)
     expect(add.title).not.toContain('⌘T')
     await openPlus()
-    const symbol = document.querySelector('[data-context-menu] .key-symbol')
-    expect(symbol?.textContent).toBe('⌘')
-    expect(symbol?.parentElement?.textContent).toBe('⌘T')
+    const symbols = document.querySelectorAll('[data-context-menu] .key-symbol')
+    expect(symbols[0]?.textContent).toBe('⌘')
+    expect(symbols[0]?.parentElement?.textContent).toBe('⌘T')
+    expect(symbols[1]?.textContent).toBe('⌘')
+    expect(symbols[1]?.parentElement?.textContent).toBe('⌘N')
   })
 
   it('with two short tabs the + follows the scroller and split follows the +', () => {

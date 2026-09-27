@@ -869,7 +869,12 @@ fn codex_exchange(io: &mut dyn CodexTransport) -> Result<CodexParsed, CodexFail>
         json!({"refreshToken": false}),
     )?)
     .map_err(CodexFail::Transport)?;
-    let account = io.read_matching(2, timeout).map_err(CodexFail::Transport)?;
+    let account = match io.read_matching(2, timeout) {
+        Ok(msg) => msg,
+        // A signed-out Codex exits app-server before account/read returns.
+        Err(err) if err.contains("closed") => return Err(CodexFail::NotSignedIn),
+        Err(err) => return Err(CodexFail::Transport(err)),
+    };
     io.write_line(&codex_line(3, "account/rateLimits/read", json!({}))?)
         .map_err(CodexFail::Transport)?;
     let limits = io.read_matching(3, timeout).map_err(CodexFail::Transport)?;
@@ -1037,9 +1042,11 @@ fn grok_exchange(io: &mut dyn GrokTransport) -> Result<GrokParsed, GrokFail> {
         .map_err(GrokFail::Transport)?;
     io.write_line(&grok_line(2, "_x.ai/billing", json!({}))?)
         .map_err(GrokFail::Transport)?;
+    // Read the billing result before closing stdin. grok 1.0.41 exits on
+    // stdin EOF and drops the reply if the pipe closes first.
+    let billing = io.read_matching(2, timeout);
     io.close_stdin().map_err(GrokFail::Transport)?;
-    let billing = io.read_matching(2, timeout).map_err(GrokFail::Transport)?;
-    parse_grok_billing(&billing)
+    parse_grok_billing(&billing.map_err(GrokFail::Transport)?)
 }
 
 fn parse_grok_billing(msg: &Value) -> Result<GrokParsed, GrokFail> {

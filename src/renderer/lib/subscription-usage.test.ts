@@ -6,6 +6,7 @@ import {
   buttonLabel,
   formatResetsIn,
   harnessName,
+  isSignedIn,
   isStale,
   percentUsed,
   PROBED_HARNESSES,
@@ -141,6 +142,27 @@ describe('subscription window math', () => {
     )
     expect(label).toBe('Usage')
     expect(label).not.toContain('0%')
+  })
+
+  it('hides a blank probe and keeps a signed-in row with no meter', () => {
+    expect(
+      isSignedIn({
+        harness: 'codex',
+        plan: '',
+        windows: [],
+        checkedAt: '',
+        status: '',
+      }),
+    ).toBe(false)
+    expect(
+      isSignedIn({
+        harness: 'claude',
+        plan: 'Max',
+        windows: [],
+        checkedAt: '',
+        status: 'No usage window',
+      }),
+    ).toBe(true)
   })
 
   it('treats a cache older than 15 seconds as stale', () => {

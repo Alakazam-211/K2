@@ -37,9 +37,12 @@ export function harnessName(id: string): string {
   return id
 }
 
-/** Not signed in and sign-in expired do not count as a live window. */
+/** A live window is a signed-in row that has a plan meter or an explicit empty state.
+ * A blank status with no windows is a failed probe, not a signed-in account. */
 export function isSignedIn(row: HarnessUsage): boolean {
-  return row.status !== 'Not signed in' && row.status !== 'Sign-in expired'
+  if (row.status === 'Not signed in' || row.status === 'Sign-in expired') return false
+  if (row.windows.length === 0 && row.status === '') return false
+  return true
 }
 
 /** Claude `utilization`, Codex `usedPercent`, and Grok `creditUsagePercent`, as a whole percent used. */

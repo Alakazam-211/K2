@@ -7,7 +7,7 @@ export function SidebarCollapseButton(): JSX.Element {
   return (
     <button
       type="button"
-      className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors"
+      className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
       onClick={() => toggle()}
       title={collapsed ? 'Open workspaces sidebar' : 'Collapse workspaces sidebar'}
       aria-label={collapsed ? 'Open workspaces sidebar' : 'Collapse workspaces sidebar'}

@@ -3,7 +3,7 @@ export function ShellTabIcon(): JSX.Element {
   return (
     <svg
       data-shell-tab-icon=""
-      className="h-4 w-4 text-[var(--color-text-muted)]"
+      className="h-3.5 w-3.5 text-[var(--color-text-muted)]"
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"

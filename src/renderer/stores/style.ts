@@ -36,6 +36,7 @@ import {
   writeStoredTextGamma,
 } from '@/lib/text-gamma'
 import { createTrafficLightController } from '@/lib/traffic-lights'
+import { createWindowCornerController } from '@/lib/window-corners'
 
 // ── localStorage mirror keys (dotted convention, see index.html) ─────
 export const LS_STYLE = 'k2.style'
@@ -134,6 +135,7 @@ export function stampStyleAttributes(sel: StyleSelection): void {
   else html.removeAttribute('data-gaps')
   stampDialProperties(style)
   syncTrafficLights()
+  syncWindowCorners()
 }
 
 // ── macOS traffic lights follow the window inset ─────────────────────
@@ -175,6 +177,40 @@ export function reapplyTrafficLights(): void {
   trafficLights.reapply()
 }
 
+// Square's window clip. Not the traffic-light inset: compact still
+// reapplies. Hover stamps this window only (no localStorage write).
+// 0.5 for `square`, 0 for every other id.
+const windowCorners = createWindowCornerController({
+  isMac: () =>
+    typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac'),
+  read: () => {
+    const el = document.documentElement
+    return {
+      styleId: el.getAttribute('data-style'),
+      scheme: el.getAttribute('data-scheme'),
+      palette: el.getAttribute('data-palette'),
+      gaps: el.getAttribute('data-gaps'),
+    }
+  },
+  apply: (radius) => {
+    void invoke('set_window_corner_radius', { radius }).catch(() => {})
+  },
+  schedule: (fn) => {
+    requestAnimationFrame(fn)
+  },
+})
+
+function syncWindowCorners(): void {
+  if (typeof document === 'undefined' || typeof navigator === 'undefined') return
+  windowCorners.reapply()
+}
+
+/** AppKit rewrites the system squircle across fullscreen and setTitle. */
+export function reapplyWindowCorners(): void {
+  if (typeof document === 'undefined' || typeof navigator === 'undefined') return
+  windowCorners.reapply()
+}
+
 if (typeof window !== 'undefined') {
   // Re-apply after this module loads. A hot update must re-execute this
   // file; otherwise the native buttons keep the inset from launch.
@@ -182,18 +218,23 @@ if (typeof window !== 'undefined') {
   queueMicrotask(() => {
     trafficLights.resetBaseline()
     syncTrafficLights()
+    syncWindowCorners()
   })
   window.addEventListener('resize', () => {
     trafficLights.onResize()
+    windowCorners.onResize()
   })
   // WKWebView does not emit this for the green button. Rust re-applies
-  // on NSWindowDidEnter/ExitFullScreenNotification for that path.
+  // traffic lights and the corner radius on
+  // NSWindowDidEnter/ExitFullScreenNotification for that path.
   if (typeof document !== 'undefined') {
     document.addEventListener('fullscreenchange', () => {
       trafficLights.onFullscreen()
+      windowCorners.onFullscreen()
     })
     document.addEventListener('webkitfullscreenchange', () => {
       trafficLights.onFullscreen()
+      windowCorners.onFullscreen()
     })
   }
 }

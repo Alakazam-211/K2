@@ -71,6 +71,8 @@ pub mod oauth_loopback;
 
 // Style System — macOS traffic-light inset for floating-chrome styles.
 pub mod traffic_lights;
+// Square style — macOS window corner radius. Non-mac is a no-op.
+pub mod window_corners;
 
 // 0.40.48 connection resilience — out-of-webview boot-status arbiter
 // (`remote_boot_probe`, a fresh never-pooled socket that tiebreaks

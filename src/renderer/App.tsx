@@ -40,7 +40,7 @@ import { preferredWorkspaceSwitchFocus, tryFocusPreferredWorkspaceInput } from '
 import { PinnedChatRetainer } from './components/AgentPane/PinnedChatRetainer'
 import { focusVisibleBrowserAddress } from './components/BrowserPane/BrowserPane'
 import { k2PageTitle } from './web/page-title'
-import { reapplyTrafficLights } from './stores/style'
+import { reapplyTrafficLights, reapplyWindowCorners } from './stores/style'
 import { mountExternalDropRouter } from './lib/external-drop-router'
 import { usePanelsStore } from './stores/panels'
 import { useSettingsStore } from './stores/settings'
@@ -266,8 +266,12 @@ function applyK2SOZoom(): void {
   if (isWebClient() || title === lastWindowTitle) return
   lastWindowTitle = title
   // setTitle relayouts the macOS title bar and parks the stoplights at the top.
+  // It can also put the system squircle back, so re-apply corners too.
   void getCurrentTauriWindow().setTitle(title).then(() => {
-    requestAnimationFrame(() => reapplyTrafficLights())
+    requestAnimationFrame(() => {
+      reapplyTrafficLights()
+      reapplyWindowCorners()
+    })
   }).catch(() => {})
 }
 

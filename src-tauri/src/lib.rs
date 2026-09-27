@@ -1641,6 +1641,8 @@ pub fn run() {
             commands::connection::open_app_devtools,
             // Style System — traffic lights follow the style's window inset.
             commands::traffic_lights::set_traffic_light_inset,
+            // Square style — private NSWindow corner radius. Non-mac no-op.
+            commands::window_corners::set_window_corner_radius,
             // Embedded Browser Tab (S1 spike) — child-webview lifecycle.
             commands::browser_webviews::browser_create,
             commands::browser_webviews::browser_set_bounds,

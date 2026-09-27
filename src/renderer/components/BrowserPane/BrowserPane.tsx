@@ -451,7 +451,7 @@ export function BrowserPane({
   return (
     <div className="flex h-full w-full flex-col">
       {/* Chrome bar — styled after the FileViewerPane header. */}
-      <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1.5 flex-shrink-0">
+      <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 flex-shrink-0">
         <div className="flex items-center gap-0.5 flex-shrink-0">
           <button
             type="button"
@@ -504,10 +504,32 @@ export function BrowserPane({
               e.currentTarget.blur()
             }
           }}
-          className="flex-1 min-w-0 bg-transparent border border-[var(--color-border)] rounded px-2 py-0.5 text-[11px] text-[var(--color-text)] font-mono outline-none focus:border-[var(--color-text-muted)]"
+          className="flex-1 min-w-0 bg-transparent border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text)] font-mono outline-none focus:border-[var(--color-text-muted)]"
         />
-        <button className={chromeButtonClass} onClick={handleReload} title="Reload">
-          ⟳
+        <button
+          type="button"
+          onClick={handleReload}
+          title="Reload"
+          aria-label="Reload"
+          className="inline-flex items-center justify-center h-5 w-5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors flex-shrink-0"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+            <path d="M3 3v5h5" />
+            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+            <path d="M16 16h5v5" />
+          </svg>
         </button>
         {import.meta.env.DEV && (
           <button

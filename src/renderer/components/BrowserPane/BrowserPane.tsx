@@ -137,6 +137,8 @@ export function BrowserPane({
   // clobber the user's in-progress edit).
   const [address, setAddress] = useState(url)
   const addressFocusedRef = useRef(false)
+  const addressRef = useRef<HTMLInputElement>(null)
+  const skipFocusLockRef = useRef(false)
 
   /** Last URL WE navigated to or observed via polling — suppresses the
    *  echo loop where the poll stamps the store, the store re-renders us
@@ -425,6 +427,18 @@ export function BrowserPane({
     })()
   }, [itemId, parentWindow, unavailable, readCurrentUrl, refreshHistory])
 
+  // A new browser tab opens with the address selected, ready to type.
+  // Programmatic focus must not lock the field, or a later URL poll
+  // cannot fill it.
+  useEffect(() => {
+    const el = addressRef.current
+    if (!el) return
+    skipFocusLockRef.current = true
+    el.focus()
+    el.select()
+    skipFocusLockRef.current = false
+  }, [])
+
   // ── Render ──────────────────────────────────────────────────────────
   const chromeButtonClass =
     'px-1.5 py-0.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] flex-shrink-0'
@@ -479,6 +493,7 @@ export function BrowserPane({
           </button>
         </div>
         <input
+          ref={addressRef}
           type="text"
           value={address}
           spellCheck={false}
@@ -487,7 +502,7 @@ export function BrowserPane({
           placeholder="Enter URL…"
           onChange={(e) => setAddress(e.target.value)}
           onFocus={(e) => {
-            addressFocusedRef.current = true
+            if (!skipFocusLockRef.current) addressFocusedRef.current = true
             e.target.select()
           }}
           onBlur={() => {

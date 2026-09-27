@@ -1,6 +1,9 @@
 import { useCallback, useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useTabsStore, type TerminalItemData } from '@/stores/tabs'
+import { readProjectDefaultAgent, resolveAgentPreset } from '@/lib/agent-resolve'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
+import { useProjectsStore } from '@/stores/projects'
+import { useSettingsStore } from '@/stores/settings'
 import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-menu'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
@@ -34,7 +37,10 @@ function presetMenuIcon(preset: AgentPreset): ReactNode {
 }
 
 /** Terminal, New File, Browser, then enabled presets in store order. No separator when none are enabled. */
-function buildPlusMenuItems(presets: AgentPreset[]): ContextMenuItemDef[] {
+function buildPlusMenuItems(
+  presets: AgentPreset[],
+  defaultPresetId: string | null,
+): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
   const items: ContextMenuItemDef[] = [
     { id: 'terminal', label: 'Terminal', shortcut: '⌘T' },
@@ -48,9 +54,26 @@ function buildPlusMenuItems(presets: AgentPreset[]): ContextMenuItemDef[] {
       id: `preset:${preset.id}`,
       label: preset.label,
       icon: presetMenuIcon(preset),
+      shortcut: preset.id === defaultPresetId ? '⇧⌘T' : undefined,
     })
   }
   return items
+}
+
+/** Same resolution as ⌘⇧T: this folder's workspace default, then the global default, then the first enabled preset. */
+function defaultPresetIdForCwd(cwd: string, presets: AgentPreset[]): string | null {
+  const projects = useProjectsStore.getState()
+  const project =
+    projects.projects.find(
+      (p) => p.path === cwd || p.workspaces.some((w) => w.worktreePath === cwd),
+    ) ?? projects.projects.find((p) => p.id === projects.activeProjectId)
+  return (
+    resolveAgentPreset(
+      presets,
+      useSettingsStore.getState().defaultAgent,
+      readProjectDefaultAgent(project),
+    )?.id ?? null
+  )
 }
 
 export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element {
@@ -193,7 +216,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const group = groupIndex
     const barCwd = cwd
     const rect = e.currentTarget.getBoundingClientRect()
-    const items = buildPlusMenuItems(usePresetsStore.getState().presets)
+    const presets = usePresetsStore.getState().presets
+    const items = buildPlusMenuItems(presets, defaultPresetIdForCwd(barCwd, presets))
     const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
     if (!picked) return
     if (picked === 'terminal') {

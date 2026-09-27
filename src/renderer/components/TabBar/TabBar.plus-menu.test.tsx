@@ -14,6 +14,8 @@ import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
 import { menuNewTab } from '@/lib/menu-new-tab'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { showLaunchBarStorageKey, usePresetsStore, type AgentPreset } from '@/stores/presets'
+import { useProjectsStore } from '@/stores/projects'
+import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore, type BrowserItemData } from '@/stores/tabs'
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -272,6 +274,40 @@ describe('tab bar plus menu', () => {
     expect(symbols[0]?.parentElement?.textContent).toBe('⌘T')
     expect(symbols[1]?.textContent).toBe('⌘')
     expect(symbols[1]?.parentElement?.textContent).toBe('⌘N')
+  })
+
+  it('puts ⇧⌘T on the workspace default agent, not the first preset', async () => {
+    usePresetsStore.setState({
+      presets: [
+        preset({ id: 'claude', label: 'Claude', sortOrder: 0 }),
+        preset({ id: 'codex', label: 'Codex', sortOrder: 1 }),
+      ],
+    })
+    useSettingsStore.setState({ defaultAgent: 'claude' })
+    useProjectsStore.setState({
+      activeProjectId: 'p',
+      projects: [
+        {
+          id: 'p',
+          path: '/ws',
+          defaultAgent: 'codex',
+          workspaces: [],
+        } as never,
+      ],
+    })
+    seedTabs(0, 1)
+    renderBar(0)
+    await openPlus()
+    const items = useContextMenuStore.getState().items
+    expect(items.find((item) => item.label === 'Claude')?.shortcut).toBeUndefined()
+    expect(items.find((item) => item.label === 'Codex')?.shortcut).toBe('⇧⌘T')
+    const shift = document.querySelector('[data-context-menu] .key-symbol')
+    expect(
+      Array.from(document.querySelectorAll('[data-context-menu] .key-symbol')).some(
+        (node) => node.textContent === '⇧' && node.parentElement?.textContent === '⇧⌘T',
+      ),
+    ).toBe(true)
+    expect(shift).toBeTruthy()
   })
 
   it('with two short tabs the + follows the scroller and split follows the +', () => {

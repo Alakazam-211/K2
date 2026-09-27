@@ -145,7 +145,7 @@ export function stampStyleAttributes(sel: StyleSelection): void {
 let lastTrafficInset = -1
 
 /** The system title bar is shorter than the 38px top bar, so the lights sit high. */
-const TRAFFIC_LIGHT_Y_NUDGE_PX = 4
+const TRAFFIC_LIGHT_Y_NUDGE_PX = 9
 
 function applyTrafficInset(inset: number): void {
   void invoke('set_traffic_light_inset', { x: inset, y: inset + TRAFFIC_LIGHT_Y_NUDGE_PX }).catch(() => {})
@@ -162,8 +162,9 @@ function syncTrafficLights(): void {
 }
 
 if (typeof window !== 'undefined') {
-  // Re-apply after this module loads, including a hot reload. The native
-  // buttons keep their last inset until invoke runs again.
+  // Re-apply after this module loads. A hot update must re-execute this
+  // file; otherwise the native buttons keep the inset from launch.
+  if (import.meta.hot) import.meta.hot.accept()
   queueMicrotask(() => {
     lastTrafficInset = -1
     syncTrafficLights()

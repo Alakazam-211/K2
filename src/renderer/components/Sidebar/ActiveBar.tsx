@@ -179,7 +179,7 @@ export function __activeBarMemoryForTests(): {
 }
 
 /** Compute which projects appear in the Active Bar */
-function useActiveBarItems(): ProjectWithWorkspaces[] {
+export function useActiveBarItems(): ProjectWithWorkspaces[] {
   const projects = useProjectsStore((s) => s.projects)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const backgroundWorkspaces = useTabsStore((s) => s.backgroundWorkspaces)
@@ -633,5 +633,3 @@ export function getActiveBarItems(): ProjectWithWorkspaces[] {
   }))
 }
 
-/** Export for use by keyboard shortcuts */
-export { useActiveBarItems }

@@ -1,10 +1,10 @@
-import { useCallback, useMemo, useState, useEffect } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useProjectsStore, type ProjectWithWorkspaces } from '../../stores/projects'
 import { useFocusGroupsStore } from '../../stores/focus-groups'
 import { useSidebarStore } from '../../stores/sidebar'
 import { useSettingsStore } from '../../stores/settings'
 import { useActiveAgentsStore } from '../../stores/active-agents'
-import { useTabsStore } from '../../stores/tabs'
+import { useActiveBarItems } from './ActiveBar'
 import { useCommandPaletteStore } from '../../stores/command-palette'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 import { useRemoveWorkspaceDialogStore } from '../../stores/remove-workspace-dialog'
@@ -105,8 +105,6 @@ function ProjectIcon({
   )
 }
 
-const TWENTY_FOUR_HOURS = 24 * 60 * 60
-
 export default function IconRail(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
@@ -118,9 +116,7 @@ export default function IconRail(): React.JSX.Element {
 
   const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
   const activeFocusGroupId = useFocusGroupsStore((s) => s.activeFocusGroupId)
-  const backgroundWorkspaces = useTabsStore((s) => s.backgroundWorkspaces)
-  const hasActiveAgents = useActiveAgentsStore((s) => s.hasActiveAgents())
-  const paneStatuses = useActiveAgentsStore((s) => s.paneStatuses)
+  const activeProjects = useActiveBarItems()
 
   // Zone 1: Pinned (manually pinned by the user). Pre-0.39.0 we
   // auto-pinned every agent-mode workspace (Custom + K2 Agent) to
@@ -145,33 +141,6 @@ export default function IconRail(): React.JSX.Element {
       (p) => p.focusGroupId === activeFocusGroupId || p.focusGroupId == null,
     )
   }, [projects, focusGroupsEnabled, activeFocusGroupId])
-
-  // Zone 3: Active. Workspaces with recent activity — post-0.39.0
-  // agent-mode workspaces are eligible (no longer auto-shunted to
-  // Zone 1).
-  const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const interval = setInterval(() => setTick((t) => t + 1), 60000)
-    return () => clearInterval(interval)
-  }, [])
-  const activeProjects = useMemo(() => {
-    const now = Math.floor(Date.now() / 1000)
-    const hasHookActivity = paneStatuses.size > 0 && Array.from(paneStatuses.values()).some(
-      (s) => s === 'working' || s === 'permission' || s === 'review'
-    )
-    // Exclude pinned (Zone 1). Agent-mode is no longer a force-exclude.
-    const pinnedIds = new Set(pinnedProjects.map((p) => p.id))
-    return projects.filter((p) => {
-      if (pinnedIds.has(p.id)) return false
-      if (p.manuallyActive) return true
-      if (p.lastInteractionAt && (now - p.lastInteractionAt) < TWENTY_FOUR_HOURS) return true
-      if (p.id === activeProjectId && (hasActiveAgents || hasHookActivity)) return true
-      const hasBackground = Object.keys(backgroundWorkspaces).some((key) => key.startsWith(`${p.id}:`))
-      if (hasBackground) return true
-      return false
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, pinnedProjects, activeProjectId, hasActiveAgents, paneStatuses, backgroundWorkspaces, tick])
 
   const handleAddProject = useCallback(async () => {
     const folderPath = await pickWorkspaceFolder()

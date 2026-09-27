@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -28,6 +28,8 @@ import {
   removeWorkspaceResource,
   type WorkspaceResource,
 } from '@/components/Projects/projects-api'
+import { MiddleEllipsisName } from './MiddleEllipsisName'
+import { resourceNameSlotWidth, treeNameSlotWidth } from './middleEllipsis'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -386,6 +388,8 @@ interface TreeItemProps {
   newEntryState: { parentPath: string; isDirectory: boolean } | null
   onNewEntryConfirm: (parentPath: string, name: string, isDirectory: boolean) => void
   onNewEntryCancel: () => void
+  panelClientWidth: number
+  measureName: (text: string) => number
 }
 
 function TreeItem(props: TreeItemProps): React.JSX.Element | null {
@@ -395,7 +399,8 @@ function TreeItem(props: TreeItemProps): React.JSX.Element | null {
     selectedPaths, cutPaths,
     onToggleDir, onItemClick, onContextMenu, onDragOutStart,
     searchQuery, dropTarget, renamingPath, onRenameConfirm, onRenameCancel,
-    newEntryState, onNewEntryConfirm, onNewEntryCancel
+    newEntryState, onNewEntryConfirm, onNewEntryCancel,
+    panelClientWidth, measureName,
   } = props
 
   const isExpanded = expandedDirs.has(entry.path)
@@ -459,7 +464,8 @@ function TreeItem(props: TreeItemProps): React.JSX.Element | null {
     cache, expandedDirs, loadingDirs, errorDirs, selectedPaths, cutPaths,
     onToggleDir, onItemClick, onContextMenu, onDragOutStart,
     searchQuery, dropTarget, renamingPath, onRenameConfirm, onRenameCancel,
-    newEntryState, onNewEntryConfirm, onNewEntryCancel
+    newEntryState, onNewEntryConfirm, onNewEntryCancel,
+    panelClientWidth, measureName,
   }
 
   if (isRenaming) {
@@ -505,9 +511,14 @@ function TreeItem(props: TreeItemProps): React.JSX.Element | null {
           {entry.isDirectory ? <ChevronIcon expanded={isExpanded} /> : null}
         </span>
         {entry.isDirectory ? <FolderIcon open={isExpanded} /> : <FileIcon name={entry.name} />}
-        <span className="truncate text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]">
-          {entry.name}
-        </span>
+        <MiddleEllipsisName
+          name={entry.name}
+          maxWidthPx={treeNameSlotWidth(panelClientWidth, depth)}
+          measure={measureName}
+          directory={entry.isDirectory}
+          title={entry.name}
+          className="text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]"
+        />
       </button>
 
       {entry.isDirectory && isExpanded && (
@@ -551,6 +562,50 @@ function TreeItem(props: TreeItemProps): React.JSX.Element | null {
 }
 
 // ── FileTree ─────────────────────────────────────────────────────────
+
+function computedCanvasFont(el: HTMLElement): string {
+  // Longhands only. The `font` shorthand can include a line-height, which
+  // canvas measureText rejects and then silently measures the default font.
+  const cs = getComputedStyle(el)
+  const size = cs.fontSize
+  const family = cs.fontFamily
+  if (!size || !family) return ''
+  return `${cs.fontStyle || 'normal'} ${cs.fontWeight || '400'} ${size} ${family}`
+}
+
+/** One glyph from the sample's computed font. Meslo is monospace. */
+function glyphWidthFromSample(
+  el: HTMLElement | null,
+  ctx: CanvasRenderingContext2D | null,
+): number {
+  if (!el || !ctx) return 0
+  const font = computedCanvasFont(el)
+  if (!font) return 0
+  ctx.font = font
+  const w = ctx.measureText('0').width
+  return Number.isFinite(w) && w > 0 ? w : 0
+}
+
+/** Badge string ("missing") from its computed font, including tracking. */
+function textWidthFromSample(
+  el: HTMLElement | null,
+  ctx: CanvasRenderingContext2D | null,
+): number {
+  if (!el || !ctx) return 0
+  const cs = getComputedStyle(el)
+  const font = computedCanvasFont(el)
+  if (!font) return 0
+  ctx.font = font
+  let text = el.textContent ?? ''
+  if (cs.textTransform === 'uppercase') text = text.toUpperCase()
+  else if (cs.textTransform === 'lowercase') text = text.toLowerCase()
+  let width = ctx.measureText(text).width
+  if (cs.letterSpacing && cs.letterSpacing !== 'normal') {
+    const extra = Number.parseFloat(cs.letterSpacing)
+    if (Number.isFinite(extra) && text.length > 1) width += extra * (text.length - 1)
+  }
+  return Number.isFinite(width) && width > 0 ? width : 0
+}
 
 export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element {
   const searchQuery = useFileTreeStore((s) => s.searchQuery)
@@ -627,6 +682,66 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   }, [toggleHiddenFiles])
 
   const treeRef = useRef<HTMLDivElement>(null)
+  const treeFontRef = useRef<HTMLSpanElement>(null)
+  const resourceFontRef = useRef<HTMLSpanElement>(null)
+  const badgeFontRef = useRef<HTMLSpanElement>(null)
+  // Width and one glyph width per font, for this panel only. Rows must not
+  // observe their own layout — search can mount hundreds of them.
+  const [panelMetrics, setPanelMetrics] = useState({
+    clientWidth: 0,
+    treeCharWidth: 0,
+    resourceCharWidth: 0,
+    badgeWidth: 0,
+  })
+
+  useLayoutEffect(() => {
+    const root = treeRef.current
+    if (!root) return
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    let cancelled = false
+
+    const read = (): void => {
+      if (cancelled) return
+      const next = {
+        clientWidth: root.clientWidth,
+        treeCharWidth: glyphWidthFromSample(treeFontRef.current, ctx),
+        resourceCharWidth: glyphWidthFromSample(resourceFontRef.current, ctx),
+        badgeWidth: textWidthFromSample(badgeFontRef.current, ctx),
+      }
+      setPanelMetrics((prev) => (
+        prev.clientWidth === next.clientWidth &&
+        prev.treeCharWidth === next.treeCharWidth &&
+        prev.resourceCharWidth === next.resourceCharWidth &&
+        prev.badgeWidth === next.badgeWidth
+          ? prev
+          : next
+      ))
+    }
+
+    read()
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => { read() })
+    observer?.observe(root)
+    // Meslo may still be loading on the first layout. One remeasure per
+    // panel when it finishes — not a per-row observer.
+    const fontsReady = typeof document !== 'undefined' ? document.fonts?.ready : undefined
+    if (fontsReady) void fontsReady.then(() => { read() })
+    return () => {
+      cancelled = true
+      observer?.disconnect()
+    }
+  }, [])
+
+  const measureTreeName = useCallback(
+    (text: string) => text.length * panelMetrics.treeCharWidth,
+    [panelMetrics.treeCharWidth],
+  )
+  const measureResourceName = useCallback(
+    (text: string) => text.length * panelMetrics.resourceCharWidth,
+    [panelMetrics.resourceCharWidth],
+  )
 
   // Track the root path so we can reset when it changes
   const prevRootPath = useRef(rootPath)
@@ -1757,7 +1872,9 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     onRenameCancel: handleRenameCancel,
     newEntryState,
     onNewEntryConfirm: handleNewEntryConfirm,
-    onNewEntryCancel: handleNewEntryCancel
+    onNewEntryCancel: handleNewEntryCancel,
+    panelClientWidth: panelMetrics.clientWidth,
+    measureName: measureTreeName,
   }
 
   // Directory load errors — shown in a bottom floating box so they never
@@ -1775,6 +1892,12 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       data-file-tree-panel="true"
       data-root-path={rootPath}
     >
+      {/* Font samples for the panel measure. Not per row. */}
+      <div aria-hidden className="pointer-events-none absolute w-0 h-0 overflow-hidden">
+        <span ref={treeFontRef} className="text-[13px] whitespace-nowrap">0</span>
+        <span ref={resourceFontRef} className="text-[11px] whitespace-nowrap">0</span>
+        <span ref={badgeFontRef} className="text-[9px] uppercase tracking-wide whitespace-nowrap">missing</span>
+      </div>
       {/* Env files section */}
       {envFiles.length > 0 && (
         <div className="border-b border-[var(--color-border)]">
@@ -1893,7 +2016,14 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
                   <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
                     <FileIcon name={row.fileName} />
                   </span>
-                  <span className="truncate flex-1">{row.fileName}</span>
+                  <MiddleEllipsisName
+                    name={row.fileName}
+                    maxWidthPx={resourceNameSlotWidth(panelMetrics.clientWidth, {
+                      missing: row.missing,
+                      badgeWidthPx: panelMetrics.badgeWidth,
+                    })}
+                    measure={measureResourceName}
+                  />
                   {row.missing ? (
                     <span className="flex-shrink-0 text-[9px] uppercase tracking-wide text-[var(--color-status-warn-soft)]">
                       missing

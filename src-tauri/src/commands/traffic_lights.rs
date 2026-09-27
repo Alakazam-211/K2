@@ -63,7 +63,6 @@ mod imp {
 
     #[link(name = "AppKit", kind = "framework")]
     extern "C" {
-        fn NSRectFill(rect: NSRect);
         fn NSMouseInRect(aPoint: NSPoint, aRect: NSRect, flipped: BOOL) -> BOOL;
     }
 
@@ -740,9 +739,13 @@ mod imp {
         if pressed {
             rgb = (rgb.0 * 0.72, rgb.1 * 0.72, rgb.2 * 0.72);
         }
-        let fill = srgb(rgb.0, rgb.1, rgb.2, 1.0);
+        // Unselected windows: the existing grey, 80% translucent.
+        // NSRectFill copies and drops alpha, so the fill has to composite.
+        let alpha = if colored { 1.0 } else { 0.2 };
+        let fill = srgb(rgb.0, rgb.1, rgb.2, alpha);
         let _: () = msg_send![fill, setFill];
-        NSRectFill(sq);
+        let path: id = msg_send![class!(NSBezierPath), bezierPathWithRect: sq];
+        let _: () = msg_send![path, fill];
         let hovered = group_hovered(view);
         if colored && (hovered || pressed) {
             stroke_glyph(role, sq, window_is_fullscreen(view), option_held());

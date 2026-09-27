@@ -249,6 +249,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                 // ('alacritty-v2' is the pre-rename working name for
                 // the same stack; in-flight tabs stamped with it
                 // dispatch here too.) See .k2so/prds/alacritty-v2.md.
+                const agentPty = isAgentPtyTerminalItem(item)
                 const pane = (
                   <TerminalPane
                     terminalId={td.terminalId}
@@ -259,6 +260,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                     args={td.args}
                     spawnedAt={td.spawnedAt}
                     attachAgentName={(td as any).attachAgentName}
+                    showComposeBar={agentPty}
                     // 2026-07-03 lazy-spawn gate — a known CLI session id
                     // marks this tab as backed by real work, so it keeps
                     // eager spawn-on-mount (stays warm while hidden). A
@@ -278,7 +280,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                     sandbox={td.sandbox}
                   />
                 )
-                content = isAgentPtyTerminalItem(item) ? (
+                content = agentPty ? (
                   <SidecarAgentChrome
                     cwd={td.cwd}
                     paneGroupId={paneGroupId}

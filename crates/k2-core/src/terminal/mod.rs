@@ -27,6 +27,10 @@ pub mod path_env;
 // inherited launchd PATH) so agent CLIs in ~/.local/bin, homebrew,
 // nvm shims, etc. resolve by bare name instead of ENOENT.
 pub mod login_path;
+// Install one of claude / codex / grok / gemini when a launcher asks
+// and the basename is missing from the spawn PATH. The HTTP handler
+// passes the fixed command table; tests pass a local script.
+pub mod ensure_cli;
 // Test-time agent spawn guard: `K2_TEST_AGENT_SHIM_DIR` shim-only
 // resolution + temp-HOME belt so `cargo test` can never exec the real
 // `claude` (which opened a browser OAuth login under a temp HOME).

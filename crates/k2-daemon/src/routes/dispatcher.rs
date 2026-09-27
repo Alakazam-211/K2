@@ -677,6 +677,7 @@ async fn handle_one_request(
             | "/cli/heartbeat/uninstall-launchd"
             | "/cli/heartbeat/apply-wake-scheduler"
             | "/cli/agents/archive-orphans"
+            | "/cli/agents/ensure-cli"
             // Phase 2 Unit 4 — DB-writing routes (workspaces /
             // focus-groups / sections / workspace-layouts / timer /
             // presets / window-state / projects / git). JSON-bodied
@@ -4120,6 +4121,37 @@ async fn handle_one_request(
             // fs walk + db lock — F5.
             let r = tokio::task::spawn_blocking(move || {
                 handle_archive_orphans(&body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") })
+                    .to_string(),
+            });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // Install one of claude / codex / grok / gemini when that basename
+        // is missing. Exact arm + require_post, same shape as
+        // archive-orphans: a GET is 405, not the /cli/ catchall 404.
+        // The body only names the program; the shell command is the
+        // fixed table inside k2_core, never the request.
+        "/cli/agents/ensure-cli" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || {
+                handle_ensure_cli(&body_bytes)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -8989,6 +9021,33 @@ fn handle_archive_orphans(body: &[u8]) -> crate::cli::CliResponse {
     crate::cli::CliResponse::ok_json(
         serde_json::json!({ "success": true, "archived": archived }).to_string(),
     )
+}
+
+/// POST /cli/agents/ensure-cli — install one missing CLI basename.
+/// Unknown programs are 400 and do not start a shell. The command is
+/// [`k2_core::terminal::ensure_cli::fixed_install_command`], not a
+/// field on the request.
+fn handle_ensure_cli(body: &[u8]) -> crate::cli::CliResponse {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        program: String,
+    }
+    let req: Req = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return crate::cli::CliResponse::bad_request(format!("invalid body: {e}"));
+        }
+    };
+    let program = req.program.trim();
+    if k2_core::terminal::ensure_cli::fixed_install_command(program).is_none() {
+        return crate::cli::CliResponse::bad_request(format!("unknown program: {program}"));
+    }
+    match k2_core::terminal::ensure_cli::ensure_cli(program) {
+        Ok(result) => crate::cli::CliResponse::ok_json(
+            serde_json::json!({ "ok": true, "installed": result.installed }).to_string(),
+        ),
+        Err(e) => crate::cli::CliResponse::bad_request(e),
+    }
 }
 
 /// Dispatch a Phase 2 Unit 6 POST request body to the right

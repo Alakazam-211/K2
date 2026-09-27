@@ -101,7 +101,7 @@ describe('show launch bar persistence', () => {
     }
   })
 
-  it('launchPreset tab mode uses the passed group, not activeGroupIndex', () => {
+  it('launchPreset tab mode uses the passed group, not activeGroupIndex', async () => {
     useTabsStore.setState({
       splitCount: 2,
       extraGroups: [{ tabs: [], activeTabId: null }],
@@ -110,13 +110,19 @@ describe('show launch bar persistence', () => {
     usePresetsStore.setState({
       presets: [preset({ id: 'c', label: 'Claude', command: 'claude' })],
     })
-    usePresetsStore.getState().launchPreset('c', '/tmp/proj', 'tab', 1)
-    expect(useTabsStore.getState().tabs).toHaveLength(0)
-    expect(useTabsStore.getState().activeGroupIndex).toBe(0)
-    expect(useTabsStore.getState().extraGroups[0].tabs.map((t) => t.title)).toEqual(['Claude'])
+    const post = vi.spyOn(daemonCli, 'daemonCliPost').mockResolvedValue({ ok: true, installed: false })
+    try {
+      await usePresetsStore.getState().launchPreset('c', '/tmp/proj', 'tab', 1)
+      expect(post).toHaveBeenCalledWith('agents/ensure-cli', { program: 'claude' })
+      expect(useTabsStore.getState().tabs).toHaveLength(0)
+      expect(useTabsStore.getState().activeGroupIndex).toBe(0)
+      expect(useTabsStore.getState().extraGroups[0].tabs.map((t) => t.title)).toEqual(['Claude'])
+    } finally {
+      post.mockRestore()
+    }
   })
 
-  it('launchPreset without a group still follows activeGroupIndex', () => {
+  it('launchPreset without a group still follows activeGroupIndex', async () => {
     useTabsStore.setState({
       splitCount: 2,
       extraGroups: [{ tabs: [], activeTabId: null }],
@@ -125,9 +131,14 @@ describe('show launch bar persistence', () => {
     usePresetsStore.setState({
       presets: [preset({ id: 'c', label: 'Claude', command: 'claude' })],
     })
-    usePresetsStore.getState().launchPreset('c', '/tmp/proj', 'tab')
-    expect(useTabsStore.getState().tabs).toHaveLength(0)
-    expect(useTabsStore.getState().extraGroups[0].tabs.map((t) => t.title)).toEqual(['Claude'])
+    const post = vi.spyOn(daemonCli, 'daemonCliPost').mockResolvedValue({ ok: true, installed: false })
+    try {
+      await usePresetsStore.getState().launchPreset('c', '/tmp/proj', 'tab')
+      expect(useTabsStore.getState().tabs).toHaveLength(0)
+      expect(useTabsStore.getState().extraGroups[0].tabs.map((t) => t.title)).toEqual(['Claude'])
+    } finally {
+      post.mockRestore()
+    }
   })
 
   it('a new store load with this host key stays off, and another host with no key stays on', async () => {

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { installingCliLabel, useCliInstallStore } from '@/lib/ensure-cli'
 import { useToastStore } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
@@ -204,12 +205,14 @@ const PANE_STACK_STYLE: React.CSSProperties = {
 
 export default function Toast(): React.JSX.Element | null {
   const toasts = useToastStore((s) => s.toasts)
+  const installing = useCliInstallStore((s) => s.installing)
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
   const page = usePageViewStore((s) => s.page)
   const [anchor, setAnchor] = useState<ToastAnchor | null>(null)
+  const installNotice = installing ? installingCliLabel(installing) : null
 
   useLayoutEffect(() => {
-    if (toasts.length === 0) return
+    if (toasts.length === 0 && !installNotice) return
     const publish = (): void => {
       const next = resolveToastAnchor(settingsOpen, page)
       setAnchor((prev) => (prev === next ? prev : next))
@@ -225,9 +228,9 @@ export default function Toast(): React.JSX.Element | null {
       document.removeEventListener('click', publish)
       document.removeEventListener('focusin', publish)
     }
-  }, [toasts.length, settingsOpen, page])
+  }, [toasts.length, installNotice, settingsOpen, page])
 
-  if (toasts.length === 0) return null
+  if (toasts.length === 0 && !installNotice) return null
 
   const live = settingsOpen ? 'settings' : anchor
   if (live == null) return null
@@ -242,6 +245,14 @@ export default function Toast(): React.JSX.Element | null {
       }
       style={live === 'settings' ? { left: '50%', transform: 'translateX(-50%)' } : PANE_STACK_STYLE}
     >
+      {installNotice && (
+        <div
+          className="relative bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] text-xs shadow-lg min-w-[240px] max-w-[360px] px-3 py-2.5"
+          data-cli-install-notice=""
+        >
+          {installNotice}
+        </div>
+      )}
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} />
       ))}

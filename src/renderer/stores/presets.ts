@@ -7,6 +7,7 @@ import { emit } from '@tauri-apps/api/event'
 // other windows re-fetch; we now re-emit that event from the renderer after
 // each successful mutation (see `emitPresetsChanged`).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { ensureOneCli, installableCliProgram } from '@/lib/ensure-cli'
 import { parseCommand } from '@/lib/agent-resolve'
 import { activeHostKey, onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
 import { useTabsStore, registerPresetsStore } from './tabs'
@@ -175,7 +176,12 @@ interface PresetsState {
    * `groupIndex` aims a `'tab'` launch at that column. Omitted keeps
    * `activeGroupIndex` (launch strip, Cmd+Shift+T).
    */
-  launchPreset: (presetId: string, cwd: string, mode: 'tab' | 'split', groupIndex?: number) => void
+  launchPreset: (
+    presetId: string,
+    cwd: string,
+    mode: 'tab' | 'split',
+    groupIndex?: number,
+  ) => Promise<void>
   // Mutations — each posts to the daemon then emits `sync:presets` on
   // success and refreshes the local list (mirrors the old Tauri shims).
   createPreset: (input: { label: string; command: string; icon?: string }) => Promise<AgentPreset>
@@ -258,7 +264,7 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
     await get().fetchPresets()
   },
 
-  launchPreset: (presetId: string, cwd: string, mode: 'tab' | 'split', groupIndex?: number) => {
+  launchPreset: async (presetId: string, cwd: string, mode: 'tab' | 'split', groupIndex?: number) => {
     const preset = get().presets.find((p) => p.id === presetId)
     if (!preset) {
       console.error(`[presets] Preset not found: ${presetId}`)
@@ -266,38 +272,52 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
     }
 
     const { command, args } = parseCommand(preset.command)
-    const tabsStore = useTabsStore.getState()
+    // Only the four launch basenames. A path token is not an install.
+    const program = installableCliProgram(command)
+    if (program) {
+      try {
+        await ensureOneCli(program)
+      } catch (err) {
+        console.error('[presets] ensure-cli failed:', err)
+        return
+      }
+    }
 
-    if (mode === 'tab') {
-      const group = groupIndex ?? tabsStore.activeGroupIndex
+    const tabsStore = useTabsStore.getState()
+    const openTab = (group: number): void => {
       tabsStore.addTabToGroup(group, cwd, {
         title: preset.label,
         command,
-        args
+        args,
       })
-    } else {
-      // Split mode: split the active tab
-      const activeTab = tabsStore.tabs.find((t) => t.id === tabsStore.activeTabId)
-      if (!activeTab) {
-        // No active tab, create one instead
-        get().launchPreset(presetId, cwd, 'tab')
-        return
-      }
-
-      const firstPaneId = getFirstLeaf(activeTab.mosaicTree)
-      if (!firstPaneId) return
-
-      const newPaneId = crypto.randomUUID()
-      const newPane: TerminalPane = {
-        type: 'terminal',
-        terminalId: newPaneId,
-        cwd,
-        command,
-        args
-      }
-
-      tabsStore.splitPane(activeTab.id, firstPaneId, newPaneId, newPane, 'column')
     }
+
+    if (mode === 'tab') {
+      openTab(groupIndex ?? tabsStore.activeGroupIndex)
+      return
+    }
+
+    // Split mode: split the active tab. Ensure already ran, so a missing
+    // active tab opens a tab without calling ensure a second time.
+    const activeTab = tabsStore.tabs.find((t) => t.id === tabsStore.activeTabId)
+    if (!activeTab) {
+      openTab(tabsStore.activeGroupIndex)
+      return
+    }
+
+    const firstPaneId = getFirstLeaf(activeTab.mosaicTree)
+    if (!firstPaneId) return
+
+    const newPaneId = crypto.randomUUID()
+    const newPane: TerminalPane = {
+      type: 'terminal',
+      terminalId: newPaneId,
+      cwd,
+      command,
+      args,
+    }
+
+    tabsStore.splitPane(activeTab.id, firstPaneId, newPaneId, newPane, 'column')
   }
 }))
 

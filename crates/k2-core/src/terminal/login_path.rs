@@ -194,6 +194,7 @@ fn capture_login_shell_path() -> Option<String> {
 ///   - `/opt/homebrew/bin` — Homebrew on Apple Silicon
 ///   - `/usr/local/bin` — Homebrew on Intel + many manual installs
 ///   - `~/.local/bin` — the Claude native installer default
+///   - `~/.grok/bin` — the xAI Grok CLI installer default
 ///   - `~/.cargo/bin` — Rust toolchain (cargo-installed CLIs)
 ///   - `~/.bun/bin` — Bun-installed global CLIs
 ///
@@ -209,6 +210,7 @@ pub fn known_fallback_dirs() -> Vec<PathBuf> {
     ];
     if let Some(home) = dirs::home_dir() {
         dirs.push(home.join(".local/bin"));
+        dirs.push(home.join(".grok/bin"));
         dirs.push(home.join(".cargo/bin"));
         dirs.push(home.join(".bun/bin"));
     }

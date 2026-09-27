@@ -743,6 +743,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             Err(r) => r,
         },
 
+        // Install-on-launch is POST-only (exact arm in the dispatcher).
+        // A GET that reaches this read chain must 405, not fall through
+        // to the catch-all 404.
+        "/cli/agents/ensure-cli" => CliResponse::method_not_allowed(),
+
         // ── Agent launch + delegate (handlers above) ────────────────
         "/cli/agents/launch" => match need_project(params) {
             Ok(p) => handle_agents_launch(params, &p),

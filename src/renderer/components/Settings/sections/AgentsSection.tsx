@@ -12,6 +12,14 @@ import {
   type InjectFlowStep,
 } from '@/stores/presets'
 import { matchAgentPreset } from '@/lib/agent-resolve'
+import {
+  CLI_INSTALL_COMMANDS,
+  ensureOneCli,
+  installingCliLabel,
+  isInstallableCli,
+  useCliInstallStore,
+  type InstallableCli,
+} from '@/lib/ensure-cli'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { KeyCombo } from '@/components/KeySymbol'
 import { SettingDropdown } from '../controls/SettingControls'
@@ -821,23 +829,21 @@ const CLI_INSTALL_ENTRIES: {
   {
     name: 'Claude Code',
     command: 'claude',
-    installCommand: 'npm install -g @anthropic-ai/claude-code',
+    installCommand: CLI_INSTALL_COMMANDS.claude,
     docs: 'https://docs.anthropic.com/en/docs/claude-code',
-    notes:
-      'Requires Node.js 18+. After install, run "claude" to authenticate with your Anthropic account.',
+    notes: 'After install, run "claude" to authenticate with your Anthropic account.',
   },
   {
     name: 'OpenAI Codex',
     command: 'codex',
-    installCommand: 'npm install -g @openai/codex',
+    installCommand: CLI_INSTALL_COMMANDS.codex,
     docs: 'https://github.com/openai/codex',
-    notes:
-      'Requires Node.js 22+. After install, set your OPENAI_API_KEY or log in via "codex --login".',
+    notes: 'After install, run "codex" to sign in.',
   },
   {
     name: 'Grok',
     command: 'grok',
-    installCommand: 'curl -fsSL https://x.ai/cli/install.sh | bash',
+    installCommand: CLI_INSTALL_COMMANDS.grok,
     docs: 'https://docs.x.ai/build',
     notes:
       "xAI's terminal coding agent. On first launch it opens a browser to sign in; for headless use set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
@@ -845,7 +851,7 @@ const CLI_INSTALL_ENTRIES: {
   {
     name: 'Gemini CLI',
     command: 'gemini',
-    installCommand: 'npm install -g @anthropic-ai/gemini-cli',
+    installCommand: CLI_INSTALL_COMMANDS.gemini,
     docs: 'https://geminicli.com',
     notes: 'Requires Node.js 18+. Authenticate with your Google account on first run.',
   },
@@ -922,11 +928,35 @@ const CLI_INSTALL_ENTRIES: {
 function CLIInstallGuide(): React.JSX.Element {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
+  const [installError, setInstallError] = useState<Partial<Record<InstallableCli, string>>>({})
+  const installing = useCliInstallStore((s) => s.installing)
 
   const handleCopy = useCallback((installCommand: string, idx: number) => {
     void navigator.clipboard.writeText(installCommand)
     setCopiedIdx(idx)
     setTimeout(() => setCopiedIdx(null), 2000)
+  }, [])
+
+  const handleInstall = useCallback((program: InstallableCli) => {
+    setInstallError((prev) => {
+      if (!(program in prev)) return prev
+      const next = { ...prev }
+      delete next[program]
+      return next
+    })
+    void ensureOneCli(program)
+      .then(() => {
+        setInstallError((prev) => {
+          if (!(program in prev)) return prev
+          const next = { ...prev }
+          delete next[program]
+          return next
+        })
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        setInstallError((prev) => ({ ...prev, [program]: message }))
+      })
   }, [])
 
   return (
@@ -976,6 +1006,16 @@ function CLIInstallGuide(): React.JSX.Element {
                     <code className="flex-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 text-[var(--color-text-primary)] select-all">
                       {entry.installCommand}
                     </code>
+                    {isInstallableCli(entry.command) && (
+                      <button
+                        type="button"
+                        onClick={() => handleInstall(entry.command)}
+                        disabled={installing === entry.command}
+                        className="flex-shrink-0 px-2 py-1.5 text-[10px] font-mono border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer disabled:cursor-wait"
+                      >
+                        {installing === entry.command ? installingCliLabel(entry.command) : 'Install'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => handleCopy(entry.installCommand, i)}
@@ -987,6 +1027,11 @@ function CLIInstallGuide(): React.JSX.Element {
                       {isCopied ? 'Copied!' : 'Copy'}
                     </button>
                   </div>
+                  {isInstallableCli(entry.command) && installError[entry.command] && (
+                    <p className="text-[10px] text-[var(--color-status-error)] leading-relaxed">
+                      {installError[entry.command]}
+                    </p>
+                  )}
 
                   {entry.notes && (
                     <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">

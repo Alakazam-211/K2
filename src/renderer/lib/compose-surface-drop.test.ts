@@ -15,8 +15,8 @@ import {
 } from './file-drag'
 
 const dropMocks = vi.hoisted(() => ({
-  executeBrowserFileDrop: vi.fn(async () => '/host/shot.png '),
-  executeRemoteDrop: vi.fn(async () => null),
+  executeBrowserFileDrop: vi.fn(async (..._args: unknown[]) => '/host/shot.png '),
+  executeRemoteDrop: vi.fn(async (..._args: unknown[]) => null as string | null),
 }))
 
 vi.mock('./handle-remote-drop', () => ({

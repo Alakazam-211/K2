@@ -175,20 +175,26 @@ let activePayload: Record<string, unknown> = {
   isV2: false,
 }
 
-function resetTabs(partial?: Parameters<typeof useTabsStore.setState>[0]): void {
-  useTabsStore.setState({
-    tabs: [],
-    activeTabId: null,
-    splitCount: 1,
-    extraGroups: [],
-    activeGroupIndex: 0,
+function resetTabs(partial?: {
+  tabs?: Tab[]
+  activeTabId?: string | null
+  extraGroups?: Array<{ tabs: Tab[]; activeTabId: string | null }>
+  splitCount?: number
+  activeGroupIndex?: number
+}): void {
+  useTabsStore.setState((state) => ({
+    ...state,
+    tabs: partial?.tabs ?? [],
+    activeTabId: partial && 'activeTabId' in partial ? partial.activeTabId ?? null : null,
+    splitCount: partial?.splitCount ?? 1,
+    extraGroups: partial?.extraGroups ?? [],
+    activeGroupIndex: partial?.activeGroupIndex ?? 0,
     navHistory: [],
     navIndex: -1,
     activeWorkspaceKey: null,
     activeProjectId: null,
     activeWorkspaceId: null,
-    ...partial,
-  })
+  }))
 }
 
 function terminalData(tab: Tab): TerminalItemData[] {

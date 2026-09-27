@@ -1009,7 +1009,10 @@ function CLIInstallGuide(): React.JSX.Element {
                     {isInstallableCli(entry.command) && (
                       <button
                         type="button"
-                        onClick={() => handleInstall(entry.command)}
+                        onClick={() => {
+                          const command = entry.command
+                          if (isInstallableCli(command)) handleInstall(command)
+                        }}
                         disabled={installing === entry.command}
                         className="flex-shrink-0 px-2 py-1.5 text-[10px] font-mono border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer disabled:cursor-wait"
                       >

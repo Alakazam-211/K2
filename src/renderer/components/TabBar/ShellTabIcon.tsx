@@ -1,5 +1,5 @@
 /** A terminal window with a cursor. Plain shell tabs, not the `>_` prompt. */
-export function ShellTabIcon(): JSX.Element {
+export function ShellTabIcon(): React.JSX.Element {
   return (
     <svg
       data-shell-tab-icon=""

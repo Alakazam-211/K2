@@ -64,7 +64,7 @@ describe('useChatTranscript', () => {
           conversationId: 'conv-1',
           agentName: 'tab-1',
         }),
-      { initialProps: { view: 'thread' as const, visible: true } },
+      { initialProps: { view: 'thread' as 'chat' | 'thread', visible: true } },
     )
     await Promise.resolve()
     expect(FakeWS.instances).toHaveLength(0)

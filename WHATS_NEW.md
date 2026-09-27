@@ -3,23 +3,28 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.41.0 — Desktop chrome, a browser tab that stays, sidecar refresh
+## 0.41.0 — Usage, chat continuation, and a desktop that stays put
 
-The Mac app’s window, browser, and extra chats caught up with how you actually use them. This is that cut, off the 0.40 line.
+Everything since 0.40.150. The window, the browser, usage, and how a chat continues.
 
-- **Square window.** On the Square style, the stoplights and the window corners are square. Status marks in Active and beside the server switcher are square too.
-- **Top bar.** Signed-in Claude, Codex, and Grok show a usage chip. The nav collapse button sits at the bottom of the sidebar. The collapsed rail uses the same Active list as the open sidebar, without the old corner dots.
-- **Menu bar.** On a Mac, a helper stays in the menu bar after you close the window and says whether this Mac’s daemon is running.
-- **Browser.** The tab shows the site’s name and icon. The page stays up when another app is in front, and still steps aside for other K2 tabs, Settings, and open menus. ⌘L selects the address on a browser tab, and opens the server switcher otherwise. ⇧⌘L is still the workspace assistant. A new browser tab starts with the address selected. Dragging a file in from Finder works. The Mac pane tells sites which WebKit it is, so they serve the normal page.
-- **Server switcher.** A click no longer dies because Settings left a hidden copy of the switcher open.
-- **Sidecar refresh.** Refresh keeps the same tab and the same conversation. The terminal inside redraws. Closing the session still removes the tab.
-- **Sidecar Thread.** Send waits until that extra chat has an address, and your draft stays if it is not ready yet.
+- **Subscription usage.** Signed-in Claude, Codex, and Grok show a chip on the top bar with the harness icon and the percent used. A harness you are signed out of stays hidden. The menu has the allowance bar, recent turns, and Refresh. Settings → Token Usage (under Context Catalog) charts daily tokens and can filter by workspace and model. The host ledger records Claude, Codex, and Grok. Gemini’s subscription meter is not in this build.
+- **Continue in a new chat.** From history or from pinned Chat, continue in another harness. The menu shows that harness’s icon and where the chat came from. Claude, Codex, Grok, and Gemini can also show the session itself as chat.
+- **Plus menu.** The tab bar has a plus menu. Hold Option and the preset you clicked opens in a sandbox. Launching an agent installs that one CLI if it is missing.
+- **View menu.** One View menu replaces the old strip. Terminal is listed, then Chat. The button is named for the mode you are in. A plain shell tab uses a window icon and does not wear agent chrome. Inbox and pinned Chat stay on screen while the rest of the strip scrolls.
+- **Tab icons.** File tabs use the same icons as the files drawer. A browser tab shows the site’s name and icon.
+- **Images and notices.** Drop an image on Thread or on chat compose. Pane notifications sit at the top right.
+- **Square window.** On the Square style, the stoplights and the window corners are square. Status marks are square. Radios and checkboxes are square. The window title is K2 and the server name. The logo opens the K2 dashboard. The Running Agents button is gone from the top bar. The nav collapse button sits at the bottom of the sidebar. The collapsed rail uses the same Active list as the open sidebar, without the old corner dots.
+- **Menu bar.** On a Mac, a helper stays in the menu bar after you close the window and says whether this Mac’s daemon is running. Clicking it opens that menu.
+- **Browser.** Back and forward live on the browser tab. The address field is square, and devtools is a cog. The page stays up when another app is in front, and still steps aside for other K2 tabs, Settings, and open menus. ⌘L selects the address on a browser tab, and opens the server switcher otherwise. ⇧⌘L is still the workspace assistant. A new browser tab starts with the address selected. Dragging a file in from Finder works. The Mac pane names the WebKit it is actually running, so sites serve the normal page. The embedded browser is on the current system webview.
+- **Server switcher.** A click no longer dies because Settings, or another page, left a hidden copy of the switcher open.
+- **Sidecar refresh.** Refresh resumes the same conversation and keeps the same tab. The terminal inside redraws. Closing the session still removes the tab.
+- **Sidecar Thread.** Send waits until that extra chat has an address. Your draft stays if it is not ready yet.
 - **Heartbeats.** Clicking a heartbeat opens the session that is already running. After the first fire, Own session points at the session it opened.
-- **Chat.** Continue a chat in a new harness. Claude, Codex, Grok, and Gemini can show the session as chat. Drop an image on Thread or chat compose. The plus menu can open the preset you clicked in a sandbox. A plain shell tab does not wear agent chrome.
 - **Files.** Long names in the drawer keep the end of the name visible.
 - **`k2 workspace resources`.** `list`, `add`, and `remove` for a workspace’s resource files.
+- **Arch package.** The release-tag build of the Arch/Omarchy package runs again.
 
-Not in this build: Gemini’s subscription meter.
+Not in this build: Gemini’s subscription meter, and Home.
 
 ## 0.40.150 — People, grants, and mail an agent can stand up
 

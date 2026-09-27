@@ -71,11 +71,13 @@ function Harness() {
 }
 
 function listCalls(): unknown[][] {
-  return h.daemonCliGet.mock.calls.filter((call) => call[0] === 'sessions/list-for-workspace')
+  const calls = h.daemonCliGet.mock.calls as unknown[][]
+  return calls.filter((call) => call[0] === 'sessions/list-for-workspace')
 }
 
 function threadPosts(): unknown[][] {
-  return h.daemonCliPost.mock.calls.filter((call) => call[0] === 'thread/post')
+  const calls = h.daemonCliPost.mock.calls as unknown[][]
+  return calls.filter((call) => call[0] === 'thread/post')
 }
 
 function typeAndSend(text: string): HTMLTextAreaElement {

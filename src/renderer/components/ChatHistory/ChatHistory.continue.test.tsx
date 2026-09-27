@@ -21,7 +21,17 @@ const h = vi.hoisted(() => {
   let seedThrows: Error | null = null
   let sessionPath: { path?: string | null } | null = null
   const seedText = 'SEED TEXT from the daemon'
-  return { posts, sessions, sandbox, api, sendResult, sendThrows, seedThrows, seedText, sessionPath }
+  return {
+    posts,
+    sessions,
+    sandbox,
+    api,
+    sendResult,
+    sendThrows: sendThrows as Error | null,
+    seedThrows: seedThrows as Error | null,
+    seedText,
+    sessionPath,
+  }
 })
 
 vi.mock('@/lib/daemon-cli', () => ({

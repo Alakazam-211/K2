@@ -1,7 +1,7 @@
 import { useSidebarStore } from '@/stores/sidebar'
 
 /** Collapse or open the workspaces nav. Lives at the bottom of the nav. */
-export function SidebarCollapseButton(): JSX.Element {
+export function SidebarCollapseButton(): React.JSX.Element {
   const collapsed = useSidebarStore((s) => s.isCollapsed)
   const toggle = useSidebarStore((s) => s.toggle)
   return (

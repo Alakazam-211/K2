@@ -51,13 +51,20 @@ export function percentUsed(used: number): number {
   return Math.round(clamped * 100)
 }
 
+type ProbedHarness = (typeof PROBED_HARNESSES)[number]
+
+function isProbedHarness(id: string): id is ProbedHarness {
+  return (PROBED_HARNESSES as readonly string[]).includes(id)
+}
+
 /** One top-bar chip per signed-in harness that has a window. Highest window wins inside that harness. Claude, then Codex, then Grok. */
 export function buttonChips(
   doc: SubscriptionDoc | null,
-): { harness: string; used: number }[] {
+): { harness: ProbedHarness; used: number }[] {
   if (!doc) return []
-  const chips: { harness: string; used: number }[] = []
+  const chips: { harness: ProbedHarness; used: number }[] = []
   for (const row of visibleHarnesses(doc)) {
+    if (!isProbedHarness(row.harness)) continue
     if (!isSignedIn(row) || row.windows.length === 0) continue
     let used = 0
     for (const window of row.windows) {

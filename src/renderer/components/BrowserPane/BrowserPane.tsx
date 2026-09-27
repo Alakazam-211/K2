@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
-import { usePageViewStore } from '@/stores/page-view'
+import { usePageViewStore, type AppPage } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useTabsStore } from '@/stores/tabs'
 import { useContextMenuStore } from '@/stores/context-menu'
@@ -101,6 +101,27 @@ function currentParentWindow(): string {
   }
 }
 
+/**
+ * Whether the native child should be shown.
+ *
+ * Standalone embeds ignore tab visibility and cover. Non-standalone
+ * panes show only when this tab is visible and Settings / a non-Agents
+ * page is not covering the workspace. `windowFocused` is not a term:
+ * another app or another window must not hide the page. Do not AND it
+ * back in to clip paint-over. A context menu is applied by the caller.
+ */
+export function browserPaneVisible(input: {
+  standalone: boolean
+  tabVisible: boolean
+  settingsOpen: boolean
+  page: AppPage
+  windowFocused: boolean
+}): boolean {
+  if (input.standalone) return true
+  const workspaceCovered = input.settingsOpen || input.page !== 'agents'
+  return input.tabVisible && !workspaceCovered
+}
+
 export function BrowserPane({
   itemId,
   tabId,
@@ -115,18 +136,17 @@ export function BrowserPane({
   // is the intentional Settings embed (`standalone`).
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
   const appPage = usePageViewStore((s) => s.page)
-  const workspaceCovered = settingsOpen || appPage !== 'agents'
-  // Blurred windows: hide non-standalone children so they don't float over
-  // the focused window (multi-window parenting). Standalone OAuth embeds
-  // stay visible while their host window is frontmost enough to complete
-  // the flow; they still hide when the host itself is covered.
   const windowFocused = useWindowFocusStore((s) => s.isFocused)
   // The + menu and other context menus are DOM. The native page paints
-  // over them, so hide the page while a menu is open.
+  // over them, so hide the page while a menu is open. OS focus does not.
   const menuOpen = useContextMenuStore((s) => s.isOpen)
-  const visible = standalone
-    ? !menuOpen
-    : tabVisible && !workspaceCovered && windowFocused && !menuOpen
+  const visible = browserPaneVisible({
+    standalone,
+    tabVisible,
+    settingsOpen,
+    page: appPage,
+    windowFocused,
+  }) && !menuOpen
   const setBrowserItemState = useTabsStore((s) => s.setBrowserItemState)
 
   // Parent window for all browser_* invokes (main / window-{uuid}).

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState, type JSX, type ReactNode } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
+  beginSidecarRefresh,
+  paneGroupIdFromTabAgent,
+  settleSidecarRefresh,
+} from '@/lib/sidecar-refresh-tab'
+import {
   copyableAddressFromDaemonRow,
   type DaemonHandleRow,
 } from '@/lib/chat-session-tab'
@@ -79,10 +84,16 @@ export function AgentSessionChrome({
     if (refreshing) return
     setRefreshing(true)
     setRefreshError(null)
+    // Only the `sessions/v2/refresh` branch. Pinned Chat passes onRefresh
+    // and must not arm. Cleared when SessionRemoved is applied, not when
+    // the POST returns — that response is not a fence for the broadcast.
+    let refreshPaneGroupId: string | null = null
     try {
       if (onRefresh) {
         onRefresh()
       } else {
+        refreshPaneGroupId = paneGroupIdFromTabAgent(agentName)
+        if (refreshPaneGroupId) beginSidecarRefresh(refreshPaneGroupId)
         // Server kills and respawns the same provider session. The
         // nonce bump remounts so TerminalPane attaches to that PTY;
         // it is not a close-then-spawn.
@@ -90,11 +101,21 @@ export function AgentSessionChrome({
           agent_name: agentName,
           ...(cwd ? { cwd } : {}),
         })
+        if (refreshPaneGroupId) {
+          settleSidecarRefresh(refreshPaneGroupId, { ok: true })
+        }
         setNonce((n) => n + 1)
       }
     } catch (e) {
       const message = e instanceof Error && e.message ? e.message : 'Refresh failed'
       setRefreshError(message)
+      if (refreshPaneGroupId) {
+        const verdict = settleSidecarRefresh(refreshPaneGroupId, { ok: false, message })
+        if (verdict === 'drop') {
+          const { dropTabAfterFailedSidecarRefresh } = await import('@/stores/tabs')
+          dropTabAfterFailedSidecarRefresh(refreshPaneGroupId)
+        }
+      }
     } finally {
       setRefreshing(false)
     }

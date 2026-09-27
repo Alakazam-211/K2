@@ -54,6 +54,7 @@ import {
 } from '@/stores/session-events'
 import { serverSupports } from '@/lib/server-capabilities'
 import { paintableBrowserIcon } from '@/lib/browser-tab-icon'
+import { takeSessionRemoved } from '@/lib/sidecar-refresh-tab'
 
 /** Phase 2.5 fix (finding #547) — gate for `loadWorkspaceSessionsFromDb`.
  *  Flips to true on the first successful load (regardless of whether the
@@ -5316,6 +5317,70 @@ function tabIsDropCandidateForSessionRemoval(tab: Tab, removedPgId: string): boo
   return true
 }
 
+/** Same strip mutation as the workspace `session_removed` handler,
+ *  including the layout save. Does not POST `sessions/v2/close`.
+ *  `save` is null only when this window has no active workspace ids;
+ *  the filter still runs. */
+function dropSurfacedTabsForSessionRemoval(
+  pgId: string,
+  save: { projectId: string; workspaceId: string } | null,
+): boolean {
+  const state = useTabsStore.getState()
+  const droppedFromMain = state.tabs.filter(
+    (t) => !tabIsDropCandidateForSessionRemoval(t, pgId),
+  )
+  const newExtraGroups = state.extraGroups.map((g) => ({
+    tabs: g.tabs.filter((t) => !tabIsDropCandidateForSessionRemoval(t, pgId)),
+    activeTabId: g.activeTabId,
+  }))
+  const mainDelta = state.tabs.length - droppedFromMain.length
+  const extraDelta = state.extraGroups.reduce(
+    (n, g, i) => n + (g.tabs.length - newExtraGroups[i].tabs.length),
+    0,
+  )
+  if (mainDelta === 0 && extraDelta === 0) return false
+
+  let newActiveId = state.activeTabId
+  if (newActiveId && !droppedFromMain.find((t) => t.id === newActiveId)) {
+    const stillExists = newExtraGroups.some((g) =>
+      g.tabs.find((t) => t.id === newActiveId),
+    )
+    if (!stillExists) {
+      newActiveId = droppedFromMain[0]?.id ?? null
+    }
+  }
+  const key = save
+    ? `${save.projectId}:${save.workspaceId}`
+    : state.activeWorkspaceKey
+  console.warn(`[tabs] session_removed push — dropped paneGroup=${pgId} for ${key}`)
+  useTabsStore.setState({
+    tabs: droppedFromMain,
+    activeTabId: newActiveId,
+    extraGroups: newExtraGroups.map((g) => ({
+      tabs: g.tabs,
+      activeTabId: g.tabs.find((t) => t.id === g.activeTabId)
+        ? g.activeTabId
+        : g.tabs[0]?.id ?? null,
+    })),
+  })
+  if (save) {
+    useTabsStore.getState().saveLayoutForWorkspace(save.projectId, save.workspaceId)
+  }
+  return true
+}
+
+/** Local strip drop after a sidecar refresh spawn failed and this window
+ *  already skipped that pane group's SessionRemoved. Same mutation as
+ *  `onRemoved`. Does not POST close. */
+export function dropTabAfterFailedSidecarRefresh(paneGroupId: string): void {
+  const { activeProjectId, activeWorkspaceId } = useTabsStore.getState()
+  const save =
+    activeProjectId && activeWorkspaceId
+      ? { projectId: activeProjectId, workspaceId: activeWorkspaceId }
+      : null
+  dropSurfacedTabsForSessionRemoval(paneGroupId, save)
+}
+
 /** Look up whether a paneGroupId is already surfaced by any tab
  *  across both group 0 and extraGroups. Used by the `session_added`
  *  handler to dedupe — local Cmd+T fires `addTab` which already
@@ -5442,46 +5507,11 @@ function subscribeForActiveWorkspace(
     onRemoved: (event: SessionRemovedEvent) => {
       const pgId = event.pane_group_id
       if (!pgId || !event.agent_name.startsWith('tab-')) return
+      // Refresh's own SessionRemoved must not drop the strip tab. A
+      // remove with no mark for this pane group still falls through.
+      if (takeSessionRemoved(pgId) === 'skip') return
       if (useTabsStore.getState().activeWorkspaceKey !== key) return
-      const state = useTabsStore.getState()
-
-      const droppedFromMain = state.tabs.filter(
-        (t) => !tabIsDropCandidateForSessionRemoval(t, pgId),
-      )
-      const newExtraGroups = state.extraGroups.map((g) => ({
-        tabs: g.tabs.filter((t) => !tabIsDropCandidateForSessionRemoval(t, pgId)),
-        activeTabId: g.activeTabId,
-      }))
-      const mainDelta = state.tabs.length - droppedFromMain.length
-      const extraDelta = state.extraGroups.reduce(
-        (n, g, i) => n + (g.tabs.length - newExtraGroups[i].tabs.length),
-        0,
-      )
-      if (mainDelta === 0 && extraDelta === 0) return
-
-      // Re-derive activeTabId if we dropped the active one.
-      let newActiveId = state.activeTabId
-      if (newActiveId && !droppedFromMain.find((t) => t.id === newActiveId)) {
-        // Was it in extraGroups? If still present there, keep it.
-        const stillExists = newExtraGroups.some((g) =>
-          g.tabs.find((t) => t.id === newActiveId),
-        )
-        if (!stillExists) {
-          newActiveId = droppedFromMain[0]?.id ?? null
-        }
-      }
-      console.warn(`[tabs] session_removed push — dropped paneGroup=${pgId} for ${key}`)
-      useTabsStore.setState({
-        tabs: droppedFromMain,
-        activeTabId: newActiveId,
-        extraGroups: newExtraGroups.map((g) => ({
-          tabs: g.tabs,
-          activeTabId: g.tabs.find((t) => t.id === g.activeTabId)
-            ? g.activeTabId
-            : g.tabs[0]?.id ?? null,
-        })),
-      })
-      useTabsStore.getState().saveLayoutForWorkspace(projectId, workspaceId)
+      dropSurfacedTabsForSessionRemoval(pgId, { projectId, workspaceId })
     },
     onHello: () => {
       // First message after (re)connect. No-op on initial connect

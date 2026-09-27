@@ -10,6 +10,11 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliPost: vi.fn(async () => ({})),
 }))
 
+const dropTabAfterFailedSidecarRefresh = vi.hoisted(() => vi.fn())
+vi.mock('@/stores/tabs', () => ({
+  dropTabAfterFailedSidecarRefresh,
+}))
+
 vi.mock('@/kessel/daemon-ws', () => ({
   getDaemonWs: vi.fn(async () => ({ host: '127.0.0.1', port: 1, token: 't', secure: false })),
   daemonWsBase: () => 'ws://127.0.0.1:1',
@@ -35,6 +40,11 @@ class FakeWS {
 vi.stubGlobal('WebSocket', FakeWS)
 
 import { daemonCliPost } from '@/lib/daemon-cli'
+import {
+  resetSidecarRefreshGuards,
+  sidecarRefreshMark,
+  takeSessionRemoved,
+} from '@/lib/sidecar-refresh-tab'
 import { AgentSessionChrome } from './AgentSessionChrome'
 import { useSessionViewChrome } from './sessionViewChrome'
 import { overlayViewer } from './sessionViewTab'
@@ -105,6 +115,8 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     FakeWS.instances = []
     if (typeof localStorage !== 'undefined') localStorage.clear()
     useContextMenuStore.getState().close()
+    resetSidecarRefreshGuards()
+    dropTabAfterFailedSidecarRefresh.mockClear()
   })
 
   afterEach(() => {
@@ -240,11 +252,14 @@ describe('sidecar refresh resumes on the server', () => {
   beforeEach(() => {
     cleanup()
     mountSeq = 0
+    resetSidecarRefreshGuards()
+    dropTabAfterFailedSidecarRefresh.mockClear()
     vi.mocked(daemonCliPost).mockReset()
     vi.mocked(daemonCliPost).mockResolvedValue({})
   })
 
   afterEach(() => {
+    resetSidecarRefreshGuards()
     vi.mocked(daemonCliPost).mockReset()
     vi.mocked(daemonCliPost).mockResolvedValue({})
   })
@@ -315,5 +330,179 @@ describe('sidecar refresh resumes on the server', () => {
     expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[0])).toEqual([
       'sessions/v2/refresh',
     ])
+    expect(sidecarRefreshMark('xyz')).toBe('none')
+    expect(takeSessionRemoved('xyz')).toBe('passthrough')
+    expect(dropTabAfterFailedSidecarRefresh).not.toHaveBeenCalled()
+    expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).toBe(before)
+  })
+
+  it('leaves the skip mark after success until that SessionRemoved arrives', async () => {
+    let resolveRefresh: (value: unknown) => void = () => {}
+    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+      if (route === 'sessions/v2/refresh') {
+        return new Promise((resolve) => {
+          resolveRefresh = resolve
+        })
+      }
+      return Promise.resolve({})
+    })
+    renderRefresh()
+    const before = screen.getByTestId('mount-probe').getAttribute('data-mount')
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Refresh session'))
+    })
+    expect(sidecarRefreshMark('xyz')).toBe('inflight')
+    await act(async () => {
+      resolveRefresh({ sessionId: 'pty-new' })
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).not.toBe(before)
+    })
+    expect(sidecarRefreshMark('xyz')).toBe('await-skip')
+    expect(takeSessionRemoved('xyz')).toBe('skip')
+    expect(sidecarRefreshMark('xyz')).toBe('none')
+    expect(takeSessionRemoved('xyz')).toBe('passthrough')
+    expect(dropTabAfterFailedSidecarRefresh).not.toHaveBeenCalled()
+    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[0])).toEqual([
+      'sessions/v2/refresh',
+    ])
+  })
+
+  it('skips a remove that arrives during the POST, then keeps on success', async () => {
+    let resolveRefresh: (value: unknown) => void = () => {}
+    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+      if (route === 'sessions/v2/refresh') {
+        return new Promise((resolve) => {
+          resolveRefresh = resolve
+        })
+      }
+      return Promise.resolve({})
+    })
+    renderRefresh()
+    const before = screen.getByTestId('mount-probe').getAttribute('data-mount')
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Refresh session'))
+    })
+    expect(takeSessionRemoved('xyz')).toBe('skip')
+    await act(async () => {
+      resolveRefresh({ sessionId: 'pty-new' })
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).not.toBe(before)
+    })
+    expect(sidecarRefreshMark('xyz')).toBe('none')
+    expect(takeSessionRemoved('xyz')).toBe('passthrough')
+    expect(dropTabAfterFailedSidecarRefresh).not.toHaveBeenCalled()
+  })
+
+  it('drops locally when spawn fails after the remove was already skipped', async () => {
+    let rejectRefresh: (reason: unknown) => void = () => {}
+    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+      if (route === 'sessions/v2/refresh') {
+        return new Promise((_resolve, reject) => {
+          rejectRefresh = reject
+        })
+      }
+      return Promise.resolve({})
+    })
+    renderRefresh()
+    const before = screen.getByTestId('mount-probe').getAttribute('data-mount')
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Refresh session'))
+    })
+    expect(takeSessionRemoved('xyz')).toBe('skip')
+    await act(async () => {
+      rejectRefresh(new Error('v2 spawn failed: pty'))
+    })
+    await waitFor(() => {
+      expect(dropTabAfterFailedSidecarRefresh).toHaveBeenCalledTimes(1)
+    })
+    expect(dropTabAfterFailedSidecarRefresh).toHaveBeenCalledWith('xyz')
+    expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).toBe(before)
+    expect(sidecarRefreshMark('xyz')).toBe('none')
+    expect(takeSessionRemoved('xyz')).toBe('passthrough')
+    expect(vi.mocked(daemonCliPost).mock.calls.map((call) => call[0])).toEqual([
+      'sessions/v2/refresh',
+    ])
+    expect(screen.getByTestId('sidecar-refresh-error').textContent).toContain('v2 spawn failed: pty')
+  })
+
+  it('a spawn failure before SessionRemoved does not drop yet and does not skip the next remove', async () => {
+    vi.mocked(daemonCliPost).mockRejectedValue(new Error('v2 spawn failed: pty'))
+    renderRefresh()
+    const before = screen.getByTestId('mount-probe').getAttribute('data-mount')
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Refresh session'))
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('sidecar-refresh-error').textContent).toContain('v2 spawn failed: pty')
+    })
+    expect(dropTabAfterFailedSidecarRefresh).not.toHaveBeenCalled()
+    expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).toBe(before)
+    expect(sidecarRefreshMark('xyz')).toBe('await-drop')
+    expect(takeSessionRemoved('xyz')).toBe('passthrough')
+    expect(sidecarRefreshMark('xyz')).toBe('none')
+  })
+
+  it('does not arm the guard for onRefresh or a non-tab agent name', async () => {
+    const onRefresh = vi.fn()
+    const pinned = render(
+      <AgentSessionChrome
+        title="sales"
+        addr="sales"
+        conversationId="conv-r"
+        agentName="tab-xyz"
+        cwd="/ws/sales"
+        onRefresh={onRefresh}
+      >
+        <MountProbe />
+      </AgentSessionChrome>,
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Refresh session'))
+    })
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(daemonCliPost)).not.toHaveBeenCalled()
+    expect(sidecarRefreshMark('xyz')).toBe('none')
+    expect(takeSessionRemoved('xyz')).toBe('passthrough')
+    pinned.unmount()
+
+    let resolveRefresh: (value: unknown) => void = () => {}
+    vi.mocked(daemonCliPost).mockImplementation((route: string) => {
+      if (route === 'sessions/v2/refresh') {
+        return new Promise((resolve) => {
+          resolveRefresh = resolve
+        })
+      }
+      return Promise.resolve({})
+    })
+    render(
+      <AgentSessionChrome
+        title="sales"
+        addr="sales"
+        conversationId="conv-r"
+        agentName="sales"
+        cwd="/ws/sales"
+      >
+        <MountProbe />
+      </AgentSessionChrome>,
+    )
+    const before = screen.getByTestId('mount-probe').getAttribute('data-mount')
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Refresh session'))
+    })
+    expect(sidecarRefreshMark('sales')).toBe('none')
+    expect(takeSessionRemoved('sales')).toBe('passthrough')
+    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith('sessions/v2/refresh', {
+      agent_name: 'sales',
+      cwd: '/ws/sales',
+    })
+    await act(async () => {
+      resolveRefresh({})
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).not.toBe(before)
+    })
+    expect(dropTabAfterFailedSidecarRefresh).not.toHaveBeenCalled()
   })
 })

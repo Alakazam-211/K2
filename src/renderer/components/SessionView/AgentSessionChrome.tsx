@@ -151,9 +151,10 @@ export function SidecarSessionHeader({
 }): JSX.Element {
   return (
     <div
-      className="border-b border-[var(--color-border)] flex-shrink-0 px-3 flex items-stretch gap-2"
+      className="border-b border-[var(--color-border)] flex-shrink-0 px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch"
       data-testid="sidecar-session-header"
     >
+        <div className="flex min-w-0 items-stretch">
         <SessionViewMenu
           value={viewTab}
           splitLeft={splitLeft}
@@ -163,13 +164,14 @@ export function SidecarSessionHeader({
           onSplitLeft={onSplitLeft}
           onSplitRight={onSplitRight}
         />
+        </div>
         <span
-          className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center flex-shrink-0"
+          className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center justify-center text-center"
           data-testid="sidecar-session-title"
         >
           {title}
         </span>
-        <div className="flex-1" />
+        <div className="flex min-w-0 items-center justify-end">
         <button
           type="button"
           onClick={onRefresh}
@@ -197,6 +199,7 @@ export function SidecarSessionHeader({
             <path d="M16 16h5v5" />
           </svg>
         </button>
+        </div>
     </div>
   )
 }

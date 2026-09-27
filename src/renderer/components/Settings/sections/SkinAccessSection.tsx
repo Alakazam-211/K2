@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { Toggle } from '@/components/ui'
+import { SquareRadio, Toggle } from '@/components/ui'
 import { SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 
@@ -976,8 +976,7 @@ export function SkinAccessSection(): React.JSX.Element {
               disable it (it binds *:80).
             </p>
             <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
-              <input
-                type="radio"
+              <SquareRadio
                 name="skin-front-door"
                 value="connect"
                 checked={frontDoor.mode === 'connect'}
@@ -988,8 +987,7 @@ export function SkinAccessSection(): React.JSX.Element {
               <span className="text-[11px] text-[var(--color-text-secondary)]">Use K2 Connect</span>
             </label>
             <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
-              <input
-                type="radio"
+              <SquareRadio
                 name="skin-front-door"
                 value="direct"
                 checked={frontDoor.mode === 'direct'}

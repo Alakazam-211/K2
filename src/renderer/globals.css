@@ -1002,6 +1002,53 @@ a,
   display: none;
 }
 
+/* Square radio and checkbox. Zero radius on every style. The radio's
+   inner mark is a background tile: input is a replaced element, so
+   ::after is dropped in WebKit. */
+.k2-square-radio,
+.k2-square-check {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  padding: 0;
+  flex-shrink: 0;
+  vertical-align: middle;
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0;
+  cursor: pointer;
+  transition: background-color 150ms, border-color 150ms;
+}
+.k2-square-radio:checked {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+  background-image: linear-gradient(var(--color-on-accent), var(--color-on-accent));
+  background-size: 6px 6px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.k2-square-check:checked {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'><path d='M3 7.2 L5.8 10 L11 4' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='square' stroke-linejoin='miter'/></svg>");
+  background-size: 14px 14px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.k2-square-radio:focus,
+.k2-square-check:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+.k2-square-radio:disabled,
+.k2-square-check:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 /* ── Square range slider (matches K2SO toggle style) ─────────────── */
 
 .k2so-slider {

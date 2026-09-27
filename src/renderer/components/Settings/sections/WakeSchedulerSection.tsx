@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { SquareRadio } from '@/components/ui'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -596,8 +597,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                   : 'border-[var(--color-border)] hover:border-[var(--color-text-secondary)]'
               }`}
             >
-              <input
-                type="radio"
+              <SquareRadio
                 name="wake-mode"
                 checked={settings.mode === mode}
                 onChange={() => update({ mode })}

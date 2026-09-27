@@ -312,7 +312,8 @@ function ChatHeader({
       className="border-b border-[var(--color-border)] flex-shrink-0 relative"
       data-testid="pinned-chat-header"
     >
-    <div className="px-3 flex items-stretch gap-2">
+    <div className="px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch">
+      <div className="flex min-w-0 items-stretch">
       <SessionViewMenu
         value={viewTab}
         splitLeft={splitLeft}
@@ -322,11 +323,11 @@ function ChatHeader({
         onSplitLeft={onSplitLeft}
         onSplitRight={onSplitRight}
       />
-      <span className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate flex-shrink-0 flex items-center">
+      </div>
+      <span className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center justify-center text-center">
         {displayName}
       </span>
-      {/* spacer pushes the dropdown + refresh to the right. */}
-      <div className="flex-1" />
+      <div className="flex min-w-0 items-center justify-end gap-1">
       {/* 0.37.12 — chat-history dropdown. Lets the user switch the
           pinned chat to a different past session (escape hatch for
           orphaned/deleted sessions or just to revisit). */}
@@ -450,6 +451,7 @@ function ChatHeader({
           <path d="M16 16h5v5" />
         </svg>
       </button>
+      </div>
     </div>
     </div>
   )

@@ -123,11 +123,14 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     const menu = screen.getByTestId('session-view-menu')
     const refresh = screen.getByLabelText('Refresh session')
     expect(title.parentElement).toBe(header)
-    expect(menu.parentElement).toBe(header)
-    expect(refresh.parentElement).toBe(header)
+    expect(menu.parentElement?.parentElement).toBe(header)
+    expect(refresh.parentElement?.parentElement).toBe(header)
     const kids = Array.from(header.children)
-    expect(kids.indexOf(menu)).toBeLessThan(kids.indexOf(title))
-    expect(kids.indexOf(title)).toBeLessThan(kids.indexOf(refresh))
+    expect(kids).toHaveLength(3)
+    expect(kids[1]).toBe(title)
+    expect(kids[0]?.contains(menu)).toBe(true)
+    expect(kids[2]?.contains(refresh)).toBe(true)
+    expect(header.className).toContain('grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]')
   })
 
   it('keeps TerminalPane and Message-the-agent after switching to Thread', async () => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { usePresetsStore } from '@/stores/presets'
-import { Button, DialogFrame, DialogScrim } from '@/components/ui'
+import { Button, DialogFrame, DialogScrim, SquareCheckbox, SquareRadio } from '@/components/ui'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { type ComposeStatus } from '@/components/Terminal/terminalCompose'
@@ -253,8 +253,7 @@ export function ContinueNewChatDialog({
         </div>
         <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginBottom: 4 }}>Context</div>
         <label style={{ display: 'block', fontSize: 12, color: 'var(--color-text-primary)', marginBottom: 2 }}>
-          <input
-            type="radio"
+          <SquareRadio
             name="continue-context"
             checked={mode === 'recent'}
             disabled={inFlight}
@@ -266,8 +265,7 @@ export function ContinueNewChatDialog({
           Last user request and last assistant reply.
         </div>
         <label style={{ display: 'block', fontSize: 12, color: 'var(--color-text-primary)', marginBottom: 2 }}>
-          <input
-            type="radio"
+          <SquareRadio
             name="continue-context"
             checked={mode === 'full'}
             disabled={inFlight}
@@ -279,8 +277,7 @@ export function ContinueNewChatDialog({
           The saved history. It uses more context.
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--color-text-primary)', margin: '4px 0 14px' }}>
-          <input
-            type="checkbox"
+          <SquareCheckbox
             checked={includePath}
             disabled={inFlight}
             onChange={(e) => setIncludePath(e.target.checked)}

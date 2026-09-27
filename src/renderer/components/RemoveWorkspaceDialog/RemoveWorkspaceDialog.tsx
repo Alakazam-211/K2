@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { Callout, DialogScrim } from '@/components/ui'
+import { Callout, DialogScrim, SquareRadio } from '@/components/ui'
 import {
   useRemoveWorkspaceDialogStore,
   type RemoveWorkspaceMode,
@@ -140,15 +140,13 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
                       : 'border-[var(--color-border)] bg-[var(--color-bg)]/30 hover:bg-[var(--color-bg)]/50'
                   }`}
                 >
-                  <input
-                    type="radio"
+                  <SquareRadio
                     name="teardown-mode"
                     value={opt.id}
                     checked={mode === opt.id}
                     onChange={() => setMode(opt.id)}
                     disabled={isPending}
                     className="mt-0.5"
-                    style={{ accentColor: 'var(--color-accent)' }}
                   />
                   <div className="flex-1 min-w-0">
                     <div className="text-[11px] font-medium text-[var(--color-text-primary)]">

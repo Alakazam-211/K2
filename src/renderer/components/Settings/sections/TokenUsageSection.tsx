@@ -404,7 +404,7 @@ function UsageLog({
       <div
         ref={scrollerRef}
         onScroll={onScroll}
-        className="border border-[var(--color-border)] rounded max-h-[70vh] overflow-auto"
+        className="border border-[var(--color-border)] max-h-[70vh] overflow-auto"
       >
         {loading ? (
           <p className="text-xs text-[var(--color-text-muted)] p-3">Loading…</p>

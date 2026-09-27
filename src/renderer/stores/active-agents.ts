@@ -2029,7 +2029,7 @@ export function stopAgentPolling(): void {
 // singletons they survive the `<App key={hostKey}>` remount on a host
 // switch, so after connecting to a REMOTE daemon `getProjectStatus` /
 // `getAggregateStatus` / `hasActiveAgents` would attribute the local box's
-// spinners to the remote — lighting the IconRail active dots and the
+// spinners to the remote — lighting the expanded-nav spinner and the
 // Active Bar `paneStatuses` read against the wrong host.
 //
 // On a real host CHANGE, wipe all of it: the new host's own polling +

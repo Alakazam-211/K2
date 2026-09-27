@@ -943,15 +943,6 @@ a,
   border-left: 2px solid var(--accent-color, var(--color-accent));
 }
 
-.icon-rail-badge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 4px;
-  height: 4px;
-  background: var(--color-status-warn);
-}
-
 /* ── Terminal activity indicator ───────────────────────────────── */
 
 @keyframes terminal-active {
@@ -1072,48 +1063,6 @@ a,
 
 .k2so-slider::-webkit-slider-thumb:hover {
   background: var(--color-accent, #3b82f6);
-}
-
-/* ── Active agent indicator ──────────────────────────────────────── */
-
-.agent-active-dot {
-  border-radius: 50%;
-  animation: agent-pulse 2s infinite;
-}
-
-@keyframes agent-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-status-working) 40%, transparent); }
-  50% { opacity: 0.7; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-status-working) 0%, transparent); }
-}
-
-/* Agent working dot (orange pulse) */
-.agent-dot-working {
-  border-radius: 50%;
-  background-color: var(--color-status-working);
-  animation: agent-pulse-working 1.5s infinite;
-}
-
-@keyframes agent-pulse-working {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-status-working) 50%, transparent); }
-  50% { opacity: 0.6; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-status-working) 0%, transparent); }
-}
-
-/* Agent permission dot (red pulse) */
-.agent-dot-permission {
-  border-radius: 50%;
-  background-color: var(--color-status-error);
-  animation: agent-pulse-permission 1s infinite;
-}
-
-@keyframes agent-pulse-permission {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-status-error) 50%, transparent); }
-  50% { opacity: 0.6; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-status-error) 0%, transparent); }
-}
-
-/* Agent review dot (green static) */
-.agent-dot-review {
-  border-radius: 50%;
-  background-color: var(--color-status-ok);
 }
 
 /* Braille spinner */

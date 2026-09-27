@@ -3,12 +3,10 @@ import { useProjectsStore, type ProjectWithWorkspaces } from '../../stores/proje
 import { useFocusGroupsStore } from '../../stores/focus-groups'
 import { useSidebarStore } from '../../stores/sidebar'
 import { useSettingsStore } from '../../stores/settings'
-import { useActiveAgentsStore } from '../../stores/active-agents'
 import { useActiveBarItems } from './ActiveBar'
 import { useCommandPaletteStore } from '../../stores/command-palette'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 import { useRemoveWorkspaceDialogStore } from '../../stores/remove-workspace-dialog'
-import { useGitInfo } from '../../hooks/useGit'
 import { usePresenceStore, usersForWorkspace } from '../../stores/presence'
 import { presenceDisplayName } from '../Presence/PresenceAvatar'
 import { invoke } from '@tauri-apps/api/core'
@@ -37,13 +35,8 @@ function ProjectIcon({
   onContextMenu: (e: React.MouseEvent) => void
   shortcutIndex?: number
 }): React.JSX.Element {
-  const { data: gitInfo } = useGitInfo(project.path)
-  const agentStatus = useActiveAgentsStore((s) => s.getProjectStatus(project.id))
   const roster = usePresenceStore((s) => s.roster)
   const presenceSupported = usePresenceStore((s) => s.supported)
-
-  const hasDirtyFiles =
-    gitInfo?.isRepo && (gitInfo.changedFiles + gitInfo.untrackedFiles) > 0
 
   // S6 — who's viewing this workspace (same path join as the sidebar's
   // avatar cluster; replaces the old +N/-N diff-count fragment).
@@ -92,10 +85,6 @@ function ProjectIcon({
         iconUrl={project.iconUrl}
         size={20}
       />
-      {agentStatus === 'working' && <span className="icon-rail-badge agent-dot-working" />}
-      {agentStatus === 'permission' && <span className="icon-rail-badge agent-dot-permission" />}
-      {agentStatus === 'review' && <span className="icon-rail-badge agent-dot-review" />}
-      {agentStatus === 'idle' && hasDirtyFiles && <span className="icon-rail-badge status-dot-dirty" />}
       {shortcutIndex !== undefined && shortcutIndex <= 9 && (
         <span className="absolute bottom-0 right-0.5 text-[7px] font-mono text-[var(--color-text-muted)] opacity-50 leading-none">
           {shortcutIndex}

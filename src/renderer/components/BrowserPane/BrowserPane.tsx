@@ -499,7 +499,7 @@ export function BrowserPane({
   return (
     <div className="flex h-full w-full flex-col">
       {/* Chrome bar — styled after the FileViewerPane header. */}
-      <div className="flex h-9 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg)] pl-3 flex-shrink-0">
+      <div className="flex h-9 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg)] pl-2 flex-shrink-0">
         <div className="flex items-center gap-0.5 flex-shrink-0">
         <button
           type="button"

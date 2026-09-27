@@ -69,7 +69,8 @@ describe('UsageButton', () => {
     h.daemonCliGet.mockResolvedValue(claudeDoc(checkedAt))
     render(<UsageButton />)
     await waitFor(() => {
-      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 31%')
+      expect(screen.getByTestId('subscription-usage').textContent).toContain('31%')
+      expect(screen.getByTestId('subscription-usage').querySelector('svg')).toBeTruthy()
     })
     expect(screen.getByTestId('subscription-usage').getAttribute('aria-label')).toBe(
       'Subscription usage',
@@ -97,7 +98,8 @@ describe('UsageButton', () => {
     h.daemonCliPost.mockResolvedValue(claudeDoc(checkedAt))
     render(<UsageButton />)
     await waitFor(() => {
-      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 31%')
+      expect(screen.getByTestId('subscription-usage').textContent).toContain('31%')
+      expect(screen.getByTestId('subscription-usage').querySelector('svg')).toBeTruthy()
     })
     fireEvent.click(screen.getByTestId('subscription-usage'))
     await screen.findByTestId('subscription-usage-menu')
@@ -176,7 +178,8 @@ describe('UsageButton', () => {
     h.daemonCliPost.mockResolvedValue(claudeDoc(fresh))
     render(<UsageButton />)
     await waitFor(() => {
-      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 31%')
+      expect(screen.getByTestId('subscription-usage').textContent).toContain('31%')
+      expect(screen.getByTestId('subscription-usage').querySelector('svg')).toBeTruthy()
     })
     fireEvent.click(screen.getByTestId('subscription-usage'))
     await waitFor(() => {
@@ -190,7 +193,8 @@ describe('UsageButton', () => {
     h.daemonCliGet.mockResolvedValue(claudeDoc(checkedAt))
     render(<UsageButton />)
     await waitFor(() => {
-      expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude 31%')
+      expect(screen.getByTestId('subscription-usage').textContent).toContain('31%')
+      expect(screen.getByTestId('subscription-usage').querySelector('svg')).toBeTruthy()
     })
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const menu = await screen.findByTestId('subscription-usage-menu')

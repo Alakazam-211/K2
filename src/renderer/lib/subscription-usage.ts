@@ -48,24 +48,30 @@ export function percentUsed(used: number): number {
   return Math.round(clamped * 100)
 }
 
+/** Highest used percent among signed-in windows. Null when nobody is signed in. */
+export function buttonSummary(
+  doc: SubscriptionDoc | null,
+): { harness: string; used: number } | null {
+  if (!doc) return null
+  let best: { harness: string; used: number } | null = null
+  for (const row of visibleHarnesses(doc)) {
+    if (!isSignedIn(row)) continue
+    for (const window of row.windows) {
+      const used = percentUsed(window.used)
+      if (best === null || used > best.used) best = { harness: row.harness, used }
+    }
+  }
+  return best
+}
+
 /**
  * Highest used percent among signed-in probed windows, plus the harness
  * name. No signed-in window → "Usage".
  */
 export function buttonLabel(doc: SubscriptionDoc | null): string {
-  if (!doc) return 'Usage'
-  let best: { name: string; used: number } | null = null
-  for (const row of visibleHarnesses(doc)) {
-    if (!isSignedIn(row)) continue
-    for (const window of row.windows) {
-      const used = percentUsed(window.used)
-      if (best === null || used > best.used) {
-        best = { name: harnessName(row.harness), used }
-      }
-    }
-  }
+  const best = buttonSummary(doc)
   if (!best) return 'Usage'
-  return `${best.name} ${best.used}%`
+  return `${harnessName(best.harness)} ${best.used}%`
 }
 
 /** True when the menu should POST a refresh instead of only reading. */

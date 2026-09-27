@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useSubscriptionUsageStore } from '@/stores/subscription-usage'
 import {
-  buttonLabel,
+  buttonSummary,
   formatResetsIn,
   harnessName,
   isSignedIn,
@@ -46,7 +47,7 @@ export default function UsageButton(): React.JSX.Element {
     }
   }, [open])
 
-  const label = buttonLabel(doc)
+  const summary = buttonSummary(doc)
   const rows = doc ? visibleHarnesses(doc) : []
   const anySignedIn = rows.some(isSignedIn)
 
@@ -61,7 +62,7 @@ export default function UsageButton(): React.JSX.Element {
         aria-expanded={open}
         aria-haspopup="menu"
         data-testid="subscription-usage"
-        className="flex h-6 items-center px-1.5 text-[11px] font-mono tabular-nums text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
+        className="flex h-6 items-center gap-1 px-1.5 text-[11px] font-mono tabular-nums text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
         style={noDrag}
         onClick={() => {
           setOpen((was) => {
@@ -70,7 +71,14 @@ export default function UsageButton(): React.JSX.Element {
           })
         }}
       >
-        {label}
+        {summary ? (
+          <>
+            <AgentIcon agent={summary.harness} size={14} />
+            <span>{summary.used}%</span>
+          </>
+        ) : (
+          'Usage'
+        )}
       </button>
       {open && (
         <div

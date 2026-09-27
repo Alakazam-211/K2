@@ -35,6 +35,7 @@ import {
   resolveTextGammaPreset,
   writeStoredTextGamma,
 } from '@/lib/text-gamma'
+import { createTrafficLightController } from '@/lib/traffic-lights'
 
 // ── localStorage mirror keys (dotted convention, see index.html) ─────
 export const LS_STYLE = 'k2.style'
@@ -138,40 +139,40 @@ export function stampStyleAttributes(sel: StyleSelection): void {
 // ── macOS traffic lights follow the window inset ─────────────────────
 // Floating-chrome styles (Glass/Bezel/spacious presets) inset the whole
 // UI from the window edge, so the close/minimize/zoom buttons must move
-// down-right with it. AppKit resets standard-button frames on resize and
-// fullscreen transitions, so we also re-apply on window resize.
+// down-right with it. Square paints those buttons as squares; every
+// other style id keeps Apple's circles. AppKit resets standard-button
+// frames on resize, fullscreen, and title changes, so re-apply on all
+// three — including Square compact, whose inset is 0.
 // Fire-and-forget: in non-Tauri contexts (parity harness, plain browser)
 // the invoke rejects and the miss is purely cosmetic.
-let lastTrafficInset = -1
-
-/** The system title bar is shorter than the 38px top bar, so the lights sit high. */
-const TRAFFIC_LIGHT_Y_NUDGE_PX = 3
-
-function applyTrafficInset(inset: number): void {
-  void invoke('set_traffic_light_inset', { x: inset, y: inset + TRAFFIC_LIGHT_Y_NUDGE_PX }).catch(() => {})
-}
-
-function readTrafficInset(): number {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue('--inset-window').trim()
-  return Number.parseFloat(raw) || 0
-}
+const trafficLights = createTrafficLightController({
+  isMac: () =>
+    typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac'),
+  read: () => {
+    const el = document.documentElement
+    const raw = getComputedStyle(el).getPropertyValue('--inset-window').trim()
+    return {
+      styleId: el.getAttribute('data-style'),
+      inset: Number.parseFloat(raw) || 0,
+    }
+  },
+  apply: (cmd) => {
+    void invoke('set_traffic_light_inset', cmd).catch(() => {})
+  },
+  schedule: (fn) => {
+    requestAnimationFrame(fn)
+  },
+})
 
 function syncTrafficLights(): void {
   if (typeof document === 'undefined' || typeof navigator === 'undefined') return
-  if (!navigator.platform.toLowerCase().includes('mac')) return
-  const inset = readTrafficInset()
-  if (inset === lastTrafficInset) return
-  lastTrafficInset = inset
-  applyTrafficInset(inset)
+  trafficLights.syncIfChanged()
 }
 
 /** AppKit puts the buttons back at the top when the window title changes. */
 export function reapplyTrafficLights(): void {
   if (typeof document === 'undefined' || typeof navigator === 'undefined') return
-  if (!navigator.platform.toLowerCase().includes('mac')) return
-  const inset = readTrafficInset()
-  lastTrafficInset = inset
-  applyTrafficInset(inset)
+  trafficLights.reapply()
 }
 
 if (typeof window !== 'undefined') {
@@ -179,18 +180,22 @@ if (typeof window !== 'undefined') {
   // file; otherwise the native buttons keep the inset from launch.
   if (import.meta.hot) import.meta.hot.accept()
   queueMicrotask(() => {
-    lastTrafficInset = -1
+    trafficLights.resetBaseline()
     syncTrafficLights()
   })
-  let queued = false
   window.addEventListener('resize', () => {
-    if (queued || lastTrafficInset <= 0) return
-    queued = true
-    requestAnimationFrame(() => {
-      queued = false
-      applyTrafficInset(lastTrafficInset)
-    })
+    trafficLights.onResize()
   })
+  // WKWebView does not emit this for the green button. Rust re-applies
+  // on NSWindowDidEnter/ExitFullScreenNotification for that path.
+  if (typeof document !== 'undefined') {
+    document.addEventListener('fullscreenchange', () => {
+      trafficLights.onFullscreen()
+    })
+    document.addEventListener('webkitfullscreenchange', () => {
+      trafficLights.onFullscreen()
+    })
+  }
 }
 
 function writeMirror(sel: StyleSelection): void {

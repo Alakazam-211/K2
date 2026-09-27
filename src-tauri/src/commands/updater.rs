@@ -55,6 +55,7 @@ fn update_http_client() -> Result<reqwest::blocking::Client, String> {
 /// `appimage` when `APPIMAGE` is set, else `arch` for an Arch/Omarchy
 /// install, else `other`. `APPIMAGE` wins so an AppImage launched on Arch
 /// is not offered the pacman package.
+#[cfg(any(target_os = "linux", test))]
 fn classify_install_kind(
     appimage_set: bool,
     arch_release_exists: bool,
@@ -69,6 +70,7 @@ fn classify_install_kind(
     "other"
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn unquote(value: &str) -> &str {
     let value = value.trim();
     let bytes = value.as_bytes();
@@ -82,6 +84,7 @@ fn unquote(value: &str) -> &str {
     value
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn os_release_is_arch(text: &str) -> bool {
     for line in text.lines() {
         let line = line.trim();
